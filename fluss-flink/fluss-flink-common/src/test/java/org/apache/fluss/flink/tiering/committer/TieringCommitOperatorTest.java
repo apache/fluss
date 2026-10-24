@@ -33,6 +33,7 @@ import org.apache.fluss.lake.committer.LakeCommitResult;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.testutils.common.MultiVersionTest;
+import org.apache.fluss.utils.FlussPaths;
 
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.runtime.jobgraph.OperatorID;
@@ -426,6 +427,63 @@ class TieringCommitOperatorTest extends FlinkTestBase {
                         message ->
                                 assertThat(message.committable().writeResults())
                                         .containsExactly(2, 0, 1));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"file:///unused", "s3://bucket/fluss"})
+    void testIgnoreMissingLakeSnapshotFromPreviousTable(String remoteDataDir) throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "test-ignore-previous-table-lake-snapshot");
+        long oldTableId = createTable(tablePath, DEFAULT_LOG_TABLE_DESCRIPTOR);
+        // Only construct the path: recovery must identify the old table without accessing
+        // the offsets file or requiring a filesystem plugin for its URI scheme.
+        String oldOffsetsPath =
+                FlussPaths.remoteLakeTableSnapshotOffsetPath(remoteDataDir, tablePath, oldTableId)
+                        .toString();
+        CommittedLakeSnapshot oldSnapshot =
+                new CommittedLakeSnapshot(
+                        5,
+                        Collections.singletonMap(
+                                FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, oldOffsetsPath));
+
+        admin.dropTable(tablePath, false).get();
+        long tableId = createTable(tablePath, DEFAULT_LOG_TABLE_DESCRIPTOR);
+        assertThat(tableId).isNotEqualTo(oldTableId);
+        TestingLakeTieringFactory.TestingLakeCommitter lakeCommitter =
+                new TestingLakeTieringFactory.TestingLakeCommitter(oldSnapshot);
+        lakeCommitter.setCommitResult(LakeCommitResult.committedIsReadable(6));
+        committerOperator.close();
+        committerOperator =
+                new TieringCommitOperator<>(
+                        parameters,
+                        FLUSS_CLUSTER_EXTENSION.getClientConfig(),
+                        new org.apache.fluss.config.Configuration(),
+                        new TestingLakeTieringFactory(lakeCommitter));
+        committerOperator.open();
+
+        // An empty round must not attach the previous table's snapshot to the new table.
+        TableBucket bucket = new TableBucket(tableId, 0);
+        committerOperator.processElement(
+                createTableBucketWriteResultStreamRecord(tablePath, bucket, null, -1, -1L, 1));
+        verifyNoLakeSnapshot(tablePath);
+        assertThat(output).isEmpty();
+
+        // The next round must commit normally with the new table's offsets, without first
+        // recovering the old offsets or failing the round for a retry.
+        committerOperator.processElement(
+                createTableBucketWriteResultStreamRecord(tablePath, bucket, 1, 100, 1L, 1));
+        verifyLakeSnapshot(tablePath, tableId, 6, Collections.singletonMap(bucket, 100L));
+        assertThat(output)
+                .singleElement()
+                .satisfies(
+                        message ->
+                                assertThat(message.committable().writeResults())
+                                        .containsExactly(1));
+        assertThat(mockOperatorEventGateway.getEventsSent())
+                .hasSize(2)
+                .allSatisfy(
+                        event ->
+                                assertThat(((SourceEventWrapper) event).getSourceEvent())
+                                        .isInstanceOf(FinishedTieringEvent.class));
     }
 
     @Test

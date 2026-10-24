@@ -22,6 +22,7 @@ import org.apache.fluss.client.metadata.LakeSnapshot;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
 import org.apache.fluss.lake.committer.LakeCommitResult;
 import org.apache.fluss.lake.committer.LakeCommitter;
@@ -298,6 +299,23 @@ public class TieringCommitter<WriteResult, Committable> {
                             missingCommittedSnapshot.getLakeSnapshotId(),
                             tablePath,
                             tableId));
+        }
+
+        // Offsets path: .../lake/{database}/{tableName}-{tableId}/metadata/{uuid}.offsets.
+        String tableDirName = new FsPath(lakeSnapshotOffsetPath).getParent().getParent().getName();
+        long snapshotTableId =
+                Long.parseLong(tableDirName.substring(tableDirName.lastIndexOf('-') + 1));
+        // A recreated Fluss table can reuse a lake table containing the old table's snapshots.
+        if (snapshotTableId != tableId) {
+            LOG.warn(
+                    "Skipping recovery of lake snapshot {} for table {} (tableId={}) because "
+                            + "offsets file {} belongs to tableId={}. Continuing the current table's commit.",
+                    missingCommittedSnapshot.getLakeSnapshotId(),
+                    tablePath,
+                    tableId,
+                    lakeSnapshotOffsetPath,
+                    snapshotTableId);
+            return null;
         }
 
         // commit this missing snapshot to fluss
