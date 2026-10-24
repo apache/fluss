@@ -188,7 +188,14 @@ final class NettyServerHandlerTest {
             RequestHandler<?>[] requestHandlers =
                     new RequestHandler<?>[RequestType.values().length - 1];
             requestHandlers[RequestType.FLUSS.id] = new FlussRequestHandler(service);
-            RequestProcessor processor = new RequestProcessor(0, channel, service, requestHandlers);
+            RequestProcessor processor =
+                    new RequestProcessor(
+                            0,
+                            channel,
+                            service,
+                            requestHandlers,
+                            RequestsMetrics.createTabletServerRequestMetrics(
+                                    NOPMetricsGroup.newInstance()));
             ExecutorService executor = Executors.newSingleThreadExecutor();
             Future<?> processorTask = executor.submit(processor);
 

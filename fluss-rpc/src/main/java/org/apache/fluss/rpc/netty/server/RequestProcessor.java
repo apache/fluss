@@ -24,6 +24,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 /** A thread that processes and answer incoming {@link RpcRequest}. */
 final class RequestProcessor implements Runnable {
@@ -34,6 +35,7 @@ final class RequestProcessor implements Runnable {
     private final RequestChannel requestChannel;
     private final CompletableFuture<Void> shutdownComplete = new CompletableFuture<>();
     private final RequestHandler<?>[] requestHandlers;
+    private final RequestsMetrics requestsMetrics;
 
     private volatile boolean isRunning;
 
@@ -41,11 +43,13 @@ final class RequestProcessor implements Runnable {
             int processorId,
             RequestChannel requestChannel,
             RpcGatewayService service,
-            RequestHandler<?>[] requestHandlers) {
+            RequestHandler<?>[] requestHandlers,
+            RequestsMetrics requestsMetrics) {
         this.processorId = processorId;
         this.service = service;
         this.requestChannel = requestChannel;
         this.requestHandlers = requestHandlers;
+        this.requestsMetrics = requestsMetrics;
         this.isRunning = true;
     }
 
@@ -61,6 +65,11 @@ final class RequestProcessor implements Runnable {
                             processorId);
                     completeShutdown();
                 } else {
+                    long startNanos = System.nanoTime();
+                    RequestsMetrics.Metrics metrics =
+                            request instanceof FlussRequest
+                                    ? requestsMetrics.getMetrics((FlussRequest) request)
+                                    : null;
                     LOG.debug(
                             "Request processor {} on server {} processing request {}.",
                             processorId,
@@ -75,7 +84,15 @@ final class RequestProcessor implements Runnable {
                         // RpcGateway shouldn't hold the reference to the request/ByteBuf after
                         // the invoking of RPC method, i.e. async execution shouldn't retain the
                         // request/ByteBuf. The request/ByteBuf is released after the RPC method.
-                        request.releaseBuffer();
+                        try {
+                            request.releaseBuffer();
+                        } finally {
+                            long durationUs =
+                                    TimeUnit.NANOSECONDS.toMicros(System.nanoTime() - startNanos);
+                            if (metrics != null) {
+                                metrics.recordSyncProcessTimeUs(durationUs);
+                            }
+                        }
                     }
                 }
             }

@@ -25,9 +25,6 @@ import org.apache.fluss.record.send.Send;
 import org.apache.fluss.rpc.messages.ApiMessage;
 import org.apache.fluss.rpc.messages.AuthenticateRequest;
 import org.apache.fluss.rpc.messages.AuthenticateResponse;
-import org.apache.fluss.rpc.messages.FetchLogRequest;
-import org.apache.fluss.rpc.messages.LookupRequest;
-import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.rpc.protocol.ApiManager;
@@ -57,8 +54,6 @@ import java.util.concurrent.CompletableFuture;
 import static org.apache.fluss.rpc.protocol.MessageCodec.encodeErrorResponse;
 import static org.apache.fluss.rpc.protocol.MessageCodec.encodeServerFailure;
 import static org.apache.fluss.rpc.protocol.MessageCodec.encodeSuccessResponse;
-import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.hasHistoricalLookup;
-import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.hasHistoricalPut;
 
 /** Implementation of the channel handler to process inbound requests for RPC server. */
 public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
@@ -306,19 +301,7 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
     }
 
     private Optional<RequestsMetrics.Metrics> getMetrics(FlussRequest request) {
-        boolean isFromFollower = false;
-        boolean isHistorical = false;
-        ApiMessage requestMessage = request.getMessage();
-        if (request.getApiKey() == ApiKeys.FETCH_LOG.id) {
-            // for fetch, we need to identify it's from client or follower
-            FetchLogRequest fetchLogRequest = (FetchLogRequest) requestMessage;
-            isFromFollower = fetchLogRequest.getFollowerServerId() >= 0;
-        } else if (request.getApiKey() == ApiKeys.LOOKUP.id) {
-            isHistorical = hasHistoricalLookup((LookupRequest) requestMessage);
-        } else if (request.getApiKey() == ApiKeys.PUT_KV.id) {
-            isHistorical = hasHistoricalPut((PutKvRequest) requestMessage);
-        }
-        return requestsMetrics.getMetrics(request.getApiKey(), isFromFollower, isHistorical);
+        return Optional.ofNullable(requestsMetrics.getMetrics(request));
     }
 
     @VisibleForTesting

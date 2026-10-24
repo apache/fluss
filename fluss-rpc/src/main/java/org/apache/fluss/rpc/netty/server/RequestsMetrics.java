@@ -25,6 +25,10 @@ import org.apache.fluss.metrics.MeterView;
 import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.metrics.ThreadSafeSimpleCounter;
 import org.apache.fluss.metrics.groups.MetricGroup;
+import org.apache.fluss.rpc.messages.ApiMessage;
+import org.apache.fluss.rpc.messages.FetchLogRequest;
+import org.apache.fluss.rpc.messages.LookupRequest;
+import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.rpc.protocol.Errors;
 
@@ -36,6 +40,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+
+import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.hasHistoricalLookup;
+import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.hasHistoricalPut;
 
 /**
  * A class wrapping the metrics registered for different request types. It's mainly used to simplify
@@ -128,6 +135,22 @@ public class RequestsMetrics {
         return Optional.ofNullable(metricsByRequest.get(requestName));
     }
 
+    Metrics getMetrics(FlussRequest request) {
+        boolean isFromFollower = false;
+        boolean isHistorical = false;
+        ApiMessage requestMessage = request.getMessage();
+        if (request.getApiKey() == ApiKeys.FETCH_LOG.id) {
+            isFromFollower = ((FetchLogRequest) requestMessage).getFollowerServerId() >= 0;
+        } else if (request.getApiKey() == ApiKeys.LOOKUP.id) {
+            isHistorical = hasHistoricalLookup((LookupRequest) requestMessage);
+        } else if (request.getApiKey() == ApiKeys.PUT_KV.id) {
+            isHistorical = hasHistoricalPut((PutKvRequest) requestMessage);
+        }
+        String requestName =
+                toRequestName(ApiKeys.forId(request.getApiKey()), isFromFollower, isHistorical);
+        return metricsByRequest.get(requestName);
+    }
+
     /** A class wrapping all registered metrics for a given request type. */
     public static final class Metrics {
         private static final int WINDOW_SIZE = 1024;
@@ -140,6 +163,8 @@ public class RequestsMetrics {
 
         private final Histogram requestQueueTimeMs;
         private final Histogram requestProcessTimeMs;
+        private final Histogram requestSyncProcessTimeUs;
+        private final Counter requestSyncProcessTimeUsSum;
         private final Histogram responseSendTimeMs;
         private final Histogram totalTimeMs;
 
@@ -162,6 +187,14 @@ public class RequestsMetrics {
                     metricGroup.histogram(
                             MetricNames.REQUEST_PROCESS_TIME_MS,
                             new DescriptiveStatisticsHistogram(WINDOW_SIZE));
+            requestSyncProcessTimeUs =
+                    metricGroup.histogram(
+                            MetricNames.REQUEST_SYNC_PROCESS_TIME_US,
+                            new DescriptiveStatisticsHistogram(WINDOW_SIZE));
+            requestSyncProcessTimeUsSum =
+                    metricGroup.counter(
+                            MetricNames.REQUEST_SYNC_PROCESS_TIME_US_SUM,
+                            new ThreadSafeSimpleCounter());
             responseSendTimeMs =
                     metricGroup.histogram(
                             MetricNames.RESPONSE_SEND_TIME_MS,
@@ -203,6 +236,11 @@ public class RequestsMetrics {
 
         public Histogram getRequestProcessTimeMs() {
             return requestProcessTimeMs;
+        }
+
+        void recordSyncProcessTimeUs(long durationUs) {
+            requestSyncProcessTimeUs.update(durationUs);
+            requestSyncProcessTimeUsSum.inc(durationUs);
         }
 
         public Histogram getResponseSendTimeMs() {

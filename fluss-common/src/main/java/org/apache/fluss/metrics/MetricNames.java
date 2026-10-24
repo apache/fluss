@@ -29,6 +29,8 @@ public class MetricNames {
     public static final String REQUEST_BYTES = "requestBytes";
     public static final String REQUEST_QUEUE_TIME_MS = "requestQueueTimeMs";
     public static final String REQUEST_PROCESS_TIME_MS = "requestProcessTimeMs";
+    public static final String REQUEST_SYNC_PROCESS_TIME_US = "requestSyncProcessTimeUs";
+    public static final String REQUEST_SYNC_PROCESS_TIME_US_SUM = "requestSyncProcessTimeUsSum";
     public static final String RESPONSE_SEND_TIME_MS = "responseSendTimeMs";
     public static final String REQUEST_TOTAL_TIME_MS = "totalTimeMs";
 
