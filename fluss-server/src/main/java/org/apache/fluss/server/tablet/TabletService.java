@@ -95,6 +95,7 @@ import org.apache.fluss.rpc.messages.StopReplicaRequest;
 import org.apache.fluss.rpc.messages.StopReplicaResponse;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.rpc.messages.UpdateMetadataResponse;
+import org.apache.fluss.rpc.netty.server.Session;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.protocol.FetchLogReadPreference;
@@ -123,6 +124,8 @@ import org.apache.fluss.server.log.FetchParamsBuilder;
 import org.apache.fluss.server.log.FilterInfo;
 import org.apache.fluss.server.log.ListOffsetsParam;
 import org.apache.fluss.server.metadata.ClusterMetadata;
+import org.apache.fluss.server.metadata.MetadataView;
+import org.apache.fluss.server.metadata.MetadataViewProvider;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.metadata.TabletServerMetadataProvider;
 import org.apache.fluss.server.replica.Replica;
@@ -186,7 +189,8 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toProduceLogDa
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toPutKvDataForBuckets;
 
 /** An RPC Gateway service for tablet server. */
-public final class TabletService extends RpcServiceBase implements TabletServerGateway {
+public final class TabletService extends RpcServiceBase
+        implements TabletServerGateway, MetadataViewProvider {
 
     private final String serviceName;
     private final ReplicaManager replicaManager;
@@ -637,6 +641,13 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                                 coordinatorEpoch,
                                 notifyLeaderAndIsrRequestData,
                                 value -> result.complete(makeNotifyLeaderAndIsrResponse(value))));
+    }
+
+    @Override
+    public MetadataView getMetadataView(Session session) {
+        return metadataCache.getMetadataView(
+                session.getListenerName(),
+                path -> isTableMetadataAuthorized(session, authorizer, path));
     }
 
     @Override

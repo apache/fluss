@@ -197,6 +197,8 @@ public final class MetadataHandler implements KafkaApiHandler<MetadataRequest> {
                 return Errors.UNKNOWN_TOPIC_OR_PARTITION;
             case UNKNOWN_TOPIC_ID:
                 return Errors.UNKNOWN_TOPIC_ID;
+            case UNKNOWN_SERVER_ERROR:
+                return Errors.UNKNOWN_SERVER_ERROR;
             case INVALID_TOPIC:
                 return Errors.INVALID_TOPIC_EXCEPTION;
             default:

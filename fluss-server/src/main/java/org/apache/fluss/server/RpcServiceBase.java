@@ -751,6 +751,16 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                 new DescribeClusterConfigsResponse().addAllConfigs(toPbConfigEntries(configs)));
     }
 
+    /** Shared DESCRIBE authorization for native and protocol-adapter metadata requests. */
+    protected static boolean isTableMetadataAuthorized(
+            Session session, Authorizer authorizer, TablePath path) {
+        return authorizer == null
+                || authorizer.isAuthorized(
+                        session,
+                        OperationType.DESCRIBE,
+                        Resource.table(path.getDatabaseName(), path.getTableName()));
+    }
+
     protected MetadataResponse processMetadataRequest(
             MetadataRequest request,
             String listenerName,
@@ -760,12 +770,8 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
             MetadataProvider metadataProvider) {
         List<TablePath> authorizedTables = new ArrayList<>();
         for (PbTablePath pbTablePath : request.getTablePathsList()) {
-            if (authorizer == null
-                    || authorizer.isAuthorized(
-                            session,
-                            OperationType.DESCRIBE,
-                            Resource.table(
-                                    pbTablePath.getDatabaseName(), pbTablePath.getTableName()))) {
+            if (isTableMetadataAuthorized(
+                    session, authorizer, ServerRpcMessageUtils.toTablePath(pbTablePath))) {
                 authorizedTables.add(ServerRpcMessageUtils.toTablePath(pbTablePath));
             }
         }
@@ -838,11 +844,10 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         // collect partition metadata
         List<PhysicalTablePath> authorizedPartitions = new ArrayList<>();
         for (PhysicalTablePath path : partitionPaths) {
-            if (authorizer == null
-                    || authorizer.isAuthorized(
-                            session,
-                            OperationType.DESCRIBE,
-                            Resource.table(path.getDatabaseName(), path.getTableName()))) {
+            if (isTableMetadataAuthorized(
+                    session,
+                    authorizer,
+                    TablePath.of(path.getDatabaseName(), path.getTableName()))) {
                 authorizedPartitions.add(path);
             }
         }

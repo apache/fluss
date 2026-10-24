@@ -22,7 +22,6 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.metrics.util.NOPMetricsGroup;
-import org.apache.fluss.rpc.TestingTabletGatewayService;
 import org.apache.fluss.rpc.netty.server.NettyServer;
 import org.apache.fluss.rpc.netty.server.RequestsMetrics;
 
@@ -50,7 +49,7 @@ class KafkaProtocolPluginITCase {
                         new NettyServer(
                                 conf,
                                 Collections.singletonList(new Endpoint("localhost", 0, "KAFKA")),
-                                new TestingTabletGatewayService(),
+                                new TestingMetadataService(),
                                 metricGroup,
                                 RequestsMetrics.createCoordinatorServerRequestMetrics(
                                         metricGroup));
