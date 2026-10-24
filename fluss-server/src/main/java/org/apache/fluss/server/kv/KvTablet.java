@@ -495,6 +495,7 @@ public final class KvTablet {
                         statisticsRegistry,
                         tableBucket.getTableId(),
                         compactionFilterFactory);
+        kv.initializeMetrics(serverMetricGroup.getRocksDBMetrics(), sharedBlockCache != null);
 
         // Create RocksDB statistics accessor (will be registered to TableMetricGroup by Replica)
         // Pass ResourceGuard to ensure thread-safe access during concurrent close operations
