@@ -71,6 +71,35 @@ public class DateTimeUtils {
                     .optionalEnd()
                     .toFormatter();
 
+    /**
+     * Converts a timestamp's milliseconds and nanoseconds within the millisecond to microseconds.
+     * Sub-microsecond digits are discarded.
+     *
+     * @throws ArithmeticException if the result does not fit in a long
+     */
+    public static long timestampToMicros(long millisecond, int nanoOfMillisecond) {
+        return scaleTimestamp(millisecond, MICROS_PER_MILLIS, nanoOfMillisecond / NANOS_PER_MICROS);
+    }
+
+    /**
+     * Converts a timestamp's milliseconds and nanoseconds within the millisecond to nanoseconds.
+     *
+     * @throws ArithmeticException if the result does not fit in a long
+     */
+    public static long timestampToNanos(long millisecond, int nanoOfMillisecond) {
+        return scaleTimestamp(millisecond, 1_000_000L, nanoOfMillisecond);
+    }
+
+    private static long scaleTimestamp(long millisecond, long unitsPerMillis, long fraction) {
+        if (millisecond < 0) {
+            // The non-negative fraction can bring the final value back into range even when
+            // multiplying the floor-rounded millisecond would underflow at Long.MIN_VALUE.
+            return Math.addExact(
+                    Math.multiplyExact(millisecond + 1, unitsPerMillis), fraction - unitsPerMillis);
+        }
+        return Math.addExact(Math.multiplyExact(millisecond, unitsPerMillis), fraction);
+    }
+
     public static LocalDate toLocalDate(int date) {
         return julianToLocalDate(date + EPOCH_JULIAN);
     }
