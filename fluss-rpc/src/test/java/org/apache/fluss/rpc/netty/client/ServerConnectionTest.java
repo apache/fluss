@@ -23,6 +23,7 @@ import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.DisconnectException;
 import org.apache.fluss.exception.InvalidServerTypeException;
+import org.apache.fluss.exception.NetworkException;
 import org.apache.fluss.exception.UnsupportedVersionException;
 import org.apache.fluss.metrics.Gauge;
 import org.apache.fluss.metrics.Metric;
@@ -58,20 +59,36 @@ import org.apache.fluss.security.auth.ClientAuthenticator;
 import org.apache.fluss.shaded.netty4.io.netty.bootstrap.Bootstrap;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelFuture;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelOutboundHandlerAdapter;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelPromise;
+import org.apache.fluss.shaded.netty4.io.netty.channel.EventLoop;
 import org.apache.fluss.shaded.netty4.io.netty.channel.EventLoopGroup;
+import org.apache.fluss.shaded.netty4.io.netty.channel.embedded.EmbeddedChannel;
+import org.apache.fluss.shaded.netty4.io.netty.handler.timeout.IdleStateEvent;
+import org.apache.fluss.shaded.netty4.io.netty.util.ReferenceCountUtil;
+import org.apache.fluss.shaded.netty4.io.netty.util.concurrent.ScheduledFuture;
 import org.apache.fluss.utils.NetUtils;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
+import java.io.IOException;
+import java.net.ConnectException;
+import java.nio.channels.ClosedChannelException;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.apache.fluss.metrics.MetricNames.CLIENT_BYTES_IN_RATE_AVG;
 import static org.apache.fluss.metrics.MetricNames.CLIENT_BYTES_IN_RATE_TOTAL;
@@ -90,7 +107,14 @@ import static org.apache.fluss.utils.NetUtils.getAvailablePort;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /** Test for {@link ServerConnection}. */
@@ -128,6 +152,226 @@ public class ServerConnectionTest {
 
         if (eventLoopGroup != null) {
             eventLoopGroup.shutdownGracefully();
+        }
+    }
+
+    @Test
+    void testDelayedConnectCancellationAndSchedulingRejection() throws Exception {
+        EventLoopGroup group = mock(EventLoopGroup.class);
+        EventLoop loop = mock(EventLoop.class);
+        when(group.next()).thenReturn(loop);
+        Bootstrap deferred = spy(new Bootstrap().group(group));
+        AtomicReference<Runnable> timer = new AtomicReference<>();
+        ScheduledFuture<?> scheduled = mock(ScheduledFuture.class);
+        when(loop.schedule(any(Runnable.class), anyLong(), eq(TimeUnit.NANOSECONDS)))
+                .thenAnswer(
+                        invocation -> {
+                            timer.set(invocation.getArgument(0));
+                            return scheduled;
+                        });
+        ServerConnection connection =
+                new ServerConnection(
+                        serverNode,
+                        TestingClientMetricGroup.newInstance(),
+                        clientAuthenticator,
+                        (con, failure) -> {},
+                        con -> {});
+        CompletableFuture<ApiMessage> pending =
+                connection.send(
+                        ApiKeys.API_VERSIONS,
+                        new ApiVersionsRequest()
+                                .setClientSoftwareName("test")
+                                .setClientSoftwareVersion("1.0"));
+        CompletableFuture<ApiMessage> secondPending =
+                connection.send(
+                        ApiKeys.API_VERSIONS,
+                        new ApiVersionsRequest()
+                                .setClientSoftwareName("second")
+                                .setClientSoftwareVersion("1.0"));
+        connection.connect(deferred, 100);
+        connection.connect(deferred, 100);
+        verify(loop).schedule(any(Runnable.class), eq(100L), eq(TimeUnit.NANOSECONDS));
+        assertThat(pending).isNotDone();
+        connection.close();
+        verify(scheduled).cancel(false);
+        timer.get().run();
+        verify(deferred, never()).connect(any(String.class), anyInt());
+        assertThatThrownBy(() -> pending.get(10, TimeUnit.SECONDS))
+                .hasRootCauseInstanceOf(ClosedChannelException.class);
+        assertThatThrownBy(() -> secondPending.get(10, TimeUnit.SECONDS))
+                .hasRootCauseInstanceOf(ClosedChannelException.class);
+        assertThatThrownBy(
+                        () ->
+                                connection
+                                        .send(ApiKeys.API_VERSIONS, new ApiVersionsRequest())
+                                        .get(10, TimeUnit.SECONDS))
+                .hasCauseInstanceOf(NetworkException.class);
+
+        when(loop.schedule(any(Runnable.class), anyLong(), eq(TimeUnit.NANOSECONDS)))
+                .thenThrow(new RejectedExecutionException("stopped"));
+        AtomicReference<Boolean> rejectionFailure = new AtomicReference<>();
+        ServerConnection rejected =
+                new ServerConnection(
+                        serverNode,
+                        TestingClientMetricGroup.newInstance(),
+                        AuthenticationFactory.loadClientAuthenticatorSupplier(conf).get(),
+                        (con, failure) -> rejectionFailure.set(failure),
+                        con -> {});
+        CompletableFuture<ApiMessage> response =
+                rejected.send(
+                        ApiKeys.API_VERSIONS,
+                        new ApiVersionsRequest()
+                                .setClientSoftwareName("test")
+                                .setClientSoftwareVersion("1.0"));
+        CompletableFuture<ApiMessage> secondResponse =
+                rejected.send(
+                        ApiKeys.API_VERSIONS,
+                        new ApiVersionsRequest()
+                                .setClientSoftwareName("second")
+                                .setClientSoftwareVersion("1.0"));
+        rejected.connect(deferred, 100);
+        assertThat(rejected.getConnectionState()).isEqualTo(ConnectionState.DISCONNECTED);
+        assertThatThrownBy(() -> response.get(10, TimeUnit.SECONDS))
+                .hasCauseInstanceOf(NetworkException.class)
+                .hasRootCauseInstanceOf(RejectedExecutionException.class);
+        assertThatThrownBy(() -> secondResponse.get(10, TimeUnit.SECONDS))
+                .hasCauseInstanceOf(NetworkException.class)
+                .hasRootCauseInstanceOf(RejectedExecutionException.class);
+        assertThat(rejectionFailure.get()).isFalse();
+        assertThatThrownBy(
+                        () ->
+                                rejected.send(ApiKeys.API_VERSIONS, new ApiVersionsRequest())
+                                        .get(10, TimeUnit.SECONDS))
+                .hasCauseInstanceOf(NetworkException.class);
+    }
+
+    @Test
+    void testScheduledConnectMakesOnlyOneDemandDrivenAttempt() throws Exception {
+        EventLoopGroup group = mock(EventLoopGroup.class);
+        EventLoop loop = mock(EventLoop.class);
+        when(group.next()).thenReturn(loop);
+        Bootstrap deferred = spy(new Bootstrap().group(group));
+        AtomicReference<Runnable> timer = new AtomicReference<>();
+        when(loop.schedule(any(Runnable.class), anyLong(), eq(TimeUnit.NANOSECONDS)))
+                .thenAnswer(
+                        invocation -> {
+                            timer.set(invocation.getArgument(0));
+                            return mock(ScheduledFuture.class);
+                        });
+        EmbeddedChannel channel = new EmbeddedChannel();
+        doReturn(channel.newFailedFuture(new ConnectException("refused")))
+                .when(deferred)
+                .connect(any(String.class), anyInt());
+        AtomicInteger failures = new AtomicInteger();
+        ServerConnection connection =
+                new ServerConnection(
+                        serverNode,
+                        TestingClientMetricGroup.newInstance(),
+                        clientAuthenticator,
+                        (con, failure) -> {
+                            if (failure) {
+                                failures.incrementAndGet();
+                            }
+                        },
+                        con -> {});
+        try {
+            CompletableFuture<ApiMessage> first =
+                    connection.send(ApiKeys.API_VERSIONS, new ApiVersionsRequest());
+            CompletableFuture<ApiMessage> second =
+                    connection.send(ApiKeys.API_VERSIONS, new ApiVersionsRequest());
+            connection.connect(deferred, 100);
+            connection.connect(deferred, 100);
+            verify(deferred, never()).connect(any(String.class), anyInt());
+            timer.get().run();
+            assertThatThrownBy(() -> first.get(10, TimeUnit.SECONDS))
+                    .hasCauseInstanceOf(NetworkException.class);
+            assertThatThrownBy(() -> second.get(10, TimeUnit.SECONDS))
+                    .hasCauseInstanceOf(NetworkException.class);
+            connection.connect(deferred, 0);
+            timer.get().run();
+            verify(deferred).connect(any(String.class), anyInt());
+            verify(loop).schedule(any(Runnable.class), eq(100L), eq(TimeUnit.NANOSECONDS));
+            assertThat(failures.get()).isEqualTo(1);
+        } finally {
+            channel.finishAndReleaseAll();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testWriteFailurePublishesBeforeCompletingQueuedRequests(boolean wrapped) throws Exception {
+        Throwable failure =
+                wrapped ? new NetworkException("write failed") : new IOException("write failed");
+        EmbeddedChannel channel =
+                new EmbeddedChannel(
+                        new ChannelOutboundHandlerAdapter() {
+                            @Override
+                            public void write(
+                                    ChannelHandlerContext ctx,
+                                    Object message,
+                                    ChannelPromise promise) {
+                                ReferenceCountUtil.release(message);
+                                promise.setFailure(failure);
+                            }
+                        });
+        Bootstrap connected = spy(new Bootstrap().group(eventLoopGroup));
+        doReturn(channel.newSucceededFuture()).when(connected).connect(any(String.class), anyInt());
+        AtomicReference<Boolean> published = new AtomicReference<>();
+        ServerConnection connection =
+                new ServerConnection(
+                        serverNode,
+                        TestingClientMetricGroup.newInstance(),
+                        clientAuthenticator,
+                        (con, transportFailure) -> published.set(transportFailure),
+                        con -> {});
+        try {
+            CompletableFuture<ApiMessage> first =
+                    connection.send(
+                            ApiKeys.API_VERSIONS,
+                            new ApiVersionsRequest()
+                                    .setClientSoftwareName("first")
+                                    .setClientSoftwareVersion("1.0"));
+            CompletableFuture<ApiMessage> second =
+                    connection.send(
+                            ApiKeys.API_VERSIONS,
+                            new ApiVersionsRequest()
+                                    .setClientSoftwareName("second")
+                                    .setClientSoftwareVersion("1.0"));
+            CompletableFuture<Boolean> observed =
+                    first.handle(
+                            (response, error) ->
+                                    error != null
+                                            && Boolean.TRUE.equals(published.get())
+                                            && connection.getConnectionState()
+                                                    == ConnectionState.DISCONNECTED);
+            connection.connect(connected, 0);
+            assertThat(observed.get(10, TimeUnit.SECONDS)).isTrue();
+            assertThatThrownBy(() -> second.get(10, TimeUnit.SECONDS))
+                    .hasCauseInstanceOf(NetworkException.class);
+            assertThat(connection.numInflightRequests()).isZero();
+        } finally {
+            channel.finishAndReleaseAll();
+        }
+    }
+
+    @Test
+    void testIdleCloseIsLocalBeforeChannelInactive() {
+        AtomicReference<Boolean> transportFailure = new AtomicReference<>();
+        ServerConnection connection =
+                new ServerConnection(
+                        serverNode,
+                        TestingClientMetricGroup.newInstance(),
+                        clientAuthenticator,
+                        (con, failure) -> transportFailure.set(failure),
+                        con -> {});
+        ClientHandlerCallback callback = connection.new ResponseCallback();
+        EmbeddedChannel channel = new EmbeddedChannel(new NettyClientHandler(callback));
+        try {
+            channel.pipeline().fireUserEventTriggered(IdleStateEvent.ALL_IDLE_STATE_EVENT);
+            assertThat(channel.isActive()).isFalse();
+            assertThat(transportFailure.get()).isFalse();
+        } finally {
+            channel.finishAndReleaseAll();
         }
     }
 

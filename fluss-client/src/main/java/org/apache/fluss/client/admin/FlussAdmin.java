@@ -36,6 +36,7 @@ import org.apache.fluss.config.cluster.ConfigEntry;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.exception.PartitionNotExistException;
+import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.metadata.BucketInfo;
 import org.apache.fluss.metadata.DatabaseChange;
 import org.apache.fluss.metadata.DatabaseDescriptor;
@@ -133,6 +134,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.function.Supplier;
 
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeAlterDatabaseRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeAlterTableRequest;
@@ -143,6 +145,7 @@ import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeListOffset
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makePbPartitionSpec;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeRegisterProducerOffsetsRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.toConfigEntries;
+import static org.apache.fluss.client.utils.MetadataUtils.getOneAvailableTabletServerNode;
 import static org.apache.fluss.client.utils.MetadataUtils.sendMetadataRequestAndRebuildCluster;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindings;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toPbAclBindingFilters;
@@ -182,16 +185,50 @@ public class FlussAdmin implements Admin {
         this.gateway =
                 GatewayClientProxy.createGatewayProxy(
                         metadataUpdater::getCoordinatorServer, client, AdminGateway.class);
-        AdminGateway rawReadOnlyGateway =
-                GatewayClientProxy.createGatewayProxy(
-                        metadataUpdater::getRandomTabletServer, client, AdminGateway.class);
+        Supplier<AdminGateway> readOnlyGatewayFactory = () -> newReadOnlyGateway(client);
         this.readOnlyGateway =
                 RetryableGatewayClientProxy.createRetryableGatewayProxy(
-                        rawReadOnlyGateway,
+                        readOnlyGatewayFactory,
                         metadataUpdater::refreshClusterUntilAvailable,
                         refreshExecutor,
                         AdminGateway.class);
         this.metadataUpdater = metadataUpdater;
+    }
+
+    private AdminGateway newReadOnlyGateway(RpcClient client) {
+        return GatewayClientProxy.createGatewayProxy(
+                new Supplier<ServerNode>() {
+                    private ServerNode firstNode;
+
+                    @Override
+                    public ServerNode get() {
+                        ServerNode selected;
+                        if (firstNode == null) {
+                            firstNode = metadataUpdater.getRandomTabletServer();
+                            selected = firstNode;
+                        } else {
+                            List<ServerNode> nodes =
+                                    metadataUpdater.getCluster().getAliveTabletServerList();
+                            List<ServerNode> alternatives = new ArrayList<>(nodes);
+                            alternatives.removeIf(
+                                    node ->
+                                            node.host().equals(firstNode.host())
+                                                    && node.port() == firstNode.port());
+                            List<ServerNode> candidates =
+                                    alternatives.isEmpty() ? nodes : alternatives;
+                            selected =
+                                    getOneAvailableTabletServerNode(
+                                            candidates, client::isBackingOff);
+                        }
+                        if (selected == null) {
+                            throw new StaleMetadataException(
+                                    "No tablet server available for read-only request.");
+                        }
+                        return selected;
+                    }
+                },
+                client,
+                AdminGateway.class);
     }
 
     @Override
