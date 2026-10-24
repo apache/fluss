@@ -1174,6 +1174,37 @@ These metrics provide a server-wide view of RocksDB resource usage. The total me
   </tbody>
 </table>
 
+The following cumulative counters add exactly 12 series per TabletServer. They have no table,
+partition or bucket labels. Counters reset on TabletServer restart; DB closure or migration does not
+subtract previously accumulated events. The Prometheus reporter exports Fluss counters as gauges;
+use their cumulative values with `rate()` over a suitable interval.
+
+| Metric | Labels | Description | Type |
+| --- | --- | --- | --- |
+| rocksdbSharedBlockCacheHitsTotal | `block_type=data/index/filter` | Native block cache hits summed across DBs using this server's shared block cache. | Counter |
+| rocksdbSharedBlockCacheMissesTotal | `block_type=data/index/filter` | Corresponding native cache misses, not physical disk reads. | Counter |
+| rocksdbReadExecutionCountTotal | `operation=get/multiGet/prefixScan` | Completed read attempts, including failures. One MultiGet batch or complete prefix traversal counts once. | Counter |
+| rocksdbReadExecutionTimeUsTotal | `operation=get/multiGet/prefixScan` | Cumulative wall-clock time of the corresponding read execution segments, in microseconds. | Counter |
+
+Shared cache counters exclude independent DB caches, write buffer accounting caches and the OS page
+cache. They remain zero when the shared block cache is disabled. Collection reads six native tickers
+per participating DB per scrape, without enumerating cache entries. Private collection cursors retain
+six longs per participating DB, in addition to map/object overhead. Failed reads preserve the last
+cursor and accumulated total; the next successful read catches up. Failures are logged at debug level;
+a failed final collection can lose the remaining unsampled events.
+
+Read execution includes `get`, `multiGetAsList`, and the entire prefix `readAll()` seek, iteration and
+result materialization. It covers all callers, including pre-write old-value reads, but excludes RPC
+queueing, asynchronous acknowledgements, snapshot/iterator creation and close, and caller processing.
+The hot path adds two clock reads and two concurrent counter updates per attempt, with no per-row
+instrumentation. Time is accumulated in nanoseconds before conversion to microseconds.
+
+`rate(time) / rate(count)` gives average execution time; cumulative wall time includes concurrent
+calls and is not CPU usage. Cache access rate is `rate(hits) + rate(misses)` and miss ratio is
+`rate(misses) / (rate(hits) + rate(misses))`; a zero denominator means no observed accesses. Cache misses
+and high cache usage alone do not prove harmful replacement or physical I/O. Use CPU/disk metrics and
+on-demand profiling to distinguish CPU work, page-cache reads and storage waits.
+
 #### Table-level RocksDB Memory Metrics (Sum Aggregation)
 
 <table class="table table-bordered">
