@@ -26,6 +26,7 @@ pub const EARLIEST_OFFSET: i64 = -2;
 
 mod append;
 mod batch_scanner;
+mod kv_value_decoder;
 mod lookup;
 
 mod log_fetch_buffer;
