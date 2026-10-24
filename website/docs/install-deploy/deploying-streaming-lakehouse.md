@@ -34,7 +34,7 @@ Fluss follows a simple convention for these keys:
 - Only configure options for the format selected by `datalake.format`.
 
 :::note
-The [Tiering Service](../streaming-lakehouse/tiering-service.md) is an independent Flink job or Spark application and needs the same lake format, catalog, and storage settings passed as `datalake.*` application arguments (see [Starting the Tiering Service](#starting-the-tiering-service)).
+The [Tiering Service](../streaming-lakehouse/tiering-service.md) is an independent Flink job or Spark application and needs the same `datalake.*` options passed as job arguments (see [Starting the Tiering Service](#starting-the-tiering-service)).
 :::
 
 <Tabs groupId="datalake-format">
@@ -161,7 +161,7 @@ Lance support is built into the Fluss distribution. Cloud storage credentials ar
 
 ## Starting the Tiering Service
 
-Choose Flink or Spark to continuously tier data from Fluss to the data lake. Both use the cluster and table configuration described in this guide. For execution models, configuration defaults, scaling, and recovery, see [Tiering Service](../streaming-lakehouse/tiering-service.md).
+The Tiering Service can run as a Flink job or Spark application that continuously tiers data from Fluss to the data lake. For architecture details, see [Tiering Service](../streaming-lakehouse/tiering-service.md).
 
 ### Flink
 
@@ -208,7 +208,7 @@ Add the following to `${FLINK_HOME}/lib`:
 </TabItem>
 </Tabs>
 
-If using S3, OSS, or HDFS as Fluss's [remote storage](../maintenance/tiered-storage/remote-storage.md), also add the corresponding [Fluss filesystem JAR](../maintenance/tiered-storage/filesystems/overview.md).
+If using S3, OSS, or HDFS as Fluss's [remote storage](../maintenance/tiered-storage/remote-storage.md), also add the corresponding [Fluss filesystem JAR](/downloads#filesystem-jars).
 
 #### Start the Service
 
@@ -313,7 +313,7 @@ Put Spark runtime options before the application JAR and Fluss, lake, and tierin
 
 ## Enabling Lakehouse for Tables
 
-Create tables with lakehouse storage enabled. The table settings are the same for either tiering engine. The following example uses Flink SQL; for Spark SQL, set these properties in `TBLPROPERTIES` as shown in [Lake-Enabled Tables](../engine-spark/reads.md#lake-enabled-tables-union-read).
+Create tables with lakehouse storage enabled:
 
 ```sql title="Flink SQL"
 CREATE TABLE my_table (
@@ -325,10 +325,14 @@ CREATE TABLE my_table (
 );
 ```
 
+For Spark SQL, set the same `table.datalake.*` properties in `TBLPROPERTIES` as shown in [Lake-Enabled Tables](../engine-spark/reads.md#lake-enabled-tables-union-read).
+
 ## Verification
 
-1. Check the tiering job or application in the Flink or Spark Web UI. For Spark, also check driver logs for table assignments and round failures.
-2. After a tiering round commits, query a table containing data. The freshness setting is a scheduling target; a backlog or limited resources can delay completion.
+### Flink
+
+1. Check the Tiering Service job is running in Flink Web UI
+2. After the freshness interval, query the table:
 
 ```sql title="Flink SQL"
 -- Union Read (real-time + historical)
@@ -341,3 +345,7 @@ SELECT * FROM my_table$lake;
 For Hudi lake-only reads, use Hudi's native catalog or another Hudi-compatible engine. The Fluss catalog `$lake` suffix currently exposes Paimon and Iceberg lake tables.
 
 See [Union Read](../streaming-lakehouse/union-read.md) for more details.
+
+### Spark
+
+Check the application in the Spark Web UI and the driver logs for table assignments and round failures. After a tiering round commits, query the data with Spark SQL as shown in [Lake-Enabled Tables](../engine-spark/reads.md#lake-enabled-tables-union-read). A backlog or limited resources can delay completion beyond the freshness target.
