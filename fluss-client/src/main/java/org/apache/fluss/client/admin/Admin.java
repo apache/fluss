@@ -643,6 +643,30 @@ public interface Admin extends AutoCloseable {
             OffsetSpec offsetSpec);
 
     /**
+     * Lists offsets for the specified buckets of a physical table or partition.
+     *
+     * <p>The supplied table and partition IDs are used for metadata routing and offset requests. If
+     * a table or partition is dropped and recreated with the same name, the new physical IDs are
+     * never substituted for the supplied IDs.
+     *
+     * <p>This method does not provide an atomic snapshot across multiple calls. Concurrent deletion
+     * may cause the lookup to fail, or an existing replica may still serve offsets for the original
+     * physical IDs while deletion propagates.
+     *
+     * @param tablePath the table path corresponding to the table ID
+     * @param tableId the physical table ID
+     * @param partitionId the physical partition ID, or null for a non-partitioned table
+     * @param buckets the buckets to fetch offsets for
+     * @param offsetSpec the offset specification
+     */
+    ListOffsetsResult listOffsets(
+            TablePath tablePath,
+            long tableId,
+            @Nullable Long partitionId,
+            Collection<Integer> buckets,
+            OffsetSpec offsetSpec);
+
+    /**
      * Asynchronously gets the statistics of this table.
      *
      * @return A future TableStats
