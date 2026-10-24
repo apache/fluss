@@ -76,6 +76,14 @@ object SparkPartitionPredicate {
   /**
    * Tests whether a partition (described by its ordered partition values) matches the given
    * predicate. Returns true when no predicate is provided.
+   *
+   * Callers pass the partition values reported by a lake split, and
+   * [[org.apache.fluss.lake.source.LakeSplit#partition]] requires one value per partition column
+   * for a partitioned table — a null/empty list is only legal for a non-partitioned table. An arity
+   * mismatch therefore means the lake plugin broke that contract, and it is rejected rather than
+   * silently admitted: the scan builder drops the partition predicate from the post-scan filters it
+   * hands back to Spark, so a split admitted here is never re-filtered and would leak rows from
+   * non-matching partitions into the result.
    */
   def matchesPartition(
       tableInfo: TableInfo,
@@ -83,9 +91,15 @@ object SparkPartitionPredicate {
       partitionPredicate: Option[FlussPredicate]): Boolean =
     partitionPredicate match {
       case None => true
-      case Some(_) if partitionValues.isEmpty => true
       case Some(predicate) =>
         val rowType = PartitionUtils.partitionRowType(tableInfo)
+        if (partitionValues.size != rowType.getFieldCount) {
+          throw new IllegalArgumentException(
+            s"Cannot evaluate partition filter for table ${tableInfo.getTablePath}: " +
+              s"expected ${rowType.getFieldCount} partition value(s) for partition key(s) " +
+              s"${rowType.getFieldNames.asScala.mkString("[", ", ", "]")}, but the lake split " +
+              s"reported ${partitionValues.size}: ${partitionValues.mkString("[", ", ", "]")}.")
+        }
         predicate.test(PartitionUtils.toPartitionRow(partitionValues.asJava, rowType))
     }
 }
