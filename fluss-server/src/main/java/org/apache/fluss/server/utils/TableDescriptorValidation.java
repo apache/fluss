@@ -22,6 +22,7 @@ import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOption;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.FlussConfigUtils;
 import org.apache.fluss.config.ReadableConfig;
 import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.InvalidAlterTableException;
@@ -867,7 +868,12 @@ public class TableDescriptorValidation {
 
     private static void validateOptionValue(ReadableConfig options, ConfigOption<?> option) {
         try {
-            options.get(option);
+            if (ConfigOptions.TABLE_DATALAKE_TIERING_GROUP.key().equals(option.key())) {
+                FlussConfigUtils.validateTieringGroup(
+                        options.get(ConfigOptions.TABLE_DATALAKE_TIERING_GROUP));
+            } else {
+                options.get(option);
+            }
         } catch (Throwable t) {
             throw new InvalidConfigException(
                     String.format(

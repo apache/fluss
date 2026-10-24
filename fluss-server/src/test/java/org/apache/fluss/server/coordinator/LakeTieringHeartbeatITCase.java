@@ -42,6 +42,7 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -50,6 +51,7 @@ import java.util.Optional;
 import java.util.Set;
 
 import static org.apache.fluss.server.coordinator.CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
+import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newAlterTableRequest;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newCreateTableRequest;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitValue;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -195,6 +197,60 @@ class LakeTieringHeartbeatITCase {
                             INITIAL_COORDINATOR_EPOCH,
                             pbHeartbeatRespForTable.getTableId()));
         }
+
+        // Grouped tables are not assigned to legacy requests without a group field.
+        TablePath groupedTable = TablePath.of("fluss", "test_lake_table_4");
+        TableDescriptor groupedDescriptor =
+                TableDescriptor.builder()
+                        .schema(Schema.newBuilder().column("f1", DataTypes.INT()).build())
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(100))
+                        .property(ConfigOptions.TABLE_DATALAKE_TIERING_GROUP, "large")
+                        .build();
+        coordinatorGateway
+                .createTable(newCreateTableRequest(groupedTable, groupedDescriptor, false))
+                .get();
+        verifyNoAnyTableToTier();
+        verifyLakeTieringTableInfo(waitGetLakeTieringTableInfo("large"), 4L, 1L);
+
+        coordinatorGateway
+                .alterTable(
+                        newAlterTableRequest(
+                                groupedTable,
+                                Collections.singletonMap(
+                                        ConfigOptions.TABLE_DATALAKE_TIERING_GROUP.key(), "small"),
+                                Collections.emptyList(),
+                                Collections.emptyList(),
+                                false))
+                .get();
+        request = makeTieringHeartbeatRequest(new long[0], new long[] {4L}, new long[0]);
+        request.setTieringGroup("large");
+        request.addForceFinishedTable(4L);
+        assertThat(
+                        coordinatorGateway
+                                .lakeTieringHeartbeat(request)
+                                .get()
+                                .getFinishedTableRespsList())
+                .allSatisfy(response -> assertThat(response.hasError()).isFalse());
+        verifyLakeTieringTableInfo(waitGetLakeTieringTableInfo("small"), 4L, 2L);
+
+        coordinatorGateway
+                .alterTable(
+                        newAlterTableRequest(
+                                groupedTable,
+                                Collections.emptyMap(),
+                                Collections.singletonList(
+                                        ConfigOptions.TABLE_DATALAKE_TIERING_GROUP.key()),
+                                Collections.emptyList(),
+                                false))
+                .get();
+        request =
+                makeTieringHeartbeatRequest(
+                        new long[0], new long[] {4L}, new long[0], INITIAL_COORDINATOR_EPOCH, 2);
+        request.setTieringGroup("small");
+        request.addForceFinishedTable(4L);
+        coordinatorGateway.lakeTieringHeartbeat(request).get();
+        verifyLakeTieringTableInfo(waitGetLakeTieringTableInfo(), 4L, 3L);
     }
 
     private void verifyNoAnyTableToTier() throws Exception {
@@ -231,12 +287,18 @@ class LakeTieringHeartbeatITCase {
     }
 
     private PbLakeTieringTableInfo waitGetLakeTieringTableInfo() {
+        return waitGetLakeTieringTableInfo(null);
+    }
+
+    private PbLakeTieringTableInfo waitGetLakeTieringTableInfo(String group) {
         return waitValue(
                 () -> {
+                    LakeTieringHeartbeatRequest request = makeRequestTableTieringHeartbeat();
+                    if (group != null) {
+                        request.setTieringGroup(group);
+                    }
                     LakeTieringHeartbeatResponse response =
-                            coordinatorGateway
-                                    .lakeTieringHeartbeat(makeRequestTableTieringHeartbeat())
-                                    .get();
+                            coordinatorGateway.lakeTieringHeartbeat(request).get();
                     if (response.hasTieringTable()) {
                         return Optional.of(response.getTieringTable());
                     } else {

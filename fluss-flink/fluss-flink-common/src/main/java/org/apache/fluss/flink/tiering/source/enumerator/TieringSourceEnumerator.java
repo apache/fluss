@@ -27,10 +27,12 @@ import org.apache.fluss.client.tiering.TieringSplit;
 import org.apache.fluss.client.tiering.TieringSplitGenerator;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.FlussConfigUtils;
 import org.apache.fluss.flink.metrics.FlinkMetricRegistry;
 import org.apache.fluss.flink.tiering.event.FailedTieringEvent;
 import org.apache.fluss.flink.tiering.event.FinishedTieringEvent;
 import org.apache.fluss.flink.tiering.event.TieringReachMaxDurationEvent;
+import org.apache.fluss.flink.tiering.source.TieringSourceOptions;
 import org.apache.fluss.flink.tiering.source.split.FlinkTieringSplit;
 import org.apache.fluss.flink.tiering.source.state.TieringSourceEnumeratorState;
 import org.apache.fluss.lake.committer.TieringStats;
@@ -115,6 +117,7 @@ public class TieringSourceEnumerator
     private final ScheduledExecutorService timerService;
     private final SplitEnumeratorMetricGroup enumeratorMetricGroup;
     private final long pollTieringTableIntervalMs;
+    private final String tieringGroup;
     // Also inspected by asynchronous heartbeat requests.
     private final Deque<TieringSplit> pendingSplits;
     private final Set<Integer> readersAwaitingSplit;
@@ -183,6 +186,8 @@ public class TieringSourceEnumerator
         this.timerService = timerService;
         this.enumeratorMetricGroup = context.metricGroup();
         this.pollTieringTableIntervalMs = pollTieringTableIntervalMs;
+        this.tieringGroup = flussConf.get(TieringSourceOptions.TIERING_GROUP);
+        FlussConfigUtils.validateTieringGroup(tieringGroup);
         this.pendingSplits = new ConcurrentLinkedDeque<>();
         this.readersAwaitingSplit = Collections.synchronizedSet(new TreeSet<>());
         this.tieringTableEpochs = new ConcurrentHashMap<>();
@@ -219,7 +224,7 @@ public class TieringSourceEnumerator
         try {
             LakeTieringHeartbeatResponse heartbeatResponse =
                     waitHeartbeatResponse(
-                            coordinatorGateway.lakeTieringHeartbeat(basicHeartBeat()));
+                            coordinatorGateway.lakeTieringHeartbeat(basicHeartBeat(tieringGroup)));
             this.flussCoordinatorEpoch = heartbeatResponse.getCoordinatorEpoch();
             LOG.info(
                     "Register Tiering Service to Fluss Coordinator(epoch={}) success.",
@@ -453,7 +458,7 @@ public class TieringSourceEnumerator
         Map<Long, Long> currentFailedTableEpochs = new HashMap<>(this.failedTableEpochs);
         LakeTieringHeartbeatRequest tieringHeartbeatRequest =
                 tieringTableHeartBeat(
-                        basicHeartBeat(),
+                        basicHeartBeat(tieringGroup),
                         this.tieringTableEpochs,
                         currentFinishedTables,
                         currentFailedTableEpochs,
@@ -642,7 +647,7 @@ public class TieringSourceEnumerator
                     waitHeartbeatResponse(
                             coordinatorGateway.lakeTieringHeartbeat(
                                     tieringTableHeartBeat(
-                                            basicHeartBeat(),
+                                            basicHeartBeat(tieringGroup),
                                             Collections.emptyMap(),
                                             currentFinishedTables,
                                             currentFailedTableEpochs,
@@ -660,8 +665,8 @@ public class TieringSourceEnumerator
     @VisibleForTesting
     static class HeartBeatHelper {
 
-        static LakeTieringHeartbeatRequest basicHeartBeat() {
-            return new LakeTieringHeartbeatRequest();
+        static LakeTieringHeartbeatRequest basicHeartBeat(String tieringGroup) {
+            return new LakeTieringHeartbeatRequest().setTieringGroup(tieringGroup);
         }
 
         static LakeTieringHeartbeatRequest heartBeatWithRequestNewTieringTable(

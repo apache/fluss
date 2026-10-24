@@ -91,6 +91,7 @@ The following `table.datalake.*` options are configured per table when creating 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `table.datalake.enabled` | Boolean | false | Enable lakehouse storage for this table |
+| `table.datalake.tiering-group` | String | default | Tiering service group responsible for this table |
 | `table.datalake.freshness` | Duration | 3min | Maximum lag between Fluss and lake data |
 | `table.datalake.auto-compaction` | Boolean | false | Auto-trigger compaction in the data lake |
 | `table.datalake.auto-expire-snapshot` | Boolean | false | Auto-expire snapshots in the data lake |
@@ -126,7 +127,17 @@ ${FLINK_HOME}/bin/flink run \
     ...
 ```
 
-Multiple tiering service jobs can run simultaneously. They are coordinated by the Fluss cluster to ensure exactly-once semantics and automatic load balancing.
+Multiple tiering service jobs can run simultaneously. Jobs in the same tiering group share the tables assigned to that group. To use a separate set of resources for large tables, start a job with `--fluss.tiering.group large` and configure those tables with:
+
+```sql
+ALTER TABLE large_table SET ('table.datalake.tiering-group' = 'large');
+```
+
+Tables and jobs without an explicit group use `default`. Group names are case-sensitive and follow Fluss table name rules: they must be 1 to 200 ASCII letters, digits, `_` or `-`, and cannot start with `__`. A table waits if no service in its group is available; it is not assigned to another group.
+
+Group changes take effect asynchronously after the Coordinator processes the table metadata update. An already assigned tiering round can finish in its original group; subsequent rounds use the updated group. `ALTER TABLE large_table RESET ('table.datalake.tiering-group')` restores the default group. Changing the group follows the existing lake catalog property update path. For legacy log tables without a recorded lake format, primary key, or bucket key, first enable datalake and then change the group in a separate ALTER.
+
+Upgrade all Coordinators before using non-default groups. A non-default group service fails when connected to a Coordinator that does not support groups. Default-group services retain the existing compatibility behavior. Before downgrading Coordinators, reset the `table.datalake.tiering-group` property on all tables and stop non-default-group services.
 
 ## Monitoring
 

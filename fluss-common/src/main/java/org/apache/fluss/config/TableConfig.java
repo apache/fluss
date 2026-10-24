@@ -148,6 +148,11 @@ public class TableConfig {
         return config.getOptional(ConfigOptions.TABLE_DATALAKE_FORMAT);
     }
 
+    /** Gets the tiering service group responsible for this table. */
+    public String getDataLakeTieringGroup() {
+        return config.get(ConfigOptions.TABLE_DATALAKE_TIERING_GROUP);
+    }
+
     /**
      * Gets the data lake freshness of the table. It defines the maximum amount of time that the
      * datalake table's content should lag behind updates to the Fluss table.

@@ -24,6 +24,9 @@ import org.apache.fluss.client.tiering.TieringSplit;
 import org.apache.fluss.client.tiering.TieringSplitGenerator;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.tiering.TestingLakeTieringFactory;
+import org.apache.fluss.flink.tiering.event.FailedTieringEvent;
+import org.apache.fluss.flink.tiering.event.FinishedTieringEvent;
+import org.apache.fluss.flink.tiering.source.TieringSourceOptions;
 import org.apache.fluss.flink.tiering.source.split.FlinkTieringSplit;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
@@ -64,6 +67,51 @@ import static org.mockito.Mockito.when;
 
 /** Tests for split assignment and table scheduling in {@link TieringSourceEnumerator}. */
 class TieringSourceEnumeratorSchedulingTest {
+
+    @ParameterizedTest
+    @ValueSource(strings = {"default", "large"})
+    void testTieringGroupIncludedInEveryHeartbeat(String group) throws Throwable {
+        Configuration configuration = new Configuration();
+        if (!group.equals(TieringSourceOptions.TIERING_GROUP.defaultValue())) {
+            configuration.set(TieringSourceOptions.TIERING_GROUP, group);
+        }
+        try (Fixture fixture = new Fixture(1, configuration)) {
+            configuration.set(TieringSourceOptions.TIERING_GROUP, "changed-after-start");
+            fixture.addTable(1, false);
+            fixture.requestTable();
+            fixture.context.runPeriodicCallable(0);
+            assertThat(fixture.requests.get(2).getTieringTablesList())
+                    .singleElement()
+                    .satisfies(table -> assertThat(table.getTableId()).isEqualTo(1));
+
+            fixture.enumerator.handleSourceEvent(0, new FinishedTieringEvent(1));
+            fixture.context.runNextOneTimeCallable();
+            assertThat(fixture.requests.get(3).getFinishedTablesList())
+                    .singleElement()
+                    .satisfies(table -> assertThat(table.getTableId()).isEqualTo(1));
+
+            fixture.addTable(2, false);
+            fixture.requestTable();
+            fixture.enumerator.handleSourceEvent(0, new FailedTieringEvent(2, "test failure"));
+            fixture.context.runNextOneTimeCallable();
+            assertThat(fixture.requests.get(5).getFailedTablesList())
+                    .singleElement()
+                    .satisfies(table -> assertThat(table.getTableId()).isEqualTo(2));
+
+            fixture.addTable(3, false);
+            fixture.requestTable();
+            fixture.closeEnumerator();
+            assertThat(fixture.requests.get(7).getFailedTablesList())
+                    .singleElement()
+                    .satisfies(table -> assertThat(table.getTableId()).isEqualTo(3));
+
+            assertThat(fixture.requests).hasSize(8);
+            assertThat(fixture.claims()).hasSize(3);
+            assertThat(fixture.requests)
+                    .extracting(LakeTieringHeartbeatRequest::getTieringGroup)
+                    .containsOnly(group);
+        }
+    }
 
     @Test
     void testPendingSplitsAssignedInOrder() throws Exception {
@@ -353,12 +401,16 @@ class TieringSourceEnumeratorSchedulingTest {
         }
 
         private Fixture(int parallelism) {
+            this(parallelism, new Configuration());
+        }
+
+        private Fixture(int parallelism, Configuration configuration) {
             this.context = new TestingContext(parallelism);
             when(gateway.lakeTieringHeartbeat(any()))
                     .thenAnswer(invocation -> respondToHeartbeat(invocation.getArgument(0)));
             enumerator =
                     new TieringSourceEnumerator(
-                            new Configuration(),
+                            configuration,
                             new Configuration(),
                             context,
                             new TestingLakeTieringFactory(),

@@ -2222,6 +2222,16 @@ public class ConfigOptions {
                             "Specifies the table name of the datalake table. This option is currently supported only for Paimon. "
                                     + "If not set, the Fluss table name is used. The option may be configured before the Paimon table is created and cannot be changed after creation.");
 
+    public static final ConfigOption<String> TABLE_DATALAKE_TIERING_GROUP =
+            key("table.datalake.tiering-group")
+                    .stringType()
+                    .defaultValue("default")
+                    .withDescription(
+                            "The tiering service group responsible for this table. "
+                                    + "Only tiering services in the same group receive the table. "
+                                    + "Group names are case-sensitive and must follow Fluss table name rules. "
+                                    + "Changes through ALTER TABLE apply asynchronously to subsequent tiering rounds.");
+
     public static final ConfigOption<Duration> TABLE_DATALAKE_FRESHNESS =
             key("table.datalake.freshness")
                     .durationType()
