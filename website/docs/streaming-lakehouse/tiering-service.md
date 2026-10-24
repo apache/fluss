@@ -98,22 +98,18 @@ The following `--lake.tiering.*` options are set when starting the tiering job:
 
 ### Spark Options
 
-The Spark entry point accepts the same `--fluss.*`, `--datalake.*`, and `--lake.tiering.*` argument groups shown above. Set `--datalake.format` and the catalog/storage options to match the Fluss cluster; the application does not inherit `server.yaml`. The `fluss.` and `datalake.<format>.` prefixes are stripped, while `lake.tiering.` is retained.
+The Spark tiering job uses the same `--fluss.*`, `--datalake.*`, and `--lake.tiering.*` argument groups as Flink. For required JARs and a `spark-submit` example, see [Spark deployment](../install-deploy/deploying-streaming-lakehouse.md#spark).
 
-The `lake.tiering.auto-expire-snapshot` and `lake.tiering.partition.mark-done.enabled` options have the same defaults as above. For Spark, `lake.tiering.io.tmp.dirs` is unset by default; the Paimon writer then uses the executor JVM's `java.io.tmpdir`. Explicit paths must be writable on every executor.
+The following `--fluss.tiering.*` options are set when starting the Spark tiering job:
 
-Pass Spark runtime options such as `--master`, `--deploy-mode`, `--executor-cores`, and `--conf` before the JAR. Pass service arguments after the JAR as `--key value` or `--key=value`; quote duration values containing spaces.
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `fluss.tiering.poll.table.interval` | Duration | 30 s | Interval between table requests when no table is available or a request fails |
+| `fluss.tiering.heartbeat.interval` | Duration | 10 s | Background heartbeat interval during a tiering round |
+| `fluss.tiering.poll.timeout` | Duration | 10 s | Timeout for polling Fluss records on executors |
+| `fluss.tiering.heartbeat.max.failures` | Integer | 10 | Maximum consecutive heartbeat failures before the application fails |
 
-The following service options are read from the Fluss configuration, so the CLI requires the **`--fluss.` prefix**. For example, use `--fluss.tiering.heartbeat.interval "10 s"`.
-
-| Option in Fluss configuration | Application argument | Default | Description |
-|-------------------------------|----------------------|---------|-------------|
-| `tiering.poll.table.interval` | `--fluss.tiering.poll.table.interval` | 30 s | Delay before requesting another table when none is available, or after a failed assignment-request heartbeat |
-| `tiering.heartbeat.interval` | `--fluss.tiering.heartbeat.interval` | 10 s | Background heartbeat interval during an active tiering round |
-| `tiering.poll.timeout` | `--fluss.tiering.poll.timeout` | 10 s | Timeout for polling Fluss records on executors; does not limit the duration of a round |
-| `tiering.heartbeat.max.failures` | `--fluss.tiering.heartbeat.max.failures` | 10 | Consecutive heartbeat failures tolerated before the service fails; reaching this count triggers failure |
-
-All four values must be positive. A successful heartbeat resets the failure count.
+For Spark, `lake.tiering.io.tmp.dirs` is unset by default; the Paimon writer uses the executor JVM's `java.io.tmpdir`. Other `lake.tiering.*` defaults are the same as for Flink.
 
 ### Table-Level Options
 
@@ -163,15 +159,9 @@ Multiple tiering service jobs can run simultaneously. They are coordinated by th
 
 ### Spark
 
-Increase executor resources to run more split tasks concurrently. The number of RDD partitions is explicitly set to the number of generated splits, so `spark.default.parallelism` and `spark.sql.shuffle.partitions` do not set tiering parallelism. Actual concurrency is bounded by the split count and available executor task slots.
+Each Spark application currently runs a single tiering job and processes one table at a time. To run multiple tiering jobs concurrently, start multiple Spark applications. The Fluss coordinator assigns tables to these applications.
 
-Each Spark application processes one table at a time. Run multiple applications to tier different tables concurrently.
-
-## Failure Recovery
-
-### Spark
-
-Spark tiering recovers progress from committed lake snapshots and Fluss offsets, without a streaming checkpoint directory. Spark retries failed tasks according to its task retry settings. If a table round fails, the service reports the failure to the Fluss coordinator for rescheduling. A rejected assignment or coordinator epoch change cancels the active round. Reaching `tiering.heartbeat.max.failures` fails the application; configure application restart through your cluster manager or resubmit it. The driver loop does not restart a failed application itself.
+Within a tiering job, splits can run in parallel. Increase executor resources to run more split tasks concurrently, up to the number of generated splits.
 
 ## Monitoring
 
