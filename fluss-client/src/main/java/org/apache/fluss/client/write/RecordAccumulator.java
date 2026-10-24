@@ -394,6 +394,7 @@ public final class RecordAccumulator {
         Set<Integer> readyNodes = new HashSet<>();
         long nextReadyCheckDelayMs = Long.MAX_VALUE;
         Set<PhysicalTablePath> unknownLeaderTables = new HashSet<>();
+        Set<PhysicalTablePath> invalidBucketTables = new HashSet<>();
         // Go table by table so that we can get queue sizes for buckets in a table and calculate
         // cumulative frequency table (used in bucket assigner).
 
@@ -403,6 +404,7 @@ public final class RecordAccumulator {
                             bucketAndWriteBatches,
                             readyNodes,
                             unknownLeaderTables,
+                            invalidBucketTables,
                             cluster,
                             nextReadyCheckDelayMs);
         }
@@ -416,7 +418,8 @@ public final class RecordAccumulator {
             nextReadyCheckDelayMs = Math.min(nextReadyCheckDelayMs, batchTimeoutMs);
         }
 
-        return new ReadyCheckResult(readyNodes, nextReadyCheckDelayMs, unknownLeaderTables);
+        return new ReadyCheckResult(
+                readyNodes, nextReadyCheckDelayMs, unknownLeaderTables, invalidBucketTables);
     }
 
     /**
@@ -802,6 +805,7 @@ public final class RecordAccumulator {
             BucketAndWriteBatches bucketAndWriteBatches,
             Set<Integer> readyNodes,
             Set<PhysicalTablePath> unknownLeaderTables,
+            Set<PhysicalTablePath> invalidBucketTables,
             Cluster cluster,
             long nextReadyCheckDelayMs) {
         PhysicalTablePath targetPath = bucketAndWriteBatches.targetPath;
@@ -864,6 +868,12 @@ public final class RecordAccumulator {
                 // a metadata refresh is orthogonal to the gate (it sends no data), and refreshing
                 // now means the leader is ready to receive once the gate clears.
                 unknownLeaderTables.add(targetPath);
+                Integer bucketCount =
+                        cluster.getBucketCount(TableOrPartition.of(tableId, partitionId))
+                                .orElse(null);
+                if (bucketCount != null && bucketCount > 0 && bucketId >= bucketCount) {
+                    invalidBucketTables.add(targetPath);
+                }
                 continue;
             }
 
@@ -1611,14 +1621,17 @@ public final class RecordAccumulator {
         public final Set<Integer> readyNodes;
         public final long nextReadyCheckDelayMs;
         public final Set<PhysicalTablePath> unknownLeaderTables;
+        public final Set<PhysicalTablePath> invalidBucketTables;
 
         public ReadyCheckResult(
                 Set<Integer> readyNodes,
                 long nextReadyCheckDelayMs,
-                Set<PhysicalTablePath> unknownLeaderTables) {
+                Set<PhysicalTablePath> unknownLeaderTables,
+                Set<PhysicalTablePath> invalidBucketTables) {
             this.readyNodes = readyNodes;
             this.nextReadyCheckDelayMs = nextReadyCheckDelayMs;
             this.unknownLeaderTables = unknownLeaderTables;
+            this.invalidBucketTables = invalidBucketTables;
         }
     }
 

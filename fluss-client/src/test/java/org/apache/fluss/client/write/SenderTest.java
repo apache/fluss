@@ -51,12 +51,17 @@ import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.encode.CompactedKeyEncoder;
 import org.apache.fluss.rpc.entity.ProduceLogResultForBucket;
 import org.apache.fluss.rpc.entity.PutKvResultForBucket;
+import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.messages.ApiMessage;
+import org.apache.fluss.rpc.messages.MetadataRequest;
+import org.apache.fluss.rpc.messages.MetadataResponse;
+import org.apache.fluss.rpc.messages.PbTableMetadata;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.ProduceLogResponse;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.messages.PutKvResponse;
 import org.apache.fluss.rpc.protocol.Errors;
+import org.apache.fluss.server.coordinator.TestCoordinatorGateway;
 import org.apache.fluss.server.entity.ProduceLogDataForBucket;
 import org.apache.fluss.server.entity.PutKvDataForBucket;
 import org.apache.fluss.server.tablet.TestTabletServerGateway;
@@ -92,6 +97,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
@@ -2138,6 +2144,99 @@ final class SenderTest {
         assertThat(sender.numOfInFlightBatches(tb1)).isZero();
         assertThat(sender.numOfInFlightBatches(tb2)).isZero();
         assertThat(accumulator.hasIncomplete()).isFalse();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testOutOfRangeBucketConfirmedByCoordinator(boolean coordinatorHasBucket) throws Exception {
+        sender.destroyResources();
+        AtomicInteger metadataRequests = new AtomicInteger();
+        metadataUpdater =
+                new TestingMetadataUpdater(
+                        Collections.singletonMap(DATA1_TABLE_PATH, DATA1_TABLE_INFO)) {
+                    @Override
+                    public CoordinatorGateway newCoordinatorServerClient() {
+                        return new TestCoordinatorGateway() {
+                            @Override
+                            public CompletableFuture<MetadataResponse> metadata(
+                                    MetadataRequest request) {
+                                metadataRequests.incrementAndGet();
+                                MetadataResponse response = new MetadataResponse();
+                                ServerNode node = TestingMetadataUpdater.NODE1;
+                                response.addTabletServer()
+                                        .setNodeId(node.id())
+                                        .setHost(node.host())
+                                        .setPort(node.port());
+                                PbTableMetadata table =
+                                        response.addTableMetadata().setTableId(DATA1_TABLE_ID);
+                                table.setTablePath()
+                                        .setDatabaseName(DATA1_TABLE_PATH.getDatabaseName())
+                                        .setTableName(DATA1_TABLE_PATH.getTableName());
+                                for (int i = 0; i < (coordinatorHasBucket ? 3 : 1); i++) {
+                                    table.addBucketMetadata()
+                                            .setBucketId(i)
+                                            .setLeaderId(node.id())
+                                            .addReplicaId(node.id());
+                                }
+                                return CompletableFuture.completedFuture(response);
+                            }
+                        };
+                    }
+                };
+        Cluster original = metadataUpdater.getCluster();
+        metadataUpdater.updateCluster(
+                new Cluster(
+                        original.getAliveTabletServers(),
+                        original.getCoordinatorServer(),
+                        original.getBucketLocationsByPath(),
+                        original.getTableIdByPath(),
+                        Collections.emptyMap(),
+                        Collections.singletonMap(TableOrPartition.ofTable(DATA1_TABLE_ID), 3)));
+        sender = setupWithIdempotenceState();
+        CompletableFuture<Exception> inflight = new CompletableFuture<>();
+        CompletableFuture<Exception> queued = new CompletableFuture<>();
+        appendToAccumulator(tb1, row(0, "inflight"), (tb, leo, e) -> inflight.complete(e));
+        sender.runOnce();
+        TableBucket missingBucket = new TableBucket(DATA1_TABLE_ID, 1);
+        appendToAccumulator(missingBucket, row(1, "queued"), (tb, leo, e) -> queued.complete(e));
+        PhysicalTablePath path = PhysicalTablePath.of(DATA1_TABLE_PATH);
+        metadataUpdater.updateCluster(
+                new Cluster(
+                        original.getAliveTabletServers(),
+                        original.getCoordinatorServer(),
+                        Collections.singletonMap(
+                                path,
+                                Collections.singletonList(original.getBucketLocation(tb1).get())),
+                        original.getTableIdByPath(),
+                        Collections.emptyMap(),
+                        Collections.singletonMap(TableOrPartition.ofTable(DATA1_TABLE_ID), 1)));
+        accumulator.beginFlush();
+
+        sender.runOnce();
+        assertThat(metadataRequests.get()).isOne();
+        if (coordinatorHasBucket) {
+            // A stale tablet cache must not cause a valid buffered write to fail or be re-routed.
+            assertThat(sender.isRunning()).isTrue();
+            assertThat(queued).isNotDone();
+            sender.runOnce();
+            ProduceLogRequest request = (ProduceLogRequest) node1Gateway().getRequest(1);
+            assertThat(request.getBucketsReqAt(0).getBucketId()).isEqualTo(1);
+            assertThat(request.getBucketsReqAt(0).getRoutingBucketCount()).isEqualTo(3);
+            node1Gateway().response(0, createProduceLogResponse(tb1, 0, 1));
+            node1Gateway().response(0, createProduceLogResponse(missingBucket, 0, 1));
+            assertThat(inflight.get(10, TimeUnit.SECONDS)).isNull();
+            assertThat(queued.get(10, TimeUnit.SECONDS)).isNull();
+        } else {
+            assertThat(sender.isRunning()).isFalse();
+            assertThat(inflight.get(10, TimeUnit.SECONDS))
+                    .isInstanceOf(InvalidBucketRoutingException.class);
+            assertThat(queued.get(10, TimeUnit.SECONDS))
+                    .isInstanceOf(InvalidBucketRoutingException.class);
+            assertThat(sender.numOfInFlightBatches(tb1)).isZero();
+        }
+        assertThat(accumulator.hasIncomplete()).isFalse();
+        assertThat(accumulator.hasUnDrained()).isFalse();
+        accumulator.awaitFlushCompletion();
     }
 
     private TestingMetadataUpdater initializeMetadataUpdater() {

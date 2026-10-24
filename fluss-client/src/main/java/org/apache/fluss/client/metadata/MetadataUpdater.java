@@ -54,6 +54,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArraySet;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
 
@@ -248,6 +249,11 @@ public class MetadataUpdater {
             throws PartitionNotExistException {
         ServerNode serverNode =
                 getOneAvailableTabletServerNode(cluster, unavailableTabletServerIds);
+        boolean refreshingTableMetadata =
+                (tablePaths != null && !tablePaths.isEmpty())
+                        || (tablePartitionNames != null && !tablePartitionNames.isEmpty())
+                        || (tablePartitionIds != null && !tablePartitionIds.isEmpty());
+        boolean retryingCoordinator = false;
         try {
             synchronized (this) {
                 if (serverNode == null) {
@@ -255,14 +261,28 @@ public class MetadataUpdater {
                             "No available tablet server to update metadata, try to re-initialize cluster using bootstrap server.");
                     cluster = initializeCluster(conf, rpcClient);
                 } else {
-                    cluster =
-                            sendMetadataRequestAndRebuildCluster(
-                                    cluster,
-                                    rpcClient,
-                                    tablePaths,
-                                    tablePartitionNames,
-                                    tablePartitionIds,
-                                    serverNode);
+                    try {
+                        cluster =
+                                sendMetadataRequestAndRebuildCluster(
+                                        cluster,
+                                        rpcClient,
+                                        tablePaths,
+                                        tablePartitionNames,
+                                        tablePartitionIds,
+                                        serverNode);
+                    } catch (Exception e) {
+                        if (!refreshingTableMetadata
+                                || !(stripExecutionException(e)
+                                        instanceof StaleMetadataException)) {
+                            throw e;
+                        }
+                        // A tablet may still describe the previous instance of a reused name.
+                        // Retry once against the coordinator, including the owning tables.
+                        retryingCoordinator = true;
+                        cluster =
+                                fetchMetadataFromCoordinator(
+                                        tablePaths, tablePartitionNames, tablePartitionIds);
+                    }
                 }
             }
 
@@ -275,7 +295,18 @@ public class MetadataUpdater {
             }
         } catch (Exception e) {
             Throwable t = stripExecutionException(e);
-            if (t instanceof RetriableException || t instanceof TimeoutException) {
+            if (refreshingTableMetadata && t instanceof StaleMetadataException) {
+                // The authoritative retry also failed. Do not let callers interpret an
+                // unsuccessful refresh as proof that a partition does not exist.
+                throw (StaleMetadataException) t;
+            } else if (t instanceof RetriableException || t instanceof TimeoutException) {
+                if (retryingCoordinator) {
+                    StaleMetadataException failure =
+                            new StaleMetadataException(
+                                    "Could not confirm stale tablet metadata with the coordinator.");
+                    failure.initCause(t);
+                    throw failure;
+                }
                 if (serverNode != null) {
                     unavailableTabletServerIds.add(serverNode.id());
                     LOG.warn(
@@ -291,6 +322,38 @@ public class MetadataUpdater {
                 throw new FlussRuntimeException("Failed to update metadata", t);
             }
         }
+    }
+
+    /** Refreshes physical table layouts from the coordinator before rejecting stale routing. */
+    public synchronized Cluster updatePhysicalTableMetadataFromCoordinator(
+            Set<PhysicalTablePath> physicalTablePaths)
+            throws ExecutionException, InterruptedException, TimeoutException {
+        Set<TablePath> tables = new HashSet<>();
+        Set<PhysicalTablePath> partitions = new HashSet<>();
+        for (PhysicalTablePath path : physicalTablePaths) {
+            tables.add(path.getTablePath());
+            if (path.getPartitionName() != null) {
+                partitions.add(path);
+            }
+        }
+        cluster = fetchMetadataFromCoordinator(tables, partitions, null);
+        return cluster;
+    }
+
+    private Cluster fetchMetadataFromCoordinator(
+            @Nullable Set<TablePath> tablePaths,
+            @Nullable Collection<PhysicalTablePath> partitions,
+            @Nullable Collection<Long> partitionIds)
+            throws ExecutionException, InterruptedException, TimeoutException {
+        if (getCoordinatorServer() == null) {
+            throw new StaleMetadataException("Coordinator is unknown while refreshing metadata.");
+        }
+        Set<TablePath> tables = tablePaths == null ? new HashSet<>() : new HashSet<>(tablePaths);
+        if (partitions != null) {
+            partitions.forEach(path -> tables.add(path.getTablePath()));
+        }
+        return sendMetadataRequestAndRebuildCluster(
+                newCoordinatorServerClient(), true, cluster, tables, partitions, partitionIds);
     }
 
     /**

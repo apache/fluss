@@ -627,6 +627,9 @@ public class ServerRpcMessageUtils {
                 .setTableName(tablePath.getTableName());
         pbTableMetadata.addAllBucketMetadatas(
                 toPbBucketMetadata(tableMetadata.getBucketMetadataList()));
+        if (tableMetadata.getDeletedTableId() != null) {
+            pbTableMetadata.setDeletedTableId(tableMetadata.getDeletedTableId());
+        }
         return pbTableMetadata;
     }
 
@@ -715,7 +718,10 @@ public class ServerRpcMessageUtils {
             bucketMetadata.add(toBucketMetadata(pbBucketMetadata));
         }
 
-        return new TableMetadata(tableInfo, bucketMetadata);
+        return new TableMetadata(
+                tableInfo,
+                bucketMetadata,
+                pbTableMetadata.hasDeletedTableId() ? pbTableMetadata.getDeletedTableId() : null);
     }
 
     private static BucketMetadata toBucketMetadata(PbBucketMetadata pbBucketMetadata) {
