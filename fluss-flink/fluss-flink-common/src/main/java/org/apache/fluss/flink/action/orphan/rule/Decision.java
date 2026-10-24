@@ -37,6 +37,9 @@ public enum Decision {
      */
     DEFER,
 
+    /** File modification time is unavailable; retain the file conservatively. */
+    MTIME_UNAVAILABLE,
+
     /** File path or extension is not recognized; skip without deletion. */
     SKIP_UNKNOWN
 }

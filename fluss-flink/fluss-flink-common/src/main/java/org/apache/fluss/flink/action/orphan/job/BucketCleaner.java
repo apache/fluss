@@ -29,7 +29,6 @@ import org.apache.fluss.fs.FileStatus;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.shaded.guava32.com.google.common.util.concurrent.RateLimiter;
-import org.apache.fluss.utils.FlussPaths;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -116,9 +115,6 @@ public final class BucketCleaner {
             for (FileStatus child : children) {
                 FsPath childPath = child.getPath();
                 if (child.isDir()) {
-                    if (FlussPaths.REMOTE_KV_SNAPSHOT_SHARED_DIR.equals(childPath.getName())) {
-                        continue;
-                    }
                     stack.push(
                             new DirVisit(
                                     childPath, false, child.getModificationTime() < cutoffMillis));
