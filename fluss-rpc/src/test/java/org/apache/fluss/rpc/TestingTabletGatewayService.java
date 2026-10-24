@@ -87,6 +87,8 @@ import org.apache.fluss.rpc.messages.PrefixLookupRequest;
 import org.apache.fluss.rpc.messages.PrefixLookupResponse;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.ProduceLogResponse;
+import org.apache.fluss.rpc.messages.PutIndexRequest;
+import org.apache.fluss.rpc.messages.PutIndexResponse;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.messages.PutKvResponse;
 import org.apache.fluss.rpc.messages.ScanKvRequest;
@@ -140,6 +142,11 @@ public class TestingTabletGatewayService extends TestingGatewayService
 
     @Override
     public CompletableFuture<PutKvResponse> putKv(PutKvRequest request) {
+        return null;
+    }
+
+    @Override
+    public CompletableFuture<PutIndexResponse> putIndex(PutIndexRequest request) {
         return null;
     }
 

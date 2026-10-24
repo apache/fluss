@@ -72,6 +72,10 @@ class IcebergBinaryRowWriter {
         return result;
     }
 
+    int capacity() {
+        return buffer.length;
+    }
+
     public void writeBoolean(boolean value) {
         ensureCapacity(1);
         UnsafeUtils.putBoolean(buffer, cursor, value);

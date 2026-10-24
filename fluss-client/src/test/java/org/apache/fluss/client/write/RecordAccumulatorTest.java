@@ -31,6 +31,7 @@ import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TableOrPartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.Gauge;
 import org.apache.fluss.metrics.MetricNames;
@@ -81,6 +82,9 @@ import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
+import static org.apache.fluss.record.TestData.PARTITION_TABLE_ID;
+import static org.apache.fluss.record.TestData.PARTITION_TABLE_INFO;
+import static org.apache.fluss.record.TestData.PARTITION_TABLE_PATH;
 import static org.apache.fluss.testutils.DataTestUtils.indexedRow;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -644,6 +648,44 @@ class RecordAccumulatorTest {
         readyCheckResult = accum.ready(cluster);
         assertThat(readyCheckResult.unknownLeaderTables).isEmpty();
         assertThat(readyCheckResult.readyNodes.size()).isEqualTo(1);
+    }
+
+    @Test
+    void testReadyWhenPreviouslyKnownPartitionIsTemporarilyMissing() throws Exception {
+        RecordAccumulator accum = createTestRecordAccumulator(0, 100, 100, 10L * 1024);
+        PhysicalTablePath partitionPath = PhysicalTablePath.of(PARTITION_TABLE_PATH, "churn");
+        IndexedRow row = indexedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
+        Map<Integer, ServerNode> nodes = Collections.singletonMap(node1.id(), node1);
+        Map<TablePath, Long> tableIds =
+                Collections.singletonMap(PARTITION_TABLE_PATH, PARTITION_TABLE_ID);
+
+        Cluster partitionKnown =
+                new Cluster(
+                        nodes,
+                        null,
+                        Collections.emptyMap(),
+                        tableIds,
+                        Collections.singletonMap(partitionPath, 41L),
+                        Collections.singletonMap(
+                                TableOrPartition.ofPartition(41L),
+                                PARTITION_TABLE_INFO.getNumBuckets()));
+        accum.append(
+                WriteRecord.forIndexedAppend(PARTITION_TABLE_INFO, partitionPath, row, null),
+                writeCallback,
+                partitionKnown);
+
+        Cluster partitionMissing =
+                new Cluster(
+                        nodes,
+                        null,
+                        Collections.emptyMap(),
+                        tableIds,
+                        Collections.emptyMap(),
+                        Collections.emptyMap());
+        RecordAccumulator.ReadyCheckResult result = accum.ready(partitionMissing);
+
+        assertThat(result.readyNodes).isEmpty();
+        assertThat(result.unknownLeaderTables).containsExactly(partitionPath);
     }
 
     @Test

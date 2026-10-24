@@ -29,6 +29,7 @@ import org.apache.fluss.record.TestData;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.zk.NOPErrorHandler;
+import org.apache.fluss.server.zk.ZkEpoch;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.BucketAssignment;
@@ -42,6 +43,7 @@ import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
@@ -64,6 +66,7 @@ class ZkBasedMetadataProviderTest {
     private static ZooKeeperClient zookeeperClient;
     private static MetadataManager metadataManager;
     private static ZkBasedMetadataProvider metadataProvider;
+    private ZkEpoch zkEpoch;
 
     @BeforeAll
     static void beforeAll() {
@@ -84,6 +87,11 @@ class ZkBasedMetadataProviderTest {
     @AfterEach
     void afterEach() {
         ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupRoot();
+    }
+
+    @BeforeEach
+    void beforeEach() throws Exception {
+        zkEpoch = zookeeperClient.fenceBecomeCoordinatorLeader("test-coordinator");
     }
 
     @AfterAll

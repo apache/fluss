@@ -24,9 +24,11 @@ import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.admin.FlussAdmin;
 import org.apache.fluss.client.admin.KvSnapshotLease;
 import org.apache.fluss.client.admin.OffsetSpec;
+import org.apache.fluss.client.lookup.Lookuper;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.scanner.batch.BatchScanner;
 import org.apache.fluss.client.table.writer.AppendWriter;
+import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.client.utils.ClientRpcMessageUtils;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
@@ -41,6 +43,9 @@ import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
 import org.apache.fluss.exception.TableNotPartitionedException;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DatabaseDescriptor;
+import org.apache.fluss.metadata.IndexType;
+import org.apache.fluss.metadata.IndexVisibility;
+import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
@@ -73,6 +78,7 @@ import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.shaded.guava32.com.google.common.collect.Lists;
 import org.apache.fluss.utils.CloseableIterator;
+import org.apache.fluss.utils.IndexTableUtils;
 
 import org.assertj.core.api.ThrowableAssert;
 import org.junit.jupiter.api.AfterEach;
@@ -90,6 +96,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 
 import static org.apache.fluss.config.ConfigOptions.DATALAKE_FORMAT;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
@@ -787,6 +794,89 @@ public class FlussAuthorizationITCase {
                                                         }
                                                     })))
                                     .doesNotThrowAnyException());
+        }
+    }
+
+    @Test
+    void testIndexTableReadInheritsMainTablePermission() throws Exception {
+        TablePath mainTable = TablePath.of("test_db_1", "indexed_acl_table");
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", org.apache.fluss.types.DataTypes.INT())
+                        .column("name", org.apache.fluss.types.DataTypes.STRING())
+                        .primaryKey("id")
+                        .index(
+                                "idx_name",
+                                IndexType.SECONDARY,
+                                Collections.singletonList("name"),
+                                IndexVisibility.SYNC,
+                                1)
+                        .build();
+        rootAdmin
+                .createTable(
+                        mainTable,
+                        TableDescriptor.builder().schema(schema).distributedBy(1, "id").build(),
+                        false)
+                .get();
+        FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(
+                rootAdmin.getTableInfo(mainTable).get().getTableId());
+        TablePath indexTable =
+                TablePath.of(
+                        mainTable.getDatabaseName(),
+                        IndexTableUtils.indexTableName(mainTable.getTableName(), "idx_name"));
+        FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(
+                rootAdmin.getTableInfo(indexTable).get().getTableId());
+        try (Table table = rootConn.getTable(mainTable)) {
+            UpsertWriter writer = table.newUpsert().createWriter();
+            writer.upsert(row(1, "alice"));
+            writer.flush();
+            assertThat(
+                            table.getSecondaryIndexLookuper("idx_name")
+                                    .lookup(row("alice"))
+                                    .get(30, TimeUnit.SECONDS)
+                                    .getRowList())
+                    .hasSize(1);
+        }
+
+        List<AclBinding> readMainTableAcl =
+                Collections.singletonList(
+                        new AclBinding(
+                                Resource.table(mainTable),
+                                new AccessControlEntry(
+                                        guestPrincipal,
+                                        WILD_CARD_HOST,
+                                        READ,
+                                        PermissionType.ALLOW)));
+        rootAdmin.createAcls(readMainTableAcl).all().get();
+        FLUSS_CLUSTER_EXTENSION.waitUntilAuthenticationSync(readMainTableAcl, true);
+
+        assertThat(guestAdmin.getTableInfo(indexTable).get().getMainTableId())
+                .hasValue(rootAdmin.getTableInfo(mainTable).get().getTableId());
+        try (Table table = guestConn.getTable(mainTable)) {
+            Lookuper lookuper = table.getSecondaryIndexLookuper("idx_name");
+            assertThat(lookuper.lookup(row("alice")).get(30, TimeUnit.SECONDS).getRowList())
+                    .hasSize(1);
+            rootAdmin
+                    .dropAcls(
+                            Collections.singletonList(
+                                    new AclBindingFilter(
+                                            new ResourceFilter(
+                                                    Resource.table(mainTable).getType(),
+                                                    Resource.table(mainTable).getName()),
+                                            new AccessControlEntryFilter(
+                                                    guestPrincipal,
+                                                    WILD_CARD_HOST,
+                                                    READ,
+                                                    PermissionType.ALLOW))))
+                    .all()
+                    .get();
+            FLUSS_CLUSTER_EXTENSION.waitUntilAuthenticationSync(readMainTableAcl, false);
+            assertThatThrownBy(() -> lookuper.lookup(row("alice")).get(30, TimeUnit.SECONDS))
+                    .rootCause()
+                    .isInstanceOf(AuthorizationException.class);
+            assertThatThrownBy(() -> guestAdmin.getTableInfo(indexTable).get())
+                    .rootCause()
+                    .isInstanceOf(AuthorizationException.class);
         }
     }
 

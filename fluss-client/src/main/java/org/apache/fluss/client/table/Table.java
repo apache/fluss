@@ -62,6 +62,18 @@ public interface Table extends AutoCloseable {
     Lookup newLookup();
 
     /**
+     * Creates a {@link Lookuper} for the named secondary index.
+     *
+     * <p>The lookuper first reads candidate primary keys from the secondary index, then looks up
+     * the current rows in this table and discards candidates whose current index-column values no
+     * longer match the lookup key.
+     *
+     * @param indexName the secondary index name declared in this table's schema
+     * @throws IllegalArgumentException if the schema does not declare the named secondary index
+     */
+    Lookuper getSecondaryIndexLookuper(String indexName);
+
+    /**
      * Creates a new {@link Append} to build a {@link AppendWriter} to append data to this table
      * (requires to be a Log Table).
      */

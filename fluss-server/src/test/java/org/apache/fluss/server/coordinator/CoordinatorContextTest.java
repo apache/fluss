@@ -67,6 +67,20 @@ class CoordinatorContextTest {
     }
 
     @Test
+    void testRemovingOldTableKeepsSameNameReplacementMapping() {
+        CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
+        TablePath tablePath = TablePath.of("db", "table");
+
+        context.putTablePath(1L, tablePath);
+        context.putTablePath(2L, tablePath);
+        context.removeTable(1L);
+
+        assertThat(context.getTablePathById(1L)).isNull();
+        assertThat(context.getTablePathById(2L)).isEqualTo(tablePath);
+        assertThat(context.getTableIdByPath(tablePath)).isEqualTo(2L);
+    }
+
+    @Test
     void testGetLakeTableCount() {
         CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
 

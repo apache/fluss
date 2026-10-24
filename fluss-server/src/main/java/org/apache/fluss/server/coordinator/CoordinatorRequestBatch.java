@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.coordinator;
 
+import org.apache.fluss.metadata.PartitionTombstone;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
@@ -99,6 +100,11 @@ public class CoordinatorRequestBatch {
     private final Map<Long, List<BucketMetadata>> updateMetadataRequestBucketMap = new HashMap<>();
     // a map from tableId to (a map from partitionId to bucket metadata) to update.
     private final Map<Long, Map<Long, List<BucketMetadata>>> updateMetadataRequestPartitionMap =
+            new HashMap<>();
+    // a map from main tableId to PartitionTombstone to ship in the next UpdateMetadataRequest.
+    // Populated by callers that advanced a tombstone in ZK (e.g. Coordinator processDropPartition)
+    // and need TabletServers to refresh their tombstone view in lockstep with the metadata update.
+    private final Map<Long, PartitionTombstone> updateMetadataRequestPartitionTombstones =
             new HashMap<>();
 
     // a map from tablet server to notify remote log offsets request.
@@ -329,6 +335,28 @@ public class CoordinatorRequestBatch {
             @Nullable Long tableId,
             @Nullable Long partitionId,
             Set<TableBucket> tableBuckets) {
+        addUpdateMetadataRequestForTabletServers(
+                tabletServers, tableId, partitionId, tableBuckets, Collections.emptyMap());
+    }
+
+    /**
+     * Variant of {@link #addUpdateMetadataRequestForTabletServers(Set, Long, Long, Set)} that also
+     * carries advanced {@link PartitionTombstone} entries to be shipped in the same {@code
+     * UpdateMetadataRequest}. Used by the Coordinator after persisting a new tombstone in ZK on
+     * partition drop, so live TabletServers refresh their tombstone view atomically with the
+     * metadata update.
+     */
+    public void addUpdateMetadataRequestForTabletServers(
+            Set<Integer> tabletServers,
+            @Nullable Long tableId,
+            @Nullable Long partitionId,
+            Set<TableBucket> tableBuckets,
+            Map<Long, PartitionTombstone> partitionTombstones) {
+        if (!partitionTombstones.isEmpty()) {
+            // last write wins per tableId within a single batch; the caller is responsible for
+            // passing the freshly-persisted tombstone snapshot.
+            updateMetadataRequestPartitionTombstones.putAll(partitionTombstones);
+        }
         // case9:
         tabletServers.stream()
                 .filter(s -> s >= 0)
@@ -625,6 +653,7 @@ public class CoordinatorRequestBatch {
         updateMetadataRequestTabletServerSet.clear();
         updateMetadataRequestBucketMap.clear();
         updateMetadataRequestPartitionMap.clear();
+        updateMetadataRequestPartitionTombstones.clear();
     }
 
     public void sendNotifyRemoteLogOffsetsRequest(int coordinatorEpoch) {
@@ -766,7 +795,10 @@ public class CoordinatorRequestBatch {
                 coordinatorContext.getCoordinatorEpoch(),
                 new HashSet<>(coordinatorContext.getLiveTabletServers().values()),
                 tableMetadataList,
-                partitionMetadataList);
+                partitionMetadataList,
+                updateMetadataRequestPartitionTombstones.isEmpty()
+                        ? Collections.emptyMap()
+                        : new HashMap<>(updateMetadataRequestPartitionTombstones));
     }
 
     @Nullable

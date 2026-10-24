@@ -18,6 +18,7 @@
 package org.apache.fluss.server.replica;
 
 import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.TableConfig;
@@ -57,6 +58,7 @@ import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.record.ProjectionPushdownCache;
 import org.apache.fluss.remote.RemoteLogFetchInfo;
 import org.apache.fluss.remote.RemoteLogSegment;
+import org.apache.fluss.rpc.GatewayClientProxy;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.entity.LimitScanResultForBucket;
@@ -68,6 +70,7 @@ import org.apache.fluss.rpc.entity.PutKvResultForBucket;
 import org.apache.fluss.rpc.entity.TableStatsResultForBucket;
 import org.apache.fluss.rpc.entity.WriteResultForBucket;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
+import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.NotifyKvSnapshotOffsetResponse;
 import org.apache.fluss.rpc.messages.NotifyLakeTableOffsetResponse;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsResponse;
@@ -85,10 +88,14 @@ import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 import org.apache.fluss.server.entity.NotifyRemoteLogOffsetsData;
 import org.apache.fluss.server.entity.ProduceLogDataForBucket;
+import org.apache.fluss.server.entity.PutIndexDataForBucket;
 import org.apache.fluss.server.entity.PutKvDataForBucket;
 import org.apache.fluss.server.entity.StopReplicaData;
 import org.apache.fluss.server.entity.StopReplicaResultForBucket;
 import org.apache.fluss.server.entity.UserContext;
+import org.apache.fluss.server.index.IndexReplicatorPool;
+import org.apache.fluss.server.index.IndexSendBuffer;
+import org.apache.fluss.server.index.IndexSender;
 import org.apache.fluss.server.kv.KvManager;
 import org.apache.fluss.server.kv.KvSnapshotResource;
 import org.apache.fluss.server.kv.scan.ScannerManager;
@@ -105,6 +112,7 @@ import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.log.checkpoint.OffsetCheckpointFile;
 import org.apache.fluss.server.log.remote.RemoteLogManager;
 import org.apache.fluss.server.metadata.ClusterMetadata;
+import org.apache.fluss.server.metadata.MetadataProvider;
 import org.apache.fluss.server.metadata.TableMetadata;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.metrics.UserMetrics;
@@ -180,6 +188,8 @@ public class ReplicaManager implements ServerReconfigurable {
     private static final Logger LOG = LoggerFactory.getLogger(ReplicaManager.class);
 
     public static final String HIGH_WATERMARK_CHECKPOINT_FILE_NAME = "high-watermark-checkpoint";
+    private static final long INDEX_REPLICATION_WORKER_BACKOFF_MS = 50L;
+    private static final long INDEX_REPLICATION_RETRY_MAX_BACKOFF_MS = 10_000L;
 
     /**
      * The first PUT_KV API version whose clients understand the {@link
@@ -203,6 +213,12 @@ public class ReplicaManager implements ServerReconfigurable {
     private final Map<TableBucket, HostedReplica> allReplicas = new ConcurrentHashMap<>();
 
     private final TabletServerMetadataCache metadataCache;
+    @Nullable private final MetadataProvider metadataProvider;
+    private final RpcClient rpcClient;
+    private final IndexSendBuffer indexSendBuffer;
+    private final IndexReplicatorPool indexReplicatorPool;
+    private final IndexSender indexSender;
+    private final TabletServerMetricGroup.GaugeRegistration indexReplicationGaugeRegistration;
     private final ExecutorService ioExecutor;
     private final ProjectionPushdownCache projectionsCache = new ProjectionPushdownCache();
     private final Lock replicaStateChangeLock = new ReentrantLock();
@@ -258,6 +274,7 @@ public class ReplicaManager implements ServerReconfigurable {
             ZooKeeperClient zkClient,
             int serverId,
             TabletServerMetadataCache metadataCache,
+            @Nullable MetadataProvider metadataProvider,
             RpcClient rpcClient,
             CoordinatorGateway coordinatorGateway,
             CompletedKvSnapshotCommitter completedKvSnapshotCommitter,
@@ -278,6 +295,7 @@ public class ReplicaManager implements ServerReconfigurable {
                 zkClient,
                 serverId,
                 metadataCache,
+                metadataProvider,
                 rpcClient,
                 coordinatorGateway,
                 completedKvSnapshotCommitter,
@@ -308,6 +326,7 @@ public class ReplicaManager implements ServerReconfigurable {
             ZooKeeperClient zkClient,
             int serverId,
             TabletServerMetadataCache metadataCache,
+            @Nullable MetadataProvider metadataProvider,
             RpcClient rpcClient,
             CoordinatorGateway coordinatorGateway,
             CompletedKvSnapshotCommitter completedKvSnapshotCommitter,
@@ -329,6 +348,45 @@ public class ReplicaManager implements ServerReconfigurable {
         this.kvManager = kvManager;
         this.serverId = serverId;
         this.metadataCache = metadataCache;
+        this.metadataProvider = metadataProvider;
+        this.rpcClient = rpcClient;
+        long sourceMaxBytes = conf.get(ConfigOptions.INDEX_REPLICATION_SOURCE_MAX_BYTES).getBytes();
+        checkArgument(
+                sourceMaxBytes > 0 && sourceMaxBytes <= Integer.MAX_VALUE,
+                "%s must be between 1 and %s bytes, but was %s",
+                ConfigOptions.INDEX_REPLICATION_SOURCE_MAX_BYTES.key(),
+                Integer.MAX_VALUE,
+                sourceMaxBytes);
+        this.indexSendBuffer =
+                new IndexSendBuffer(
+                        conf.get(ConfigOptions.INDEX_REPLICATION_MAIN_BUCKET_BUFFER_MAX_BYTES)
+                                .getBytes(),
+                        conf.get(ConfigOptions.INDEX_REPLICATION_BUFFER_MAX_BYTES).getBytes());
+        this.indexReplicatorPool =
+                new IndexReplicatorPool(
+                        conf.getInt(ConfigOptions.INDEX_REPLICATION_READER_THREADS),
+                        (int) sourceMaxBytes,
+                        conf.get(ConfigOptions.INDEX_REPLICATION_REQUEST_TARGET_BYTES).getBytes(),
+                        INDEX_REPLICATION_WORKER_BACKOFF_MS,
+                        ioExecutor);
+        this.indexSender =
+                new IndexSender(
+                        indexSendBuffer,
+                        metadataCache::getBucketLeader,
+                        this::indexPushGatewayFor,
+                        serverMetricGroup,
+                        conf.getInt(ConfigOptions.INDEX_REPLICATION_SENDER_THREADS),
+                        INDEX_REPLICATION_WORKER_BACKOFF_MS,
+                        conf.get(ConfigOptions.INDEX_REPLICATION_RETRY_BACKOFF).toMillis(),
+                        INDEX_REPLICATION_RETRY_MAX_BACKOFF_MS,
+                        conf.get(ConfigOptions.INDEX_REPLICATION_REQUEST_TARGET_BYTES).getBytes(),
+                        conf.get(ConfigOptions.NETTY_SERVER_MAX_REQUEST_SIZE).getBytes(),
+                        30_000L);
+        this.indexReplicationGaugeRegistration =
+                serverMetricGroup.registerIndexReplicationGauges(
+                        indexSendBuffer::pendingBytes,
+                        this::maxIndexReplicationNoProgressTimeMs,
+                        this::failedIndexReplicationSourceBucketCount);
 
         this.highWatermarkCheckpoints = new HashMap<>();
         for (File dataDir : localDiskManager.dataDirs()) {
@@ -547,6 +605,21 @@ public class ReplicaManager implements ServerReconfigurable {
         return onlineReplicas().filter(Replica::isAtMinIsr).count();
     }
 
+    private long failedIndexReplicationSourceBucketCount() {
+        return onlineReplicas()
+                .filter(Replica::isLeader)
+                .filter(replica -> replica.getIndexManager().isFailed())
+                .count();
+    }
+
+    private long maxIndexReplicationNoProgressTimeMs() {
+        return onlineReplicas()
+                .filter(Replica::isLeader)
+                .mapToLong(replica -> replica.getIndexManager().noProgressTimeMs())
+                .max()
+                .orElse(0L);
+    }
+
     @VisibleForTesting
     public long leaderCount() {
         return onlineReplicas().filter(Replica::isLeader).count();
@@ -642,6 +715,9 @@ public class ReplicaManager implements ServerReconfigurable {
                     Set<Long> deletedTableIds =
                             metadataCache.updateClusterMetadata(clusterMetadata);
                     updateReplicaTableInfo(clusterMetadata);
+                    // Index replicators deferred for missing Index Table metadata can only resume
+                    // here: this is the point where that metadata becomes visible to them.
+                    retryDeferredIndexReplicators();
                     if (!deletedTableIds.isEmpty()) {
                         ioExecutor.execute(
                                 () ->
@@ -805,11 +881,52 @@ public class ReplicaManager implements ServerReconfigurable {
         LOG.debug(
                 "Put records to local kv storage and wait generate cdc log in {} ms",
                 System.currentTimeMillis() - startTime);
+        completeDelayedFetches(kvPutResult.values());
 
         // maybe do delay write operation to write cdc log to be replicated to other follower
         // replicas.
         maybeAddDelayedWrite(
                 timeoutMs, requiredAcks, entriesPerBucket.size(), kvPutResult, responseCallback);
+    }
+
+    /** Applies internal secondary-index batches and waits for their ordinary WAL replication. */
+    public void putIndexRecords(
+            int timeoutMs,
+            int requiredAcks,
+            List<PutIndexDataForBucket> entries,
+            Consumer<List<PutKvResultForBucket>> responseCallback) {
+        if (requiredAcks != -1) {
+            throw new InvalidRequiredAcksException("PutIndex requires acks=-1");
+        }
+        localDiskManager.ensureWritable();
+
+        Map<TableBucket, PutKvResultForBucket> results = new HashMap<>();
+        for (PutIndexDataForBucket data : entries) {
+            TableBucket target = data.targetBucket();
+            try {
+                Replica replica = getReplicaOrException(target);
+                long requiredOffset = replica.putIndexRecordsToLeader(data, requiredAcks);
+                results.put(target, new PutKvResultForBucket(target, requiredOffset));
+            } catch (Exception e) {
+                if (isUnexpectedException(e)) {
+                    LOG.error("Error applying Index Table records to {}", target, e);
+                }
+                results.put(target, new PutKvResultForBucket(target, ApiError.fromThrowable(e)));
+            }
+        }
+        completeDelayedFetches(results.values());
+        maybeAddDelayedWrite(timeoutMs, requiredAcks, entries.size(), results, responseCallback);
+    }
+
+    private void completeDelayedFetches(Collection<PutKvResultForBucket> results) {
+        // Follower fetches wait for LEO, not HW. Check after releasing all replica/storage locks:
+        // completing a fetch re-enters replica reads and may update follower state and ISR.
+        for (PutKvResultForBucket result : results) {
+            if (result.succeeded() && result.getWriteLogEndOffset() >= 0) {
+                delayedFetchLogManager.checkAndComplete(
+                        new DelayedTableBucketKey(result.getTableBucket()));
+            }
+        }
     }
 
     /** Puts records to historical partition leaders. */
@@ -2097,14 +2214,31 @@ public class ReplicaManager implements ServerReconfigurable {
             int requestBucketSize,
             Map<TableBucket, T> writeResults,
             Consumer<List<T>> responseCallback) {
-        if (delayedWriteRequired(requiredAcks, requestBucketSize, writeResults)) {
-            Map<TableBucket, DelayedWrite.DelayedBucketStatus<T>> bucketStatusMap = new HashMap<>();
-            writeResults.forEach(
-                    (tb, result) ->
-                            bucketStatusMap.put(
-                                    tb,
-                                    new DelayedWrite.DelayedBucketStatus<>(
-                                            result.getWriteLogEndOffset(), result)));
+        // Build the per-bucket status first so we can decide whether any bucket needs the PutKv ack
+        // gated on its sync index-pushed-offset. A SYNC index forces a delayed
+        // write even when requiredAcks != -1, because its ack must wait for the index push, not
+        // just
+        // for ISR replication.
+        Map<TableBucket, DelayedWrite.DelayedBucketStatus<T>> bucketStatusMap = new HashMap<>();
+        boolean anySyncIndex = false;
+        for (Map.Entry<TableBucket, T> entry : writeResults.entrySet()) {
+            TableBucket tb = entry.getKey();
+            T result = entry.getValue();
+            long requiredIndexOffset = DelayedWrite.DelayedBucketStatus.NO_INDEX_OFFSET_REQUIRED;
+            if (result.succeeded() && requiresSyncIndexVisibility(tb)) {
+                requiredIndexOffset = result.getWriteLogEndOffset();
+                anySyncIndex = true;
+            }
+            bucketStatusMap.put(
+                    tb,
+                    new DelayedWrite.DelayedBucketStatus<>(
+                            result.getWriteLogEndOffset(),
+                            requiredIndexOffset,
+                            requiredAcks == -1,
+                            result));
+        }
+
+        if (delayedWriteRequired(requiredAcks, requestBucketSize, writeResults) || anySyncIndex) {
             DelayedWrite<T> delayedWrite =
                     new DelayedWrite<>(
                             timeoutMs,
@@ -2123,6 +2257,24 @@ public class ReplicaManager implements ServerReconfigurable {
                             .collect(Collectors.toList()));
         } else {
             responseCallback.accept(new ArrayList<>(writeResults.values()));
+        }
+    }
+
+    /**
+     * Returns {@code true} when the bucket's leader replica requires SYNC index visibility (its
+     * PutKv ack must wait for secondary-index mutations to be applied). If the local replica
+     * disappears during acknowledgement, conservatively retains the gate so delayed completion
+     * re-resolves the replica and reports the leadership error instead of acknowledging early.
+     */
+    boolean requiresSyncIndexVisibility(TableBucket tableBucket) {
+        try {
+            return getReplicaOrException(tableBucket).requiresSyncIndexVisibility();
+        } catch (Exception e) {
+            LOG.warn(
+                    "Replica {} disappeared before write acknowledgement; applying conservative index visibility gating",
+                    tableBucket,
+                    e);
+            return true;
         }
     }
 
@@ -2546,13 +2698,17 @@ public class ReplicaManager implements ServerReconfigurable {
                                 adjustIsrManager,
                                 kvSnapshotContext,
                                 metadataCache,
+                                metadataProvider,
                                 fatalErrorHandler,
                                 bucketMetricGroup,
                                 tableInfo,
                                 remoteDataDir,
                                 clock,
                                 remoteLogManager,
-                                scannerManager);
+                                scannerManager,
+                                indexReplicatorPool,
+                                indexSendBuffer,
+                                serverMetricGroup);
                 // Initialize the routing state before the replica becomes visible, so a
                 // ready leader always has its routing bucket count ready.
                 replica.updateRoutingState(data);
@@ -2648,6 +2804,18 @@ public class ReplicaManager implements ServerReconfigurable {
         return allReplicas.getOrDefault(tableBucket, new NoneReplica());
     }
 
+    /** Marks only the expected failed replica offline without taking the lifecycle lock. */
+    public void markReplicaOffline(TableBucket tableBucket, Replica expectedReplica) {
+        allReplicas.computeIfPresent(
+                tableBucket,
+                (ignored, hostedReplica) ->
+                        hostedReplica instanceof OnlineReplica
+                                        && ((OnlineReplica) hostedReplica).getReplica()
+                                                == expectedReplica
+                                ? new OfflineReplica()
+                                : hostedReplica);
+    }
+
     private boolean isRequiredAcksInvalid(int requiredAcks) {
         return requiredAcks != 0 && requiredAcks != 1 && requiredAcks != -1;
     }
@@ -2674,6 +2842,45 @@ public class ReplicaManager implements ServerReconfigurable {
 
     public TabletServerMetricGroup getServerMetricGroup() {
         return serverMetricGroup;
+    }
+
+    private void retryDeferredIndexReplicators() {
+        for (Map.Entry<TableBucket, HostedReplica> entry : allReplicas.entrySet()) {
+            if (entry.getValue() instanceof OnlineReplica) {
+                Replica replica = ((OnlineReplica) entry.getValue()).getReplica();
+                replica.getIndexManager()
+                        .retryStart(
+                                replica.getLogTablet(),
+                                replica.getSchemaGetter(),
+                                replica::advanceIndexProgress,
+                                replica.getAllIndexPushedOffset());
+            }
+        }
+    }
+
+    /** Returns the server-global index replicator pool (read layer). */
+    public IndexReplicatorPool getIndexReplicatorPool() {
+        return indexReplicatorPool;
+    }
+
+    /** Returns the server-global index sendBuffer (staging area). */
+    public IndexSendBuffer getIndexSendBuffer() {
+        return indexSendBuffer;
+    }
+
+    private TabletServerGateway indexPushGatewayFor(int serverId) {
+        String listenerName = conf.get(ConfigOptions.INTERNAL_LISTENER_NAME);
+        ServerNode node =
+                metadataCache
+                        .getTabletServer(serverId, listenerName)
+                        .orElseThrow(
+                                () ->
+                                        new IllegalStateException(
+                                                "TabletServer "
+                                                        + serverId
+                                                        + " not found in cache"));
+        return GatewayClientProxy.createGatewayProxy(
+                () -> node, rpcClient, TabletServerGateway.class);
     }
 
     /**
@@ -2703,10 +2910,13 @@ public class ReplicaManager implements ServerReconfigurable {
     public static final class OfflineReplica implements HostedReplica {}
 
     public void shutdown() throws InterruptedException {
+        indexReplicationGaugeRegistration.close();
         // Close the resources for snapshot kv
         kvSnapshotResource.close();
         historicalPartitionManager.close();
         replicaFetcherManager.shutdown();
+        indexSender.close();
+        indexReplicatorPool.close();
         delayedWriteManager.shutdown();
         delayedFetchLogManager.shutdown();
 

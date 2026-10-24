@@ -34,6 +34,7 @@ import org.apache.fluss.server.kv.rocksdb.RocksDBStatistics;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.LongSupplier;
 
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -82,13 +83,21 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
     private volatile LongSupplier sharedBlockCacheUsageSupplier = () -> 0L;
 
     private volatile LongSupplier sharedBlockCachePinnedUsageSupplier = () -> 0L;
-
     private volatile long sharedBlockCacheCapacity;
-
     /** Supplier for shared write buffer usage, set by KvManager. */
     private volatile LongSupplier sharedWriteBufferUsageSupplier = () -> 0L;
 
     private volatile long sharedWriteBufferCapacity;
+    // aggregated index replication metrics
+    private final Counter indexReplicationSourceBytes;
+    private final Counter indexReplicationCompletedBytes;
+    private final Counter indexReplicationRetries;
+    private final Counter indexReplicationFailures;
+    private final Counter indexPushStaleProgressBatches;
+    private final Counter indexPushTombstoneNoOpBatches;
+    private final Histogram indexReplicationRequestLatencyHistogram;
+    private final AtomicReference<IndexReplicationGaugeSource> indexReplicationGaugeSource =
+            new AtomicReference<>(IndexReplicationGaugeSource.EMPTY);
 
     public TabletServerMetricGroup(
             MetricRegistry registry, String clusterId, String rack, String hostname, int serverId) {
@@ -148,6 +157,45 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
         meter(MetricNames.ISR_SHRINKS_RATE, new MeterView(isrShrinks));
         failedIsrUpdates = new SimpleCounter();
         meter(MetricNames.FAILED_ISR_UPDATES_RATE, new MeterView(failedIsrUpdates));
+
+        // index replication metrics
+        indexReplicationSourceBytes = new ThreadSafeSimpleCounter();
+        meter(
+                MetricNames.INDEX_REPLICATION_SOURCE_BYTES_RATE,
+                new MeterView(indexReplicationSourceBytes));
+        indexReplicationCompletedBytes = new ThreadSafeSimpleCounter();
+        meter(
+                MetricNames.INDEX_REPLICATION_COMPLETED_BYTES_RATE,
+                new MeterView(indexReplicationCompletedBytes));
+        indexReplicationRetries = new ThreadSafeSimpleCounter();
+        meter(MetricNames.INDEX_REPLICATION_RETRIES_RATE, new MeterView(indexReplicationRetries));
+        indexReplicationFailures = new ThreadSafeSimpleCounter();
+        meter(MetricNames.INDEX_REPLICATION_FAILURES_RATE, new MeterView(indexReplicationFailures));
+        indexPushStaleProgressBatches = new ThreadSafeSimpleCounter();
+        meter(
+                MetricNames.INDEX_PUSH_STALE_PROGRESS_BATCHES_RATE,
+                new MeterView(indexPushStaleProgressBatches));
+        indexPushTombstoneNoOpBatches = new ThreadSafeSimpleCounter();
+        meter(
+                MetricNames.INDEX_PUSH_TOMBSTONE_NO_OP_BATCHES_RATE,
+                new MeterView(indexPushTombstoneNoOpBatches));
+        indexReplicationRequestLatencyHistogram = new DescriptiveStatisticsHistogram(WINDOW_SIZE);
+        histogram(
+                MetricNames.INDEX_REPLICATION_REQUEST_LATENCY_MS,
+                indexReplicationRequestLatencyHistogram);
+        gauge(
+                MetricNames.INDEX_REPLICATION_PENDING_BYTES,
+                () -> indexReplicationGaugeSource.get().pendingBytesSupplier.getAsLong());
+        gauge(
+                MetricNames.INDEX_REPLICATION_MAX_NO_PROGRESS_TIME_MS,
+                () -> indexReplicationGaugeSource.get().maxNoProgressTimeMsSupplier.getAsLong());
+        gauge(
+                MetricNames.INDEX_REPLICATION_FAILED_SOURCE_BUCKET_COUNT,
+                () ->
+                        indexReplicationGaugeSource
+                                .get()
+                                .failedSourceBucketCountSupplier
+                                .getAsLong());
 
         // Register server-level RocksDB aggregated metrics
         registerServerRocksDBMetrics();
@@ -311,6 +359,74 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
 
     public Counter failedIsrUpdates() {
         return failedIsrUpdates;
+    }
+
+    public Counter indexReplicationSourceBytes() {
+        return indexReplicationSourceBytes;
+    }
+
+    public Counter indexReplicationCompletedBytes() {
+        return indexReplicationCompletedBytes;
+    }
+
+    public Counter indexReplicationRetries() {
+        return indexReplicationRetries;
+    }
+
+    public Counter indexReplicationFailures() {
+        return indexReplicationFailures;
+    }
+
+    public Counter indexPushStaleProgressBatches() {
+        return indexPushStaleProgressBatches;
+    }
+
+    public Counter indexPushTombstoneNoOpBatches() {
+        return indexPushTombstoneNoOpBatches;
+    }
+
+    public Histogram indexReplicationRequestLatencyHistogram() {
+        return indexReplicationRequestLatencyHistogram;
+    }
+
+    public GaugeRegistration registerIndexReplicationGauges(
+            LongSupplier pendingBytesSupplier,
+            LongSupplier maxNoProgressTimeMsSupplier,
+            LongSupplier failedSourceBucketCountSupplier) {
+        IndexReplicationGaugeSource source =
+                new IndexReplicationGaugeSource(
+                        pendingBytesSupplier,
+                        maxNoProgressTimeMsSupplier,
+                        failedSourceBucketCountSupplier);
+        indexReplicationGaugeSource.set(source);
+        return () ->
+                indexReplicationGaugeSource.compareAndSet(
+                        source, IndexReplicationGaugeSource.EMPTY);
+    }
+
+    /** Scoped ownership of replaceable server-level gauge suppliers. */
+    @FunctionalInterface
+    public interface GaugeRegistration extends AutoCloseable {
+        @Override
+        void close();
+    }
+
+    private static final class IndexReplicationGaugeSource {
+        private static final IndexReplicationGaugeSource EMPTY =
+                new IndexReplicationGaugeSource(() -> 0L, () -> 0L, () -> 0L);
+
+        private final LongSupplier pendingBytesSupplier;
+        private final LongSupplier maxNoProgressTimeMsSupplier;
+        private final LongSupplier failedSourceBucketCountSupplier;
+
+        private IndexReplicationGaugeSource(
+                LongSupplier pendingBytesSupplier,
+                LongSupplier maxNoProgressTimeMsSupplier,
+                LongSupplier failedSourceBucketCountSupplier) {
+            this.pendingBytesSupplier = pendingBytesSupplier;
+            this.maxNoProgressTimeMsSupplier = maxNoProgressTimeMsSupplier;
+            this.failedSourceBucketCountSupplier = failedSourceBucketCountSupplier;
+        }
     }
 
     // ------------------------------------------------------------------------

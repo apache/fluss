@@ -20,10 +20,13 @@ package org.apache.fluss.server.metadata;
 import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.cluster.TabletServerInfo;
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.TableNotExistException;
+import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
@@ -31,6 +34,8 @@ import org.apache.fluss.server.coordinator.MetadataManager;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.Arrays;
 import java.util.Collections;
@@ -49,8 +54,12 @@ import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.server.metadata.PartitionMetadata.DELETED_PARTITION_ID;
 import static org.apache.fluss.server.metadata.PartitionMetadata.DELETED_PARTITION_NAME;
 import static org.apache.fluss.server.metadata.TableMetadata.DELETED_TABLE_ID;
+import static org.apache.fluss.server.metadata.TableMetadata.DELETED_TABLE_PATH;
 import static org.apache.fluss.server.zk.data.LeaderAndIsr.NO_LEADER;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 /** Test for {@link TabletServerMetadataCache}. */
 public class TabletServerMetadataCacheTest {
@@ -137,6 +146,156 @@ public class TabletServerMetadataCacheTest {
                                 partitionName2,
                                 partitionId2,
                                 initialBucketMetadata));
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testIndexReadAuthorizationUsesLocalMetadata(boolean singleTableUpdate) {
+        MetadataManager metadataManager = mock(MetadataManager.class);
+        serverMetadataCache = new TabletServerMetadataCache(metadataManager);
+        TablePath indexPath = TablePath.of("test_db_1", "index_with_owner_property");
+        long indexId = 200001L;
+        TableDescriptor indexDescriptor =
+                TableDescriptor.builder()
+                        .schema(DATA1_TABLE_INFO.getSchema())
+                        .distributedBy(1)
+                        .property(ConfigOptions.TABLE_INDEX_META_MAIN_TABLE_ID, DATA1_TABLE_ID)
+                        .build();
+        TableMetadata index =
+                new TableMetadata(
+                        TableInfo.of(
+                                indexPath,
+                                indexId,
+                                0,
+                                indexDescriptor,
+                                DEFAULT_REMOTE_DATA_DIR,
+                                100L,
+                                100L),
+                        Collections.emptyList());
+        if (singleTableUpdate) {
+            serverMetadataCache.updateTableMetadata(index);
+        } else {
+            serverMetadataCache.updateClusterMetadata(
+                    new ClusterMetadata(
+                            coordinatorServer,
+                            aliveTableServers,
+                            Collections.singletonList(index),
+                            Collections.emptyList()));
+        }
+        assertThatThrownBy(() -> serverMetadataCache.getReadAuthorizationTablePath(indexId))
+                .isInstanceOf(UnknownTableOrBucketException.class);
+        assertThatThrownBy(() -> serverMetadataCache.getReadAuthorizationTablePath(indexPath))
+                .isInstanceOf(UnknownTableOrBucketException.class);
+        serverMetadataCache.updateTableMetadata(
+                new TableMetadata(DATA1_TABLE_INFO, initialBucketMetadata));
+        assertThat(serverMetadataCache.getReadAuthorizationTablePath(indexId))
+                .contains(DATA1_TABLE_PATH);
+        assertThat(serverMetadataCache.getReadAuthorizationTablePath(indexPath))
+                .isEqualTo(DATA1_TABLE_PATH);
+        assertThat(serverMetadataCache.getReadAuthorizationTablePath(DATA1_TABLE_ID))
+                .contains(DATA1_TABLE_PATH);
+        assertThat(serverMetadataCache.getTablePath(indexId)).contains(indexPath);
+        serverMetadataCache.updateTableMetadata(
+                new TableMetadata(partitionTableInfo, Collections.emptyList()));
+        serverMetadataCache.updatePartitionMetadata(partitionMetadataList.get(0));
+        assertThat(serverMetadataCache.getReadAuthorizationTablePath(indexId))
+                .contains(DATA1_TABLE_PATH);
+        serverMetadataCache.clearTableMetadata();
+        assertThat(serverMetadataCache.getReadAuthorizationTablePath(indexId)).isEmpty();
+        verifyNoInteractions(metadataManager);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testIndexAuthorizationMetadataDeletionAndRecreation(boolean deleteById) {
+        MetadataManager metadataManager = mock(MetadataManager.class);
+        serverMetadataCache = new TabletServerMetadataCache(metadataManager);
+        TablePath indexPath = TablePath.of("test_db_1", "index_with_owner_property");
+        long indexId = 200001L;
+        TableDescriptor indexDescriptor =
+                TableDescriptor.builder()
+                        .schema(DATA1_TABLE_INFO.getSchema())
+                        .distributedBy(1)
+                        .property(ConfigOptions.TABLE_INDEX_META_MAIN_TABLE_ID, DATA1_TABLE_ID)
+                        .build();
+        serverMetadataCache.updateTableMetadata(
+                new TableMetadata(DATA1_TABLE_INFO, initialBucketMetadata));
+        serverMetadataCache.updateTableMetadata(
+                new TableMetadata(
+                        TableInfo.of(
+                                indexPath,
+                                indexId,
+                                0,
+                                indexDescriptor,
+                                DEFAULT_REMOTE_DATA_DIR,
+                                100L,
+                                100L),
+                        Collections.emptyList()));
+        TableInfo deletedMain =
+                TableInfo.of(
+                        deleteById ? DELETED_TABLE_PATH : DATA1_TABLE_PATH,
+                        deleteById ? DATA1_TABLE_ID : DELETED_TABLE_ID,
+                        0,
+                        DATA1_TABLE_DESCRIPTOR,
+                        DEFAULT_REMOTE_DATA_DIR,
+                        100L,
+                        100L);
+        serverMetadataCache.updateClusterMetadata(
+                new ClusterMetadata(
+                        coordinatorServer,
+                        aliveTableServers,
+                        Collections.singletonList(
+                                new TableMetadata(deletedMain, Collections.emptyList())),
+                        Collections.emptyList()));
+        assertThatThrownBy(() -> serverMetadataCache.getReadAuthorizationTablePath(indexId))
+                .isInstanceOf(UnknownTableOrBucketException.class);
+        // Reusing the main table name must not grant access to an index owned by its old ID.
+        serverMetadataCache.updateTableMetadata(
+                new TableMetadata(
+                        TableInfo.of(
+                                DATA1_TABLE_PATH,
+                                DATA1_TABLE_ID + 1,
+                                0,
+                                DATA1_TABLE_DESCRIPTOR,
+                                DEFAULT_REMOTE_DATA_DIR,
+                                100L,
+                                100L),
+                        Collections.emptyList()));
+        assertThatThrownBy(() -> serverMetadataCache.getReadAuthorizationTablePath(indexId))
+                .isInstanceOf(UnknownTableOrBucketException.class);
+        TableInfo deletedIndex =
+                TableInfo.of(
+                        deleteById ? DELETED_TABLE_PATH : indexPath,
+                        deleteById ? indexId : DELETED_TABLE_ID,
+                        0,
+                        indexDescriptor,
+                        DEFAULT_REMOTE_DATA_DIR,
+                        100L,
+                        100L);
+        serverMetadataCache.updateClusterMetadata(
+                new ClusterMetadata(
+                        coordinatorServer,
+                        aliveTableServers,
+                        Collections.singletonList(
+                                new TableMetadata(deletedIndex, Collections.emptyList())),
+                        Collections.emptyList()));
+        assertThat(serverMetadataCache.getReadAuthorizationTablePath(indexId)).isEmpty();
+        serverMetadataCache.updateTableMetadata(
+                new TableMetadata(
+                        TableInfo.of(
+                                indexPath,
+                                indexId + 1,
+                                0,
+                                DATA1_TABLE_DESCRIPTOR,
+                                DEFAULT_REMOTE_DATA_DIR,
+                                100L,
+                                100L),
+                        Collections.emptyList()));
+        assertThat(serverMetadataCache.getReadAuthorizationTablePath(indexId + 1))
+                .contains(indexPath);
+        assertThat(serverMetadataCache.getReadAuthorizationTablePath(indexPath))
+                .isEqualTo(indexPath);
+        verifyNoInteractions(metadataManager);
     }
 
     @Test

@@ -980,6 +980,7 @@ class AlterBucketNumTest {
                                         // The concurrent delete wins the race just before commit.
                                         metadataManager.dropPartition(
                                                 tablePath,
+                                                tableId,
                                                 ResolvedPartitionSpec.fromPartitionName(
                                                         tableInfo.getPartitionKeys(),
                                                         victimPartition),

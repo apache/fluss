@@ -426,4 +426,120 @@ class TableSchemaTest {
         assertThat(schemaStringAgg.getAggFunction("items").get().getParameter("delimiter"))
                 .isEqualTo(", ");
     }
+
+    @Test
+    void testBuildSchemaWithSingleSecondaryIndex() {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("order_id", DataTypes.BIGINT())
+                        .column("user_id", DataTypes.BIGINT())
+                        .primaryKey("order_id")
+                        .index("idx_user", "user_id")
+                        .build();
+
+        assertThat(schema.getIndexes()).hasSize(1);
+        Schema.Index idx = schema.getIndexes().get(0);
+        assertThat(idx.getIndexName()).isEqualTo("idx_user");
+        assertThat(idx.getColumnNames()).containsExactly("user_id");
+    }
+
+    @Test
+    void testRejectIndexNameWithDoubleUnderscore() {
+        Schema.Builder b =
+                Schema.newBuilder()
+                        .column("id", DataTypes.BIGINT())
+                        .column("u", DataTypes.BIGINT())
+                        .primaryKey("id");
+
+        assertThatThrownBy(() -> b.index("idx__bad", "u"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("__");
+    }
+
+    @Test
+    void testRejectIndexNameWithLeadingUnderscore() {
+        Schema.Builder b =
+                Schema.newBuilder()
+                        .column("id", DataTypes.BIGINT())
+                        .column("u", DataTypes.BIGINT())
+                        .primaryKey("id");
+
+        assertThatThrownBy(() -> b.index("_idx_bad", "u"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("cannot start with underscore");
+
+        assertThatThrownBy(
+                        () ->
+                                new Schema.Index(
+                                        "_idx_bad", java.util.Collections.singletonList("u")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("cannot start with underscore");
+    }
+
+    @Test
+    void testRejectEmptyIndexColumns() {
+        Schema.Builder b = Schema.newBuilder().column("id", DataTypes.BIGINT()).primaryKey("id");
+
+        assertThatThrownBy(() -> b.index("idx_empty"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("at least one column");
+    }
+
+    @Test
+    void testRejectIndexNameWithIllegalCharacter() {
+        Schema.Builder b =
+                Schema.newBuilder()
+                        .column("id", DataTypes.BIGINT())
+                        .column("u", DataTypes.BIGINT())
+                        .primaryKey("id");
+
+        assertThatThrownBy(() -> b.index("idx-bad", "u"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("letters, digits, and underscores");
+    }
+
+    @Test
+    void testRejectDuplicateIndexName() {
+        Schema.Builder b =
+                Schema.newBuilder()
+                        .column("id", DataTypes.BIGINT())
+                        .column("u", DataTypes.BIGINT())
+                        .column("v", DataTypes.BIGINT())
+                        .primaryKey("id")
+                        .index("idx_user", "u");
+
+        assertThatThrownBy(() -> b.index("idx_user", "v"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Duplicate index name 'idx_user'");
+    }
+
+    @Test
+    void testRejectDuplicateIndexColumns() {
+        Schema.Builder b =
+                Schema.newBuilder()
+                        .column("id", DataTypes.BIGINT())
+                        .column("u", DataTypes.BIGINT())
+                        .primaryKey("id");
+
+        assertThatThrownBy(() -> b.index("idx_user", "u", "u"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("duplicate columns");
+
+        assertThatThrownBy(() -> new Schema.Index("idx_user", java.util.Arrays.asList("u", "u")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("duplicate columns");
+    }
+
+    @Test
+    void testUserCannotDefineReservedSystemColumnInMainSchema() {
+        assertThatThrownBy(
+                        () ->
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.BIGINT())
+                                        .column("__partition_id", DataTypes.BIGINT())
+                                        .primaryKey("id")
+                                        .build())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("__partition_id");
+    }
 }

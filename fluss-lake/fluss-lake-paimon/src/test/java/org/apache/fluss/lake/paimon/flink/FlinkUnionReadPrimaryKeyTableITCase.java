@@ -1165,6 +1165,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
             // Verify union read reconciles tiered data (V1) with a fluss log
             // containing multiple schema versions (V2 and V3).
             jobClient.cancel().get();
+            jobClient = null;
             addColumnChanges =
                     Collections.singletonList(
                             TableChange.addColumn(
@@ -1192,7 +1193,9 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
                             "+I[2, v2_updated_again, 20, 30]",
                             "+I[3, v3_update, 30, 40]");
         } finally {
-            jobClient.cancel().get();
+            if (jobClient != null) {
+                jobClient.cancel().get();
+            }
         }
     }
 

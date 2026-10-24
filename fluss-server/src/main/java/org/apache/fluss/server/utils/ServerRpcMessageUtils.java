@@ -37,6 +37,7 @@ import org.apache.fluss.metadata.AggFunctions;
 import org.apache.fluss.metadata.DatabaseChange;
 import org.apache.fluss.metadata.DatabaseSummary;
 import org.apache.fluss.metadata.PartitionSpec;
+import org.apache.fluss.metadata.PartitionTombstone;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableBucket;
@@ -50,6 +51,7 @@ import org.apache.fluss.record.DefaultKvRecordBatch;
 import org.apache.fluss.record.DefaultValueRecordBatch;
 import org.apache.fluss.record.FileChannelChunk;
 import org.apache.fluss.record.FileLogRecords;
+import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.remote.RemoteLogFetchInfo;
@@ -135,12 +137,15 @@ import org.apache.fluss.rpc.messages.PbNotifyLeaderAndIsrReqForBucket;
 import org.apache.fluss.rpc.messages.PbNotifyLeaderAndIsrRespForBucket;
 import org.apache.fluss.rpc.messages.PbPartitionMetadata;
 import org.apache.fluss.rpc.messages.PbPartitionSpec;
+import org.apache.fluss.rpc.messages.PbPartitionTombstone;
 import org.apache.fluss.rpc.messages.PbPhysicalTablePath;
 import org.apache.fluss.rpc.messages.PbPrefixLookupReqForBucket;
 import org.apache.fluss.rpc.messages.PbPrefixLookupRespForBucket;
 import org.apache.fluss.rpc.messages.PbProduceLogReqForBucket;
 import org.apache.fluss.rpc.messages.PbProduceLogRespForBucket;
 import org.apache.fluss.rpc.messages.PbProducerTableOffsets;
+import org.apache.fluss.rpc.messages.PbPutIndexReqForBucket;
+import org.apache.fluss.rpc.messages.PbPutIndexRespForBucket;
 import org.apache.fluss.rpc.messages.PbPutKvReqForBucket;
 import org.apache.fluss.rpc.messages.PbPutKvRespForBucket;
 import org.apache.fluss.rpc.messages.PbRebalancePlanForBucket;
@@ -164,6 +169,8 @@ import org.apache.fluss.rpc.messages.PrefixLookupRequest;
 import org.apache.fluss.rpc.messages.PrefixLookupResponse;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.ProduceLogResponse;
+import org.apache.fluss.rpc.messages.PutIndexRequest;
+import org.apache.fluss.rpc.messages.PutIndexResponse;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.messages.PutKvResponse;
 import org.apache.fluss.rpc.messages.RebalanceResponse;
@@ -188,6 +195,7 @@ import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 import org.apache.fluss.server.entity.NotifyRemoteLogOffsetsData;
 import org.apache.fluss.server.entity.ProduceLogDataForBucket;
+import org.apache.fluss.server.entity.PutIndexDataForBucket;
 import org.apache.fluss.server.entity.PutKvDataForBucket;
 import org.apache.fluss.server.entity.StopReplicaData;
 import org.apache.fluss.server.entity.StopReplicaResultForBucket;
@@ -508,6 +516,22 @@ public class ServerRpcMessageUtils {
             Set<ServerInfo> aliveTableServers,
             List<TableMetadata> tableMetadataList,
             List<PartitionMetadata> partitionMetadataList) {
+        return makeUpdateMetadataRequest(
+                coordinatorServer,
+                coordinatorEpoch,
+                aliveTableServers,
+                tableMetadataList,
+                partitionMetadataList,
+                Collections.emptyMap());
+    }
+
+    public static UpdateMetadataRequest makeUpdateMetadataRequest(
+            @Nullable ServerInfo coordinatorServer,
+            @Nullable Integer coordinatorEpoch,
+            Set<ServerInfo> aliveTableServers,
+            List<TableMetadata> tableMetadataList,
+            List<PartitionMetadata> partitionMetadataList,
+            Map<Long, PartitionTombstone> partitionTombstones) {
         UpdateMetadataRequest updateMetadataRequest = new UpdateMetadataRequest();
         Set<PbServerNode> aliveTableServerNodes = new HashSet<>();
         for (ServerInfo serverInfo : aliveTableServers) {
@@ -547,10 +571,37 @@ public class ServerRpcMessageUtils {
         updateMetadataRequest.addAllTableMetadatas(pbTableMetadataList);
         updateMetadataRequest.addAllPartitionMetadatas(pbPartitionMetadataList);
 
+        if (!partitionTombstones.isEmpty()) {
+            List<PbPartitionTombstone> pbList = new ArrayList<>(partitionTombstones.size());
+            for (Map.Entry<Long, PartitionTombstone> e : partitionTombstones.entrySet()) {
+                pbList.add(toPbPartitionTombstone(e.getKey(), e.getValue()));
+            }
+            updateMetadataRequest.addAllPartitionTombstones(pbList);
+        }
+
         if (coordinatorEpoch != null) {
             updateMetadataRequest.setCoordinatorEpoch(coordinatorEpoch);
         }
         return updateMetadataRequest;
+    }
+
+    private static PbPartitionTombstone toPbPartitionTombstone(
+            long tableId, PartitionTombstone tombstone) {
+        PbPartitionTombstone pb =
+                new PbPartitionTombstone()
+                        .setTableId(tableId)
+                        .setFloor(tombstone.getFloor())
+                        .setVersion(tombstone.getVersion());
+        Set<Long> explicitSet = tombstone.getExplicitSet();
+        if (!explicitSet.isEmpty()) {
+            long[] arr = new long[explicitSet.size()];
+            int i = 0;
+            for (Long v : explicitSet) {
+                arr[i++] = v;
+            }
+            pb.setExplicitSets(arr);
+        }
+        return pb;
     }
 
     public static ClusterMetadata getUpdateMetadataRequestData(UpdateMetadataRequest request) {
@@ -605,8 +656,34 @@ public class ServerRpcMessageUtils {
                         partitionMetadata ->
                                 partitionMetadataList.add(toPartitionMetadata(partitionMetadata)));
 
+        Map<Long, PartitionTombstone> partitionTombstones;
+        if (request.getPartitionTombstonesCount() == 0) {
+            partitionTombstones = Collections.emptyMap();
+        } else {
+            partitionTombstones = new HashMap<>(request.getPartitionTombstonesCount());
+            for (PbPartitionTombstone pb : request.getPartitionTombstonesList()) {
+                long[] explicitArr = pb.getExplicitSets();
+                Set<Long> explicitSet;
+                if (explicitArr.length == 0) {
+                    explicitSet = Collections.emptySet();
+                } else {
+                    explicitSet = new HashSet<>(explicitArr.length);
+                    for (long v : explicitArr) {
+                        explicitSet.add(v);
+                    }
+                }
+                partitionTombstones.put(
+                        pb.getTableId(),
+                        new PartitionTombstone(pb.getFloor(), explicitSet, pb.getVersion()));
+            }
+        }
+
         return new ClusterMetadata(
-                coordinatorServer, aliveTabletServers, tableMetadataList, partitionMetadataList);
+                coordinatorServer,
+                aliveTabletServers,
+                tableMetadataList,
+                partitionMetadataList,
+                partitionTombstones);
     }
 
     private static PbTableMetadata toPbTableMetadata(TableMetadata tableMetadata) {
@@ -1226,6 +1303,37 @@ public class ServerRpcMessageUtils {
         return putKvData;
     }
 
+    public static List<PutIndexDataForBucket> getPutIndexData(PutIndexRequest request) {
+        List<PutIndexDataForBucket> result = new ArrayList<>(request.getBucketsReqsCount());
+        Set<TableBucket> targets = new HashSet<>();
+        for (PbPutIndexReqForBucket bucketRequest : request.getBucketsReqsList()) {
+            TableBucket targetBucket =
+                    new TableBucket(request.getTableId(), bucketRequest.getBucketId());
+            if (!targets.add(targetBucket)) {
+                throw new IllegalArgumentException(
+                        "A PutIndex request contains duplicate target bucket " + targetBucket);
+            }
+            TableBucket sourceBucket =
+                    new TableBucket(
+                            request.getSourceTableId(),
+                            bucketRequest.hasSourcePartitionId()
+                                    ? bucketRequest.getSourcePartitionId()
+                                    : null,
+                            bucketRequest.getSourceBucketId());
+            KvRecordBatch records =
+                    DefaultKvRecordBatch.pointToByteBuffer(
+                            toByteBuffer(bucketRequest.getRecordsSlice()));
+            result.add(
+                    new PutIndexDataForBucket(
+                            targetBucket,
+                            sourceBucket,
+                            bucketRequest.getSourceEndOffset(),
+                            bucketRequest.getProgressKey(),
+                            records));
+        }
+        return result;
+    }
+
     public static Map<TableBucket, List<byte[]>> toLookupData(LookupRequest lookupRequest) {
         long tableId = lookupRequest.getTableId();
         Map<TableBucket, List<byte[]>> lookupEntryData = new HashMap<>();
@@ -1345,6 +1453,20 @@ public class ServerRpcMessageUtils {
         }
         putKvResponse.addAllBucketsResps(putKvRespForBucketList);
         return putKvResponse;
+    }
+
+    public static PutIndexResponse makePutIndexResponse(Collection<PutKvResultForBucket> results) {
+        PutIndexResponse response = new PutIndexResponse();
+        for (PutKvResultForBucket result : results) {
+            PbPutIndexRespForBucket bucket =
+                    response.addBucketsResp().setBucketId(result.getBucketId());
+            if (result.failed()) {
+                bucket.setError(result.getErrorCode(), result.getErrorMessage());
+            } else if (result.getWriteLogEndOffset() >= 0) {
+                bucket.setLogEndOffset(result.getWriteLogEndOffset());
+            }
+        }
+        return response;
     }
 
     public static LimitScanResponse makeLimitScanResponse(LimitScanResultForBucket bucketResult) {

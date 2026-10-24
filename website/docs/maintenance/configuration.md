@@ -274,6 +274,22 @@ This behavior requires upgrading the Java client or the connector that bundles i
 It uses the existing server error code and requires no server protocol upgrade.
 The per-bucket backoff does not impose a cluster-wide bandwidth limit.
 
+## Index Replication
+
+These TabletServer options control maintenance of [secondary indexes](../table-design/secondary-indexes.md).
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| index.replication.reader.threads | Integer | 8 | Number of reader workers that read and convert committed main-table WAL. Must be positive. |
+| index.replication.source.max-bytes | MemorySize | 2mb | Preferred maximum source WAL bytes read per replication window. The first complete log record batch may exceed this limit to ensure progress. Independent of the encoded request target size. Must be between 1 and 2147483647 bytes. |
+| index.replication.sender.threads | Integer | 2 | Number of sender workers that dispatch index batches. Must be positive. |
+| index.replication.request.target-bytes | MemorySize | 1mb | Preferred encoded payload size for one replication window. Complete log record batches are not split. Must be positive. |
+| index.replication.buffer.max-bytes-per-main-bucket | MemorySize | 64mb | Maximum retained payload bytes buffered per leader main-table bucket. Must be positive. |
+| index.replication.buffer.max-bytes | MemorySize | 512mb | Maximum retained bytes of admitted index batches across one TabletServer, including queued and in-flight batches. Source reads and batches still being constructed are not included. Must be positive. |
+| index.replication.retry.backoff | Duration | 100ms | Base backoff before retrying a failed index batch. Must be positive and no greater than 10 seconds. |
+
+The client option `client.lookup.continuation-threads` (Integer, default `4`) controls how many threads per connection continue secondary-index lookups after index candidates are returned. It must be positive.
+
 ## Metrics
 
 More metrics example could be found in [Observability - Metric Reporters](observability/metric-reporters.md).

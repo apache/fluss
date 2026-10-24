@@ -1158,6 +1158,64 @@ public class ConfigOptions {
                     .withDescription("The amount of time to sleep when fetch bucket error occurs.")
                     .withFallbackKeys("log.replica.fetch-backoff-interval");
 
+    public static final ConfigOption<Integer> INDEX_REPLICATION_READER_THREADS =
+            key("index.replication.reader.threads")
+                    .intType()
+                    .defaultValue(8)
+                    .withDescription(
+                            "Number of reader worker threads in the server-global index replicator pool. "
+                                    + "The value must be positive.");
+
+    public static final ConfigOption<MemorySize> INDEX_REPLICATION_SOURCE_MAX_BYTES =
+            key("index.replication.source.max-bytes")
+                    .memoryType()
+                    .defaultValue(MemorySize.parse("2mb"))
+                    .withDescription(
+                            "Preferred maximum source WAL bytes read per index replication window. "
+                                    + "The first complete log record batch may exceed this limit to ensure progress. "
+                                    + "This is independent of the encoded index request target size. "
+                                    + "The value must be positive and at most 2147483647 bytes.");
+
+    public static final ConfigOption<Integer> INDEX_REPLICATION_SENDER_THREADS =
+            key("index.replication.sender.threads")
+                    .intType()
+                    .defaultValue(2)
+                    .withDescription(
+                            "Number of sender worker threads that dispatch derived index batches. "
+                                    + "The value must be positive.");
+
+    public static final ConfigOption<Duration> INDEX_REPLICATION_RETRY_BACKOFF =
+            key("index.replication.retry.backoff")
+                    .durationType()
+                    .defaultValue(Duration.ofMillis(100))
+                    .withDescription(
+                            "The base backoff applied before retrying a failed index batch send. "
+                                    + "The value must be positive and must not exceed 10 seconds.");
+
+    public static final ConfigOption<MemorySize> INDEX_REPLICATION_MAIN_BUCKET_BUFFER_MAX_BYTES =
+            key("index.replication.buffer.max-bytes-per-main-bucket")
+                    .memoryType()
+                    .defaultValue(MemorySize.parse("64mb"))
+                    .withDescription(
+                            "Maximum retained payload bytes buffered per leader main-table bucket. "
+                                    + "The value must be positive.");
+
+    public static final ConfigOption<MemorySize> INDEX_REPLICATION_BUFFER_MAX_BYTES =
+            key("index.replication.buffer.max-bytes")
+                    .memoryType()
+                    .defaultValue(MemorySize.parse("512mb"))
+                    .withDescription(
+                            "Maximum retained payload bytes across one TabletServer. "
+                                    + "The value must be positive.");
+
+    public static final ConfigOption<MemorySize> INDEX_REPLICATION_REQUEST_TARGET_BYTES =
+            key("index.replication.request.target-bytes")
+                    .memoryType()
+                    .defaultValue(MemorySize.parse("1mb"))
+                    .withDescription(
+                            "Preferred encoded payload size for one index replication window. "
+                                    + "The value must be positive.");
+
     public static final ConfigOption<MemorySize> LOG_REPLICA_FETCH_MAX_BYTES =
             key("log.replica.fetch.max-bytes")
                     .memoryType()
@@ -1794,6 +1852,14 @@ public class ConfigOptions {
                     .defaultValue(25600)
                     .withDescription("The maximum number of pending lookup operations.");
 
+    public static final ConfigOption<Integer> CLIENT_LOOKUP_CONTINUATION_THREADS =
+            key("client.lookup.continuation-threads")
+                    .intType()
+                    .defaultValue(4)
+                    .withDescription(
+                            "The number of threads used to continue secondary-index lookups after "
+                                    + "the index-table lookup completes. The value must be positive.");
+
     public static final ConfigOption<Integer> CLIENT_LOOKUP_MAX_BATCH_SIZE =
             key("client.lookup.max-batch-size")
                     .intType()
@@ -2408,6 +2474,13 @@ public class ConfigOptions {
                     .defaultValue(Duration.ofSeconds(5))
                     .withDescription(
                             "The maximum time to wait for all replicas to acknowledge an offset commit.");
+    public static final ConfigOption<Long> TABLE_INDEX_META_MAIN_TABLE_ID =
+            key("table.index-meta.main-table-id")
+                    .longType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The main table id associated with an internal Index Table. "
+                                    + "This option is managed by the system.");
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for Kv

@@ -69,7 +69,6 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
     private transient Connection connection;
     private transient Table table;
     private transient Lookuper lookuper;
-    private transient FlinkAsFlussRow lookupRow;
 
     public FlinkAsyncLookupFunction(
             Configuration flussConfig,
@@ -91,7 +90,6 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
         LOG.info("start open ...");
         connection = ConnectionFactory.createConnection(flussConfig);
         table = connection.getTable(tablePath);
-        lookupRow = new FlinkAsFlussRow();
 
         final RowType outputRowType;
         if (projection == null) {
@@ -108,15 +106,26 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
         flussRowToFlinkRowConverter =
                 new FlussRowToFlinkRowConverter(FlinkConversions.toFlussRowType(outputRowType));
 
-        Lookup lookup = table.newLookup();
-        if (lookupNormalizer.getLookupType() == LookupType.PREFIX_LOOKUP) {
+        if (lookupNormalizer.getLookupType() == LookupType.SECONDARY_INDEX_LOOKUP) {
             int[] lookupKeyIndexes = lookupNormalizer.getLookupKeyIndexes();
             RowType lookupKeyRowType = FlinkUtils.projectRowType(flinkRowType, lookupKeyIndexes);
-            lookup = lookup.lookupBy(lookupKeyRowType.getFieldNames());
-        } else if (insertIfNotExists) {
-            lookup = lookup.enableInsertIfNotExists();
+            List<String> lookupColumns = lookupKeyRowType.getFieldNames();
+            String indexName =
+                    LookupNormalizer.findMatchingSecondaryIndexName(
+                            table.getTableInfo().getSchema(), lookupColumns);
+            lookuper = table.getSecondaryIndexLookuper(indexName);
+        } else {
+            Lookup lookup = table.newLookup();
+            if (lookupNormalizer.getLookupType() == LookupType.PREFIX_LOOKUP) {
+                int[] lookupKeyIndexes = lookupNormalizer.getLookupKeyIndexes();
+                RowType lookupKeyRowType =
+                        FlinkUtils.projectRowType(flinkRowType, lookupKeyIndexes);
+                lookup = lookup.lookupBy(lookupKeyRowType.getFieldNames());
+            } else if (insertIfNotExists) {
+                lookup = lookup.enableInsertIfNotExists();
+            }
+            lookuper = lookup.createLookuper();
         }
-        lookuper = lookup.createLookuper();
 
         LOG.info("end open.");
     }
@@ -130,10 +139,12 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
     public CompletableFuture<Collection<RowData>> asyncLookup(RowData keyRow) {
         RowData normalizedKeyRow = lookupNormalizer.normalizeLookupKey(keyRow);
         RemainingFilter remainingFilter = lookupNormalizer.createRemainingFilter(keyRow);
-        InternalRow flussKeyRow = lookupRow.replace(normalizedKeyRow);
+        // Bind a wrapper to this call. Multiple async lookups can be in flight at the same time, so
+        // a
+        // shared mutable wrapper would let a later call overwrite an earlier call's key data.
+        InternalRow flussKeyRow = new FlinkAsFlussRow(normalizedKeyRow);
 
-        // the retry mechanism is now handled by the underlying LookupClient layer,
-        // we can't call lookuper.lookup() in whenComplete callback as lookuper is not thread-safe.
+        // the retry mechanism is now handled by the underlying LookupClient layer.
         CompletableFuture<Collection<RowData>> future = new CompletableFuture<>();
         lookuper.lookup(flussKeyRow)
                 .whenComplete(

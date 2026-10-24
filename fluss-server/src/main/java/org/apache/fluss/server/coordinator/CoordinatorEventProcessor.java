@@ -41,6 +41,7 @@ import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.exception.TabletServerNotAvailableException;
 import org.apache.fluss.exception.UnknownServerException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
+import org.apache.fluss.metadata.PartitionTombstone;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
@@ -895,7 +896,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
                     new HashSet<>(coordinatorContext.getLiveTabletServers().values()),
                     null,
                     null,
-                    tableBuckets);
+                    tableBuckets,
+                    partitionTombstoneForCreatedTable(tableInfo));
 
             // register table metrics.
             coordinatorMetricGroup.addTableBucketMetricGroup(
@@ -909,7 +911,22 @@ public class CoordinatorEventProcessor implements EventProcessor {
                     new HashSet<>(coordinatorContext.getLiveTabletServers().values()),
                     tableId,
                     null,
-                    Collections.emptySet());
+                    Collections.emptySet(),
+                    partitionTombstoneForCreatedTable(tableInfo));
+        }
+    }
+
+    private Map<Long, PartitionTombstone> partitionTombstoneForCreatedTable(TableInfo tableInfo) {
+        if (!tableInfo.isPartitioned() || tableInfo.getSchema().getIndexes().isEmpty()) {
+            return Collections.emptyMap();
+        }
+        try {
+            return Collections.singletonMap(
+                    tableInfo.getTableId(),
+                    zooKeeperClient.getPartitionTombstone(tableInfo.getTablePath()));
+        } catch (Exception e) {
+            throw new FlussRuntimeException(
+                    "Failed to load PartitionTombstone for table " + tableInfo.getTablePath(), e);
         }
     }
 
@@ -1158,13 +1175,32 @@ public class CoordinatorEventProcessor implements EventProcessor {
         TablePartition tablePartition =
                 new TablePartition(tableId, dropPartitionEvent.getPartitionId());
 
-        // If this is a primary key table partition, drop the kv snapshot store.
         TableInfo dropTableInfo = coordinatorContext.getTableInfoById(tableId);
+        if (dropTableInfo == null) {
+            return;
+        }
+        // Recursive table deletion also emits child partition events. There is no need to publish
+        // tombstones while the whole table is being removed.
+        boolean tableBeingDeleted = coordinatorContext.isTableQueuedForDeletion(tableId);
+        Map<Long, PartitionTombstone> partitionTombstones = Collections.emptyMap();
+        if (!tableBeingDeleted && !dropTableInfo.getSchema().getIndexes().isEmpty()) {
+            try {
+                PartitionTombstone tombstone =
+                        zooKeeperClient.getPartitionTombstone(dropTableInfo.getTablePath());
+                partitionTombstones = Collections.singletonMap(tableId, tombstone);
+            } catch (Exception e) {
+                throw new FlussRuntimeException(
+                        "Failed to load PartitionTombstone for table "
+                                + dropTableInfo.getTablePath(),
+                        e);
+            }
+        }
 
         // Remove partition metrics before dropping their backing snapshot stores.
         coordinatorMetricGroup.removeTablePartitionMetricsGroup(
                 dropTableInfo.getTablePath(), tableId, tablePartition.getPartitionId());
 
+        // If this is a primary key table partition, drop the kv snapshot store.
         if (dropTableInfo.hasPrimaryKey()) {
             Set<TableBucket> deleteTableBuckets =
                     coordinatorContext.getAllBucketsForPartition(
@@ -1182,7 +1218,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 new HashSet<>(coordinatorContext.getLiveTabletServers().values()),
                 tableId,
                 tablePartition.getPartitionId(),
-                Collections.emptySet());
+                Collections.emptySet(),
+                partitionTombstones);
     }
 
     private void processDeleteReplicaResponseReceived(
@@ -1383,7 +1420,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 Collections.singleton(serverInfo),
                 null,
                 null,
-                coordinatorContext.bucketLeaderAndIsr().keySet());
+                coordinatorContext.bucketLeaderAndIsr().keySet(),
+                collectPartitionTombstonesForIndexedTables());
 
         tableManager.resumeReplicaDeletion(tabletServerId);
 
@@ -2611,9 +2649,36 @@ public class CoordinatorEventProcessor implements EventProcessor {
                             }
                         });
         coordinatorRequestBatch.addUpdateMetadataRequestForTabletServers(
-                serverIds, null, null, tableBuckets);
+                serverIds, null, null, tableBuckets, collectPartitionTombstonesForIndexedTables());
 
         coordinatorRequestBatch.sendUpdateMetadataRequest();
+    }
+
+    private Map<Long, PartitionTombstone> collectPartitionTombstonesForIndexedTables() {
+        Map<Long, PartitionTombstone> tombstones = new HashMap<>();
+        for (long tableId : coordinatorContext.allTables().keySet()) {
+            if (coordinatorContext.isTableQueuedForDeletion(tableId)) {
+                continue;
+            }
+            TableInfo tableInfo = coordinatorContext.getTableInfoById(tableId);
+            if (tableInfo == null
+                    || !tableInfo.isPartitioned()
+                    || tableInfo.getSchema().getIndexes().isEmpty()) {
+                continue;
+            }
+            try {
+                PartitionTombstone tombstone =
+                        zooKeeperClient.getPartitionTombstone(tableInfo.getTablePath());
+                tombstones.put(tableId, tombstone);
+            } catch (Exception e) {
+                throw new FlussRuntimeException(
+                        "Failed to load PartitionTombstone for table "
+                                + tableInfo.getTablePath()
+                                + " while building metadata update",
+                        e);
+            }
+        }
+        return tombstones;
     }
 
     /** Update metadata cache for all remote tablet servers. */
@@ -2622,11 +2687,22 @@ public class CoordinatorEventProcessor implements EventProcessor {
             @Nullable Long tableId,
             @Nullable Long partitionId,
             Set<TableBucket> tableBuckets) {
+        updateTabletServerMetadataCache(
+                aliveTabletServers, tableId, partitionId, tableBuckets, Collections.emptyMap());
+    }
+
+    /** Sends partition tombstones with the metadata update. */
+    private void updateTabletServerMetadataCache(
+            Set<ServerInfo> aliveTabletServers,
+            @Nullable Long tableId,
+            @Nullable Long partitionId,
+            Set<TableBucket> tableBuckets,
+            Map<Long, PartitionTombstone> partitionTombstones) {
         coordinatorRequestBatch.newBatch();
         Set<Integer> serverIds =
                 aliveTabletServers.stream().map(ServerInfo::id).collect(Collectors.toSet());
         coordinatorRequestBatch.addUpdateMetadataRequestForTabletServers(
-                serverIds, tableId, partitionId, tableBuckets);
+                serverIds, tableId, partitionId, tableBuckets, partitionTombstones);
         coordinatorRequestBatch.sendUpdateMetadataRequest();
     }
 

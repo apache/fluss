@@ -270,6 +270,15 @@ class FlussConfigUtilsTest {
         // valid defaults should pass
         Configuration validConf = new Configuration();
         FlussConfigUtils.validateClientConfigs(validConf);
+        assertThat(validConf.get(ConfigOptions.CLIENT_LOOKUP_CONTINUATION_THREADS)).isEqualTo(4);
+
+        Configuration zeroContinuationThreadsConf = new Configuration();
+        zeroContinuationThreadsConf.set(ConfigOptions.CLIENT_LOOKUP_CONTINUATION_THREADS, 0);
+        assertThatThrownBy(
+                        () -> FlussConfigUtils.validateClientConfigs(zeroContinuationThreadsConf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining(ConfigOptions.CLIENT_LOOKUP_CONTINUATION_THREADS.key())
+                .hasMessageContaining("must be greater than or equal 1");
 
         // max-poll-records = 0 should fail
         Configuration zeroPollConf = new Configuration();
