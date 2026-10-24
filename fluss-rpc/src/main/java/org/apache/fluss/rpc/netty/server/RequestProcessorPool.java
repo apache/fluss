@@ -42,6 +42,7 @@ final class RequestProcessorPool {
 
     private final RequestChannel[] requestChannels;
     private final RequestProcessor[] processors;
+    private final String threadName;
 
     private ExecutorService workerPool;
 
@@ -49,26 +50,28 @@ final class RequestProcessorPool {
             int numProcessors,
             int totalQueueCapacity,
             RpcGatewayService service,
-            List<NetworkProtocolPlugin> protocols,
-            RequestsMetrics requestsMetrics) {
+            RequestHandler<?>[] requestHandlers,
+            RequestsMetrics requestsMetrics,
+            int processorIndexOffset,
+            String threadName) {
         this.processors = new RequestProcessor[numProcessors];
         this.requestChannels = new RequestChannel[numProcessors];
+        this.threadName = threadName;
 
-        RequestHandler<?>[] requestHandlers = initializeRequestHandlers(protocols, service);
         for (int i = 0; i < numProcessors; i++) {
             RequestChannel requestChannel = new RequestChannel(totalQueueCapacity / numProcessors);
             requestChannels[i] = requestChannel;
             // bind processor to a single channel to make requests from the
             // same channel processed serializable
-            processors[i] = new RequestProcessor(i, requestChannel, service, requestHandlers);
+            int processorIndex = processorIndexOffset + i;
+            processors[i] =
+                    new RequestProcessor(processorIndex, requestChannel, service, requestHandlers);
             requestsMetrics.gauge(
                     PROCESSOR_INDEX,
-                    String.valueOf(i),
+                    String.valueOf(processorIndex),
                     MetricNames.REQUEST_QUEUE_SIZE,
                     requestChannel::requestsCount);
         }
-        // register requestQueueSize metrics
-        requestsMetrics.gauge(MetricNames.REQUEST_QUEUE_SIZE, this::getRequestQueueSize);
     }
 
     public int getRequestQueueSize() {
@@ -86,7 +89,7 @@ final class RequestProcessorPool {
     public synchronized void start() {
         this.workerPool =
                 Executors.newFixedThreadPool(
-                        processors.length, new ExecutorThreadFactory("fluss-netty-server-worker"));
+                        processors.length, new ExecutorThreadFactory(threadName));
         for (RequestProcessor processor : processors) {
             workerPool.execute(processor);
         }
@@ -115,7 +118,7 @@ final class RequestProcessorPool {
         // service and requestChannel shutdown is handled outside.
     }
 
-    private RequestHandler<?>[] initializeRequestHandlers(
+    static RequestHandler<?>[] createRequestHandlers(
             List<NetworkProtocolPlugin> protocolPlugins, RpcGatewayService service) {
         int maxRequestTypeId =
                 Arrays.stream(RequestType.values())
