@@ -23,7 +23,7 @@ import org.apache.fluss.annotation.PublicEvolving;
  * Merge mode for write operations on tables with merge engines.
  *
  * <p>This enum controls how the server handles data merging when writing to tables with merge
- * engines. It applies uniformly to all merge engine types (aggregation, first-row, versioned).
+ * engines. Supported engines depend on the selected mode.
  *
  * @since 0.9
  */
@@ -58,7 +58,16 @@ public enum MergeMode {
      *
      * <p>This mode applies to all merge engine types.
      */
-    OVERWRITE(1);
+    OVERWRITE(1),
+
+    /**
+     * Upsert non-NULL target-column values and preserve existing values for incoming NULLs.
+     *
+     * <p>Only supported for primary key tables using the default merge engine. Applies to both
+     * full-row and partial-column upserts. Deletes retain their configured behavior. This mode
+     * requires PUT_KV protocol version 4 or newer. Value 2 is reserved for local aggregation.
+     */
+    IGNORE_NULLS(3);
 
     private final int value;
 
@@ -100,6 +109,8 @@ public enum MergeMode {
                 return DEFAULT;
             case 1:
                 return OVERWRITE;
+            case 3:
+                return IGNORE_NULLS;
             default:
                 return DEFAULT;
         }

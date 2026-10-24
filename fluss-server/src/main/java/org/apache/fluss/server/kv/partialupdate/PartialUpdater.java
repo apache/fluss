@@ -44,16 +44,23 @@ public class PartialUpdater {
     private final boolean updatePrimaryKeyOnly;
     private final DataType[] fieldDataTypes;
 
-    public PartialUpdater(KvFormat kvFormat, short schemaId, Schema schema, int[] targetColumns) {
+    public PartialUpdater(
+            KvFormat kvFormat, short schemaId, Schema schema, @Nullable int[] targetColumns) {
         this.targetSchemaId = schemaId;
-        for (int targetColumn : targetColumns) {
-            partialUpdateCols.set(targetColumn);
+        if (targetColumns == null) {
+            partialUpdateCols.set(0, schema.getColumns().size());
+        } else {
+            for (int targetColumn : targetColumns) {
+                partialUpdateCols.set(targetColumn);
+            }
         }
         for (int pkIndex : schema.getPrimaryKeyIndexes()) {
             primaryKeyCols.set(pkIndex);
         }
         this.fieldDataTypes = schema.getRowType().getChildren().toArray(new DataType[0]);
-        sanityCheck(schema, targetColumns);
+        if (targetColumns != null) {
+            sanityCheck(schema, targetColumns);
+        }
 
         // getter for the fields in row
         flussFieldGetters = new InternalRow.FieldGetter[fieldDataTypes.length];
@@ -102,6 +109,12 @@ public class PartialUpdater {
      * @return the updated value (schema id + row bytes)
      */
     public BinaryValue updateRow(@Nullable BinaryValue oldValue, BinaryValue partialValue) {
+        return updateRow(oldValue, partialValue, false);
+    }
+
+    /** Updates target columns, optionally preserving old values for incoming NULLs. */
+    public BinaryValue updateRow(
+            @Nullable BinaryValue oldValue, BinaryValue partialValue, boolean ignoreNulls) {
         if (updatePrimaryKeyOnly && oldValue != null) {
             // only primary key columns are updated, return the old value directly
             return oldValue;
@@ -110,8 +123,17 @@ public class PartialUpdater {
         rowEncoder.startNewRow();
         // write each field
         for (int i = 0; i < fieldDataTypes.length; i++) {
-            // use the partial row value
-            if (partialUpdateCols.get(i)) {
+            boolean hasNewField = i < partialValue.row.getFieldCount();
+            if (ignoreNulls
+                    && partialUpdateCols.get(i)
+                    && hasNewField
+                    && partialValue.row.isNullAt(i)
+                    && !fieldDataTypes[i].isNullable()) {
+                throw new IllegalArgumentException(
+                        "NULL is not allowed for NOT NULL target column at index " + i);
+            }
+            if (partialUpdateCols.get(i)
+                    && (!ignoreNulls || (hasNewField && !partialValue.row.isNullAt(i)))) {
                 rowEncoder.encodeField(i, flussFieldGetters[i].getFieldOrNull(partialValue.row));
             } else {
                 // use the old row value, the old row may be old schema with fewer fields,

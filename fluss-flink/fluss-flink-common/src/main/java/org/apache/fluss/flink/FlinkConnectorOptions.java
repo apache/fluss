@@ -197,6 +197,15 @@ public class FlinkConnectorOptions {
                                     + "one assignment request. The value must be positive. By default, "
                                     + "all pending splits for a reader are assigned in one request.");
 
+    public static final ConfigOption<Boolean> SINK_IGNORE_NULLS =
+            ConfigOptions.key("sink.ignore-nulls")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Whether upserts preserve existing target-column values for incoming NULLs. "
+                                    + "Supported for full and partial upserts to default-engine primary key tables. "
+                                    + "Does not affect SQL UPDATE assignments or deletes. Requires PUT_KV version 4 or newer.");
+
     public static final ConfigOption<Boolean> SINK_IGNORE_DELETE =
             ConfigOptions.key("sink.ignore-delete")
                     .booleanType()

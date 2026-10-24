@@ -39,6 +39,7 @@ import org.apache.fluss.rpc.metrics.ConnectionMetrics;
 import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.rpc.protocol.ApiManager;
 import org.apache.fluss.rpc.protocol.ApiMethod;
+import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.rpc.protocol.MessageCodec;
 import org.apache.fluss.security.auth.ClientAuthenticator;
 import org.apache.fluss.shaded.netty4.io.netty.bootstrap.Bootstrap;
@@ -385,6 +386,19 @@ final class ServerConnection {
 
     @VisibleForTesting
     void validateVersionCompatibility(ApiKeys apiKey, short version, ApiMessage rawRequest) {
+        if (apiKey == ApiKeys.PUT_KV && version < 4) {
+            PutKvRequest request = (PutKvRequest) rawRequest;
+            if (request.hasAggMode()
+                    && request.getAggMode() == MergeMode.IGNORE_NULLS.getProtoValue()) {
+                throw new UnsupportedVersionException(
+                        "IGNORE_NULLS requires PUT_KV version 4 or newer, but server "
+                                + node
+                                + " negotiated version "
+                                + version
+                                + '.');
+            }
+        }
+
         if (apiKey == ApiKeys.PRODUCE_LOG && version < HISTORICAL_PRODUCE_LOG_MIN_VERSION) {
             ProduceLogRequest produceLogRequest = (ProduceLogRequest) rawRequest;
             if (hasHistoricalProduce(produceLogRequest)) {

@@ -105,6 +105,11 @@ public class TableUpsert implements Upsert {
 
     @Override
     public UpsertWriter createWriter() {
+        if (mergeMode == MergeMode.IGNORE_NULLS
+                && tableInfo.getTableConfig().getMergeEngineType().isPresent()) {
+            throw new IllegalArgumentException(
+                    "MergeMode.IGNORE_NULLS is only supported for the default merge engine.");
+        }
         // Check that OVERWRITE mode is only used with tables that have a merge engine
         if (mergeMode == MergeMode.OVERWRITE) {
             Optional<MergeEngineType> mergeEngineType =
