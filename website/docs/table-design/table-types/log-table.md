@@ -110,7 +110,7 @@ WITH (
 In the above example, we set the compression codec to `LZ4_FRAME` and the compression level to `2`.
 
 :::note 
-1. Currently, the compression codec and compression level are only supported for arrow format. If you set `'table.log.format'='indexed'`, the compression codec and compression level will be ignored.
+1. The `table.log.arrow.compression.*` options only apply to the arrow format. The COMPACTED format has its own compression options, see [COMPACTED with Compression](/table-design/data-formats.md#compacted-with-compression). If you set `'table.log.format'='indexed'`, the compression codec and compression level will be ignored.
 2. The valid range of `table.log.arrow.compression.zstd.level` is 1 to 22.
 :::
 

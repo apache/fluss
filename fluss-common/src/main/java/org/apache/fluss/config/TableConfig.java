@@ -19,6 +19,7 @@ package org.apache.fluss.config;
 
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.compression.ArrowCompressionInfo;
+import org.apache.fluss.compression.LogCompressionInfo;
 import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DeleteBehavior;
@@ -199,6 +200,11 @@ public class TableConfig {
     /** Gets the Arrow compression type and compression level of the table. */
     public ArrowCompressionInfo getArrowCompressionInfo() {
         return ArrowCompressionInfo.fromConf(config);
+    }
+
+    /** Gets the compression type and compression level of COMPACTED log batches of the table. */
+    public LogCompressionInfo getCompactedLogCompressionInfo() {
+        return LogCompressionInfo.fromConf(config);
     }
 
     /** Gets the auto partition strategy of the table. */

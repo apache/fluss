@@ -31,6 +31,7 @@ import org.apache.fluss.client.table.writer.DeleteResult;
 import org.apache.fluss.client.table.writer.TableWriter;
 import org.apache.fluss.client.table.writer.UpsertResult;
 import org.apache.fluss.client.table.writer.UpsertWriter;
+import org.apache.fluss.compression.LogCompressionType;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
@@ -47,12 +48,18 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.ChangeType;
+import org.apache.fluss.record.DefaultLogRecordBatch;
+import org.apache.fluss.record.FileLogRecords;
+import org.apache.fluss.record.LogRecordBatch;
+import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.ProjectedRow;
 import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.row.indexed.IndexedRow;
+import org.apache.fluss.server.log.LogSegment;
+import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.types.BigIntType;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
@@ -67,6 +74,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.annotation.Nullable;
 
+import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -1089,7 +1097,28 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         verifyAppendOrPut(false, "COMPACTED", "COMPACTED");
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"LZ4_FRAME", "ZSTD"})
+    void testAppendAndPollCompressedCompacted(String compressionType) throws Exception {
+        verifyAppendOrPut(true, "COMPACTED", null, compressionType);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"LZ4_FRAME", "ZSTD"})
+    void testPutAndPollCompressedCompacted(String compressionType) throws Exception {
+        verifyAppendOrPut(false, "COMPACTED", "COMPACTED", compressionType);
+    }
+
     void verifyAppendOrPut(boolean append, String logFormat, @Nullable String kvFormat)
+            throws Exception {
+        verifyAppendOrPut(append, logFormat, kvFormat, null);
+    }
+
+    void verifyAppendOrPut(
+            boolean append,
+            String logFormat,
+            @Nullable String kvFormat,
+            @Nullable String compactedCompressionType)
             throws Exception {
         Schema schema =
                 append
@@ -1111,9 +1140,19 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         if (kvFormat != null) {
             builder.kvFormat(KvFormat.fromString(kvFormat));
         }
+        if (compactedCompressionType != null) {
+            builder.property(
+                    ConfigOptions.TABLE_LOG_COMPACTED_COMPRESSION_TYPE.key(),
+                    compactedCompressionType);
+        }
         TableDescriptor tableDescriptor = builder.build();
-        createTable(DATA1_TABLE_PATH, tableDescriptor, false);
+        long tableId = createTable(DATA1_TABLE_PATH, tableDescriptor, false);
 
+        // compression only pays off for batches that are not tiny, so use longer values
+        String valuePrefix =
+                compactedCompressionType == null
+                        ? "hello, friend"
+                        : String.join("", Collections.nCopies(20, "hello, friend "));
         int expectedSize = 30;
         try (Table table = conn.getTable(DATA1_TABLE_PATH)) {
             TableWriter tableWriter;
@@ -1123,7 +1162,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                 tableWriter = table.newUpsert().createWriter();
             }
             for (int i = 0; i < expectedSize; i++) {
-                String value = i % 2 == 0 ? "hello, friend" + i : null;
+                String value = i % 2 == 0 ? valuePrefix + i : null;
                 GenericRow row = row(i, 100, value, i * 10L);
                 if (tableWriter instanceof AppendWriter) {
                     ((AppendWriter) tableWriter).append(row);
@@ -1155,7 +1194,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                     assertThat(scanRecord.getRow().getInt(1)).isEqualTo(100);
                     if (count % 2 == 0) {
                         assertThat(scanRecord.getRow().getString(2).toString())
-                                .isEqualTo("hello, friend" + count);
+                                .isEqualTo(valuePrefix + count);
                     } else {
                         // check null values
                         assertThat(scanRecord.getRow().isNullAt(2)).isTrue();
@@ -1165,7 +1204,44 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                 }
             }
             assertThat(count).isEqualTo(expectedSize);
+
+            if (compactedCompressionType != null) {
+                assertBatchesCompressed(
+                        tableId,
+                        table.getTableInfo().getNumBuckets(),
+                        LogCompressionType.valueOf(compactedCompressionType));
+            }
         }
+    }
+
+    /**
+     * Asserts that the stored log batches of the table use the given compression. Small batches may
+     * be stored uncompressed when compression doesn't make them smaller, so at least one must be
+     * compressed.
+     */
+    private static void assertBatchesCompressed(
+            long tableId, int numBuckets, LogCompressionType compressionType) throws Exception {
+        int compressedBatches = 0;
+        for (int bucket = 0; bucket < numBuckets; bucket++) {
+            Replica replica =
+                    FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(
+                            new TableBucket(tableId, bucket));
+            for (LogSegment segment : replica.getLogTablet().logSegments()) {
+                FileLogRecords fileRecords = segment.getFileLogRecords();
+                ByteBuffer buffer = ByteBuffer.allocate(fileRecords.sizeInBytes());
+                // readInto flips the buffer
+                fileRecords.readInto(buffer, 0);
+                for (LogRecordBatch batch : MemoryLogRecords.pointToByteBuffer(buffer).batches()) {
+                    assertThat(batch.magic()).isEqualTo(LogRecordBatch.CURRENT_LOG_MAGIC_VALUE);
+                    LogCompressionType stored = ((DefaultLogRecordBatch) batch).compressionType();
+                    assertThat(stored).isIn(compressionType, LogCompressionType.NONE);
+                    if (stored == compressionType) {
+                        compressedBatches++;
+                    }
+                }
+            }
+        }
+        assertThat(compressedBatches).isGreaterThan(0);
     }
 
     @ParameterizedTest

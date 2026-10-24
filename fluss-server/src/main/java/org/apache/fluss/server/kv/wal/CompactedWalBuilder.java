@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.kv.wal;
 
+import org.apache.fluss.compression.LogCompressionInfo;
 import org.apache.fluss.memory.ManagedPagedOutputView;
 import org.apache.fluss.memory.MemorySegmentPool;
 import org.apache.fluss.record.ChangeType;
@@ -43,14 +44,22 @@ public class CompactedWalBuilder implements WalBuilder {
     private final FieldGetter[] fieldGetters;
     private final int fieldCount;
 
-    public CompactedWalBuilder(int schemaId, RowType rowType, MemorySegmentPool memorySegmentPool)
+    public CompactedWalBuilder(
+            int schemaId,
+            RowType rowType,
+            MemorySegmentPool memorySegmentPool,
+            LogCompressionInfo compressionInfo)
             throws IOException {
         this.memorySegmentPool = memorySegmentPool;
         this.outputView = new ManagedPagedOutputView(memorySegmentPool);
         // unlimited write size as we don't know the WAL size in advance
         this.recordsBuilder =
                 MemoryLogRecordsCompactedBuilder.builder(
-                        schemaId, Integer.MAX_VALUE, outputView, /*appendOnly*/ false);
+                        schemaId,
+                        Integer.MAX_VALUE,
+                        outputView,
+                        /*appendOnly*/ false,
+                        compressionInfo);
         DataType[] fieldTypes = rowType.getChildren().toArray(new DataType[0]);
         this.rowEncoder = new CompactedRowEncoder(fieldTypes);
         this.fieldGetters = InternalRow.createFieldGetters(rowType);

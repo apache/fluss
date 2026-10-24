@@ -17,6 +17,7 @@
 
 package org.apache.fluss.record;
 
+import org.apache.fluss.compression.LogCompressionType;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
 
 import java.nio.ByteBuffer;
@@ -61,6 +62,29 @@ public class LogRecordBatchFormat {
 
     // Statistics format version
     public static final byte STATISTICS_VERSION = 1;
+
+    /**
+     * Attribute bits 1-2 hold the id of the {@link LogCompressionType} of the records section, in
+     * every magic version. Only the {@code COMPACTED} log format compresses batches today, all
+     * other writers leave these bits as 0 ({@link LogCompressionType#NONE}). When the codec is not
+     * {@link LogCompressionType#NONE}, the records section is laid out as:
+     *
+     * <pre>
+     * +----------------------------+------------------------------------+
+     * | UncompressedSize (4 bytes) | Compressed Records (variable size) |
+     * +----------------------------+------------------------------------+
+     * </pre>
+     *
+     * <p>The CRC covers the stored (compressed) bytes. Readers that don't know these bits read the
+     * compressed bytes as records, so all readers of a table must support compression before it is
+     * enabled.
+     */
+    public static final byte COMPRESSION_CODEC_MASK = 0x06;
+
+    public static final int COMPRESSION_CODEC_SHIFT = 1;
+
+    /** Length of the uncompressed-size prefix of a compressed records section. */
+    public static final int UNCOMPRESSED_SIZE_LENGTH = 4;
 
     // ----------------------------------------------------------------------------------------
     // Format of Magic Version: V2
@@ -115,10 +139,12 @@ public class LogRecordBatchFormat {
      * <p>The current attributes are given below:
      *
      * <pre>
-     * ------------------------------------------
-     * |  Unused (1-7)   |  AppendOnly Flag (0) |
-     * ------------------------------------------
+     * ----------------------------------------------------------------------
+     * |  Unused (3-7)  |  Compression Codec (1-2)  |  AppendOnly Flag (0)  |
+     * ----------------------------------------------------------------------
      * </pre>
+     *
+     * <p>See {@link #COMPRESSION_CODEC_MASK} for the compression codec.
      *
      * @since 1.0
      */
@@ -190,10 +216,12 @@ public class LogRecordBatchFormat {
      * <p>The current attributes are given below:
      *
      * <pre>
-     * ------------------------------------------
-     * |  Unused (1-7)   |  AppendOnly Flag (0) |
-     * ------------------------------------------
+     * ----------------------------------------------------------------------
+     * |  Unused (3-7)  |  Compression Codec (1-2)  |  AppendOnly Flag (0)  |
+     * ----------------------------------------------------------------------
      * </pre>
+     *
+     * <p>See {@link #COMPRESSION_CODEC_MASK} for the compression codec.
      *
      * @since 1.0
      */
@@ -244,10 +272,12 @@ public class LogRecordBatchFormat {
      * <p>The current attributes are given below:
      *
      * <pre>
-     * ------------------------------------------
-     * |  Unused (1-7)   |  AppendOnly Flag (0) |
-     * ------------------------------------------
+     * ----------------------------------------------------------------------
+     * |  Unused (3-7)  |  Compression Codec (1-2)  |  AppendOnly Flag (0)  |
+     * ----------------------------------------------------------------------
      * </pre>
+     *
+     * <p>See {@link #COMPRESSION_CODEC_MASK} for the compression codec.
      *
      * @since 0.1
      */

@@ -19,6 +19,8 @@ package org.apache.fluss.record;
 
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.compression.LogCompressionInfo;
+import org.apache.fluss.compression.LogCompressionType;
 import org.apache.fluss.exception.CorruptMessageException;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.metadata.LogFormat;
@@ -46,12 +48,15 @@ import java.util.Optional;
 
 import static org.apache.fluss.record.LogRecordBatchFormat.BASE_OFFSET_OFFSET;
 import static org.apache.fluss.record.LogRecordBatchFormat.COMMIT_TIMESTAMP_OFFSET;
+import static org.apache.fluss.record.LogRecordBatchFormat.COMPRESSION_CODEC_MASK;
+import static org.apache.fluss.record.LogRecordBatchFormat.COMPRESSION_CODEC_SHIFT;
 import static org.apache.fluss.record.LogRecordBatchFormat.LENGTH_OFFSET;
 import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V1;
 import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V2;
 import static org.apache.fluss.record.LogRecordBatchFormat.LOG_OVERHEAD;
 import static org.apache.fluss.record.LogRecordBatchFormat.MAGIC_OFFSET;
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_LEADER_EPOCH;
+import static org.apache.fluss.record.LogRecordBatchFormat.UNCOMPRESSED_SIZE_LENGTH;
 import static org.apache.fluss.record.LogRecordBatchFormat.attributeOffset;
 import static org.apache.fluss.record.LogRecordBatchFormat.batchSequenceOffset;
 import static org.apache.fluss.record.LogRecordBatchFormat.crcOffset;
@@ -356,15 +361,40 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
     private CloseableIterator<LogRecord> compactedRowRecordIterator(
             RowType rowType, @Nullable ProjectedRow outputProjection, long timestamp) {
         DataType[] fieldTypes = rowType.getChildren().toArray(new DataType[0]);
+        int recordsOffset = position + recordsDataOffset();
+        LogCompressionType compressionType = compressionType();
+        final MemorySegment recordsSegment;
+        final int recordsStart;
+        if (compressionType == LogCompressionType.NONE) {
+            recordsSegment = segment;
+            recordsStart = recordsOffset;
+        } else {
+            int uncompressedSize = segment.getInt(recordsOffset);
+            int compressedOffset = recordsOffset + UNCOMPRESSED_SIZE_LENGTH;
+            int compressedSize = position + sizeInBytes() - compressedOffset;
+            recordsSegment =
+                    MemorySegment.wrap(
+                            LogCompressionInfo.decompress(
+                                    compressionType,
+                                    segment,
+                                    compressedOffset,
+                                    compressedSize,
+                                    uncompressedSize));
+            recordsStart = 0;
+        }
         return new LogRecordIterator() {
-            int position = DefaultLogRecordBatch.this.position + recordsDataOffset();
+            int position = recordsStart;
             int rowId = 0;
 
             @Override
             protected LogRecord readNext(long baseOffset) {
                 CompactedLogRecord logRecord =
                         CompactedLogRecord.readFrom(
-                                segment, position, baseOffset + rowId, timestamp, fieldTypes);
+                                recordsSegment,
+                                position,
+                                baseOffset + rowId,
+                                timestamp,
+                                fieldTypes);
                 rowId++;
                 position += logRecord.getSizeInBytes();
                 if (outputProjection == null) {
@@ -432,6 +462,12 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
 
     private boolean isAppendOnly() {
         return (attributes() & APPEND_ONLY_FLAG_MASK) > 0;
+    }
+
+    /** The batch-level compression codec of the records section. */
+    public LogCompressionType compressionType() {
+        return LogCompressionType.fromId(
+                (attributes() & COMPRESSION_CODEC_MASK) >> COMPRESSION_CODEC_SHIFT);
     }
 
     /** The basic implementation for Arrow log record iterator. */
