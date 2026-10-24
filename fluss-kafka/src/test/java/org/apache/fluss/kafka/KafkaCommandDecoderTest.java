@@ -48,7 +48,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 public class KafkaCommandDecoderTest {
 
     @Test
-    public void testUnsupportedApiVersionsRequestReturnsVersionZeroErrorResponse() {
+    public void testUnsupportedApiVersionsRequestReturnsVersionZeroErrorResponse()
+            throws Exception {
         RequestChannel requestChannel = new RequestChannel(1);
         EmbeddedChannel channel =
                 new EmbeddedChannel(
@@ -73,7 +74,10 @@ public class KafkaCommandDecoderTest {
             assertThat(parsedRequest.version()).isZero();
 
             TestingTabletGatewayService service = new TestingTabletGatewayService();
-            new KafkaRequestHandler(new Configuration(), service).processRequest(request);
+            try (KafkaRequestHandler handler =
+                    new KafkaRequestHandler(new Configuration(), service)) {
+                handler.processRequest(request);
+            }
             channel.runPendingTasks();
 
             responseBuffer = channel.readOutbound();

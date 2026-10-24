@@ -25,18 +25,25 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.metrics.util.NOPMetricsGroup;
+import org.apache.fluss.rpc.RpcGatewayService;
 import org.apache.fluss.rpc.RpcServer;
 import org.apache.fluss.rpc.TestingGatewayService;
 import org.apache.fluss.rpc.messages.ApiVersionsRequest;
 import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
 import org.apache.fluss.rpc.netty.client.NettyClient;
 import org.apache.fluss.rpc.protocol.ApiKeys;
+import org.apache.fluss.rpc.protocol.NetworkProtocolPlugin;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandler;
 import org.apache.fluss.utils.NetUtils;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Supplier;
 
 import static org.apache.fluss.utils.NetUtils.getAvailablePort;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -110,5 +117,95 @@ public class NettyServerTest {
                         .hasMessageContaining("Adjusted frame length exceeds 16");
             }
         }
+    }
+
+    @Test
+    void testProtocolsCloseOnlyAfterListenersStop() {
+        CompletableFuture<Void> workerShutdown = new CompletableFuture<>();
+        AtomicInteger closeCalls = new AtomicInteger();
+        NetworkProtocolPlugin protocol =
+                testingProtocol(
+                        () -> {
+                            closeCalls.incrementAndGet();
+                            return CompletableFuture.completedFuture(null);
+                        });
+
+        CompletableFuture<Void> result =
+                NettyServer.closeProtocolsAfter(
+                        workerShutdown, Collections.singletonList(protocol));
+        assertThat(closeCalls).hasValue(0);
+        assertThat(result).isNotDone();
+
+        workerShutdown.complete(null);
+        result.join();
+        assertThat(closeCalls).hasValue(1);
+    }
+
+    @Test
+    void testAllProtocolsCloseAfterExceptionalWorkerShutdown() {
+        CompletableFuture<Void> workerShutdown = new CompletableFuture<>();
+        AtomicInteger closeCalls = new AtomicInteger();
+        RuntimeException asyncFailure = new RuntimeException("async protocol close failure");
+        RuntimeException synchronousFailure =
+                new RuntimeException("synchronous protocol close failure");
+        NetworkProtocolPlugin asyncFailing =
+                testingProtocol(
+                        () -> {
+                            closeCalls.incrementAndGet();
+                            CompletableFuture<Void> failed = new CompletableFuture<>();
+                            failed.completeExceptionally(asyncFailure);
+                            return failed;
+                        });
+        NetworkProtocolPlugin synchronouslyFailing =
+                testingProtocol(
+                        () -> {
+                            closeCalls.incrementAndGet();
+                            throw synchronousFailure;
+                        });
+        CompletableFuture<Void> result =
+                NettyServer.closeProtocolsAfter(
+                        workerShutdown, Arrays.asList(asyncFailing, synchronouslyFailing));
+
+        workerShutdown.completeExceptionally(new RuntimeException("worker failure"));
+
+        assertThatThrownBy(result::join)
+                .hasStackTraceContaining("worker failure")
+                .hasStackTraceContaining("async protocol close failure")
+                .hasStackTraceContaining("synchronous protocol close failure");
+        assertThat(closeCalls).hasValue(2);
+    }
+
+    private static NetworkProtocolPlugin testingProtocol(
+            Supplier<CompletableFuture<Void>> closeAction) {
+        return new NetworkProtocolPlugin() {
+            @Override
+            public String name() {
+                return "testing";
+            }
+
+            @Override
+            public void setup(Configuration conf) {}
+
+            @Override
+            public List<String> listenerNames() {
+                return Collections.emptyList();
+            }
+
+            @Override
+            public ChannelHandler createChannelHandler(
+                    RequestChannel[] requestChannels, String listenerName) {
+                return null;
+            }
+
+            @Override
+            public RequestHandler<?> createRequestHandler(RpcGatewayService service) {
+                return null;
+            }
+
+            @Override
+            public CompletableFuture<Void> closeAsync() {
+                return closeAction.get();
+            }
+        };
     }
 }

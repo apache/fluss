@@ -17,20 +17,43 @@
 
 package org.apache.fluss.kafka;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.kafka.transcode.KafkaRecordTranscoder;
 import org.apache.fluss.rpc.RpcGatewayService;
 import org.apache.fluss.rpc.netty.server.RequestChannel;
 import org.apache.fluss.rpc.netty.server.RequestHandler;
 import org.apache.fluss.rpc.protocol.NetworkProtocolPlugin;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandler;
+import org.apache.fluss.utils.IOUtils;
+import org.apache.fluss.utils.concurrent.FutureUtils;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.function.Supplier;
+
+import static org.apache.fluss.utils.Preconditions.checkState;
 
 /** The Kafka protocol plugin. */
 public class KafkaProtocolPlugin implements NetworkProtocolPlugin {
 
+    private final Supplier<KafkaRecordTranscoder> transcoderFactory;
+    private final List<KafkaRequestHandler> requestHandlers = new ArrayList<>();
     private Configuration conf;
+    private KafkaProduceResources resources;
+    private CompletableFuture<Void> closeFuture;
+
+    /** Creates a plugin that owns the conversion resources of its request handlers. */
+    public KafkaProtocolPlugin() {
+        this(null);
+    }
+
+    @VisibleForTesting
+    KafkaProtocolPlugin(Supplier<KafkaRecordTranscoder> transcoderFactory) {
+        this.transcoderFactory = transcoderFactory;
+    }
 
     @Override
     public String name() {
@@ -39,7 +62,7 @@ public class KafkaProtocolPlugin implements NetworkProtocolPlugin {
 
     @Override
     public void setup(Configuration conf) {
-        this.conf = conf;
+        this.conf = new Configuration(conf);
     }
 
     @Override
@@ -59,7 +82,36 @@ public class KafkaProtocolPlugin implements NetworkProtocolPlugin {
     }
 
     @Override
-    public RequestHandler<?> createRequestHandler(RpcGatewayService service) {
-        return new KafkaRequestHandler(conf, service);
+    public synchronized RequestHandler<?> createRequestHandler(RpcGatewayService service) {
+        checkState(closeFuture == null, "Kafka protocol plugin has already been closed.");
+        if (transcoderFactory == null && resources == null) {
+            resources = new KafkaProduceResources(conf);
+        }
+        KafkaRecordTranscoder transcoder =
+                transcoderFactory == null ? resources.createTranscoder() : transcoderFactory.get();
+        try {
+            KafkaRequestHandler handler = new KafkaRequestHandler(conf, service, transcoder);
+            requestHandlers.add(handler);
+            return handler;
+        } catch (RuntimeException | Error failure) {
+            IOUtils.closeQuietly(transcoder);
+            throw failure;
+        }
+    }
+
+    /** Releases conversion resources after the RPC request processors have stopped. */
+    @Override
+    public synchronized CompletableFuture<Void> closeAsync() {
+        if (closeFuture == null) {
+            List<AutoCloseable> resourcesToClose = new ArrayList<>(requestHandlers);
+            resourcesToClose.add(resources);
+            try {
+                IOUtils.closeAll(resourcesToClose);
+                closeFuture = CompletableFuture.completedFuture(null);
+            } catch (Exception failure) {
+                closeFuture = FutureUtils.completedExceptionally(failure);
+            }
+        }
+        return closeFuture;
     }
 }

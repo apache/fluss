@@ -25,6 +25,7 @@ import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBufAllocator;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.Unpooled;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
 import org.apache.fluss.shaded.netty4.io.netty.channel.embedded.EmbeddedChannel;
+import org.apache.fluss.utils.IOUtils;
 
 import org.apache.kafka.common.message.ApiVersionsRequestData;
 import org.apache.kafka.common.message.ApiVersionsResponseData;
@@ -43,13 +44,16 @@ import org.apache.kafka.common.requests.CreateTopicsResponse;
 import org.apache.kafka.common.requests.RequestHeader;
 import org.apache.kafka.common.requests.RequestUtils;
 import org.apache.kafka.common.requests.ResponseHeader;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -57,6 +61,13 @@ import static org.assertj.core.api.Assertions.tuple;
 
 /** Tests for {@link KafkaRequestHandler}. */
 public class KafkaRequestHandlerTest {
+
+    private final List<KafkaRequestHandler> handlers = new ArrayList<>();
+
+    @AfterEach
+    void closeHandlers() throws Exception {
+        IOUtils.closeAll(handlers);
+    }
 
     @Test
     public void testUnsupportedWireVersionFallsBackAndAllowsRenegotiation() {
@@ -151,6 +162,7 @@ public class KafkaRequestHandlerTest {
         assertThat(response.data().apiKeys())
                 .extracting(ApiVersion::apiKey, ApiVersion::minVersion, ApiVersion::maxVersion)
                 .containsExactly(
+                        tuple(ApiKeys.PRODUCE.id, (short) 3, (short) 11),
                         tuple(ApiKeys.METADATA.id, (short) 0, (short) 11),
                         tuple(ApiKeys.API_VERSIONS.id, (short) 0, (short) 4));
     }
@@ -298,8 +310,10 @@ public class KafkaRequestHandlerTest {
         }
     }
 
-    private static KafkaRequestHandler createKafkaRequestHandler() {
+    private KafkaRequestHandler createKafkaRequestHandler() {
         TestingTabletGatewayService service = new TestingTabletGatewayService();
-        return new KafkaRequestHandler(new Configuration(), service);
+        KafkaRequestHandler handler = new KafkaRequestHandler(new Configuration(), service);
+        handlers.add(handler);
+        return handler;
     }
 }

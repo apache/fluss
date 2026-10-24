@@ -131,7 +131,9 @@ public final class KafkaProduceCommand {
             return partitionId;
         }
 
-        /** Returns records with borrowed key/value buffers in append order. */
+        /**
+         * Returns records with borrowed key/value buffers in append order, including null values.
+         */
         public List<Record> records() {
             return records;
         }

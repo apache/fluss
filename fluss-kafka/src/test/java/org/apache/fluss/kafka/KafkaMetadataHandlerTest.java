@@ -39,6 +39,7 @@ import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBufAllocator;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
+import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import org.apache.kafka.clients.Metadata;
@@ -58,6 +59,7 @@ import org.apache.kafka.common.requests.MetadataRequest;
 import org.apache.kafka.common.requests.MetadataResponse;
 import org.apache.kafka.common.requests.RequestHeader;
 import org.apache.kafka.common.utils.LogContext;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -81,6 +83,13 @@ import static org.assertj.core.api.Assertions.entry;
 public class KafkaMetadataHandlerTest {
 
     private static final Uuid TOPIC_ID = new Uuid(0x466c757373000000L, 123L);
+
+    private final List<KafkaRequestHandler> handlers = new ArrayList<>();
+
+    @AfterEach
+    void closeHandlers() throws Exception {
+        IOUtils.closeAll(handlers);
+    }
 
     @Test
     public void testNamedTopicForEverySupportedVersion() {
@@ -737,17 +746,18 @@ public class KafkaMetadataHandlerTest {
         return new MetadataRequest(data, version);
     }
 
-    private static MetadataResponse handle(
+    private MetadataResponse handle(
             TestingMetadataGatewayService service, MetadataRequest requestBody, short version) {
         return handle(service, requestBody, version, new Configuration());
     }
 
-    private static MetadataResponse handle(
+    private MetadataResponse handle(
             TestingMetadataGatewayService service,
             MetadataRequest requestBody,
             short version,
             Configuration config) {
         KafkaRequestHandler handler = new KafkaRequestHandler(config, service);
+        handlers.add(handler);
         ByteBuf requestBuffer = ByteBufAllocator.DEFAULT.buffer();
         KafkaRequest request;
         try {
