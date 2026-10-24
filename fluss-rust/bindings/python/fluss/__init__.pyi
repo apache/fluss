@@ -110,6 +110,14 @@ class RecordBatch:
         is the case for a limit scan that merges several log batches.
         """
         ...
+    @property
+    def schema_id(self) -> int:
+        """Source log batch schema ID, before projection or schema alignment.
+
+        This does not identify the output Arrow schema. `NO_SCHEMA_ID` is
+        returned when there is no single source schema, including limit scans.
+        """
+        ...
     def __str__(self) -> str: ...
     def __repr__(self) -> str: ...
 
@@ -1510,5 +1518,8 @@ EARLIEST_OFFSET: int
 # Reported by `RecordBatch.commit_timestamp` when the batch carries no single
 # commit timestamp, for example a limit scan that merges several log batches (-1)
 NO_COMMIT_TIMESTAMP: int
+
+# No single source log batch schema ID, including limit scan results.
+NO_SCHEMA_ID: int
 
 __version__: str

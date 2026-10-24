@@ -72,6 +72,8 @@ pub(crate) struct FetchedBatch {
     pub(crate) base_offset: i64,
     /// Commit timestamp of the log batch this Arrow batch was decoded from.
     pub(crate) commit_timestamp: i64,
+    /// Schema ID from the source log batch header, before projection or alignment.
+    pub(crate) schema_id: i32,
 }
 
 /// Represents a completed fetch that can be consumed
@@ -657,6 +659,7 @@ impl DefaultCompletedFetch {
             // Calculate the effective base offset for this batch
             let log_base_offset = log_batch.base_log_offset();
             let commit_timestamp = log_batch.commit_timestamp();
+            let schema_id = i32::from(log_batch.schema_id());
             let effective_base_offset = if self.next_fetch_offset > log_base_offset {
                 let skip_count = (self.next_fetch_offset - log_base_offset) as usize;
                 if skip_count >= record_batch.num_rows() {
@@ -675,6 +678,7 @@ impl DefaultCompletedFetch {
                 batch: record_batch,
                 base_offset: effective_base_offset,
                 commit_timestamp,
+                schema_id,
             }));
         }
     }
@@ -1146,11 +1150,13 @@ mod tests {
             FetchResult::SchemaRequired(schema_id) if schema_id == source_schema_id as i16
         ));
         resolver.register_schema(source_schema_id as i16, source_table_info.get_schema())?;
-        Ok(expect_data(fetch.fetch_batches(1)?)
+        let fetched = expect_data(fetch.fetch_batches(1)?)
             .into_iter()
             .next()
-            .expect("one fixed-schema batch")
-            .batch)
+            .expect("one fixed-schema batch");
+        assert_eq!(fetched.schema_id, source_schema_id);
+        assert_ne!(fetched.schema_id, target_table_info.get_schema_id());
+        Ok(fetched.batch)
     }
 
     struct ErrorPendingFetch {
@@ -1275,18 +1281,19 @@ mod tests {
     }
 
     #[test]
-    fn fetch_batches_preserves_each_log_batch_timestamp_after_slicing() -> Result<()> {
+    fn fetch_batches_preserves_each_log_batch_metadata_after_slicing() -> Result<()> {
         let row_type = RowType::new(vec![DataField::new("id", DataTypes::int(), None)]);
         let table_path = TablePath::new("db", "tbl");
         let table_info = Arc::new(build_table_info(table_path.clone(), 1, 1));
         let physical_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path)));
         let mut data = Vec::new();
 
-        for (offset, values, timestamp) in
-            [(0_i64, &[0_i32, 1][..], 1234_i64), (2, &[2_i32][..], 5678)]
-        {
+        for (offset, values, timestamp, schema_id) in [
+            (0_i64, &[0_i32, 1][..], 1234_i64, 1),
+            (2, &[2_i32][..], 5678, 2),
+        ] {
             let mut builder = MemoryLogRecordsArrowBuilder::new(
-                uncompressed_arrow_batch_config(1, &row_type, usize::MAX),
+                uncompressed_arrow_batch_config(schema_id, &row_type, usize::MAX),
                 false,
             )?;
             for &value in values {
@@ -1295,7 +1302,7 @@ mod tests {
                 builder.append(&WriteRecord::for_append(
                     Arc::clone(&table_info),
                     Arc::clone(&physical_path),
-                    1,
+                    schema_id,
                     &row,
                 ))?;
             }
@@ -1332,6 +1339,7 @@ mod tests {
             Arc::new(ReadContext::new(schema, row_type, true)),
             None,
         ));
+        resolver.register_schema(2, table_info.get_schema())?;
         let mut fetch = DefaultCompletedFetch::new(
             TableBucket::new(1, 0),
             LogRecordsBatches::new(data.clone()),
@@ -1344,6 +1352,8 @@ mod tests {
 
         let batches = expect_data(fetch.fetch_batches(10)?);
         assert_eq!(batches.len(), 2);
+        assert_eq!(batches[0].schema_id, 1);
+        assert_eq!(batches[1].schema_id, 2);
         assert_eq!(
             (batches[0].base_offset, batches[0].commit_timestamp),
             (1, 1234)
@@ -1568,6 +1578,7 @@ mod tests {
         assert_eq!(batches.len(), 1);
         let batch = &batches[0].batch;
         assert_eq!(batch.schema(), new_arrow_schema);
+        assert_eq!(batches[0].schema_id, 0);
         assert_eq!(batch.num_columns(), 2);
         assert_eq!(batch.column(1).null_count(), 1);
 
