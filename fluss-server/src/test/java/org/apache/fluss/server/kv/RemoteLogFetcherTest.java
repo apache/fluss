@@ -298,6 +298,8 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
         ExecutorService executor = Executors.newSingleThreadExecutor();
         DynamicConfigManager dynamicConfigManager = new DynamicConfigManager(zkClient, conf);
         MetricGroup metricGroup = NOPMetricsGroup.newInstance();
+        MetadataManager metadataManager =
+                new MetadataManager(zkClient, conf, new LakeCatalogDynamicLoader(conf, null, true));
         TabletService service =
                 new TabletService(
                         TABLET_SERVER_ID,
@@ -305,8 +307,7 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
                         zkClient,
                         replicaManager,
                         serverMetadataCache,
-                        new MetadataManager(
-                                zkClient, conf, new LakeCatalogDynamicLoader(conf, null, true)),
+                        metadataManager,
                         null,
                         dynamicConfigManager,
                         executor,
@@ -314,7 +315,8 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
                         scannerManager,
                         testCoordinatorGateway,
                         "CLIENT",
-                        GroupManager.from(conf));
+                        GroupManager.from(
+                                conf, TABLET_SERVER_ID, replicaManager, metadataManager, zkClient));
         try (RpcServer server =
                 RpcServer.create(
                         conf,
