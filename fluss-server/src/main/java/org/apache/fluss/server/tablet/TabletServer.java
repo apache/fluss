@@ -315,7 +315,8 @@ public class TabletServer extends ServerBase {
                             pluginManager);
             replicaManager.startup();
 
-            this.groupManager = GroupManager.from(conf);
+            this.groupManager =
+                    GroupManager.from(conf, serverId, replicaManager, metadataManager, zkClient);
 
             this.tabletService =
                     new TabletService(

@@ -17,10 +17,12 @@
 
 package org.apache.fluss.server.tablet;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.exception.ApiException;
 import org.apache.fluss.exception.AuthorizationException;
+import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.InvalidScanRequestException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
@@ -80,6 +82,10 @@ import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsRequest;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsResponse;
+import org.apache.fluss.rpc.messages.PbCommitConsumerOffsetsRequestBucket;
+import org.apache.fluss.rpc.messages.PbCommitConsumerOffsetsRequestTable;
+import org.apache.fluss.rpc.messages.PbCommitConsumerOffsetsResponseBucket;
+import org.apache.fluss.rpc.messages.PbCommitConsumerOffsetsResponseTable;
 import org.apache.fluss.rpc.messages.PbFetchLogReqForTable;
 import org.apache.fluss.rpc.messages.PbScanReqForBucket;
 import org.apache.fluss.rpc.messages.PbServerNode;
@@ -127,16 +133,20 @@ import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.metadata.TabletServerMetadataProvider;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.replica.ReplicaManager;
+import org.apache.fluss.server.tablet.consumer.group.ConsumerOffsetAndMetadata;
 import org.apache.fluss.server.tablet.consumer.group.ConsumerOffsetTableManager;
 import org.apache.fluss.server.tablet.consumer.group.GroupManager;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import javax.annotation.Nullable;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -196,6 +206,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     private final CoordinatorGateway coordinatorGateway;
     private final String interListenerName;
     private final ExecutorService replicaStateChangeExecutor;
+    private final ExecutorService ioExecutor;
     private final GroupManager groupManager;
     private final ConsumerOffsetTableManager consumerOffsetTableManager;
 
@@ -231,6 +242,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         this.coordinatorGateway = coordinatorGateway;
         this.interListenerName = interListenerName;
         this.replicaStateChangeExecutor = replicaStateChangeExecutor;
+        this.ioExecutor = ioExecutor;
         this.groupManager = groupManager;
         this.consumerOffsetTableManager =
                 new ConsumerOffsetTableManager(
@@ -817,9 +829,84 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     @Override
     public CompletableFuture<CommitConsumerOffsetsResponse> commitConsumerOffsets(
             CommitConsumerOffsetsRequest request) {
-        CompletableFuture<CommitConsumerOffsetsResponse> response = new CompletableFuture<>();
-        response.completeExceptionally(
-                new UnsupportedOperationException("commitConsumerOffsets is not supported yet"));
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), OperationType.ALTER, Resource.cluster());
+        }
+
+        // Copy request values before returning: the RPC request buffer is released afterward.
+        final String groupId = request.getGroupId();
+        final Map<TableBucket, ConsumerOffsetAndMetadata> offsets;
+        try {
+            offsets = decodeCommitConsumerOffsetsRequest(request);
+        } catch (InvalidBucketRoutingException e) {
+            return FutureUtils.completedExceptionally(e);
+        }
+        if (offsets.isEmpty()) {
+            return CompletableFuture.completedFuture(
+                    buildCommitConsumerOffsetsResponse(Collections.emptyMap()));
+        }
+
+        return consumerOffsetTableManager
+                .ensureTableAsync()
+                .thenComposeAsync(
+                        bucketCount -> {
+                            CompletableFuture<Map<TableBucket, Errors>> commitResult =
+                                    new CompletableFuture<>();
+                            groupManager.handleCommitConsumerOffsets(
+                                    groupId, offsets, bucketCount, commitResult::complete);
+                            return commitResult;
+                        },
+                        ioExecutor)
+                .thenApply(TabletService::buildCommitConsumerOffsetsResponse);
+    }
+
+    @VisibleForTesting
+    static Map<TableBucket, ConsumerOffsetAndMetadata> decodeCommitConsumerOffsetsRequest(
+            CommitConsumerOffsetsRequest request) {
+        Map<TableBucket, ConsumerOffsetAndMetadata> offsets = new LinkedHashMap<>();
+        for (PbCommitConsumerOffsetsRequestTable table : request.getTablesList()) {
+            for (PbCommitConsumerOffsetsRequestBucket bucket : table.getBucketsList()) {
+                Long partitionId = bucket.hasPartitionId() ? bucket.getPartitionId() : null;
+                TableBucket tableBucket =
+                        new TableBucket(table.getTableId(), partitionId, bucket.getBucketId());
+                if (offsets.containsKey(tableBucket)) {
+                    throw new InvalidBucketRoutingException(
+                            "Duplicate table bucket in CommitConsumerOffsets request: "
+                                    + tableBucket);
+                }
+                offsets.put(
+                        tableBucket,
+                        new ConsumerOffsetAndMetadata(
+                                bucket.getOffset(),
+                                bucket.hasMetadata() ? bucket.getMetadata() : ""));
+            }
+        }
+        return offsets;
+    }
+
+    @VisibleForTesting
+    static CommitConsumerOffsetsResponse buildCommitConsumerOffsetsResponse(
+            Map<TableBucket, Errors> results) {
+        CommitConsumerOffsetsResponse response = new CommitConsumerOffsetsResponse();
+        Map<Long, PbCommitConsumerOffsetsResponseTable> tablesById = new HashMap<>();
+        results.forEach(
+                (tableBucket, error) -> {
+                    PbCommitConsumerOffsetsResponseTable table =
+                            tablesById.computeIfAbsent(
+                                    tableBucket.getTableId(),
+                                    tableId -> response.addTable().setTableId(tableId));
+                    PbCommitConsumerOffsetsResponseBucket bucket =
+                            table.addBucket().setBucketId(tableBucket.getBucket());
+                    if (tableBucket.getPartitionId() != null) {
+                        bucket.setPartitionId(tableBucket.getPartitionId());
+                    }
+                    if (error != Errors.NONE) {
+                        bucket.setErrorCode(error.code());
+                        if (error.message() != null) {
+                            bucket.setErrorMessage(error.message());
+                        }
+                    }
+                });
         return response;
     }
 

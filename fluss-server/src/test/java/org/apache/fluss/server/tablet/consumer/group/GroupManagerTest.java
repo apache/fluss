@@ -17,17 +17,41 @@
 
 package org.apache.fluss.server.tablet.consumer.group;
 
-import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidConsumerGroupIdException;
+import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
+import org.apache.fluss.server.coordinator.MetadataManager;
+import org.apache.fluss.server.replica.ReplicaTestBase;
 
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-class GroupManagerTest {
+class GroupManagerTest extends ReplicaTestBase {
 
-    private final GroupManager groupManager = GroupManager.from(new Configuration());
+    private LakeCatalogDynamicLoader lakeCatalogLoader;
+    private GroupManager groupManager;
+
+    @BeforeEach
+    void createGroupManager() {
+        lakeCatalogLoader = new LakeCatalogDynamicLoader(conf, null, true);
+        groupManager =
+                GroupManager.from(
+                        conf,
+                        TABLET_SERVER_ID,
+                        replicaManager,
+                        new MetadataManager(zkClient, conf, lakeCatalogLoader),
+                        zkClient);
+    }
+
+    @AfterEach
+    void closeLakeCatalogLoader() throws Exception {
+        if (lakeCatalogLoader != null) {
+            lakeCatalogLoader.close();
+        }
+    }
 
     @Test
     void testStableBucketRouting() {
