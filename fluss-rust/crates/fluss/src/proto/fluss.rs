@@ -609,6 +609,9 @@ pub struct FindConsumerGroupOwnerResponse {
     pub owner: PbServerNode,
 }
 /// Commit consumer offsets request and response.
+/// Each tablet server appends accepted non-empty commits for the same group in submission order,
+/// including when initializing the system table. Replication acknowledgements may overlap.
+/// Offset values may decrease for intentional consumption resets.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommitConsumerOffsetsRequest {
     #[prost(string, required, tag = "1")]
@@ -2132,6 +2135,7 @@ pub struct PbCommitConsumerOffsetsRequestTable {
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PbCommitConsumerOffsetsRequestBucket {
+    /// Omit for non-partitioned tables; -1 is reserved for internal offset storage and must not be sent.
     #[prost(int64, optional, tag = "1")]
     pub partition_id: ::core::option::Option<i64>,
     #[prost(int32, required, tag = "2")]

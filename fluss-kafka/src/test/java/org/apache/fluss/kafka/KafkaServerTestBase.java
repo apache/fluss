@@ -23,7 +23,6 @@ import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.replica.ReplicaTestBase;
 import org.apache.fluss.server.tablet.TabletService;
-import org.apache.fluss.server.tablet.consumer.group.ConsumerOffsetTableConfig;
 import org.apache.fluss.server.tablet.consumer.group.GroupManager;
 
 import org.junit.jupiter.api.AfterEach;
@@ -61,7 +60,7 @@ public class KafkaServerTestBase extends ReplicaTestBase {
                 scannerManager,
                 testCoordinatorGateway,
                 "INTERNAL",
-                new GroupManager(ConsumerOffsetTableConfig.from(conf)));
+                GroupManager.from(conf, TABLET_SERVER_ID, replicaManager, serverMetadataCache));
     }
 
     @AfterEach
