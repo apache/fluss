@@ -16,9 +16,8 @@
 // under the License.
 
 use crate::async_nif;
-use crate::atoms::{client_err, to_nif_err};
+use crate::atoms::to_nif_err;
 use crate::connection::ConnectionResource;
-use crate::row_convert;
 use crate::schema::{NifSchema, TableDescriptorResource};
 use fluss::client::FlussAdmin;
 use fluss::error::Error;
@@ -27,7 +26,7 @@ use fluss::metadata::{
     TablePath,
 };
 use fluss::{ServerNode, ServerType};
-use rustler::{Env, MapIterator, NifStruct, NifUnitEnum, ResourceArc, Term};
+use rustler::{Env, NifMap, NifStruct, NifUnitEnum, ResourceArc, Term};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -164,6 +163,40 @@ impl NifTableInfo {
     }
 }
 
+// Options arrive validated, with every key present, from `Fluss.Admin`. One struct per
+// function, so each can gain options independently.
+
+#[derive(NifMap)]
+pub struct CreateDatabaseOpts {
+    ignore_if_exists: bool,
+}
+
+#[derive(NifMap)]
+pub struct DropDatabaseOpts {
+    ignore_if_not_exists: bool,
+    cascade: bool,
+}
+
+#[derive(NifMap)]
+pub struct CreateTableOpts {
+    ignore_if_exists: bool,
+}
+
+#[derive(NifMap)]
+pub struct DropTableOpts {
+    ignore_if_not_exists: bool,
+}
+
+#[derive(NifMap)]
+pub struct CreatePartitionOpts {
+    ignore_if_exists: bool,
+}
+
+#[derive(NifMap)]
+pub struct DropPartitionOpts {
+    ignore_if_not_exists: bool,
+}
+
 pub struct AdminResource {
     pub inner: Arc<FlussAdmin>,
 }
@@ -195,14 +228,17 @@ fn admin_create_database<'a>(
     env: Env<'a>,
     admin: ResourceArc<AdminResource>,
     database_name: String,
-    descriptor: Option<NifDatabaseDescriptor>,
-    ignore_if_exists: bool,
+    descriptor: NifDatabaseDescriptor,
+    opts: CreateDatabaseOpts,
 ) -> Term<'a> {
     async_nif::spawn_task(env, async move {
-        let core_descriptor = descriptor.as_ref().map(NifDatabaseDescriptor::to_core);
         admin
             .inner
-            .create_database(&database_name, core_descriptor.as_ref(), ignore_if_exists)
+            .create_database(
+                &database_name,
+                Some(&descriptor.to_core()),
+                opts.ignore_if_exists,
+            )
             .await
     })
 }
@@ -224,12 +260,12 @@ fn admin_drop_database<'a>(
     env: Env<'a>,
     admin: ResourceArc<AdminResource>,
     database_name: String,
-    ignore_if_not_exists: bool,
+    opts: DropDatabaseOpts,
 ) -> Term<'a> {
     async_nif::spawn_task(env, async move {
         admin
             .inner
-            .drop_database(&database_name, ignore_if_not_exists, false)
+            .drop_database(&database_name, opts.ignore_if_not_exists, opts.cascade)
             .await
     })
 }
@@ -257,13 +293,13 @@ fn admin_create_table<'a>(
     database_name: String,
     table_name: String,
     descriptor: ResourceArc<TableDescriptorResource>,
-    ignore_if_exists: bool,
+    opts: CreateTableOpts,
 ) -> Term<'a> {
     async_nif::spawn_task(env, async move {
         let path = TablePath::new(&database_name, &table_name);
         admin
             .inner
-            .create_table(&path, &descriptor.inner, ignore_if_exists)
+            .create_table(&path, &descriptor.inner, opts.ignore_if_exists)
             .await
     })
 }
@@ -274,11 +310,14 @@ fn admin_drop_table<'a>(
     admin: ResourceArc<AdminResource>,
     database_name: String,
     table_name: String,
-    ignore_if_not_exists: bool,
+    opts: DropTableOpts,
 ) -> Term<'a> {
     async_nif::spawn_task(env, async move {
         let path = TablePath::new(&database_name, &table_name);
-        admin.inner.drop_table(&path, ignore_if_not_exists).await
+        admin
+            .inner
+            .drop_table(&path, opts.ignore_if_not_exists)
+            .await
     })
 }
 
@@ -341,24 +380,7 @@ impl NifPartitionInfo {
     }
 }
 
-/// Decoded here, not as a `HashMap<String, String>` argument, so a bad spec is an error result
-/// rather than a raise.
-fn term_to_partition_spec(term: Term<'_>) -> Result<PartitionSpec, String> {
-    let entries: MapIterator = term
-        .decode()
-        .map_err(|_| "expected a map of partition column to value".to_string())?;
-    let mut spec = HashMap::new();
-    for (key, value) in entries {
-        let column = row_convert::term_to_column_name(key)?;
-        let value: String = value
-            .decode()
-            .map_err(|_| format!("partition value for `{column}` must be a string"))?;
-        if spec.insert(column.clone(), value).is_some() {
-            return Err(format!("partition column `{column}` given more than once"));
-        }
-    }
-    Ok(PartitionSpec::new(spec))
-}
+// Specs arrive validated, with string keys, from `Fluss.Admin`.
 
 #[rustler::nif]
 fn admin_create_partition<'a>(
@@ -366,17 +388,16 @@ fn admin_create_partition<'a>(
     admin: ResourceArc<AdminResource>,
     database_name: String,
     table_name: String,
-    spec: Term<'a>,
-    ignore_if_exists: bool,
-) -> Result<Term<'a>, rustler::Error> {
-    let spec = term_to_partition_spec(spec).map_err(client_err)?;
-    Ok(async_nif::spawn_task(env, async move {
+    spec: HashMap<String, String>,
+    opts: CreatePartitionOpts,
+) -> Term<'a> {
+    async_nif::spawn_task(env, async move {
         let path = TablePath::new(&database_name, &table_name);
         admin
             .inner
-            .create_partition(&path, &spec, ignore_if_exists)
+            .create_partition(&path, &PartitionSpec::new(spec), opts.ignore_if_exists)
             .await
-    }))
+    })
 }
 
 #[rustler::nif]
@@ -385,17 +406,16 @@ fn admin_drop_partition<'a>(
     admin: ResourceArc<AdminResource>,
     database_name: String,
     table_name: String,
-    spec: Term<'a>,
-    ignore_if_not_exists: bool,
-) -> Result<Term<'a>, rustler::Error> {
-    let spec = term_to_partition_spec(spec).map_err(client_err)?;
-    Ok(async_nif::spawn_task(env, async move {
+    spec: HashMap<String, String>,
+    opts: DropPartitionOpts,
+) -> Term<'a> {
+    async_nif::spawn_task(env, async move {
         let path = TablePath::new(&database_name, &table_name);
         admin
             .inner
-            .drop_partition(&path, &spec, ignore_if_not_exists)
+            .drop_partition(&path, &PartitionSpec::new(spec), opts.ignore_if_not_exists)
             .await
-    }))
+    })
 }
 
 #[rustler::nif]
@@ -404,16 +424,11 @@ fn admin_list_partition_infos<'a>(
     admin: ResourceArc<AdminResource>,
     database_name: String,
     table_name: String,
-    spec: Term<'a>,
-) -> Result<Term<'a>, rustler::Error> {
-    // Not `Option<Term>`: a `Term` accepts `nil`, so that would be `Some(nil)`.
-    let spec = if row_convert::is_nil(spec) {
-        None
-    } else {
-        Some(term_to_partition_spec(spec).map_err(client_err)?)
-    };
-    Ok(async_nif::spawn_task_with_result(env, async move {
+    spec: Option<HashMap<String, String>>,
+) -> Term<'a> {
+    async_nif::spawn_task_with_result(env, async move {
         let path = TablePath::new(&database_name, &table_name);
+        let spec = spec.map(PartitionSpec::new);
         let infos = admin
             .inner
             .list_partition_infos_with_spec(&path, spec.as_ref())
@@ -422,7 +437,7 @@ fn admin_list_partition_infos<'a>(
             .iter()
             .map(NifPartitionInfo::from_core)
             .collect::<Vec<_>>())
-    }))
+    })
 }
 
 #[derive(NifStruct)]

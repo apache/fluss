@@ -154,7 +154,7 @@ defmodule Fluss.Integration.LookupTest do
 
       schema = Fluss.Schema.new() |> Fluss.Schema.column("id", :int)
       descriptor = Fluss.TableDescriptor.new!(schema)
-      :ok = Fluss.Admin.create_table(admin, @database, table_name, descriptor, false)
+      :ok = Fluss.Admin.create_table(admin, @database, table_name, descriptor)
       table = Fluss.Table.get!(conn, @database, table_name)
 
       assert {:error, %Fluss.Error{} = err} = Lookuper.new(table)
@@ -166,14 +166,14 @@ defmodule Fluss.Integration.LookupTest do
     test "returns an error after the table is dropped", %{conn: conn, admin: admin} do
       table_name = unique("lookup_dropped_table")
       descriptor = Fluss.TableDescriptor.new!(id_name_schema(), bucket_count: 1)
-      :ok = Fluss.Admin.create_table(admin, @database, table_name, descriptor, false)
+      :ok = Fluss.Admin.create_table(admin, @database, table_name, descriptor)
       table = Fluss.Table.get!(conn, @database, table_name)
       upsert!(writer!(table), [1, "alice"])
       lookuper = Lookuper.new!(table)
 
       assert {:ok, %{id: 1, name: "alice"}} = Lookuper.lookup(lookuper, [1])
 
-      :ok = Fluss.Admin.drop_table(admin, @database, table_name, false)
+      :ok = Fluss.Admin.drop_table(admin, @database, table_name)
 
       assert {:error, %Fluss.Error{code: :table_not_exist}} = Lookuper.lookup(lookuper, [1])
     end
@@ -414,7 +414,7 @@ defmodule Fluss.Integration.LookupTest do
         Keyword.merge([bucket_count: 1, bucket_keys: ["id"]], opts)
       )
 
-    :ok = Fluss.Admin.create_table(admin, @database, table_name, descriptor, false)
+    :ok = Fluss.Admin.create_table(admin, @database, table_name, descriptor)
     Fluss.Table.get!(conn, @database, table_name)
   end
 
@@ -433,6 +433,6 @@ defmodule Fluss.Integration.LookupTest do
   defp unique(label), do: "ex_test_#{label}_#{:rand.uniform(100_000)}"
 
   defp cleanup_table(admin, table_name) do
-    Fluss.Admin.drop_table(admin, @database, table_name, true)
+    Fluss.Admin.drop_table(admin, @database, table_name, ignore_if_not_exists: true)
   end
 end
