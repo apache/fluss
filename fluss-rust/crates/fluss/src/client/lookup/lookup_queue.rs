@@ -76,9 +76,6 @@ impl LookupQueue {
 
         loop {
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            if remaining.is_zero() {
-                break;
-            }
 
             // Re-enqueued lookups go first. A batch they fill still takes one new lookup, so
             // retries for a bucket without a leader can't hold back the other lookups.
@@ -92,6 +89,14 @@ impl LookupQueue {
             let sleep = tokio::time::sleep(remaining);
             tokio::select! {
                 biased;
+                // Without a batch delay, an empty queue waits for work instead of spinning.
+                maybe = self.re_enqueue_rx.recv(), if self.batch_timeout.is_zero() && lookups.is_empty() => {
+                    match maybe {
+                        Some(lookup) => lookups.push(lookup),
+                        None => break,
+                    }
+                    continue;
+                }
                 maybe = self.lookup_rx.recv() => {
                     match maybe {
                         Some(lookup) => {
@@ -111,10 +116,11 @@ impl LookupQueue {
                         break;
                     }
                 }
-                _ = sleep => break,
+                _ = sleep, if !self.batch_timeout.is_zero() || !lookups.is_empty() => break,
             }
 
-            if lookups.len() >= self.max_batch_size {
+            // Even a zero timeout must poll the queues once before ending the batch.
+            if lookups.len() >= self.max_batch_size || tokio::time::Instant::now() >= deadline {
                 break;
             }
         }
@@ -164,19 +170,82 @@ mod tests {
         ))
     }
 
-    #[tokio::test]
-    async fn a_batch_full_of_retries_still_takes_a_new_lookup() {
+    #[tokio::test(start_paused = true)]
+    async fn zero_timeout_drains_lookups_up_to_the_batch_size() {
+        for re_enqueued in [false, true] {
+            let (_cluster_tx, cluster_rx) = watch::channel(0);
+            let (mut queue, lookup_tx, re_enqueue_tx) = LookupQueue::new(8, 2, 0, cluster_rx);
+            for key in [b"first", b"second".as_slice(), b"third"] {
+                if re_enqueued {
+                    re_enqueue_tx.send(lookup(key)).unwrap();
+                } else {
+                    lookup_tx.send(lookup(key)).await.unwrap();
+                }
+            }
+
+            let lookups = queue.drain().await;
+            let keys: Vec<&[u8]> = lookups.iter().map(|lookup| lookup.key().as_ref()).collect();
+            assert_eq!(keys, [b"first".as_slice(), b"second"]);
+            assert!(queue.has_undrained());
+
+            let lookups = queue.drain().await;
+            assert_eq!(lookups.len(), 1);
+            assert_eq!(lookups[0].key().as_ref(), b"third");
+            assert!(!queue.has_undrained());
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn zero_timeout_waits_for_work_when_the_queue_is_empty() {
+        for re_enqueued in [false, true] {
+            let (_cluster_tx, cluster_rx) = watch::channel(0);
+            let (mut queue, lookup_tx, re_enqueue_tx) = LookupQueue::new(8, 2, 0, cluster_rx);
+            let drain = queue.drain();
+            tokio::pin!(drain);
+
+            assert!(futures::poll!(&mut drain).is_pending());
+            if re_enqueued {
+                re_enqueue_tx.send(lookup(b"lookup")).unwrap();
+            } else {
+                lookup_tx.send(lookup(b"lookup")).await.unwrap();
+            }
+
+            let lookups = drain.await;
+            assert_eq!(lookups.len(), 1);
+            assert_eq!(lookups[0].key().as_ref(), b"lookup");
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_partial_batch_waits_for_a_positive_timeout() {
         let (_cluster_tx, cluster_rx) = watch::channel(0);
-        let (mut queue, lookup_tx, re_enqueue_tx) = LookupQueue::new(8, 2, 60_000, cluster_rx);
-        re_enqueue_tx.send(lookup(b"retry")).unwrap();
-        re_enqueue_tx.send(lookup(b"retry")).unwrap();
+        let (mut queue, lookup_tx, _re_enqueue_tx) = LookupQueue::new(8, 2, 100, cluster_rx);
         lookup_tx.send(lookup(b"new")).await.unwrap();
+        let start = tokio::time::Instant::now();
 
-        let lookups = tokio::time::timeout(Duration::from_secs(10), queue.drain())
-            .await
-            .expect("a full batch does not wait for the batch timeout");
+        let lookups = queue.drain().await;
+        assert_eq!(lookups.len(), 1);
+        assert_eq!(lookups[0].key().as_ref(), b"new");
+        assert_eq!(start.elapsed(), Duration::from_millis(100));
+    }
 
-        let keys: Vec<&[u8]> = lookups.iter().map(|lookup| lookup.key().as_ref()).collect();
-        assert_eq!(keys, [b"retry".as_slice(), b"retry", b"new"]);
+    #[tokio::test(start_paused = true)]
+    async fn a_batch_full_of_retries_still_takes_a_new_lookup() {
+        for batch_timeout_ms in [0, 60_000] {
+            let (_cluster_tx, cluster_rx) = watch::channel(0);
+            let (mut queue, lookup_tx, re_enqueue_tx) =
+                LookupQueue::new(8, 2, batch_timeout_ms, cluster_rx);
+            re_enqueue_tx.send(lookup(b"retry")).unwrap();
+            re_enqueue_tx.send(lookup(b"retry")).unwrap();
+            lookup_tx.send(lookup(b"new")).await.unwrap();
+
+            let lookups = tokio::time::timeout(Duration::from_secs(10), queue.drain())
+                .await
+                .expect("a full batch does not wait for the batch timeout");
+
+            let keys: Vec<&[u8]> = lookups.iter().map(|lookup| lookup.key().as_ref()).collect();
+            assert_eq!(keys, [b"retry".as_slice(), b"retry", b"new"]);
+            assert!(!queue.has_undrained());
+        }
     }
 }
