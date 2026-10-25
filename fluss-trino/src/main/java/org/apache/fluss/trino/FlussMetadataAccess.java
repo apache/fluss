@@ -24,6 +24,7 @@ import org.apache.fluss.exception.DatabaseNotExistException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.metadata.BucketInfo;
+import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.shaded.guava32.com.google.common.collect.ImmutableList;
@@ -180,13 +181,21 @@ final class FlussMetadataAccess {
         }
     }
 
-    List<FlussPhysicalBucket> listScanBuckets(FlussTableHandle table) {
+    List<FlussPhysicalBucket> listScanBuckets(
+            FlussTableHandle table, Optional<PartitionSpec> partitionSpec) {
         checkNotNull(table, "table is null");
+        checkNotNull(partitionSpec, "partitionSpec is null");
+
         TablePath tablePath = TablePath.of(table.getFlussDatabaseName(), table.getFlussTableName());
+
         try {
+            CompletableFuture<List<BucketInfo>> future =
+                    partitionSpec.isPresent()
+                            ? getAdmin().describeBuckets(tablePath, partitionSpec.get())
+                            : getAdmin().describeBuckets(tablePath);
             List<BucketInfo> bucketInfos =
                     await(
-                            getAdmin().describeBuckets(tablePath),
+                            future,
                             FLUSS_SPLIT_ERROR,
                             "Failed to describe Fluss buckets for " + table);
 
@@ -241,8 +250,11 @@ final class FlussMetadataAccess {
     }
 
     List<FlussPhysicalBucket> retainCurrentBuckets(
-            FlussTableHandle table, List<FlussPhysicalBucket> expectedBuckets) {
-        Set<FlussPhysicalBucket> currentBuckets = new HashSet<>(listScanBuckets(table));
+            FlussTableHandle table,
+            List<FlussPhysicalBucket> expectedBuckets,
+            Optional<PartitionSpec> partitionSpec) {
+        Set<FlussPhysicalBucket> currentBuckets =
+                new HashSet<>(listScanBuckets(table, partitionSpec));
         Set<Long> currentPartitionIds = new HashSet<>();
         for (FlussPhysicalBucket current : currentBuckets) {
             FlussBucketHandle bucket = current.getBucket();

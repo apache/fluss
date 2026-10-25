@@ -26,6 +26,7 @@ import org.apache.fluss.flink.lake.LakeTableFactory;
 import org.apache.fluss.flink.sink.FlinkTableSink;
 import org.apache.fluss.flink.sink.shuffle.DistributionMode;
 import org.apache.fluss.flink.source.BinlogFlinkTableSource;
+import org.apache.fluss.flink.source.BucketsFlinkTableSource;
 import org.apache.fluss.flink.source.ChangelogFlinkTableSource;
 import org.apache.fluss.flink.source.FlinkTableSource;
 import org.apache.fluss.flink.source.reader.LeaseContext;
@@ -114,6 +115,10 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
             return createBinlogTableSource(context, tableIdentifier, tableName);
         }
 
+        if (tableName.endsWith(FlinkCatalog.BUCKETS_TABLE_SUFFIX)) {
+            return createBucketsTableSource(context, tableIdentifier, tableName);
+        }
+
         FactoryUtil.TableFactoryHelper helper = FactoryUtil.createTableFactoryHelper(this, context);
         final ReadableConfig tableOptions = helper.getOptions();
         validateSourceOptions(tableOptions);
@@ -187,6 +192,11 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
 
     @Override
     public DynamicTableSink createDynamicTableSink(Context context) {
+        String tableName = context.getObjectIdentifier().getObjectName();
+        if (FlinkCatalog.isVirtualTableName(tableName)) {
+            throw new UnsupportedOperationException(
+                    String.format("Cannot write to read-only virtual table %s.", tableName));
+        }
         FactoryUtil.TableFactoryHelper helper = FactoryUtil.createTableFactoryHelper(this, context);
         final ReadableConfig tableOptions = helper.getOptions();
 
@@ -467,5 +477,19 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                 partitionDiscoveryIntervalMs,
                 splitAssignmentBatchSize,
                 catalogTableOptions);
+    }
+
+    /** Creates a bounded source for a {@code $buckets} virtual table. */
+    private DynamicTableSource createBucketsTableSource(
+            Context context, ObjectIdentifier tableIdentifier, String tableName) {
+        String baseTableName =
+                tableName.substring(
+                        0, tableName.length() - FlinkCatalog.BUCKETS_TABLE_SUFFIX.length());
+        RowType tableOutputType = (RowType) context.getPhysicalRowDataType().getLogicalType();
+        return new BucketsFlinkTableSource(
+                TablePath.of(tableIdentifier.getDatabaseName(), baseTableName),
+                toFlussClientConfig(
+                        context.getCatalogTable().getOptions(), context.getConfiguration()),
+                tableOutputType);
     }
 }

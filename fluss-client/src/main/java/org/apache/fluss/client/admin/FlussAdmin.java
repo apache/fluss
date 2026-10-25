@@ -67,12 +67,15 @@ import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.CancelRebalanceRequest;
 import org.apache.fluss.rpc.messages.CreateAclsRequest;
 import org.apache.fluss.rpc.messages.CreateDatabaseRequest;
+import org.apache.fluss.rpc.messages.CreateTableFromLakeRequest;
+import org.apache.fluss.rpc.messages.CreateTableFromLakeResponse;
 import org.apache.fluss.rpc.messages.CreateTableRequest;
 import org.apache.fluss.rpc.messages.DatabaseExistsRequest;
 import org.apache.fluss.rpc.messages.DatabaseExistsResponse;
 import org.apache.fluss.rpc.messages.DeleteProducerOffsetsRequest;
 import org.apache.fluss.rpc.messages.DescribeBucketsRequest;
 import org.apache.fluss.rpc.messages.DescribeClusterConfigsRequest;
+import org.apache.fluss.rpc.messages.DescribeTabletServersRequest;
 import org.apache.fluss.rpc.messages.DropAclsRequest;
 import org.apache.fluss.rpc.messages.DropDatabaseRequest;
 import org.apache.fluss.rpc.messages.DropTableRequest;
@@ -99,8 +102,10 @@ import org.apache.fluss.rpc.messages.ListRemoteLogManifestsRequest;
 import org.apache.fluss.rpc.messages.ListTablesRequest;
 import org.apache.fluss.rpc.messages.ListTablesResponse;
 import org.apache.fluss.rpc.messages.PbAlterConfig;
+import org.apache.fluss.rpc.messages.PbKeyValue;
 import org.apache.fluss.rpc.messages.PbListOffsetsRespForBucket;
 import org.apache.fluss.rpc.messages.PbPartitionInfo;
+import org.apache.fluss.rpc.messages.PbTableInfo;
 import org.apache.fluss.rpc.messages.PbTablePath;
 import org.apache.fluss.rpc.messages.PbTableStatsRespForBucket;
 import org.apache.fluss.rpc.messages.RebalanceRequest;
@@ -139,6 +144,8 @@ import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeListOffset
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makePbPartitionSpec;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeRegisterProducerOffsetsRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.toConfigEntries;
+import static org.apache.fluss.client.utils.MetadataUtils.fallbackIfUnsupported;
+import static org.apache.fluss.client.utils.MetadataUtils.sendDescribeClusterRequest;
 import static org.apache.fluss.client.utils.MetadataUtils.sendMetadataRequestAndRebuildCluster;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindings;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toPbAclBindingFilters;
@@ -192,6 +199,14 @@ public class FlussAdmin implements Admin {
 
     @Override
     public CompletableFuture<List<ServerNode>> getServerNodes() {
+        // Only the coordinator knows the server tags. A coordinator older than Fluss 1.1 does not
+        // support the describe cluster request, so fall back to the metadata request, which returns
+        // the same server nodes without tags.
+        return fallbackIfUnsupported(
+                () -> sendDescribeClusterRequest(gateway), this::getServerNodesFromMetadata);
+    }
+
+    private CompletableFuture<List<ServerNode>> getServerNodesFromMetadata() {
         CompletableFuture<List<ServerNode>> future = new CompletableFuture<>();
         CompletableFuture.runAsync(
                 () -> {
@@ -320,6 +335,31 @@ public class FlussAdmin implements Admin {
     }
 
     @Override
+    public CompletableFuture<TableInfo> createTableFromLake(
+            TablePath tablePath, Map<String, String> options) {
+        tablePath.validate();
+        checkNotNull(options, "options must not be null");
+
+        List<PbKeyValue> optionList = new ArrayList<>(options.size());
+        for (Map.Entry<String, String> option : options.entrySet()) {
+            optionList.add(
+                    new PbKeyValue()
+                            .setKey(checkNotNull(option.getKey(), "option key must not be null"))
+                            .setValue(
+                                    checkNotNull(
+                                            option.getValue(), "option value must not be null")));
+        }
+
+        CreateTableFromLakeRequest request = new CreateTableFromLakeRequest();
+        request.addAllOptions(optionList)
+                .setTablePath()
+                .setDatabaseName(tablePath.getDatabaseName())
+                .setTableName(tablePath.getTableName());
+        return gateway.createTableFromLake(request)
+                .thenApply(response -> toTableInfo(tablePath, response));
+    }
+
+    @Override
     public CompletableFuture<Void> alterTable(
             TablePath tablePath, List<TableChange> tableChanges, boolean ignoreIfNotExists) {
         tablePath.validate();
@@ -347,11 +387,11 @@ public class FlussAdmin implements Admin {
                 .getTableInfo(request)
                 .thenApply(
                         r ->
-                                TableInfo.of(
+                                toTableInfo(
                                         tablePath,
                                         r.getTableId(),
                                         r.getSchemaId(),
-                                        TableDescriptor.fromJsonBytes(r.getTableJson()),
+                                        r.getTableJson(),
                                         // For backward compatibility, results returned by old
                                         // clusters do not include the remote data dir
                                         r.hasRemoteDataDir() ? r.getRemoteDataDir() : null,
@@ -1116,10 +1156,50 @@ public class FlussAdmin implements Admin {
         }
     }
 
+    private static TableInfo toTableInfo(
+            TablePath tablePath, CreateTableFromLakeResponse response) {
+        PbTableInfo pbTableInfo = response.getTableInfo();
+        return toTableInfo(
+                tablePath,
+                pbTableInfo.getTableId(),
+                pbTableInfo.getSchemaId(),
+                pbTableInfo.getTableJson(),
+                pbTableInfo.hasRemoteDataDir() ? pbTableInfo.getRemoteDataDir() : null,
+                pbTableInfo.getCreatedTime(),
+                pbTableInfo.getModifiedTime(),
+                pbTableInfo.hasBucketCountEpoch() ? pbTableInfo.getBucketCountEpoch() : 0L);
+    }
+
+    private static TableInfo toTableInfo(
+            TablePath tablePath,
+            long tableId,
+            int schemaId,
+            byte[] tableJson,
+            @Nullable String remoteDataDir,
+            long createdTime,
+            long modifiedTime,
+            long bucketCountEpoch) {
+        return TableInfo.of(
+                tablePath,
+                tableId,
+                schemaId,
+                TableDescriptor.fromJsonBytes(tableJson),
+                remoteDataDir,
+                createdTime,
+                modifiedTime,
+                bucketCountEpoch);
+    }
+
     @Override
     public CompletableFuture<ClusterHealth> getClusterHealth() {
         return gateway.getClusterHealth(new GetClusterHealthRequest())
                 .thenApply(ClientRpcMessageUtils::toClusterHealth);
+    }
+
+    @Override
+    public CompletableFuture<List<TabletServerDescription>> describeTabletServers() {
+        return gateway.describeTabletServers(new DescribeTabletServersRequest())
+                .thenApply(ClientRpcMessageUtils::toTabletServerDescriptions);
     }
 
     @VisibleForTesting

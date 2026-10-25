@@ -1329,8 +1329,8 @@ How to Use Flink Metrics, you can see [Flink Metrics](https://nightlies.apache.o
 
 ### Tiering Service Metrics
 
-These metrics are exposed by the Flink-based tiering source reader when running the Lake Tiering Service.
-All metrics are registered under the `fluss.tieringService` metric group, which is a child of the Flink `SourceReaderMetricGroup`.
+These metrics are exposed by the Flink-based tiering source when running the Lake Tiering Service.
+All metrics are registered under the `fluss.tieringService` metric group, as a child of the Flink `SourceReaderMetricGroup` for reader metrics or `SplitEnumeratorMetricGroup` for enumerator metrics.
 
 <table class="table table-bordered">
     <thead>
@@ -1353,6 +1353,12 @@ All metrics are registered under the `fluss.tieringService` metric group, which 
             <td>Flink Source Operator</td>
             <td>The read throughput rate in bytes per second, derived from the readBytes counter using a 60-second sliding window.</td>
             <td>Meter</td>
+        </tr>
+        <tr>
+            <td>readersAwaitingSplitRatio</td>
+            <td>Flink Source Enumerator</td>
+            <td>The current ratio (0–1) of readers tracked by the enumerator as waiting for a split to the source parallelism.</td>
+            <td>Gauge</td>
         </tr>
     </tbody>
 </table>

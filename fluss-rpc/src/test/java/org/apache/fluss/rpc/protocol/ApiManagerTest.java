@@ -50,6 +50,8 @@ public class ApiManagerTest {
         // coordinator only
         assertThat(coordinatorApi.getApi(ApiKeys.CREATE_TABLE.id)).isNotNull();
         assertThat(tabletserverApi.getApi(ApiKeys.CREATE_TABLE.id)).isNull();
+        assertThat(coordinatorApi.getApi(ApiKeys.CREATE_TABLE_FROM_LAKE.id)).isNotNull();
+        assertThat(tabletserverApi.getApi(ApiKeys.CREATE_TABLE_FROM_LAKE.id)).isNull();
     }
 
     @Test

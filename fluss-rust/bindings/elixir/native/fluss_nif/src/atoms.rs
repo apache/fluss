@@ -23,6 +23,8 @@ rustler::atoms! {
     error,
     nil,
     pending,
+    cancelled,
+    replying,
 
     // Change types
     append_only,

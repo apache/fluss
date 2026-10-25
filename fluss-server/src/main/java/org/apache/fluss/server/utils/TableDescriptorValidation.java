@@ -133,6 +133,7 @@ public class TableDescriptorValidation {
         checkLogFormat(tableConf, hasPrimaryKey);
         checkArrowCompression(tableConf);
         checkMergeEngine(tableConf, hasPrimaryKey, schema);
+        checkUpsertSkipUnchanged(tableConf, hasPrimaryKey);
         checkDeleteBehavior(tableConf, hasPrimaryKey);
         checkTieredLog(tableConf);
         checkHistoricalPartition(tableDescriptor, tableConf);
@@ -170,21 +171,16 @@ public class TableDescriptorValidation {
             return;
         }
 
-        if (!tableConf.get(ConfigOptions.TABLE_DATALAKE_ENABLED)) {
-            return;
-        }
-
         Optional<DataLakeFormat> tableDataLakeFormat =
                 tableConf.getOptional(ConfigOptions.TABLE_DATALAKE_FORMAT);
         if (tableDataLakeFormat.isPresent() && tableDataLakeFormat.get() != clusterDataLakeFormat) {
             throw new InvalidConfigException(
                     String.format(
-                            "'%s' ('%s') must match cluster '%s' ('%s') when '%s' is enabled.",
+                            "'%s' ('%s') must match cluster '%s' ('%s').",
                             ConfigOptions.TABLE_DATALAKE_FORMAT.key(),
                             tableDataLakeFormat.get(),
                             ConfigOptions.DATALAKE_FORMAT.key(),
-                            clusterDataLakeFormat,
-                            ConfigOptions.TABLE_DATALAKE_ENABLED.key()));
+                            clusterDataLakeFormat));
         }
     }
 
@@ -467,6 +463,10 @@ public class TableDescriptorValidation {
             throw new InvalidTableException("Bucket number must be set.");
         }
         int bucketCount = tableDescriptor.getTableDistribution().get().getBucketCount().get();
+        if (bucketCount <= 0) {
+            throw new InvalidTableException(
+                    String.format("Bucket count must be greater than 0, but is %s.", bucketCount));
+        }
         if (bucketCount > maxBucketNum) {
             throw new TooManyBucketsException(
                     String.format(
@@ -608,6 +608,35 @@ public class TableDescriptorValidation {
                 // Validate aggregation function parameters for aggregation merge engine
                 validateAggregationFunctionParameters(schema);
             }
+        }
+    }
+
+    private static void checkUpsertSkipUnchanged(Configuration tableConf, boolean hasPrimaryKey) {
+        if (!tableConf.get(ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED)) {
+            return;
+        }
+        String option = ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED.key();
+        if (!hasPrimaryKey) {
+            throw new InvalidConfigException(
+                    String.format("'%s' is only supported for primary key tables.", option));
+        }
+        if (tableConf.getOptional(ConfigOptions.TABLE_MERGE_ENGINE).isPresent()) {
+            throw new InvalidConfigException(
+                    String.format(
+                            "'%s' cannot be combined with '%s'.",
+                            option, ConfigOptions.TABLE_MERGE_ENGINE.key()));
+        }
+        if (tableConf.get(ConfigOptions.TABLE_CHANGELOG_IMAGE) == ChangelogImage.WAL) {
+            throw new InvalidConfigException(
+                    String.format(
+                            "'%s' requires '%s' to be FULL.",
+                            option, ConfigOptions.TABLE_CHANGELOG_IMAGE.key()));
+        }
+        if (tableConf.getOptional(ConfigOptions.TABLE_KV_TTL).isPresent()) {
+            throw new InvalidConfigException(
+                    String.format(
+                            "'%s' cannot be combined with '%s'.",
+                            option, ConfigOptions.TABLE_KV_TTL.key()));
         }
     }
 

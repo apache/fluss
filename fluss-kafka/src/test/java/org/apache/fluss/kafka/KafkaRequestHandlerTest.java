@@ -17,6 +17,8 @@
 
 package org.apache.fluss.kafka;
 
+import org.apache.fluss.kafka.mapping.KafkaTopicMapper;
+import org.apache.fluss.kafka.security.KafkaSaslConnection;
 import org.apache.fluss.rpc.netty.server.RequestChannel;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBufAllocator;
@@ -41,6 +43,8 @@ import org.apache.kafka.common.requests.CreateTopicsResponse;
 import org.apache.kafka.common.requests.RequestHeader;
 import org.apache.kafka.common.requests.RequestUtils;
 import org.apache.kafka.common.requests.ResponseHeader;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -54,15 +58,26 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.tuple;
 
 /** Tests for {@link KafkaRequestHandler}. */
-public class KafkaRequestHandlerTest {
+public class KafkaRequestHandlerTest extends KafkaServerTestBase {
+
+    private KafkaRequestHandler handler;
+
+    @BeforeEach
+    void createRequestHandler() {
+        handler = new KafkaRequestHandler(new KafkaTopicMapper(conf), createTabletService());
+    }
+
+    @AfterEach
+    void closeRequestHandler() throws Exception {
+        if (handler != null) {
+            handler.close();
+        }
+    }
 
     @Test
     public void testUnsupportedWireVersionFallsBackAndAllowsRenegotiation() {
-        KafkaRequestHandler handler = createKafkaRequestHandler();
         RequestChannel requests = new RequestChannel(100);
-        EmbeddedChannel channel =
-                new EmbeddedChannel(
-                        new KafkaCommandDecoder(new RequestChannel[] {requests}, "KAFKA"));
+        EmbeddedChannel channel = new EmbeddedChannel(new KafkaCommandDecoder(requests, "KAFKA"));
         short unsupportedVersion = (short) (ApiKeys.API_VERSIONS.latestVersion() + 1);
         try {
             // An unknown request version must be rejected without parsing its body schema.
@@ -76,7 +91,10 @@ public class KafkaRequestHandlerTest {
             ApiVersionsResponse unsupportedResponse = parseWireResponse(channel, (short) 0, 41);
             assertThat(unsupportedResponse.data().errorCode())
                     .isEqualTo(Errors.UNSUPPORTED_VERSION.code());
-            assertBrokerCapabilities(unsupportedResponse);
+            // The version error only advertises the range needed to retry ApiVersions.
+            assertThat(unsupportedResponse.data().apiKeys())
+                    .extracting(ApiVersion::apiKey, ApiVersion::minVersion, ApiVersion::maxVersion)
+                    .containsExactly(tuple(ApiKeys.API_VERSIONS.id, (short) 0, (short) 4));
 
             ApiVersionsRequestData data =
                     new ApiVersionsRequestData()
@@ -105,7 +123,6 @@ public class KafkaRequestHandlerTest {
     @ParameterizedTest
     @ValueSource(shorts = {0, 1, 2, 3, 4})
     public void testKafkaApiVersionsRequest(short version) {
-        KafkaRequestHandler handler = createKafkaRequestHandler();
         ApiVersionsResponse response = requestApiVersions(handler, version);
 
         assertSuccessfulResponseDefaults(response);
@@ -145,7 +162,10 @@ public class KafkaRequestHandlerTest {
     private static void assertBrokerCapabilities(ApiVersionsResponse response) {
         assertThat(response.data().apiKeys())
                 .extracting(ApiVersion::apiKey, ApiVersion::minVersion, ApiVersion::maxVersion)
-                .containsExactly(tuple(ApiKeys.API_VERSIONS.id, (short) 0, (short) 4));
+                .containsExactly(
+                        tuple(ApiKeys.PRODUCE.id, (short) 3, (short) 11),
+                        tuple(ApiKeys.METADATA.id, (short) 0, (short) 11),
+                        tuple(ApiKeys.API_VERSIONS.id, (short) 0, (short) 4));
     }
 
     @ParameterizedTest
@@ -157,7 +177,6 @@ public class KafkaRequestHandlerTest {
     })
     public void testInvalidApiVersionsRequest(
             short version, String softwareName, String softwareVersion) {
-        KafkaRequestHandler handler = createKafkaRequestHandler();
         ApiVersionsRequest requestBody =
                 new ApiVersionsRequest.Builder(
                                 new ApiVersionsRequestData()
@@ -183,7 +202,6 @@ public class KafkaRequestHandlerTest {
 
     @Test
     public void testUnregisteredApiIsNotRouted() {
-        KafkaRequestHandler handler = createKafkaRequestHandler();
         short version = ApiKeys.CREATE_TOPICS.latestVersion();
         CreateTopicsRequestData requestData =
                 new CreateTopicsRequestData()
@@ -235,11 +253,12 @@ public class KafkaRequestHandlerTest {
             assertThat(request.apiVersion()).isEqualTo(version);
             handler.processRequest(request);
             assertThat(request.future()).isDone();
-            channel.runPendingTasks();
-            assertThat(buffer.refCnt()).isZero();
         } finally {
+            // Mirror RequestProcessor's independent ownership before response-queue cleanup.
             request.releaseBuffer();
         }
+        channel.runPendingTasks();
+        assertThat(buffer.refCnt()).isZero();
     }
 
     private static ApiVersionsResponse parseWireResponse(
@@ -273,6 +292,7 @@ public class KafkaRequestHandlerTest {
                     header,
                     requestBody,
                     "KAFKA",
+                    KafkaSaslConnection.plaintext(),
                     requestBuffer,
                     context,
                     new CompletableFuture<>());
@@ -289,9 +309,5 @@ public class KafkaRequestHandlerTest {
         } finally {
             responseBuffer.release();
         }
-    }
-
-    private static KafkaRequestHandler createKafkaRequestHandler() {
-        return new KafkaRequestHandler();
     }
 }

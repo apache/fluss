@@ -94,6 +94,12 @@ pub(crate) fn build_cluster_with_port(
     buckets: i32,
     port: u32,
 ) -> Cluster {
+    build_cluster_with_tables(&[(table_path, table_id, buckets)], port)
+}
+
+/// Build a Cluster whose tables are all led by tablet server 1 at the given port. Kept as the
+/// single Cluster::new call site in test code, so a constructor change only breaks this helper.
+pub(crate) fn build_cluster_with_tables(tables: &[(&TablePath, i64, i32)], port: u32) -> Cluster {
     let server = ServerNode::new(1, "127.0.0.1".to_string(), port, ServerType::TabletServer);
 
     let mut servers = HashMap::new();
@@ -101,31 +107,31 @@ pub(crate) fn build_cluster_with_port(
 
     let mut locations_by_path = HashMap::new();
     let mut locations_by_bucket = HashMap::new();
-    let mut bucket_locations = Vec::new();
-
-    for bucket_id in 0..buckets {
-        let table_bucket = TableBucket::new(table_id, bucket_id);
-        let bucket_location = BucketLocation::new(
-            table_bucket.clone(),
-            Some(server.clone()),
-            Arc::new(PhysicalTablePath::of(Arc::new(table_path.clone()))),
-        );
-        bucket_locations.push(bucket_location.clone());
-        locations_by_bucket.insert(table_bucket, bucket_location);
-    }
-    locations_by_path.insert(
-        Arc::new(PhysicalTablePath::of(Arc::new(table_path.clone()))),
-        bucket_locations,
-    );
-
     let mut table_id_by_path = HashMap::new();
-    table_id_by_path.insert(table_path.clone(), table_id);
-
     let mut table_info_by_path = HashMap::new();
-    table_info_by_path.insert(
-        table_path.clone(),
-        build_table_info(table_path.clone(), table_id, buckets),
-    );
+    let mut bucket_count_by_table = HashMap::new();
+
+    for (table_path, table_id, buckets) in tables {
+        let physical_path = Arc::new(PhysicalTablePath::of(Arc::new((*table_path).clone())));
+        let mut bucket_locations = Vec::new();
+        for bucket_id in 0..*buckets {
+            let table_bucket = TableBucket::new(*table_id, bucket_id);
+            let bucket_location = BucketLocation::new(
+                table_bucket.clone(),
+                Some(server.clone()),
+                Arc::clone(&physical_path),
+            );
+            bucket_locations.push(bucket_location.clone());
+            locations_by_bucket.insert(table_bucket, bucket_location);
+        }
+        locations_by_path.insert(physical_path, bucket_locations);
+        table_id_by_path.insert((*table_path).clone(), *table_id);
+        table_info_by_path.insert(
+            (*table_path).clone(),
+            build_table_info((*table_path).clone(), *table_id, *buckets),
+        );
+        bucket_count_by_table.insert(TableOrPartition::Table(*table_id), *buckets);
+    }
 
     Cluster::new(
         None,
@@ -135,7 +141,7 @@ pub(crate) fn build_cluster_with_port(
         table_id_by_path,
         table_info_by_path,
         HashMap::new(),
-        HashMap::from([(TableOrPartition::Table(table_id), buckets)]),
+        bucket_count_by_table,
     )
 }
 

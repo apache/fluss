@@ -24,6 +24,7 @@ import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
 import org.apache.fluss.client.table.scanner.log.ScanRecords;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.flink.sink.shuffle.DistributionMode;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
@@ -1340,6 +1341,73 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                         "Table %s uses the 'VERSIONED' merge engine which does not support partial updates."
                                 + " Please make sure the number of specified columns in INSERT INTO matches columns of the Fluss table.",
                         tablePath);
+    }
+
+    @Test
+    @MultiVersionTest
+    void testSkipUnchangedUpsertsSupportsMutations() throws Exception {
+        String tableName = "skipUnchangedUpsertsTable";
+        tBatchEnv.executeSql(
+                String.format(
+                        "create table %s ("
+                                + " a int not null,"
+                                + " b bigint null, "
+                                + " c string null, "
+                                + " primary key (a) not enforced"
+                                + ") with ('table.upsert.skip-unchanged' = 'true')",
+                        tableName));
+
+        tBatchEnv
+                .executeSql(
+                        String.format(
+                                "INSERT INTO %s VALUES (1, 10, 'initial'), (2, 20, 'delete')",
+                                tableName))
+                .await();
+
+        // Verify that the Flink sink accepts partial updates with unchanged writes skipped.
+        tBatchEnv
+                .executeSql(String.format("INSERT INTO %s (a, c) VALUES (1, 'partial')", tableName))
+                .await();
+
+        // Verify that row-level UPDATE and DELETE statements are accepted as well.
+        tBatchEnv.executeSql(String.format("UPDATE %s SET b = 11 WHERE a = 1", tableName)).await();
+        tBatchEnv.executeSql(String.format("DELETE FROM %s WHERE a = 2", tableName)).await();
+
+        CloseableIterator<Row> rowIter =
+                tBatchEnv.executeSql(String.format("SELECT * FROM %s", tableName)).collect();
+        assertResultsIgnoreOrder(rowIter, Collections.singletonList("+I[1, 11, partial]"), true);
+    }
+
+    @Test
+    @MultiVersionTest
+    void testSkipUnchangedUpsertsRejectsWalImage() {
+        assertThatThrownBy(
+                        () ->
+                                tBatchEnv.executeSql(
+                                        "create table skip_unchanged_wal ("
+                                                + "a int not null, b string, primary key (a) not enforced"
+                                                + ") with ('table.upsert.skip-unchanged' = 'true', "
+                                                + "'table.changelog.image' = 'wal')"))
+                .rootCause()
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining("table.upsert.skip-unchanged")
+                .hasMessageContaining("table.changelog.image");
+    }
+
+    @Test
+    @MultiVersionTest
+    void testSkipUnchangedUpsertsRejectsKvTtl() {
+        assertThatThrownBy(
+                        () ->
+                                tBatchEnv.executeSql(
+                                        "create table skip_unchanged_ttl ("
+                                                + "a int not null, b string, primary key (a) not enforced"
+                                                + ") with ('table.upsert.skip-unchanged' = 'true', "
+                                                + "'table.kv.ttl' = '1 h')"))
+                .rootCause()
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining("table.upsert.skip-unchanged")
+                .hasMessageContaining("table.kv.ttl");
     }
 
     @Test

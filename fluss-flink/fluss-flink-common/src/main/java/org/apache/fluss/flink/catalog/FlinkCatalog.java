@@ -38,6 +38,7 @@ import org.apache.fluss.flink.functions.bitmap.RbToArrayFunction;
 import org.apache.fluss.flink.functions.bitmap.RbXorAggFunction;
 import org.apache.fluss.flink.functions.bitmap.RbXorFunction;
 import org.apache.fluss.flink.lake.LakeFlinkCatalog;
+import org.apache.fluss.flink.procedure.FlussProcedureContext;
 import org.apache.fluss.flink.procedure.ProcedureManager;
 import org.apache.fluss.flink.utils.CatalogExceptionUtils;
 import org.apache.fluss.flink.utils.FlinkConversions;
@@ -108,6 +109,7 @@ import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 import static org.apache.flink.table.api.DataTypes.BIGINT;
+import static org.apache.flink.table.api.DataTypes.INT;
 import static org.apache.flink.table.api.DataTypes.STRING;
 import static org.apache.flink.table.api.DataTypes.TIMESTAMP_LTZ;
 import static org.apache.flink.util.Preconditions.checkArgument;
@@ -139,6 +141,7 @@ public class FlinkCatalog extends AbstractCatalog {
     public static final String LAKE_TABLE_SPLITTER = "$lake";
     public static final String CHANGELOG_TABLE_SUFFIX = "$changelog";
     public static final String BINLOG_TABLE_SUFFIX = "$binlog";
+    public static final String BUCKETS_TABLE_SUFFIX = "$buckets";
 
     protected final ClassLoader classLoader;
 
@@ -216,11 +219,7 @@ public class FlinkCatalog extends AbstractCatalog {
 
     @Override
     public void open() throws CatalogException {
-        Map<String, String> flussConfigs = new HashMap<>();
-        flussConfigs.put(ConfigOptions.BOOTSTRAP_SERVERS.key(), bootstrapServers);
-        flussConfigs.putAll(securityConfigs);
-
-        connection = ConnectionFactory.createConnection(Configuration.fromMap(flussConfigs));
+        connection = ConnectionFactory.createConnection(getFlussConfiguration());
         admin = connection.getAdmin();
         if (!databaseExists(defaultDatabase)) {
             throw new CatalogException(
@@ -436,13 +435,17 @@ public class FlinkCatalog extends AbstractCatalog {
         // may be should be as a datalake table
         String tableName = objectPath.getObjectName();
 
-        // Check if this is a virtual table ($changelog or $binlog)
+        // Check if this is a Fluss virtual table. Lake table routing takes precedence so that,
+        // for example, "orders$lake$buckets" is delegated to the lake catalog.
         if (tableName.endsWith(CHANGELOG_TABLE_SUFFIX)
                 && !tableName.contains(LAKE_TABLE_SPLITTER)) {
             return getVirtualChangelogTable(objectPath);
         } else if (tableName.endsWith(BINLOG_TABLE_SUFFIX)
                 && !tableName.contains(LAKE_TABLE_SPLITTER)) {
             return getVirtualBinlogTable(objectPath);
+        } else if (tableName.endsWith(BUCKETS_TABLE_SUFFIX)
+                && !tableName.contains(LAKE_TABLE_SPLITTER)) {
+            return getVirtualBucketsTable(objectPath);
         }
 
         TablePath tablePath = toTablePath(objectPath);
@@ -555,7 +558,7 @@ public class FlinkCatalog extends AbstractCatalog {
 
     @Override
     public boolean tableExists(ObjectPath objectPath) throws CatalogException {
-        // For virtual tables ($changelog, $binlog), check if the base physical table exists
+        // For Fluss virtual tables, check if the base physical table exists.
         TablePath tablePath = toPhysicalTablePath(objectPath);
         try {
             return admin.tableExists(tablePath).get();
@@ -570,6 +573,7 @@ public class FlinkCatalog extends AbstractCatalog {
     @Override
     public void dropTable(ObjectPath objectPath, boolean ignoreIfNotExists)
             throws TableNotExistException, CatalogException {
+        rejectVirtualTableMutation(objectPath, "drop");
         TablePath tablePath = toTablePath(objectPath);
         try {
             admin.dropTable(tablePath, ignoreIfNotExists).get();
@@ -632,6 +636,7 @@ public class FlinkCatalog extends AbstractCatalog {
             List<org.apache.flink.table.catalog.TableChange> tableChanges,
             boolean ignoreIfNotExists)
             throws TableNotExistException, CatalogException {
+        rejectVirtualTableMutation(objectPath, "alter");
         TablePath tablePath = toTablePath(objectPath);
 
         List<TableChange> flussTableChanges =
@@ -704,7 +709,7 @@ public class FlinkCatalog extends AbstractCatalog {
         }
 
         try {
-            // For virtual tables ($changelog, $binlog), list partitions of the base physical table
+            // For virtual tables, list partitions of the base physical table.
             TablePath tablePath = toPhysicalTablePath(objectPath);
             List<PartitionInfo> partitionInfos;
             if (catalogPartitionSpec != null) {
@@ -768,7 +773,7 @@ public class FlinkCatalog extends AbstractCatalog {
             throws TableNotExistException, TableNotPartitionedException,
                     PartitionSpecInvalidException, PartitionAlreadyExistsException,
                     CatalogException {
-        // $changelog / $binlog are read-only virtual tables; reject partition mutations.
+        // Virtual tables are read-only; reject partition mutations.
         if (isVirtualTable(objectPath)) {
             throw new UnsupportedOperationException(
                     String.format(
@@ -822,7 +827,7 @@ public class FlinkCatalog extends AbstractCatalog {
     public void dropPartition(
             ObjectPath objectPath, CatalogPartitionSpec catalogPartitionSpec, boolean b)
             throws PartitionNotExistException, CatalogException {
-        // $changelog / $binlog are read-only virtual tables; reject partition mutations.
+        // Virtual tables are read-only; reject partition mutations.
         if (isVirtualTable(objectPath)) {
             throw new UnsupportedOperationException(
                     String.format(
@@ -974,27 +979,45 @@ public class FlinkCatalog extends AbstractCatalog {
 
     /**
      * Converts an {@link ObjectPath} to a physical {@link TablePath}, stripping any virtual table
-     * suffix ($changelog, $binlog) if present. This is needed because virtual tables share the same
-     * partitioning and physical storage as their base table, so partition-related operations must
-     * be performed against the base table name.
+     * suffix ({@code $changelog}, {@code $binlog}, or {@code $buckets}) if present. This is needed
+     * because virtual tables are resolved from their base table.
      */
     private TablePath toPhysicalTablePath(ObjectPath objectPath) {
         String tableName = objectPath.getObjectName();
         // Strip virtual table suffixes to get the base physical table name
-        if (tableName.endsWith(CHANGELOG_TABLE_SUFFIX)) {
+        if (tableName.contains(LAKE_TABLE_SPLITTER)) {
+            return TablePath.of(objectPath.getDatabaseName(), tableName);
+        } else if (tableName.endsWith(CHANGELOG_TABLE_SUFFIX)) {
             tableName =
                     tableName.substring(0, tableName.length() - CHANGELOG_TABLE_SUFFIX.length());
         } else if (tableName.endsWith(BINLOG_TABLE_SUFFIX)) {
             tableName = tableName.substring(0, tableName.length() - BINLOG_TABLE_SUFFIX.length());
+        } else if (tableName.endsWith(BUCKETS_TABLE_SUFFIX)) {
+            tableName = tableName.substring(0, tableName.length() - BUCKETS_TABLE_SUFFIX.length());
         }
         return TablePath.of(objectPath.getDatabaseName(), tableName);
     }
 
-    /** Returns whether the given path refers to a read-only $changelog / $binlog virtual table. */
+    /** Returns whether the given path refers to a read-only Fluss virtual table. */
     private static boolean isVirtualTable(ObjectPath objectPath) {
-        String tableName = objectPath.getObjectName();
-        return tableName.endsWith(CHANGELOG_TABLE_SUFFIX)
-                || tableName.endsWith(BINLOG_TABLE_SUFFIX);
+        return isVirtualTableName(objectPath.getObjectName());
+    }
+
+    static boolean isVirtualTableName(String tableName) {
+        return !tableName.contains(LAKE_TABLE_SPLITTER)
+                && (tableName.endsWith(CHANGELOG_TABLE_SUFFIX)
+                        || tableName.endsWith(BINLOG_TABLE_SUFFIX)
+                        || tableName.endsWith(BUCKETS_TABLE_SUFFIX));
+    }
+
+    private void rejectVirtualTableMutation(ObjectPath objectPath, String operation) {
+        if (isVirtualTable(objectPath)) {
+            throw new UnsupportedOperationException(
+                    String.format(
+                            "Cannot %s read-only virtual table %s in %s. "
+                                    + "Please modify the base table instead.",
+                            operation, objectPath, getName()));
+        }
     }
 
     @Override
@@ -1009,7 +1032,15 @@ public class FlinkCatalog extends AbstractCatalog {
     @Override
     public Procedure getProcedure(ObjectPath procedurePath)
             throws ProcedureNotExistException, CatalogException {
-        Optional<Procedure> procedure = ProcedureManager.getProcedure(admin, procedurePath);
+        FlussProcedureContext procedureContext =
+                new FlussProcedureContext(
+                        admin,
+                        defaultDatabase,
+                        getFlussConfiguration(),
+                        getLakeCatalogProperties(),
+                        classLoader);
+        Optional<Procedure> procedure =
+                ProcedureManager.getProcedure(procedureContext, procedurePath);
         if (procedure.isPresent()) {
             return procedure.get();
         } else {
@@ -1032,6 +1063,13 @@ public class FlinkCatalog extends AbstractCatalog {
             }
         }
         return lakeCatalogProperties;
+    }
+
+    private Configuration getFlussConfiguration() {
+        Map<String, String> flussConfigs = new HashMap<>();
+        flussConfigs.put(ConfigOptions.BOOTSTRAP_SERVERS.key(), bootstrapServers);
+        flussConfigs.putAll(securityConfigs);
+        return Configuration.fromMap(flussConfigs);
     }
 
     private CatalogTable wrapWithIndexes(CatalogTable table, TableInfo tableInfo) {
@@ -1264,5 +1302,52 @@ public class FlinkCatalog extends AbstractCatalog {
         // Note: We don't copy primary keys or watermarks for virtual tables
 
         return builder.build();
+    }
+
+    /** Creates a read-only virtual table exposing the current bucket metadata snapshot. */
+    private CatalogBaseTable getVirtualBucketsTable(ObjectPath objectPath)
+            throws TableNotExistException, CatalogException {
+        String virtualTableName = objectPath.getObjectName();
+        String baseTableName =
+                virtualTableName.substring(
+                        0, virtualTableName.length() - BUCKETS_TABLE_SUFFIX.length());
+        ObjectPath baseObjectPath = new ObjectPath(objectPath.getDatabaseName(), baseTableName);
+
+        try {
+            // Validate that the base table exists. Bucket rows themselves are loaded by the source
+            // when the query is translated into a bounded data stream.
+            admin.getTableInfo(toTablePath(baseObjectPath)).get();
+
+            Schema bucketsSchema =
+                    Schema.newBuilder()
+                            .column("table_path", STRING().notNull())
+                            .column("table_id", BIGINT().notNull())
+                            .column("partition_id", BIGINT())
+                            .column("partition_name", STRING())
+                            .column("bucket_id", INT().notNull())
+                            .column("leader_id", INT())
+                            .column("leader_epoch", INT())
+                            .column("bucket_epoch", INT())
+                            .column("replicas", DataTypes.ARRAY(INT().notNull()).notNull())
+                            .column("isr", DataTypes.ARRAY(INT().notNull()).notNull())
+                            .build();
+            Map<String, String> options = new HashMap<>();
+            options.put(BOOTSTRAP_SERVERS.key(), bootstrapServers);
+            options.putAll(securityConfigs);
+            return CatalogTableAdapter.toCatalogTable(
+                    bucketsSchema,
+                    "Current bucket placement and leader/ISR metadata",
+                    Collections.emptyList(),
+                    options);
+        } catch (Exception e) {
+            Throwable t = ExceptionUtils.stripExecutionException(e);
+            if (isTableNotExist(t)) {
+                throw new TableNotExistException(getName(), baseObjectPath);
+            }
+            throw new CatalogException(
+                    String.format(
+                            "Failed to get virtual buckets table %s in %s", objectPath, getName()),
+                    t);
+        }
     }
 }

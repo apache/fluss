@@ -495,6 +495,8 @@
                                         <exclude>org.apache.fluss.predicate.*</exclude>
                                         <!-- end exclude for lake source -->
                                         <exclude>org.apache.fluss.lake.source.*</exclude>
+                                        <exclude>org.apache.fluss.lake.lakestorage.LakeCatalog</exclude>
+                                        <exclude>org.apache.fluss.lake.lakestorage.LakeCatalog.Context</exclude>
                                         <exclude>org.apache.fluss.lake.lakestorage.LakeStorage</exclude>
                                         <exclude>
                                             org.apache.fluss.lake.lakestorage.LakeTableLookuper
@@ -538,7 +540,7 @@
                                         <exclude>
                                             org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper
                                         </exclude>
-                                        <exclude>org.apache.fluss.flink.tiering.source.TieringWriterInitContext
+                                        <exclude>org.apache.fluss.client.tiering.TieringWriterInitContext
                                         </exclude>
                                         <exclude>org.apache.fluss.flink.tiering.source.TieringSourceReader</exclude>
                                         <exclude>org.apache.fluss.flink.tiering.source.TieringSourceFetcherManager</exclude>
@@ -553,7 +555,7 @@
                                         <exclude>org.apache.fluss.flink.tiering.committer.CommittableMessageTypeInfo*
                                         </exclude>
                                         <exclude>
-                                            org.apache.fluss.flink.tiering.committer.TieringCommitterInitContext
+                                            org.apache.fluss.client.tiering.TieringCommitterInitContext
                                         </exclude>
                                         <exclude>
                                             org.apache.fluss.flink.tiering.LakeTieringJobBuilder

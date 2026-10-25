@@ -129,6 +129,25 @@ message CreateTableRequest {
 message CreateTableResponse {
 }
 
+message CreateTableFromLakeRequest {
+  required PbTablePath table_path = 1;
+  repeated PbKeyValue options = 2;
+}
+
+message CreateTableFromLakeResponse {
+  required PbTableInfo table_info = 1;
+}
+
+message PbTableInfo {
+  required int64 table_id = 1;
+  required int32 schema_id = 2;
+  required bytes table_json = 3;
+  required int64 created_time = 4;
+  required int64 modified_time = 5;
+  optional string remote_data_dir = 6;
+  optional int64 bucket_count_epoch = 7;
+}
+
 // alter table request and response
 message AlterTableRequest {
   required PbTablePath table_path = 1;
@@ -232,6 +251,15 @@ message UpdateMetadataRequest {
 }
 
 message UpdateMetadataResponse {
+}
+
+// describe cluster request and response
+message DescribeClusterRequest {
+}
+
+message DescribeClusterResponse {
+  optional PbServerNode coordinator_server = 1;
+  repeated PbServerNode tablet_servers = 2;
 }
 
 // produce log request and response
@@ -935,8 +963,24 @@ message GetClusterHealthResponse {
   required int32 status = 5; // PbClusterHealthStatus: GREEN=0, YELLOW=1, RED=2, UNKNOWN=3
 }
 
+message DescribeTabletServersRequest {
+}
+
+message DescribeTabletServersResponse {
+  repeated PbTabletServerLoad tablet_servers = 1;
+}
+
 
 // --------------- Inner classes ----------------
+message PbTabletServerLoad {
+  required int32 server_id = 1;
+  required int32 num_replicas = 2;
+  required int32 in_sync_replicas = 3;
+  required int32 num_leader_replicas = 4;
+  required int32 active_leader_replicas = 5;
+  required int32 leaderless_replicas = 6;
+}
+
 message PbApiVersion {
   required int32 api_key = 1;
   required int32 min_version = 2;
@@ -959,12 +1003,14 @@ message PbPhysicalTablePath {
 //   * versions <= 0.6: host and port are used.
 //   * versions >= 0.7: listeners is used to replace host and port.
 // For MetadataResponse and UpdateMetadataRequest: Fluss versions >= 0.7: we add rack for each tabletServer
+// For DescribeClusterResponse: Fluss versions >= 1.1: we add server_tag for each tabletServer
 message PbServerNode {
   required int32 node_id = 1;
   required string host = 2;
   required int32 port = 3;
   optional string listeners = 4;
   optional string rack = 5;
+  optional int32 server_tag = 6;
 }
 
 message PbTableMetadata {
@@ -1082,6 +1128,11 @@ message PbFetchLogRespForBucket {
   // The safe local log retention boundary confirmed by a committed KV snapshot. This is only
   // returned for KV follower fetches and is distinct from the physical log_start_offset.
   optional int64 min_retain_offset = 10;
+  // The log start offset to which an EARLIEST_OFFSET request was resolved.
+  // This field is present only when the request used EARLIEST_OFFSET.
+  // Its presence also allows a client to distinguish a server that reports the
+  // resolved offset from an older server that does not.
+  optional int64 resolved_earliest_offset = 11;
 }
 
 message PbPutKvReqForBucket {

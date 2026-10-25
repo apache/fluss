@@ -1502,6 +1502,47 @@ public class ConfigOptions {
                             "Setting a value greater than zero will cause the client to resend any record whose "
                                     + "send fails with a potentially transient error.");
 
+    public static final ConfigOption<Duration> CLIENT_WRITER_RETRY_BACKOFF =
+            key("client.writer.retry-backoff")
+                    .durationType()
+                    .defaultValue(Duration.ofMillis(100))
+                    .withDescription(
+                            "The initial delay before retrying a write that failed with a retriable error. "
+                                    + "The delay doubles with the batch retry count and uses 20% jitter, "
+                                    + "up to client.writer.retry-backoff-max. Set to 0 to disable this backoff.");
+
+    public static final ConfigOption<Duration> CLIENT_WRITER_RETRY_BACKOFF_MAX =
+            key("client.writer.retry-backoff-max")
+                    .durationType()
+                    .defaultValue(Duration.ofSeconds(1))
+                    .withDescription(
+                            "The maximum delay before retrying a write that failed with a retriable error. "
+                                    + "Must be between the initial backoff and 2147483647ms. "
+                                    + "The backoff applies per physical table bucket and is independent of "
+                                    + "KV backpressure and disk-write protection.");
+
+    public static final ConfigOption<Duration> CLIENT_WRITER_DISK_WRITE_LOCKED_BACKOFF =
+            key("client.writer.disk-write-locked.backoff")
+                    .durationType()
+                    .defaultValue(Duration.ofSeconds(1))
+                    .withDescription(
+                            "The initial retry backoff when disk write protection rejects a write. "
+                                    + "Applies to both Log and KV writes, independently of KV backpressure. "
+                                    + "The backoff doubles with the batch retry count and uses 20% jitter, "
+                                    + "up to client.writer.disk-write-locked.backoff-max. "
+                                    + "The value must be at least 1ms and no greater than the maximum backoff.");
+
+    public static final ConfigOption<Duration> CLIENT_WRITER_DISK_WRITE_LOCKED_BACKOFF_MAX =
+            key("client.writer.disk-write-locked.backoff-max")
+                    .durationType()
+                    .defaultValue(Duration.ofSeconds(10))
+                    .withDescription(
+                            "The maximum retry backoff for a bucket whose writes are rejected by disk "
+                                    + "write protection. Must be between the initial backoff and 2147483647ms. "
+                                    + "Setting this equal to the initial backoff uses a fixed delay without jitter. "
+                                    + "Writes retry automatically after the delay, subject to client.writer.retries. "
+                                    + "Flush and graceful close also respect this delay.");
+
     public static final ConfigOption<Boolean> CLIENT_WRITER_ENABLE_IDEMPOTENCE =
             key("client.writer.enable-idempotence")
                     .booleanType()
@@ -2215,6 +2256,16 @@ public class ConfigOptions {
                                     + "The `versioned` merge engine will keep the row with the largest version of the same primary key. "
                                     + "The `aggregation` merge engine will aggregate rows with the same primary key using field-level aggregate functions.");
 
+    public static final ConfigOption<Boolean> TABLE_UPSERT_SKIP_UNCHANGED =
+            key("table.upsert.skip-unchanged")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "For a primary key table using the default merge behavior, skip the state write and changelog when the complete candidate row has the same schema ID and serialized row bytes as the stored row. "
+                                    + "This also applies to partial updates and partial deletes. "
+                                    + "It requires FULL changelog image mode and cannot be combined with row-level KV TTL or a merge engine. As with other tables without a merge engine, OVERWRITE writes are unsupported. "
+                                    + "FULL changelog image mode already reads the previous value for every upsert. Comparing it with the complete candidate row adds comparison costs.");
+
     public static final ConfigOption<String> TABLE_MERGE_ENGINE_VERSION_COLUMN =
             // we may need to introduce "del-column" in the future to support delete operation
             key("table.merge-engine.versioned.ver-column")
@@ -2695,6 +2746,20 @@ public class ConfigOptions {
                                     + "together with all other data blocks. This helps to limit memory usage "
                                     + "so that the total memory used by RocksDB is bounded by block cache size. "
                                     + "The default value is `false`.");
+
+    public static final ConfigOption<Boolean> KV_PARTITIONED_INDEX_FILTERS =
+            key("kv.rocksdb.block.partitioned-index-filters")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Enables partitioned indexes. If `kv.rocksdb.use-bloom-filter` is true, "
+                                    + "Bloom filters are partitioned as well. Requires a positive "
+                                    + "`kv.rocksdb.block.metadata-blocksize`; when `kv.rocksdb.use-bloom-filter` "
+                                    + "is true, `kv.rocksdb.bloom-filter.block-based-mode` must be `false`. "
+                                    + "Only newly generated SSTs "
+                                    + "use this format; existing SSTs remain readable when this option is enabled or disabled. "
+                                    + "Partitions use the block cache even when metadata caching is disabled. "
+                                    + "Takes effect when opening a RocksDB instance.");
 
     public static final ConfigOption<Boolean> KV_CACHE_INDEX_AND_FILTER_BLOCKS_WITH_HIGH_PRIORITY =
             key("kv.rocksdb.block.cache-index-and-filter-blocks-with-high-priority")

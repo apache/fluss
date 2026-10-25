@@ -24,6 +24,7 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.types.DataTypes;
 
 import io.trino.spi.TrinoException;
+import io.trino.spi.predicate.TupleDomain;
 import org.junit.jupiter.api.Test;
 
 import java.util.Optional;
@@ -38,7 +39,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /** Tests native table capabilities and physical split identity validation. */
 final class FlussTableScanValidatorTest {
     private static final FlussTableHandle HANDLE =
-            new FlussTableHandle("sales", "users", "sales", "users", 42, 1);
+            new FlussTableHandle("sales", "users", "sales", "users", 42, 1, TupleDomain.all());
 
     @Test
     void testNativeTablesAndMatchingSplits() {

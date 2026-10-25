@@ -22,6 +22,7 @@ package org.apache.fluss.lake.paimon.source;
 
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.predicate.PredicateBuilder;
 
 import org.apache.paimon.CoreOptions;
 import org.apache.paimon.Snapshot;
@@ -29,6 +30,7 @@ import org.apache.paimon.data.BinaryString;
 import org.apache.paimon.data.GenericRow;
 import org.apache.paimon.data.InternalRow;
 import org.apache.paimon.schema.Schema;
+import org.apache.paimon.schema.SchemaChange;
 import org.apache.paimon.table.FileStoreTable;
 import org.apache.paimon.table.Table;
 import org.apache.paimon.table.source.Split;
@@ -36,9 +38,12 @@ import org.apache.paimon.types.DataTypes;
 import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.stream.Collectors;
 
+import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toFlussRowType;
+import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test case for {@link PaimonSplitPlanner}. */
@@ -109,5 +114,31 @@ class PaimonSplitPlannerTest extends PaimonSourceTestBase {
             assertThat(split.isBucketUnAware()).isTrue();
             assertThat(split.bucket()).isEqualTo(-1);
         }
+    }
+
+    @Test
+    void testPlanWithFiltersAfterAddingColumn() throws Exception {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, DEFAULT_TABLE);
+        createTable(tablePath, Schema.newBuilder().column("id", DataTypes.INT()).build());
+        writeRecord(tablePath, Collections.singletonList(GenericRow.of(1)));
+        Snapshot snapshot = getTable(tablePath).latestSnapshot().get();
+
+        paimonCatalog.alterTable(
+                toPaimon(tablePath),
+                Collections.singletonList(SchemaChange.addColumn("added", DataTypes.INT())),
+                false);
+
+        LakeSource<PaimonSplit> lakeSource = lakeStorage.createLakeSource(tablePath);
+        PredicateBuilder predicateBuilder =
+                new PredicateBuilder(toFlussRowType(getTable(tablePath).rowType()));
+        lakeSource.withFilters(
+                Collections.singletonList(
+                        predicateBuilder.isNull(predicateBuilder.indexOf("added"))));
+
+        // The old row has null for the added column, so its file must not be pruned.
+        List<PaimonSplit> splits = lakeSource.createPlanner(snapshot::id).plan();
+        assertThat(splits).hasSize(1);
+        assertThat(splits.get(0).dataSplit().snapshotId()).isEqualTo(snapshot.id());
+        assertThat(splits.get(0).dataSplit().rowCount()).isEqualTo(1);
     }
 }

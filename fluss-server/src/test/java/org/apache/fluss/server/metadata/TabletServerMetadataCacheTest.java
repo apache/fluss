@@ -503,6 +503,24 @@ public class TabletServerMetadataCacheTest {
     }
 
     @Test
+    void testGetCachedBucketMetadata() {
+        assertThat(serverMetadataCache.getCachedBucketMetadata(DATA1_TABLE_PATH, 0)).isEmpty();
+
+        serverMetadataCache.updateTableMetadata(
+                new TableMetadata(DATA1_TABLE_INFO, initialBucketMetadata));
+
+        assertThat(serverMetadataCache.getCachedBucketMetadata(DATA1_TABLE_PATH, 0))
+                .contains(initialBucketMetadata.get(0));
+        assertThat(serverMetadataCache.getCachedBucketMetadata(DATA1_TABLE_PATH, 1))
+                .contains(initialBucketMetadata.get(1));
+        assertThat(serverMetadataCache.getCachedBucketMetadata(DATA1_TABLE_PATH, 2)).isEmpty();
+        assertThat(
+                        serverMetadataCache.getCachedBucketMetadata(
+                                TablePath.of("unknown_db", "unknown_table"), 0))
+                .isEmpty();
+    }
+
+    @Test
     void testUpdateTableMetadataMergeWithExisting() {
         // Given: existing table metadata in cache
         TableMetadata existingMetadata = new TableMetadata(DATA1_TABLE_INFO, initialBucketMetadata);

@@ -16,14 +16,18 @@
 // under the License.
 
 use crate::async_nif;
-use crate::atoms::to_nif_err;
+use crate::atoms::{client_err, to_nif_err};
 use crate::connection::ConnectionResource;
+use crate::row_convert;
 use crate::schema::{NifSchema, TableDescriptorResource};
 use fluss::client::FlussAdmin;
 use fluss::error::Error;
-use fluss::metadata::{DatabaseDescriptor, DatabaseInfo, SchemaInfo, TableInfo, TablePath};
+use fluss::metadata::{
+    DatabaseDescriptor, DatabaseInfo, PartitionInfo, PartitionSpec, SchemaInfo, TableInfo,
+    TablePath,
+};
 use fluss::{ServerNode, ServerType};
-use rustler::{Env, NifStruct, NifUnitEnum, ResourceArc, Term};
+use rustler::{Env, MapIterator, NifStruct, NifUnitEnum, ResourceArc, Term};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -315,6 +319,110 @@ fn admin_get_table_info<'a>(
         let table_info = admin.inner.get_table_info(&table_path).await?;
         NifTableInfo::from_core(&table_info)
     })
+}
+
+#[derive(NifStruct)]
+#[module = "Fluss.PartitionInfo"]
+pub struct NifPartitionInfo {
+    pub partition_id: i64,
+    pub partition_name: String,
+    pub partition_spec: HashMap<String, String>,
+    pub bucket_count: i32,
+}
+
+impl NifPartitionInfo {
+    pub fn from_core(info: &PartitionInfo) -> Self {
+        Self {
+            partition_id: info.get_partition_id(),
+            partition_name: info.get_partition_name(),
+            partition_spec: info.get_partition_spec().get_spec_map().clone(),
+            bucket_count: info.get_bucket_count(),
+        }
+    }
+}
+
+/// Decoded here, not as a `HashMap<String, String>` argument, so a bad spec is an error result
+/// rather than a raise.
+fn term_to_partition_spec(term: Term<'_>) -> Result<PartitionSpec, String> {
+    let entries: MapIterator = term
+        .decode()
+        .map_err(|_| "expected a map of partition column to value".to_string())?;
+    let mut spec = HashMap::new();
+    for (key, value) in entries {
+        let column = row_convert::term_to_column_name(key)?;
+        let value: String = value
+            .decode()
+            .map_err(|_| format!("partition value for `{column}` must be a string"))?;
+        if spec.insert(column.clone(), value).is_some() {
+            return Err(format!("partition column `{column}` given more than once"));
+        }
+    }
+    Ok(PartitionSpec::new(spec))
+}
+
+#[rustler::nif]
+fn admin_create_partition<'a>(
+    env: Env<'a>,
+    admin: ResourceArc<AdminResource>,
+    database_name: String,
+    table_name: String,
+    spec: Term<'a>,
+    ignore_if_exists: bool,
+) -> Result<Term<'a>, rustler::Error> {
+    let spec = term_to_partition_spec(spec).map_err(client_err)?;
+    Ok(async_nif::spawn_task(env, async move {
+        let path = TablePath::new(&database_name, &table_name);
+        admin
+            .inner
+            .create_partition(&path, &spec, ignore_if_exists)
+            .await
+    }))
+}
+
+#[rustler::nif]
+fn admin_drop_partition<'a>(
+    env: Env<'a>,
+    admin: ResourceArc<AdminResource>,
+    database_name: String,
+    table_name: String,
+    spec: Term<'a>,
+    ignore_if_not_exists: bool,
+) -> Result<Term<'a>, rustler::Error> {
+    let spec = term_to_partition_spec(spec).map_err(client_err)?;
+    Ok(async_nif::spawn_task(env, async move {
+        let path = TablePath::new(&database_name, &table_name);
+        admin
+            .inner
+            .drop_partition(&path, &spec, ignore_if_not_exists)
+            .await
+    }))
+}
+
+#[rustler::nif]
+fn admin_list_partition_infos<'a>(
+    env: Env<'a>,
+    admin: ResourceArc<AdminResource>,
+    database_name: String,
+    table_name: String,
+    spec: Term<'a>,
+) -> Result<Term<'a>, rustler::Error> {
+    // Not `Option<Term>`: a `Term` accepts `nil`, so that would be `Some(nil)`.
+    let spec = if row_convert::is_nil(spec) {
+        None
+    } else {
+        Some(term_to_partition_spec(spec).map_err(client_err)?)
+    };
+    Ok(async_nif::spawn_task_with_result(env, async move {
+        let path = TablePath::new(&database_name, &table_name);
+        let infos = admin
+            .inner
+            .list_partition_infos_with_spec(&path, spec.as_ref())
+            .await?;
+        Ok(infos
+            .iter()
+            .map(NifPartitionInfo::from_core)
+            .collect::<Vec<_>>())
+    }))
 }
 
 #[derive(NifStruct)]

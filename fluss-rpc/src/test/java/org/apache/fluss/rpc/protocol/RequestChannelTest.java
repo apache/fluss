@@ -54,7 +54,6 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.FutureTask;
-import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -252,39 +251,6 @@ public class RequestChannelTest {
         pauseTask.get(2, TimeUnit.SECONDS);
         resumeTask.get(2, TimeUnit.SECONDS);
         assertThat(channel.requestsCount()).isEqualTo(2);
-        assertThat(testChannel.isAutoRead()).isFalse();
-    }
-
-    /**
-     * Test that backpressure transitions do not throw when a channel's event loop is already
-     * shutting down (e.g. during server shutdown) and rejects new tasks.
-     */
-    @Test
-    void testBackpressureIgnoresRejectedEventLoopTasks() {
-        int backpressureThreshold = 10;
-        RequestChannel channel = new RequestChannel(backpressureThreshold);
-        TestChannel testChannel = new TestChannel();
-        channel.registerChannel(testChannel);
-        testChannel.eventLoop.rejectTasks(true);
-
-        // pausing the channel is rejected by its event loop, but putRequest must not throw
-        for (int i = 0; i < backpressureThreshold; i++) {
-            channel.putRequest(createTestRequest(i));
-        }
-        assertThat(testChannel.isAutoRead()).isTrue();
-
-        // resuming the channel is rejected as well, but pollRequest must not throw
-        for (int i = 0; i < backpressureThreshold; i++) {
-            assertThat(channel.pollRequest(10)).isNotNull();
-        }
-        assertThat(channel.requestsCount()).isZero();
-
-        // a real event loop never accepts tasks again after shutting down; this only verifies
-        // that the skipped tasks did not leave the backpressure state machine stuck
-        testChannel.eventLoop.rejectTasks(false);
-        for (int i = 0; i < backpressureThreshold; i++) {
-            channel.putRequest(createTestRequest(i));
-        }
         assertThat(testChannel.isAutoRead()).isFalse();
     }
 
@@ -720,17 +686,11 @@ public class RequestChannelTest {
         /** Test EventLoop that executes tasks immediately in the current thread for testing. */
         private static class TestEventLoop extends SingleThreadEventExecutor implements EventLoop {
             private final AtomicBoolean blockNextExecution = new AtomicBoolean();
-            private final AtomicBoolean rejectTasks = new AtomicBoolean();
             private final CountDownLatch taskBlocked = new CountDownLatch(1);
             private final CountDownLatch blockedTaskRelease = new CountDownLatch(1);
 
             TestEventLoop() {
                 super(null, new DefaultThreadFactory("test"), false);
-            }
-
-            /** Simulates an event loop that is shutting down and rejects new tasks. */
-            void rejectTasks(boolean reject) {
-                rejectTasks.set(reject);
             }
 
             void blockNextTask() {
@@ -752,9 +712,6 @@ public class RequestChannelTest {
 
             @Override
             public void execute(Runnable task) {
-                if (rejectTasks.get()) {
-                    throw new RejectedExecutionException("event executor terminated");
-                }
                 if (blockNextExecution.compareAndSet(true, false)) {
                     taskBlocked.countDown();
                     try {

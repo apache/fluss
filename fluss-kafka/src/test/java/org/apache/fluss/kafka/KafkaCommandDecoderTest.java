@@ -17,6 +17,7 @@
 
 package org.apache.fluss.kafka;
 
+import org.apache.fluss.kafka.mapping.KafkaTopicMapper;
 import org.apache.fluss.rpc.netty.server.RequestChannel;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.Unpooled;
@@ -43,15 +44,14 @@ import java.nio.ByteBuffer;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Tests response ordering and ownership in {@link KafkaCommandDecoder}. */
-public class KafkaCommandDecoderTest {
+public class KafkaCommandDecoderTest extends KafkaServerTestBase {
 
     @Test
-    public void testUnsupportedApiVersionsRequestReturnsVersionZeroErrorResponse() {
+    public void testUnsupportedApiVersionsRequestReturnsVersionZeroErrorResponse()
+            throws Exception {
         RequestChannel requestChannel = new RequestChannel(1);
         EmbeddedChannel channel =
-                new EmbeddedChannel(
-                        new KafkaCommandDecoder(
-                                new RequestChannel[] {requestChannel}, "KAFKA_EXTERNAL"));
+                new EmbeddedChannel(new KafkaCommandDecoder(requestChannel, "KAFKA_EXTERNAL"));
         short unsupportedVersion = (short) (ApiKeys.API_VERSIONS.latestVersion() + 1);
         RequestHeader header =
                 new RequestHeader(ApiKeys.API_VERSIONS, unsupportedVersion, "client", 42);
@@ -60,7 +60,8 @@ public class KafkaCommandDecoderTest {
                 serialize(header, new ApiVersionsRequest.Builder().build((short) 0));
         KafkaRequest request = null;
         ByteBuf responseBuffer = null;
-        try {
+        try (KafkaRequestHandler handler =
+                new KafkaRequestHandler(new KafkaTopicMapper(conf), createTabletService())) {
             channel.writeInbound(requestBuffer);
             request = (KafkaRequest) requestChannel.pollRequest(1000);
             assertThat(request).isNotNull();
@@ -70,7 +71,8 @@ public class KafkaCommandDecoderTest {
             assertThat(parsedRequest.hasUnsupportedRequestVersion()).isTrue();
             assertThat(parsedRequest.version()).isZero();
 
-            new KafkaRequestHandler().processRequest(request);
+            handler.processRequest(request);
+            request.releaseBuffer();
             channel.runPendingTasks();
 
             responseBuffer = channel.readOutbound();
@@ -98,11 +100,41 @@ public class KafkaCommandDecoderTest {
     }
 
     @Test
+    public void testDisconnectReleasesQueuedRequestBuffer() {
+        RequestChannel requestChannel = new RequestChannel(100);
+        EmbeddedChannel channel =
+                new EmbeddedChannel(new KafkaCommandDecoder(requestChannel, "KAFKA"));
+        short produceVersion = ApiKeys.PRODUCE.latestVersion();
+        ProduceRequest produceRequest =
+                new ProduceRequest(
+                        new ProduceRequestData().setAcks((short) 1).setTimeoutMs(1000),
+                        produceVersion);
+        RequestHeader header = new RequestHeader(ApiKeys.PRODUCE, produceVersion, "client", 1);
+        ByteBuf requestBuffer = serialize(header, produceRequest);
+
+        try {
+            channel.writeInbound(requestBuffer);
+            KafkaRequest queuedRequest = (KafkaRequest) requestChannel.pollRequest(1000);
+            assertThat(queuedRequest).isNotNull();
+            assertThat(requestBuffer.refCnt()).isOne();
+
+            channel.close();
+            channel.runPendingTasks();
+
+            assertThat(queuedRequest.cancelled()).isTrue();
+            assertThat(requestBuffer.refCnt()).isZero();
+            queuedRequest.releaseBuffer();
+            assertThat(requestBuffer.refCnt()).isZero();
+        } finally {
+            channel.finishAndReleaseAll();
+        }
+    }
+
+    @Test
     public void testAcksZeroSuppressesResponseAndUnblocksFollowingResponse() {
         RequestChannel requestChannel = new RequestChannel(100);
         EmbeddedChannel channel =
-                new EmbeddedChannel(
-                        new KafkaCommandDecoder(new RequestChannel[] {requestChannel}, "KAFKA"));
+                new EmbeddedChannel(new KafkaCommandDecoder(requestChannel, "KAFKA"));
         short produceVersion = ApiKeys.PRODUCE.latestVersion();
         ProduceRequest produceRequest =
                 new ProduceRequest(
@@ -130,6 +162,11 @@ public class KafkaCommandDecoderTest {
             KafkaRequest second = (KafkaRequest) requestChannel.pollRequest(1000);
             assertThat(first).isNotNull();
             assertThat(second).isNotNull();
+
+            // Simulate the worker releasing input after synchronous conversion, before either
+            // asynchronous response is complete.
+            first.releaseBuffer();
+            second.releaseBuffer();
 
             second.complete(new ApiVersionsResponse(new ApiVersionsResponseData()));
             channel.runPendingTasks();

@@ -31,12 +31,76 @@ defmodule Fluss.ConfigTest do
     assert config.connect_timeout_ms == 30_000
   end
 
+  test "set_lookup_batch_timeout_ms/2 sets the lookup batch timeout" do
+    config =
+      Fluss.Config.new("localhost:9123")
+      |> Fluss.Config.set_lookup_batch_timeout_ms(200)
+
+    assert config.lookup_batch_timeout_ms == 200
+  end
+
+  test "set_lookup_max_batch_size/2 sets the lookup max batch size" do
+    config =
+      Fluss.Config.new("localhost:9123")
+      |> Fluss.Config.set_lookup_max_batch_size(64)
+
+    assert config.lookup_max_batch_size == 64
+  end
+
+  test "set_lookup_max_inflight_requests/2 sets the lookup max in-flight requests" do
+    config =
+      Fluss.Config.new("localhost:9123")
+      |> Fluss.Config.set_lookup_max_inflight_requests(32)
+
+    assert config.lookup_max_inflight_requests == 32
+  end
+
+  test "set_lookup_max_retries/2 sets the lookup max retries" do
+    config =
+      Fluss.Config.new("localhost:9123")
+      |> Fluss.Config.set_lookup_max_retries(5)
+
+    assert config.lookup_max_retries == 5
+  end
+
+  test "set_lookup_queue_size/2 sets the lookup queue size" do
+    config =
+      Fluss.Config.new("localhost:9123")
+      |> Fluss.Config.set_lookup_queue_size(1_024)
+
+    assert config.lookup_queue_size == 1_024
+  end
+
   test "set_remote_file_download_thread_num/2 sets the download thread num" do
     config =
       Fluss.Config.new("localhost:9123")
       |> Fluss.Config.set_remote_file_download_thread_num(4)
 
     assert config.remote_file_download_thread_num == 4
+  end
+
+  test "scanner_io_tmp_dir defaults to nil" do
+    assert Fluss.Config.new("localhost:9123").scanner_io_tmp_dir == nil
+    assert Fluss.Config.default().scanner_io_tmp_dir == nil
+  end
+
+  test "set_scanner_io_tmp_dir/2 preserves the configured path" do
+    for path <- ["/tmp/fluss logs", "relative/日志", ""] do
+      config =
+        Fluss.Config.new("localhost:9123")
+        |> Fluss.Config.set_scanner_io_tmp_dir(path)
+
+      assert config.scanner_io_tmp_dir == path
+      assert config.bootstrap_servers == "localhost:9123"
+    end
+  end
+
+  test "set_scanner_io_tmp_dir/2 rejects non-string values" do
+    for path <- [nil, 123, [:tmp]] do
+      assert_raise FunctionClauseError, fn ->
+        Fluss.Config.set_scanner_io_tmp_dir(Fluss.Config.default(), path)
+      end
+    end
   end
 
   test "set_scanner_log_fetch_max_bytes/2 sets the fetch max bytes" do

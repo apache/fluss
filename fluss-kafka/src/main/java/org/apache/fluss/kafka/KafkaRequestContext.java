@@ -18,6 +18,8 @@
 package org.apache.fluss.kafka;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.kafka.security.KafkaSaslConnection;
+import org.apache.fluss.security.acl.FlussPrincipal;
 import org.apache.fluss.shaded.netty4.io.netty.channel.Channel;
 
 import org.apache.kafka.common.protocol.ApiKeys;
@@ -36,8 +38,10 @@ public final class KafkaRequestContext {
     private final SocketAddress localAddress;
     private final SocketAddress remoteAddress;
     private final long receivedTimeMs;
+    private final KafkaRequest request;
 
     private KafkaRequestContext(KafkaRequest request) {
+        this.request = request;
         this.correlationId = request.header().correlationId();
         this.clientId = request.header().clientId();
         this.apiKey = request.apiKey();
@@ -92,5 +96,20 @@ public final class KafkaRequestContext {
     /** Returns the wall-clock time at which the request was received. */
     public long receivedTimeMs() {
         return receivedTimeMs;
+    }
+
+    /** Returns the authenticated principal captured when this request was received. */
+    public FlussPrincipal principal() {
+        return request.principal();
+    }
+
+    /** Returns this network connection's SASL state machine. */
+    public KafkaSaslConnection saslConnection() {
+        return request.saslConnection();
+    }
+
+    /** Closes the connection after this request's response has been flushed. */
+    public void closeConnectionAfterResponse() {
+        request.closeConnectionAfterResponse();
     }
 }

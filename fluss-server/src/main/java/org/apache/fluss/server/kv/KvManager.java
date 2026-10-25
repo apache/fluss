@@ -37,6 +37,7 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.TabletManagerBase;
 import org.apache.fluss.server.kv.autoinc.AutoIncrementManager;
 import org.apache.fluss.server.kv.autoinc.ZkSequenceGeneratorFactory;
+import org.apache.fluss.server.kv.rocksdb.RocksDBResourceContainer;
 import org.apache.fluss.server.kv.rowmerger.RowMerger;
 import org.apache.fluss.server.log.LogManager;
 import org.apache.fluss.server.log.LogTablet;
@@ -183,6 +184,12 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
             Clock clock)
             throws IOException {
         super(TabletType.KV, localDiskManager.dataDirs(), conf, recoveryThreadsPerDataDir);
+        RocksDBResourceContainer.validateConfiguration(conf);
+        if (conf.get(ConfigOptions.KV_PIN_L0_FILTER_AND_INDEX_BLOCKS_IN_CACHE)
+                && conf.get(ConfigOptions.KV_COMPACTION_STYLE)
+                        != ConfigOptions.CompactionStyle.LEVEL) {
+            LOG.warn("RocksDB L0 metadata pinning is recommended only for LEVEL compaction.");
+        }
         this.localDiskManager = localDiskManager;
         this.logManager = logManager;
         this.arrowBufferAllocator = BufferAllocatorUtil.createBufferAllocator(null);
@@ -609,6 +616,17 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
         FileUtils.deleteDirectoryQuietly(tabletDir);
         createTabletDirectory(tabletDir);
         return tabletDir;
+    }
+
+    // TODO: Move ownership and cleanup of these shared resources to TabletServer.
+    /** Returns the shared Arrow allocator; callers must not close it. */
+    public BufferAllocator getArrowBufferAllocator() {
+        return arrowBufferAllocator;
+    }
+
+    /** Returns the shared memory segment pool; callers must not close it. */
+    public LazyMemorySegmentPool getMemorySegmentPool() {
+        return memorySegmentPool;
     }
 
     public Optional<KvTablet> getKv(TableBucket tableBucket) {

@@ -110,6 +110,11 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
         return serverMetadataSnapshot.getAliveTabletServerInfos();
     }
 
+    /** Returns the table ID from the in-memory metadata snapshot without accessing ZooKeeper. */
+    public OptionalLong getTableId(TablePath tablePath) {
+        return serverMetadataSnapshot.getTableId(tablePath);
+    }
+
     public Optional<TablePath> getTablePath(long tableId) {
         return serverMetadataSnapshot.getTablePath(tableId);
     }
@@ -139,6 +144,20 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
             // This maintains backward compatibility while fixing the semantic issue
             return Optional.empty();
         }
+    }
+
+    /**
+     * Returns one bucket of a non-partitioned table from the in-memory snapshot only (no ZK
+     * access). Empty if this server's snapshot does not know the table or bucket yet.
+     */
+    public Optional<BucketMetadata> getCachedBucketMetadata(TablePath tablePath, int bucketId) {
+        ServerMetadataSnapshot snapshot = serverMetadataSnapshot;
+        OptionalLong tableIdOpt = snapshot.getTableId(tablePath);
+        if (!tableIdOpt.isPresent()) {
+            return Optional.empty();
+        }
+        return Optional.ofNullable(
+                snapshot.getBucketMetadataForTable(tableIdOpt.getAsLong()).get(bucketId));
     }
 
     public SchemaGetter subscribeWithInitialSchema(

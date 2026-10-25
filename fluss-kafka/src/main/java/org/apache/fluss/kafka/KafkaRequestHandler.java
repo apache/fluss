@@ -17,26 +17,56 @@
 
 package org.apache.fluss.kafka;
 
+import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.kafka.api.metadata.MetadataHandler;
+import org.apache.fluss.kafka.api.produce.ProduceHandler;
+import org.apache.fluss.kafka.api.sasl.SaslAuthenticateHandler;
+import org.apache.fluss.kafka.api.sasl.SaslHandshakeHandler;
 import org.apache.fluss.kafka.api.versions.ApiVersionsHandler;
+import org.apache.fluss.kafka.backend.metadata.GatewayKafkaMetadataBackend;
+import org.apache.fluss.kafka.backend.metadata.KafkaMetadataBackend;
+import org.apache.fluss.kafka.backend.produce.GatewayKafkaProduceBackend;
+import org.apache.fluss.kafka.backend.produce.KafkaProduceBackend;
 import org.apache.fluss.kafka.dispatcher.KafkaApiRegistry;
 import org.apache.fluss.kafka.dispatcher.KafkaRequestDispatcher;
 import org.apache.fluss.kafka.error.KafkaErrorMapper;
+import org.apache.fluss.kafka.mapping.KafkaTopicMapper;
 import org.apache.fluss.rpc.netty.server.RequestHandler;
 import org.apache.fluss.rpc.protocol.RequestType;
+import org.apache.fluss.server.tablet.TabletService;
 
-import java.util.Collections;
+import java.util.Arrays;
 
 /** Entry point that dispatches Kafka protocol requests to registered API handlers. */
 public class KafkaRequestHandler implements RequestHandler<KafkaRequest> {
 
     private final KafkaApiRegistry registry;
     private final KafkaRequestDispatcher dispatcher;
+    // TODO: having a generic backend interface for all APIs, and close backends in the close()
+    private final KafkaProduceBackend produceBackend;
 
-    /** Creates a Kafka request handler with the implemented server capabilities. */
-    public KafkaRequestHandler() {
+    /** Creates a Kafka request handler with the capabilities provided by a TabletServer. */
+    public KafkaRequestHandler(KafkaTopicMapper topicMapper, TabletService service) {
+        this(
+                topicMapper,
+                new GatewayKafkaMetadataBackend(service, topicMapper),
+                new GatewayKafkaProduceBackend(service, topicMapper));
+    }
+
+    @VisibleForTesting
+    KafkaRequestHandler(
+            KafkaTopicMapper topicMapper,
+            KafkaMetadataBackend metadataBackend,
+            KafkaProduceBackend produceBackend) {
+        this.produceBackend = produceBackend;
         this.registry =
                 new KafkaApiRegistry(
-                        Collections.singletonList(new ApiVersionsHandler(this::apiRegistry)));
+                        Arrays.asList(
+                                new ApiVersionsHandler(this::apiRegistry),
+                                new SaslHandshakeHandler(),
+                                new SaslAuthenticateHandler(),
+                                new MetadataHandler(metadataBackend, topicMapper),
+                                new ProduceHandler(produceBackend)));
         this.dispatcher = new KafkaRequestDispatcher(registry, new KafkaErrorMapper());
     }
 
@@ -57,6 +87,12 @@ public class KafkaRequestHandler implements RequestHandler<KafkaRequest> {
                                 request.fail(failure);
                             }
                         });
+    }
+
+    /** Releases conversion resources after request processing has stopped. */
+    @Override
+    public void close() throws Exception {
+        produceBackend.close();
     }
 
     private KafkaApiRegistry apiRegistry() {

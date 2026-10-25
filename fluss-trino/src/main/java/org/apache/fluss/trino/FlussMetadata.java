@@ -31,10 +31,13 @@ import io.trino.spi.connector.ConnectorSession;
 import io.trino.spi.connector.ConnectorTableHandle;
 import io.trino.spi.connector.ConnectorTableMetadata;
 import io.trino.spi.connector.ConnectorTableVersion;
+import io.trino.spi.connector.Constraint;
+import io.trino.spi.connector.ConstraintApplicationResult;
 import io.trino.spi.connector.RelationColumnsMetadata;
 import io.trino.spi.connector.RelationCommentMetadata;
 import io.trino.spi.connector.SchemaTableName;
 import io.trino.spi.connector.SystemTable;
+import io.trino.spi.predicate.TupleDomain;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -113,7 +116,30 @@ public final class FlussMetadata implements ConnectorMetadata {
                 resolved.getFlussDatabaseName(),
                 resolved.getFlussTableName(),
                 info.getTableId(),
-                info.getSchemaId());
+                info.getSchemaId(),
+                TupleDomain.all());
+    }
+
+    @Override
+    public Optional<ConstraintApplicationResult<ConnectorTableHandle>> applyFilter(
+            ConnectorSession session, ConnectorTableHandle table, Constraint constraint) {
+        FlussTableHandle handle = (FlussTableHandle) table;
+        TupleDomain<FlussColumnHandle> combined =
+                handle.getConstraint()
+                        .intersect(
+                                constraint
+                                        .getSummary()
+                                        .transformKeys(FlussColumnHandle.class::cast));
+        if (combined.equals(handle.getConstraint())) {
+            return Optional.empty();
+        }
+
+        return Optional.of(
+                new ConstraintApplicationResult<>(
+                        handle.withConstraint(combined),
+                        constraint.getSummary(),
+                        constraint.getExpression(),
+                        false));
     }
 
     @Override

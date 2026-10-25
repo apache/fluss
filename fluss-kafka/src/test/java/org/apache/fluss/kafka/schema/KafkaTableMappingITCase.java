@@ -44,12 +44,15 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.stream.Stream;
 
 import static org.apache.fluss.server.coordinator.CoordinatorServer.DEFAULT_DATABASE;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createTable;
@@ -61,6 +64,7 @@ import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newGetTableI
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newTableExistsRequest;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.params.provider.Arguments.arguments;
 
 /** Verifies Kafka DDL contracts through real coordinator RPC and persisted metadata. */
 class KafkaTableMappingITCase {
@@ -231,6 +235,7 @@ class KafkaTableMappingITCase {
     void testNotNullFieldsAreRejectedBeforePersistence(String field) throws Exception {
         boolean system = "system".equals(field);
         String column = system ? "_kafka_metadata" : "payload";
+        String expectedMessage = system ? "_kafka_metadata must be ROW" : "nullable fields";
         DataType type =
                 system
                         ? DataTypes.ROW(
@@ -259,7 +264,8 @@ class KafkaTableMappingITCase {
                                 gateway.createTable(newCreateTableRequest(path, descriptor, false))
                                         .get())
                 .hasCauseInstanceOf(InvalidTableException.class)
-                .hasStackTraceContaining("nullable fields");
+                .hasStackTraceContaining(expectedMessage)
+                .hasStackTraceContaining("NOT NULL");
         assertThat(gateway.tableExists(newTableExistsRequest(path)).get().isExists()).isFalse();
         assertThat(CLUSTER.getZooKeeperClient().getCurrentSchemaId(path)).isZero();
         createTable(
@@ -271,7 +277,8 @@ class KafkaTableMappingITCase {
         GetTableInfoResponse before = info(path);
         assertThatThrownBy(() -> set(path, Collections.singletonMap("table.kafka.enabled", "true")))
                 .hasCauseInstanceOf(InvalidTableException.class)
-                .hasStackTraceContaining("nullable fields");
+                .hasStackTraceContaining(expectedMessage)
+                .hasStackTraceContaining("NOT NULL");
         assertUnchanged(path, before);
 
         // Native schema evolution already rejects new NOT NULL columns. Kafka additionally
@@ -282,7 +289,8 @@ class KafkaTableMappingITCase {
             GetTableInfoResponse beforeAlter = info(alter);
             assertThatThrownBy(() -> addColumn(alter, system ? column : "invalid", type))
                     .hasCauseInstanceOf(InvalidTableException.class)
-                    .hasStackTraceContaining("nullable fields");
+                    .hasStackTraceContaining(expectedMessage)
+                    .hasStackTraceContaining("NOT NULL");
             assertUnchanged(alter, beforeAlter);
         }
     }
@@ -467,10 +475,24 @@ class KafkaTableMappingITCase {
     }
 
     @Test
-    void testMetadataCanBeCreatedAndEnabledWithoutOffset() throws Exception {
+    void testMetadataWithFieldCommentsCanBeCreatedAndEnabled() throws Exception {
         Schema schema =
                 Schema.newBuilder()
-                        .column("_kafka_metadata", metadataType())
+                        .column(
+                                "_kafka_metadata",
+                                DataTypes.ROW(
+                                        DataTypes.FIELD(
+                                                "timestamp",
+                                                DataTypes.TIMESTAMP_LTZ(3),
+                                                "Record timestamp"),
+                                        DataTypes.FIELD(
+                                                "timestamp_type",
+                                                DataTypes.INT(),
+                                                "Timestamp type"),
+                                        DataTypes.FIELD(
+                                                "partition",
+                                                DataTypes.INT(),
+                                                "Requested partition")))
                         .column("_kafka_value", DataTypes.BYTES())
                         .build();
         TableDescriptor descriptor = enabled().schema(schema).build();
@@ -492,20 +514,16 @@ class KafkaTableMappingITCase {
         assertThat(KafkaTableSchema.resolve(stored(altered)).metadataPosition()).isZero();
     }
 
-    @Test
-    void testMetadataOffsetFieldRejectedOnCreateAndEnable() throws Exception {
+    @ParameterizedTest
+    @MethodSource("invalidMetadataTypes")
+    void testInvalidMetadataRejectedOnCreateAndEnable(String caseName, DataType metadata)
+            throws Exception {
         gateway.createDatabase(newCreateDatabaseRequest("ddl", true)).get();
-        TablePath path = TablePath.of("ddl", "metadata_with_offset");
+        TablePath path = TablePath.of("ddl", "invalid_metadata_" + caseName);
         Schema schema =
                 Schema.newBuilder()
                         .column("_kafka_value", DataTypes.BYTES())
-                        .column(
-                                "_kafka_metadata",
-                                DataTypes.ROW(
-                                        DataTypes.FIELD("timestamp", DataTypes.TIMESTAMP_LTZ(3)),
-                                        DataTypes.FIELD("timestamp_type", DataTypes.INT()),
-                                        DataTypes.FIELD("partition", DataTypes.INT()),
-                                        DataTypes.FIELD("offset", DataTypes.BIGINT())))
+                        .column("_kafka_metadata", metadata)
                         .build();
         assertThatThrownBy(
                         () ->
@@ -516,8 +534,7 @@ class KafkaTableMappingITCase {
                                                         false))
                                         .get())
                 .hasCauseInstanceOf(InvalidTableException.class)
-                .hasStackTraceContaining(
-                        "ROW<timestamp TIMESTAMP_LTZ(3), timestamp_type INT, partition INT>");
+                .hasStackTraceContaining("_kafka_metadata must be ROW");
         assertThat(gateway.tableExists(newTableExistsRequest(path)).get().isExists()).isFalse();
         createTable(
                 CLUSTER,
@@ -529,8 +546,7 @@ class KafkaTableMappingITCase {
         TableDescriptor before = stored(path);
         assertThatThrownBy(() -> set(path, Collections.singletonMap("table.kafka.enabled", "true")))
                 .hasCauseInstanceOf(InvalidTableException.class)
-                .hasStackTraceContaining(
-                        "ROW<timestamp TIMESTAMP_LTZ(3), timestamp_type INT, partition INT>");
+                .hasStackTraceContaining("_kafka_metadata must be ROW");
         assertThat(stored(path)).isEqualTo(before);
     }
 
@@ -555,6 +571,29 @@ class KafkaTableMappingITCase {
         assertThatThrownBy(() -> set(path, Collections.singletonMap("table.kafka.enabled", "true")))
                 .hasCauseInstanceOf(InvalidTableException.class);
         assertThat(stored(path)).isEqualTo(before);
+    }
+
+    private static Stream<Arguments> invalidMetadataTypes() {
+        return Stream.of(
+                arguments(
+                        "offset",
+                        DataTypes.ROW(
+                                DataTypes.FIELD("timestamp", DataTypes.TIMESTAMP_LTZ(3)),
+                                DataTypes.FIELD("timestamp_type", DataTypes.INT()),
+                                DataTypes.FIELD("partition", DataTypes.INT()),
+                                DataTypes.FIELD("offset", DataTypes.BIGINT()))),
+                arguments(
+                        "renamed",
+                        DataTypes.ROW(
+                                DataTypes.FIELD("timestamp", DataTypes.TIMESTAMP_LTZ(3)),
+                                DataTypes.FIELD("timestamp_type", DataTypes.INT()),
+                                DataTypes.FIELD("bucket", DataTypes.INT()))),
+                arguments(
+                        "reordered",
+                        DataTypes.ROW(
+                                DataTypes.FIELD("timestamp", DataTypes.TIMESTAMP_LTZ(3)),
+                                DataTypes.FIELD("partition", DataTypes.INT()),
+                                DataTypes.FIELD("timestamp_type", DataTypes.INT()))));
     }
 
     private static DataType metadataType() {

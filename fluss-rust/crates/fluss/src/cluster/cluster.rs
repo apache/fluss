@@ -980,6 +980,7 @@ mod tests {
                 port: 9123,
                 listeners: None,
                 rack: None,
+                server_tag: None,
             }],
             table_metadata: vec![PbTableMetadata {
                 table_path: PbTablePath {
@@ -1049,6 +1050,7 @@ mod tests {
             port: 9123,
             listeners: None,
             rack: None,
+            server_tag: None,
         };
         let table_response = MetadataResponse {
             coordinator_server: None,
@@ -1173,6 +1175,7 @@ mod tests {
                 port: 9123,
                 listeners: None,
                 rack: None,
+                server_tag: None,
             }],
             table_metadata,
             partition_metadata,

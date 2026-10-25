@@ -33,6 +33,38 @@ For distributed deployments, configure reachable `bind.listeners` and `advertise
 The coordinator and all TabletServers must use the same `kafka.default.database`; see the
 [server configuration reference](maintenance/configuration.md#common).
 
+## SASL/PLAIN authentication
+
+Kafka listeners support `PLAINTEXT` and `SASL_PLAINTEXT` with the `PLAIN` mechanism.
+To require authentication, add the Kafka listener to the server's authentication protocol map:
+
+```yaml title="server.yaml"
+security.protocol.map: FLUSS:plaintext,KAFKA:sasl
+security.sasl.enabled.mechanisms: PLAIN
+security.sasl.plain.credentials: writer:change-me
+```
+
+The Kafka listener name must match `kafka.listener.names`. Credentials and dynamic credential
+updates use the same settings as [native Fluss authentication](security/authentication.md).
+Credential changes apply to new authentications; established connections retain their authenticated
+identity. Kafka TLS, SCRAM, and re-authentication are not supported by this implementation.
+`SASL_PLAINTEXT` does not encrypt credentials or record data.
+
+Configure a Kafka producer with properties:
+
+```properties
+bootstrap.servers=localhost:9092
+security.protocol=SASL_PLAINTEXT
+sasl.mechanism=PLAIN
+sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="writer" password="change-me";
+enable.idempotence=false
+```
+
+After authentication, Kafka requests use the authenticated user's identity for Fluss ACL checks.
+When authorization is enabled, the user must also have the required permissions on the target tables.
+SASL handshake versions 0–1 and SaslAuthenticate versions 0–2 are supported. Ordinary requests are
+rejected until authentication completes.
+
 ## Topic-to-table mapping
 
 Topic names use `<database>.<table>`. Names without a database prefix use

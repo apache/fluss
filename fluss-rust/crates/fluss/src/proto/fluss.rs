@@ -145,6 +145,35 @@ pub struct CreateTableRequest {
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CreateTableResponse {}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CreateTableFromLakeRequest {
+    #[prost(message, required, tag = "1")]
+    pub table_path: PbTablePath,
+    #[prost(message, repeated, tag = "2")]
+    pub options: ::prost::alloc::vec::Vec<PbKeyValue>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CreateTableFromLakeResponse {
+    #[prost(message, required, tag = "1")]
+    pub table_info: PbTableInfo,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PbTableInfo {
+    #[prost(int64, required, tag = "1")]
+    pub table_id: i64,
+    #[prost(int32, required, tag = "2")]
+    pub schema_id: i32,
+    #[prost(bytes = "vec", required, tag = "3")]
+    pub table_json: ::prost::alloc::vec::Vec<u8>,
+    #[prost(int64, required, tag = "4")]
+    pub created_time: i64,
+    #[prost(int64, required, tag = "5")]
+    pub modified_time: i64,
+    #[prost(string, optional, tag = "6")]
+    pub remote_data_dir: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(int64, optional, tag = "7")]
+    pub bucket_count_epoch: ::core::option::Option<i64>,
+}
 /// alter table request and response
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AlterTableRequest {
@@ -284,6 +313,16 @@ pub struct UpdateMetadataRequest {
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct UpdateMetadataResponse {}
+/// describe cluster request and response
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DescribeClusterRequest {}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DescribeClusterResponse {
+    #[prost(message, optional, tag = "1")]
+    pub coordinator_server: ::core::option::Option<PbServerNode>,
+    #[prost(message, repeated, tag = "2")]
+    pub tablet_servers: ::prost::alloc::vec::Vec<PbServerNode>,
+}
 /// produce log request and response
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ProduceLogRequest {
@@ -1215,7 +1254,29 @@ pub struct GetClusterHealthResponse {
     #[prost(int32, required, tag = "5")]
     pub status: i32,
 }
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DescribeTabletServersRequest {}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DescribeTabletServersResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub tablet_servers: ::prost::alloc::vec::Vec<PbTabletServerLoad>,
+}
 /// --------------- Inner classes ----------------
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PbTabletServerLoad {
+    #[prost(int32, required, tag = "1")]
+    pub server_id: i32,
+    #[prost(int32, required, tag = "2")]
+    pub num_replicas: i32,
+    #[prost(int32, required, tag = "3")]
+    pub in_sync_replicas: i32,
+    #[prost(int32, required, tag = "4")]
+    pub num_leader_replicas: i32,
+    #[prost(int32, required, tag = "5")]
+    pub active_leader_replicas: i32,
+    #[prost(int32, required, tag = "6")]
+    pub leaderless_replicas: i32,
+}
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PbApiVersion {
     #[prost(int32, required, tag = "1")]
@@ -1246,6 +1307,7 @@ pub struct PbPhysicalTablePath {
 ///    * versions <= 0.6: host and port are used.
 ///    * versions >= 0.7: listeners is used to replace host and port.
 /// For MetadataResponse and UpdateMetadataRequest: Fluss versions >= 0.7: we add rack for each tabletServer
+/// For DescribeClusterResponse: Fluss versions >= 1.1: we add server_tag for each tabletServer
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PbServerNode {
     #[prost(int32, required, tag = "1")]
@@ -1258,6 +1320,8 @@ pub struct PbServerNode {
     pub listeners: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(string, optional, tag = "5")]
     pub rack: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(int32, optional, tag = "6")]
+    pub server_tag: ::core::option::Option<i32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PbTableMetadata {
@@ -1436,6 +1500,12 @@ pub struct PbFetchLogRespForBucket {
     /// returned for KV follower fetches and is distinct from the physical log_start_offset.
     #[prost(int64, optional, tag = "10")]
     pub min_retain_offset: ::core::option::Option<i64>,
+    /// The log start offset to which an EARLIEST_OFFSET request was resolved.
+    /// This field is present only when the request used EARLIEST_OFFSET.
+    /// Its presence also allows a client to distinguish a server that reports the
+    /// resolved offset from an older server that does not.
+    #[prost(int64, optional, tag = "11")]
+    pub resolved_earliest_offset: ::core::option::Option<i64>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PbPutKvReqForBucket {

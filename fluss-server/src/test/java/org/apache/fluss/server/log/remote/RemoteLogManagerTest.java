@@ -23,6 +23,9 @@ import org.apache.fluss.fs.FSDataOutputStream;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metrics.Gauge;
+import org.apache.fluss.metrics.MetricNames;
+import org.apache.fluss.metrics.groups.AbstractMetricGroup;
 import org.apache.fluss.remote.RemoteLogFetchInfo;
 import org.apache.fluss.remote.RemoteLogManifest;
 import org.apache.fluss.remote.RemoteLogSegment;
@@ -85,6 +88,31 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
     @BeforeEach
     public void setup() throws Exception {
         super.setup();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testRemoteLogMetricsAfterRepeatedMakeLeader(boolean partitionTable) throws Exception {
+        TableBucket tb = makeTableBucket(partitionTable);
+        makeLogTableAsLeader(tb, partitionTable);
+        makeLogTableAsLeader(tb, partitionTable);
+
+        Replica replica = replicaManager.getReplicaOrException(tb);
+        addMultiSegmentsToLogTablet(replica.getLogTablet(), 5);
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+
+        RemoteLogTablet remoteLog = remoteLogManager.remoteLogTablet(tb);
+        assertThat(remoteLog.allRemoteLogSegments()).hasSize(4);
+        AbstractMetricGroup metrics =
+                (AbstractMetricGroup) replica.bucketMetrics().addGroup("remoteLog");
+        assertThat(((Gauge<?>) metrics.getMetrics().get(MetricNames.LOG_NUM_SEGMENTS)).getValue())
+                .isEqualTo(4);
+        assertThat(((Gauge<?>) metrics.getMetrics().get(MetricNames.LOG_START_OFFSET)).getValue())
+                .isEqualTo(remoteLog.getRemoteLogStartOffset());
+        assertThat(((Gauge<?>) metrics.getMetrics().get(MetricNames.LOG_END_OFFSET)).getValue())
+                .isEqualTo(remoteLog.getRemoteLogEndOffset().getAsLong());
+        assertThat(((Gauge<?>) metrics.getMetrics().get(MetricNames.REMOTE_LOG_SIZE)).getValue())
+                .isEqualTo(remoteLog.getRemoteSizeInBytes());
     }
 
     @ParameterizedTest

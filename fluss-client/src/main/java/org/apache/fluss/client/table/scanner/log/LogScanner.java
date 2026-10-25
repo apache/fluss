@@ -18,6 +18,7 @@
 package org.apache.fluss.client.table.scanner.log;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.exception.UnsupportedBoundedEarliestException;
 
 import java.time.Duration;
 
@@ -96,6 +97,88 @@ public interface LogScanner extends AutoCloseable {
      * @throws java.lang.IllegalStateException if the table is a non-partitioned table.
      */
     void subscribe(long partitionId, int bucket, long offset);
+
+    /**
+     * Subscribe to the given table bucket in the given offset range dynamically. If the table
+     * bucket is already subscribed, the offset range will be updated.
+     *
+     * <p>The stopping offset is exclusive, so the subscribed range is {@code [startingOffset,
+     * stoppingOffset)}. The stopping offset must be non-negative.
+     *
+     * <p>When scanning from {@link #EARLIEST_OFFSET}, the server must report the resolved starting
+     * offset unless the range can be completed locally, such as when the stopping offset is zero.
+     * If the connected server does not support this capability, a subsequent poll fails with {@link
+     * UnsupportedBoundedEarliestException}.
+     *
+     * <p>The starting offset must be non-negative or {@link #EARLIEST_OFFSET}. A resolved starting
+     * offset at or beyond the stopping offset represents an empty range. A stopping offset of zero
+     * always represents an empty range, including when starting from the beginning.
+     *
+     * <p>Completion is reported once per subscription through {@link
+     * ScanRecords#finishedBuckets()}. The final result can contain records that must be consumed
+     * before completing the read. The exclusive boundary takes precedence over keeping
+     * UPDATE_BEFORE and UPDATE_AFTER together.
+     *
+     * <p>Once all currently subscribed buckets are bounded and have completed, subsequent polls
+     * return immediately without waiting for the requested timeout. A later subscription may make
+     * the scanner active again.
+     *
+     * <p>Please use {@link #subscribeBounded(long, int, long, long)} to subscribe a partitioned
+     * table.
+     *
+     * @param bucket the table bucket to subscribe.
+     * @param startingOffset the offset to start from.
+     * @param stoppingOffset the non-negative exclusive offset to stop at.
+     * @throws IllegalArgumentException if the starting offset is negative and is not {@link
+     *     #EARLIEST_OFFSET}, or the stopping offset is negative.
+     * @throws UnsupportedOperationException if this scanner does not support bounded subscriptions.
+     * @throws java.lang.IllegalStateException if the table is a partitioned table.
+     */
+    default void subscribeBounded(int bucket, long startingOffset, long stoppingOffset) {
+        throw new UnsupportedOperationException("Bounded log scanning is not supported.");
+    }
+
+    /**
+     * Subscribe to the given partitioned table bucket in the given offset range dynamically. If the
+     * table bucket is already subscribed, the offset range will be updated.
+     *
+     * <p>The stopping offset is exclusive, so the subscribed range is {@code [startingOffset,
+     * stoppingOffset)}. The stopping offset must be non-negative.
+     *
+     * <p>When scanning from {@link #EARLIEST_OFFSET}, the server must report the resolved starting
+     * offset unless the range can be completed locally, such as when the stopping offset is zero.
+     * If the connected server does not support this capability, a subsequent poll fails with {@link
+     * UnsupportedBoundedEarliestException}.
+     *
+     * <p>The starting offset must be non-negative or {@link #EARLIEST_OFFSET}. A resolved starting
+     * offset at or beyond the stopping offset represents an empty range. A stopping offset of zero
+     * always represents an empty range, including when starting from the beginning.
+     *
+     * <p>Completion is reported once per subscription through {@link
+     * ScanRecords#finishedBuckets()}. The final result can contain records that must be consumed
+     * before completing the read. The exclusive boundary takes precedence over keeping
+     * UPDATE_BEFORE and UPDATE_AFTER together.
+     *
+     * <p>Once all currently subscribed buckets are bounded and have completed, subsequent polls
+     * return immediately without waiting for the requested timeout. A later subscription may make
+     * the scanner active again.
+     *
+     * <p>Please use {@link #subscribeBounded(int, long, long)} to subscribe a non-partitioned
+     * table.
+     *
+     * @param partitionId the partition id of the table partition to subscribe.
+     * @param bucket the table bucket to subscribe.
+     * @param startingOffset the offset to start from.
+     * @param stoppingOffset the non-negative exclusive offset to stop at.
+     * @throws IllegalArgumentException if the starting offset is negative and is not {@link
+     *     #EARLIEST_OFFSET}, or the stopping offset is negative.
+     * @throws UnsupportedOperationException if this scanner does not support bounded subscriptions.
+     * @throws java.lang.IllegalStateException if the table is a non-partitioned table.
+     */
+    default void subscribeBounded(
+            long partitionId, int bucket, long startingOffset, long stoppingOffset) {
+        throw new UnsupportedOperationException("Bounded log scanning is not supported.");
+    }
 
     /**
      * Unsubscribe from the given bucket of given partition dynamically.

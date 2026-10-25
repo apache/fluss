@@ -26,15 +26,9 @@ import java.time.Duration;
 
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
-/** Identity, layout and write configuration of the consumer-offset system table. */
+/** Layout and write configuration of the consumer-offset system table. */
 @Internal
 public final class ConsumerOffsetTableConfig {
-
-    /** Database containing Fluss internal system tables. */
-    public static final String SYSTEM_DATABASE = "sys";
-
-    /** Name of the consumer-offset system table. */
-    public static final String CONSUMER_OFFSET_TABLE_NAME = "consumer_offsets";
 
     /** Sentinel indicating that the table id has not been resolved. */
     public static final long UNRESOLVED_TABLE_ID = -1L;
@@ -47,6 +41,9 @@ public final class ConsumerOffsetTableConfig {
      * be durably persisted, so this value is intentionally not configurable.
      */
     public static final short OFFSET_COMMIT_REQUIRED_ACKS = -1;
+
+    /** Local log retention for the consumer-offset system table. */
+    public static final Duration OFFSETS_TABLE_LOCAL_LOG_TTL = Duration.ofHours(6);
 
     private final MemorySize maxMetadataSize;
     private final Duration offsetsRetention;

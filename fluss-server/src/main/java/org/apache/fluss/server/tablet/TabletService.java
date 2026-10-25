@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.tablet;
 
+import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.exception.ApiException;
 import org.apache.fluss.exception.AuthorizationException;
@@ -49,6 +50,8 @@ import org.apache.fluss.rpc.messages.DeleteConsumerGroupsRequest;
 import org.apache.fluss.rpc.messages.DeleteConsumerGroupsResponse;
 import org.apache.fluss.rpc.messages.DeleteConsumerOffsetsRequest;
 import org.apache.fluss.rpc.messages.DeleteConsumerOffsetsResponse;
+import org.apache.fluss.rpc.messages.DescribeTabletServersRequest;
+import org.apache.fluss.rpc.messages.DescribeTabletServersResponse;
 import org.apache.fluss.rpc.messages.FetchLogRequest;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
 import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerRequest;
@@ -81,6 +84,7 @@ import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsRequest;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsResponse;
 import org.apache.fluss.rpc.messages.PbFetchLogReqForTable;
 import org.apache.fluss.rpc.messages.PbScanReqForBucket;
+import org.apache.fluss.rpc.messages.PbServerNode;
 import org.apache.fluss.rpc.messages.PrefixLookupRequest;
 import org.apache.fluss.rpc.messages.PrefixLookupResponse;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
@@ -125,6 +129,8 @@ import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.metadata.TabletServerMetadataProvider;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.replica.ReplicaManager;
+import org.apache.fluss.server.tablet.consumer.group.ConsumerOffsetTableManager;
+import org.apache.fluss.server.tablet.consumer.group.GroupManager;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 
@@ -192,6 +198,8 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     private final CoordinatorGateway coordinatorGateway;
     private final String interListenerName;
     private final ExecutorService replicaStateChangeExecutor;
+    private final GroupManager groupManager;
+    private final ConsumerOffsetTableManager consumerOffsetTableManager;
 
     public TabletService(
             int serverId,
@@ -206,7 +214,8 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
             ExecutorService replicaStateChangeExecutor,
             ScannerManager scannerManager,
             CoordinatorGateway coordinatorGateway,
-            String interListenerName) {
+            String interListenerName,
+            GroupManager groupManager) {
         super(
                 remoteFileSystem,
                 ServerType.TABLET_SERVER,
@@ -224,6 +233,26 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         this.coordinatorGateway = coordinatorGateway;
         this.interListenerName = interListenerName;
         this.replicaStateChangeExecutor = replicaStateChangeExecutor;
+        this.groupManager = groupManager;
+        this.consumerOffsetTableManager =
+                new ConsumerOffsetTableManager(
+                        groupManager.consumerOffsetTableConfig(),
+                        zkClient,
+                        metadataManager,
+                        metadataCache,
+                        metadataFunctionProvider,
+                        coordinatorGateway,
+                        ioExecutor);
+    }
+
+    /** Returns the local replica manager used by protocol plugins. */
+    public ReplicaManager getReplicaManager() {
+        return replicaManager;
+    }
+
+    /** Returns the shared TabletServer metadata cache. */
+    public TabletServerMetadataCache getMetadataCache() {
+        return metadataCache;
     }
 
     @Override
@@ -770,10 +799,31 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     @Override
     public CompletableFuture<FindConsumerGroupOwnerResponse> findConsumerGroupOwner(
             FindConsumerGroupOwnerRequest request) {
-        CompletableFuture<FindConsumerGroupOwnerResponse> response = new CompletableFuture<>();
-        response.completeExceptionally(
-                new UnsupportedOperationException("findConsumerGroupOwner is not supported yet"));
-        return response;
+        // Copy request/session values before returning: the request buffer is released after this
+        // method and the current session is bound to the RPC worker thread.
+        final String groupId = request.getGroupId();
+        final String listenerName = currentListenerName();
+        groupManager.validateGroupId(groupId);
+
+        return consumerOffsetTableManager
+                .ensureTableAsync()
+                .thenCompose(
+                        bucketCount -> {
+                            int bucketId = groupManager.bucketFor(groupId, bucketCount);
+                            return consumerOffsetTableManager.resolveOwnerAsync(
+                                    bucketId, listenerName);
+                        })
+                .thenApply(this::buildFindConsumerGroupOwnerResponse);
+    }
+
+    private FindConsumerGroupOwnerResponse buildFindConsumerGroupOwnerResponse(
+            ServerNode leaderNode) {
+        return new FindConsumerGroupOwnerResponse()
+                .setOwner(
+                        new PbServerNode()
+                                .setNodeId(leaderNode.id())
+                                .setHost(leaderNode.host())
+                                .setPort(leaderNode.port()));
     }
 
     @Override
@@ -819,6 +869,29 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         response.completeExceptionally(
                 new UnsupportedOperationException("deleteConsumerGroups is not supported yet"));
         return response;
+    }
+
+    @Override
+    public CompletableFuture<DescribeTabletServersResponse> describeTabletServers(
+            DescribeTabletServersRequest request) {
+        // Tablet servers don't own the cluster-wide replica view; we forward the call to the
+        // coordinator over the internal listener.
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), OperationType.DESCRIBE, Resource.cluster());
+        }
+
+        if (metadataCache.getCoordinatorServer(interListenerName) == null) {
+            // Fail fast during the startup window before the tablet has received its first
+            // UpdateMetadataRequest from the coordinator. The supplier inside coordinatorGateway
+            // would otherwise block-and-retry, which is not what callers want.
+            CompletableFuture<DescribeTabletServersResponse> failed = new CompletableFuture<>();
+            failed.completeExceptionally(
+                    new StaleMetadataException(
+                            "Tablet server has not yet received coordinator metadata; tablet"
+                                    + " server loads are unavailable."));
+            return failed;
+        }
+        return coordinatorGateway.describeTabletServers(request);
     }
 
     @Override

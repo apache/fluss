@@ -19,10 +19,16 @@ package org.apache.fluss.kafka;
 
 import org.apache.fluss.rpc.netty.NettyChannelInitializer;
 import org.apache.fluss.rpc.netty.server.RequestChannel;
+import org.apache.fluss.security.auth.ServerAuthenticator;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelInitializer;
 import org.apache.fluss.shaded.netty4.io.netty.channel.socket.SocketChannel;
 import org.apache.fluss.shaded.netty4.io.netty.handler.codec.LengthFieldPrepender;
 import org.apache.fluss.shaded.netty4.io.netty.handler.flow.FlowControlHandler;
+import org.apache.fluss.utils.MathUtils;
+
+import javax.annotation.Nullable;
+
+import java.util.function.Supplier;
 
 /**
  * A {@link ChannelInitializer} for initializing {@link SocketChannel} instances that will be used
@@ -33,29 +39,42 @@ public class KafkaChannelInitializer extends NettyChannelInitializer {
     private final RequestChannel[] requestChannels;
     private final String listenerName;
     private final int maxRequestSize;
+    private final @Nullable Supplier<ServerAuthenticator> authenticatorSupplier;
     private final LengthFieldPrepender prepender = new LengthFieldPrepender(4);
-    private final boolean preferHeap;
 
+    /** Creates a channel initializer with an optional per-connection authenticator supplier. */
     public KafkaChannelInitializer(
             RequestChannel[] requestChannels,
             String listenerName,
             long maxIdleTimeSeconds,
             int maxRequestSize,
-            boolean preferHeap) {
+            @Nullable Supplier<ServerAuthenticator> authenticatorSupplier) {
         super(maxIdleTimeSeconds);
         this.requestChannels = requestChannels;
         this.listenerName = listenerName;
         this.maxRequestSize = maxRequestSize;
-        this.preferHeap = preferHeap;
+        this.authenticatorSupplier = authenticatorSupplier;
     }
 
     @Override
     protected void initChannel(SocketChannel ch) throws Exception {
         super.initChannel(ch);
+        // NettyLogger dumps full buffers at TRACE. A SASL/PLAIN frame contains the clear-text
+        // credential token, so authenticated listeners must never install the payload logger.
+        if (authenticatorSupplier != null && ch.pipeline().get("loggingHandler") != null) {
+            ch.pipeline().remove("loggingHandler");
+        }
         addIdleStateHandler(ch);
         ch.pipeline().addLast(prepender);
-        addFrameDecoder(ch, maxRequestSize, 4, preferHeap);
+        addFrameDecoder(ch, maxRequestSize, 4, false);
         ch.pipeline().addLast("flowController", new FlowControlHandler());
-        ch.pipeline().addLast(new KafkaCommandDecoder(requestChannels, listenerName));
+        ch.pipeline()
+                .addLast(
+                        new KafkaCommandDecoder(
+                                requestChannels[
+                                        MathUtils.murmurHash(ch.id().hashCode())
+                                                % requestChannels.length],
+                                listenerName,
+                                authenticatorSupplier));
     }
 }

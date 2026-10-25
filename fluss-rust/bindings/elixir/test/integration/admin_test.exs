@@ -501,4 +501,139 @@ defmodule Fluss.Integration.AdminTest do
       assert info.partition_keys == ["dt"]
     end
   end
+
+  describe "partitions" do
+    test "create, list and drop a partition", %{admin: admin} do
+      table = partitioned_table(admin, ["region"])
+
+      assert :ok = Fluss.Admin.create_partition(admin, @database, table, %{region: "EU"})
+
+      assert {:ok, [%Fluss.PartitionInfo{} = info]} =
+               Fluss.Admin.list_partition_infos(admin, @database, table)
+
+      assert is_integer(info.partition_id)
+      assert info.partition_name == "EU"
+      assert info.partition_spec == %{"region" => "EU"}
+      assert info.bucket_count == 2
+
+      assert :ok = Fluss.Admin.drop_partition(admin, @database, table, %{"region" => "EU"})
+      assert Fluss.Admin.list_partition_infos!(admin, @database, table) == []
+    end
+
+    test "an existing or missing partition is an error unless ignored", %{admin: admin} do
+      table = partitioned_table(admin, ["region"])
+      spec = %{region: "EU"}
+      :ok = Fluss.Admin.create_partition(admin, @database, table, spec)
+
+      assert {:error, %Fluss.Error{code: :partition_already_exists}} =
+               Fluss.Admin.create_partition(admin, @database, table, spec)
+
+      assert :ok = Fluss.Admin.create_partition(admin, @database, table, spec, true)
+
+      missing = %{region: "US"}
+
+      assert {:error, %Fluss.Error{code: :partition_not_exists}} =
+               Fluss.Admin.drop_partition(admin, @database, table, missing)
+
+      assert :ok = Fluss.Admin.drop_partition(admin, @database, table, missing, true)
+    end
+
+    test "a partial spec filters the list", %{admin: admin} do
+      table = partitioned_table(admin, ["region", "dt"])
+
+      for region <- ["EU", "US"] do
+        :ok =
+          Fluss.Admin.create_partition(admin, @database, table, %{region: region, dt: "2026"})
+      end
+
+      assert [%Fluss.PartitionInfo{partition_name: "EU$2026"}] =
+               Fluss.Admin.list_partition_infos!(admin, @database, table, %{region: "EU"})
+
+      assert length(Fluss.Admin.list_partition_infos!(admin, @database, table)) == 2
+    end
+
+    test "a created partition accepts writes", %{conn: conn, admin: admin} do
+      table_name = partitioned_table(admin, ["region"])
+      :ok = Fluss.Admin.create_partition(admin, @database, table_name, %{region: "EU"})
+      table = Fluss.Table.get!(conn, @database, table_name)
+      writer = table |> Fluss.TableUpsert.new!() |> Fluss.TableUpsert.create_writer!()
+
+      {:ok, handle} = Fluss.UpsertWriter.upsert(writer, %{id: 1, region: "EU"})
+      assert :ok = Fluss.WriteHandle.wait(handle)
+
+      assert Fluss.Lookuper.lookup(Fluss.Lookuper.new!(table), %{id: 1, region: "EU"}) ==
+               {:ok, %{id: 1, region: "EU"}}
+    end
+
+    # Hangs: core retries a missing partition forever, blocking later writes too. Expects
+    # partition_not_exists, since core doesn't create partitions on write as Java does.
+    @tag :skip
+    test "a write to a missing partition fails without blocking other writes", ctx do
+      # Its own connection, so the hang can't block other tests' writes.
+      %{config: config, admin: admin} = ctx
+      conn = Fluss.Connection.new!(config)
+      table_name = partitioned_table(admin, ["region"])
+      :ok = Fluss.Admin.create_partition(admin, @database, table_name, %{region: "EU"})
+      table = Fluss.Table.get!(conn, @database, table_name)
+      writer = table |> Fluss.TableUpsert.new!() |> Fluss.TableUpsert.create_writer!()
+
+      {:ok, missing} = Fluss.UpsertWriter.upsert(writer, %{id: 1, region: "US"})
+      {:ok, existing} = Fluss.UpsertWriter.upsert(writer, %{id: 2, region: "EU"})
+
+      assert {:error, %Fluss.Error{code: :partition_not_exists}} = Fluss.WriteHandle.wait(missing)
+      assert :ok = Fluss.WriteHandle.wait(existing)
+    end
+
+    test "rejects a bad spec", %{admin: admin} do
+      table = partitioned_table(admin, ["region"])
+
+      for {spec, message} <- [
+            {%{region: 2026}, "partition value for `region` must be a string"},
+            {%{:region => "EU", "region" => "US"},
+             "partition column `region` given more than once"},
+            {[region: "EU"], "expected a map of partition column to value"}
+          ] do
+        assert {:error, %Fluss.Error{} = err} =
+                 Fluss.Admin.create_partition(admin, @database, table, spec)
+
+        assert err.message =~ message
+      end
+
+      assert {:error, %Fluss.Error{}} =
+               Fluss.Admin.list_partition_infos(admin, @database, table, %{region: 1})
+    end
+
+    test "a non-partitioned table returns core's error", %{admin: admin} do
+      table = "fluss_table_#{:rand.uniform(100_000)}"
+      schema = Fluss.Schema.new() |> Fluss.Schema.column("id", :int)
+      :ok = Fluss.Admin.create_table(admin, @database, table, Fluss.TableDescriptor.new!(schema))
+      on_exit(fn -> Fluss.Admin.drop_table(admin, @database, table, true) end)
+
+      assert {:error, %Fluss.Error{}} =
+               Fluss.Admin.create_partition(admin, @database, table, %{region: "EU"})
+    end
+  end
+
+  # A primary key table partitioned by `keys` (string columns), with two buckets.
+  defp partitioned_table(admin, keys) do
+    table = "fluss_table_#{:rand.uniform(100_000)}"
+
+    schema =
+      keys
+      |> Enum.reduce(Fluss.Schema.new() |> Fluss.Schema.column("id", :int), fn key, schema ->
+        Fluss.Schema.column(schema, key, :string)
+      end)
+      |> Fluss.Schema.primary_key(["id" | keys])
+
+    descriptor =
+      Fluss.TableDescriptor.new!(schema,
+        partition_keys: keys,
+        bucket_count: 2,
+        bucket_keys: ["id"]
+      )
+
+    :ok = Fluss.Admin.create_table(admin, @database, table, descriptor, false)
+    on_exit(fn -> Fluss.Admin.drop_table(admin, @database, table, true) end)
+    table
+  end
 end

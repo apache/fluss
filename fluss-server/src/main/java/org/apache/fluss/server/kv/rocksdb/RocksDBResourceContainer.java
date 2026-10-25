@@ -34,8 +34,9 @@ import io.github.fluss_contrib.rocksdb.ColumnFamilyOptions;
 import io.github.fluss_contrib.rocksdb.CompactionStyle;
 import io.github.fluss_contrib.rocksdb.CompressionType;
 import io.github.fluss_contrib.rocksdb.DBOptions;
+import io.github.fluss_contrib.rocksdb.HyperClockCache;
+import io.github.fluss_contrib.rocksdb.IndexType;
 import io.github.fluss_contrib.rocksdb.InfoLogLevel;
-import io.github.fluss_contrib.rocksdb.LRUCache;
 import io.github.fluss_contrib.rocksdb.PlainTableConfig;
 import io.github.fluss_contrib.rocksdb.RateLimiter;
 import io.github.fluss_contrib.rocksdb.ReadOptions;
@@ -54,6 +55,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /* This file is based on source code of Apache Flink Project (https://flink.apache.org/), licensed by the Apache
@@ -159,6 +161,7 @@ public class RocksDBResourceContainer implements AutoCloseable {
             RateLimiter sharedRateLimiter,
             @Nullable Cache sharedBlockCache,
             @Nullable WriteBufferManager sharedWriteBufferManager) {
+        validateConfiguration(configuration);
         this.configuration = configuration;
 
         this.instanceRocksDBPath =
@@ -172,6 +175,22 @@ public class RocksDBResourceContainer implements AutoCloseable {
         this.sharedWriteBufferManager = sharedWriteBufferManager;
 
         this.handlesToClose = new ArrayList<>();
+    }
+
+    /** Validates metadata options before allocating RocksDB resources. */
+    public static void validateConfiguration(ReadableConfig configuration) {
+        if (configuration.get(ConfigOptions.KV_PARTITIONED_INDEX_FILTERS)) {
+            checkArgument(
+                    configuration.get(ConfigOptions.KV_METADATA_BLOCK_SIZE).getBytes() > 0,
+                    "%s must be positive when partitioning is enabled.",
+                    ConfigOptions.KV_METADATA_BLOCK_SIZE.key());
+            if (configuration.get(ConfigOptions.KV_USE_BLOOM_FILTER)) {
+                checkArgument(
+                        !configuration.get(ConfigOptions.KV_BLOOM_FILTER_BLOCK_BASED_MODE),
+                        "%s must be false to use partitioned Bloom filters.",
+                        ConfigOptions.KV_BLOOM_FILTER_BLOCK_BASED_MODE.key());
+            }
+        }
     }
 
     /** Gets the RocksDB {@link DBOptions} to be used for RocksDB instances. */
@@ -367,17 +386,23 @@ public class RocksDBResourceContainer implements AutoCloseable {
         blockBasedTableConfig.setMetadataBlockSize(
                 internalGetOption(ConfigOptions.KV_METADATA_BLOCK_SIZE).getBytes());
 
-        // Create explicit LRUCache for accurate memory tracking
+        // Create an explicit block cache for accurate memory tracking
         if (sharedBlockCache != null) {
             // Use shared block cache, do NOT add to handlesToClose (managed by KvManager)
             blockCache = sharedBlockCache;
             blockBasedTableConfig.setBlockCache(sharedBlockCache);
         } else {
             long blockCacheSize = internalGetOption(ConfigOptions.KV_BLOCK_CACHE_SIZE).getBytes();
-            blockCache = new LRUCache(blockCacheSize);
+            blockCache = new HyperClockCache(blockCacheSize, 0, -1, false);
             handlesToClose.add(blockCache);
             blockBasedTableConfig.setBlockCache(blockCache);
         }
+
+        boolean partitioning = configuration.get(ConfigOptions.KV_PARTITIONED_INDEX_FILTERS);
+        blockBasedTableConfig.setIndexType(
+                partitioning ? IndexType.kTwoLevelIndexSearch : IndexType.kBinarySearch);
+        blockBasedTableConfig.setPartitionFilters(
+                partitioning && internalGetOption(ConfigOptions.KV_USE_BLOOM_FILTER));
 
         // Configure index and filter blocks caching
         blockBasedTableConfig.setCacheIndexAndFilterBlocks(

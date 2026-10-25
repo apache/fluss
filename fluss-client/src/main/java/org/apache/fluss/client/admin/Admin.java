@@ -90,7 +90,14 @@ import java.util.concurrent.CompletableFuture;
 @PublicEvolving
 public interface Admin extends AutoCloseable {
 
-    /** Get the current server node information. asynchronously. */
+    /**
+     * Get the current server node information asynchronously: the coordinator server, followed by
+     * the alive tablet servers.
+     *
+     * <p>Each tablet server carries its {@link ServerTag} in {@link ServerNode#serverTag()}, or
+     * {@code null} if it has none. The tags are read from the coordinator. Against a cluster older
+     * than Fluss 1.1, which cannot report server tags, the server nodes are returned without tags.
+     */
     CompletableFuture<List<ServerNode>> getServerNodes();
 
     /**
@@ -239,6 +246,28 @@ public interface Admin extends AutoCloseable {
      */
     CompletableFuture<Void> createTable(
             TablePath tablePath, TableDescriptor tableDescriptor, boolean ignoreIfExists)
+            throws InvalidTableException, InvalidDatabaseException;
+
+    /**
+     * Creates a Fluss table from an existing lake table asynchronously.
+     *
+     * <p>The returned future completes after the Fluss metadata has been created. The operation
+     * does not enable datalake or initialize historical data. If the target Fluss database does not
+     * exist, it is created with the default database descriptor.
+     *
+     * <p>If a Fluss table already exists, its definition is checked against the lake table and
+     * requested options.
+     *
+     * @param tablePath path of the existing lake table
+     * @param options Fluss table options to apply to the derived table definition
+     * @return a future containing the created Fluss table metadata
+     * @throws InvalidTableException if the table definition or options are invalid, or an existing
+     *     Fluss table is incompatible with the lake table and requested options
+     * @throws TableAlreadyExistException if a compatible Fluss table already exists
+     * @throws InvalidDatabaseException if the database name is invalid
+     */
+    CompletableFuture<TableInfo> createTableFromLake(
+            TablePath tablePath, Map<String, String> options)
             throws InvalidTableException, InvalidDatabaseException;
 
     /**
@@ -898,6 +927,29 @@ public interface Admin extends AutoCloseable {
      * @since 1.0
      */
     CompletableFuture<ClusterHealth> getClusterHealth();
+
+    /**
+     * Describe the replica load of each tablet server in the cluster asynchronously.
+     *
+     * <p>The returned list contains {@link TabletServerDescription} counters per tablet server.
+     * Live tablet servers are always included, even when they host no replicas.
+     *
+     * <p>This API is designed for operational tooling (e.g., a Kubernetes operator):
+     *
+     * <ul>
+     *   <li>scale-in safety gate - a tablet server may only be removed once its {@code numReplicas}
+     *       is {@code 0}, since terminating a non-empty server causes under-replication or data
+     *       unavailability;
+     *   <li>rolling-upgrade gate - only proceed to the next server when the previous one is green
+     *       again ({@code inSyncReplicas == numReplicas && activeLeaderReplicas ==
+     *       numLeaderReplicas && leaderlessReplicas == 0}, see {@link TabletServerDescription});
+     *   <li>reporting per-server tablet load in cluster status.
+     * </ul>
+     *
+     * @return a {@link CompletableFuture} that completes with the per tablet server replica loads.
+     * @since 1.1
+     */
+    CompletableFuture<List<TabletServerDescription>> describeTabletServers();
 
     /**
      * List per-bucket remote log manifest entries for a table or partition scope.

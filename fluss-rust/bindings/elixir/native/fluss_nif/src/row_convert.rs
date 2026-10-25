@@ -380,7 +380,7 @@ pub fn decode_list<'a>(term: Term<'a>, error: &str) -> Result<Vec<Term<'a>>, Str
     term.decode().map_err(|_| error.to_string())
 }
 
-fn is_nil(term: Term<'_>) -> bool {
+pub fn is_nil(term: Term<'_>) -> bool {
     term.is_atom()
         && term
             .decode::<rustler::Atom>()
@@ -396,6 +396,18 @@ pub fn term_to_column_name(term: Term<'_>) -> Result<String, String> {
         term.decode::<String>()
             .map_err(|_| "column names must be atoms or strings".to_string())
     }
+}
+
+/// Core accepts a repeated column; `[0, 0]` would then expect two values for one column.
+/// Indices must be in range.
+pub fn check_distinct_columns(columns: &[Column], indices: &[usize]) -> Result<(), String> {
+    let mut seen = vec![false; columns.len()];
+    for &idx in indices {
+        if std::mem::replace(&mut seen[idx], true) {
+            return Err(format!("duplicate target column `{}`", columns[idx].name()));
+        }
+    }
+    Ok(())
 }
 
 fn target_column_names(columns: &[Column], targets: &[usize]) -> Vec<String> {
