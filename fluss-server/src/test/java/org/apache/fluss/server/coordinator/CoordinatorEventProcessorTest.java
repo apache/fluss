@@ -2089,6 +2089,65 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
     }
 
     @Test
+    void testBucketReassignmentMovesLeaderWhenOldLeaderStaysInReplicas() throws Exception {
+        zookeeperClient.registerTabletServer(
+                3,
+                new TabletServerRegistration(
+                        "rack3",
+                        Collections.singletonList(
+                                new Endpoint("host3", 1001, DEFAULT_LISTENER_NAME)),
+                        System.currentTimeMillis()));
+
+        try {
+            initCoordinatorChannel();
+            TablePath t1 = TablePath.of(defaultDatabase, "test_reassignment_with_leader_change");
+            Map<Integer, BucketAssignment> bucketAssignments = new HashMap<>();
+            bucketAssignments.put(0, BucketAssignment.of(0, 1, 3));
+            long t1Id =
+                    metadataManager.createTable(
+                            t1,
+                            remoteDataDir,
+                            CoordinatorEventProcessorTest.TEST_TABLE,
+                            new TableAssignment(bucketAssignments),
+                            false);
+            TableBucket tb0 = new TableBucket(t1Id, 0);
+            verifyIsr(tb0, 0, Arrays.asList(0, 1, 3));
+
+            // Replica 3 moves to 2 and the leader moves from 0 to 1, while the old leader 0 stays
+            // in the target replicas. The plan puts the target leader first.
+            Map<TableBucket, RebalancePlanForBucket> rebalancePlan = new HashMap<>();
+            rebalancePlan.put(
+                    tb0,
+                    new RebalancePlanForBucket(
+                            tb0, 0, 1, Arrays.asList(0, 1, 3), Arrays.asList(1, 0, 2)));
+            eventProcessor
+                    .getRebalanceManager()
+                    .registerRebalance(
+                            "rebalance-reassign-with-leader-change",
+                            rebalancePlan,
+                            RebalanceStatus.NOT_STARTED);
+
+            // Mock the adding replica 2 catching up with the leader.
+            Map<TableBucket, LeaderAndIsr> leaderAndIsrMap = new HashMap<>();
+            CompletableFuture<AdjustIsrResponse> respCallback = new CompletableFuture<>();
+            leaderAndIsrMap.put(
+                    tb0,
+                    new LeaderAndIsr(
+                            0, 0, Arrays.asList(0, 1, 2, 3), Collections.emptyList(), 0, 1));
+            eventProcessor
+                    .getCoordinatorEventManager()
+                    .put(new AdjustIsrReceivedEvent(leaderAndIsrMap, respCallback));
+            respCallback.get();
+
+            verifyIsr(tb0, 1, Arrays.asList(0, 1, 2));
+        } finally {
+            ZOO_KEEPER_EXTENSION_WRAPPER
+                    .getCustomExtension()
+                    .cleanupPath(ZkData.ServerIdZNode.path(3));
+        }
+    }
+
+    @Test
     void testLeaderOnlyRebalanceExecutesSequentially() throws Exception {
         // Set up controlled gateways that capture NotifyLeaderAndIsr calls.
         // Gateways start in pass-through mode for table creation, then switch

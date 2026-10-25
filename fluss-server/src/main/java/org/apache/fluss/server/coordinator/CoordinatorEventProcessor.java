@@ -1935,7 +1935,9 @@ public class CoordinatorEventProcessor implements EventProcessor {
             TableBucket tableBucket, List<Integer> targetReplicas) throws Exception {
         LeaderAndIsr leaderAndIsr = coordinatorContext.getBucketLeaderAndIsr(tableBucket).get();
         int currentLeader = leaderAndIsr.leader();
-        if (!targetReplicas.contains(currentLeader)) {
+        // The first target replica is the planned leader (see GoalOptimizerUtils#getDiff), so
+        // re-elect also when the current leader stays in the target replicas but is not first.
+        if (currentLeader != targetReplicas.get(0)) {
             LOG.info(
                     "Leader {} for tableBucket {} being reassigned. Re-electing leader to {}",
                     currentLeader,
