@@ -28,7 +28,6 @@ import javax.annotation.Nullable;
 
 import java.util.Collections;
 import java.util.Iterator;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -48,9 +47,6 @@ public class ArrowScanRecords implements Iterable<ArrowBatchData>, AutoCloseable
     /** The exclusive upper bound of consumed offsets per polled bucket in this round. */
     private final Map<TableBucket, Long> consumedUpToOffsets;
 
-    /** The bounded buckets that reached their stopping offsets in this poll round. */
-    private final Set<TableBucket> finishedBuckets;
-
     public ArrowScanRecords(Map<TableBucket, List<ArrowBatchData>> records) {
         this(records, Collections.emptyMap());
     }
@@ -58,26 +54,8 @@ public class ArrowScanRecords implements Iterable<ArrowBatchData>, AutoCloseable
     public ArrowScanRecords(
             Map<TableBucket, List<ArrowBatchData>> records,
             Map<TableBucket, Long> consumedUpToOffsets) {
-        this(records, consumedUpToOffsets, Collections.emptySet());
-    }
-
-    /**
-     * Creates Arrow scan records with consumed offsets and bounded scan completions.
-     *
-     * <p>A completion event may accompany the final batches for the same bucket.
-     *
-     * @param records the Arrow batches grouped by table bucket
-     * @param consumedUpToOffsets the exclusive consumed offsets for each bucket
-     * @param finishedBuckets the buckets whose bounded subscriptions finished in this poll
-     */
-    @Internal
-    public ArrowScanRecords(
-            Map<TableBucket, List<ArrowBatchData>> records,
-            Map<TableBucket, Long> consumedUpToOffsets,
-            Set<TableBucket> finishedBuckets) {
-        this.records = withProgressOrFinishedBuckets(records, consumedUpToOffsets, finishedBuckets);
+        this.records = records;
         this.consumedUpToOffsets = consumedUpToOffsets;
-        this.finishedBuckets = finishedBuckets;
     }
 
     /** Get just the Arrow batches for the given bucket. */
@@ -89,10 +67,7 @@ public class ArrowScanRecords implements Iterable<ArrowBatchData>, AutoCloseable
         return Collections.unmodifiableList(recs);
     }
 
-    /**
-     * Get the buckets that were polled in this round, including buckets whose batch list is empty
-     * but whose log offset still advanced or whose bounded subscription finished.
-     */
+    /** Returns the buckets that were polled in this round. */
     public Set<TableBucket> buckets() {
         return Collections.unmodifiableSet(records.keySet());
     }
@@ -124,25 +99,6 @@ public class ArrowScanRecords implements Iterable<ArrowBatchData>, AutoCloseable
         return records.isEmpty();
     }
 
-    /**
-     * Returns {@code true} if this {@code ArrowScanRecords} carries any scanner progress, either by
-     * returning records, advancing a consumed offset, or completing a bounded subscription.
-     */
-    public boolean hasProgress() {
-        return count() > 0 || !consumedUpToOffsets.isEmpty() || !finishedBuckets.isEmpty();
-    }
-
-    /**
-     * Returns the bounded buckets that finished in this poll round, including empty ranges.
-     *
-     * <p>Each subscription reports completion only once. A completion event may accompany the final
-     * records or arrive without any records. Callers must consume all records in this result before
-     * treating the corresponding buckets as fully read.
-     */
-    public Set<TableBucket> finishedBuckets() {
-        return Collections.unmodifiableSet(finishedBuckets);
-    }
-
     /** Closes all Arrow batches held by this container, releasing off-heap memory. */
     @Override
     public void close() {
@@ -157,29 +113,6 @@ public class ArrowScanRecords implements Iterable<ArrowBatchData>, AutoCloseable
     @Nonnull
     public Iterator<ArrowBatchData> iterator() {
         return new ConcatenatedIterable(records.values()).iterator();
-    }
-
-    /**
-     * Ensures every bucket with a consumed offset or completion event has a (possibly empty) record
-     * list entry, so that {@link #buckets()} surfaces progress-only and finished-only buckets.
-     */
-    private static Map<TableBucket, List<ArrowBatchData>> withProgressOrFinishedBuckets(
-            Map<TableBucket, List<ArrowBatchData>> records,
-            Map<TableBucket, Long> consumedUpToOffsets,
-            Set<TableBucket> finishedBuckets) {
-        if (records.keySet().containsAll(consumedUpToOffsets.keySet())
-                && records.keySet().containsAll(finishedBuckets)) {
-            return records;
-        }
-
-        Map<TableBucket, List<ArrowBatchData>> merged = new LinkedHashMap<>(records);
-        for (TableBucket bucket : consumedUpToOffsets.keySet()) {
-            merged.putIfAbsent(bucket, Collections.emptyList());
-        }
-        for (TableBucket bucket : finishedBuckets) {
-            merged.putIfAbsent(bucket, Collections.emptyList());
-        }
-        return merged;
     }
 
     private static class ConcatenatedIterable implements Iterable<ArrowBatchData> {
