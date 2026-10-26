@@ -21,56 +21,51 @@ import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.fs.token.CredentialsJsonSerde;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
 
+import com.google.api.client.auth.oauth2.Credential;
+import com.google.api.client.googleapis.auth.oauth2.GoogleCredential;
+import com.google.api.client.googleapis.compute.ComputeCredential;
 import com.google.auth.oauth2.AccessToken;
 import com.google.auth.oauth2.ComputeEngineCredentials;
 import com.google.auth.oauth2.GoogleCredentials;
-import com.google.auth.oauth2.ServiceAccountCredentials;
+import com.google.cloud.hadoop.util.HadoopCredentialConfiguration;
 import org.apache.hadoop.conf.Configuration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.FileInputStream;
 import java.io.IOException;
-import java.util.ArrayList;
+import java.security.GeneralSecurityException;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 
-import static com.google.cloud.hadoop.util.HadoopCredentialConfiguration.SERVICE_ACCOUNT_JSON_KEYFILE_SUFFIX;
+import static com.google.cloud.hadoop.fs.gcs.GoogleHadoopFileSystemConfiguration.DELEGATION_TOKEN_BINDING_CLASS;
+import static com.google.cloud.hadoop.util.HadoopCredentialConfiguration.GROUP_IMPERSONATION_SERVICE_ACCOUNT_SUFFIX;
+import static com.google.cloud.hadoop.util.HadoopCredentialConfiguration.IMPERSONATION_SERVICE_ACCOUNT_SUFFIX;
+import static com.google.cloud.hadoop.util.HadoopCredentialConfiguration.USER_IMPERSONATION_SERVICE_ACCOUNT_SUFFIX;
 
 /**
- * Mints a short-lived Cloud Storage access token from the server identity. Clients receive that
- * bearer token and do not need the key file. The token uses the Cloud Storage read-only scope, and
- * only a service account can mint it.
+ * Mints a short-lived, read-only Cloud Storage access token for the identity the bundled GCS
+ * connector writes with. Clients receive that bearer token and do not need the server credentials.
  *
- * <p>{@code SERVICE_ACCOUNT_JSON_KEYFILE} exchanges a JWT at the key's {@code token_uri}. {@code
- * COMPUTE_ENGINE} reads the instance metadata server. {@code APPLICATION_DEFAULT} calls {@link
- * GoogleCredentials#getApplicationDefault()} and accepts only {@link ServiceAccountCredentials} or
- * {@link ComputeEngineCredentials}. User credentials, such as those from {@code gcloud auth
- * application-default login}, are rejected because {@code createScoped} leaves their original
- * scopes in place.
+ * <p>The identity is resolved by the connector's own {@code CredentialFactory}, so the precedence
+ * (service account key settings, then {@code GOOGLE_APPLICATION_CREDENTIALS}, then the metadata
+ * server) and the {@code fs.gs.token.server.url} and {@code fs.gs.proxy.*} settings match the
+ * connector. The bundled connector (gcs-connector 2.x) does not read {@code fs.gs.auth.type}, so
+ * this provider does not either.
  *
- * <p>When {@code fs.gs.auth.type} is unset, a configured {@code
- * fs.gs.auth.service.account.json.keyfile} is used. Application default credentials are used only
- * when that key file is absent. The bundled GCS connector does not read {@code fs.gs.auth.type} and
- * authenticates with the key file whenever one is set.
+ * <p>Only service accounts can mint the token: user credentials keep the scopes granted at login,
+ * so the read-only scope would not apply to the token sent to clients. A custom access token
+ * provider, delegation tokens and impersonation are rejected because the connector would then write
+ * with an identity this provider does not reproduce.
  */
 public class GSSecurityTokenProvider {
 
     private static final Logger LOG = LoggerFactory.getLogger(GSSecurityTokenProvider.class);
 
-    private static final String AUTH_TYPE_KEY = "fs.gs.auth.type";
+    private static final String GCS_CONFIG_PREFIX = "fs.gs";
 
-    private static final String JSON_KEYFILE_KEY = "fs.gs.auth.service.account.json.keyfile";
-
-    private static final String AUTH_TYPE_APPLICATION_DEFAULT = "APPLICATION_DEFAULT";
-
-    private static final String AUTH_TYPE_COMPUTE_ENGINE = "COMPUTE_ENGINE";
-
-    private static final String AUTH_TYPE_SERVICE_ACCOUNT_JSON_KEYFILE =
-            "SERVICE_ACCOUNT_JSON_KEYFILE";
-
-    private static final String AUTH_TYPE_UNAUTHENTICATED = "UNAUTHENTICATED";
+    private static final List<String> CONFIG_KEY_PREFIXES =
+            HadoopCredentialConfiguration.getConfigKeyPrefixes(GCS_CONFIG_PREFIX);
 
     /**
      * Cloud Storage read-only scope. This stays on the storage API instead of cloud-platform, which
@@ -78,137 +73,120 @@ public class GSSecurityTokenProvider {
      */
     static final String STORAGE_SCOPE = "https://www.googleapis.com/auth/devstorage.read_only";
 
+    private static final List<String> SCOPES = Collections.singletonList(STORAGE_SCOPE);
+
     private final String scheme;
 
-    private final GoogleCredentials googleCredentials;
+    private final Configuration conf;
 
     /**
      * Creates a provider for the given filesystem scheme.
      *
      * @param scheme filesystem scheme, expected to be {@code gs}
-     * @param conf Hadoop configuration that carries {@code fs.gs.auth.type} and the credential
-     *     source
+     * @param conf Hadoop configuration the GCS connector was initialized with
      */
     public GSSecurityTokenProvider(String scheme, Configuration conf) {
         this.scheme = scheme;
-        this.googleCredentials = extractProvider(conf);
+        this.conf = conf;
     }
 
     /**
-     * Refreshes an OAuth access token for the configured identity. A service account key exchanges
-     * a JWT at its {@code token_uri}. Compute Engine credentials read the instance metadata server.
+     * Refreshes a read-only OAuth access token for the connector's identity. Credentials are
+     * resolved on every call, so a rotated key file is picked up without a restart.
      */
     public ObtainedSecurityToken obtainSecurityToken() {
         LOG.info("Obtaining session credentials token");
+        rejectIdentitiesThatCannotBeReproduced();
 
-        GoogleCredentials scoped =
-                googleCredentials.createScoped(Collections.singletonList(STORAGE_SCOPE));
+        final String tokenValue;
+        final Long expirationTimeMs;
         try {
-            scoped.refresh();
-        } catch (IOException e) {
+            Credential credential =
+                    HadoopCredentialConfiguration.getCredentialFactory(conf, GCS_CONFIG_PREFIX)
+                            .getCredential(SCOPES);
+            if (credential instanceof ComputeCredential) {
+                // The connector ignores scopes for the metadata server, so request the read-only
+                // scope from it directly.
+                GoogleCredentials scoped = ComputeEngineCredentials.create().createScoped(SCOPES);
+                scoped.refresh();
+                AccessToken accessToken = scoped.getAccessToken();
+                tokenValue = accessToken == null ? null : accessToken.getTokenValue();
+                expirationTimeMs =
+                        accessToken == null || accessToken.getExpirationTime() == null
+                                ? null
+                                : accessToken.getExpirationTime().getTime();
+            } else if (isServiceAccount(credential)) {
+                credential.refreshToken();
+                tokenValue = credential.getAccessToken();
+                expirationTimeMs = credential.getExpirationTimeMilliseconds();
+            } else {
+                throw new IllegalArgumentException(
+                        "Only a service account can mint a Cloud Storage security token, because "
+                                + "user credentials cannot be limited to "
+                                + STORAGE_SCOPE
+                                + ". Configure fs.gs.auth.service.account.json.keyfile with a "
+                                + "service account key, or run where the metadata server provides "
+                                + "a service account (GCE or GKE Workload Identity).");
+            }
+        } catch (IOException | GeneralSecurityException e) {
             throw new FlussRuntimeException("Fail to obtain session credentials token", e);
         }
-        AccessToken accessToken = scoped.getAccessToken();
-        if (accessToken == null
-                || accessToken.getTokenValue() == null
-                || accessToken.getExpirationTime() == null) {
+
+        if (tokenValue == null || expirationTimeMs == null) {
             throw new FlussRuntimeException("Session credentials token is empty");
         }
-        LOG.info(
-                "Session credentials obtained successfully with expiration: {}",
-                accessToken.getExpirationTime());
+        LOG.info("Session credentials obtained successfully with expiration: {}", expirationTimeMs);
 
+        // GCS session credentials are a bearer token. Access key fields stay empty.
+        org.apache.fluss.fs.token.Credentials flussCredentials =
+                new org.apache.fluss.fs.token.Credentials("", "", tokenValue);
         return new ObtainedSecurityToken(
                 scheme,
-                toJson(accessToken),
-                accessToken.getExpirationTime().getTime(),
+                CredentialsJsonSerde.toJson(flussCredentials),
+                expirationTimeMs,
                 new HashMap<>());
     }
 
-    private byte[] toJson(AccessToken accessToken) {
-        // GCS session credentials are a bearer token. Access key fields stay empty.
-        org.apache.fluss.fs.token.Credentials flussCredentials =
-                new org.apache.fluss.fs.token.Credentials("", "", accessToken.getTokenValue());
-        return CredentialsJsonSerde.toJson(flussCredentials);
+    /** Service accounts sign a JWT with their private key; user credentials have no key. */
+    private static boolean isServiceAccount(Credential credential) {
+        return credential instanceof GoogleCredential
+                && ((GoogleCredential) credential).getServiceAccountPrivateKey() != null;
     }
 
-    private static GoogleCredentials extractProvider(Configuration conf) {
-        final String authType = conf.get(AUTH_TYPE_KEY);
-        if (authType == null || authType.isEmpty()) {
-            // The bundled connector ignores fs.gs.auth.type and uses the key file when one is set.
-            // Minting from ADC here would hand clients a different identity than the server writes
-            // with.
-            if (isConfigured(serviceAccountKeyFile(conf))) {
-                return getServiceAccountCredentials(conf);
-            }
-            return applicationDefaultCredentials();
-        } else if (AUTH_TYPE_APPLICATION_DEFAULT.equals(authType)) {
-            return applicationDefaultCredentials();
-        } else if (AUTH_TYPE_COMPUTE_ENGINE.equals(authType)) {
-            return ComputeEngineCredentials.newBuilder().build();
-        } else if (AUTH_TYPE_SERVICE_ACCOUNT_JSON_KEYFILE.equals(authType)) {
-            return getServiceAccountCredentials(conf);
-        } else if (AUTH_TYPE_UNAUTHENTICATED.equals(authType)) {
+    private void rejectIdentitiesThatCannotBeReproduced() {
+        if (isConfigured(DELEGATION_TOKEN_BINDING_CLASS.get(conf, conf::get))) {
             throw new IllegalArgumentException(
-                    "UNAUTHENTICATED cannot obtain a Google Cloud Storage security token.");
-        } else {
-            throw new IllegalArgumentException("Unsupported authentication type: " + authType);
+                    "Cannot obtain a Cloud Storage security token when "
+                            + DELEGATION_TOKEN_BINDING_CLASS.getKey()
+                            + " is set.");
         }
-    }
-
-    private static GoogleCredentials applicationDefaultCredentials() {
-        final GoogleCredentials credentials;
-        try {
-            credentials = GoogleCredentials.getApplicationDefault();
-        } catch (IOException e) {
+        Class<?> accessTokenProvider =
+                HadoopCredentialConfiguration.getAccessTokenProviderImplClass(
+                        conf, GCS_CONFIG_PREFIX);
+        if (accessTokenProvider != null) {
             throw new IllegalArgumentException(
-                    "Application default credentials are not available. "
-                            + "Run where Application Default Credentials can be resolved, "
-                            + "set fs.gs.auth.type to COMPUTE_ENGINE on a GCE instance, "
-                            + "or set fs.gs.auth.type to SERVICE_ACCOUNT_JSON_KEYFILE.",
-                    e);
+                    "Cannot obtain a Cloud Storage security token when a custom access token "
+                            + "provider is configured: "
+                            + accessTokenProvider.getName());
         }
-        return requireServiceAccount(credentials);
-    }
-
-    /**
-     * User credentials ignore {@code createScoped} and keep the scopes granted at login, usually
-     * {@code cloud-platform}. Distributing that bearer would give every client the server user's
-     * access. Service account and Compute Engine credentials honor the read-only scope.
-     */
-    private static GoogleCredentials requireServiceAccount(GoogleCredentials credentials) {
-        if (credentials instanceof ServiceAccountCredentials
-                || credentials instanceof ComputeEngineCredentials) {
-            return credentials;
-        }
-        throw new IllegalArgumentException(
-                "Only a service account can mint a Cloud Storage security token. "
-                        + "Application default credentials resolved to "
-                        + credentials.getClass().getSimpleName()
-                        + ", which cannot be limited to "
-                        + STORAGE_SCOPE
-                        + ". Use a service account JSON key file, or run where Application "
-                        + "Default Credentials are a service account (GCE or GKE Workload Identity).");
-    }
-
-    private static ServiceAccountCredentials getServiceAccountCredentials(Configuration conf) {
-        String keyFile = serviceAccountKeyFile(conf);
-        if (!isConfigured(keyFile)) {
+        boolean impersonation =
+                isConfigured(
+                                IMPERSONATION_SERVICE_ACCOUNT_SUFFIX
+                                        .withPrefixes(CONFIG_KEY_PREFIXES)
+                                        .get(conf, conf::get))
+                        || !USER_IMPERSONATION_SERVICE_ACCOUNT_SUFFIX
+                                .withPrefixes(CONFIG_KEY_PREFIXES)
+                                .getPropsWithPrefix(conf)
+                                .isEmpty()
+                        || !GROUP_IMPERSONATION_SERVICE_ACCOUNT_SUFFIX
+                                .withPrefixes(CONFIG_KEY_PREFIXES)
+                                .getPropsWithPrefix(conf)
+                                .isEmpty();
+        if (impersonation) {
             throw new IllegalArgumentException(
-                    JSON_KEYFILE_KEY + " must be set to obtain a security token.");
+                    "Cannot obtain a Cloud Storage security token when service account "
+                            + "impersonation is configured.");
         }
-        try (FileInputStream fis = new FileInputStream(keyFile)) {
-            return ServiceAccountCredentials.fromStream(fis);
-        } catch (IOException e) {
-            throw new FlussRuntimeException("Fail to read service account json file", e);
-        }
-    }
-
-    private static String serviceAccountKeyFile(Configuration conf) {
-        List<String> prefixes = new ArrayList<>();
-        // Suffixes already start with '.', so the prefix must not.
-        prefixes.add("fs.gs");
-        return SERVICE_ACCOUNT_JSON_KEYFILE_SUFFIX.withPrefixes(prefixes).get(conf, conf::get);
     }
 
     private static boolean isConfigured(String value) {

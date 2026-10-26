@@ -45,40 +45,37 @@ Google Cloud Storage support is not included in the default Fluss distribution. 
 
 ## Configurations setup
 
-To enable Google Cloud Storage as remote storage, add the required configuration to Fluss' `server.yaml`. The Fluss plugin accepts both `gs.` and `fs.gs.` prefixes; entries are forwarded to the underlying `gcs-connector` with the `fs.gs.` prefix. Choose one authentication method below.
+To enable Google Cloud Storage as remote storage, add the required configuration to Fluss' `server.yaml`. The Fluss plugin accepts both `gs.` and `fs.gs.` prefixes; entries are forwarded to the underlying `gcs-connector` with the `fs.gs.` prefix.
 
-### Application Default Credentials
+The bundled `gcs-connector` (2.x) selects credentials in this order and does not read `fs.gs.auth.type`:
 
-Recommended on GCE and GKE. When running in an environment with [Application Default Credentials](https://cloud.google.com/docs/authentication/application-default-credentials) available (for example via Workload Identity), the plugin can pick up credentials automatically. When `fs.gs.auth.type` is omitted, this method is used only if `fs.gs.auth.service.account.json.keyfile` is not set. Set `fs.gs.auth.type` to `APPLICATION_DEFAULT` to select it even when a key file is present.
+1. A service account key configured with `fs.gs.auth.service.account.json.keyfile`.
+2. The file referenced by the `GOOGLE_APPLICATION_CREDENTIALS` environment variable.
+3. The GCE or GKE metadata server, for example with Workload Identity.
 
-The credentials must be a service account: the GCE or GKE metadata server, or `GOOGLE_APPLICATION_CREDENTIALS` pointing at a service account key. User credentials, such as those from `gcloud auth application-default login`, are rejected. They keep the scopes granted at login, so the read-only Cloud Storage scope would not apply to the token sent to clients.
+### Metadata server
+
+Recommended on GCE and GKE. Leave the key file and `GOOGLE_APPLICATION_CREDENTIALS` unset, and the attached service account is used:
 
 ```yaml
 # The dir used as remote storage of Fluss, using the gs:// URI scheme
 remote.data.dir: gs://my-fluss-bucket/path
-# Defer to the GCE/GKE metadata server or ADC for credentials
-fs.gs.auth.type: APPLICATION_DEFAULT
-```
-
-### Compute Engine
-
-Read credentials from the GCE instance metadata server.
-
-```yaml
-remote.data.dir: gs://my-fluss-bucket/path
-fs.gs.auth.type: COMPUTE_ENGINE
 ```
 
 ### Service account key file
 
-When `fs.gs.auth.type` is omitted, this key file is still used if the path below is set. The bundled GCS connector does not read `fs.gs.auth.type` and follows the same rule.
-
 ```yaml
 remote.data.dir: gs://my-fluss-bucket/path
-# Use a service account JSON key file for authentication
-fs.gs.auth.type: SERVICE_ACCOUNT_JSON_KEYFILE
 # Path to the service account JSON key file on the Fluss host
 fs.gs.auth.service.account.json.keyfile: /etc/fluss/secrets/gcs-sa.json
 ```
 
-Other valid values for `fs.gs.auth.type` include `USER_CREDENTIALS`, `ACCESS_TOKEN_PROVIDER`, and `UNAUTHENTICATED`. See the [GCS Hadoop connector documentation](https://github.com/GoogleCloudDataproc/hadoop-connectors/blob/master/gcs/CONFIGURATION.md) for the full list of `fs.gs.*` options.
+See the [GCS Hadoop connector documentation](https://github.com/GoogleCloudDataproc/hadoop-connectors/blob/master/gcs/CONFIGURATION.md) for the full list of `fs.gs.*` options.
+
+### Client access to tiered data
+
+Clients such as the Flink and Spark connectors read tiered data directly from Google Cloud Storage. When a client has no service account key file or access token provider of its own, Fluss servers issue it a short-lived access token for the server's service account, limited to the `https://www.googleapis.com/auth/devstorage.read_only` scope. Clients never receive the key file.
+
+- The token can read every bucket the server's service account can read, not only `remote.data.dir`. Grant that service account access to the Fluss bucket only.
+- Only service accounts can issue the token. Servers that authenticate with user credentials (OAuth client settings, or a `GOOGLE_APPLICATION_CREDENTIALS` file created by `gcloud auth application-default login`), with service account impersonation, or with a custom access token provider cannot issue it; clients of such a cluster must configure their own credentials.
+- Access tokens are valid for at most one hour. If a client fails to renew its token, it retries after `client.filesystem.security.token.renewal.backoff` (default one hour), so consider lowering that option on clients.

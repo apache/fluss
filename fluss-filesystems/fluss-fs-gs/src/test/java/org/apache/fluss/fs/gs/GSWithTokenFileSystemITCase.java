@@ -64,7 +64,6 @@ class GSWithTokenFileSystemITCase {
                 "GS_SA_JSON and GS_BUCKET are required for the real Cloud Storage token test");
 
         Configuration server = new Configuration();
-        server.setString("fs.gs.auth.type", "SERVICE_ACCOUNT_JSON_KEYFILE");
         server.setString("fs.gs.auth.service.account.json.keyfile", keyFile);
 
         GSFileSystemPlugin plugin = new GSFileSystemPlugin();

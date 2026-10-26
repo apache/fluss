@@ -31,10 +31,7 @@ import org.apache.hadoop.conf.Configuration;
  */
 public class GSFileSystem extends HadoopFileSystem {
 
-    private final String scheme;
-    private final Configuration conf;
-
-    private volatile GSSecurityTokenProvider tokenProvider;
+    private final GSSecurityTokenProvider tokenProvider;
 
     /**
      * Creates a GSFileSystem based on the given Hadoop Google Cloud Storage file system. The given
@@ -47,19 +44,11 @@ public class GSFileSystem extends HadoopFileSystem {
     public GSFileSystem(
             String scheme, org.apache.hadoop.fs.FileSystem hadoopGSFileSystem, Configuration conf) {
         super(hadoopGSFileSystem);
-        this.scheme = scheme;
-        this.conf = conf;
+        this.tokenProvider = new GSSecurityTokenProvider(scheme, conf);
     }
 
     @Override
     public ObtainedSecurityToken obtainSecurityToken() {
-        if (tokenProvider == null) {
-            synchronized (this) {
-                if (tokenProvider == null) {
-                    tokenProvider = new GSSecurityTokenProvider(scheme, conf);
-                }
-            }
-        }
         return tokenProvider.obtainSecurityToken();
     }
 }

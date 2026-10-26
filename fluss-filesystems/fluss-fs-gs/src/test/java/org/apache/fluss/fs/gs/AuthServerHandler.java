@@ -39,6 +39,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.List;
 
+import static org.apache.fluss.shaded.guava32.com.google.common.net.HttpHeaders.AUTHORIZATION;
 import static org.apache.fluss.shaded.guava32.com.google.common.net.HttpHeaders.CONTENT_ENCODING;
 import static org.apache.fluss.shaded.guava32.com.google.common.net.HttpHeaders.CONTENT_LENGTH;
 import static org.apache.fluss.shaded.netty4.io.netty.handler.codec.http.HttpHeaderNames.CONNECTION;
@@ -49,17 +50,24 @@ import static org.apache.fluss.shaded.netty4.io.netty.handler.codec.http.HttpRes
 import static org.apache.fluss.shaded.netty4.io.netty.handler.codec.http.HttpResponseStatus.OK;
 
 /**
- * Netty handler for the mock Google token endpoint. Token requests are answered with a fixed bearer
- * token, and the requested scope is recorded so tests can assert the read-only scope.
+ * Netty handler for the mock Google token and storage endpoints. Token requests are answered with a
+ * fixed bearer token, and the requested scope is recorded so tests can assert the read-only scope.
+ * Other requests are storage calls: their {@code Authorization} header is recorded and they are
+ * answered with 404.
  */
 public class AuthServerHandler extends SimpleChannelInboundHandler<HttpObject> {
 
     private final List<String> requestedScopes;
     private final List<String> requestedIssuers;
+    private final List<String> storageAuthorizations;
 
-    AuthServerHandler(List<String> requestedScopes, List<String> requestedIssuers) {
+    AuthServerHandler(
+            List<String> requestedScopes,
+            List<String> requestedIssuers,
+            List<String> storageAuthorizations) {
         this.requestedScopes = requestedScopes;
         this.requestedIssuers = requestedIssuers;
+        this.storageAuthorizations = storageAuthorizations;
     }
 
     @Override
@@ -78,6 +86,8 @@ public class AuthServerHandler extends SimpleChannelInboundHandler<HttpObject> {
                     recordTokenExchange(req);
                     jsonResponse(ctx, req, "create-token.json");
                 } else {
+                    String authorization = req.headers().get(AUTHORIZATION);
+                    storageAuthorizations.add(authorization == null ? "" : authorization);
                     response(ctx, req, new byte[] {}, NOT_FOUND, APPLICATION_JSON);
                 }
             } catch (IOException e) {

@@ -57,6 +57,9 @@ public class MockAuthServer implements Closeable {
     /** JWT {@code iss} values for the same token requests. Empty for Compute Engine metadata. */
     private final List<String> requestedIssuers = new CopyOnWriteArrayList<>();
 
+    /** {@code Authorization} headers of storage requests, empty when the header was absent. */
+    private final List<String> storageAuthorizations = new CopyOnWriteArrayList<>();
+
     MockAuthServer(EventLoopGroup bossGroup, EventLoopGroup workerGroup) {
         this.bossGroup = bossGroup;
         this.workerGroup = workerGroup;
@@ -69,23 +72,29 @@ public class MockAuthServer implements Closeable {
         return port;
     }
 
-    /** Drops recorded token requests so a test can assert only the calls it makes. */
-    void clearRecordedTokenRequests() {
+    /** Drops recorded requests so a test can assert only the calls it makes. */
+    void clearRecordedRequests() {
         requestedScopes.clear();
         requestedIssuers.clear();
+        storageAuthorizations.clear();
     }
 
-    /** Scopes of token requests recorded since the last {@link #clearRecordedTokenRequests()}. */
+    /** Scopes of token requests recorded since the last {@link #clearRecordedRequests()}. */
     List<String> requestedScopes() {
         return Collections.unmodifiableList(new ArrayList<>(requestedScopes));
     }
 
     /**
      * Service-account emails ({@code iss}) of token requests recorded since the last {@link
-     * #clearRecordedTokenRequests()}. Compute Engine requests contribute an empty string.
+     * #clearRecordedRequests()}. Compute Engine requests contribute an empty string.
      */
     List<String> requestedIssuers() {
         return Collections.unmodifiableList(new ArrayList<>(requestedIssuers));
+    }
+
+    /** {@code Authorization} headers of storage requests since the last clear. */
+    List<String> storageAuthorizations() {
+        return Collections.unmodifiableList(new ArrayList<>(storageAuthorizations));
     }
 
     public ChannelFuture run() {
@@ -107,7 +116,9 @@ public class MockAuthServer implements Closeable {
                                     p.addLast(new HttpObjectAggregator(1024 * 1024));
                                     p.addLast(
                                             new AuthServerHandler(
-                                                    requestedScopes, requestedIssuers));
+                                                    requestedScopes,
+                                                    requestedIssuers,
+                                                    storageAuthorizations));
                                 }
                             });
 

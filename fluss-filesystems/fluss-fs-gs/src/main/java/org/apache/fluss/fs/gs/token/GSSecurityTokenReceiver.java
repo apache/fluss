@@ -35,33 +35,15 @@ public class GSSecurityTokenReceiver implements SecurityTokenReceiver {
 
     private static final Logger LOG = LoggerFactory.getLogger(GSSecurityTokenReceiver.class);
 
-    static volatile AccessTokenProvider.AccessToken accessToken;
+    private static volatile AccessTokenProvider.AccessToken accessToken;
 
+    /** Points the GCS connector at {@link GSAccessTokenProvider}, which serves the token. */
     public static void updateHadoopConfig(org.apache.hadoop.conf.Configuration hadoopConfig) {
-        LOG.info("Updating Hadoop configuration");
-
-        String providers = hadoopConfig.get(PROVIDER_CONFIG_NAME, "");
-
-        if (!providers.contains(GSAccessTokenProvider.NAME)) {
-            if (providers.isEmpty()) {
-                LOG.debug("Setting provider");
-                providers = GSAccessTokenProvider.NAME;
-            } else {
-                // Configuration.getClass accepts one class name, not a comma-separated list.
-                LOG.debug("Replacing providers with {}", GSAccessTokenProvider.NAME);
-                providers = GSAccessTokenProvider.NAME;
-            }
-
-            hadoopConfig.set(PROVIDER_CONFIG_NAME, providers);
-        } else {
-            LOG.debug("Provider already exists");
-        }
-
         if (accessToken == null) {
             throw new FlussRuntimeException(GSAccessTokenProvider.COMPONENT + " not set");
         }
-
-        LOG.info("Updated Hadoop configuration successfully");
+        hadoopConfig.set(PROVIDER_CONFIG_NAME, GSAccessTokenProvider.NAME);
+        LOG.info("Using session credentials received from the Fluss server");
     }
 
     @Override
@@ -82,8 +64,8 @@ public class GSSecurityTokenReceiver implements SecurityTokenReceiver {
                         credentials.getSecurityToken(), token.getValidUntil().get());
 
         LOG.info(
-                "Session credentials updated successfully with access key: {}.",
-                credentials.getAccessKeyId());
+                "Session credentials updated successfully with expiration: {}",
+                token.getValidUntil().get());
     }
 
     public static AccessTokenProvider.AccessToken getAccessToken() {

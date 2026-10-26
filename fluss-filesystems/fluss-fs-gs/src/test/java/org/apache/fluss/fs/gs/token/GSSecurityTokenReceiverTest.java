@@ -91,13 +91,4 @@ class GSSecurityTokenReceiverTest {
                 .isInstanceOf(org.apache.fluss.exception.FlussRuntimeException.class)
                 .hasMessageContaining("not set");
     }
-
-    @Test
-    void missingServiceAccountKeyFileIsRejected() {
-        Configuration configuration = new Configuration(false);
-        configuration.set("fs.gs.auth.type", "SERVICE_ACCOUNT_JSON_KEYFILE");
-        assertThatThrownBy(() -> new GSSecurityTokenProvider("gs", configuration))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("fs.gs.auth.service.account.json.keyfile");
-    }
 }
