@@ -98,6 +98,7 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: status.hostIP
+            {{- include "fluss.listeners.advertisedEnv" (dict "ctx" . "component" "coordinator") | trim | nindent 12 }}
             {{- if (include "fluss.security.jaas.required" .) }}
             - name: FLUSS_ENV_JAVA_OPTS
               value: "-Djava.security.auth.login.config=/etc/fluss/conf/jaas.conf"

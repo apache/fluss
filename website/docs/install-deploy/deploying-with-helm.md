@@ -758,6 +758,13 @@ listeners:
     port: 9124
 ```
 
+Each server pod publishes the advertised address of the `INTERNAL` and `CLIENT` listeners as environment variables named `FLUSS_ADVERTISED_LISTENER_<LISTENER_NAME>`, with a `<host>:<port>` value. These are the addresses the server registers for the two listeners. The chart does not publish the `EXTERNAL` listener this way, because its address can depend on the pod ordinal. With the default listeners, `tablet-server-0` in namespace `fluss` gets:
+
+```
+FLUSS_ADVERTISED_LISTENER_CLIENT=tablet-server-0.tablet-server-hs.fluss.svc.cluster.local:9124
+FLUSS_ADVERTISED_LISTENER_INTERNAL=<pod IP>:9123
+```
+
 ### Enabling Secure Connection
 
 With the helm deployment, you can specify authentication mechanisms when connecting to the Fluss cluster.
