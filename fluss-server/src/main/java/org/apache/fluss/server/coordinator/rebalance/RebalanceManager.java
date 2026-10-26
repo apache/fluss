@@ -105,13 +105,13 @@ import static org.apache.fluss.utils.Preconditions.checkState;
  * <p>Only one bucket occupies the normal execution slot. TIMEOUT releases that slot but remains
  * non-final and tracked; reaching the configured tracking limit pauses admission of new buckets.
  * Cancellation is persisted before local state changes. New pending tasks are canceled directly;
- * recovered or admitted tasks must still be at their origin to be canceled. Recovery restores
- * intermediate tasks directly into reconciliation, and still requires a current leader
- * acknowledgement even when the persisted state already matches the target.
+ * recovered or admitted tasks must still be at their origin to be canceled. Recovery admits
+ * intermediate tasks into reconciliation up to the configured tracking limit, and still requires a
+ * current leader acknowledgement even when the persisted state already matches the target.
  *
  * <p>The overall rebalance remains REBALANCING while buckets are pending, running, or timed out,
- * and while its final state cannot be persisted. Once all buckets are final, a cancellation request
- * yields CANCELED; otherwise any failed bucket yields FAILED, and all completed buckets yield
+ * and while its final state cannot be persisted. Once all buckets are final, any failed bucket
+ * yields FAILED; otherwise a cancellation request yields CANCELED, and all completed buckets yield
  * COMPLETED. Final-state persistence is retried before another rebalance can be admitted. A failed
  * bucket can retain an intermediate assignment for a subsequent rebalance to clean up.
  *
@@ -144,7 +144,10 @@ public class RebalanceManager {
     /** Tasks awaiting admission. */
     private final Queue<TableBucket> pendingRebalanceTasks = new ArrayDeque<>();
 
-    /** A mapping from table bucket to rebalance status of pending and running tasks. */
+    /** Recovered intermediate tasks awaiting bounded reconciliation admission. */
+    private final Queue<TableBucket> pendingRecoveredTasks = new ArrayDeque<>();
+
+    /** A mapping from table bucket to rebalance status of all non-final tasks. */
     private final Map<TableBucket, RebalanceResultForBucket> inProgressRebalanceTasks =
             new HashMap<>();
 
@@ -224,11 +227,9 @@ public class RebalanceManager {
 
     public synchronized void startup() {
         LOG.info("Start up rebalance manager.");
-        initialize();
-    }
-
-    /** Starts the periodic timeout checker. Call after {@link #startup()}. */
-    public synchronized void start() {
+        // Keep initialization in one critical section. Otherwise the queued recovery event could
+        // acquire this manager's monitor before a separate checker-start call and delay coordinator
+        // startup while it scans a large persisted task.
         timeoutChecker.scheduleWithFixedDelay(
                 this::checkTimeoutSafely,
                 TIMEOUT_CHECK_INTERVAL_MS,
@@ -238,6 +239,7 @@ public class RebalanceManager {
                 "RebalanceManager timeout checker started: timeoutMs={}, checkIntervalMs={}",
                 REBALANCE_TASK_TIMEOUT_MS,
                 TIMEOUT_CHECK_INTERVAL_MS);
+        initialize();
     }
 
     public synchronized @Nullable String getRebalanceId() {
@@ -619,6 +621,24 @@ public class RebalanceManager {
     }
 
     private void processNewRebalanceTask() {
+        TableBucket tableBucket;
+        while (timedOutRebalanceTasks.size() < maxTrackedTimedOutTasks
+                && (tableBucket = pendingRecoveredTasks.poll()) != null) {
+            RebalanceResultForBucket resultForBucket = inProgressRebalanceTasks.get(tableBucket);
+            if (resultForBucket == null || resultForBucket.status() != TIMEOUT) {
+                continue;
+            }
+            long now = clock.milliseconds();
+            RebalanceTaskAttempt attempt =
+                    new RebalanceTaskAttempt(
+                            new RebalanceExecutionKey(currentRebalanceId, tableBucket), now);
+            attempt.onTimedOut(now, observeBucketState(tableBucket));
+            timedOutRebalanceTasks.put(tableBucket, attempt);
+            enqueueReconciliation(attempt);
+        }
+        if (!pendingRecoveredTasks.isEmpty()) {
+            return;
+        }
         if (!runningRebalanceTasks.isEmpty()) {
             return;
         }
@@ -633,7 +653,6 @@ public class RebalanceManager {
                     timedOutRebalanceTasks.size());
             return;
         }
-        TableBucket tableBucket;
         while ((tableBucket = pendingRebalanceTasks.poll()) != null) {
             RebalanceResultForBucket resultForBucket = inProgressRebalanceTasks.get(tableBucket);
             if (resultForBucket == null || resultForBucket.status() != NOT_STARTED) {
@@ -657,7 +676,7 @@ public class RebalanceManager {
 
     private void persistFinalStatus() {
         checkNotClosed();
-        RebalanceStatus finalStatus = cancelRequested ? CANCELED : aggregateFinalStatus();
+        RebalanceStatus finalStatus = aggregateFinalStatus();
         try {
             zkClient.registerRebalanceTask(
                     new RebalanceTask(
@@ -677,6 +696,7 @@ public class RebalanceManager {
         finalizationEventQueued = false;
         inProgressRebalanceTasks.clear();
         pendingRebalanceTasks.clear();
+        pendingRecoveredTasks.clear();
         runningRebalanceTasks.clear();
         timedOutRebalanceTasks.clear();
         queuedTimeoutEvents.clear();
@@ -699,6 +719,7 @@ public class RebalanceManager {
         finalizationEventQueued = false;
         inProgressRebalanceTasks.clear();
         pendingRebalanceTasks.clear();
+        pendingRecoveredTasks.clear();
         runningRebalanceTasks.clear();
         timedOutRebalanceTasks.clear();
         finishedRebalanceTasks.clear();
@@ -713,14 +734,8 @@ public class RebalanceManager {
 
     private void addRecoveredIntermediateTask(
             TableBucket tableBucket, RebalancePlanForBucket plan) {
-        long now = clock.milliseconds();
-        RebalanceTaskAttempt attempt =
-                new RebalanceTaskAttempt(
-                        new RebalanceExecutionKey(currentRebalanceId, tableBucket), now);
-        attempt.onTimedOut(now, observeBucketState(tableBucket));
-        timedOutRebalanceTasks.put(tableBucket, attempt);
+        pendingRecoveredTasks.add(tableBucket);
         inProgressRebalanceTasks.put(tableBucket, RebalanceResultForBucket.of(plan, TIMEOUT));
-        enqueueReconciliation(attempt);
     }
 
     private @Nullable RebalanceTaskAttempt findActiveAttempt(RebalanceExecutionKey executionKey) {
@@ -797,11 +812,11 @@ public class RebalanceManager {
 
     private RebalanceStatus aggregateFinalStatus() {
         for (RebalanceResultForBucket result : finishedRebalanceTasks.values()) {
-            if (result.status() == FAILED || result.status() == CANCELED) {
+            if (result.status() == FAILED) {
                 return FAILED;
             }
         }
-        return COMPLETED;
+        return cancelRequested ? CANCELED : COMPLETED;
     }
 
     private ClusterModel buildClusterModel(CoordinatorContext coordinatorContext) {
