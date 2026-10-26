@@ -71,6 +71,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.CANCELED;
@@ -296,6 +297,26 @@ public class RebalanceManagerTest {
     }
 
     @Test
+    void testCanceledRebalanceReportsFailedWhenDrainFails() throws Exception {
+        configureManager(
+                new Configuration()
+                        .set(COORDINATOR_REBALANCE_NO_PROGRESS_TIMEOUT, Duration.ofMillis(1)));
+        TableBucket tableBucket = new TableBucket(1L, 0);
+        rebalanceManager.registerRebalance("cancel-drain-failure", plans(tableBucket));
+        RebalanceExecutionKey attempt = rebalanceManager.getExecutionKey(tableBucket);
+        assertThat(rebalanceManager.timeoutRebalanceTask(attempt)).isTrue();
+
+        rebalanceManager.cancelRebalance("cancel-drain-failure");
+        assertThat(rebalanceManager.getPlanForReconciliation(attempt)).isNotNull();
+        clock.advanceTime(Duration.ofMillis(2));
+        assertThat(rebalanceManager.getPlanForReconciliation(attempt)).isNull();
+
+        assertThat(rebalanceManager.getRebalanceStatus()).isEqualTo(FAILED);
+        assertThat(zookeeperClient.getRebalanceTask().get().getRebalanceStatus()).isEqualTo(FAILED);
+        assertThat(zookeeperClient.getRebalanceTask().get().isCancelRequested()).isTrue();
+    }
+
+    @Test
     void testRecoveryTracksIntermediateTasksBeforeAdmittingNewWork() throws Exception {
         Configuration conf =
                 new Configuration().set(COORDINATOR_REBALANCE_MAX_TRACKED_TIMED_OUT_TASKS, 1);
@@ -310,19 +331,34 @@ public class RebalanceManagerTest {
         zookeeperClient.registerRebalanceTask(storedTask);
         RebalanceTask recoveredTask = zookeeperClient.getRebalanceTask().get();
         List<TableBucket> recoveredOrder = new ArrayList<>(recoveredTask.getExecutePlan().keySet());
-        TableBucket intermediateBucket = recoveredOrder.get(recoveredOrder.size() - 1);
+        Set<TableBucket> intermediateBuckets =
+                new HashSet<>(
+                        recoveredOrder.subList(recoveredOrder.size() - 3, recoveredOrder.size()));
         rebalanceExecutor.originBuckets.addAll(recoveredOrder);
-        rebalanceExecutor.originBuckets.remove(intermediateBucket);
+        rebalanceExecutor.originBuckets.removeAll(intermediateBuckets);
 
         rebalanceManager.recoverRebalance(recoveredTask);
 
-        RebalanceExecutionKey intermediateAttempt =
-                rebalanceManager.getExecutionKey(intermediateBucket);
-        assertThat(intermediateAttempt).isNotNull();
-        assertThat(rebalanceManager.getPlanForReconciliation(intermediateAttempt))
-                .isEqualTo(recoveredTask.getExecutePlan().get(intermediateBucket));
         assertThat(rebalanceExecutor.executedPlans).isEmpty();
-        assertThat(statuses(rebalanceManager).get(intermediateBucket)).isEqualTo(TIMEOUT);
+        assertThat(statuses(rebalanceManager))
+                .extractingByKeys(intermediateBuckets.toArray(new TableBucket[0]))
+                .containsOnly(TIMEOUT);
+
+        Set<TableBucket> remainingIntermediateBuckets = new HashSet<>(intermediateBuckets);
+        while (!remainingIntermediateBuckets.isEmpty()) {
+            List<TableBucket> activeBuckets =
+                    remainingIntermediateBuckets.stream()
+                            .filter(bucket -> rebalanceManager.getExecutionKey(bucket) != null)
+                            .collect(Collectors.toList());
+            assertThat(activeBuckets).hasSize(1);
+            TableBucket activeBucket = activeBuckets.get(0);
+            RebalanceExecutionKey attempt = rebalanceManager.getExecutionKey(activeBucket);
+            assertThat(rebalanceManager.getPlanForReconciliation(attempt))
+                    .isEqualTo(recoveredTask.getExecutePlan().get(activeBucket));
+            assertThat(rebalanceManager.finishRebalanceTask(attempt, COMPLETED)).isTrue();
+            remainingIntermediateBuckets.remove(activeBucket);
+        }
+        assertThat(rebalanceExecutor.executedPlans).hasSize(1);
     }
 
     @Test
@@ -665,7 +701,6 @@ public class RebalanceManagerTest {
         try (TestingFinalizationZooKeeperClient testingClient =
                 new TestingFinalizationZooKeeperClient()) {
             rebalanceManager = createManager(new Configuration(), testingClient);
-            rebalanceManager.start();
             TableBucket tableBucket = new TableBucket(1L, 0);
             Map<TableBucket, RebalancePlanForBucket> plan = plans(tableBucket);
             String rebalanceId = "finalization-retry-test";
@@ -746,6 +781,7 @@ public class RebalanceManagerTest {
 
         assertThat(rebalanceManager.hasInProgressRebalance()).isTrue();
         assertThat(rebalanceManager.getRebalanceId()).isNull();
+        assertThat(timeoutChecker.getActivePeriodicScheduledTask()).hasSize(1);
         assertThat(eventManager.events).hasSize(1);
         RecoverRebalanceEvent recoveryEvent = (RecoverRebalanceEvent) eventManager.events.get(0);
         assertThat(recoveryEvent.getRebalanceTask()).isEqualTo(storedTask);

@@ -458,8 +458,10 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
         verifyIsr(bucket, 0, origin);
     }
 
-    @Test
-    void testRestartAfterCancellationDoesNotStartPendingBucketAfterLeaderChange() throws Exception {
+    @ParameterizedTest(name = "leaderOnly={0}")
+    @ValueSource(booleans = {false, true})
+    void testRestartAfterCancellationDoesNotStartPendingBucketAfterLeaderChange(boolean leaderOnly)
+            throws Exception {
         registerTabletServer(3);
         initCoordinatorChannel();
         List<Integer> origin = Arrays.asList(0, 1, 2);
@@ -467,12 +469,22 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
         long tableId = createTableWithReplicas(origin, 2);
         TableBucket running = new TableBucket(tableId, 0);
         TableBucket pending = new TableBucket(tableId, 1);
-        adjustRebalanceIsr(pending, Arrays.asList(0, 1));
-        changeLeader(pending, 1);
+        // An unrelated leader election must not make the pending plan look started. For a
+        // leader-only plan, the elected leader is neither the original nor the target leader.
+        int pendingLeader = leaderOnly ? 2 : 1;
+        List<Integer> pendingIsr = leaderOnly ? origin : Arrays.asList(0, 1);
+        if (!leaderOnly) {
+            adjustRebalanceIsr(pending, pendingIsr);
+        }
+        changeLeader(pending, pendingLeader);
         installBlockingNotifyGateways(pendingResponses);
         Map<TableBucket, RebalancePlanForBucket> plan = new LinkedHashMap<>();
         plan.put(running, new RebalancePlanForBucket(running, 0, 0, origin, target));
-        plan.put(pending, new RebalancePlanForBucket(pending, 0, 0, origin, target));
+        plan.put(
+                pending,
+                leaderOnly
+                        ? new RebalancePlanForBucket(pending, 0, 1, origin, Arrays.asList(1, 0, 2))
+                        : new RebalancePlanForBucket(pending, 0, 0, origin, target));
         String rebalanceId = "cancel-before-restart";
         registerRebalance(rebalanceId, plan);
         fromCtx(
@@ -494,7 +506,7 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
         assertThat(eventProcessor.getRebalanceManager().getExecutionKey(pending)).isNull();
         assertThat(zookeeperClient.getTableAssignment(tableId).get().getBucketAssignment(1))
                 .isEqualTo(new BucketAssignment(origin));
-        verifyIsr(pending, 1, Arrays.asList(0, 1));
+        verifyIsr(pending, pendingLeader, pendingIsr);
 
         adjustRebalanceIsr(running, Arrays.asList(0, 1, 2, 3));
         retry(
@@ -508,6 +520,7 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
                 .isEqualTo(RebalanceStatus.CANCELED);
         assertThat(zookeeperClient.getTableAssignment(tableId).get().getBucketAssignment(1))
                 .isEqualTo(new BucketAssignment(origin));
+        verifyIsr(pending, pendingLeader, pendingIsr);
         verifyIsr(running, 0, target);
     }
 
@@ -627,7 +640,11 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
         RebalancePlanForBucket leaderOnlyPlan =
                 new RebalancePlanForBucket(
                         tableBucket, 0, 1, Arrays.asList(0, 1, 2), Arrays.asList(0, 1, 2));
+        // The target leader is elected: wait for its acknowledgement instead of canceling.
         assertThat(eventProcessor.isRebalanceTaskAtOrigin(leaderOnlyPlan)).isFalse();
+        // An unrelated election does not apply a leader-only plan.
+        putBucketState(tableBucket, 2, Arrays.asList(0, 1, 2), Arrays.asList(0, 1, 2));
+        assertThat(eventProcessor.isRebalanceTaskAtOrigin(leaderOnlyPlan)).isTrue();
     }
 
     private void changeLeader(TableBucket tableBucket, int newLeader) throws Exception {
