@@ -1037,7 +1037,7 @@ mod tests {
         COMMIT_TIMESTAMP_LENGTH, COMMIT_TIMESTAMP_OFFSET, LENGTH_LENGTH, LENGTH_OFFSET,
         LOG_OVERHEAD, MemoryLogRecordsArrowBuilder, RECORDS_OFFSET, ReadContext, to_arrow_schema,
     };
-    use crate::row::GenericRow;
+    use crate::row::{DataGetters, GenericRow};
     use crate::test_utils::{
         build_table_info, build_table_info_with_columns, uncompressed_arrow_batch_config,
     };
@@ -1500,6 +1500,208 @@ mod tests {
         let records = expect_data(fetch.fetch_records(10)?);
         assert!(records.is_empty());
         assert_eq!(fetch.next_fetch_offset(), EARLIEST_OFFSET);
+        Ok(())
+    }
+
+    #[test]
+    fn remote_projection_reads_historical_records() -> Result<()> {
+        check_remote_projection(false)
+    }
+
+    #[test]
+    fn remote_projection_reads_historical_batches() -> Result<()> {
+        check_remote_projection(true)
+    }
+
+    fn check_remote_projection(batch_mode: bool) -> Result<()> {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let mut tables = Vec::new();
+        let mut data = Vec::new();
+        for version in 0..3 {
+            let fields = ["id", "middle", "added"]
+                .iter()
+                .take(version + 1)
+                .map(|name| DataField::new(*name, DataTypes::int(), None))
+                .collect();
+            let mut table = build_table_info_with_columns(table_path.clone(), 1, 1, fields);
+            table.schema_id = version as i32;
+            let table = Arc::new(table);
+            let mut builder = MemoryLogRecordsArrowBuilder::new(
+                uncompressed_arrow_batch_config(version as i32, table.get_row_type(), usize::MAX),
+                false,
+            )?;
+            for row_index in 0..2 {
+                let mut row = GenericRow::new(version + 1);
+                for field in 0..=version {
+                    row.set_field(field, (version * 100 + row_index * 10 + field) as i32);
+                }
+                builder.append(&WriteRecord::for_append(
+                    Arc::clone(&table),
+                    Arc::new(PhysicalTablePath::of(Arc::new(table_path.clone()))),
+                    version as i32,
+                    &row,
+                ))?;
+            }
+            let mut bytes = builder.build()?;
+            bytes[BASE_OFFSET_OFFSET..BASE_OFFSET_OFFSET + BASE_OFFSET_LENGTH]
+                .copy_from_slice(&(version as i64 * 2).to_le_bytes());
+            bytes[COMMIT_TIMESTAMP_OFFSET..COMMIT_TIMESTAMP_OFFSET + COMMIT_TIMESTAMP_LENGTH]
+                .copy_from_slice(&(1000 + version as i64).to_le_bytes());
+            data.extend(bytes);
+            tables.push(table);
+        }
+        let target = &tables[2];
+        for fields in [vec![0], vec![2], vec![2, 0], vec![1, 0], vec![2, 1, 0]] {
+            let full_schema = to_arrow_schema(target.get_row_type())?;
+            let output_schema = ReadContext::project_schema(full_schema.clone(), &fields)?;
+            let row_type = Arc::new(target.get_row_type().project(&fields)?);
+            let local = Arc::new(
+                ReadContext::with_projection_pushdown(
+                    full_schema.clone(),
+                    Arc::clone(&row_type),
+                    fields.clone(),
+                    false,
+                )?
+                .with_fluss_row_type(Arc::clone(&row_type)),
+            );
+            let remote = Arc::new(
+                ReadContext::with_projection_pushdown(
+                    full_schema,
+                    Arc::clone(&row_type),
+                    fields.clone(),
+                    true,
+                )?
+                .with_fluss_row_type(row_type),
+            );
+            let resolver = Arc::new(
+                ReadContextResolver::new(2, local, remote, Some(fields.clone()))
+                    .with_fixed_schema(target.get_schema()),
+            );
+            // The same resolver must keep server-projected responses on the initial context.
+            assert!(Arc::ptr_eq(
+                &resolver.resolve(0, false).unwrap(),
+                &resolver.resolve(2, false).unwrap()
+            ));
+            let directory = tempfile::tempdir()?;
+            let path = directory.path().join("remote.log");
+            std::fs::write(&path, &data)?;
+            let log_batches = LogRecordsBatches::from_file(std::fs::File::open(&path)?, 0, path)?;
+            let mut fetch = DefaultCompletedFetch::new(
+                TableBucket::new(1, 0),
+                log_batches,
+                data.len(),
+                Arc::clone(&resolver),
+                true,
+                1,
+                6,
+            );
+            let mut offsets = Vec::new();
+            for _ in 0..16 {
+                if fetch.is_consumed() {
+                    break;
+                }
+                if batch_mode {
+                    match fetch.fetch_batches(1)? {
+                        FetchResult::SchemaRequired(id) => {
+                            resolver.register_schema(id, tables[id as usize].get_schema())?
+                        }
+                        FetchResult::Data(batches) => {
+                            for fetched in batches {
+                                assert_eq!(fetched.batch.schema(), output_schema);
+                                for row in 0..fetched.batch.num_rows() {
+                                    let offset = fetched.base_offset + row as i64;
+                                    let version = offset as usize / 2;
+                                    assert_eq!(fetched.commit_timestamp, 1000 + version as i64);
+                                    for (column, field) in fields.iter().enumerate() {
+                                        let values = fetched
+                                            .batch
+                                            .column(column)
+                                            .as_any()
+                                            .downcast_ref::<Int32Array>()
+                                            .unwrap();
+                                        assert_eq!(values.is_null(row), *field > version);
+                                        if *field <= version {
+                                            assert_eq!(
+                                                values.value(row),
+                                                (version * 100 + offset as usize % 2 * 10 + field)
+                                                    as i32
+                                            );
+                                        }
+                                    }
+                                    offsets.push(offset);
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    match fetch.fetch_records(1)? {
+                        FetchResult::SchemaRequired(id) => {
+                            resolver.register_schema(id, tables[id as usize].get_schema())?
+                        }
+                        FetchResult::Data(records) => {
+                            for record in records {
+                                let offset = record.offset();
+                                let version = offset as usize / 2;
+                                assert_eq!(record.timestamp(), 1000 + version as i64);
+                                for (column, field) in fields.iter().enumerate() {
+                                    assert_eq!(record.row.is_null_at(column)?, *field > version);
+                                    if *field <= version {
+                                        assert_eq!(
+                                            record.row.get_int(column)?,
+                                            (version * 100 + offset as usize % 2 * 10 + field)
+                                                as i32
+                                        );
+                                    }
+                                }
+                                offsets.push(offset);
+                            }
+                        }
+                    }
+                }
+            }
+            assert!(fetch.is_consumed(), "projected fetch did not finish");
+            assert_eq!(offsets, vec![1, 2, 3, 4, 5]);
+            assert_eq!(fetch.next_fetch_offset(), 6);
+            if fields == [0] {
+                // An old server-projected batch must still decode after remote contexts are cached.
+                let length = i32::from_le_bytes(
+                    data[LENGTH_OFFSET..LENGTH_OFFSET + LENGTH_LENGTH]
+                        .try_into()
+                        .unwrap(),
+                ) as usize
+                    + LOG_OVERHEAD;
+                let mut local_fetch = DefaultCompletedFetch::new(
+                    TableBucket::new(1, 0),
+                    LogRecordsBatches::new(data[..length].to_vec()),
+                    length,
+                    Arc::clone(&resolver),
+                    false,
+                    0,
+                    2,
+                );
+                if batch_mode {
+                    let batches = expect_data(local_fetch.fetch_batches(1)?);
+                    assert_eq!(batches[0].batch.schema(), output_schema);
+                    assert_eq!(batches[0].batch.num_rows(), 2);
+                    assert_eq!(
+                        batches[0]
+                            .batch
+                            .column(0)
+                            .as_any()
+                            .downcast_ref::<Int32Array>()
+                            .unwrap()
+                            .values()
+                            .as_ref(),
+                        &[0, 10]
+                    );
+                } else {
+                    let records = expect_data(local_fetch.fetch_records(2)?);
+                    assert_eq!(records.len(), 2);
+                    assert_eq!(records[0].row.get_int(0)?, 0);
+                    assert_eq!(records[1].row.get_int(0)?, 10);
+                }
+            }
+        }
         Ok(())
     }
 

@@ -1450,7 +1450,7 @@ impl LogFetcher {
             projected_fields,
         )
         .with_schema_getter(Arc::clone(&schema_getter));
-        if fixed_schema {
+        if fixed_schema || resolver.projected_fields().is_some() {
             resolver = resolver.with_fixed_schema(table_info.get_schema());
         }
         let resolver = Arc::new(resolver);
@@ -2732,6 +2732,158 @@ mod tests {
             WriteRecord::for_append(Arc::new(table_info.clone()), physical_table_path, 1, &row);
         builder.append(&record)?;
         builder.build()
+    }
+
+    #[tokio::test]
+    async fn poll_remote_projection_records_in_both_schema_modes() -> Result<()> {
+        check_poll_remote_projection(false).await
+    }
+
+    #[tokio::test]
+    async fn poll_remote_projection_batches_in_both_schema_modes() -> Result<()> {
+        check_poll_remote_projection(true).await
+    }
+
+    async fn check_poll_remote_projection(batch_mode: bool) -> Result<()> {
+        use crate::metadata::DataField;
+        use crate::row::DataGetters;
+        use crate::test_utils::build_table_info_with_columns;
+        use arrow::array::{Array, Int32Array, StringArray};
+
+        let table_path = TablePath::new("db", "projected_history");
+        let source = build_table_info_with_columns(
+            table_path.clone(),
+            1,
+            1,
+            vec![
+                DataField::new("id", DataTypes::int(), None),
+                DataField::new("name", DataTypes::string(), None),
+            ],
+        );
+        let mut target = build_table_info_with_columns(
+            table_path.clone(),
+            1,
+            2,
+            vec![
+                DataField::new("id", DataTypes::int(), None),
+                DataField::new("name", DataTypes::string(), None),
+                DataField::new("added", DataTypes::string(), None),
+            ],
+        );
+        target.schema_id = 2;
+        let mut builder = MemoryLogRecordsArrowBuilder::new(
+            uncompressed_arrow_batch_config(1, source.get_row_type(), usize::MAX),
+            false,
+        )?;
+        for name in [Some("alice"), None] {
+            let mut row = GenericRow::new(2);
+            row.set_field(0, 7_i32);
+            if let Some(name) = name {
+                row.set_field(1, name);
+            }
+            builder.append(&WriteRecord::for_append(
+                Arc::new(source.clone()),
+                Arc::new(PhysicalTablePath::of(Arc::new(table_path.clone()))),
+                1,
+                &row,
+            ))?;
+        }
+        let data = builder.build()?;
+        for fixed_schema in [false, true] {
+            let metadata = Arc::new(Metadata::new_for_test(build_cluster_arc(&table_path, 1, 1)));
+            let mut inner = LogScannerInner::new(
+                &target,
+                Arc::clone(&metadata),
+                Arc::new(RpcClient::new()),
+                &Config::default(),
+                Some(vec![2, 1, 0]),
+                fixed_schema,
+                None,
+                test_admin(&metadata),
+            )?;
+            // Seed the historical schema cache so the real asynchronous schema-resolution path
+            // runs without a coordinator RPC. The resolver starts with only the target context.
+            inner.log_fetcher = LogFetcher::new(
+                target.clone(),
+                Arc::new(RpcClient::new()),
+                Arc::clone(&metadata),
+                Arc::clone(&inner.log_scanner_status),
+                &Config::default(),
+                Some(vec![2, 1, 0]),
+                fixed_schema,
+                None,
+                test_scanner_metrics(&table_path),
+                test_schema_getter(&source, &metadata),
+            )?;
+            let inner = Arc::new(inner);
+            let fetcher = &inner.log_fetcher;
+            assert!(fetcher.resolver.resolve(1, true).is_none());
+            let bucket = TableBucket::new(1, 0);
+            inner
+                .log_scanner_status
+                .assign_scan_bucket(bucket.clone(), 0);
+            // Prevent speculative network fetches after returning the supplied file-backed data.
+            fetcher.nodes_with_pending_fetch_requests.lock().insert(1);
+            let directory = tempfile::tempdir()?;
+            let path = directory.path().join("remote.log");
+            std::fs::write(&path, &data)?;
+            let completed = DefaultCompletedFetch::new(
+                bucket.clone(),
+                LogRecordsBatches::from_file(std::fs::File::open(&path)?, 0, path)?,
+                data.len(),
+                Arc::clone(&fetcher.resolver),
+                true,
+                0,
+                2,
+            );
+            fetcher.log_fetch_buffer.add(Box::new(completed));
+            if batch_mode {
+                let scanner = RecordBatchLogScanner {
+                    inner: Arc::clone(&inner),
+                };
+                let batches = scanner.poll(Duration::ZERO).await?;
+                assert_eq!(batches.len(), 1);
+                let batch = batches[0].batch();
+                assert_eq!(
+                    batch.schema(),
+                    to_arrow_schema(&target.get_row_type().project(&[2, 1, 0])?)?
+                );
+                assert_eq!(batch.num_rows(), 2);
+                assert_eq!(batch.column(0).null_count(), 2);
+                let names = batch
+                    .column(1)
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .unwrap();
+                assert_eq!(names.value(0), "alice");
+                assert!(names.is_null(1));
+                let ids = batch
+                    .column(2)
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .unwrap();
+                assert_eq!(ids.values().as_ref(), &[7, 7]);
+                assert!(scanner.poll(Duration::ZERO).await?.is_empty());
+            } else {
+                let scanner = LogScanner {
+                    inner: Arc::clone(&inner),
+                };
+                let records = scanner.poll(Duration::ZERO).await?;
+                let records = records.records(&bucket);
+                assert_eq!(records.len(), 2);
+                for (index, record) in records.iter().enumerate() {
+                    assert_eq!(record.offset(), index as i64);
+                    assert!(record.row.is_null_at(0)?);
+                    assert_eq!(record.row.is_null_at(1)?, index == 1);
+                    assert_eq!(record.row.get_int(2)?, 7);
+                }
+                assert_eq!(records[0].row.get_string(1)?, "alice");
+                assert!(scanner.poll(Duration::ZERO).await?.is_empty());
+            }
+            assert!(fetcher.resolver.resolve(1, true).is_some());
+            assert_eq!(inner.log_scanner_status.get_bucket_offset(&bucket), Some(2));
+        }
+        Ok(())
     }
 
     #[test]
