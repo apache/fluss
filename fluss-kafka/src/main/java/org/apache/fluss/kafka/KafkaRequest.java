@@ -191,7 +191,7 @@ public class KafkaRequest implements RpcRequest {
             return serialize(response);
         } catch (Throwable t) {
             if (metrics != null) {
-                metrics.responseFailed();
+                metrics.markFailed();
             }
             AbstractResponse response = request.getErrorResponse(t);
             return serialize(response);

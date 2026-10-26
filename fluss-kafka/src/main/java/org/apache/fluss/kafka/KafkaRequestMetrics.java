@@ -30,7 +30,6 @@ import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.kafka.common.message.ProduceRequestData.TopicProduceData;
 import org.apache.kafka.common.message.ProduceResponseData.PartitionProduceResponse;
 import org.apache.kafka.common.message.ProduceResponseData.TopicProduceResponse;
-import org.apache.kafka.common.protocol.ApiKeys;
 import org.apache.kafka.common.protocol.Errors;
 import org.apache.kafka.common.requests.AbstractRequest;
 import org.apache.kafka.common.requests.AbstractResponse;
@@ -46,7 +45,6 @@ import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.WeakHashMap;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 
@@ -59,20 +57,10 @@ final class KafkaRequestMetrics {
 
     private final MetricGroup metricGroup;
     private final Clock clock;
-    private final Map<ApiKeys, Metrics> metricsByApi = new ConcurrentHashMap<>();
     private final Function<String, MetricGroup> tableMetricGroupLookup;
-    // Table groups own metric registration and close when their last local bucket is removed.
-    // Weak keys let the cache release those groups without retaining deleted tables.
-    private final Map<MetricGroup, Metrics> metricsByTableGroup =
+    // Table groups own registration; weak keys avoid retaining removed tables.
+    private final Map<MetricGroup, Metrics> metricsByGroup =
             Collections.synchronizedMap(new WeakHashMap<>());
-
-    KafkaRequestMetrics(MetricGroup metricGroup) {
-        this(metricGroup, SystemClock.getInstance());
-    }
-
-    KafkaRequestMetrics(MetricGroup metricGroup, Clock clock) {
-        this(metricGroup, topic -> null, clock);
-    }
 
     KafkaRequestMetrics(
             MetricGroup metricGroup, Function<String, MetricGroup> tableMetricGroupLookup) {
@@ -100,24 +88,22 @@ final class KafkaRequestMetrics {
                 MetricGroup tableGroup = tableMetricGroupLookup.apply(topic.name());
                 if (tableGroup != null) {
                     tableMetrics.put(
-                            topic.name(),
-                            metricsByTableGroup.computeIfAbsent(tableGroup, Metrics::new));
+                            topic.name(), metricsByGroup.computeIfAbsent(tableGroup, Metrics::new));
                 }
             }
         }
-        return startRequest(request.apiKey(), receivedTimeNs, tableMetrics);
+        Metrics apiMetrics =
+                metricsByGroup.computeIfAbsent(
+                        metricGroup.addGroup("request", request.apiKey().name()), Metrics::new);
+        return new RequestMetrics(apiMetrics, tableMetrics, clock, receivedTimeNs);
     }
 
-    RequestMetrics startRequest(ApiKeys apiKey, long receivedTimeNs) {
-        return startRequest(apiKey, receivedTimeNs, Collections.emptyMap());
-    }
-
-    private RequestMetrics startRequest(
-            ApiKeys apiKey, long receivedTimeNs, Map<String, Metrics> tableMetrics) {
-        Metrics metrics =
-                metricsByApi.computeIfAbsent(
-                        apiKey, key -> new Metrics(metricGroup.addGroup("request", key.name())));
-        return new RequestMetrics(metrics, tableMetrics, clock, receivedTimeNs);
+    private enum Stage {
+        QUEUED,
+        PROCESSING,
+        COMPLETED,
+        SENDING,
+        FINISHED
     }
 
     private static final class Metrics {
@@ -148,32 +134,27 @@ final class KafkaRequestMetrics {
 
     /** Coordinates worker completion, ordered response sending, and connection cancellation. */
     static final class RequestMetrics {
-        private final Metrics metrics;
+        private final Metrics apiMetrics;
         private final Map<String, Metrics> tableMetrics;
         private final Set<Metrics> allMetrics;
         private final Set<Metrics> failedMetrics = new HashSet<>();
         private final Clock clock;
         private final long receivedTimeNs;
-        private final long enqueuedTimeNs;
-        private long processingStartNs;
-        private long processingEndNs;
-        private boolean processingStarted;
-        private boolean processingCompleted;
-        private boolean responseDequeued;
-        private boolean finished;
+        private long stageStartNs;
+        private Stage stage = Stage.QUEUED;
 
         private RequestMetrics(
-                Metrics metrics,
+                Metrics apiMetrics,
                 Map<String, Metrics> tableMetrics,
                 Clock clock,
                 long receivedTimeNs) {
-            this.metrics = metrics;
+            this.apiMetrics = apiMetrics;
             this.tableMetrics = tableMetrics;
             this.allMetrics = new LinkedHashSet<>(tableMetrics.values());
-            this.allMetrics.add(metrics);
+            this.allMetrics.add(apiMetrics);
             this.clock = clock;
             this.receivedTimeNs = receivedTimeNs;
-            this.enqueuedTimeNs = clock.nanoseconds();
+            this.stageStartNs = clock.nanoseconds();
             for (Metrics target : allMetrics) {
                 target.requests.inc();
                 target.inFlight.inc();
@@ -181,34 +162,36 @@ final class KafkaRequestMetrics {
         }
 
         synchronized void processingStarted() {
-            if (finished || processingStarted) {
+            if (stage != Stage.QUEUED) {
                 return;
             }
-            processingStarted = true;
-            processingStartNs = clock.nanoseconds();
+            long now = clock.nanoseconds();
             for (Metrics target : allMetrics) {
-                update(target.queueTime, processingStartNs - enqueuedTimeNs);
+                update(target.queueTime, now - stageStartNs);
             }
+            stageStartNs = now;
+            stage = Stage.PROCESSING;
         }
 
         synchronized void processingCompleted(
                 @Nullable AbstractResponse response, boolean noResponse) {
-            if (finished || processingCompleted) {
+            if (stage != Stage.QUEUED && stage != Stage.PROCESSING) {
                 return;
             }
-            processingCompleted = true;
-            processingEndNs = clock.nanoseconds();
-            if (processingStarted) {
+            long now = clock.nanoseconds();
+            if (stage == Stage.PROCESSING) {
                 for (Metrics target : allMetrics) {
-                    update(target.processTime, processingEndNs - processingStartNs);
+                    update(target.processTime, now - stageStartNs);
                 }
             }
+            stageStartNs = now;
+            stage = Stage.COMPLETED;
             if (response == null) {
-                markAllFailed();
+                markFailed();
             } else {
                 for (Map.Entry<Errors, Integer> error : response.errorCounts().entrySet()) {
                     if (error.getKey() != Errors.NONE && error.getValue() > 0) {
-                        markFailed(metrics);
+                        markFailed(apiMetrics);
                         break;
                     }
                 }
@@ -222,24 +205,24 @@ final class KafkaRequestMetrics {
         }
 
         synchronized void responseDequeued() {
-            if (finished || !processingCompleted || responseDequeued) {
+            if (stage != Stage.COMPLETED) {
                 return;
             }
-            responseDequeued = true;
-            long durationNs = clock.nanoseconds() - processingEndNs;
+            long durationNs = clock.nanoseconds() - stageStartNs;
             for (Metrics target : allMetrics) {
                 update(target.responseQueueTime, durationNs);
             }
+            stage = Stage.SENDING;
         }
 
         synchronized void finish(boolean failure) {
-            if (finished) {
+            if (stage == Stage.FINISHED) {
                 return;
             }
-            finished = true;
             if (failure) {
-                markAllFailed();
+                markFailed();
             }
+            stage = Stage.FINISHED;
             long durationNs = clock.nanoseconds() - receivedTimeNs;
             for (Metrics target : allMetrics) {
                 target.inFlight.dec();
@@ -247,9 +230,11 @@ final class KafkaRequestMetrics {
             }
         }
 
-        synchronized void responseFailed() {
-            if (!finished) {
-                markAllFailed();
+        synchronized void markFailed() {
+            if (stage != Stage.FINISHED) {
+                for (Metrics target : allMetrics) {
+                    markFailed(target);
+                }
             }
         }
 
@@ -265,12 +250,6 @@ final class KafkaRequestMetrics {
                         break;
                     }
                 }
-            }
-        }
-
-        private void markAllFailed() {
-            for (Metrics target : allMetrics) {
-                markFailed(target);
             }
         }
 

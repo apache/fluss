@@ -17,20 +17,21 @@
 
 package org.apache.fluss.kafka;
 
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.kafka.backend.metadata.KafkaClusterMetadata;
 import org.apache.fluss.kafka.mapping.KafkaTopicMapper;
+import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.Gauge;
 import org.apache.fluss.metrics.Histogram;
 import org.apache.fluss.metrics.Meter;
 import org.apache.fluss.metrics.Metric;
 import org.apache.fluss.metrics.groups.AbstractMetricGroup;
-import org.apache.fluss.metrics.groups.GenericMetricGroup;
-import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.metrics.registry.NOPMetricRegistry;
-import org.apache.fluss.metrics.util.TestMetricGroup;
 import org.apache.fluss.rpc.netty.server.RequestChannel;
-import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
+import org.apache.fluss.server.metrics.group.TableMetricGroup;
+import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.Unpooled;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelOutboundHandlerAdapter;
@@ -39,18 +40,14 @@ import org.apache.fluss.shaded.netty4.io.netty.channel.embedded.EmbeddedChannel;
 import org.apache.fluss.shaded.netty4.io.netty.util.ReferenceCountUtil;
 import org.apache.fluss.utils.clock.ManualClock;
 
-import org.apache.kafka.common.errors.InvalidRequestException;
 import org.apache.kafka.common.message.ApiVersionsResponseData;
 import org.apache.kafka.common.message.ProduceRequestData;
 import org.apache.kafka.common.message.ProduceResponseData;
-import org.apache.kafka.common.message.ProduceResponseData.PartitionProduceResponse;
-import org.apache.kafka.common.message.ProduceResponseData.TopicProduceResponse;
-import org.apache.kafka.common.protocol.ApiKeys;
 import org.apache.kafka.common.protocol.Errors;
+import org.apache.kafka.common.record.MemoryRecords;
 import org.apache.kafka.common.requests.AbstractRequest;
 import org.apache.kafka.common.requests.ApiVersionsRequest;
 import org.apache.kafka.common.requests.ApiVersionsResponse;
-import org.apache.kafka.common.requests.MetadataRequest;
 import org.apache.kafka.common.requests.ProduceRequest;
 import org.apache.kafka.common.requests.ProduceResponse;
 import org.apache.kafka.common.requests.RequestHeader;
@@ -61,364 +58,292 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.IOException;
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.List;
+import java.util.HashMap;
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Tests metric boundaries through the Kafka request and response pipeline. */
+/** Core request timing, table attribution, and cleanup checks through the Kafka pipeline. */
 class KafkaRequestMetricsTest {
 
-    @Test
-    void testLatencyIncludesAsyncProcessingResponseQueueAndPendingWrite() {
-        try (Harness harness = new Harness(true)) {
-            KafkaRequest request = harness.receive(apiVersions());
-            assertThat(harness.count("requestsPerSecond")).isOne();
-            assertThat(harness.inFlight()).isOne();
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testTimingAndWriteCompletion(boolean writeSucceeds) {
+        try (Harness harness = new Harness()) {
+            KafkaRequest request =
+                    harness.receive(new ApiVersionsRequest.Builder().build((short) 0));
+            assertThat(harness.count("API_VERSIONS", "requestsPerSecond")).isOne();
+            assertThat(harness.inFlight("API_VERSIONS")).isOne();
             harness.advance(5);
             request.processingStarted();
             harness.advance(11);
-            request.complete(success());
-            assertThat(harness.histogram("requestProcessTimeMs").getCount()).isOne();
+            request.complete(new ApiVersionsResponse(new ApiVersionsResponseData()));
             harness.advance(7);
             harness.channel.runPendingTasks();
-            assertThat(harness.inFlight()).isOne();
-            assertThat(harness.histogram("totalTimeMs").getCount()).isZero();
+            assertThat(harness.inFlight("API_VERSIONS")).isOne();
+            harness.assertSamples("API_VERSIONS", "totalTimeMs");
             harness.advance(13);
-            harness.write.complete(true);
+            harness.write.complete(writeSucceeds);
+            harness.channel.close();
 
-            harness.assertSamples("requestQueueTimeMs", 5);
-            harness.assertSamples("requestProcessTimeMs", 11);
-            harness.assertSamples("responseQueueTimeMs", 7);
-            harness.assertSamples("totalTimeMs", 36);
-            assertThat(harness.count("failedRequestsPerSecond")).isZero();
-            assertThat(harness.inFlight()).isZero();
-        }
-    }
-
-    @Test
-    void testOrderedResponsesIncludeHeadOfLineWaiting() {
-        try (Harness harness = new Harness(false)) {
-            KafkaRequest first = harness.receive(apiVersions());
-            KafkaRequest second = harness.receive(apiVersions());
-            first.processingStarted();
-            second.processingStarted();
-            harness.advance(2);
-            second.complete(success());
-            harness.channel.runPendingTasks();
-            assertThat(harness.channel.outboundMessages()).isEmpty();
-            harness.advance(8);
-            first.complete(success());
-            harness.channel.runPendingTasks();
-
-            harness.assertSamples("responseQueueTimeMs", 0, 8);
-            harness.assertSamples("requestProcessTimeMs", 2, 10);
-            harness.assertSamples("totalTimeMs", 10, 10);
-            assertThat(harness.channel.outboundMessages()).hasSize(2);
-            assertThat(harness.inFlight()).isZero();
+            harness.assertSamples("API_VERSIONS", "requestQueueTimeMs", 5);
+            harness.assertSamples("API_VERSIONS", "requestProcessTimeMs", 11);
+            harness.assertSamples("API_VERSIONS", "responseQueueTimeMs", 7);
+            harness.assertSamples("API_VERSIONS", "totalTimeMs", 36);
+            assertThat(harness.count("API_VERSIONS", "failedRequestsPerSecond"))
+                    .isEqualTo(writeSucceeds ? 0 : 1);
+            assertThat(harness.inFlight("API_VERSIONS")).isZero();
         }
     }
 
     @ParameterizedTest
     @ValueSource(shorts = {0, 1})
-    void testPartialProduceFailureCountsOneFailedRequest(short acks) {
-        try (Harness harness = new Harness(false)) {
-            KafkaRequest request = harness.receive(produce(acks));
+    void testTableAliasesAndPartialFailure(short acks) {
+        try (Harness harness = new Harness()) {
+            harness.addTable("orders", 1);
+            harness.addTable("payments", 2);
+            KafkaRequest request =
+                    harness.receive(produce(acks, "orders", "analytics.orders", "payments"));
+            harness.advance(5);
             request.processingStarted();
-            request.complete(partialFailure());
-            // A repeated completion or a subsequent disconnect must not count another failure.
-            request.fail(new InvalidRequestException("late failure"));
-            harness.channel.runPendingTasks();
-            harness.channel.close();
-
-            assertThat(harness.count("requestsPerSecond")).isOne();
-            assertThat(harness.count("failedRequestsPerSecond")).isOne();
-            assertThat(harness.inFlight()).isZero();
-            assertThat(harness.histogram("totalTimeMs").getCount()).isOne();
-            assertThat(harness.histogram("responseQueueTimeMs").getCount())
-                    .isEqualTo(acks == 0 ? 0 : 1);
-        }
-    }
-
-    @Test
-    void testAcksZeroFinishesAtBusinessCompletionWhileEarlierResponseIsBlocked() {
-        try (Harness harness = new Harness(false)) {
-            KafkaRequest first = harness.receive(produce((short) 1));
-            KafkaRequest second = harness.receive(produce((short) 0));
-            first.processingStarted();
-            second.processingStarted();
+            harness.advance(9);
+            request.complete(response("payments", "orders", "analytics.orders", "payments"));
+            assertThat(harness.inFlight("PRODUCE")).isEqualTo(acks == 0 ? 0 : 1);
             harness.advance(3);
-            second.complete(new ProduceResponse(new ProduceResponseData()));
-            assertThat(harness.inFlight()).isOne();
-            harness.assertSamples("totalTimeMs", 3);
-            assertThat(harness.histogram("responseQueueTimeMs").getCount()).isZero();
-            harness.advance(7);
-            first.complete(new ProduceResponse(new ProduceResponseData()));
             harness.channel.runPendingTasks();
+            if (acks != 0) {
+                harness.write.complete(true);
+            }
+            request.cancel();
 
-            harness.assertSamples("totalTimeMs", 3, 10);
-            harness.assertSamples("responseQueueTimeMs", 0);
-            assertThat(harness.channel.outboundMessages()).hasSize(1);
-            assertThat(harness.inFlight()).isZero();
+            assertThat(harness.count("PRODUCE", "failedRequestsPerSecond")).isOne();
+            assertThat(harness.count("analytics.orders", "failedRequestsPerSecond")).isZero();
+            assertThat(harness.count("analytics.payments", "failedRequestsPerSecond")).isOne();
+            for (String scope :
+                    Arrays.asList("PRODUCE", "analytics.orders", "analytics.payments")) {
+                assertThat(harness.metrics.get(scope)).hasSize(7);
+                assertThat(harness.count(scope, "requestsPerSecond")).isOne();
+                assertThat(harness.inFlight(scope)).isZero();
+                harness.assertSamples(scope, "requestQueueTimeMs", 5);
+                harness.assertSamples(scope, "requestProcessTimeMs", 9);
+                harness.assertSamples(
+                        scope, "responseQueueTimeMs", acks == 0 ? new long[0] : new long[] {3});
+                harness.assertSamples(scope, "totalTimeMs", acks == 0 ? 14 : 17);
+            }
         }
     }
 
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
-    void testDisconnectEndsRequestOnlyOnce(boolean processing) {
-        try (Harness harness = new Harness(false)) {
-            KafkaRequest request = harness.receive(apiVersions());
+    void testDisconnectIgnoresLateCompletion(boolean processing) {
+        try (Harness harness = new Harness()) {
+            harness.addTable("orders", 1);
+            KafkaRequest request = harness.receive(produce((short) 1, "orders"));
             if (processing) {
                 request.processingStarted();
             }
             harness.advance(4);
             harness.channel.close();
-            harness.advance(5);
             request.processingStarted();
-            request.complete(success());
+            request.complete(response(null, "orders"));
             request.cancel();
             harness.channel.runPendingTasks();
 
-            assertThat(harness.inFlight()).isZero();
-            assertThat(harness.count("failedRequestsPerSecond")).isOne();
-            harness.assertSamples("totalTimeMs", 4);
-            assertThat(harness.histogram("requestProcessTimeMs").getCount()).isZero();
-            assertThat(harness.histogram("responseQueueTimeMs").getCount()).isZero();
+            for (String scope : Arrays.asList("PRODUCE", "analytics.orders")) {
+                assertThat(harness.count(scope, "failedRequestsPerSecond")).isOne();
+                assertThat(harness.inFlight(scope)).isZero();
+                harness.assertSamples(scope, "totalTimeMs", 4);
+                harness.assertSamples(scope, "requestProcessTimeMs");
+                harness.assertSamples(scope, "responseQueueTimeMs");
+            }
         }
     }
 
-    @Test
-    void testFailedWriteEndsRequestAndClosesConnection() {
-        try (Harness harness = new Harness(true)) {
-            KafkaRequest request = harness.receive(apiVersions());
-            request.processingStarted();
-            request.complete(success());
-            harness.channel.runPendingTasks();
-            harness.write.complete(false);
-            harness.channel.runPendingTasks();
-
-            assertThat(harness.channel.isActive()).isFalse();
-            assertThat(harness.inFlight()).isZero();
-            assertThat(harness.count("failedRequestsPerSecond")).isOne();
-            assertThat(harness.histogram("totalTimeMs").getCount()).isOne();
-        }
-    }
-
-    @Test
-    void testSerializationFallbackCountsFailure() {
-        try (Harness harness = new Harness(false)) {
-            KafkaRequest request = harness.receive(apiVersions());
-            request.processingStarted();
-            request.complete(
-                    new ApiVersionsResponse(new ApiVersionsResponseData()) {
-                        @Override
-                        public ApiVersionsResponseData data() {
-                            throw new IllegalStateException("test serialization failure");
-                        }
-
-                        @Override
-                        public Map<Errors, Integer> errorCounts() {
-                            return Collections.singletonMap(Errors.NONE, 1);
-                        }
-                    });
-            harness.channel.runPendingTasks();
-            assertThat(harness.count("failedRequestsPerSecond")).isOne();
-            assertThat(harness.inFlight()).isZero();
-            assertThat(harness.channel.outboundMessages()).hasSize(1);
-        }
-    }
-
-    @Test
-    void testExceptionalCompletionIsCounted() {
-        try (Harness harness = new Harness(false)) {
-            KafkaRequest request = harness.receive(apiVersions());
-            request.processingStarted();
-            request.fail(new InvalidRequestException("invalid request"));
-            harness.channel.runPendingTasks();
-            assertThat(harness.count("failedRequestsPerSecond")).isOne();
-            assertThat(harness.inFlight()).isZero();
-            assertThat(harness.channel.outboundMessages()).hasSize(1);
-        }
-    }
-
-    @Test
-    void testHandlerTracksAsyncBackendFailureMappedToResponse() throws Exception {
-        CompletableFuture<KafkaClusterMetadata> result = new CompletableFuture<>();
-        try (Harness harness = new Harness(false);
-                KafkaRequestHandler handler =
-                        new KafkaRequestHandler(
-                                new KafkaTopicMapper(new Configuration()),
-                                query -> result,
-                                command -> {
-                                    throw new AssertionError("Unexpected produce");
-                                })) {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testProcessingAndSerializationFailures(boolean serializationFailure) {
+        try (Harness harness = new Harness()) {
             KafkaRequest request =
-                    harness.receive(
-                            new MetadataRequest.Builder(Collections.singletonList("topic"), false)
-                                    .build((short) 4));
-            harness.advance(5);
-            handler.processRequest(request);
-            assertThat(request.future()).isNotDone();
-            assertThat(harness.histogram("requestProcessTimeMs").getCount()).isZero();
-            harness.advance(9);
-            result.completeExceptionally(new InvalidRequestException("backend failure"));
+                    harness.receive(new ApiVersionsRequest.Builder().build((short) 0));
+            request.processingStarted();
+            if (serializationFailure) {
+                request.complete(
+                        new ApiVersionsResponse(new ApiVersionsResponseData()) {
+                            @Override
+                            public ApiVersionsResponseData data() {
+                                throw new IllegalStateException("test serialization failure");
+                            }
+                        });
+            } else {
+                request.fail(new IOException("test processing failure"));
+            }
             harness.channel.runPendingTasks();
-
-            harness.assertSamples("requestQueueTimeMs", 5);
-            harness.assertSamples("requestProcessTimeMs", 9);
-            assertThat(harness.count("failedRequestsPerSecond")).isOne();
-            assertThat(harness.inFlight()).isZero();
+            harness.write.complete(true);
+            request.cancel();
+            assertThat(harness.count("API_VERSIONS", "failedRequestsPerSecond")).isOne();
+            assertThat(harness.inFlight("API_VERSIONS")).isZero();
+            harness.assertSamples("API_VERSIONS", "totalTimeMs", 0);
         }
     }
 
     @Test
-    void testRegistersOnlySelectedMetricsAndSeparatesListenersAndApis() {
-        List<Map<String, String>> variables = new ArrayList<>();
-        List<String> names = new ArrayList<>();
-        NOPMetricRegistry registry =
-                new NOPMetricRegistry() {
-                    @Override
-                    public void register(Metric metric, String name, AbstractMetricGroup group) {
-                        variables.add(group.getAllVariables());
-                        names.add(name);
-                    }
-                };
-        MetricGroup root = new GenericMetricGroup(registry, null, "tabletserver");
-        try {
-            KafkaRequestMetrics internal =
-                    new KafkaRequestMetrics(
-                            root.addGroup("kafka").addGroup("listener", "INTERNAL"));
-            KafkaRequestMetrics external =
-                    new KafkaRequestMetrics(
-                            root.addGroup("kafka").addGroup("listener", "EXTERNAL"));
-            internal.startRequest(ApiKeys.PRODUCE, internal.nanoTime()).finish(false);
-            internal.startRequest(ApiKeys.PRODUCE, internal.nanoTime()).finish(false);
-            internal.startRequest(ApiKeys.METADATA, internal.nanoTime()).finish(false);
-            external.startRequest(ApiKeys.PRODUCE, external.nanoTime()).finish(false);
-            assertThat(names).hasSize(21);
-            assertThat(names)
-                    .containsOnly(
-                            "requestsPerSecond",
-                            "failedRequestsPerSecond",
-                            "requestQueueTimeMs",
-                            "requestProcessTimeMs",
-                            "responseQueueTimeMs",
-                            "totalTimeMs",
-                            "inFlightRequests");
-            assertThat(variables.subList(0, 7))
-                    .allSatisfy(
-                            values ->
-                                    assertThat(values)
-                                            .containsEntry("listener", "INTERNAL")
-                                            .containsEntry("request", "PRODUCE"));
-            assertThat(variables.subList(7, 14))
-                    .allSatisfy(values -> assertThat(values).containsEntry("request", "METADATA"));
-            assertThat(variables.subList(14, 21))
-                    .allSatisfy(
-                            values ->
-                                    assertThat(values)
-                                            .containsEntry("listener", "EXTERNAL")
-                                            .containsEntry("request", "PRODUCE"));
-        } finally {
-            root.close();
+    void testTableMetricsAreRemovedAndRecreated() {
+        try (Harness harness = new Harness()) {
+            harness.addTable("orders", 1);
+            KafkaRequest first = harness.receive(produce((short) 0, "orders"));
+            first.complete(response(null, "orders"));
+            harness.root.removeTableBucketMetricGroup(
+                    TablePath.of("analytics", "orders"), new TableBucket(1, 0));
+            assertThat(harness.metrics.get("analytics.orders")).isEmpty();
+
+            harness.addTable("orders", 2);
+            KafkaRequest second = harness.receive(produce((short) 0, "orders", "unknown"));
+            second.complete(response(null, "orders", "unknown"));
+            assertThat(harness.count("analytics.orders", "requestsPerSecond")).isOne();
+            assertThat(harness.count("PRODUCE", "requestsPerSecond")).isEqualTo(2);
+            assertThat(harness.metrics).doesNotContainKey("analytics.unknown");
         }
     }
 
-    private static ApiVersionsRequest apiVersions() {
-        return new ApiVersionsRequest.Builder().build((short) 0);
+    private static ProduceRequest produce(short acks, String... topics) {
+        ProduceRequestData data = new ProduceRequestData().setAcks(acks).setTimeoutMs(1000);
+        for (String topic : topics) {
+            data.topicData()
+                    .add(
+                            new ProduceRequestData.TopicProduceData()
+                                    .setName(topic)
+                                    .setPartitionData(
+                                            Collections.singletonList(
+                                                    new ProduceRequestData.PartitionProduceData()
+                                                            .setIndex(0)
+                                                            .setRecords(MemoryRecords.EMPTY))));
+        }
+        return new ProduceRequest(data, (short) 3);
     }
 
-    private static ApiVersionsResponse success() {
-        return new ApiVersionsResponse(new ApiVersionsResponseData());
-    }
-
-    private static ProduceRequest produce(short acks) {
-        return new ProduceRequest(
-                new ProduceRequestData().setAcks(acks).setTimeoutMs(1000), (short) 3);
-    }
-
-    private static ProduceResponse partialFailure() {
+    private static ProduceResponse response(String failedTopic, String... topics) {
         ProduceResponseData data = new ProduceResponseData();
-        data.responses()
-                .add(
-                        new TopicProduceResponse()
-                                .setName("topic")
-                                .setPartitionResponses(
-                                        Arrays.asList(
-                                                new PartitionProduceResponse()
-                                                        .setIndex(0)
-                                                        .setErrorCode(Errors.NONE.code()),
-                                                new PartitionProduceResponse()
-                                                        .setIndex(1)
-                                                        .setErrorCode(
-                                                                Errors.NOT_LEADER_OR_FOLLOWER
-                                                                        .code()),
-                                                new PartitionProduceResponse()
-                                                        .setIndex(2)
-                                                        .setErrorCode(
-                                                                Errors.UNKNOWN_TOPIC_OR_PARTITION
-                                                                        .code()))));
+        for (String topic : topics) {
+            data.responses()
+                    .add(
+                            new ProduceResponseData.TopicProduceResponse()
+                                    .setName(topic)
+                                    .setPartitionResponses(
+                                            Collections.singletonList(
+                                                    new ProduceResponseData
+                                                                    .PartitionProduceResponse()
+                                                            .setIndex(0)
+                                                            .setErrorCode(
+                                                                    topic.equals(failedTopic)
+                                                                            ? Errors.INVALID_RECORD
+                                                                                    .code()
+                                                                            : Errors.NONE
+                                                                                    .code()))));
+        }
         return new ProduceResponse(data);
     }
 
     private static final class Harness implements AutoCloseable {
+        private final Map<String, Map<String, Metric>> metrics = new HashMap<>();
+        private final TabletServerMetricGroup root =
+                new TabletServerMetricGroup(
+                        new NOPMetricRegistry() {
+                            @Override
+                            public void register(
+                                    Metric metric, String name, AbstractMetricGroup group) {
+                                if (group.getAllVariables().containsKey("request")) {
+                                    metrics.computeIfAbsent(
+                                                    scope(group), ignored -> new HashMap<>())
+                                            .put(name, metric);
+                                }
+                            }
+
+                            @Override
+                            public void unregister(
+                                    Metric metric, String name, AbstractMetricGroup group) {
+                                if (group.getAllVariables().containsKey("request")) {
+                                    metrics.get(scope(group)).remove(name, metric);
+                                }
+                            }
+                        },
+                        "cluster",
+                        "rack",
+                        "host",
+                        0);
         private final ManualClock clock = new ManualClock();
-        private final TestMetricGroup group = TestMetricGroup.createTestMetricGroup();
         private final RequestChannel requests = new RequestChannel(100);
         private final PendingWrite write = new PendingWrite();
         private final EmbeddedChannel channel;
-        private int correlationId;
 
-        private Harness(boolean delayWrites) {
-            KafkaCommandDecoder decoder =
-                    new KafkaCommandDecoder(
-                            requests, "KAFKA", null, new KafkaRequestMetrics(group, clock));
+        private Harness() {
+            Configuration conf = new Configuration();
+            conf.set(ConfigOptions.KAFKA_DEFAULT_DATABASE, "analytics");
+            KafkaTopicMapper mapper = new KafkaTopicMapper(conf);
+            KafkaRequestMetrics requestMetrics =
+                    new KafkaRequestMetrics(
+                            root.addGroup("kafka").addGroup("listener", "KAFKA"),
+                            topic -> {
+                                TableMetricGroup table =
+                                        root.getTableMetricGroup(mapper.toTablePath(topic));
+                                return table == null
+                                        ? null
+                                        : table.addGroup("kafka")
+                                                .addGroup("listener", "KAFKA")
+                                                .addGroup("request", "PRODUCE");
+                            },
+                            clock);
             channel =
-                    delayWrites
-                            ? new EmbeddedChannel(write, decoder)
-                            : new EmbeddedChannel(decoder);
+                    new EmbeddedChannel(
+                            write,
+                            new KafkaCommandDecoder(requests, "KAFKA", null, requestMetrics));
+        }
+
+        private static String scope(AbstractMetricGroup group) {
+            Map<String, String> variables = group.getAllVariables();
+            return variables.containsKey("table")
+                    ? variables.get("database") + "." + variables.get("table")
+                    : variables.get("request");
+        }
+
+        private void addTable(String name, long id) {
+            root.addTableBucketMetricGroup(
+                    PhysicalTablePath.of(TablePath.of("analytics", name)),
+                    new TableBucket(id, 0),
+                    false);
         }
 
         private KafkaRequest receive(AbstractRequest request) {
             RequestHeader header =
-                    new RequestHeader(
-                            request.apiKey(), request.version(), "client", correlationId++);
-            ByteBuf bytes =
+                    new RequestHeader(request.apiKey(), request.version(), "client", 1);
+            channel.writeInbound(
                     Unpooled.wrappedBuffer(
                             RequestUtils.serialize(
                                     header.data(),
                                     header.headerVersion(),
                                     request.data(),
-                                    request.version()));
-            channel.writeInbound(bytes);
-            KafkaRequest received = (KafkaRequest) requests.pollRequest(0);
-            assertThat(received).isNotNull();
-            return received;
+                                    request.version())));
+            KafkaRequest result = (KafkaRequest) requests.pollRequest(0);
+            assertThat(result).isNotNull();
+            return result;
         }
 
         private void advance(long millis) {
             clock.advanceTime(Duration.ofMillis(millis));
         }
 
-        private long count(String name) {
-            return ((Meter) group.getMetric(name)).getCount();
+        private long count(String scope, String name) {
+            return ((Meter) metrics.get(scope).get(name)).getCount();
         }
 
-        private long inFlight() {
-            return ((Number) ((Gauge<?>) group.getMetric("inFlightRequests")).getValue())
+        private long inFlight(String scope) {
+            return ((Number) ((Gauge<?>) metrics.get(scope).get("inFlightRequests")).getValue())
                     .longValue();
         }
 
-        private Histogram histogram(String name) {
-            return (Histogram) group.getMetric(name);
-        }
-
-        private void assertSamples(String name, long... values) {
-            assertThat(histogram(name).getStatistics().getValues())
+        private void assertSamples(String scope, String name, long... values) {
+            assertThat(((Histogram) metrics.get(scope).get(name)).getStatistics().getValues())
                     .containsExactlyInAnyOrder(values);
         }
 
@@ -428,6 +353,7 @@ class KafkaRequestMetricsTest {
                 write.complete(false);
             }
             channel.finishAndReleaseAll();
+            root.close();
         }
     }
 
