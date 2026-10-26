@@ -20,7 +20,6 @@ package org.apache.fluss.record;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.metadata.LogFormat;
-import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.row.InternalRow;
@@ -29,12 +28,11 @@ import org.apache.fluss.row.ProjectedRow;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.AllocationManager;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocatorUtil;
-import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.RowType;
-import org.apache.fluss.utils.ArrowUtils;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.Projection;
+import org.apache.fluss.utils.SchemaUtil;
 import org.apache.fluss.utils.UnshadedArrowReadUtils;
 
 import javax.annotation.Nullable;
@@ -86,7 +84,7 @@ public class LogRecordReadContext
     @Nullable private volatile AutoCloseable unshadedBufferAllocator;
     private final boolean projectionPushDowned;
     private final SchemaGetter schemaGetter;
-    private final ConcurrentHashMap<Integer, VectorSchemaRoot> vectorSchemaRootMap =
+    private final ConcurrentHashMap<Integer, ArrowReadPlan> arrowReadPlans =
             new ConcurrentHashMap<>();
     private final Object unshadedArrowResourceLock = new Object();
     private final ConcurrentHashMap<Integer, FieldGetter[]> fieldGetterCache =
@@ -324,29 +322,32 @@ public class LogRecordReadContext
      */
     @Nullable
     private int[] getSchemaEvolutionMapping(int schemaId) {
-        ProjectedRow projectedRow = getOutputProjectedRow(schemaId);
-        if (projectedRow == null) {
+        if (target == null || isProjectionPushDowned() || schemaId == target.schemaId) {
             return null;
         }
-        return projectedRow.getIndexMapping();
+        return SchemaUtil.getIndexMapping(
+                schemaGetter.getSchema(schemaId), schemaGetter.getSchema(target.schemaId));
     }
 
     @Override
-    public VectorSchemaRoot getVectorSchemaRoot(int schemaId) {
+    public ArrowReadPlan getArrowReadPlan(int schemaId) {
         if (logFormat != LogFormat.ARROW) {
-            throw new IllegalArgumentException(
-                    "Only Arrow log format provides vector schema root.");
+            throw new IllegalArgumentException("Only Arrow log format provides Arrow read plan.");
         }
-
-        RowType rowType = getRowType(schemaId);
-        return vectorSchemaRootMap.computeIfAbsent(
-                schemaId,
-                (id) ->
-                        VectorSchemaRoot.create(
-                                ArrowUtils.toArrowSchema(rowType), bufferAllocator));
+        return arrowReadPlans.computeIfAbsent(schemaId, this::createArrowReadPlan);
     }
 
-    @Override
+    private ArrowReadPlan createArrowReadPlan(int schemaId) {
+        RowType rowType = getRowType(schemaId);
+        int[] selectedFields =
+                target == null
+                        ? IntStream.range(0, rowType.getFieldCount()).toArray()
+                        : target.selectedFields;
+        return new ArrowReadPlan(
+                rowType, getSchemaEvolutionMapping(schemaId), selectedFields, bufferAllocator);
+    }
+
+    /** Gets the buffer allocator of the {@link LogFormat#ARROW} read plans. */
     public BufferAllocator getBufferAllocator() {
         if (logFormat != LogFormat.ARROW) {
             throw new IllegalArgumentException("Only Arrow log format provides buffer allocator.");
@@ -367,20 +368,16 @@ public class LogRecordReadContext
     @Nullable
     @Override
     public ProjectedRow getOutputProjectedRow(int schemaId) {
-
-        if (target == null || isProjectionPushDowned() || schemaId == target.schemaId) {
-            return null;
+        if (logFormat == LogFormat.ARROW) {
+            return getArrowReadPlan(schemaId).createOutputRow();
         }
-
-        // TODO: should we cache the projection?
-        Schema originSchema = schemaGetter.getSchema(schemaId);
-        Schema expectedSchema = schemaGetter.getSchema(target.schemaId);
-        return ProjectedRow.from(originSchema, expectedSchema);
+        int[] mapping = getSchemaEvolutionMapping(schemaId);
+        return mapping == null ? null : ProjectedRow.from(mapping);
     }
 
     public void close() {
-        vectorSchemaRootMap.values().forEach(VectorSchemaRoot::close);
-        vectorSchemaRootMap.clear();
+        arrowReadPlans.values().forEach(ArrowReadPlan::close);
+        arrowReadPlans.clear();
         if (bufferAllocator != null) {
             bufferAllocator.close();
         }
