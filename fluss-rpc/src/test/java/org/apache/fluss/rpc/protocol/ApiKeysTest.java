@@ -24,6 +24,7 @@ import java.util.HashSet;
 import java.util.Set;
 import java.util.stream.IntStream;
 
+import static org.apache.fluss.rpc.protocol.ApiKeys.ApiVisibility.PUBLIC;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class ApiKeysTest {
@@ -66,5 +67,26 @@ class ApiKeysTest {
         assertThat(ApiKeys.DELETE_CONSUMER_OFFSETS.id).isEqualTo((short) 1071);
         assertThat(ApiKeys.LIST_CONSUMER_GROUPS.id).isEqualTo((short) 1072);
         assertThat(ApiKeys.DELETE_CONSUMER_GROUPS.id).isEqualTo((short) 1073);
+    }
+
+    @Test
+    void testBulkLoadApiKeysAndVersionRanges() {
+        assertApi(ApiKeys.BEGIN_BULK_LOAD, 1077, 0, 0, PUBLIC);
+        assertApi(ApiKeys.COMMIT_BULK_LOAD, 1078, 0, 0, PUBLIC);
+        assertApi(ApiKeys.ABORT_BULK_LOAD, 1079, 0, 0, PUBLIC);
+        assertApi(ApiKeys.GET_IN_PROGRESS_BULK_LOAD, 1080, 0, 0, PUBLIC);
+    }
+
+    private static void assertApi(
+            ApiKeys api,
+            int id,
+            int lowestVersion,
+            int highestVersion,
+            ApiKeys.ApiVisibility visibility) {
+        assertThat(api.id).isEqualTo((short) id);
+        assertThat(api.lowestSupportedVersion).isEqualTo((short) lowestVersion);
+        assertThat(api.highestSupportedVersion).isEqualTo((short) highestVersion);
+        assertThat(api.visibility).isEqualTo(visibility);
+        assertThat(ApiKeys.forId(id)).isSameAs(api);
     }
 }

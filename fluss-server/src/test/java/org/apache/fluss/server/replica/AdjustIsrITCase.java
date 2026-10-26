@@ -139,8 +139,7 @@ public class AdjustIsrITCase {
                         currentLeaderAndIsr.coordinatorEpoch(),
                         currentLeaderAndIsr.bucketEpoch());
         isr.add(stopFollower);
-        FLUSS_CLUSTER_EXTENSION.notifyLeaderAndIsr(
-                stopFollower, DATA1_TABLE_PATH, tb, newLeaderAndIsr, isr);
+        FLUSS_CLUSTER_EXTENSION.notifyLeaderAndIsr(stopFollower, tb, newLeaderAndIsr, isr);
         // retry until the stop follower add back to ISR.
         retry(
                 Duration.ofMinutes(1),

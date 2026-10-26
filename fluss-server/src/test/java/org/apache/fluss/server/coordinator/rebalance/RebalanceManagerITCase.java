@@ -106,11 +106,14 @@ public class RebalanceManagerITCase {
         long tableId2 =
                 createTable(FLUSS_CLUSTER_EXTENSION, partitionTablePath, partitionTableDescriptor);
         String partitionName1 = "b1";
-        createPartition(
-                FLUSS_CLUSTER_EXTENSION,
-                partitionTablePath,
-                new PartitionSpec(Collections.singletonMap("b", partitionName1)),
-                false);
+        long partitionId =
+                createPartition(
+                        FLUSS_CLUSTER_EXTENSION,
+                        partitionTablePath,
+                        new PartitionSpec(Collections.singletonMap("b", partitionName1)),
+                        false);
+        FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId1);
+        FLUSS_CLUSTER_EXTENSION.waitUntilTablePartitionReady(tableId2, partitionId);
 
         // Wait for the bucket leader and ISR state to be initialized after table creation.
         retry(

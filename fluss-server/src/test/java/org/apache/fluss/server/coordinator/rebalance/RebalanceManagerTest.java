@@ -108,6 +108,9 @@ public class RebalanceManagerTest {
         String remoteDataDir = "/tmp/fluss/remote-data";
         conf = new Configuration();
         conf.set(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
+        metadataManager =
+                new MetadataManager(
+                        zookeeperClient, conf, new LakeCatalogDynamicLoader(conf, null, true));
 
         kvSnapshotLeaseManager =
                 new KvSnapshotLeaseManager(
@@ -151,11 +154,6 @@ public class RebalanceManagerTest {
             scheduler.shutdown();
         }
         zookeeperClient.deleteRebalanceTask();
-        metadataManager =
-                new MetadataManager(
-                        zookeeperClient,
-                        new Configuration(),
-                        new LakeCatalogDynamicLoader(new Configuration(), null, true));
     }
 
     @Test

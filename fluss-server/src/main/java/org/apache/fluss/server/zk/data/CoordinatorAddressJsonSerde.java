@@ -35,12 +35,13 @@ public class CoordinatorAddressJsonSerde
 
     public static final CoordinatorAddressJsonSerde INSTANCE = new CoordinatorAddressJsonSerde();
     private static final String VERSION_KEY = "version";
-    private static final int VERSION = 2;
+    private static final int VERSION = 3;
 
     private static final String ID = "id";
     private static final String HOST = "host";
     private static final String PORT = "port";
     private static final String LISTENERS = "listeners";
+    private static final String SERVER_PROTOCOL_VERSION = "server_protocol_version";
 
     private static void writeVersion(JsonGenerator generator) throws IOException {
         generator.writeNumberField(VERSION_KEY, VERSION);
@@ -54,6 +55,8 @@ public class CoordinatorAddressJsonSerde
         generator.writeStringField(ID, coordinatorAddress.getId());
         generator.writeStringField(
                 LISTENERS, Endpoint.toListenersString(coordinatorAddress.getEndpoints()));
+        generator.writeNumberField(
+                SERVER_PROTOCOL_VERSION, coordinatorAddress.getServerProtocolVersion());
         generator.writeEndObject();
     }
 
@@ -69,6 +72,8 @@ public class CoordinatorAddressJsonSerde
         } else {
             endpoints = Endpoint.fromListenersString(node.get(LISTENERS).asText());
         }
-        return new CoordinatorAddress(id, endpoints);
+        int serverProtocolVersion =
+                node.has(SERVER_PROTOCOL_VERSION) ? node.get(SERVER_PROTOCOL_VERSION).asInt() : 0;
+        return new CoordinatorAddress(id, endpoints, serverProtocolVersion);
     }
 }

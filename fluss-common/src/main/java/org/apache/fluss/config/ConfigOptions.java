@@ -1270,6 +1270,50 @@ public class ConfigOptions {
                                     + "This option is deprecated. Please use server.io-pool.size instead.");
 
     // ------------------------------------------------------------------------
+    //  BulkLoad Settings
+    // ------------------------------------------------------------------------
+
+    public static final ConfigOption<Duration> BULKLOAD_BUILD_TIMEOUT_DEFAULT =
+            key("bulkload.build-timeout.default")
+                    .durationType()
+                    .defaultValue(Duration.ofHours(24))
+                    .withDescription(
+                            "The default time available to build the files for a newly begun BulkLoad transaction.");
+
+    public static final ConfigOption<Duration> BULKLOAD_BUILD_TIMEOUT_MAX =
+            key("bulkload.build-timeout.max")
+                    .durationType()
+                    .defaultValue(Duration.ofDays(7))
+                    .withDescription(
+                            "The maximum build timeout accepted for a BulkLoad transaction.");
+
+    public static final ConfigOption<Duration> BULKLOAD_COMMIT_DECISION_TIMEOUT =
+            key("bulkload.commit-decision-timeout")
+                    .durationType()
+                    .defaultValue(Duration.ofHours(24))
+                    .withDescription(
+                            "The time available to validate BulkLoad snapshot metadata and durably decide commit.");
+
+    public static final ConfigOption<Duration> BULKLOAD_RESULT_RETENTION =
+            key("bulkload.result-retention")
+                    .durationType()
+                    .defaultValue(Duration.ofDays(7))
+                    .withDescription("The minimum retention time for a terminal BulkLoad result.");
+
+    public static final ConfigOption<Integer> BULKLOAD_MAX_ACTIVE_TRANSACTIONS =
+            key("bulkload.max-active-transactions")
+                    .intType()
+                    .defaultValue(64)
+                    .withDescription("The maximum number of active BulkLoad transactions.");
+
+    public static final ConfigOption<MemorySize> BULKLOAD_SNAPSHOT_METADATA_MAX_SIZE =
+            key("bulkload.snapshot-metadata.max-size")
+                    .memoryType()
+                    .defaultValue(MemorySize.parse("16mb"))
+                    .withDescription(
+                            "The maximum raw size of one BulkLoad snapshot metadata file.");
+
+    // ------------------------------------------------------------------------
     //  Netty Settings
     // ------------------------------------------------------------------------
 

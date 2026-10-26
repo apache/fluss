@@ -24,7 +24,9 @@ import org.junit.jupiter.api.Test;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.function.Consumer;
 
 import static org.apache.fluss.config.FlussConfigUtils.CLIENT_OPTIONS;
 import static org.apache.fluss.config.FlussConfigUtils.TABLE_OPTIONS;
@@ -32,6 +34,7 @@ import static org.apache.fluss.config.FlussConfigUtils.extractConfigOptions;
 import static org.apache.fluss.config.FlussConfigUtils.validateCoordinatorConfigs;
 import static org.apache.fluss.config.FlussConfigUtils.validateTabletConfigs;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link FlussConfigUtils}. */
@@ -286,5 +289,71 @@ class FlussConfigUtilsTest {
                 .isInstanceOf(IllegalConfigurationException.class)
                 .hasMessageContaining(ConfigOptions.CLIENT_CONNECT_TIMEOUT.key())
                 .hasMessageContaining("must be greater than or equal 1 ms");
+    }
+
+    @Test
+    void testBulkLoadConfigValuesMustBePositiveForBothServerRoles() {
+        Map<String, Consumer<Configuration>> invalidValues = new LinkedHashMap<>();
+        invalidValues.put(
+                "bulkload.build-timeout.default",
+                conf -> conf.set(ConfigOptions.BULKLOAD_BUILD_TIMEOUT_DEFAULT, Duration.ZERO));
+        invalidValues.put(
+                "bulkload.build-timeout.max",
+                conf -> conf.set(ConfigOptions.BULKLOAD_BUILD_TIMEOUT_MAX, Duration.ZERO));
+        invalidValues.put(
+                "bulkload.commit-decision-timeout",
+                conf -> conf.set(ConfigOptions.BULKLOAD_COMMIT_DECISION_TIMEOUT, Duration.ZERO));
+        invalidValues.put(
+                "bulkload.result-retention",
+                conf -> conf.set(ConfigOptions.BULKLOAD_RESULT_RETENTION, Duration.ZERO));
+        invalidValues.put(
+                "bulkload.max-active-transactions",
+                conf -> conf.set(ConfigOptions.BULKLOAD_MAX_ACTIVE_TRANSACTIONS, 0));
+        invalidValues.put(
+                "bulkload.snapshot-metadata.max-size",
+                conf ->
+                        conf.set(
+                                ConfigOptions.BULKLOAD_SNAPSHOT_METADATA_MAX_SIZE,
+                                MemorySize.ZERO));
+
+        invalidValues.forEach(
+                (key, mutation) -> {
+                    Configuration conf = validServerConfiguration();
+                    mutation.accept(conf);
+                    assertBulkLoadValidationRejected(conf, key);
+                });
+    }
+
+    @Test
+    void testBulkLoadCrossOptionValidationForBothServerRoles() {
+        Configuration timeoutOrder = validServerConfiguration();
+        timeoutOrder.set(ConfigOptions.BULKLOAD_BUILD_TIMEOUT_DEFAULT, Duration.ofDays(2));
+        timeoutOrder.set(ConfigOptions.BULKLOAD_BUILD_TIMEOUT_MAX, Duration.ofDays(1));
+        assertBulkLoadValidationRejected(
+                timeoutOrder, ConfigOptions.BULKLOAD_BUILD_TIMEOUT_DEFAULT.key());
+
+        Configuration equalityBoundary = validServerConfiguration();
+        equalityBoundary.set(ConfigOptions.BULKLOAD_BUILD_TIMEOUT_DEFAULT, Duration.ofHours(1));
+        equalityBoundary.set(ConfigOptions.BULKLOAD_BUILD_TIMEOUT_MAX, Duration.ofHours(1));
+        assertThatCode(() -> validateCoordinatorConfigs(new Configuration(equalityBoundary)))
+                .doesNotThrowAnyException();
+        assertThatCode(() -> validateTabletConfigs(new Configuration(equalityBoundary)))
+                .doesNotThrowAnyException();
+    }
+
+    private static Configuration validServerConfiguration() {
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.REMOTE_DATA_DIR, "s3://bucket/path");
+        conf.set(ConfigOptions.TABLET_SERVER_ID, 0);
+        return conf;
+    }
+
+    private static void assertBulkLoadValidationRejected(Configuration conf, String key) {
+        assertThatThrownBy(() -> validateCoordinatorConfigs(new Configuration(conf)))
+                .isExactlyInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining(key);
+        assertThatThrownBy(() -> validateTabletConfigs(new Configuration(conf)))
+                .isExactlyInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining(key);
     }
 }

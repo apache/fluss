@@ -31,12 +31,40 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link CoordinatorEventManager}. */
 class CoordinatorEventManagerTest {
+
+    @Test
+    void testIdentifiesOnlyItsCoordinatorEventThread() {
+        AtomicReference<Boolean> observed = new AtomicReference<>();
+        CoordinatorMetricGroup metricGroup =
+                new CoordinatorMetricGroup(NOPMetricRegistry.INSTANCE, "cluster2", "host", "0");
+        AtomicReference<CoordinatorEventManager> managerReference = new AtomicReference<>();
+        CoordinatorContext coordinatorContext = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
+        CoordinatorEventManager manager =
+                new CoordinatorEventManager(
+                        event -> {
+                            observed.set(managerReference.get().isEventThread());
+                            processAccessContext((AccessContextEvent<?>) event, coordinatorContext);
+                        },
+                        metricGroup);
+        managerReference.set(manager);
+
+        assertThat(manager.isEventThread()).isFalse();
+        manager.start();
+        try {
+            manager.put(new AccessContextEvent<>(ignored -> null));
+            retry(Duration.ofMinutes(1), () -> assertThat(observed).hasValue(true));
+        } finally {
+            manager.close();
+            metricGroup.close();
+        }
+    }
 
     /**
      * Verifies that coordinator metrics are updated immediately after startup, even when no events

@@ -23,8 +23,8 @@ import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
+import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.fs.local.LocalFileSystem;
-import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.registry.MetricRegistry;
@@ -57,6 +57,7 @@ import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.replica.ReplicaManager;
 import org.apache.fluss.server.tablet.TabletServer;
+import org.apache.fluss.server.tablet.bulkload.BulkLoadTargetMetadata;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
@@ -68,6 +69,7 @@ import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
+import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.clock.SystemClock;
@@ -109,6 +111,7 @@ import static org.apache.fluss.testutils.common.CommonTestUtils.waitValue;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.function.FunctionUtils.uncheckedFunction;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.fail;
 
 /**
@@ -237,30 +240,30 @@ public final class FlussClusterExtension
     }
 
     public void close() throws Exception {
-        if (rpcClient != null) {
-            rpcClient.close();
-            rpcClient = null;
-        }
+        Throwable closeFailure = closeResource(rpcClient, null);
+        rpcClient = null;
         for (TabletServer tabletServer : tabletServers.values()) {
-            tabletServer.close();
+            closeFailure = closeResource(tabletServer, closeFailure);
         }
         tabletServers.clear();
         tabletServerInfos.clear();
-        if (coordinatorServer != null) {
-            coordinatorServer.close();
-            coordinatorServer = null;
-        }
-        if (zooKeeperClient != null) {
-            zooKeeperClient.close();
-            zooKeeperClient = null;
-        }
-        if (zooKeeperServer != null) {
-            zooKeeperServer.close();
-            zooKeeperServer = null;
-        }
+        closeFailure = closeResource(coordinatorServer, closeFailure);
+        coordinatorServer = null;
+        coordinatorServerInfo = null;
+        closeFailure = closeResource(zooKeeperClient, closeFailure);
+        zooKeeperClient = null;
+        closeFailure = closeResource(zooKeeperServer, closeFailure);
+        zooKeeperServer = null;
         if (tempDir != null) {
-            FileUtils.deleteDirectoryQuietly(tempDir);
+            try {
+                FileUtils.deleteDirectory(tempDir);
+            } catch (Throwable tempDirFailure) {
+                closeFailure = ExceptionUtils.firstOrSuppressed(tempDirFailure, closeFailure);
+            }
             tempDir = null;
+        }
+        if (closeFailure != null) {
+            ExceptionUtils.rethrowException(closeFailure, "Failed to close test cluster.");
         }
     }
 
@@ -297,8 +300,12 @@ public final class FlussClusterExtension
     }
 
     public void stopCoordinatorServer() throws Exception {
-        coordinatorServer.close();
-        coordinatorServer = null;
+        CoordinatorServer stoppingCoordinatorServer = coordinatorServer;
+        stoppingCoordinatorServer.close();
+        if (coordinatorServer == stoppingCoordinatorServer) {
+            coordinatorServer = null;
+            coordinatorServerInfo = null;
+        }
     }
 
     private void startTabletServers() throws Exception {
@@ -349,7 +356,17 @@ public final class FlussClusterExtension
         setRemoteDataDirs(tabletServerConf);
 
         TabletServer tabletServer = new TabletServer(tabletServerConf, clock);
-        tabletServer.start();
+        try {
+            tabletServer.start();
+        } catch (Throwable startupFailure) {
+            try {
+                tabletServer.close();
+            } catch (Throwable closeFailure) {
+                startupFailure.addSuppressed(closeFailure);
+            }
+            ExceptionUtils.rethrowException(startupFailure, "Failed to start TabletServer.");
+            return;
+        }
         ServerInfo serverInfo =
                 new ServerInfo(
                         serverId,
@@ -419,7 +436,9 @@ public final class FlussClusterExtension
         if (!tabletServers.containsKey(serverId)) {
             throw new IllegalArgumentException("Tablet server " + serverId + " does not exist.");
         }
-        tabletServers.remove(serverId).close();
+        TabletServer tabletServer = tabletServers.get(serverId);
+        tabletServer.close();
+        tabletServers.remove(serverId);
         tabletServerInfos.remove(serverId);
     }
 
@@ -689,8 +708,17 @@ public final class FlussClusterExtension
                     Optional<LeaderAndIsr> leaderAndIsrOpt = zkClient.getLeaderAndIsr(tableBucket);
                     assertThat(leaderAndIsrOpt).isPresent();
                     LeaderAndIsr leaderAndIsr = leaderAndIsrOpt.get();
+                    TableAssignment assignment =
+                            tableBucket.getPartitionId() == null
+                                    ? zkClient.getTableAssignment(tableBucket.getTableId()).get()
+                                    : zkClient.getPartitionAssignment(tableBucket.getPartitionId())
+                                            .get();
+                    List<Integer> assignedReplicas =
+                            assignment.getBucketAssignment(tableBucket.getBucket()).getReplicas();
                     List<Integer> isr = leaderAndIsr.isr();
-                    for (int replicaId : isr) {
+                    assertThat(isr).containsExactlyInAnyOrderElementsOf(assignedReplicas);
+                    int leader = leaderAndIsr.leader();
+                    for (int replicaId : assignedReplicas) {
                         TabletServer tabletServer = getTabletServerById(replicaId);
                         assertThat(tabletServer)
                                 .as("Tablet server %s should be available.", replicaId)
@@ -698,7 +726,12 @@ public final class FlussClusterExtension
                         ReplicaManager replicaManager = tabletServer.getReplicaManager();
                         assertThat(replicaManager.getReplica(tableBucket))
                                 .isInstanceOf(ReplicaManager.OnlineReplica.class);
-
+                        assertThatCode(tabletServer.getAccessGate()::captureAccessEpoch)
+                                .as(
+                                        "TabletServer %s access must be enabled before its"
+                                                + " replica is ready",
+                                        replicaId)
+                                .doesNotThrowAnyException();
                         // check table metadata.
                         TabletServerMetadataCache serverMetadataCache =
                                 tabletServer.getMetadataCache();
@@ -706,7 +739,6 @@ public final class FlussClusterExtension
                                 .isPresent();
                     }
 
-                    int leader = leaderAndIsr.leader();
                     TabletServer leaderServer = getTabletServerById(leader);
                     assertThat(leaderServer)
                             .as("Leader tablet server %s should be available.", leader)
@@ -874,24 +906,31 @@ public final class FlussClusterExtension
 
     public void notifyLeaderAndIsr(
             int tabletServerId,
-            TablePath tablePath,
             TableBucket tableBucket,
             LeaderAndIsr leaderAndIsr,
-            List<Integer> replicas) {
+            List<Integer> replicas)
+            throws Exception {
         TabletServerGateway followerGateway = newTabletServerClientForNode(tabletServerId);
+        Replica replica =
+                getTabletServerById(tabletServerId)
+                        .getReplicaManager()
+                        .getReplicaOrException(tableBucket);
+        BulkLoadTargetMetadata target = replica.getBulkLoadTargetMetadata();
         PbNotifyLeaderAndIsrReqForBucket reqForBucket =
                 makeNotifyBucketLeaderAndIsr(
                         new NotifyLeaderAndIsrData(
-                                PhysicalTablePath.of(tablePath),
+                                replica.getPhysicalTablePath(),
                                 tableBucket,
                                 replicas,
                                 leaderAndIsr,
                                 3,
-                                0L));
+                                0L,
+                                target,
+                                false));
         NotifyLeaderAndIsrRequest notifyLeaderAndIsrRequest =
                 ServerRpcMessageUtils.makeNotifyLeaderAndIsrRequest(
                         0, Collections.singletonList(reqForBucket));
-        followerGateway.notifyLeaderAndIsr(notifyLeaderAndIsrRequest);
+        followerGateway.notifyLeaderAndIsr(notifyLeaderAndIsrRequest).get();
     }
 
     private Optional<Replica> getReplica(TableBucket tableBucket, int replica, boolean isLeader) {
@@ -908,7 +947,12 @@ public final class FlussClusterExtension
             ReplicaManager.OnlineReplica onlineReplica =
                     (ReplicaManager.OnlineReplica) replicaManager.getReplica(tableBucket);
             if (onlineReplica.getReplica().isLeader() == isLeader) {
-                return Optional.of(onlineReplica.getReplica());
+                try {
+                    tabletServer.getAccessGate().captureAccessEpoch();
+                    return Optional.of(onlineReplica.getReplica());
+                } catch (StaleMetadataException ignored) {
+                    return Optional.empty();
+                }
             } else {
                 return Optional.empty();
             }
@@ -1005,6 +1049,19 @@ public final class FlussClusterExtension
 
     public CoordinatorServer getCoordinatorServer() {
         return coordinatorServer;
+    }
+
+    private static Throwable closeResource(
+            @Nullable AutoCloseable resource, @Nullable Throwable previousFailure) {
+        if (resource == null) {
+            return previousFailure;
+        }
+        try {
+            resource.close();
+            return previousFailure;
+        } catch (Throwable closeFailure) {
+            return ExceptionUtils.firstOrSuppressed(closeFailure, previousFailure);
+        }
     }
 
     private void waitUntilCoordinatorServerElected() {

@@ -970,6 +970,64 @@ message DescribeTabletServersResponse {
   repeated PbTabletServerLoad tablet_servers = 1;
 }
 
+message BeginBulkLoadRequest {
+  required PbPhysicalTablePath target = 1;
+  optional int64 build_timeout_ms = 2;
+}
+
+message PbBulkLoadHandle {
+  required PbPhysicalTablePath target = 1;
+  required int64 table_id = 2;
+  optional int64 partition_id = 3;
+  required string bulk_load_id = 4;
+}
+
+message BeginBulkLoadResponse {
+  required PbBulkLoadTargetInfo target_info = 1;
+}
+
+message CommitBulkLoadRequest {
+  required PbBulkLoadHandle handle = 1;
+  // SHA-256 of the concatenated 32-byte metadata SHA-256 digests, in bucket order.
+  optional string input_sha256 = 2;
+}
+
+message CommitBulkLoadResponse {
+  required PbBulkLoadStatus status = 1;
+}
+
+message AbortBulkLoadRequest {
+  required PbBulkLoadHandle handle = 1;
+}
+
+message AbortBulkLoadResponse {
+  required PbBulkLoadStatus status = 1;
+}
+
+message GetInProgressBulkLoadRequest {
+  required PbPhysicalTablePath target = 1;
+}
+
+message GetInProgressBulkLoadResponse {
+  optional PbBulkLoadStatus status = 1;
+}
+
+message PbBulkLoadStatus {
+  required PbBulkLoadHandle handle = 1;
+  required int32 state = 2;
+  optional int32 abort_reason = 3;
+  optional string abort_message = 4;
+}
+
+message PbBulkLoadTargetInfo {
+  required PbBulkLoadHandle handle = 1;
+  required int32 schema_id = 2;
+  required bytes table_json = 3;
+  required int64 created_time = 4;
+  required int64 modified_time = 5;
+  optional string remote_data_dir = 6;
+  repeated int64 snapshot_ids = 8;
+}
 
 // --------------- Inner classes ----------------
 message PbTabletServerLoad {
@@ -1266,6 +1324,12 @@ message PbNotifyLeaderAndIsrReqForBucket {
   repeated int32 standby_replicas = 8 [packed = true];
   optional int32 bucket_count = 9;
   optional int64 bucket_count_epoch = 10;
+  optional int32 metadata_version = 12;
+  optional int32 data_state = 13;
+  // Set only while installing a BulkLoad fence: the recipient must prove the bucket holds no local
+  // user data before it accepts the role. The snapshot-restore round carries the same LOADING
+  // identity but leaves this unset, because by then the bucket is expected to be filled.
+  optional bool require_empty_target = 15;
 }
 
 message PbNotifyLeaderAndIsrRespForBucket {

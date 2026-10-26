@@ -147,6 +147,13 @@ public class RemoteLogManager implements Closeable {
             return;
         }
         TableBucket tableBucket = replica.getTableBucket();
+        TaskWithFuture task = rlmTasks.get(tableBucket);
+        if (task != null) {
+            if (task.isOwnedBy(replica)) {
+                return;
+            }
+            pauseLogTiering(replica);
+        }
         PhysicalTablePath physicalTablePath = replica.getPhysicalTablePath();
         LogTablet log = replica.getLogTablet();
         FsPath remoteLogDir = FlussPaths.remoteLogDir(replica.getRemoteDataDir());
@@ -180,6 +187,9 @@ public class RemoteLogManager implements Closeable {
 
     /** Start the log tiering task for the given replica. */
     public void startLogTiering(Replica replica) {
+        if (remoteDisabled()) {
+            return;
+        }
         TableBucket tableBucket = replica.getTableBucket();
         RemoteLogTablet remoteLog = remoteLogs.get(tableBucket);
         if (remoteLog == null) {
@@ -196,9 +206,6 @@ public class RemoteLogManager implements Closeable {
 
     /** Stop the log tiering task for the given replica. */
     public void stopLogTiering(Replica replica) {
-        if (remoteDisabled()) {
-            return;
-        }
         TableBucket tb = replica.getTableBucket();
         RemoteLogTablet remoteLog = remoteLogs.remove(tb);
 
@@ -222,16 +229,40 @@ public class RemoteLogManager implements Closeable {
         LOG.debug("Removed the remote log tiering task for replica {}", tb);
     }
 
+    /** Pauses upload and expiry scheduling without deleting remote read state. */
+    public void pauseLogTiering(Replica replica) {
+        if (remoteDisabled()) {
+            return;
+        }
+        TableBucket tableBucket = replica.getTableBucket();
+        TaskWithFuture task = rlmTasks.remove(tableBucket);
+        if (task != null) {
+            LOG.info("Pausing the RLM task for table-bucket: {}", tableBucket);
+            task.cancel();
+        }
+    }
+
+    /** Resumes a previously paused leader task after BulkLoad ACTIVE convergence. */
+    public void resumeLogTiering(Replica replica) {
+        if (remoteDisabled()) {
+            return;
+        }
+        if (!replica.isLeader()) {
+            throw new IllegalStateException(
+                    "Remote log tiering can only resume for the current leader.");
+        }
+        if (!remoteLogs.containsKey(replica.getTableBucket())) {
+            throw new IllegalStateException(
+                    "Remote log tiering cannot resume before the replica is registered.");
+        }
+        startLogTiering(replica);
+    }
+
     /**
      * Stop the log tiering task for the given replica, and maybe delete remote logs of the replica
      * in remote storage.
      */
     public void stopReplica(Replica replica, boolean deleteRemote) {
-        // if the remote storage disabled, do nothing.
-        if (remoteDisabled()) {
-            return;
-        }
-
         PhysicalTablePath physicalTablePath = replica.getPhysicalTablePath();
         TableBucket tb = replica.getTableBucket();
         // stop the log tiering task for the table bucket.
@@ -259,10 +290,6 @@ public class RemoteLogManager implements Closeable {
      * return.
      */
     public long lookupOffsetForTimestamp(TableBucket tableBucket, long timestamp) {
-        if (remoteDisabled()) {
-            return -1L;
-        }
-
         RemoteLogTablet remoteLogTablet = remoteLogs.get(tableBucket);
         if (remoteLogTablet == null) {
             return -1L;
@@ -332,9 +359,12 @@ public class RemoteLogManager implements Closeable {
                 tableBucket,
                 (tb, prevTask) -> {
                     if (prevTask != null) {
-                        LOG.info(
-                                "Cancelling the remote log task for table-bucket: {}", tableBucket);
-                        prevTask.cancel();
+                        if (prevTask.isOwnedBy(replica)) {
+                            return prevTask;
+                        }
+                        throw new IllegalStateException(
+                                "Remote log tiering already has a different replica owner for "
+                                        + tableBucket);
                     }
                     LogTieringTask task =
                             new LogTieringTask(
@@ -355,7 +385,7 @@ public class RemoteLogManager implements Closeable {
                                     Math.abs(ThreadLocalRandom.current().nextLong(taskInterval)),
                                     taskInterval,
                                     TimeUnit.MILLISECONDS);
-                    return new TaskWithFuture(task, future);
+                    return new TaskWithFuture(replica, task, future);
                 });
     }
 
@@ -385,12 +415,18 @@ public class RemoteLogManager implements Closeable {
 
     static class TaskWithFuture {
 
+        private final Replica owner;
         private final LogTieringTask task;
         private final Future<?> future;
 
-        TaskWithFuture(LogTieringTask task, Future<?> future) {
+        TaskWithFuture(Replica owner, LogTieringTask task, Future<?> future) {
+            this.owner = owner;
             this.task = task;
             this.future = future;
+        }
+
+        boolean isOwnedBy(Replica replica) {
+            return owner == replica;
         }
 
         public void cancel() {

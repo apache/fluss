@@ -19,6 +19,9 @@ package org.apache.fluss.server.testutils;
 
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.metadata.BulkLoadHandle;
+import org.apache.fluss.metadata.KvSnapshotFileMetadata;
+import org.apache.fluss.metadata.KvSnapshotFileMetadataJsonSerde;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.rpc.messages.LookupResponse;
 import org.apache.fluss.rpc.messages.PbLookupRespForBucket;
@@ -37,6 +40,7 @@ import org.apache.fluss.server.kv.snapshot.KvSnapshotHandle;
 import org.apache.fluss.server.kv.snapshot.PlaceholderKvFileHandler;
 import org.apache.fluss.utils.CloseableRegistry;
 import org.apache.fluss.utils.FileUtils;
+import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.types.Tuple2;
 
 import io.github.fluss_contrib.rocksdb.RocksDB;
@@ -57,6 +61,46 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test utils related to Kv. */
 public class KvTestUtils {
+
+    /** Writes a snapshot manifest and dummy SST for metadata validation tests. */
+    public static FsPath writeSnapshotMetadata(
+            String remoteDataDir,
+            BulkLoadHandle handle,
+            TableBucket tableBucket,
+            long snapshotId,
+            long endOffset,
+            Long rowCount)
+            throws Exception {
+        FsPath snapshotDir =
+                FlussPaths.remoteKvSnapshotDir(
+                        FlussPaths.remoteKvTabletDir(
+                                new FsPath(remoteDataDir, FlussPaths.REMOTE_KV_DIR_NAME),
+                                handle.getTarget(),
+                                tableBucket),
+                        snapshotId);
+        FsPath remoteFile = new FsPath(snapshotDir, "file.sst");
+        Path local = java.nio.file.Paths.get(remoteFile.toUri());
+        Files.createDirectories(local.getParent());
+        Files.write(local, new byte[] {(byte) tableBucket.getBucket()});
+        KvSnapshotFileMetadata metadata =
+                new KvSnapshotFileMetadata(
+                        tableBucket,
+                        snapshotId,
+                        snapshotDir.toString(),
+                        Collections.emptyList(),
+                        Collections.singletonList(
+                                new KvSnapshotFileMetadata.FileHandle(
+                                        remoteFile.toString(), 1L, "file.sst")),
+                        1L,
+                        endOffset,
+                        rowCount,
+                        null);
+        FsPath metadataPath = new FsPath(snapshotDir, "_METADATA");
+        Files.write(
+                java.nio.file.Paths.get(metadataPath.toUri()),
+                KvSnapshotFileMetadataJsonSerde.toJson(metadata));
+        return metadataPath;
+    }
 
     public static void checkSnapshot(
             CompletedSnapshot completedSnapshot,

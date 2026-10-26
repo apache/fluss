@@ -22,6 +22,7 @@ import org.apache.fluss.server.authorizer.Authorizer;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.replica.ReplicaTestBase;
+import org.apache.fluss.server.tablet.TabletServerAccessGate;
 import org.apache.fluss.server.tablet.TabletService;
 import org.apache.fluss.server.tablet.consumer.group.ConsumerOffsetTableConfig;
 import org.apache.fluss.server.tablet.consumer.group.GroupManager;
@@ -47,6 +48,8 @@ public class KafkaServerTestBase extends ReplicaTestBase {
                         zkClient,
                         conf,
                         new LakeCatalogDynamicLoader(new Configuration(), null, true));
+        TabletServerAccessGate accessGate = new TabletServerAccessGate();
+        accessGate.validationSucceeded(accessGate.beginValidation());
         return new TabletService(
                 TABLET_SERVER_ID,
                 null,
@@ -61,7 +64,8 @@ public class KafkaServerTestBase extends ReplicaTestBase {
                 scannerManager,
                 testCoordinatorGateway,
                 "INTERNAL",
-                new GroupManager(ConsumerOffsetTableConfig.from(conf)));
+                new GroupManager(ConsumerOffsetTableConfig.from(conf)),
+                accessGate);
     }
 
     @AfterEach

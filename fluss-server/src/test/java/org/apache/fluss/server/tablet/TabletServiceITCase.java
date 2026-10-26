@@ -25,6 +25,7 @@ import org.apache.fluss.exception.ConsumerGroupOwnerNotAvailableException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.InvalidRequiredAcksException;
+import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
@@ -66,17 +67,25 @@ import org.apache.fluss.rpc.messages.PutKvResponse;
 import org.apache.fluss.rpc.messages.ScanKvRequest;
 import org.apache.fluss.rpc.messages.ScanKvResponse;
 import org.apache.fluss.rpc.messages.StopReplicaRequest;
+import org.apache.fluss.rpc.netty.server.Session;
 import org.apache.fluss.rpc.protocol.Errors;
+import org.apache.fluss.security.acl.FlussPrincipal;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
+import org.apache.fluss.server.kv.KvManager;
 import org.apache.fluss.server.log.ListOffsetsParam;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.metadata.SystemTables;
+import org.apache.fluss.server.replica.Replica;
+import org.apache.fluss.server.tablet.bulkload.BulkLoadTargetMetadata;
 import org.apache.fluss.server.tablet.consumer.group.ConsumerOffsetTableConfig;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
+import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.TableRegistration;
+import org.apache.fluss.server.zk.data.ZkData;
+import org.apache.fluss.server.zk.data.bulkload.BulkLoadDataState;
 import org.apache.fluss.types.DataField;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
@@ -91,6 +100,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.annotation.Nullable;
 
+import java.net.InetAddress;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -1035,10 +1045,12 @@ public class TabletServiceITCase {
     void testInitWriterId() throws Exception {
         TabletServerGateway tabletServerGateway =
                 FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(0);
-        for (int i = 0; i < 100; i++) {
+        long firstWriterId =
+                tabletServerGateway.initWriter(new InitWriterRequest()).get().getWriterId();
+        for (int i = 1; i < 100; i++) {
             InitWriterResponse response =
                     tabletServerGateway.initWriter(new InitWriterRequest()).get();
-            assertThat(response.getWriterId()).isEqualTo(i);
+            assertThat(response.getWriterId()).isEqualTo(firstWriterId + i);
         }
 
         FLUSS_CLUSTER_EXTENSION.stopCoordinatorServer();
@@ -1048,7 +1060,7 @@ public class TabletServiceITCase {
         for (int i = 100; i < 200; i++) {
             InitWriterResponse response =
                     tabletServerGateway.initWriter(new InitWriterRequest()).get();
-            assertThat(response.getWriterId()).isEqualTo(i);
+            assertThat(response.getWriterId()).isEqualTo(firstWriterId + i);
         }
     }
 
@@ -1074,6 +1086,13 @@ public class TabletServiceITCase {
         int follower = getOneFollower(originLeaderAndIsr);
         TabletServerGateway followerGateway =
                 FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(follower);
+        BulkLoadTargetMetadata followerTarget =
+                FLUSS_CLUSTER_EXTENSION
+                        .getTabletServerById(follower)
+                        .getReplicaManager()
+                        .getReplicaOrException(tb)
+                        .getBulkLoadTargetMetadata();
+        assertThat(followerTarget).isNotNull();
 
         // 1. first send one NotifyLeaderAndIsr request with same LeaderAndIsr to mock the
         // coordinator is offline and recovery to send NotifyLeaderAndIsr request with same
@@ -1090,7 +1109,8 @@ public class TabletServiceITCase {
                                                 originLeaderAndIsr.isr(),
                                                 originLeaderAndIsr.standbyReplicas(),
                                                 originLeaderAndIsr.coordinatorEpoch(),
-                                                originLeaderAndIsr.bucketEpoch())))
+                                                originLeaderAndIsr.bucketEpoch()),
+                                        followerTarget))
                         .get();
         List<NotifyLeaderAndIsrResultForBucket> result =
                 getNotifyLeaderAndIsrResponseData(notifyLeaderAndIsrResponse);
@@ -1134,11 +1154,132 @@ public class TabletServiceITCase {
                                                 originLeaderAndIsr.isr(),
                                                 originLeaderAndIsr.standbyReplicas(),
                                                 originLeaderAndIsr.coordinatorEpoch(),
-                                                originLeaderAndIsr.bucketEpoch())))
+                                                originLeaderAndIsr.bucketEpoch()),
+                                        followerTarget))
                         .get();
         result = getNotifyLeaderAndIsrResponseData(notifyLeaderAndIsrResponse);
         assertThat(result.size()).isEqualTo(1);
         assertThat(result.get(0).getError().error()).isEqualTo(Errors.NONE);
+    }
+
+    @Test
+    void testNotifyFencesEveryTargetBucketAndReportsPerBucket() throws Exception {
+        TablePath tablePath = TablePath.of("bulkload_update_metadata_it", "all_buckets");
+        long tableId =
+                createTable(
+                        FLUSS_CLUSTER_EXTENSION,
+                        tablePath,
+                        TableDescriptor.builder()
+                                .schema(DATA1_SCHEMA)
+                                .distributedBy(7)
+                                .property(ConfigOptions.TABLE_REPLICATION_FACTOR.key(), "1")
+                                .build());
+        Map<Integer, List<TableBucket>> bucketsByLeader = new HashMap<>();
+        Map<TableBucket, LeaderAndIsr> roles = new HashMap<>();
+        for (int bucketId = 0; bucketId < 7; bucketId++) {
+            TableBucket bucket = new TableBucket(tableId, bucketId);
+            FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(bucket);
+            LeaderAndIsr role = FLUSS_CLUSTER_EXTENSION.waitLeaderAndIsrReady(bucket);
+            roles.put(bucket, role);
+            bucketsByLeader
+                    .computeIfAbsent(role.leader(), ignored -> new ArrayList<>())
+                    .add(bucket);
+        }
+        Map.Entry<Integer, List<TableBucket>> selected =
+                bucketsByLeader.entrySet().stream()
+                        .filter(entry -> entry.getValue().size() >= 3)
+                        .findFirst()
+                        .orElseThrow(
+                                () -> new AssertionError("Expected three buckets on one server"));
+        int leader = selected.getKey();
+        TableBucket emptyBucket = selected.getValue().get(0);
+        TableBucket absentBucket = selected.getValue().get(1);
+        TableBucket nonEmptyBucket = selected.getValue().get(2);
+        TabletService service =
+                FLUSS_CLUSTER_EXTENSION.getTabletServerById(leader).getTabletService();
+        service.setCurrentSession(
+                new Session(
+                        (short) 1,
+                        "CLIENT",
+                        false,
+                        InetAddress.getLoopbackAddress(),
+                        new FlussPrincipal("bulkload-update-metadata", "User")));
+        Replica emptyReplica =
+                FLUSS_CLUSTER_EXTENSION
+                        .getTabletServerById(leader)
+                        .getReplicaManager()
+                        .getReplicaOrException(emptyBucket);
+        Replica nonEmptyReplica =
+                FLUSS_CLUSTER_EXTENSION
+                        .getTabletServerById(leader)
+                        .getReplicaManager()
+                        .getReplicaOrException(nonEmptyBucket);
+        stopReplicaWithLatestEpoch(service, absentBucket, roles.get(absentBucket));
+        nonEmptyReplica.appendRecordsToLeader(genMemoryLogRecordsByObject(DATA1), 1);
+        ZooKeeperClient zk = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
+        String metadataPath = ZkData.TableZNode.path(tablePath);
+        int activeVersion = zk.getDataWithStat(metadataPath).getStat().getVersion();
+        BulkLoadTargetMetadata emptyTarget =
+                new BulkLoadTargetMetadata(
+                        emptyBucket, activeVersion + 1, BulkLoadDataState.LOADING);
+        BulkLoadTargetMetadata absentTarget =
+                new BulkLoadTargetMetadata(
+                        absentBucket, activeVersion + 1, BulkLoadDataState.LOADING);
+        BulkLoadTargetMetadata nonEmptyTarget =
+                new BulkLoadTargetMetadata(
+                        nonEmptyBucket, activeVersion + 1, BulkLoadDataState.LOADING);
+        Map<TableBucket, BulkLoadTargetMetadata> fenced = new HashMap<>();
+        fenced.put(emptyBucket, emptyTarget);
+        fenced.put(nonEmptyBucket, nonEmptyTarget);
+
+        // The fence and its emptiness proof both ride NotifyLeaderAndIsr, which reports per bucket.
+        NotifyLeaderAndIsrResponse fenceResponse =
+                service.notifyLeaderAndIsr(
+                                makeNotifyLeaderAndIsrRequest(
+                                        PhysicalTablePath.of(tablePath), fenced, roles, true))
+                        .get();
+        Map<TableBucket, NotifyLeaderAndIsrResultForBucket> fenceResults = new HashMap<>();
+        for (NotifyLeaderAndIsrResultForBucket bucketResult :
+                getNotifyLeaderAndIsrResponseData(fenceResponse)) {
+            fenceResults.put(bucketResult.getTableBucket(), bucketResult);
+        }
+        assertThat(fenceResults.get(nonEmptyBucket).getError().error())
+                .isEqualTo(Errors.INVALID_BULK_LOAD_REQUEST);
+        assertThat(fenceResults.get(nonEmptyBucket).getErrorMessage())
+                .contains("contains local data");
+        assertThat(fenceResults.get(emptyBucket).failed())
+                .as("one bucket's verdict must not fail its siblings")
+                .isFalse();
+
+        // A bucket that was absent during the fence takes it when it comes back: the ordinary
+        // NotifyLeaderAndIsr always carries the target identity read from ZooKeeper.
+        NotifyLeaderAndIsrResponse notifyResponse =
+                service.notifyLeaderAndIsr(
+                                makeNotifyLeaderAndIsrRequest(
+                                        PhysicalTablePath.of(tablePath),
+                                        absentBucket,
+                                        roles.get(absentBucket),
+                                        absentTarget))
+                        .get();
+        assertThat(getNotifyLeaderAndIsrResponseData(notifyResponse).get(0).failed()).isFalse();
+        Replica absentReplica =
+                FLUSS_CLUSTER_EXTENSION
+                        .getTabletServerById(leader)
+                        .getReplicaManager()
+                        .getReplicaOrException(absentBucket);
+        assertThat(absentReplica.getBulkLoadTargetMetadata()).isEqualTo(absentTarget);
+        assertThatThrownBy(
+                        () ->
+                                absentReplica.appendRecordsToLeader(
+                                        genMemoryLogRecordsByObject(DATA1), 1))
+                .isInstanceOf(StaleMetadataException.class)
+                .hasMessageContaining("LOADING");
+    }
+
+    private static KvManager kvManager(TabletServer server) throws Exception {
+        java.lang.reflect.Field field = TabletServer.class.getDeclaredField("kvManager");
+        field.setAccessible(true);
+        return (KvManager) field.get(server);
     }
 
     private static void assertPutKvResponse(PutKvResponse putKvResponse) {
@@ -1205,6 +1346,39 @@ public class TabletServiceITCase {
                                 0L));
         return ServerRpcMessageUtils.makeNotifyLeaderAndIsrRequest(
                 0, Collections.singletonList(reqForBucket));
+    }
+
+    private NotifyLeaderAndIsrRequest makeNotifyLeaderAndIsrRequest(
+            PhysicalTablePath physicalTablePath,
+            TableBucket tableBucket,
+            LeaderAndIsr leaderAndIsr,
+            BulkLoadTargetMetadata target) {
+        return makeNotifyLeaderAndIsrRequest(
+                physicalTablePath,
+                Collections.singletonMap(tableBucket, target),
+                Collections.singletonMap(tableBucket, leaderAndIsr),
+                false);
+    }
+
+    private NotifyLeaderAndIsrRequest makeNotifyLeaderAndIsrRequest(
+            PhysicalTablePath physicalTablePath,
+            Map<TableBucket, BulkLoadTargetMetadata> targets,
+            Map<TableBucket, LeaderAndIsr> roles,
+            boolean requireEmptyTarget) {
+        List<PbNotifyLeaderAndIsrReqForBucket> reqForBuckets = new ArrayList<>();
+        for (Map.Entry<TableBucket, BulkLoadTargetMetadata> entry : targets.entrySet()) {
+            LeaderAndIsr leaderAndIsr = roles.get(entry.getKey());
+            reqForBuckets.add(
+                    makeNotifyBucketLeaderAndIsr(
+                            new NotifyLeaderAndIsrData(
+                                    physicalTablePath,
+                                    entry.getKey(),
+                                    leaderAndIsr.isr(),
+                                    leaderAndIsr,
+                                    entry.getValue(),
+                                    requireEmptyTarget)));
+        }
+        return ServerRpcMessageUtils.makeNotifyLeaderAndIsrRequest(0, reqForBuckets);
     }
 
     @Test

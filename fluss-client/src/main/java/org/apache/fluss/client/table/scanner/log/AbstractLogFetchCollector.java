@@ -271,11 +271,7 @@ abstract class AbstractLogFetchCollector<T, R> {
         } else if (error == Errors.AUTHORIZATION_EXCEPTION) {
             throw new AuthorizationException(errorMessage);
         } else if (error == Errors.UNKNOWN_SERVER_ERROR) {
-            log.warn(
-                    "Unknown server error while fetching offset {} for bucket {}: {}",
-                    requestedFetchOffset,
-                    tb,
-                    error.exception(errorMessage));
+            throw error.exception(errorMessage);
         } else if (error == Errors.CORRUPT_MESSAGE) {
             throw new FetchException(
                     String.format(

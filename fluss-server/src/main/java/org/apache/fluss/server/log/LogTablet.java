@@ -1233,6 +1233,26 @@ public final class LogTablet {
         }
     }
 
+    /** Advances only the local log after writer state was fully staged and loaded. */
+    public void truncateLocalFullyAndStartAt(long newOffset) throws LogStorageException {
+        LOG.debug(
+                "Truncate local log and start at offset {} for bucket {}",
+                newOffset,
+                getTableBucket());
+        synchronized (lock) {
+            try {
+                localLog.truncateFullyAndStartAt(newOffset);
+                updateHighWatermark(localLog.getLocalLogEndOffset());
+            } catch (IOException e) {
+                throw new LogStorageException(
+                        String.format(
+                                "Error while truncating local log for bucket %s to offset %s.",
+                                getTableBucket(), newOffset),
+                        e);
+            }
+        }
+    }
+
     /**
      * Completely delete the local log directory and all contents form the file system with no
      * delay.

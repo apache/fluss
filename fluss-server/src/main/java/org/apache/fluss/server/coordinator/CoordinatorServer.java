@@ -33,6 +33,8 @@ import org.apache.fluss.server.DynamicConfigManager;
 import org.apache.fluss.server.ServerBase;
 import org.apache.fluss.server.authorizer.Authorizer;
 import org.apache.fluss.server.authorizer.AuthorizerLoader;
+import org.apache.fluss.server.coordinator.event.BulkLoadMaintenanceEvent;
+import org.apache.fluss.server.coordinator.event.EventManager;
 import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseManager;
 import org.apache.fluss.server.coordinator.rebalance.RebalanceManager;
 import org.apache.fluss.server.coordinator.remote.RemoteDirDynamicLoader;
@@ -46,6 +48,7 @@ import org.apache.fluss.server.zk.ZkEpoch;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperUtils;
 import org.apache.fluss.server.zk.data.CoordinatorAddress;
+import org.apache.fluss.server.zk.data.ServerProtocolVersion;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.ExecutorUtils;
@@ -71,6 +74,7 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -145,6 +149,9 @@ public class CoordinatorServer extends ServerBase {
     /** Shared scheduler for lightweight coordinator background tasks. */
     @GuardedBy("lock")
     private Scheduler scheduler;
+
+    @GuardedBy("lock")
+    private @Nullable ScheduledFuture<?> bulkLoadMaintenanceTask;
 
     @GuardedBy("lock")
     private ExecutorService ioExecutor;
@@ -240,7 +247,6 @@ public class CoordinatorServer extends ServerBase {
                             serverId);
 
             this.zkClient = ZooKeeperUtils.startZookeeperClient(conf, this);
-
             // CoordinatorLeaderElection must be created after zkClient is initialized.
             this.coordinatorLeaderElection = new CoordinatorLeaderElection(zkClient, serverId);
 
@@ -325,6 +331,7 @@ public class CoordinatorServer extends ServerBase {
     protected void initCoordinatorLeader() throws Exception {
         // to avoid split-brain
         ZkEpoch zkEpoch = zkClient.fenceBecomeCoordinatorLeader(serverId);
+        zkClient.ensureBulkLoadMetadataPaths();
         registerCoordinatorLeader();
 
         synchronized (lock) {
@@ -370,6 +377,16 @@ public class CoordinatorServer extends ServerBase {
                             scheduler,
                             clock);
             coordinatorEventProcessor.startup();
+            coordinatorEventProcessor
+                    .getCoordinatorEventManager()
+                    .put(new BulkLoadMaintenanceEvent());
+            EventManager bulkLoadEvents = coordinatorEventProcessor.getCoordinatorEventManager();
+            bulkLoadMaintenanceTask =
+                    scheduler.schedule(
+                            "bulkload-maintenance",
+                            () -> bulkLoadEvents.put(new BulkLoadMaintenanceEvent()),
+                            1000L,
+                            1000L);
 
             // As the active leader, this server is the sole writer of dynamic configs and holds the
             // latest values, so stop consuming change notifications to avoid rolling a value back.
@@ -401,6 +418,10 @@ public class CoordinatorServer extends ServerBase {
             }
 
             // Clean up leader-specific resources in reverse order of initialization
+            if (bulkLoadMaintenanceTask != null) {
+                bulkLoadMaintenanceTask.cancel(false);
+                bulkLoadMaintenanceTask = null;
+            }
             try {
                 if (coordinatorEventProcessor != null) {
                     coordinatorEventProcessor.shutdown();
@@ -497,7 +518,9 @@ public class CoordinatorServer extends ServerBase {
     private CoordinatorAddress buildCoordinatorAddress() {
         List<Endpoint> bindEndpoints = rpcServer.getBindEndpoints();
         return new CoordinatorAddress(
-                this.serverId, Endpoint.loadAdvertisedEndpoints(bindEndpoints, conf));
+                this.serverId,
+                Endpoint.loadAdvertisedEndpoints(bindEndpoints, conf),
+                ServerProtocolVersion.CURRENT);
     }
 
     /**

@@ -26,7 +26,6 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.messages.AdjustIsrResponse;
 import org.apache.fluss.rpc.protocol.Errors;
-import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.AdjustIsrReceivedEvent;
 import org.apache.fluss.server.entity.AdjustIsrResultForBucket;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
@@ -54,10 +53,8 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
-import static org.apache.fluss.server.coordinator.CoordinatorTestUtils.makeSendLeaderAndStopRequestAlwaysSuccess;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getAdjustIsrResponseData;
 import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
 import static org.apache.fluss.server.zk.ZooKeeperUtils.startZookeeperClient;
@@ -393,22 +390,6 @@ class CoordinatorEventProcessorAdjustIsrTest extends CoordinatorEventProcessorTe
                                             originalLeaderAndIsr.isr())
                                     : originalLeaderAndIsr);
         }
-    }
-
-    private void initCoordinatorChannel() throws Exception {
-        makeSendLeaderAndStopRequestAlwaysSuccess(
-                testCoordinatorChannelManager,
-                Arrays.stream(zookeeperClient.getSortedTabletServerList())
-                        .boxed()
-                        .collect(Collectors.toSet()),
-                Collections.emptySet());
-    }
-
-    private <T> T fromCtx(java.util.function.Function<CoordinatorContext, T> retrieveFunction)
-            throws Exception {
-        AccessContextEvent<T> event = new AccessContextEvent<>(retrieveFunction);
-        eventProcessor.getCoordinatorEventManager().put(event);
-        return event.getResultFuture().get(30, TimeUnit.SECONDS);
     }
 
     private CoordinatorEventProcessor buildCoordinatorEventProcessor(
