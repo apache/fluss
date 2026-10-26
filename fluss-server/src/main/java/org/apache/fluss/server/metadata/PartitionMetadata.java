@@ -27,14 +27,16 @@ public class PartitionMetadata {
     /**
      * The already deleted partitionName. This partitionName will be used in UpdateMetadata request
      * to identify this partition already deleted, but there is an partitionId residual in
-     * zookeeper. In this case, tabletServers need to clear the metadata of this partition.
+     * zookeeper. In this case, tabletServers need to clear the metadata of this partition. The
+     * original partition ID identifies the partition to remove.
      */
     public static final String DELETED_PARTITION_NAME = "__delete__";
 
     /**
      * The already delete partition id. This partition id will be used in UpdateMetadata request to
      * identify this partition already deleted, and tabletServers need to clear the metadata of this
-     * partition.
+     * partition. New coordinators preserve the original partition ID and use {@link
+     * #DELETED_PARTITION_NAME} instead.
      */
     public static final Long DELETED_PARTITION_ID = -2L;
 

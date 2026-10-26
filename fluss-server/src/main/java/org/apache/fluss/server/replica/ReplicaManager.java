@@ -172,6 +172,8 @@ import static org.apache.fluss.config.ConfigOptions.KV_FORMAT_VERSION_2;
 import static org.apache.fluss.server.TabletManagerBase.getPartitionRegistration;
 import static org.apache.fluss.server.TabletManagerBase.getSchemaInfo;
 import static org.apache.fluss.server.TabletManagerBase.getTableRegistration;
+import static org.apache.fluss.server.metadata.TableMetadata.DELETED_TABLE_ID;
+import static org.apache.fluss.server.metadata.TableMetadata.DELETED_TABLE_PATH;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.Preconditions.checkState;
@@ -668,8 +670,16 @@ public class ReplicaManager implements ServerReconfigurable {
         Map<Long, TableInfo> tableInfosById = new HashMap<>();
         for (TableMetadata tableMetadata : clusterMetadata.getTableMetadataList()) {
             TableInfo tableInfo = tableMetadata.getTableInfo();
+
+            // Deletion tombstones must not be applied as regular table metadata.
+            if (tableInfo.getTableId() == DELETED_TABLE_ID
+                    || DELETED_TABLE_PATH.equals(tableInfo.getTablePath())) {
+                continue;
+            }
+
             tableInfosById.put(tableInfo.getTableId(), tableInfo);
         }
+
         if (tableInfosById.isEmpty()) {
             return;
         }
