@@ -15,26 +15,26 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Errors returned by bounded UnionRead planning and execution.
+//! Errors returned by UnionRead source preparation and context validation.
 
 use fluss::error::Error as ClientError;
 use thiserror::Error;
 
-/// Result type returned by UnionRead planning and execution APIs.
+/// Result type returned by UnionRead APIs.
 pub type Result<T> = std::result::Result<T, FlussLakeError>;
 
-/// Errors surfaced by the UnionRead planning and execution contract.
+/// Errors surfaced by source preparation and context validation.
 ///
 /// Match variants to classify failures; diagnostic messages are not a stable
-/// protocol. Boundary conversions include available cause messages, but do not
-/// retain the original error objects.
+/// protocol. Client failures retain their original error as the source.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum FlussLakeError {
     /// Requested table is not configured for lake reads.
     #[error("table is not lake-readable: {0}")]
     NotLakeReadable(String),
 
-    /// Invalid read configuration or failure to construct the default read plan.
+    /// Source metadata cannot form a valid read boundary.
     #[error("UnionRead planning failed: {0}")]
     PlanningFailed(String),
 
@@ -46,17 +46,13 @@ pub enum FlussLakeError {
     #[error("UnionRead schema incompatible: {0}")]
     SchemaIncompatible(String),
 
-    /// Access to Fluss RPC or the lake storage/catalog failed.
-    #[error("UnionRead connection error: {0}")]
-    ConnectionError(String),
-
-    /// Merge engine is not supported by the default PK tail reconciliation.
-    #[error("unsupported merge engine: {0}")]
-    UnsupportedMergeEngine(String),
-
-    /// Split or backend payload version is not supported by this reader.
-    #[error("incompatible UnionRead split version: {0}")]
-    IncompatibleSplitVersion(String),
+    /// A core client operation failed while preparing source boundaries.
+    #[error("failed to {action}: {source}")]
+    Client {
+        action: String,
+        #[source]
+        source: Box<ClientError>,
+    },
 
     /// Public engine-integration context is malformed or incomplete.
     #[error("invalid UnionRead context: {0}")]
@@ -65,63 +61,34 @@ pub enum FlussLakeError {
     /// Public context transport version is not supported.
     #[error("incompatible UnionRead context version: {0}")]
     IncompatibleReadContextVersion(String),
-
-    /// Backend or execution failure outside the explicitly classified categories,
-    /// including malformed task payloads. Returned to callers like other read errors.
-    #[error("UnionRead internal error: {0}")]
-    Internal(String),
 }
 
-/// Classifies metadata failures consistently for table opening and planning.
 pub(crate) fn planning_client_error(action: &str, error: ClientError) -> FlussLakeError {
-    let message = error_message(action, &error);
-    match error {
-        ClientError::RpcError { .. } => FlussLakeError::ConnectionError(message),
-        _ => FlussLakeError::PlanningFailed(message),
+    FlussLakeError::Client {
+        action: action.to_string(),
+        source: Box::new(error),
     }
-}
-
-/// Retains cause messages in diagnostics without changing the public error variants.
-pub(crate) fn error_message(action: &str, error: &dyn std::error::Error) -> String {
-    let mut message = format!("failed to {action}: {error}");
-    let mut source = error.source();
-    while let Some(cause) = source {
-        let detail = cause.to_string();
-        if !detail.is_empty() && !message.contains(&detail) {
-            message.push_str(": ");
-            message.push_str(&detail);
-        }
-        source = cause.source();
-    }
-    message
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[derive(Debug, Error)]
-    enum ReadError {
-        #[error("reader failed")]
-        Hidden(#[source] std::io::Error),
-        #[error("reader failed: {0}")]
-        Included(#[source] std::io::Error),
-    }
+    use std::error::Error as _;
 
     #[test]
-    fn diagnostic_preserves_causes_without_repeating_displayed_messages() {
-        assert_eq!(
-            error_message("read frozen task", &std::io::Error::other("reader failed")),
-            "failed to read frozen task: reader failed"
+    fn client_failure_preserves_action_and_typed_source() {
+        let error = planning_client_error(
+            "get table metadata",
+            ClientError::invalid_table("invalid layout"),
         );
-        for error in [
-            ReadError::Hidden(std::io::Error::other("underlying failure")),
-            ReadError::Included(std::io::Error::other("underlying failure")),
-        ] {
-            assert_eq!(
-                error_message("read frozen task", &error),
-                "failed to read frozen task: reader failed: underlying failure"
-            );
-        }
+        assert!(error.to_string().contains("get table metadata"));
+        assert!(error.source().is_some());
+        let FlussLakeError::Client { source, .. } = error else {
+            panic!("expected a client failure");
+        };
+        assert_eq!(
+            source.api_error(),
+            Some(fluss::error::FlussError::InvalidTableException)
+        );
     }
 }

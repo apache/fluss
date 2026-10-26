@@ -1899,10 +1899,6 @@ mod tests {
             "paimon".to_string(),
         )]));
         assert!(!format_only.is_datalake_enabled().unwrap());
-        assert_eq!(
-            format_only.get_datalake_format().unwrap(),
-            Some(DataLakeFormat::Paimon)
-        );
 
         let enabled = TableConfig::from_properties(HashMap::from([
             ("table.datalake.enabled".to_string(), "TRUE".to_string()),

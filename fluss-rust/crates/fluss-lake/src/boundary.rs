@@ -42,7 +42,7 @@ pub(crate) async fn freeze_read_context(
         )));
     }
 
-    let readable_snapshot = match admin.get_readable_lake_snapshot(table_path).await {
+    let readable_snapshot = match admin.get_lake_snapshot(table_path, None, Some(true)).await {
         Ok(snapshot) => Some(snapshot),
         Err(error) if error.api_error() == Some(fluss::error::FlussError::LakeSnapshotNotExist) => {
             None

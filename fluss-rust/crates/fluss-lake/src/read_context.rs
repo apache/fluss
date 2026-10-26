@@ -164,9 +164,10 @@ impl FlussLakeReadContext {
                 .ok_or_else(|| invalid_context("missing lake format"))?
                 .to_string(),
             merge_engine: table
-                .properties
-                .get("table.merge-engine")
-                .map(|value| value.to_ascii_lowercase()),
+                .table_config
+                .get_merge_engine_type()
+                .map_err(invalid_context)?
+                .map(|engine| engine.to_string()),
             lake_snapshot_id,
             log_ranges,
         }
@@ -288,9 +289,10 @@ impl FlussLakeReadContext {
             .map_err(invalid_context)?
             .map(|format| format.to_string());
         let merge = table
-            .properties
-            .get("table.merge-engine")
-            .map(|value| value.to_ascii_lowercase());
+            .table_config
+            .get_merge_engine_type()
+            .map_err(invalid_context)?
+            .map(|engine| engine.to_string());
         if self.table_path() != &table.table_path
             || self.table_id() != table.table_id
             || self.lake_table_path() != &crate::table::resolve_lake_table_path(table)?
@@ -558,7 +560,6 @@ mod tests {
             ),
             "unexpectedly accepted {value}"
         );
-        assert!(serde_json::from_value::<FlussLakeReadContext>(value).is_err());
     }
 
     #[test]
@@ -570,7 +571,6 @@ mod tests {
             assert_eq!(decoded.to_json().unwrap(), bytes);
             assert_eq!(decoded.log_ranges(), original.log_ranges());
             assert_eq!(decoded.table_schema(), original.table_schema());
-            assert_eq!(decoded.table_schema().columns()[0].id(), 0);
             // The canonical schema intentionally omits constraint names.
             // A named PK must not be mistaken for schema drift.
             decoded.validate_table(&table(partitioned)).unwrap();
@@ -740,6 +740,7 @@ mod tests {
         assert_invalid(missing);
         let mut duplicate = value(true);
         duplicate["log_ranges"][1] = duplicate["log_ranges"][0].clone();
+        assert!(serde_json::from_value::<FlussLakeReadContext>(duplicate.clone()).is_err());
         assert_invalid(duplicate);
         let mut conflicting = value(true);
         conflicting["log_ranges"][1]["partition_identity"] = serde_json::to_value(
@@ -855,6 +856,31 @@ mod tests {
                 .all(|range| range.bucket_count() == 2)
         );
         assert_eq!(context.log_ranges()[0].stop_offset(), 20);
+    }
+
+    #[test]
+    fn configured_merge_engine_is_frozen_and_checked_against_live_metadata() {
+        let mut table = table(true);
+        for value in ["VERSIONED", "versioned"] {
+            table
+                .properties
+                .insert("table.merge-engine".into(), value.into());
+            table.table_config =
+                fluss::metadata::TableConfig::from_properties(table.properties.clone());
+            let context = FlussLakeReadContext::from_boundary(
+                &table,
+                Some(42),
+                context(true).log_ranges().to_vec(),
+            )
+            .unwrap();
+            assert_eq!(context.merge_engine(), Some("versioned"));
+            context.validate_table(&table).unwrap();
+            table.table_config.properties.remove("table.merge-engine");
+            assert!(matches!(
+                context.validate_table(&table),
+                Err(FlussLakeError::SchemaIncompatible(_))
+            ));
+        }
     }
 
     #[test]

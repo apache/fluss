@@ -27,4 +27,4 @@ mod table;
 pub use error::{FlussLakeError, Result};
 pub use partition::FlussLakePartitionIdentity;
 pub use read_context::{FlussLakeLogRange, FlussLakeReadContext};
-pub use table::{FlussLakeScan, FlussLakeTable};
+pub use table::FlussLakeTable;

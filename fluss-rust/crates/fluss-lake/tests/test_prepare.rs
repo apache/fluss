@@ -20,7 +20,6 @@
 use arrow::array::{ArrayRef, Int32Array};
 use arrow::record_batch::RecordBatch;
 use fluss::metadata::{DataTypes, Schema, TableDescriptor, TablePath};
-use fluss::predicate::col;
 use fluss_lake::{FlussLakeReadContext, FlussLakeTable};
 use std::sync::Arc;
 
@@ -58,14 +57,6 @@ async fn prepare_freezes_table_wide_ranges_without_a_lake_backend() {
         .await
         .unwrap();
     let plain = table.prepare().await.unwrap();
-    let filtered = table
-        .new_scan()
-        .with_filter(col("id").eq(99_i32))
-        .with_projection(vec![0])
-        .prepare()
-        .await
-        .unwrap();
-    assert_eq!(plain.to_json().unwrap(), filtered.to_json().unwrap());
     assert_eq!(plain.lake_snapshot_id(), None);
     assert_eq!(plain.log_ranges().len(), 1);
     assert_eq!(plain.log_ranges()[0].start_offset(), 0);

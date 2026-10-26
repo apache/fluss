@@ -33,6 +33,6 @@ let transported = FlussLakeReadContext::from_json(&context.to_json()?)?;
 # }
 ```
 
-The context freezes table/schema identity, physical lake table mapping, a readable snapshot and half-open log ranges `[start, stop)`. Projection and filters do not prune this table-wide capture. Actual per-partition bucket counts are preserved. The context contains no credentials or physical lake-file tasks, is not a global transactional snapshot and does not acquire a retention lease. Its JSON representation is an evolving Rust contract, not a stable cross-language ABI.
+The context freezes table/schema identity, physical lake table mapping, a readable snapshot and half-open log ranges `[start, stop)`. Scan configuration, including projection and filters, belongs to the subsequent planning layer; preparation always captures table-wide boundaries. Actual per-partition bucket counts are preserved. The context contains no credentials or physical lake-file tasks, is not a global transactional snapshot and does not acquire a retention lease. Its JSON representation is an evolving Rust contract, not a stable cross-language ABI.
 
 The lake crate requires Rust 1.91 independently of the core workspace MSRV. Run `cargo test -p fluss-lake --lib` for unit tests. `test_prepare` requires the `integration_tests` feature and the existing Fluss Docker test-cluster environment.
