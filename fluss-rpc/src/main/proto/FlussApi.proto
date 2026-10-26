@@ -1128,11 +1128,6 @@ message PbFetchLogRespForBucket {
   // The safe local log retention boundary confirmed by a committed KV snapshot. This is only
   // returned for KV follower fetches and is distinct from the physical log_start_offset.
   optional int64 min_retain_offset = 10;
-  // The log start offset to which an EARLIEST_OFFSET request was resolved.
-  // This field is present only when the request used EARLIEST_OFFSET.
-  // Its presence also allows a client to distinguish a server that reports the
-  // resolved offset from an older server that does not.
-  optional int64 resolved_earliest_offset = 11;
 }
 
 message PbPutKvReqForBucket {

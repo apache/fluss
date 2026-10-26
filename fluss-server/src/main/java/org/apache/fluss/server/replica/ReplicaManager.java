@@ -169,7 +169,6 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static org.apache.fluss.config.ConfigOptions.KV_FORMAT_VERSION_2;
-import static org.apache.fluss.rpc.entity.FetchLogResultForBucket.NO_RESOLVED_EARLIEST_OFFSET;
 import static org.apache.fluss.server.TabletManagerBase.getPartitionRegistration;
 import static org.apache.fluss.server.TabletManagerBase.getSchemaInfo;
 import static org.apache.fluss.server.TabletManagerBase.getTableRegistration;
@@ -1882,8 +1881,9 @@ public class ReplicaManager implements ServerReconfigurable {
                                 fetchedData.hasFilteredEndOffset()
                                         ? fetchedData.getFilteredEndOffset()
                                         : -1L,
-                                readInfo.hasMinRetainOffset() ? readInfo.getMinRetainOffset() : -1L,
-                                readInfo.getResolvedEarliestOffset());
+                                readInfo.hasMinRetainOffset()
+                                        ? readInfo.getMinRetainOffset()
+                                        : -1L);
                 logReadResult.put(
                         tb,
                         new LogReadResult(fetchLogResult, fetchedData.getFetchOffsetMetadata()));
@@ -1920,7 +1920,7 @@ public class ReplicaManager implements ServerReconfigurable {
     }
 
     private @Nullable FetchLogResultForBucket tryFetchRemoteFirst(
-            Replica replica, long requestedFetchOffset) {
+            Replica replica, long fetchOffset) {
         if (!replica.isLeader()) {
             throw new NotLeaderOrFollowerException(
                     String.format(
@@ -1929,24 +1929,20 @@ public class ReplicaManager implements ServerReconfigurable {
         }
 
         TableBucket tb = replica.getTableBucket();
-        boolean resolvingEarliest = requestedFetchOffset == FetchParams.FETCH_FROM_EARLIEST_OFFSET;
-        long effectiveFetchOffset =
-                resolvingEarliest ? replica.getLogStartOffset() : requestedFetchOffset;
-        long resolvedEarliestOffset =
-                resolvingEarliest ? effectiveFetchOffset : NO_RESOLVED_EARLIEST_OFFSET;
-        if (!canFetchFromRemoteLog(replica, effectiveFetchOffset)) {
+        long normalizedFetchOffset =
+                fetchOffset == FetchParams.FETCH_FROM_EARLIEST_OFFSET
+                        ? replica.getLogStartOffset()
+                        : fetchOffset;
+        if (!canFetchFromRemoteLog(replica, normalizedFetchOffset)) {
             return null;
         }
 
         try {
             RemoteLogFetchInfo remoteLogFetchInfo =
-                    fetchLogFromRemote(replica, effectiveFetchOffset);
+                    fetchLogFromRemote(replica, normalizedFetchOffset);
             if (remoteLogFetchInfo != null) {
                 return FetchLogResultForBucket.remote(
-                        tb,
-                        remoteLogFetchInfo,
-                        replica.getLogHighWatermark(),
-                        resolvedEarliestOffset);
+                        tb, remoteLogFetchInfo, replica.getLogHighWatermark());
             }
             // Remote log is expected to cover the offset, but segments/manifest may not be ready
             // yet.
@@ -1956,7 +1952,7 @@ public class ReplicaManager implements ServerReconfigurable {
             LOG.warn(
                     "Failed to fetch remote log first for replica {} at offset {}; falling back to local reads",
                     tb,
-                    effectiveFetchOffset,
+                    normalizedFetchOffset,
                     e);
             // Fall back to local reads on remote fetch failures.
             return null;
@@ -1964,39 +1960,29 @@ public class ReplicaManager implements ServerReconfigurable {
     }
 
     private FetchLogResultForBucket handleFetchOutOfRangeException(
-            Replica replica, long requestedFetchOffset, Exception e) {
+            Replica replica, long fetchOffset, Exception e) {
         TableBucket tb = replica.getTableBucket();
-        boolean resolvingEarliest = requestedFetchOffset == FetchParams.FETCH_FROM_EARLIEST_OFFSET;
-        long effectiveFetchOffset =
-                resolvingEarliest ? replica.getLogStartOffset() : requestedFetchOffset;
-        long resolvedEarliestOffset =
-                resolvingEarliest ? effectiveFetchOffset : NO_RESOLVED_EARLIEST_OFFSET;
-        if (canFetchFromLakeLog(replica, effectiveFetchOffset)) {
+        if (fetchOffset == FetchParams.FETCH_FROM_EARLIEST_OFFSET) {
+            fetchOffset = replica.getLogStartOffset();
+        }
+
+        if (canFetchFromLakeLog(replica, fetchOffset)) {
             // todo: currently, we just return empty records directly
             // need to return the info of datalake to make client can fetch
             // from datalake directly
             return FetchLogResultForBucket.records(
-                    tb,
-                    MemoryLogRecords.EMPTY,
-                    replica.getLogHighWatermark(),
-                    -1L,
-                    -1L,
-                    resolvedEarliestOffset);
+                    tb, MemoryLogRecords.EMPTY, replica.getLogHighWatermark(), -1L, -1L);
         }
         // Once we get a fetch out of range exception from local storage, we need to check whether
         // the log segment already upload to the remote storage. If uploaded, we will return a list
         // of RemoteLogSegment. For client fetcher, it will fetch the log from remote in client.
         // For follower, it can update its local metadata to adjust the next fetch offset.
-        else if (canFetchFromRemoteLog(replica, effectiveFetchOffset)) {
+        else if (canFetchFromRemoteLog(replica, fetchOffset)) {
             try {
-                RemoteLogFetchInfo remoteLogFetchInfo =
-                        fetchLogFromRemote(replica, effectiveFetchOffset);
+                RemoteLogFetchInfo remoteLogFetchInfo = fetchLogFromRemote(replica, fetchOffset);
                 if (remoteLogFetchInfo != null) {
                     return FetchLogResultForBucket.remote(
-                            tb,
-                            remoteLogFetchInfo,
-                            replica.getLogHighWatermark(),
-                            resolvedEarliestOffset);
+                            tb, remoteLogFetchInfo, replica.getLogHighWatermark());
                 }
             } catch (Exception ex) {
                 return FetchLogResultForBucket.error(tb, ApiError.fromThrowable(ex));
@@ -2007,7 +1993,7 @@ public class ReplicaManager implements ServerReconfigurable {
                             new LogOffsetOutOfRangeException(
                                     String.format(
                                             "The fetch offset %s is out of range for table bucket %s",
-                                            effectiveFetchOffset, tb))));
+                                            fetchOffset, tb))));
         } else {
             return FetchLogResultForBucket.error(tb, ApiError.fromThrowable(e));
         }
