@@ -32,8 +32,11 @@ import org.apache.kafka.common.protocol.Message;
 import org.apache.kafka.common.protocol.ObjectSerializationCache;
 import org.apache.kafka.common.requests.AbstractRequest;
 import org.apache.kafka.common.requests.AbstractResponse;
+import org.apache.kafka.common.requests.ProduceRequest;
 import org.apache.kafka.common.requests.RequestHeader;
 import org.apache.kafka.common.requests.ResponseHeader;
+
+import javax.annotation.Nullable;
 
 import java.nio.ByteBuffer;
 import java.util.concurrent.CompletableFuture;
@@ -59,6 +62,7 @@ public class KafkaRequest implements RpcRequest {
     private final AtomicBoolean bufferReleased = new AtomicBoolean();
     private volatile boolean cancelled = false;
     private volatile boolean closeConnectionAfterResponse;
+    private @Nullable KafkaRequestMetrics.RequestMetrics metrics;
 
     /** Creates a request that snapshots identity from the supplied connection security state. */
     protected KafkaRequest(
@@ -142,16 +146,29 @@ public class KafkaRequest implements RpcRequest {
         return future;
     }
 
-    public void complete(AbstractResponse response) {
+    public synchronized void complete(AbstractResponse response) {
+        if (future.isDone()) {
+            return;
+        }
+        if (metrics != null) {
+            metrics.processingCompleted(response, hasNoResponse());
+        }
         future.complete(response);
     }
 
-    public void fail(Throwable t) {
+    public synchronized void fail(Throwable t) {
+        if (future.isDone()) {
+            return;
+        }
+        if (metrics != null) {
+            metrics.processingCompleted(null, hasNoResponse());
+        }
         future.completeExceptionally(t);
     }
 
     public void cancel() {
         cancelled = true;
+        finish(true);
     }
 
     public boolean cancelled() {
@@ -173,11 +190,40 @@ public class KafkaRequest implements RpcRequest {
             AbstractResponse response = future.join();
             return serialize(response);
         } catch (Throwable t) {
+            if (metrics != null) {
+                metrics.responseFailed();
+            }
             AbstractResponse response = request.getErrorResponse(t);
             return serialize(response);
         } finally {
             releaseBuffer();
         }
+    }
+
+    void startTracking(KafkaRequestMetrics requestMetrics, long receivedTimeNs) {
+        metrics = requestMetrics.startRequest(request, receivedTimeNs);
+    }
+
+    void processingStarted() {
+        if (metrics != null) {
+            metrics.processingStarted();
+        }
+    }
+
+    void responseDequeued() {
+        if (metrics != null) {
+            metrics.responseDequeued();
+        }
+    }
+
+    void finish(boolean failed) {
+        if (metrics != null) {
+            metrics.finish(failed);
+        }
+    }
+
+    private boolean hasNoResponse() {
+        return apiKey == ApiKeys.PRODUCE && ((ProduceRequest) request).acks() == 0;
     }
 
     private ByteBuf serialize(AbstractResponse response) {

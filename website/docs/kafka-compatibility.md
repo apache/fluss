@@ -177,3 +177,49 @@ JSON. When a value cannot be converted, the corresponding table field is set to 
 fields are preserved. Without `_kafka_rescue`, these errors cause conversion to fail. Invalid JSON
 and non-object roots always fail conversion. The column is null for binary/string conversion or
 when there is nothing to rescue.
+
+## Request metrics
+
+Kafka request metrics are registered under the TabletServer's `kafka` metric group, with
+`listener` and `request` variables. The request value is the Kafka API name, such as `PRODUCE`,
+`METADATA`, or `API_VERSIONS`. Each API's metrics are registered when its first request is decoded.
+
+| Metric | Type | Description |
+|---|---|---|
+| `requestsPerSecond` | Meter | Successfully decoded requests received per second. |
+| `failedRequestsPerSecond` | Meter | Failed requests per second. A request counts once if any response error is present, processing fails, or it is cancelled or cannot be sent. Multiple failed Produce partitions count as one failed request. |
+| `requestQueueTimeMs` | Histogram | Time from enqueueing a decoded request to starting its handler. |
+| `requestProcessTimeMs` | Histogram | Time from starting the handler until its asynchronous result completes. |
+| `responseQueueTimeMs` | Histogram | Time from completing processing until starting response serialization, including event-loop scheduling and waiting for earlier responses on the same connection. |
+| `totalTimeMs` | Histogram | Time from receiving a complete request frame until Netty completes the response write, or the request is cancelled. This does not measure client receipt. |
+| `inFlightRequests` | Gauge | Received requests that have not finished, including queued requests, asynchronous processing, and pending responses. |
+
+For Produce with `acks=0`, the request finishes when processing completes: `totalTimeMs` and
+`inFlightRequests` are updated then, and no `responseQueueTimeMs` sample is recorded. Errors
+are still counted. On disconnect, pending requests finish once; later processing callbacks do
+not count them again. A processing or response-queue histogram only receives a sample when
+that stage finishes before cancellation.
+
+Malformed frames, requests rejected before decoding, and legacy SASL raw authentication tokens
+are outside these request metrics.
+
+### Produce requests by table
+
+Produce also exposes the same seven metrics under each locally hosted table's `kafka` group,
+with `database`, `table`, `listener`, and `request=PRODUCE` variables. Names are resolved with
+`kafka.default.database`: with the default setting, `orders` and `fluss.orders` contribute to
+the same `database=fluss, table=orders` metrics.
+
+A request contributes once to each distinct table it references, regardless of the number of
+partitions or topic aliases. Only tables with failed partitions contribute a failed request;
+a request-wide processing, serialization, connection, or send failure marks every involved
+table as failed. The API-level request count remains one, so summing table request counts can
+exceed the API-level count for requests spanning multiple tables.
+
+The latency samples describe the entire request involving the table, including waiting for
+other tables in that request. They do not measure the table's individual append latency.
+`acks=0` and cancellation follow the same rules as the API metrics.
+
+Table metrics are registered only for tables with local buckets and are removed when the last
+local bucket is removed. Unknown tables and malformed topic names contribute only to API-level
+metrics. Metadata, ApiVersions, and SASL requests retain API-level metrics only.
