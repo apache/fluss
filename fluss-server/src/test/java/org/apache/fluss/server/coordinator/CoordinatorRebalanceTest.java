@@ -358,7 +358,7 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
         for (NotifyLeaderAndIsrRequestContext staleContext :
                 Arrays.asList(oldContext, oldEpochContext)) {
             notifyLeaderResponse(tableBucket, current.leader(), staleContext);
-            assertThat(rebalanceStatus(tableBucket)).isEqualTo(RebalanceStatus.REBALANCING);
+            assertThat(rebalanceStatus(tableBucket)).isEqualTo(RebalanceStatus.TIMEOUT);
             assertThat(zookeeperClient.getRebalanceTask()).hasValue(persistedTask);
         }
 
@@ -459,7 +459,7 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
     }
 
     @Test
-    void testRestartAfterCancellationDoesNotStartPendingBucketWithShrunkIsr() throws Exception {
+    void testRestartAfterCancellationDoesNotStartPendingBucketAfterLeaderChange() throws Exception {
         registerTabletServer(3);
         initCoordinatorChannel();
         List<Integer> origin = Arrays.asList(0, 1, 2);
@@ -468,6 +468,7 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
         TableBucket running = new TableBucket(tableId, 0);
         TableBucket pending = new TableBucket(tableId, 1);
         adjustRebalanceIsr(pending, Arrays.asList(0, 1));
+        changeLeader(pending, 1);
         installBlockingNotifyGateways(pendingResponses);
         Map<TableBucket, RebalancePlanForBucket> plan = new LinkedHashMap<>();
         plan.put(running, new RebalancePlanForBucket(running, 0, 0, origin, target));
@@ -493,7 +494,7 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
         assertThat(eventProcessor.getRebalanceManager().getExecutionKey(pending)).isNull();
         assertThat(zookeeperClient.getTableAssignment(tableId).get().getBucketAssignment(1))
                 .isEqualTo(new BucketAssignment(origin));
-        verifyIsr(pending, 0, Arrays.asList(0, 1));
+        verifyIsr(pending, 1, Arrays.asList(0, 1));
 
         adjustRebalanceIsr(running, Arrays.asList(0, 1, 2, 3));
         retry(
@@ -545,25 +546,27 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
                 () ->
                         assertThat(eventProcessor.getRebalanceManager().getRebalanceId())
                                 .isEqualTo(rebalanceId));
-        TableBucket recoveredPending =
+        TableBucket recoveredIntermediate =
                 plans.keySet().stream()
-                        .filter(bucket -> rebalanceStatus(bucket) == RebalanceStatus.NOT_STARTED)
+                        .filter(bucket -> rebalanceStatus(bucket) == RebalanceStatus.TIMEOUT)
                         .findFirst()
                         .get();
         assertThat(
                         zookeeperClient
                                 .getTableAssignment(tableId)
                                 .get()
-                                .getBucketAssignment(recoveredPending.getBucket()))
+                                .getBucketAssignment(recoveredIntermediate.getBucket()))
                 .isEqualTo(new BucketAssignment(union));
         fromCtx(
                 ctx -> {
-                    assertThat(eventProcessor.isRebalanceTaskAtOrigin(plans.get(recoveredPending)))
+                    assertThat(
+                                    eventProcessor.isRebalanceTaskAtOrigin(
+                                            plans.get(recoveredIntermediate)))
                             .isFalse();
                     eventProcessor.getRebalanceManager().cancelRebalance(rebalanceId);
                     return null;
                 });
-        assertThat(rebalanceStatus(recoveredPending))
+        assertThat(rebalanceStatus(recoveredIntermediate))
                 .as("A previously started migration still needs draining after recovery")
                 .isNotEqualTo(RebalanceStatus.CANCELED);
         for (TableBucket bucket : plans.keySet()) {
@@ -619,7 +622,32 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
         putBucketState(tableBucket, 0, Arrays.asList(0, 1, 2, 3), Arrays.asList(0, 1, 2));
         assertThat(eventProcessor.isRebalanceTaskAtOrigin(plan)).isFalse();
         putBucketState(tableBucket, 1, Arrays.asList(0, 1, 2), Arrays.asList(0, 1, 2));
-        assertThat(eventProcessor.isRebalanceTaskAtOrigin(plan)).isFalse();
+        assertThat(eventProcessor.isRebalanceTaskAtOrigin(plan)).isTrue();
+
+        RebalancePlanForBucket leaderOnlyPlan =
+                new RebalancePlanForBucket(
+                        tableBucket, 0, 1, Arrays.asList(0, 1, 2), Arrays.asList(0, 1, 2));
+        assertThat(eventProcessor.isRebalanceTaskAtOrigin(leaderOnlyPlan)).isFalse();
+    }
+
+    private void changeLeader(TableBucket tableBucket, int newLeader) throws Exception {
+        LeaderAndIsr current = zookeeperClient.getLeaderAndIsr(tableBucket).get();
+        LeaderAndIsr changed =
+                new LeaderAndIsr(
+                        newLeader,
+                        current.leaderEpoch() + 1,
+                        current.isr(),
+                        current.standbyReplicas(),
+                        current.coordinatorEpoch(),
+                        current.bucketEpoch() + 1);
+        int coordinatorZkVersion = fromCtx(CoordinatorContext::getCoordinatorZkVersion);
+        zookeeperClient.updateLeaderAndIsr(tableBucket, changed, coordinatorZkVersion);
+        fromCtx(
+                ctx -> {
+                    ctx.putBucketLeaderAndIsr(tableBucket, changed);
+                    return null;
+                });
+        verifyIsr(tableBucket, newLeader, current.isr());
     }
 
     private void putBucketState(

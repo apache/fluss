@@ -105,9 +105,8 @@ import static org.apache.fluss.utils.Preconditions.checkState;
  * <p>Only one bucket occupies the normal execution slot. TIMEOUT releases that slot but remains
  * non-final and tracked; reaching the configured tracking limit pauses admission of new buckets.
  * Cancellation is persisted before local state changes. New pending tasks are canceled directly;
- * recovered or admitted tasks must still be at their origin to be canceled. Intermediate tasks
- * continue to drain, including those queued again after coordinator recovery. Recovery resumes
- * non-final plans from the current assignment and ISR, and still requires a current leader
+ * recovered or admitted tasks must still be at their origin to be canceled. Recovery restores
+ * intermediate tasks directly into reconciliation, and still requires a current leader
  * acknowledgement even when the persisted state already matches the target.
  *
  * <p>The overall rebalance remains REBALANCING while buckets are pending, running, or timed out,
@@ -142,7 +141,7 @@ public class RebalanceManager {
     private final long noProgressTimeoutMs;
     private final int maxTrackedTimedOutTasks;
 
-    /** Tasks awaiting admission, including intermediate migrations loaded during recovery. */
+    /** Tasks awaiting admission. */
     private final Queue<TableBucket> pendingRebalanceTasks = new ArrayDeque<>();
 
     /** A mapping from table bucket to rebalance status of pending and running tasks. */
@@ -300,7 +299,11 @@ public class RebalanceManager {
 
         for (Map.Entry<TableBucket, RebalancePlanForBucket> entry :
                 rebalanceTask.getExecutePlan().entrySet()) {
-            addPendingTask(entry.getKey(), entry.getValue());
+            if (rebalanceExecutor.isRebalanceTaskAtOrigin(entry.getValue())) {
+                addPendingTask(entry.getKey(), entry.getValue());
+            } else {
+                addRecoveredIntermediateTask(entry.getKey(), entry.getValue());
+            }
         }
         if (cancelRequested) {
             cancelPendingTasks();
@@ -448,7 +451,7 @@ public class RebalanceManager {
         while (pending.hasNext()) {
             TableBucket bucket = pending.next();
             RebalanceResultForBucket result = inProgressRebalanceTasks.get(bucket);
-            // Recovery can put an already started migration back into the pending queue.
+            // A recovered pending task may have changed after it was classified at startup.
             if (!recoveredRebalance || rebalanceExecutor.isRebalanceTaskAtOrigin(result.plan())) {
                 pending.remove();
                 inProgressRebalanceTasks.remove(bucket);
@@ -568,6 +571,10 @@ public class RebalanceManager {
         }
         RebalanceResultForBucket result = inProgressRebalanceTasks.get(tableBucket);
         if (result == null) {
+            return null;
+        }
+        if (rebalanceExecutor.isRebalanceTaskDeleted(tableBucket)) {
+            finishRebalanceTask(executionKey, COMPLETED);
             return null;
         }
 
@@ -702,6 +709,18 @@ public class RebalanceManager {
     private void addPendingTask(TableBucket tableBucket, RebalancePlanForBucket plan) {
         pendingRebalanceTasks.add(tableBucket);
         inProgressRebalanceTasks.put(tableBucket, RebalanceResultForBucket.of(plan, NOT_STARTED));
+    }
+
+    private void addRecoveredIntermediateTask(
+            TableBucket tableBucket, RebalancePlanForBucket plan) {
+        long now = clock.milliseconds();
+        RebalanceTaskAttempt attempt =
+                new RebalanceTaskAttempt(
+                        new RebalanceExecutionKey(currentRebalanceId, tableBucket), now);
+        attempt.onTimedOut(now, observeBucketState(tableBucket));
+        timedOutRebalanceTasks.put(tableBucket, attempt);
+        inProgressRebalanceTasks.put(tableBucket, RebalanceResultForBucket.of(plan, TIMEOUT));
+        enqueueReconciliation(attempt);
     }
 
     private @Nullable RebalanceTaskAttempt findActiveAttempt(RebalanceExecutionKey executionKey) {

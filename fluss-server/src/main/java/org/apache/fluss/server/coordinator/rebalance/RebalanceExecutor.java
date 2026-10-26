@@ -18,6 +18,7 @@
 package org.apache.fluss.server.coordinator.rebalance;
 
 import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
 
 /** Coordinator operations needed to execute and reconcile rebalance bucket plans. */
@@ -31,4 +32,7 @@ public interface RebalanceExecutor {
 
     /** Returns whether the plan remains at its clean origin state. */
     boolean isRebalanceTaskAtOrigin(RebalancePlanForBucket planForBucket);
+
+    /** Returns whether the bucket was deleted or is being deleted. */
+    boolean isRebalanceTaskDeleted(TableBucket tableBucket);
 }

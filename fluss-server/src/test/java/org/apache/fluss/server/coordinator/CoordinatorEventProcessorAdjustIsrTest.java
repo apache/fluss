@@ -355,7 +355,7 @@ class CoordinatorEventProcessorAdjustIsrTest extends CoordinatorEventProcessorTe
         return response.get();
     }
 
-    private AdjustIsrResultForBucket submitAdjustIsr(
+    protected AdjustIsrResultForBucket submitAdjustIsr(
             TableBucket tableBucket, LeaderAndIsr newLeaderAndIsr) throws Exception {
         CompletableFuture<AdjustIsrResponse> response = new CompletableFuture<>();
         eventProcessor
@@ -395,7 +395,7 @@ class CoordinatorEventProcessorAdjustIsrTest extends CoordinatorEventProcessorTe
         }
     }
 
-    private void initCoordinatorChannel() throws Exception {
+    protected void initCoordinatorChannel() throws Exception {
         makeSendLeaderAndStopRequestAlwaysSuccess(
                 testCoordinatorChannelManager,
                 Arrays.stream(zookeeperClient.getSortedTabletServerList())
@@ -404,7 +404,7 @@ class CoordinatorEventProcessorAdjustIsrTest extends CoordinatorEventProcessorTe
                 Collections.emptySet());
     }
 
-    private <T> T fromCtx(java.util.function.Function<CoordinatorContext, T> retrieveFunction)
+    protected <T> T fromCtx(java.util.function.Function<CoordinatorContext, T> retrieveFunction)
             throws Exception {
         AccessContextEvent<T> event = new AccessContextEvent<>(retrieveFunction);
         eventProcessor.getCoordinatorEventManager().put(event);
