@@ -94,6 +94,7 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+            {{- include "fluss.listeners.advertisedEnv" (dict "root" . "service" "tablet-server-hs") | trim | nindent 12 }}
             {{- if (include "fluss.security.jaas.required" .) }}
             - name: FLUSS_ENV_JAVA_OPTS
               value: "-Djava.security.auth.login.config=/etc/fluss/conf/jaas.conf"
@@ -120,8 +121,8 @@ spec:
               export FLUSS_SERVER_ID=${POD_NAME##*-} && \
               cp /opt/conf/server.yaml $FLUSS_HOME/conf && \
 
-              BIND_LISTENERS="INTERNAL://${POD_IP}:{{ .Values.listeners.internal.port }}, CLIENT://${POD_IP}:{{ .Values.listeners.client.port }}" && \
-              ADVERTISED_LISTENERS="CLIENT://${POD_NAME}.tablet-server-hs.${POD_NAMESPACE}.svc.cluster.local:{{ .Values.listeners.client.port }}" && \
+              BIND_LISTENERS="{{ include "fluss.listeners.bind" . }}" && \
+              ADVERTISED_LISTENERS="{{ include "fluss.listeners.advertised" . }}" && \
 
               echo "" >> $FLUSS_HOME/conf/server.yaml && \
               echo "tablet-server.id: ${FLUSS_SERVER_ID}" >> $FLUSS_HOME/conf/server.yaml && \

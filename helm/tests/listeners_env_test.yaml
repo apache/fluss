@@ -1,0 +1,111 @@
+#
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+suite: coordinator advertised listener env
+templates:
+  - templates/sts-coordinator.yaml
+
+tests:
+  - it: should publish the CLIENT advertised address as an env var
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: FLUSS_ADVERTISED_LISTENER_CLIENT
+            value: $(POD_NAME).coordinator-server-hs.$(POD_NAMESPACE).svc.cluster.local:9124
+
+  - it: should publish the INTERNAL advertised address as the pod IP
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: FLUSS_ADVERTISED_LISTENER_INTERNAL
+            value: $(POD_IP):9123
+
+  - it: should build advertised.listeners from the published env vars
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'ADVERTISED_LISTENERS="CLIENT://\$\{FLUSS_ADVERTISED_LISTENER_CLIENT\}, INTERNAL://\$\{FLUSS_ADVERTISED_LISTENER_INTERNAL\}"'
+
+  - it: should bind every listener on the pod IP
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'BIND_LISTENERS="CLIENT://\$\{POD_IP\}:9124, INTERNAL://\$\{POD_IP\}:9123"'
+
+  - it: should follow custom listener ports
+    set:
+      listeners.internal.port: 19123
+      listeners.client.port: 19124
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: FLUSS_ADVERTISED_LISTENER_CLIENT
+            value: $(POD_NAME).coordinator-server-hs.$(POD_NAMESPACE).svc.cluster.local:19124
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: FLUSS_ADVERTISED_LISTENER_INTERNAL
+            value: $(POD_IP):19123
+
+  - it: should publish one env var per configured listener
+    set:
+      listeners.external.port: 9125
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: FLUSS_ADVERTISED_LISTENER_EXTERNAL
+            value: $(POD_NAME).coordinator-server-hs.$(POD_NAMESPACE).svc.cluster.local:9125
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'BIND_LISTENERS="CLIENT://\$\{POD_IP\}:9124, EXTERNAL://\$\{POD_IP\}:9125, INTERNAL://\$\{POD_IP\}:9123"'
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'EXTERNAL://\$\{FLUSS_ADVERTISED_LISTENER_EXTERNAL\}'
+
+---
+
+suite: tablet advertised listener env
+templates:
+  - templates/sts-tablet.yaml
+
+tests:
+  - it: should publish the CLIENT advertised address as an env var
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: FLUSS_ADVERTISED_LISTENER_CLIENT
+            value: $(POD_NAME).tablet-server-hs.$(POD_NAMESPACE).svc.cluster.local:9124
+
+  - it: should publish the INTERNAL advertised address as the pod IP
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: FLUSS_ADVERTISED_LISTENER_INTERNAL
+            value: $(POD_IP):9123
+
+  - it: should build advertised.listeners from the published env vars
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'ADVERTISED_LISTENERS="CLIENT://\$\{FLUSS_ADVERTISED_LISTENER_CLIENT\}, INTERNAL://\$\{FLUSS_ADVERTISED_LISTENER_INTERNAL\}"'
