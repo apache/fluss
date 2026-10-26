@@ -427,6 +427,13 @@ class TieringSourceEnumeratorSchedulingTest {
 
         private void requestTable() {
             enumerator.handleSplitRequest(0, "localhost");
+            if (!context.getOneTimeCallables().isEmpty()) {
+                try {
+                    context.runNextOneTimeCallable();
+                } catch (Throwable t) {
+                    throw new AssertionError(t);
+                }
+            }
         }
 
         private TableInfo addTable(long id, boolean empty) throws Exception {

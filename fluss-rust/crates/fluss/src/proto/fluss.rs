@@ -1347,6 +1347,10 @@ pub struct PbTableMetadata {
     /// A table-level, monotonically increasing version for bucket.num changes.
     #[prost(int64, optional, tag = "9")]
     pub bucket_count_epoch: ::core::option::Option<i64>,
+    /// Original ID of a deleted table. Keep the legacy table_id/path tombstone for older servers.
+    /// The ID prevents a delayed deletion from removing a newly created table with the same name.
+    #[prost(int64, optional, tag = "10")]
+    pub deleted_table_id: ::core::option::Option<i64>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PbPartitionMetadata {

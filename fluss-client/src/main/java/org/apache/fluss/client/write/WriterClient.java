@@ -27,11 +27,14 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.IllegalConfigurationException;
 import org.apache.fluss.exception.PartitionNotExistException;
+import org.apache.fluss.exception.RetriableException;
+import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
 import org.apache.fluss.utils.AutoPartitionStrategy;
+import org.apache.fluss.utils.ExponentialBackoff;
 import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 
@@ -91,6 +94,7 @@ public class WriterClient {
     private final IdempotenceManager idempotenceManager;
     private final WriterMetricGroup writerMetricGroup;
     private final DynamicPartitionCreator dynamicPartitionCreator;
+    private final ExponentialBackoff metadataRetryBackoff;
 
     public WriterClient(
             Configuration conf,
@@ -119,6 +123,12 @@ public class WriterClient {
 
             short acks = configureAcks(idempotenceManager.idempotenceEnabled());
             int retries = configureRetries(idempotenceManager.idempotenceEnabled());
+            this.metadataRetryBackoff =
+                    new ExponentialBackoff(
+                            conf.get(ConfigOptions.CLIENT_WRITER_RETRY_BACKOFF).toMillis(),
+                            2,
+                            conf.get(ConfigOptions.CLIENT_WRITER_RETRY_BACKOFF_MAX).toMillis(),
+                            0.2);
             this.accumulator =
                     new RecordAccumulator(
                             conf, idempotenceManager, writerMetricGroup, SystemClock.getInstance());
@@ -188,22 +198,7 @@ public class WriterClient {
         try {
             throwIfWriterClosed();
 
-            TableInfo tableInfo = record.getTableInfo();
-            PhysicalTablePath physicalTablePath = record.getPhysicalTablePath();
-            // Resolve retired partitions before appending so their records target the historical
-            // partition.
-            if (tableInfo.isPartitioned()) {
-                boolean historicalPartitionEnabled =
-                        accumulator.checkAndCacheHistoricalPartitionEnabled(tableInfo);
-                if (historicalPartitionEnabled
-                        && mayBeExpiredHistoricalPartition(
-                                physicalTablePath, tableInfo, Instant.now())) {
-                    resolveHistoricalWriteTarget(physicalTablePath, tableInfo);
-                } else {
-                    dynamicPartitionCreator.checkAndCreatePartitionAsync(
-                            physicalTablePath, tableInfo);
-                }
-            }
+            preparePartition(record);
 
             RecordAppendResult result =
                     accumulator.append(record, callback, metadataUpdater.getCluster());
@@ -218,12 +213,71 @@ public class WriterClient {
             // A partition-creation failure may close the accumulator before this record is
             // registered. Preserve that failure instead of reporting only "Writer closed".
             Throwable fatalError = sender.getFatalError();
+            if (fatalError == null && e instanceof RetriableException) {
+                throw (RetriableException) e;
+            }
             throw new FlussRuntimeException(
                     String.format(
                             "Failed to send record to table %s. Writer state: %s",
                             record.getPhysicalTablePath(),
                             sender != null && sender.isRunning() ? "running" : "closed"),
                     fatalError == null ? e : fatalError);
+        }
+    }
+
+    private void preparePartition(WriteRecord record) throws InterruptedException {
+        if (!record.getTableInfo().isPartitioned()) {
+            return;
+        }
+        long started = System.nanoTime();
+        long timeoutNanos = conf.get(ConfigOptions.CLIENT_REQUEST_TIMEOUT).toNanos();
+        int maxRetries = conf.get(ConfigOptions.CLIENT_WRITER_RETRIES);
+        for (int attempt = 0; ; attempt++) {
+            throwIfWriterClosed();
+            try {
+                preparePartitionOnce(record, started + timeoutNanos);
+                throwIfWriterClosed();
+                if (System.nanoTime() - started >= timeoutNanos) {
+                    throw new StaleMetadataException("Partition preparation deadline exceeded.");
+                }
+                return;
+            } catch (RetriableException e) {
+                long remaining = timeoutNanos - (System.nanoTime() - started);
+                long delay = TimeUnit.MILLISECONDS.toNanos(metadataRetryBackoff.backoff(attempt));
+                // Bound metadata preparation by the request timeout as well as the retry count.
+                // Exhaustion preserves the retriable cause for callers; no record is enqueued.
+                if (attempt >= maxRetries || remaining <= delay) {
+                    throw e;
+                }
+                try {
+                    TimeUnit.NANOSECONDS.sleep(delay);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw interrupted;
+                }
+                if (System.nanoTime() - started >= timeoutNanos) {
+                    throw e;
+                }
+            }
+        }
+    }
+
+    private void preparePartitionOnce(WriteRecord record, long deadlineNanos) {
+        TableInfo tableInfo = record.getTableInfo();
+        PhysicalTablePath physicalTablePath = record.getPhysicalTablePath();
+        // Resolve retired partitions before appending so their records target the historical
+        // partition.
+        if (tableInfo.isPartitioned()) {
+            boolean historicalPartitionEnabled =
+                    accumulator.checkAndCacheHistoricalPartitionEnabled(tableInfo);
+            if (historicalPartitionEnabled
+                    && mayBeExpiredHistoricalPartition(
+                            physicalTablePath, tableInfo, Instant.now())) {
+                resolveHistoricalWriteTarget(physicalTablePath, tableInfo, deadlineNanos);
+            } else {
+                dynamicPartitionCreator.checkAndCreatePartitionAsync(
+                        physicalTablePath, tableInfo, deadlineNanos);
+            }
         }
     }
 
@@ -263,7 +317,8 @@ public class WriterClient {
     }
 
     /** Resolves the physical write target for the original partition. */
-    private void resolveHistoricalWriteTarget(PhysicalTablePath originalPath, TableInfo tableInfo) {
+    private void resolveHistoricalWriteTarget(
+            PhysicalTablePath originalPath, TableInfo tableInfo, long deadlineNanos) {
         // Keep refreshing while the target is still the original partition so its retirement can
         // be detected before more records are appended to the stale route. Ideally, the Client
         // should learn the server-authoritative partition status without synchronously refreshing
@@ -278,7 +333,7 @@ public class WriterClient {
         metadataUpdater.invalidPhysicalTableBucketAndPartitionMeta(
                 Collections.singleton(originalPath));
         try {
-            if (!metadataUpdater.checkAndUpdatePartitionMetadata(originalPath)) {
+            if (!metadataUpdater.checkAndUpdatePartitionMetadata(originalPath, deadlineNanos)) {
                 throw new FlussRuntimeException(
                         "Failed to resolve write target for " + originalPath + '.');
             }
@@ -288,7 +343,7 @@ public class WriterClient {
             // TODO: Activate this target only after the lake-aware partition retirement protocol
             // guarantees that all accepted original writes are readable from the lake; see
             // https://github.com/apache/fluss/pull/3820.
-            if (!metadataUpdater.checkAndUpdatePartitionMetadata(targetPath)) {
+            if (!metadataUpdater.checkAndUpdatePartitionMetadata(targetPath, deadlineNanos)) {
                 throw new PartitionNotExistException(
                         "Historical partition " + targetPath + " does not exist.");
             }

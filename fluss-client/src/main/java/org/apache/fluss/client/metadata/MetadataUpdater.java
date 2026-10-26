@@ -27,6 +27,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.NetworkException;
+import org.apache.fluss.exception.NotCoordinatorLeaderException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.RetriableException;
 import org.apache.fluss.exception.StaleMetadataException;
@@ -54,6 +55,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArraySet;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
 
@@ -187,6 +190,14 @@ public class MetadataUpdater {
         return cluster.getPartitionId(physicalTablePath).isPresent();
     }
 
+    /** Checks a partition within the writer's absolute nanoTime deadline. */
+    public boolean checkAndUpdatePartitionMetadata(PhysicalTablePath path, long deadlineNanos) {
+        if (!cluster.getPartitionId(path).isPresent()) {
+            updateMetadata(null, Collections.singleton(path), null, deadlineNanos);
+        }
+        return cluster.getPartitionId(path).isPresent();
+    }
+
     /**
      * Check the table/partition bucket info for the given table bucket exist in metadata cache, if
      * not, try to update the metadata cache.
@@ -246,23 +257,62 @@ public class MetadataUpdater {
             @Nullable Collection<PhysicalTablePath> tablePartitionNames,
             @Nullable Collection<Long> tablePartitionIds)
             throws PartitionNotExistException {
+        updateMetadata(tablePaths, tablePartitionNames, tablePartitionIds, null);
+    }
+
+    private void updateMetadata(
+            @Nullable Set<TablePath> tablePaths,
+            @Nullable Collection<PhysicalTablePath> tablePartitionNames,
+            @Nullable Collection<Long> tablePartitionIds,
+            @Nullable Long deadlineNanos) {
         ServerNode serverNode =
                 getOneAvailableTabletServerNode(cluster, unavailableTabletServerIds);
+        boolean refreshingTableMetadata =
+                (tablePaths != null && !tablePaths.isEmpty())
+                        || (tablePartitionNames != null && !tablePartitionNames.isEmpty())
+                        || (tablePartitionIds != null && !tablePartitionIds.isEmpty());
+        boolean retryingCoordinator = false;
         try {
             synchronized (this) {
                 if (serverNode == null) {
                     LOG.info(
                             "No available tablet server to update metadata, try to re-initialize cluster using bootstrap server.");
-                    cluster = initializeCluster(conf, rpcClient);
+                    cluster = initializeCluster(conf, rpcClient, deadlineNanos);
+                    if (deadlineNanos != null && refreshingTableMetadata) {
+                        unavailableTabletServerIds.removeIf(
+                                cluster.getAliveTabletServers()::containsKey);
+                        updateMetadata(
+                                tablePaths, tablePartitionNames, tablePartitionIds, deadlineNanos);
+                        return;
+                    }
                 } else {
-                    cluster =
-                            sendMetadataRequestAndRebuildCluster(
-                                    cluster,
-                                    rpcClient,
-                                    tablePaths,
-                                    tablePartitionNames,
-                                    tablePartitionIds,
-                                    serverNode);
+                    try {
+                        cluster =
+                                requestMetadata(
+                                        GatewayClientProxy.createGatewayProxy(
+                                                () -> serverNode,
+                                                rpcClient,
+                                                AdminReadOnlyGateway.class),
+                                        tablePaths,
+                                        tablePartitionNames,
+                                        tablePartitionIds,
+                                        deadlineNanos);
+                    } catch (Exception e) {
+                        if (!refreshingTableMetadata
+                                || !(stripExecutionException(e)
+                                        instanceof StaleMetadataException)) {
+                            throw e;
+                        }
+                        // A tablet may still describe the previous instance of a reused name.
+                        // Retry once against the coordinator, including the owning tables.
+                        retryingCoordinator = true;
+                        cluster =
+                                fetchMetadataFromCoordinator(
+                                        tablePaths,
+                                        tablePartitionNames,
+                                        tablePartitionIds,
+                                        deadlineNanos);
+                    }
                 }
             }
 
@@ -275,7 +325,39 @@ public class MetadataUpdater {
             }
         } catch (Exception e) {
             Throwable t = stripExecutionException(e);
-            if (t instanceof RetriableException || t instanceof TimeoutException) {
+            if (t instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+                throw new FlussRuntimeException("Interrupted while updating metadata", t);
+            }
+            if (deadlineNanos != null
+                    && (t instanceof RetriableException
+                            || t instanceof NotCoordinatorLeaderException
+                            || t instanceof TimeoutException)) {
+                if (!retryingCoordinator
+                        && serverNode != null
+                        && !(t instanceof StaleMetadataException)) {
+                    unavailableTabletServerIds.add(serverNode.id());
+                }
+                StaleMetadataException failure =
+                        new StaleMetadataException(
+                                "Metadata could not be refreshed within the write preparation budget.");
+                failure.initCause(t);
+                throw failure;
+            }
+            if (refreshingTableMetadata && t instanceof StaleMetadataException) {
+                // The authoritative retry also failed. Do not let callers interpret an
+                // unsuccessful refresh as proof that a partition does not exist.
+                throw (StaleMetadataException) t;
+            } else if (t instanceof RetriableException
+                    || t instanceof NotCoordinatorLeaderException
+                    || t instanceof TimeoutException) {
+                if (retryingCoordinator) {
+                    StaleMetadataException failure =
+                            new StaleMetadataException(
+                                    "Could not confirm stale tablet metadata with the coordinator.");
+                    failure.initCause(t);
+                    throw failure;
+                }
                 if (serverNode != null) {
                     unavailableTabletServerIds.add(serverNode.id());
                     LOG.warn(
@@ -291,6 +373,81 @@ public class MetadataUpdater {
                 throw new FlussRuntimeException("Failed to update metadata", t);
             }
         }
+    }
+
+    /** Refreshes physical table layouts from the coordinator before rejecting stale routing. */
+    public synchronized Cluster updatePhysicalTableMetadataFromCoordinator(
+            Set<PhysicalTablePath> physicalTablePaths)
+            throws ExecutionException, InterruptedException, TimeoutException {
+        Set<TablePath> tables = new HashSet<>();
+        Set<PhysicalTablePath> partitions = new HashSet<>();
+        for (PhysicalTablePath path : physicalTablePaths) {
+            tables.add(path.getTablePath());
+            if (path.getPartitionName() != null) {
+                partitions.add(path);
+            }
+        }
+        cluster = fetchMetadataFromCoordinator(tables, partitions, null, null);
+        return cluster;
+    }
+
+    private Cluster fetchMetadataFromCoordinator(
+            @Nullable Set<TablePath> tablePaths,
+            @Nullable Collection<PhysicalTablePath> partitions,
+            @Nullable Collection<Long> partitionIds,
+            @Nullable Long deadlineNanos)
+            throws ExecutionException, InterruptedException, TimeoutException {
+        long deadline =
+                deadlineNanos == null
+                        ? System.nanoTime() + TimeUnit.SECONDS.toNanos(30)
+                        : deadlineNanos;
+        Set<TablePath> tables = tablePaths == null ? new HashSet<>() : new HashSet<>(tablePaths);
+        if (partitions != null) {
+            partitions.forEach(path -> tables.add(path.getTablePath()));
+        }
+        try {
+            if (getCoordinatorServer() == null) {
+                throw new NotCoordinatorLeaderException(
+                        "Coordinator is unknown while refreshing metadata.");
+            }
+            return requestMetadata(
+                    newCoordinatorServerClient(), tables, partitions, partitionIds, deadline);
+        } catch (NotCoordinatorLeaderException
+                | RetriableException
+                | ExecutionException
+                | TimeoutException e) {
+            Throwable cause = stripExecutionException(e);
+            if (!(cause instanceof NotCoordinatorLeaderException
+                    || cause instanceof TimeoutException
+                    || (cause instanceof RetriableException
+                            && !(cause instanceof StaleMetadataException)))) {
+                throw e;
+            }
+            // The cached coordinator may have lost leadership or moved. Reuse node discovery
+            // before one authoritative retry; repeated calls must not keep using the old address.
+            updateMetadata(null, null, null, deadline);
+            if (getCoordinatorServer() == null) {
+                throw new StaleMetadataException(
+                        "Coordinator is still unknown after node discovery.");
+            }
+            return requestMetadata(
+                    newCoordinatorServerClient(), tables, partitions, partitionIds, deadline);
+        }
+    }
+
+    private Cluster requestMetadata(
+            AdminReadOnlyGateway gateway,
+            @Nullable Set<TablePath> tables,
+            @Nullable Collection<PhysicalTablePath> partitions,
+            @Nullable Collection<Long> partitionIds,
+            @Nullable Long deadlineNanos)
+            throws ExecutionException, InterruptedException, TimeoutException {
+        long remaining =
+                deadlineNanos == null
+                        ? TimeUnit.SECONDS.toNanos(30)
+                        : deadlineNanos - System.nanoTime();
+        return sendMetadataRequestAndRebuildCluster(
+                gateway, true, cluster, tables, partitions, partitionIds, remaining);
     }
 
     /**
@@ -358,6 +515,11 @@ public class MetadataUpdater {
      * servers according to the config {@link ConfigOptions#BOOTSTRAP_SERVERS}.
      */
     private static Cluster initializeCluster(Configuration conf, RpcClient rpcClient) {
+        return initializeCluster(conf, rpcClient, null);
+    }
+
+    private static Cluster initializeCluster(
+            Configuration conf, RpcClient rpcClient, @Nullable Long deadlineNanos) {
         List<InetSocketAddress> inetSocketAddresses =
                 ClientUtils.parseAndValidateAddresses(conf.get(ConfigOptions.BOOTSTRAP_SERVERS));
         Cluster cluster = null;
@@ -372,7 +534,18 @@ public class MetadataUpdater {
                 AdminReadOnlyGateway adminReadOnlyGateway =
                         GatewayClientProxy.createGatewayProxy(
                                 () -> finalServerNode, rpcClient, AdminReadOnlyGateway.class);
-                if (inetSocketAddresses.size() == 1) {
+                if (deadlineNanos != null) {
+                    cluster =
+                            sendMetadataRequestAndRebuildCluster(
+                                    adminReadOnlyGateway,
+                                    false,
+                                    Cluster.empty(),
+                                    null,
+                                    null,
+                                    null,
+                                    deadlineNanos - System.nanoTime());
+                    break;
+                } else if (inetSocketAddresses.size() == 1) {
                     // if there is only one bootstrap server, we can retry to connect to it.
                     cluster =
                             tryToInitializeClusterWithRetries(
@@ -391,11 +564,24 @@ public class MetadataUpdater {
                         "Failed to initialize fluss client connection to bootstrap server: {}",
                         address,
                         e);
+                if (stripExecutionException(e) instanceof InterruptedException) {
+                    Thread.currentThread().interrupt();
+                    throw new FlussRuntimeException(
+                            "Interrupted while discovering cluster nodes", e);
+                }
                 lastException = e;
             }
         }
 
         if (cluster == null && lastException != null) {
+            Throwable cause = stripExecutionException(lastException);
+            if (deadlineNanos != null
+                    && (cause instanceof RetriableException || cause instanceof TimeoutException)) {
+                StaleMetadataException failure =
+                        new StaleMetadataException("Cluster node discovery temporarily failed.");
+                failure.initCause(cause);
+                throw failure;
+            }
             String errorMsg =
                     "Failed to initialize fluss client connection to bootstrap servers: "
                             + inetSocketAddresses

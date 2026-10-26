@@ -21,6 +21,7 @@ import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.PartitionNotExistException;
+import org.apache.fluss.exception.RetriableException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableInfo;
@@ -31,6 +32,7 @@ import org.apache.fluss.utils.ExceptionUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 
 import java.util.List;
@@ -69,6 +71,14 @@ public class DynamicPartitionCreator {
     /** Ensures the partition exists, creating it asynchronously when enabled. */
     public void checkAndCreatePartitionAsync(
             PhysicalTablePath physicalTablePath, TableInfo tableInfo) {
+        checkAndCreatePartitionAsync(physicalTablePath, tableInfo, null);
+    }
+
+    /** Ensures partition metadata is resolved within the writer's request deadline. */
+    public void checkAndCreatePartitionAsync(
+            PhysicalTablePath physicalTablePath,
+            TableInfo tableInfo,
+            @Nullable Long deadlineNanos) {
         String partitionName = physicalTablePath.getPartitionName();
         if (partitionName == null) {
             // no need to check and create partition
@@ -83,7 +93,7 @@ public class DynamicPartitionCreator {
                 // if the partition is already in inflightPartitionsToCreate, we should skip
                 // creating it.
                 LOG.debug("Partition {} is already being created, skipping.", physicalTablePath);
-            } else if (forceCheckPartitionExist(physicalTablePath)) {
+            } else if (forceCheckPartitionExist(physicalTablePath, deadlineNanos)) {
                 // if the partition exists, we should skip creating it.
                 LOG.debug("Partition {} already exists, skipping.", physicalTablePath);
             } else {
@@ -116,11 +126,16 @@ public class DynamicPartitionCreator {
         }
     }
 
-    private boolean forceCheckPartitionExist(PhysicalTablePath physicalTablePath) {
+    private boolean forceCheckPartitionExist(
+            PhysicalTablePath physicalTablePath, @Nullable Long deadlineNanos) {
         boolean idExist = false;
         // force an IO to check whether the partition exists
         try {
-            idExist = metadataUpdater.checkAndUpdatePartitionMetadata(physicalTablePath);
+            idExist =
+                    deadlineNanos == null
+                            ? metadataUpdater.checkAndUpdatePartitionMetadata(physicalTablePath)
+                            : metadataUpdater.checkAndUpdatePartitionMetadata(
+                                    physicalTablePath, deadlineNanos);
         } catch (Exception e) {
             Throwable t = ExceptionUtils.stripExecutionException(e);
             if (t instanceof PartitionNotExistException) {
@@ -129,6 +144,8 @@ public class DynamicPartitionCreator {
                             String.format(
                                     "Table partition '%s' does not exist.", physicalTablePath));
                 }
+            } else if (t instanceof RetriableException) {
+                throw (RetriableException) t;
             } else {
                 throw new FlussRuntimeException(e.getMessage(), e);
             }

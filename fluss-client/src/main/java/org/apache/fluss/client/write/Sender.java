@@ -23,8 +23,10 @@ import org.apache.fluss.client.metrics.WriterMetricGroup;
 import org.apache.fluss.client.write.RecordAccumulator.ReadyCheckResult;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.exception.HistoricalPartitionThrottledException;
+import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.InvalidMetadataException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
+import org.apache.fluss.exception.NotCoordinatorLeaderException;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.RetriableException;
@@ -57,6 +59,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeProduceLogRequest;
@@ -100,6 +105,9 @@ public class Sender implements Runnable {
 
     /** The first fatal error that requires the sender thread to abort all incomplete batches. */
     private final AtomicReference<Throwable> fatalError = new AtomicReference<>();
+
+    private final ConcurrentMap<PhysicalTablePath, Exception> pendingRoutingFailures =
+            new ConcurrentHashMap<>();
 
     private final Object wakeupLock = new Object();
     private boolean wakeup;
@@ -200,6 +208,7 @@ public class Sender implements Runnable {
 
     /** Run a single iteration of sending. */
     public void runOnce() throws Exception {
+        abortInvalidRoutingTargets();
         if (fatalError.get() != null) {
             maybeAbortBatches(fatalError.get());
             return;
@@ -255,6 +264,26 @@ public class Sender implements Runnable {
         // if there are any buckets whose leaders are not known yet, force metadata update
         if (!readyCheckResult.unknownLeaderTables.isEmpty()) {
             try {
+                if (!readyCheckResult.invalidBucketTables.isEmpty()) {
+                    // A cached layout can lag a bucket expansion. Confirm with the coordinator
+                    // before failing a batch that cannot reach a server for routing validation.
+                    Cluster refreshedCluster =
+                            metadataUpdater.updatePhysicalTableMetadataFromCoordinator(
+                                    readyCheckResult.invalidBucketTables);
+                    Set<PhysicalTablePath> invalidTables =
+                            new HashSet<>(accumulator.ready(refreshedCluster).invalidBucketTables);
+                    invalidTables.retainAll(readyCheckResult.invalidBucketTables);
+                    if (!invalidTables.isEmpty()) {
+                        InvalidBucketRoutingException failure =
+                                new InvalidBucketRoutingException(
+                                        "Buffered records target buckets outside the current layout for "
+                                                + invalidTables
+                                                + ". Recreate the connection with current metadata.");
+                        invalidTables.forEach(path -> failRoutingTarget(path, failure));
+                        abortInvalidRoutingTargets();
+                    }
+                    return;
+                }
                 metadataUpdater.updatePhysicalTableMetadata(readyCheckResult.unknownLeaderTables);
             } catch (Exception e) {
                 // TODO: this try-catch is not needed when we don't update metadata for
@@ -262,6 +291,14 @@ public class Sender implements Runnable {
                 Throwable t = ExceptionUtils.stripExecutionException(e);
                 if (t instanceof PartitionNotExistException) {
                     handlePartitionNotExistException(readyCheckResult.unknownLeaderTables);
+                } else if (!readyCheckResult.invalidBucketTables.isEmpty()
+                        && (t instanceof RetriableException
+                                || t instanceof NotCoordinatorLeaderException
+                                || t instanceof TimeoutException)) {
+                    // Leave the unresolved target queued, but let healthy targets below drain.
+                    // A fast rejection from the previous leader must not cause a tight retry loop.
+                    LOG.debug("Routing metadata is temporarily unavailable; will retry.", t);
+                    awaitNextReadyCheck(100);
                 } else {
                     throw e;
                 }
@@ -298,7 +335,7 @@ public class Sender implements Runnable {
     }
 
     private void completeBatch(ReadyWriteBatch readyWriteBatch) {
-        if (fatalError.get() != null) {
+        if (shouldIgnoreResponse(readyWriteBatch)) {
             return;
         }
         if (idempotenceManager.idempotenceEnabled()) {
@@ -312,7 +349,7 @@ public class Sender implements Runnable {
     /** Complete batch with bucket and log end offset info (for KV batches). */
     private void completeBatch(
             ReadyWriteBatch readyWriteBatch, TableBucket bucket, long logEndOffset) {
-        if (fatalError.get() != null) {
+        if (shouldIgnoreResponse(readyWriteBatch)) {
             return;
         }
         if (idempotenceManager.idempotenceEnabled()) {
@@ -730,6 +767,9 @@ public class Sender implements Runnable {
             ApiError error,
             Set<PhysicalTablePath> invalidMetadataTables,
             List<ReadyWriteBatch> batchesToRetry) {
+        if (shouldIgnoreResponse(readyWriteBatch)) {
+            return;
+        }
         WriteBatch writeBatch = readyWriteBatch.writeBatch();
         // Historical queues use the original path as their accumulator key, so capture the actual
         // RPC target before any retry handling.
@@ -745,8 +785,8 @@ public class Sender implements Runnable {
         if (error.error() == Errors.INVALID_BUCKET_ROUTING) {
             // Tentative assignments are resolved before drain. A rejection after that barrier
             // cannot be recovered by failing one batch: queued and in-flight writes belong to
-            // the same ordered stream. Stop accepting/draining writes and fail the writer.
-            recordFatalError(error.exception());
+            // the same ordered stream. Fence that target, leaving unrelated targets writable.
+            failRoutingTarget(writeTargetPath, error.exception());
             invalidMetadataTables.add(writeBatch.physicalTablePath());
             return;
         }
@@ -962,7 +1002,29 @@ public class Sender implements Runnable {
         return matchedBatches;
     }
 
-    private void abortBatches(PhysicalTablePath targetPath, PartitionNotExistException exception) {
+    private boolean shouldIgnoreResponse(ReadyWriteBatch batch) {
+        return fatalError.get() != null
+                || batch.writeBatch().isDone()
+                || accumulator.isTargetFailed(batch.writeBatch().writeTargetPath());
+    }
+
+    private void failRoutingTarget(PhysicalTablePath targetPath, Exception exception) {
+        accumulator.failTarget(targetPath, exception);
+        pendingRoutingFailures.putIfAbsent(targetPath, exception);
+        wakeup();
+    }
+
+    private void abortInvalidRoutingTargets() {
+        // RPC callbacks only fence appends. Release buffers on the sender thread, after any
+        // concurrent request construction has finished using them.
+        pendingRoutingFailures.forEach(
+                (path, failure) -> {
+                    abortBatches(path, failure);
+                    pendingRoutingFailures.remove(path, failure);
+                });
+    }
+
+    private void abortBatches(PhysicalTablePath targetPath, Exception exception) {
         List<ReadyWriteBatch> matchingInFlightBatches = getInFlightBatches(targetPath);
         // Make the batches terminal before detaching their in-flight bookkeeping.
         accumulator.abortBatches(targetPath, exception);

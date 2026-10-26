@@ -89,6 +89,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 
 import static org.apache.fluss.config.ConfigOptions.DATALAKE_FORMAT;
@@ -1142,16 +1143,20 @@ public class FlussAuthorizationITCase {
 
             // Trigger table creation. We do not wait for the table to be "ready"
             // to maximize the chance of the rebalancer encountering transient metadata.
-            rootAdmin.createTable(transientTable, DATA1_TABLE_DESCRIPTOR_PK, false);
+            CompletableFuture<Void> createTableFuture =
+                    rootAdmin.createTable(transientTable, DATA1_TABLE_DESCRIPTOR_PK, false);
 
-            // Attempt to rebalance the cluster.
-            // This verifies that the rebalance operation is robust against transient table states
-            // (e.g., leader elected but not yet present in the assignment list) and does not fail.
-            assertThatCode(() -> guestAdmin.rebalance(Collections.emptyList()).get())
-                    .doesNotThrowAnyException();
-
-            // Cleanup the table for the next iteration.
-            rootAdmin.dropTable(transientTable, true).get();
+            try {
+                // Attempt to rebalance the cluster.
+                // This verifies that the rebalance operation is robust against transient table
+                // states (e.g., leader elected but not yet present in the assignment list).
+                assertThatCode(() -> guestAdmin.rebalance(Collections.emptyList()).get())
+                        .doesNotThrowAnyException();
+            } finally {
+                // Finish creation before cleanup, even if the rebalance assertion fails.
+                createTableFuture.get();
+                rootAdmin.dropTable(transientTable, true).get();
+            }
         }
     }
 

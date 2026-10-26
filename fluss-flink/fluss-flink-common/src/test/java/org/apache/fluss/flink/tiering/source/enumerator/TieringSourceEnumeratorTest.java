@@ -37,18 +37,21 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
+import org.apache.fluss.rpc.messages.LakeTieringHeartbeatRequest;
+import org.apache.fluss.rpc.messages.LakeTieringHeartbeatResponse;
 import org.apache.fluss.rpc.messages.PbLakeTableOffsetForBucket;
 import org.apache.fluss.rpc.messages.PbLakeTableSnapshotInfo;
+import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
 
 import org.apache.flink.api.connector.source.SourceEvent;
 import org.apache.flink.api.connector.source.SplitsAssignment;
 import org.apache.flink.api.connector.source.mocks.MockSplitEnumeratorContext;
-import org.apache.flink.api.java.tuple.Tuple3;
 import org.apache.flink.util.FlinkRuntimeException;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.annotation.Nullable;
@@ -69,10 +72,6 @@ import static org.apache.fluss.config.ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRE
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyNoMoreInteractions;
-import static org.mockito.Mockito.when;
 
 /** Unit tests for {@link TieringSourceEnumerator} and {@link TieringSplitGenerator}. */
 class TieringSourceEnumeratorTest extends TieringTestBase {
@@ -88,6 +87,69 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
     @BeforeEach
     protected void beforeEach() throws Exception {
         super.beforeEach();
+    }
+
+    @ParameterizedTest
+    @CsvSource({"true, true", "false, true", "false, false"})
+    void testCloseReleasesTableBeforeNextHeartbeat(boolean emptyTable, boolean finished)
+            throws Exception {
+        long tableId = createTable(DEFAULT_TABLE_PATH, DEFAULT_PK_TABLE_DESCRIPTOR);
+        if (!emptyTable) {
+            upsertRow(DEFAULT_TABLE_PATH, DEFAULT_PK_TABLE_DESCRIPTOR, 0, 10);
+            triggerAndWaitSnapshot(tableId);
+        }
+        ManuallyTriggeredScheduledExecutorService timer =
+                new ManuallyTriggeredScheduledExecutorService();
+        try (FlussMockSplitEnumeratorContext<FlinkTieringSplit> context =
+                        new FlussMockSplitEnumeratorContext<>(1);
+                TieringSourceEnumerator enumerator =
+                        new TieringSourceEnumerator(
+                                flussConf,
+                                new Configuration(),
+                                context,
+                                new TestingLakeTieringFactory(),
+                                500,
+                                timer)) {
+            enumerator.start();
+            context.registerSourceReader(0, 0, "localhost");
+            enumerator.addReader(0);
+            retry(
+                    Duration.ofSeconds(10),
+                    () -> {
+                        enumerator.handleSplitRequest(0, "localhost");
+                        try {
+                            context.runNextOneTimeCallable();
+                        } catch (Throwable t) {
+                            throw new AssertionError(t);
+                        }
+                        assertThat(timer.getActiveNonPeriodicScheduledTask()).isNotEmpty();
+                    });
+            if (emptyTable) {
+                assertThat(context.getSplitsAssignmentSequence()).isEmpty();
+            } else {
+                assertThat(context.getSplitsAssignmentSequence()).isNotEmpty();
+                if (finished) {
+                    enumerator.handleSourceEvent(0, new FinishedTieringEvent(tableId));
+                }
+            }
+
+            // Neither periodic heartbeats nor completion callbacks run before shutdown.
+            // Closing must release both empty/completed rounds and unfinished work.
+            enumerator.close();
+            retry(
+                    Duration.ofSeconds(10),
+                    () -> {
+                        LakeTieringHeartbeatResponse response =
+                                coordinatorGateway
+                                        .lakeTieringHeartbeat(
+                                                new LakeTieringHeartbeatRequest()
+                                                        .setRequestTable(true))
+                                        .get();
+                        assertThat(response.hasTieringTable()).isTrue();
+                        assertThat(response.getTieringTable().getTableId()).isEqualTo(tableId);
+                        assertThat(response.getTieringTable().getTieringEpoch()).isGreaterThan(1);
+                    });
+        }
     }
 
     @ParameterizedTest
@@ -353,8 +415,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
         int numSubtasks = 6;
         int expectNumberOfSplits = 6;
         Configuration tieringConfig = new Configuration();
-        LakeTieringFactory<?, ?> factory = mock(LakeTieringFactory.class);
-        when(factory.supportsPartitionMarkDone()).thenReturn(true);
+        LakeTieringFactory<?, ?> factory = new TestingLakeTieringFactory();
         // test get snapshot split assignment
         try (FlussMockSplitEnumeratorContext<FlinkTieringSplit> context =
                         new FlussMockSplitEnumeratorContext<>(numSubtasks);
@@ -380,7 +441,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             assertThat(actualSnapshotAssignment).isEmpty();
 
             tieringConfig.set(ConfigOptions.LAKE_TIERING_PARTITION_MARK_DONE_ENABLED, true);
-            enumerator.generateAndAssignSplits(Tuple3.of(tableId, 1L, tablePath), null);
+            waitUntilTieringTableSplitAssignmentReady(context, 1, 500L);
             List<FlinkTieringSplit> maintenanceSplits = new ArrayList<>();
             context.getSplitsAssignmentSequence()
                     .forEach(a -> a.assignment().values().forEach(maintenanceSplits::addAll));
@@ -393,8 +454,6 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                                 assertThat(split.unwrap().shouldSkipCurrentRound()).isTrue();
                             });
             assertValidTieringRound(maintenanceSplits);
-            verify(factory).supportsPartitionMarkDone();
-            verifyNoMoreInteractions(factory);
             tieringConfig.set(ConfigOptions.LAKE_TIERING_PARTITION_MARK_DONE_ENABLED, false);
 
             // mock finished tiered this round, check second round
@@ -841,7 +900,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
     }
 
     @Test
-    void testTableValidationFailureDoesNotAssignSplits() throws Exception {
+    void testTableValidationFailureDoesNotAssignSplits() throws Throwable {
         TablePath tablePath = TablePath.of(DEFAULT_DB, "tiering-validation-failure");
         createTable(tablePath, DEFAULT_LOG_TABLE_DESCRIPTOR);
         AtomicReference<TableInfo> validatedTable = new AtomicReference<>();
@@ -860,6 +919,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                         createTieringSourceEnumerator(flussConf, context, lakeTieringFactory)) {
             enumerator.start();
             registerSingleReaderAndHandleSplitRequests(context, enumerator, 0, 0);
+            context.runNextOneTimeCallable();
 
             assertThat(validatedTable.get()).isNotNull();
             assertThat(validatedTable.get().getTablePath()).isEqualTo(tablePath);

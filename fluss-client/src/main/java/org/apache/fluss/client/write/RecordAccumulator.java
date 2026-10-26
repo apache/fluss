@@ -125,6 +125,9 @@ public final class RecordAccumulator {
     private final ConcurrentMap<PhysicalTablePath, BucketAndWriteBatches> writeBatches =
             new CopyOnWriteMap<>();
 
+    private final ConcurrentMap<PhysicalTablePath, Exception> failedTargets =
+            new ConcurrentHashMap<>();
+
     /** Whether tables observed by this writer have historical partition support enabled. */
     private final ConcurrentMap<TablePath, Boolean> historicalPartitionEnabledByTable =
             new ConcurrentHashMap<>();
@@ -394,6 +397,7 @@ public final class RecordAccumulator {
         Set<Integer> readyNodes = new HashSet<>();
         long nextReadyCheckDelayMs = Long.MAX_VALUE;
         Set<PhysicalTablePath> unknownLeaderTables = new HashSet<>();
+        Set<PhysicalTablePath> invalidBucketTables = new HashSet<>();
         // Go table by table so that we can get queue sizes for buckets in a table and calculate
         // cumulative frequency table (used in bucket assigner).
 
@@ -403,6 +407,7 @@ public final class RecordAccumulator {
                             bucketAndWriteBatches,
                             readyNodes,
                             unknownLeaderTables,
+                            invalidBucketTables,
                             cluster,
                             nextReadyCheckDelayMs);
         }
@@ -416,7 +421,8 @@ public final class RecordAccumulator {
             nextReadyCheckDelayMs = Math.min(nextReadyCheckDelayMs, batchTimeoutMs);
         }
 
-        return new ReadyCheckResult(readyNodes, nextReadyCheckDelayMs, unknownLeaderTables);
+        return new ReadyCheckResult(
+                readyNodes, nextReadyCheckDelayMs, unknownLeaderTables, invalidBucketTables);
     }
 
     /**
@@ -620,12 +626,44 @@ public final class RecordAccumulator {
 
     /** Aborts incomplete batches whose current RPC target is {@code targetPath}. */
     void abortBatches(PhysicalTablePath targetPath, Exception reason) {
+        if (isTargetFailed(targetPath)) {
+            // An append may have passed the failure check before the target was fenced. Wait
+            // for its batch registration before taking the incomplete-batch snapshot.
+            for (BucketAndWriteBatches context : writeBatches.values()) {
+                synchronized (context) {
+                    if (context.targetPath.equals(targetPath)) {
+                        for (Deque<WriteBatch> deque : context.batches.values()) {
+                            synchronized (deque) {
+                                // Wait for an append already holding this deque.
+                            }
+                        }
+                    }
+                }
+            }
+        }
         for (WriteBatch batch : incomplete.copyAll()) {
             BucketAndWriteBatches writeTarget = writeBatches.get(batch.physicalTablePath());
             if (writeTarget != null && writeTarget.targetPath.equals(targetPath)) {
                 abortBatch(reason, batch);
+                if (idempotenceManager.idempotenceEnabled() && batch.hasBatchSequence()) {
+                    idempotenceManager.removeInFlightBatch(
+                            new ReadyWriteBatch(
+                                    new TableBucket(
+                                            batch.tableId(),
+                                            writeTarget.partitionId,
+                                            batch.bucketId()),
+                                    batch));
+                }
             }
         }
+    }
+
+    void failTarget(PhysicalTablePath targetPath, Exception reason) {
+        failedTargets.putIfAbsent(targetPath, reason);
+    }
+
+    boolean isTargetFailed(PhysicalTablePath targetPath) {
+        return failedTargets.containsKey(targetPath);
     }
 
     /** Abort all incomplete batches (whether they have been sent or not). */
@@ -766,7 +804,14 @@ public final class RecordAccumulator {
     }
 
     public Set<PhysicalTablePath> getPhysicalTablePathsInBatches() {
-        return writeBatches.keySet();
+        Set<PhysicalTablePath> targets = new HashSet<>();
+        writeBatches.forEach(
+                (path, batches) -> {
+                    if (!isTargetFailed(batches.targetPath)) {
+                        targets.add(path);
+                    }
+                });
+        return targets;
     }
 
     private List<MemorySegment> allocateMemorySegments(
@@ -802,9 +847,13 @@ public final class RecordAccumulator {
             BucketAndWriteBatches bucketAndWriteBatches,
             Set<Integer> readyNodes,
             Set<PhysicalTablePath> unknownLeaderTables,
+            Set<PhysicalTablePath> invalidBucketTables,
             Cluster cluster,
             long nextReadyCheckDelayMs) {
         PhysicalTablePath targetPath = bucketAndWriteBatches.targetPath;
+        if (isTargetFailed(targetPath)) {
+            return nextReadyCheckDelayMs;
+        }
         Long partitionId =
                 bucketAndWriteBatches.isPartitionedTable
                         ? cluster.getPartitionId(targetPath).orElse(null)
@@ -864,6 +913,12 @@ public final class RecordAccumulator {
                 // a metadata refresh is orthogonal to the gate (it sends no data), and refreshing
                 // now means the leader is ready to receive once the gate clears.
                 unknownLeaderTables.add(targetPath);
+                Integer bucketCount =
+                        cluster.getBucketCount(TableOrPartition.of(tableId, partitionId))
+                                .orElse(null);
+                if (bucketCount != null && bucketCount > 0 && bucketId >= bucketCount) {
+                    invalidBucketTables.add(targetPath);
+                }
                 continue;
             }
 
@@ -1190,6 +1245,11 @@ public final class RecordAccumulator {
         if (closed) {
             throw new FlussRuntimeException("Writer closed while send in progress");
         }
+        Exception failure =
+                failedTargets.get(writeBatches.get(writeRecord.getPhysicalTablePath()).targetPath);
+        if (failure != null) {
+            throw failure;
+        }
         WriteBatch last = deque.peekLast();
         if (last != null) {
             boolean success =
@@ -1228,6 +1288,10 @@ public final class RecordAccumulator {
             TableBucket tableBucket = bucket.getTableBucket();
             updateDrainIndex(node, drainIndex);
             drainIndex = (drainIndex + 1) % buckets.size();
+
+            if (isTargetFailed(physicalTablePath)) {
+                continue;
+            }
 
             Deque<WriteBatch> deque = getReadyDeque(physicalTablePath, tableBucket.getBucket());
             if (deque == null) {
@@ -1611,14 +1675,17 @@ public final class RecordAccumulator {
         public final Set<Integer> readyNodes;
         public final long nextReadyCheckDelayMs;
         public final Set<PhysicalTablePath> unknownLeaderTables;
+        public final Set<PhysicalTablePath> invalidBucketTables;
 
         public ReadyCheckResult(
                 Set<Integer> readyNodes,
                 long nextReadyCheckDelayMs,
-                Set<PhysicalTablePath> unknownLeaderTables) {
+                Set<PhysicalTablePath> unknownLeaderTables,
+                Set<PhysicalTablePath> invalidBucketTables) {
             this.readyNodes = readyNodes;
             this.nextReadyCheckDelayMs = nextReadyCheckDelayMs;
             this.unknownLeaderTables = unknownLeaderTables;
+            this.invalidBucketTables = invalidBucketTables;
         }
     }
 

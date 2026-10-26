@@ -171,28 +171,44 @@ public final class NettyClient implements RpcClient {
                     shutdownFutures.add(conn.getValue().close());
                 }
             }
-            shutdownFutures.add(NettyUtils.shutdownGroup(eventGroup));
-            CompletableFuture.allOf(shutdownFutures.toArray(new CompletableFuture<?>[0]))
-                    .get(10, TimeUnit.SECONDS);
+            try {
+                CompletableFuture.allOf(shutdownFutures.toArray(new CompletableFuture<?>[0]))
+                        .get(10, TimeUnit.SECONDS);
+            } finally {
+                // Shut down the event loop only after the connections are closed, as it
+                // terminates without a quiet period. It is shut down even if closing a
+                // connection failed or timed out.
+                NettyUtils.shutdownGroup(eventGroup).get(10, TimeUnit.SECONDS);
+            }
             LOG.info("Netty client was shutdown successfully.");
         } catch (Exception e) {
             LOG.warn("Netty client shutdown failed: ", e);
         }
     }
 
-    private ServerConnection getOrCreateConnection(ServerNode node) {
+    @VisibleForTesting
+    ServerConnection getOrCreateConnection(ServerNode node) {
         String serverId = node.uid();
-        return connections.computeIfAbsent(
-                serverId,
-                ignored -> {
-                    LOG.debug("Creating connection to server {}.", node);
-                    return new ServerConnection(
-                            bootstrap,
-                            node,
-                            clientMetricGroup,
-                            authenticatorSupplier.get(),
-                            (con, ignore) -> connections.remove(serverId, con));
-                });
+        ServerConnection connection =
+                connections.computeIfAbsent(
+                        serverId,
+                        ignored -> {
+                            LOG.debug("Creating connection to server {}.", node);
+                            return new ServerConnection(
+                                    bootstrap,
+                                    node,
+                                    clientMetricGroup,
+                                    authenticatorSupplier.get(),
+                                    (con, ignore) -> connections.remove(serverId, con));
+                        });
+        // close() may have run before the connection was added and missed it. Its event loop is
+        // then terminated, so the connection would never connect and its requests would never
+        // complete. Close it here, so they fail instead. isClosed is volatile: either this check
+        // sees the client closed, or close() sees the connection.
+        if (isClosed) {
+            connection.close();
+        }
+        return connection;
     }
 
     @VisibleForTesting

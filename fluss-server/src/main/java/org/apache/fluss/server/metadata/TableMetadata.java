@@ -20,6 +20,8 @@ package org.apache.fluss.server.metadata;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 
+import javax.annotation.Nullable;
+
 import java.util.List;
 import java.util.Objects;
 
@@ -52,9 +54,20 @@ public class TableMetadata {
      */
     private final List<BucketMetadata> bucketMetadataList;
 
+    @Nullable private final Long deletedTableId;
+
     public TableMetadata(TableInfo tableInfo, List<BucketMetadata> bucketMetadataList) {
+        this(tableInfo, bucketMetadataList, null);
+    }
+
+    /** Creates metadata, retaining the original ID when this is a deletion notification. */
+    public TableMetadata(
+            TableInfo tableInfo,
+            List<BucketMetadata> bucketMetadataList,
+            @Nullable Long deletedTableId) {
         this.tableInfo = tableInfo;
         this.bucketMetadataList = bucketMetadataList;
+        this.deletedTableId = deletedTableId;
     }
 
     public TableInfo getTableInfo() {
@@ -65,6 +78,12 @@ public class TableMetadata {
         return bucketMetadataList;
     }
 
+    /** Returns the original table ID carried by a deletion notification, if available. */
+    @Nullable
+    public Long getDeletedTableId() {
+        return deletedTableId;
+    }
+
     @Override
     public String toString() {
         return "TableMetadata{"
@@ -72,6 +91,8 @@ public class TableMetadata {
                 + tableInfo
                 + ", bucketMetadataList="
                 + bucketMetadataList
+                + ", deletedTableId="
+                + deletedTableId
                 + '}';
     }
 
@@ -87,11 +108,12 @@ public class TableMetadata {
         if (!tableInfo.equals(that.tableInfo)) {
             return false;
         }
-        return bucketMetadataList.equals(that.bucketMetadataList);
+        return bucketMetadataList.equals(that.bucketMetadataList)
+                && Objects.equals(deletedTableId, that.deletedTableId);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(tableInfo, bucketMetadataList);
+        return Objects.hash(tableInfo, bucketMetadataList, deletedTableId);
     }
 }

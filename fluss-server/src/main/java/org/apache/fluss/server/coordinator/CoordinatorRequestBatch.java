@@ -62,7 +62,6 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-import static org.apache.fluss.server.metadata.PartitionMetadata.DELETED_PARTITION_ID;
 import static org.apache.fluss.server.metadata.PartitionMetadata.DELETED_PARTITION_NAME;
 import static org.apache.fluss.server.metadata.TableMetadata.DELETED_TABLE_ID;
 import static org.apache.fluss.server.metadata.TableMetadata.DELETED_TABLE_PATH;
@@ -75,6 +74,7 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeNotifyRemo
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeStopBucketReplica;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeUpdateMetadataRequest;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTableBucket;
+import static org.apache.fluss.utils.Preconditions.checkState;
 
 /** A request sender for coordinator server to request to tablet server by batch. */
 public class CoordinatorRequestBatch {
@@ -702,7 +702,13 @@ public class CoordinatorRequestBatch {
                 (tableId, bucketMetadataList) -> {
                     TableInfo tableInfo = getTableInfo(tableId);
                     if (tableInfo != null) {
-                        tableMetadataList.add(new TableMetadata(tableInfo, bucketMetadataList));
+                        tableMetadataList.add(
+                                new TableMetadata(
+                                        tableInfo,
+                                        bucketMetadataList,
+                                        coordinatorContext.isTableQueuedForDeletion(tableId)
+                                                ? tableId
+                                                : null));
                     }
                 });
 
@@ -724,27 +730,25 @@ public class CoordinatorRequestBatch {
                         Integer bucketCount =
                                 partitionAssignment.isEmpty() ? null : partitionAssignment.size();
                         PartitionMetadata partitionMetadata;
-                        if (partitionName == null) {
-                            if (partitionQueuedForDeletion) {
-                                partitionMetadata =
-                                        new PartitionMetadata(
-                                                tableId,
-                                                DELETED_PARTITION_NAME,
-                                                partitionId,
-                                                kvEntry.getValue(),
-                                                bucketCount);
-                            } else {
-                                throw new IllegalStateException(
-                                        "Partition name is null for partition " + partitionId);
-                            }
+                        if (partitionQueuedForDeletion) {
+                            // Keep the original identity even while the name is still in context.
+                            partitionMetadata =
+                                    new PartitionMetadata(
+                                            tableId,
+                                            DELETED_PARTITION_NAME,
+                                            partitionId,
+                                            kvEntry.getValue(),
+                                            bucketCount);
                         } else {
+                            checkState(
+                                    partitionName != null,
+                                    "Partition name is null for partition %s",
+                                    partitionId);
                             partitionMetadata =
                                     new PartitionMetadata(
                                             tableId,
                                             partitionName,
-                                            partitionQueuedForDeletion
-                                                    ? DELETED_PARTITION_ID
-                                                    : partitionId,
+                                            partitionId,
                                             kvEntry.getValue(),
                                             bucketCount);
                         }
@@ -755,7 +759,12 @@ public class CoordinatorRequestBatch {
                     TableInfo tableInfo = getTableInfo(tableId);
                     if (tableInfo != null) {
                         tableMetadataList.add(
-                                new TableMetadata(getTableInfo(tableId), Collections.emptyList()));
+                                new TableMetadata(
+                                        tableInfo,
+                                        Collections.emptyList(),
+                                        coordinatorContext.isTableQueuedForDeletion(tableId)
+                                                ? tableId
+                                                : null));
                     }
                 });
 
@@ -772,36 +781,18 @@ public class CoordinatorRequestBatch {
     @Nullable
     private TableInfo getTableInfo(long tableId) {
         TableInfo tableInfo = coordinatorContext.getTableInfoById(tableId);
-        boolean tableQueuedForDeletion = coordinatorContext.isTableQueuedForDeletion(tableId);
-        if (tableInfo == null) {
-            if (tableQueuedForDeletion) {
-                return TableInfo.of(
-                        DELETED_TABLE_PATH,
-                        tableId,
-                        0,
-                        EMPTY_TABLE_DESCRIPTOR,
-                        EMPTY_REMOTE_DATA_DIR,
-                        -1L,
-                        -1L);
-            } else {
-                // it may happen that the table is dropped, but the partition still exists
-                // when coordinator restarts, it won't consider it as deleted table,
-                // and will still send partition bucket metadata to tablet server after startup,
-                // which will fail into this code patch, not throw exception, just return null.
-                // TODO: FIX ME, it shouldn't come into here
-                return null;
-            }
-        } else {
-            return tableQueuedForDeletion
-                    ? TableInfo.of(
-                            tableInfo.getTablePath(),
-                            DELETED_TABLE_ID,
-                            0,
-                            EMPTY_TABLE_DESCRIPTOR,
-                            EMPTY_REMOTE_DATA_DIR,
-                            -1L,
-                            -1L)
-                    : tableInfo;
+        if (coordinatorContext.isTableQueuedForDeletion(tableId)) {
+            // Preserve the legacy name-based tombstone for older tablet servers. New servers
+            // use the optional deletedTableId carried by TableMetadata to fence replacements.
+            return TableInfo.of(
+                    tableInfo == null ? DELETED_TABLE_PATH : tableInfo.getTablePath(),
+                    tableInfo == null ? tableId : DELETED_TABLE_ID,
+                    0,
+                    EMPTY_TABLE_DESCRIPTOR,
+                    EMPTY_REMOTE_DATA_DIR,
+                    -1L,
+                    -1L);
         }
+        return tableInfo;
     }
 }

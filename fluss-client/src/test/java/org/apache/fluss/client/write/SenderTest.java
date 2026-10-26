@@ -51,12 +51,17 @@ import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.encode.CompactedKeyEncoder;
 import org.apache.fluss.rpc.entity.ProduceLogResultForBucket;
 import org.apache.fluss.rpc.entity.PutKvResultForBucket;
+import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.messages.ApiMessage;
+import org.apache.fluss.rpc.messages.MetadataRequest;
+import org.apache.fluss.rpc.messages.MetadataResponse;
+import org.apache.fluss.rpc.messages.PbTableMetadata;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.ProduceLogResponse;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.messages.PutKvResponse;
 import org.apache.fluss.rpc.protocol.Errors;
+import org.apache.fluss.server.coordinator.TestCoordinatorGateway;
 import org.apache.fluss.server.entity.ProduceLogDataForBucket;
 import org.apache.fluss.server.entity.PutKvDataForBucket;
 import org.apache.fluss.server.tablet.TestTabletServerGateway;
@@ -92,6 +97,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
@@ -429,23 +435,21 @@ final class SenderTest {
         PhysicalTablePath partitionPath =
                 PhysicalTablePath.of(tableInfo.getTablePath(), "20990101");
         TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), 21L, 0);
+        PhysicalTablePath healthyPath = PhysicalTablePath.of(tableInfo.getTablePath(), "20990102");
+        TableBucket healthyBucket = new TableBucket(tableInfo.getTableId(), 22L, 0);
+        Map<PhysicalTablePath, TableBucket> paths = new HashMap<>();
+        paths.put(partitionPath, tableBucket);
+        paths.put(healthyPath, healthyBucket);
         Map<TableOrPartition, Integer> bucketCounts = new HashMap<>();
+        bucketCounts.put(TableOrPartition.ofPartition(22L), 1);
         bucketCounts.put(TableOrPartition.ofPartition(tableBucket.getPartitionId()), initialCount);
-        metadataUpdater.updateCluster(
-                partitionedCluster(
-                        tableInfo,
-                        Collections.singletonMap(partitionPath, tableBucket),
-                        bucketCounts));
+        metadataUpdater.updateCluster(partitionedCluster(tableInfo, paths, bucketCounts));
         sender = setupWithIdempotenceState();
 
         CompletableFuture<Exception> future =
                 appendKvRecord(tableInfo, partitionPath, 1, metadataUpdater.getCluster());
         bucketCounts.put(TableOrPartition.ofPartition(tableBucket.getPartitionId()), updatedCount);
-        metadataUpdater.updateCluster(
-                partitionedCluster(
-                        tableInfo,
-                        Collections.singletonMap(partitionPath, tableBucket),
-                        bucketCounts));
+        metadataUpdater.updateCluster(partitionedCluster(tableInfo, paths, bucketCounts));
         sender.runOnce();
 
         PutKvRequest request = (PutKvRequest) node1Gateway().getRequest(0);
@@ -458,9 +462,15 @@ final class SenderTest {
         // the count carried by the request and reports any stale routing.
         finishRequest(
                 tableBucket, 0, createPutKvResponse(tableBucket, Errors.INVALID_BUCKET_ROUTING));
-        assertThat(sender.isRunning()).isFalse();
+        assertThat(sender.isRunning()).isTrue();
         sender.runOnce();
         assertThat(future.get()).isInstanceOf(InvalidBucketRoutingException.class);
+        // A rejected partition must not prevent another partition of the same table from writing.
+        CompletableFuture<Exception> healthy =
+                appendKvRecord(tableInfo, healthyPath, 2, metadataUpdater.getCluster());
+        sender.runOnce();
+        node1Gateway().response(0, createPutKvResponse(healthyBucket, 1L));
+        assertThat(healthy.get(10, TimeUnit.SECONDS)).isNull();
         assertThat(accumulator.hasIncomplete()).isFalse();
     }
 
@@ -2109,8 +2119,27 @@ final class SenderTest {
         assertThat(accumulator.hasUnDrained()).isFalse();
     }
 
-    @Test
-    void testInvalidBucketRoutingStopsQueuedAndInflightWrites() throws Exception {
+    @ParameterizedTest
+    @CsvSource({
+        "false,before",
+        "false,after",
+        "false,retry",
+        "true,before",
+        "true,after",
+        "true,retry"
+    })
+    void testInvalidBucketRoutingIsIsolatedToTarget(boolean idempotent, String responseTiming)
+            throws Exception {
+        sender.destroyResources();
+        IdempotenceManager manager = createIdempotenceManager(idempotent);
+        manager.setWriterId(42L);
+        sender = setupWithIdempotenceState(manager);
+        TableBucket healthyBucket = new TableBucket(DATA1_TABLE_ID_PK, 0);
+        CompletableFuture<Exception> healthy = new CompletableFuture<>();
+        appendKvToAccumulator(
+                healthyBucket,
+                compactedRow(DATA1_ROW_TYPE, new Object[] {3, "healthy"}),
+                (tb, leo, e) -> healthy.complete(e));
         TableBucket tb2 = new TableBucket(DATA1_TABLE_ID, 1);
         CompletableFuture<Exception> first = new CompletableFuture<>();
         CompletableFuture<Exception> inflight = new CompletableFuture<>();
@@ -2124,20 +2153,142 @@ final class SenderTest {
                 (TestTabletServerGateway)
                         metadataUpdater.newTabletServerClientForNode(
                                 metadataUpdater.leaderFor(DATA1_TABLE_PATH, tb2));
-        finishRequest(tb1, 0, createProduceLogResponse(tb1, Errors.INVALID_BUCKET_ROUTING));
-        assertThat(sender.isRunning()).isFalse();
+        int rejectedRequest = findRequestIndex(tb1, DATA1_TABLE_ID);
+        if (responseTiming.equals("retry")) {
+            secondGateway.response(0, createProduceLogResponse(tb2, Errors.NETWORK_EXCEPTION));
+        }
+        node1Gateway()
+                .response(
+                        rejectedRequest,
+                        createProduceLogResponse(tb1, Errors.INVALID_BUCKET_ROUTING));
+        assertThat(sender.isRunning()).isTrue();
+        assertThat(sender.getFatalError()).isNull();
         assertThatThrownBy(() -> appendToAccumulator(tb1, row(1, "retry"), (tb, leo, e) -> {}))
-                .hasMessageContaining("Writer closed");
+                .isInstanceOf(InvalidBucketRoutingException.class);
         // A success arriving after rejection but before sender cleanup must not complete v2.
-        secondGateway.response(0, createProduceLogResponse(tb2, 0, 1));
+        if (responseTiming.equals("before")) {
+            secondGateway.response(0, createProduceLogResponse(tb2, 0, 1));
+        }
         assertThat(inflight).isNotDone();
         sender.runOnce();
+        if (responseTiming.equals("after")) {
+            secondGateway.response(0, createProduceLogResponse(tb2, 0, 1));
+        }
+        assertThat(manager.hasInflightBatches(tb1)).isFalse();
+        assertThat(manager.hasInflightBatches(tb2)).isFalse();
+        assertThat(accumulator.getPhysicalTablePathsInBatches())
+                .doesNotContain(PhysicalTablePath.of(DATA1_TABLE_PATH));
         assertThat(first.get()).isInstanceOf(InvalidBucketRoutingException.class);
         assertThat(inflight.get()).isInstanceOf(InvalidBucketRoutingException.class);
         assertThat(queued.get()).isInstanceOf(InvalidBucketRoutingException.class);
         assertThat(sender.numOfInFlightBatches(tb1)).isZero();
         assertThat(sender.numOfInFlightBatches(tb2)).isZero();
+        assertThat(healthy).isNotDone();
+        node1Gateway().response(0, createPutKvResponse(healthyBucket, 1L));
+        assertThat(healthy.get(10, TimeUnit.SECONDS)).isNull();
+        CompletableFuture<Exception> next = new CompletableFuture<>();
+        appendKvToAccumulator(
+                healthyBucket,
+                compactedRow(DATA1_ROW_TYPE, new Object[] {4, "next"}),
+                (tb, leo, e) -> next.complete(e));
+        sender.runOnce();
+        node1Gateway().response(0, createPutKvResponse(healthyBucket, 2L));
+        assertThat(next.get(10, TimeUnit.SECONDS)).isNull();
         assertThat(accumulator.hasIncomplete()).isFalse();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testOutOfRangeBucketConfirmedByCoordinator(boolean coordinatorHasBucket) throws Exception {
+        sender.destroyResources();
+        AtomicInteger metadataRequests = new AtomicInteger();
+        metadataUpdater =
+                new TestingMetadataUpdater(
+                        Collections.singletonMap(DATA1_TABLE_PATH, DATA1_TABLE_INFO)) {
+                    @Override
+                    public CoordinatorGateway newCoordinatorServerClient() {
+                        return new TestCoordinatorGateway() {
+                            @Override
+                            public CompletableFuture<MetadataResponse> metadata(
+                                    MetadataRequest request) {
+                                metadataRequests.incrementAndGet();
+                                MetadataResponse response = new MetadataResponse();
+                                ServerNode node = TestingMetadataUpdater.NODE1;
+                                response.addTabletServer()
+                                        .setNodeId(node.id())
+                                        .setHost(node.host())
+                                        .setPort(node.port());
+                                PbTableMetadata table =
+                                        response.addTableMetadata().setTableId(DATA1_TABLE_ID);
+                                table.setTablePath()
+                                        .setDatabaseName(DATA1_TABLE_PATH.getDatabaseName())
+                                        .setTableName(DATA1_TABLE_PATH.getTableName());
+                                for (int i = 0; i < (coordinatorHasBucket ? 3 : 1); i++) {
+                                    table.addBucketMetadata()
+                                            .setBucketId(i)
+                                            .setLeaderId(node.id())
+                                            .addReplicaId(node.id());
+                                }
+                                return CompletableFuture.completedFuture(response);
+                            }
+                        };
+                    }
+                };
+        Cluster original = metadataUpdater.getCluster();
+        metadataUpdater.updateCluster(
+                new Cluster(
+                        original.getAliveTabletServers(),
+                        original.getCoordinatorServer(),
+                        original.getBucketLocationsByPath(),
+                        original.getTableIdByPath(),
+                        Collections.emptyMap(),
+                        Collections.singletonMap(TableOrPartition.ofTable(DATA1_TABLE_ID), 3)));
+        sender = setupWithIdempotenceState();
+        CompletableFuture<Exception> inflight = new CompletableFuture<>();
+        CompletableFuture<Exception> queued = new CompletableFuture<>();
+        appendToAccumulator(tb1, row(0, "inflight"), (tb, leo, e) -> inflight.complete(e));
+        sender.runOnce();
+        TableBucket missingBucket = new TableBucket(DATA1_TABLE_ID, 1);
+        appendToAccumulator(missingBucket, row(1, "queued"), (tb, leo, e) -> queued.complete(e));
+        PhysicalTablePath path = PhysicalTablePath.of(DATA1_TABLE_PATH);
+        metadataUpdater.updateCluster(
+                new Cluster(
+                        original.getAliveTabletServers(),
+                        original.getCoordinatorServer(),
+                        Collections.singletonMap(
+                                path,
+                                Collections.singletonList(original.getBucketLocation(tb1).get())),
+                        original.getTableIdByPath(),
+                        Collections.emptyMap(),
+                        Collections.singletonMap(TableOrPartition.ofTable(DATA1_TABLE_ID), 1)));
+        accumulator.beginFlush();
+
+        sender.runOnce();
+        assertThat(metadataRequests.get()).isOne();
+        if (coordinatorHasBucket) {
+            // A stale tablet cache must not cause a valid buffered write to fail or be re-routed.
+            assertThat(sender.isRunning()).isTrue();
+            assertThat(queued).isNotDone();
+            sender.runOnce();
+            ProduceLogRequest request = (ProduceLogRequest) node1Gateway().getRequest(1);
+            assertThat(request.getBucketsReqAt(0).getBucketId()).isEqualTo(1);
+            assertThat(request.getBucketsReqAt(0).getRoutingBucketCount()).isEqualTo(3);
+            node1Gateway().response(0, createProduceLogResponse(tb1, 0, 1));
+            node1Gateway().response(0, createProduceLogResponse(missingBucket, 0, 1));
+            assertThat(inflight.get(10, TimeUnit.SECONDS)).isNull();
+            assertThat(queued.get(10, TimeUnit.SECONDS)).isNull();
+        } else {
+            assertThat(sender.isRunning()).isTrue();
+            assertThat(sender.getFatalError()).isNull();
+            assertThat(inflight.get(10, TimeUnit.SECONDS))
+                    .isInstanceOf(InvalidBucketRoutingException.class);
+            assertThat(queued.get(10, TimeUnit.SECONDS))
+                    .isInstanceOf(InvalidBucketRoutingException.class);
+            assertThat(sender.numOfInFlightBatches(tb1)).isZero();
+        }
+        assertThat(accumulator.hasIncomplete()).isFalse();
+        assertThat(accumulator.hasUnDrained()).isFalse();
+        accumulator.awaitFlushCompletion();
     }
 
     private TestingMetadataUpdater initializeMetadataUpdater() {

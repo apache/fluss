@@ -72,6 +72,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.CompletableFuture;
@@ -140,6 +141,13 @@ public class TieringSourceEnumerator
 
     /** Tracks a pending delayed poll, but not an in-flight request. */
     private boolean delayedPollScheduled = false;
+
+    // Guarded by this. Network waits must never hold the enumerator monitor.
+    @Nullable private CompletableFuture<Void> heartbeatInFlight;
+    private long readerGeneration;
+
+    // Reserve a claim until its coordinator-thread callback has published or discarded it.
+    @Nullable private Tuple3<Long, Long, TablePath> pendingClaim;
 
     public TieringSourceEnumerator(
             Configuration flussConf,
@@ -255,18 +263,7 @@ public class TieringSourceEnumerator
         if (!pendingSplits.isEmpty()) {
             assignSplits();
         } else {
-            // Note: Ideally, only one table should be tiering at a time.
-            // Here we block to request a tiering table synchronously to avoid multiple threads
-            // requesting tiering tables concurrently, which would cause the enumerator to contain
-            // multiple tiering tables simultaneously. This is not optimal for tiering performance.
-            Tuple3<Long, Long, TablePath> tieringTable = null;
-            Throwable throwable = null;
-            try {
-                tieringTable = this.requestTieringTableSplitsViaHeartBeat();
-            } catch (Throwable t) {
-                throwable = t;
-            }
-            this.generateAndAssignSplits(tieringTable, throwable);
+            requestTableAndAssign(0);
         }
     }
 
@@ -278,7 +275,10 @@ public class TieringSourceEnumerator
     }
 
     @Override
-    public void addReader(int subtaskId) {
+    public synchronized void addReader(int subtaskId) {
+        if (closed) {
+            return;
+        }
         LOG.info("Adding reader: {} to Tiering Source enumerator.", subtaskId);
         Map<Integer, ReaderInfo> readerByAttempt =
                 context.registeredReadersOfAttempts().get(subtaskId);
@@ -328,7 +328,10 @@ public class TieringSourceEnumerator
     }
 
     @Override
-    public void handleSourceEvent(int subtaskId, SourceEvent sourceEvent) {
+    public synchronized void handleSourceEvent(int subtaskId, SourceEvent sourceEvent) {
+        if (closed) {
+            return;
+        }
         if (sourceEvent instanceof FinishedTieringEvent) {
             FinishedTieringEvent finishedTieringEvent = (FinishedTieringEvent) sourceEvent;
             long finishedTableId = finishedTieringEvent.getTableId();
@@ -374,6 +377,8 @@ public class TieringSourceEnumerator
     }
 
     private void handleSourceReaderFailOver() {
+        readerGeneration++;
+        pendingClaim = null;
         LOG.info(
                 "Handling source reader fail over, mark current tiering table epoch {} as failed.",
                 tieringTableEpochs);
@@ -420,18 +425,33 @@ public class TieringSourceEnumerator
     @VisibleForTesting
     void generateAndAssignSplits(
             @Nullable Tuple3<Long, Long, TablePath> tieringTable, Throwable throwable) {
+        if (closed) {
+            return;
+        }
         if (throwable != null) {
             ExceptionUtils.rethrow(throwable);
         }
-        if (tieringTable != null) {
-            generateTieringSplits(tieringTable);
+        try {
+            if (tieringTable != null && isCurrentClaim(tieringTable)) {
+                generateTieringSplits(tieringTable);
+            }
+            assignSplits();
+        } finally {
+            synchronized (this) {
+                if (Objects.equals(pendingClaim, tieringTable)) {
+                    pendingClaim = null;
+                }
+            }
         }
-        assignSplits();
     }
 
-    private void assignSplits() {
-        // we don't assign splits during failover
-        if (isFailOvering) {
+    private synchronized boolean isCurrentClaim(Tuple3<Long, Long, TablePath> claim) {
+        return !closed && Objects.equals(tieringTableEpochs.get(claim.f0), claim.f1);
+    }
+
+    private synchronized void assignSplits() {
+        // We do not assign splits during shutdown or failover.
+        if (closed || isFailOvering) {
             return;
         }
         if (!readersAwaitingSplit.isEmpty()) {
@@ -452,56 +472,67 @@ public class TieringSourceEnumerator
     }
 
     private @Nullable Tuple3<Long, Long, TablePath> requestTieringTableSplitsViaHeartBeat() {
-        if (closed) {
-            return null;
-        }
-        Map<Long, TieringFinishInfo> currentFinishedTables = new HashMap<>(this.finishedTables);
-        Map<Long, Long> currentFailedTableEpochs = new HashMap<>(this.failedTableEpochs);
-        LakeTieringHeartbeatRequest tieringHeartbeatRequest =
-                tieringTableHeartBeat(
-                        basicHeartBeat(),
-                        this.tieringTableEpochs,
-                        currentFinishedTables,
-                        currentFailedTableEpochs,
-                        this.flussCoordinatorEpoch);
-
-        Tuple3<Long, Long, TablePath> lakeTieringInfo = null;
-        // report heartbeat with request table to fluss coordinator
-        LOG.info(
-                "currentFinishedTables: {}, currentFailedTableEpochs: {}, tieringTableEpochs: {}",
-                currentFinishedTables,
-                currentFailedTableEpochs,
-                tieringTableEpochs);
-
-        if (pendingSplits.isEmpty() && !readersAwaitingSplit.isEmpty()) {
-            LakeTieringHeartbeatResponse heartbeatResponse =
-                    waitHeartbeatResponse(
-                            coordinatorGateway.lakeTieringHeartbeat(
-                                    heartBeatWithRequestNewTieringTable(tieringHeartbeatRequest)));
-            if (heartbeatResponse.hasTieringTable()) {
-                PbLakeTieringTableInfo tieringTable = heartbeatResponse.getTieringTable();
-                lakeTieringInfo =
-                        Tuple3.of(
-                                tieringTable.getTableId(),
-                                tieringTable.getTieringEpoch(),
-                                TablePath.of(
-                                        tieringTable.getTablePath().getDatabaseName(),
-                                        tieringTable.getTablePath().getTableName()));
-                tieringTableEpochs.put(lakeTieringInfo.f0, lakeTieringInfo.f1);
-                LOG.info("Tiering table {} has been requested.", lakeTieringInfo);
-            } else {
-                LOG.info("No available Tiering table found, will poll later.");
+        final Map<Long, TieringFinishInfo> currentFinishedTables;
+        final Map<Long, Long> currentFailedTableEpochs;
+        final LakeTieringHeartbeatRequest request;
+        final CompletableFuture<Void> completion = new CompletableFuture<>();
+        final long generation;
+        synchronized (this) {
+            if (closed || heartbeatInFlight != null) {
+                return null;
             }
-        } else {
-            // report heartbeat to fluss coordinator
-            waitHeartbeatResponse(coordinatorGateway.lakeTieringHeartbeat(tieringHeartbeatRequest));
+            heartbeatInFlight = completion;
+            generation = readerGeneration;
+            currentFinishedTables = new HashMap<>(finishedTables);
+            currentFailedTableEpochs = new HashMap<>(failedTableEpochs);
+            request =
+                    tieringTableHeartBeat(
+                            basicHeartBeat(),
+                            tieringTableEpochs,
+                            currentFinishedTables,
+                            currentFailedTableEpochs,
+                            flussCoordinatorEpoch);
+            if (!isFailOvering
+                    && pendingClaim == null
+                    && pendingSplits.isEmpty()
+                    && !readersAwaitingSplit.isEmpty()) {
+                heartBeatWithRequestNewTieringTable(request);
+            }
         }
 
-        // if come to here, we can remove currentFinishedTables/failedTableEpochs to avoid send
-        // in next round
-        currentFinishedTables.forEach(finishedTables::remove);
-        currentFailedTableEpochs.forEach(failedTableEpochs::remove);
-        return lakeTieringInfo;
+        try {
+            LakeTieringHeartbeatResponse response =
+                    waitHeartbeatResponse(coordinatorGateway.lakeTieringHeartbeat(request));
+            synchronized (this) {
+                currentFinishedTables.forEach(finishedTables::remove);
+                currentFailedTableEpochs.forEach(failedTableEpochs::remove);
+                if (response.hasTieringTable()) {
+                    PbLakeTieringTableInfo table = response.getTieringTable();
+                    if (generation != readerGeneration) {
+                        // A claim made before reader failover belongs to the old generation.
+                        failedTableEpochs.put(table.getTableId(), table.getTieringEpoch());
+                        return null;
+                    }
+                    // Record late claims even after close starts. Close waits for this state
+                    // update outside the monitor before building its final release heartbeat.
+                    tieringTableEpochs.put(table.getTableId(), table.getTieringEpoch());
+                    pendingClaim =
+                            Tuple3.of(
+                                    table.getTableId(),
+                                    table.getTieringEpoch(),
+                                    TablePath.of(
+                                            table.getTablePath().getDatabaseName(),
+                                            table.getTablePath().getTableName()));
+                    return pendingClaim;
+                }
+                return null;
+            }
+        } finally {
+            synchronized (this) {
+                heartbeatInFlight = null;
+                completion.complete(null);
+            }
+        }
     }
 
     private void generateTieringSplits(Tuple3<Long, Long, TablePath> tieringTable)
@@ -543,34 +574,48 @@ public class TieringSourceEnumerator
                     splitsWithMetadata.size(),
                     tieringTable.f2,
                     System.currentTimeMillis() - start);
-            if (splitsWithMetadata.isEmpty()) {
-                LOG.info(
-                        "Generate Tiering splits for table {} is empty, no need to tier data.",
-                        tieringTable.f2.getTableName());
-                tieringTableEpochs.remove(tieringTable.f0);
-                finishedTables.put(tieringTable.f0, TieringFinishInfo.from(tieringTable.f1));
-                // An empty round has no split or completion event to drive the next table.
-                requestTableAndAssign(EMPTY_TABLE_POLL_DELAY_MS);
-            } else {
-                pendingSplits.addAll(splitsWithMetadata);
-
-                timerService.schedule(
-                        () ->
-                                context.runInCoordinatorThread(
-                                        () ->
-                                                handleTableTieringReachMaxDuration(
-                                                        tablePath,
-                                                        tieringTable.f0,
-                                                        tieringTable.f1)),
-
-                        // for simplicity, we use the freshness as
-                        tableInfo.getTableConfig().getDataLakeFreshness().toMillis(),
-                        TimeUnit.MILLISECONDS);
-            }
+            addGeneratedSplits(tieringTable, tableInfo, splitsWithMetadata);
         } catch (Exception e) {
-            LOG.warn("Fail to generate Tiering splits for table {}.", tieringTable.f2, e);
-            failedTableEpochs.put(tieringTable.f0, tieringTable.f1);
+            synchronized (this) {
+                if (isCurrentClaim(tieringTable)) {
+                    LOG.warn("Fail to generate Tiering splits for table {}.", tieringTable.f2, e);
+                    failedTableEpochs.put(tieringTable.f0, tieringTable.f1);
+                    tieringTableEpochs.remove(tieringTable.f0);
+                }
+            }
+        }
+    }
+
+    // Only publish the result under the lifecycle lock. Generating splits can perform slow I/O
+    // and must not block heartbeat renewal or shutdown.
+    private synchronized void addGeneratedSplits(
+            Tuple3<Long, Long, TablePath> tieringTable,
+            TableInfo tableInfo,
+            List<TieringSplit> tieringSplits) {
+        if (!isCurrentClaim(tieringTable)) {
+            return;
+        }
+        if (tieringSplits.isEmpty()) {
+            LOG.info(
+                    "Generate Tiering splits for table {} is empty, no need to tier data.",
+                    tieringTable.f2.getTableName());
             tieringTableEpochs.remove(tieringTable.f0);
+            finishedTables.put(tieringTable.f0, TieringFinishInfo.from(tieringTable.f1));
+            // An empty round has no split or completion event to drive the next table.
+            requestTableAndAssign(EMPTY_TABLE_POLL_DELAY_MS);
+        } else {
+            pendingSplits.addAll(tieringSplits);
+            timerService.schedule(
+                    () ->
+                            context.runInCoordinatorThread(
+                                    () ->
+                                            handleTableTieringReachMaxDuration(
+                                                    tieringTable.f2,
+                                                    tieringTable.f0,
+                                                    tieringTable.f1)),
+                    // for simplicity, we use the freshness as
+                    tableInfo.getTableConfig().getDataLakeFreshness().toMillis(),
+                    TimeUnit.MILLISECONDS);
         }
     }
 
@@ -625,14 +670,28 @@ public class TieringSourceEnumerator
 
     @Override
     public void close() throws IOException {
-        // Repeated lifecycle calls are a no-op: the final report is attempted once and the
-        // resources are released once.
-        if (closed) {
-            return;
+        final CompletableFuture<Void> pendingHeartbeat;
+        synchronized (this) {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            pendingHeartbeat = heartbeatInFlight;
         }
-        closed = true;
         timerService.shutdownNow();
         try {
+            if (pendingHeartbeat != null) {
+                // The heartbeat itself has a bounded RPC wait. Wait outside the monitor so
+                // reader events can observe closed without waiting for that RPC.
+                try {
+                    pendingHeartbeat.get();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException("Interrupted while waiting for tiering heartbeat", e);
+                } catch (java.util.concurrent.ExecutionException e) {
+                    throw new IOException("Failed to finish tiering heartbeat", e);
+                }
+            }
             if (coordinatorGateway != null) {
                 // The finished tables have to be flushed here: a table that produced no splits is
                 // removed from the in-flight epochs as soon as it is marked as finished, so it is

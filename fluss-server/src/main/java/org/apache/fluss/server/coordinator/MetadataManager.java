@@ -80,10 +80,13 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Callable;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BiConsumer;
 
 import static org.apache.fluss.server.utils.TableDescriptorValidation.validateAlterTableProperties;
 import static org.apache.fluss.server.utils.TableDescriptorValidation.validateAlterTableSchema;
+import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
 
 /** A manager for metadata. */
 public class MetadataManager {
@@ -100,6 +103,10 @@ public class MetadataManager {
     private final int maxPartitionNum;
     private final int maxBucketNum;
     private final LakeCatalogDynamicLoader lakeCatalogDynamicLoader;
+
+    // Auto partitioning and DDL share this manager. Keep table identity validation and
+    // partition registration atomic with table deletion, including cascading database drops.
+    private final Lock partitionRegistrationLock = new ReentrantLock();
 
     public static final Set<String> SENSITIVE_TABLE_OPTIONS = new HashSet<>();
 
@@ -344,6 +351,12 @@ public class MetadataManager {
 
     public void dropDatabase(String name, boolean ignoreIfNotExists, boolean cascade)
             throws DatabaseNotExistException, DatabaseNotEmptyException {
+        inLock(
+                partitionRegistrationLock,
+                () -> dropDatabaseLocked(name, ignoreIfNotExists, cascade));
+    }
+
+    private void dropDatabaseLocked(String name, boolean ignoreIfNotExists, boolean cascade) {
         if (CoordinatorServer.DEFAULT_DATABASE.equals(name)) {
             throw new UnsupportedOperationException(
                     "Cannot drop the default database '"
@@ -365,6 +378,10 @@ public class MetadataManager {
 
     public void dropTable(TablePath tablePath, boolean ignoreIfNotExists)
             throws TableNotExistException {
+        inLock(partitionRegistrationLock, () -> dropTableLocked(tablePath, ignoreIfNotExists));
+    }
+
+    private void dropTableLocked(TablePath tablePath, boolean ignoreIfNotExists) {
         if (!tableExists(tablePath)) {
             if (ignoreIfNotExists) {
                 return;
@@ -1249,6 +1266,34 @@ public class MetadataManager {
             ResolvedPartitionSpec partition,
             boolean ignoreIfExists,
             int bucketCount) {
+        inLock(
+                partitionRegistrationLock,
+                () ->
+                        createPartitionLocked(
+                                tablePath,
+                                tableId,
+                                remoteDataDir,
+                                partitionAssignment,
+                                partition,
+                                ignoreIfExists,
+                                bucketCount));
+    }
+
+    private void createPartitionLocked(
+            TablePath tablePath,
+            long tableId,
+            String remoteDataDir,
+            PartitionAssignment partitionAssignment,
+            ResolvedPartitionSpec partition,
+            boolean ignoreIfExists,
+            int bucketCount) {
+        // A delayed task must not register partitions under a replacement table, even if
+        // ignoreIfExists is true and the new table already has a partition with this name.
+        if (getTableRegistration(tablePath).tableId != tableId) {
+            throw new TableNotExistException(
+                    String.format("Table '%s' with id %s does not exist.", tablePath, tableId));
+        }
+
         String partitionName = partition.getPartitionName();
         Optional<PartitionRegistration> optionalPartitionRegistration =
                 getOptionalPartitionRegistration(tablePath, partitionName);
