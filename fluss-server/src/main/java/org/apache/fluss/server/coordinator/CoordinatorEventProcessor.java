@@ -1849,14 +1849,27 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
         LeaderAndIsr leaderAndIsr = leaderAndIsrOpt.get();
         // Losing an original follower from ISR does not mean the migration has started. Only an
         // ISR member outside the origin indicates leftover work that cancellation must drain.
-        return leaderAndIsr.leader() == planForBucket.getOriginalLeader()
-                && new HashSet<>(planForBucket.getOriginReplicas()).containsAll(leaderAndIsr.isr());
+        if (!new HashSet<>(planForBucket.getOriginReplicas()).containsAll(leaderAndIsr.isr())) {
+            return false;
+        }
+        ReplicaReassignment reassignment =
+                ReplicaReassignment.build(
+                        planForBucket.getOriginReplicas(), planForBucket.getNewReplicas());
+        // An unrelated leader election is not evidence that a replica migration started. For a
+        // leader-only plan, however, the leader is the state being changed.
+        return reassignment.isBeingReassigned()
+                || leaderAndIsr.leader() == planForBucket.getOriginalLeader();
+    }
+
+    @Override
+    public boolean isRebalanceTaskDeleted(TableBucket tableBucket) {
+        return !coordinatorContext.getAllBuckets().contains(tableBucket)
+                || coordinatorContext.isTableQueuedForDeletion(tableBucket.getTableId())
+                || coordinatorContext.isToBeDeleted(tableBucket);
     }
 
     private boolean completeRebalanceTaskIfDeleted(TableBucket tableBucket) {
-        if (coordinatorContext.getAllBuckets().contains(tableBucket)
-                && !coordinatorContext.isTableQueuedForDeletion(tableBucket.getTableId())
-                && !coordinatorContext.isToBeDeleted(tableBucket)) {
+        if (!isRebalanceTaskDeleted(tableBucket)) {
             return false;
         }
 
