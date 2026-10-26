@@ -2136,6 +2136,9 @@ Result Lookuper::Poll(int64_t timeout_ms, std::vector<LookupCompletion>& out) co
         if (!result.Ok()) {
             return result;
         }
+        if (ffi_result.ptr == 0) {
+            break;
+        }
         auto completion = utils::ptr_from_ffi<ffi::LookupCompletion>(ffi_result);
         if (!completion) {
             break;
@@ -2278,6 +2281,9 @@ Result PrefixLookuper::Poll(int64_t timeout_ms, std::vector<PrefixLookupCompleti
         auto result = utils::from_ffi_result(ffi_result.result);
         if (!result.Ok()) {
             return result;
+        }
+        if (ffi_result.ptr == 0) {
+            break;
         }
         auto completion = utils::ptr_from_ffi<ffi::PrefixLookupCompletion>(ffi_result);
         if (!completion) {
