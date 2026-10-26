@@ -673,7 +673,6 @@
                         <!-- Generated content -->
                         <exclude>**/target/**</exclude>
                         <exclude>build-target/**</exclude>
-                        <exclude>m2-*/**</exclude>
                         <exclude>**/scalastyle-output.xml</exclude>
                         <exclude>**/*.svg</exclude>
                         <exclude>**/dependency-reduced-pom.xml</exclude>
