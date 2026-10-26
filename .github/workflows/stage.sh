@@ -46,12 +46,14 @@ MODULES_COMMON_SPARK="\
 fluss-spark,\
 fluss-spark/fluss-spark-common,\
 fluss-spark/fluss-spark-ut,\
+fluss-spark/fluss-spark-tiering,\
 "
 
 MODULES_SPARK3="\
 fluss-spark,\
 fluss-spark/fluss-spark-common,\
 fluss-spark/fluss-spark-ut,\
+fluss-spark/fluss-spark-tiering,\
 fluss-spark/fluss-spark-3.5,\
 fluss-spark/fluss-spark-3.4,\
 "
