@@ -19,7 +19,9 @@ mod lookup;
 mod types;
 mod write_callback;
 use lookup::{
-    PendingLookup, PendingPrefixLookup, delete_pending_lookup, delete_pending_prefix_lookup,
+    LookupCompletion, PendingLookup, PendingPrefixLookup, PrefixLookupCompletion,
+    delete_lookup_completion, delete_pending_lookup, delete_pending_prefix_lookup,
+    delete_prefix_lookup_completion,
 };
 use write_callback::ensure_callback_executor;
 
@@ -431,6 +433,8 @@ mod ffi {
         type PrefixLookuper;
         type PendingLookup;
         type PendingPrefixLookup;
+        type LookupCompletion;
+        type PrefixLookupCompletion;
 
         // Opaque types for optimized FFI
         type ScanResultInner;
@@ -712,11 +716,20 @@ mod ffi {
         unsafe fn delete_lookuper(lookuper: *mut Lookuper);
         fn lookup(self: &Lookuper, pk_row: &GenericRowInner) -> Box<LookupResultInner>;
         fn lookup_async(self: &Lookuper, pk_row: &GenericRowInner) -> FfiPtrResult;
+        fn lookup_async_poll(
+            self: &Lookuper,
+            pk_row: &GenericRowInner,
+            request_id: u64,
+        ) -> FfiResult;
+        fn poll_lookup(self: &Lookuper, timeout_ms: i64) -> FfiPtrResult;
 
         // PendingLookup. A negative timeout_ms waits without limit.
         unsafe fn delete_pending_lookup(pending: *mut PendingLookup);
         fn lookup_wait(self: &mut PendingLookup, timeout_ms: i64) -> Box<LookupResultInner>;
         fn lookup_is_pending(self: &PendingLookup) -> bool;
+        unsafe fn delete_lookup_completion(completion: *mut LookupCompletion);
+        fn lookup_completion_request_id(self: &LookupCompletion) -> u64;
+        fn lookup_completion_take_result(self: &mut LookupCompletion) -> Box<LookupResultInner>;
 
         // LookupResultInner accessors
         fn lv_has_error(self: &LookupResultInner) -> bool;
@@ -779,6 +792,12 @@ mod ffi {
         ) -> Box<PrefixLookupResultInner>;
         fn prefix_lookup_async(self: &PrefixLookuper, prefix_row: &GenericRowInner)
         -> FfiPtrResult;
+        fn prefix_lookup_async_poll(
+            self: &PrefixLookuper,
+            prefix_row: &GenericRowInner,
+            request_id: u64,
+        ) -> FfiResult;
+        fn poll_prefix_lookup(self: &PrefixLookuper, timeout_ms: i64) -> FfiPtrResult;
 
         // PendingPrefixLookup. A negative timeout_ms waits without limit.
         unsafe fn delete_pending_prefix_lookup(pending: *mut PendingPrefixLookup);
@@ -787,6 +806,11 @@ mod ffi {
             timeout_ms: i64,
         ) -> Box<PrefixLookupResultInner>;
         fn prefix_lookup_is_pending(self: &PendingPrefixLookup) -> bool;
+        unsafe fn delete_prefix_lookup_completion(completion: *mut PrefixLookupCompletion);
+        fn prefix_lookup_completion_request_id(self: &PrefixLookupCompletion) -> u64;
+        fn prefix_lookup_completion_take_result(
+            self: &mut PrefixLookupCompletion,
+        ) -> Box<PrefixLookupResultInner>;
 
         // PrefixLookupResultInner accessors — like LookupResultInner but indexed
         // by record, since a prefix lookup returns zero-or-more rows.
@@ -1052,6 +1076,8 @@ pub struct UpsertWriter {
 pub struct Lookuper {
     inner: Arc<fcore::client::Lookuper>,
     table_info: Arc<TableInfo>,
+    completion_sender: tokio::sync::mpsc::Sender<LookupCompletion>,
+    completion_receiver: Mutex<tokio::sync::mpsc::Receiver<LookupCompletion>>,
 }
 
 pub struct PrefixLookuper {
@@ -1059,6 +1085,8 @@ pub struct PrefixLookuper {
     table_info: Arc<TableInfo>,
     /// Full-schema indices of the lookup columns, used to compact the input row.
     lookup_column_indices: Vec<usize>,
+    completion_sender: tokio::sync::mpsc::Sender<PrefixLookupCompletion>,
+    completion_receiver: Mutex<tokio::sync::mpsc::Receiver<PrefixLookupCompletion>>,
 }
 
 // C++ callers may share one lookuper across threads.
@@ -2169,10 +2197,13 @@ impl Table {
             Ok(l) => l,
             Err(e) => return err_ptr_from_core(&e),
         };
+        let (completion_sender, completion_receiver) = tokio::sync::mpsc::channel(1024);
 
         let ptr = Box::into_raw(Box::new(Lookuper {
             inner: Arc::new(lookuper),
             table_info: Arc::new(self.table_info.clone()),
+            completion_sender,
+            completion_receiver: Mutex::new(completion_receiver),
         }));
         ok_ptr(ptr as usize)
     }
@@ -2200,11 +2231,14 @@ impl Table {
             Ok(l) => l,
             Err(e) => return err_ptr_from_core(&e),
         };
+        let (completion_sender, completion_receiver) = tokio::sync::mpsc::channel(1024);
 
         let ptr = Box::into_raw(Box::new(PrefixLookuper {
             inner: Arc::new(lookuper),
             table_info: Arc::new(self.table_info.clone()),
             lookup_column_indices,
+            completion_sender,
+            completion_receiver: Mutex::new(completion_receiver),
         }));
         ok_ptr(ptr as usize)
     }

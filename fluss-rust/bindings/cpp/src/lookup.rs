@@ -26,6 +26,7 @@ use fluss as fcore;
 use fluss::metadata::TableInfo;
 use fluss::row::GenericRow;
 use fluss::rpc::FlussError as CoreFlussError;
+use tokio::sync::mpsc::error::TryRecvError;
 use tokio::task::JoinHandle;
 
 use crate::{
@@ -107,6 +108,40 @@ pub struct PendingLookup(Pending<Box<LookupResultInner>>);
 
 pub struct PendingPrefixLookup(Pending<Box<PrefixLookupResultInner>>);
 
+pub struct LookupCompletion {
+    request_id: u64,
+    result: Option<Box<LookupResultInner>>,
+}
+
+pub struct PrefixLookupCompletion {
+    request_id: u64,
+    result: Option<Box<PrefixLookupResultInner>>,
+}
+
+impl LookupCompletion {
+    pub(crate) fn lookup_completion_request_id(&self) -> u64 {
+        self.request_id
+    }
+
+    pub(crate) fn lookup_completion_take_result(&mut self) -> Box<LookupResultInner> {
+        self.result
+            .take()
+            .expect("lookup completion result already taken")
+    }
+}
+
+impl PrefixLookupCompletion {
+    pub(crate) fn prefix_lookup_completion_request_id(&self) -> u64 {
+        self.request_id
+    }
+
+    pub(crate) fn prefix_lookup_completion_take_result(&mut self) -> Box<PrefixLookupResultInner> {
+        self.result
+            .take()
+            .expect("prefix lookup completion result already taken")
+    }
+}
+
 impl PendingLookup {
     pub(crate) fn lookup_wait(&mut self, timeout_ms: i64) -> Box<LookupResultInner> {
         self.0.wait(timeout_ms)
@@ -139,6 +174,22 @@ pub(crate) unsafe fn delete_pending_prefix_lookup(pending: *mut PendingPrefixLoo
     if !pending.is_null() {
         unsafe {
             drop(Box::from_raw(pending));
+        }
+    }
+}
+
+pub(crate) unsafe fn delete_lookup_completion(completion: *mut LookupCompletion) {
+    if !completion.is_null() {
+        unsafe {
+            drop(Box::from_raw(completion));
+        }
+    }
+}
+
+pub(crate) unsafe fn delete_prefix_lookup_completion(completion: *mut PrefixLookupCompletion) {
+    if !completion.is_null() {
+        unsafe {
+            drop(Box::from_raw(completion));
         }
     }
 }
@@ -177,6 +228,57 @@ impl Lookuper {
                 ok_ptr(Box::into_raw(Box::new(pending)) as usize)
             }
             Err(e) => client_err_ptr(e),
+        }
+    }
+
+    pub(crate) fn lookup_async_poll(
+        &self,
+        pk_row: &GenericRowInner,
+        request_id: u64,
+    ) -> ffi::FfiResult {
+        match self.key(pk_row) {
+            Ok(key) => {
+                let sender = self.completion_sender.clone();
+                let inner = Arc::clone(&self.inner);
+                let table_info = Arc::clone(&self.table_info);
+                RUNTIME.spawn(async move {
+                    let result = to_lookup_result(inner.lookup(&key).await, &table_info);
+                    let _ = sender
+                        .send(LookupCompletion {
+                            request_id,
+                            result: Some(result),
+                        })
+                        .await;
+                });
+                crate::ok_result()
+            }
+            Err(e) => crate::err_result(CLIENT_ERROR_CODE, e),
+        }
+    }
+
+    pub(crate) fn poll_lookup(&self, timeout_ms: i64) -> ffi::FfiPtrResult {
+        let mut receiver = self.completion_receiver.lock().unwrap();
+        let completion = if timeout_ms < 0 {
+            RUNTIME.block_on(receiver.recv())
+        } else if timeout_ms == 0 {
+            match receiver.try_recv() {
+                Ok(completion) => Some(completion),
+                Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => None,
+            }
+        } else {
+            RUNTIME.block_on(async {
+                tokio::time::timeout(Duration::from_millis(timeout_ms as u64), receiver.recv())
+                    .await
+                    .ok()
+                    .flatten()
+            })
+        };
+        match completion {
+            Some(completion) => ok_ptr(Box::into_raw(Box::new(completion)) as usize),
+            None if receiver.is_closed() => {
+                client_err_ptr("Lookup completion queue closed".to_string())
+            }
+            None => ok_ptr(0),
         }
     }
 }
@@ -218,6 +320,57 @@ impl PrefixLookuper {
                 ok_ptr(Box::into_raw(Box::new(pending)) as usize)
             }
             Err(e) => client_err_ptr(e),
+        }
+    }
+
+    pub(crate) fn prefix_lookup_async_poll(
+        &self,
+        prefix_row: &GenericRowInner,
+        request_id: u64,
+    ) -> ffi::FfiResult {
+        match self.key(prefix_row) {
+            Ok(key) => {
+                let sender = self.completion_sender.clone();
+                let inner = Arc::clone(&self.inner);
+                let table_info = Arc::clone(&self.table_info);
+                RUNTIME.spawn(async move {
+                    let result = to_prefix_lookup_result(inner.lookup(&key).await, &table_info);
+                    let _ = sender
+                        .send(PrefixLookupCompletion {
+                            request_id,
+                            result: Some(result),
+                        })
+                        .await;
+                });
+                crate::ok_result()
+            }
+            Err(e) => crate::err_result(CLIENT_ERROR_CODE, e),
+        }
+    }
+
+    pub(crate) fn poll_prefix_lookup(&self, timeout_ms: i64) -> ffi::FfiPtrResult {
+        let mut receiver = self.completion_receiver.lock().unwrap();
+        let completion = if timeout_ms < 0 {
+            RUNTIME.block_on(receiver.recv())
+        } else if timeout_ms == 0 {
+            match receiver.try_recv() {
+                Ok(completion) => Some(completion),
+                Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => None,
+            }
+        } else {
+            RUNTIME.block_on(async {
+                tokio::time::timeout(Duration::from_millis(timeout_ms as u64), receiver.recv())
+                    .await
+                    .ok()
+                    .flatten()
+            })
+        };
+        match completion {
+            Some(completion) => ok_ptr(Box::into_raw(Box::new(completion)) as usize),
+            None if receiver.is_closed() => {
+                client_err_ptr("Lookup completion queue closed".to_string())
+            }
+            None => ok_ptr(0),
         }
     }
 }
