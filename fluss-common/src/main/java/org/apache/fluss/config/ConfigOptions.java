@@ -1115,6 +1115,24 @@ public class ConfigOptions {
                             "The frequency with which the high watermark is saved out to disk. "
                                     + "The default setting is 5 seconds.");
 
+    public static final ConfigOption<Boolean> LOG_REPLICA_FOLLOWER_RECOVERY_ENABLED =
+            key("log.replica.follower-recovery.enabled")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Whether to recover follower replicas using temporary thread pools per data directory. "
+                                    + "When disabled, recovery runs serially on the replica state change thread.");
+
+    public static final ConfigOption<Integer> LOG_REPLICA_FOLLOWER_RECOVERY_THREADS_PER_DATA_DIR =
+            key("log.replica.follower-recovery.threads-per-data-dir")
+                    .intType()
+                    .defaultValue(1)
+                    .withDescription(
+                            "Number of recovery threads per data directory when follower recovery is enabled. "
+                                    + "Must be greater than zero. With 1 thread, directories recover concurrently "
+                                    + "while replicas in each directory recover sequentially. Higher values also "
+                                    + "allow concurrent recovery within each directory and increase disk and CPU load.");
+
     public static final ConfigOption<Duration> LOG_REPLICA_MAX_LAG_TIME =
             key("log.replica.max-lag-time")
                     .durationType()

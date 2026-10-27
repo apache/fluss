@@ -394,8 +394,21 @@ public class ReplicaTestBase {
                 manualClock,
                 ioExecutor,
                 localDiskManager,
-                null);
+                null) {
+            @Override
+            void truncateToHighWatermark(Replica replica) {
+                beforeFollowerTruncation(replica);
+                super.truncateToHighWatermark(replica);
+                afterFollowerTruncation(replica);
+            }
+        };
     }
+
+    /** Allows recovery tests to coordinate the real truncation boundary. */
+    protected void beforeFollowerTruncation(Replica replica) {}
+
+    /** Allows recovery tests to observe completion of the real truncation boundary. */
+    protected void afterFollowerTruncation(Replica replica) {}
 
     @AfterEach
     void tearDown() throws Exception {
