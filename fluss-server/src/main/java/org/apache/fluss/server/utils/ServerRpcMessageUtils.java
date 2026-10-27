@@ -34,6 +34,7 @@ import org.apache.fluss.lake.committer.LakeCommitResult;
 import org.apache.fluss.metadata.AggFunction;
 import org.apache.fluss.metadata.AggFunctionType;
 import org.apache.fluss.metadata.AggFunctions;
+import org.apache.fluss.metadata.ColumnPath;
 import org.apache.fluss.metadata.DatabaseChange;
 import org.apache.fluss.metadata.DatabaseSummary;
 import org.apache.fluss.metadata.PartitionSpec;
@@ -102,6 +103,7 @@ import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsRequest;
 import org.apache.fluss.rpc.messages.PbAclInfo;
 import org.apache.fluss.rpc.messages.PbAddColumn;
+import org.apache.fluss.rpc.messages.PbAddNestedField;
 import org.apache.fluss.rpc.messages.PbAdjustIsrReqForBucket;
 import org.apache.fluss.rpc.messages.PbAdjustIsrReqForTable;
 import org.apache.fluss.rpc.messages.PbAdjustIsrRespForBucket;
@@ -109,6 +111,7 @@ import org.apache.fluss.rpc.messages.PbAdjustIsrRespForTable;
 import org.apache.fluss.rpc.messages.PbAlterConfig;
 import org.apache.fluss.rpc.messages.PbBucketMetadata;
 import org.apache.fluss.rpc.messages.PbBucketOffset;
+import org.apache.fluss.rpc.messages.PbColumnPathSegment;
 import org.apache.fluss.rpc.messages.PbCreateAclRespInfo;
 import org.apache.fluss.rpc.messages.PbDatabaseSummary;
 import org.apache.fluss.rpc.messages.PbDescribeConfig;
@@ -401,6 +404,7 @@ public class ServerRpcMessageUtils {
     public static List<TableChange> toAlterTableSchemaChanges(AlterTableRequest request) {
         List<TableChange> alterTableSchemaChanges = new ArrayList<>();
         alterTableSchemaChanges.addAll(toAddColumns(request.getAddColumnsList()));
+        alterTableSchemaChanges.addAll(toAddNestedFields(request.getAddNestedFieldsList()));
         alterTableSchemaChanges.addAll(toDropColumns(request.getDropColumnsList()));
         alterTableSchemaChanges.addAll(toRenameColumns(request.getRenameColumnsList()));
         alterTableSchemaChanges.addAll(toModifyColumns(request.getModifyColumnsList()));
@@ -443,6 +447,48 @@ public class ServerRpcMessageUtils {
             parameters.put(parameter.getKey(), parameter.getValue());
         }
         return AggFunctions.of(type, parameters);
+    }
+
+    /** Converts nested field additions from their RPC representation. */
+    public static List<TableChange> toAddNestedFields(List<PbAddNestedField> addNestedFields) {
+        return addNestedFields.stream()
+                .filter(Objects::nonNull)
+                .map(
+                        pbAddNestedField ->
+                                TableChange.addNestedField(
+                                        toColumnPath(pbAddNestedField.getParentPathsList()),
+                                        pbAddNestedField.getFieldName(),
+                                        JsonSerdeUtils.readValue(
+                                                pbAddNestedField.getDataTypeJson(),
+                                                DataTypeJsonSerde.INSTANCE),
+                                        pbAddNestedField.hasComment()
+                                                ? pbAddNestedField.getComment()
+                                                : null))
+                .collect(Collectors.toList());
+    }
+
+    private static ColumnPath toColumnPath(List<PbColumnPathSegment> pbSegments) {
+        return ColumnPath.of(
+                pbSegments.stream()
+                        .map(ServerRpcMessageUtils::toColumnPathSegment)
+                        .collect(Collectors.toList()));
+    }
+
+    private static ColumnPath.Segment toColumnPathSegment(PbColumnPathSegment pbSegment) {
+        switch (pbSegment.getSegmentType()) {
+            case 0:
+                if (!pbSegment.hasName()) {
+                    throw new IllegalArgumentException("FIELD segment must have name.");
+                }
+                return ColumnPath.Segment.field(pbSegment.getName());
+            case 1:
+                return ColumnPath.Segment.arrayElement();
+            case 2:
+                return ColumnPath.Segment.mapValue();
+            default:
+                throw new IllegalArgumentException(
+                        "Unsupported column path segment type: " + pbSegment.getSegmentType());
+        }
     }
 
     public static List<TableChange.SchemaChange> toDropColumns(List<PbDropColumn> dropColumns) {

@@ -158,6 +158,7 @@ message AlterTableRequest {
   repeated PbRenameColumn rename_columns = 6;
   repeated PbModifyColumn modify_columns = 7;
   optional PbModifyBucketCount modify_bucket_count = 8;
+  repeated PbAddNestedField add_nested_fields = 9;
 }
 
 message PbModifyBucketCount {
@@ -1420,6 +1421,18 @@ message PbAddColumn {
   required int32 column_position_type = 4; // LAST=0,FIRST=1,AFTER=3
   optional string agg_function_type = 5;
   repeated PbKeyValue agg_function_params = 6;
+}
+
+message PbColumnPathSegment {
+  required int32 segment_type = 1; // FIELD=0, ARRAY_ELEMENT=1, MAP_VALUE=2
+  optional string name = 2;
+}
+
+message PbAddNestedField {
+  repeated PbColumnPathSegment parent_path = 1;
+  required string field_name = 2;
+  required bytes data_type_json = 3;
+  optional string comment = 4;
 }
 
 message PbDropColumn {

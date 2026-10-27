@@ -45,6 +45,7 @@ import org.apache.fluss.fs.FsPathAndFileName;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
 import org.apache.fluss.metadata.AggFunction;
 import org.apache.fluss.metadata.BucketInfo;
+import org.apache.fluss.metadata.ColumnPath;
 import org.apache.fluss.metadata.DatabaseChange;
 import org.apache.fluss.metadata.DatabaseSummary;
 import org.apache.fluss.metadata.PartitionInfo;
@@ -78,9 +79,11 @@ import org.apache.fluss.rpc.messages.ListRemoteLogManifestsResponse;
 import org.apache.fluss.rpc.messages.LookupRequest;
 import org.apache.fluss.rpc.messages.MetadataRequest;
 import org.apache.fluss.rpc.messages.PbAddColumn;
+import org.apache.fluss.rpc.messages.PbAddNestedField;
 import org.apache.fluss.rpc.messages.PbAlterConfig;
 import org.apache.fluss.rpc.messages.PbBucketInfo;
 import org.apache.fluss.rpc.messages.PbBucketOffset;
+import org.apache.fluss.rpc.messages.PbColumnPathSegment;
 import org.apache.fluss.rpc.messages.PbDatabaseSummary;
 import org.apache.fluss.rpc.messages.PbDescribeConfig;
 import org.apache.fluss.rpc.messages.PbDropColumn;
@@ -439,6 +442,7 @@ public class ClientRpcMessageUtils {
                 .setTableName(tablePath.getTableName());
 
         List<PbAddColumn> addColumns = new ArrayList<>();
+        List<PbAddNestedField> addNestedFields = new ArrayList<>();
         List<PbDropColumn> dropColumns = new ArrayList<>();
         List<PbRenameColumn> renameColumns = new ArrayList<>();
         List<PbModifyColumn> modifyColumns = new ArrayList<>();
@@ -447,6 +451,8 @@ public class ClientRpcMessageUtils {
         for (TableChange tableChange : tableChanges) {
             if (tableChange instanceof TableChange.AddColumn) {
                 addColumns.add(toPbAddColumn((TableChange.AddColumn) tableChange));
+            } else if (tableChange instanceof TableChange.AddNestedField) {
+                addNestedFields.add(toPbAddNestedField((TableChange.AddNestedField) tableChange));
             } else if (tableChange instanceof TableChange.DropColumn) {
                 dropColumns.add(toPbDropColumn((TableChange.DropColumn) tableChange));
             } else if (tableChange instanceof TableChange.RenameColumn) {
@@ -473,6 +479,7 @@ public class ClientRpcMessageUtils {
         }
         request.addAllConfigChanges(alterConfigs)
                 .addAllAddColumns(addColumns)
+                .addAllAddNestedFields(addNestedFields)
                 .addAllDropColumns(dropColumns)
                 .addAllRenameColumns(renameColumns)
                 .addAllModifyColumns(modifyColumns);
@@ -784,6 +791,49 @@ public class ClientRpcMessageUtils {
         }
 
         return pbAddColumn;
+    }
+
+    /** Converts a nested field addition to its RPC representation. */
+    public static PbAddNestedField toPbAddNestedField(TableChange.AddNestedField addNestedField) {
+        PbAddNestedField pbAddNestedField =
+                new PbAddNestedField()
+                        .addAllParentPaths(toPbColumnPathSegments(addNestedField.getParentPath()))
+                        .setFieldName(addNestedField.getFieldName())
+                        .setDataTypeJson(
+                                JsonSerdeUtils.writeValueAsBytes(
+                                        addNestedField.getDataType(), DataTypeJsonSerde.INSTANCE));
+        if (addNestedField.getComment() != null) {
+            pbAddNestedField.setComment(addNestedField.getComment());
+        }
+        return pbAddNestedField;
+    }
+
+    private static List<PbColumnPathSegment> toPbColumnPathSegments(ColumnPath columnPath) {
+        return columnPath.getSegments().stream()
+                .map(ClientRpcMessageUtils::toPbColumnPathSegment)
+                .collect(Collectors.toList());
+    }
+
+    private static PbColumnPathSegment toPbColumnPathSegment(ColumnPath.Segment segment) {
+        PbColumnPathSegment pbSegment =
+                new PbColumnPathSegment().setSegmentType(toPbColumnPathSegmentType(segment));
+        if (segment.getType() == ColumnPath.SegmentType.FIELD) {
+            pbSegment.setName(segment.getName().get());
+        }
+        return pbSegment;
+    }
+
+    private static int toPbColumnPathSegmentType(ColumnPath.Segment segment) {
+        switch (segment.getType()) {
+            case FIELD:
+                return 0;
+            case ARRAY_ELEMENT:
+                return 1;
+            case MAP_VALUE:
+                return 2;
+            default:
+                throw new IllegalArgumentException("Unsupported column path segment: " + segment);
+        }
     }
 
     public static PbDropColumn toPbDropColumn(TableChange.DropColumn dropColumn) {
