@@ -17,12 +17,14 @@
 
 package org.apache.fluss.flink.procedure;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.tiering.FlussTableLakeSnapshotCommitter;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
 import org.apache.fluss.exception.TableAlreadyExistException;
+import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.flink.utils.DataLakeUtils;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
 import org.apache.fluss.lake.lakestorage.LakeStorage;
@@ -33,13 +35,16 @@ import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.utils.ExceptionUtils;
+import org.apache.fluss.utils.RetryUtils;
 import org.apache.fluss.utils.TemporaryClassLoaderContext;
+import org.apache.fluss.utils.function.ThrowingRunnable;
 
 import org.apache.flink.table.annotation.ArgumentHint;
 import org.apache.flink.table.annotation.DataTypeHint;
 import org.apache.flink.table.annotation.ProcedureHint;
 import org.apache.flink.table.procedure.ProcedureContext;
 
+import java.io.IOException;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -53,6 +58,10 @@ import static org.apache.fluss.utils.PropertiesUtils.extractAndRemovePrefix;
 public class EnableFlussOnLakeTableProcedure extends ProcedureBase {
 
     private static final String SUCCESS_MESSAGE = "Successfully enabled Fluss on %s table '%s'.";
+
+    private static final int COMMIT_MAX_ATTEMPTS = 10;
+    private static final long COMMIT_INITIAL_BACKOFF_MS = 100L;
+    private static final long COMMIT_MAX_BACKOFF_MS = 2000L;
 
     @ProcedureHint(argument = {@ArgumentHint(name = "table", type = @DataTypeHint("STRING"))})
     public String[] call(ProcedureContext context, String table) throws Exception {
@@ -134,8 +143,13 @@ public class EnableFlussOnLakeTableProcedure extends ProcedureBase {
                     new FlussTableLakeSnapshotCommitter(
                             flussProcedureContext.getFlussConfiguration())) {
                 committer.open();
-                committer.commitInitialSnapshot(
-                        tableInfo.getTableId(), tableInfo.getTablePath(), snapshotId.get());
+                commitInitialSnapshotWithRetry(
+                        () ->
+                                committer.commitInitialSnapshot(
+                                        tableInfo.getTableId(),
+                                        tableInfo.getTablePath(),
+                                        snapshotId.get()),
+                        tableInfo.getTablePath());
             }
         } catch (Exception e) {
             throw new FlussRuntimeException(
@@ -144,6 +158,27 @@ public class EnableFlussOnLakeTableProcedure extends ProcedureBase {
                             tableInfo.getTablePath(), tableInfo.getTableId()),
                     e);
         }
+    }
+
+    /**
+     * Runs the commit of the initial lake snapshot, retrying while the coordinator reports the
+     * table as missing. The coordinator learns about a newly created table asynchronously via
+     * ZooKeeper, so an immediate commit can be rejected with {@link TableNotExistException} until
+     * then.
+     */
+    @VisibleForTesting
+    static void commitInitialSnapshotWithRetry(
+            ThrowingRunnable<IOException> commit, TablePath tablePath) throws IOException {
+        RetryUtils.executeWithRetry(
+                () -> {
+                    commit.run();
+                    return null;
+                },
+                String.format("Committing the initial lake snapshot of table %s", tablePath),
+                COMMIT_MAX_ATTEMPTS,
+                COMMIT_INITIAL_BACKOFF_MS,
+                COMMIT_MAX_BACKOFF_MS,
+                e -> ExceptionUtils.findThrowable(e, TableNotExistException.class).isPresent());
     }
 
     private LakeCatalog createLakeCatalog(TableInfo tableInfo) {

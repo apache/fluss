@@ -17,6 +17,7 @@
 
 package org.apache.fluss.flink.procedure;
 
+import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.metadata.TablePath;
 
 import org.junit.jupiter.api.Test;
@@ -24,7 +25,9 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.NullAndEmptySource;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.io.IOException;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -62,5 +65,36 @@ class EnableFlussOnLakeTableProcedureTest {
     void testRejectInvalidOptions(String options) {
         assertThatThrownBy(() -> EnableFlussOnLakeTableProcedure.parseOptions(options))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void testRetryCommitWhileCoordinatorDoesNotKnowTable() throws Exception {
+        AtomicInteger attempts = new AtomicInteger();
+        EnableFlussOnLakeTableProcedure.commitInitialSnapshotWithRetry(
+                () -> {
+                    if (attempts.incrementAndGet() < 3) {
+                        throw new IOException(
+                                "Fail to commit table lake snapshot",
+                                new TableNotExistException("Table 9 not found."));
+                    }
+                },
+                TablePath.of("db", "table"));
+        assertThat(attempts).hasValue(3);
+    }
+
+    @Test
+    void testDoNotRetryCommitOnOtherFailures() {
+        AtomicInteger attempts = new AtomicInteger();
+        assertThatThrownBy(
+                        () ->
+                                EnableFlussOnLakeTableProcedure.commitInitialSnapshotWithRetry(
+                                        () -> {
+                                            attempts.incrementAndGet();
+                                            throw new IOException("unexpected failure");
+                                        },
+                                        TablePath.of("db", "table")))
+                .isInstanceOf(IOException.class)
+                .hasMessage("unexpected failure");
+        assertThat(attempts).hasValue(1);
     }
 }
