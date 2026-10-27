@@ -17,10 +17,12 @@
 
 package org.apache.fluss.server.coordinator.event;
 
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 
 import java.util.List;
+import java.util.Map;
 
 /** An event for receive the response of {@link NotifyLeaderAndIsrRequest} from tablet server. */
 public class NotifyLeaderAndIsrResponseReceivedEvent implements CoordinatorEvent {
@@ -30,11 +32,16 @@ public class NotifyLeaderAndIsrResponseReceivedEvent implements CoordinatorEvent
     // the server id that return the response
     private final int responseServerId;
 
+    // the bucket epoch sent in the request for each bucket, the response itself carries no epoch
+    private final Map<TableBucket, Integer> requestBucketEpochs;
+
     public NotifyLeaderAndIsrResponseReceivedEvent(
             List<NotifyLeaderAndIsrResultForBucket> notifyLeaderAndIsrResultForBuckets,
-            int responseServerId) {
+            int responseServerId,
+            Map<TableBucket, Integer> requestBucketEpochs) {
         this.notifyLeaderAndIsrResultForBuckets = notifyLeaderAndIsrResultForBuckets;
         this.responseServerId = responseServerId;
+        this.requestBucketEpochs = requestBucketEpochs;
     }
 
     public int getResponseServerId() {
@@ -43,5 +50,10 @@ public class NotifyLeaderAndIsrResponseReceivedEvent implements CoordinatorEvent
 
     public List<NotifyLeaderAndIsrResultForBucket> getNotifyLeaderAndIsrResultForBuckets() {
         return notifyLeaderAndIsrResultForBuckets;
+    }
+
+    /** Returns the bucket epoch the request sent for the bucket, or -1 if unknown. */
+    public int getRequestBucketEpoch(TableBucket tableBucket) {
+        return requestBucketEpochs.getOrDefault(tableBucket, -1);
     }
 }

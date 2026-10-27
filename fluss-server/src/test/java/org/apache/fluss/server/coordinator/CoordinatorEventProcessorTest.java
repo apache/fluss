@@ -1403,7 +1403,8 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                                                 new ApiError(
                                                         Errors.DISK_WRITE_LOCKED,
                                                         "disk write locked"))),
-                                leader));
+                                leader,
+                                Collections.emptyMap()));
 
         fromCtx(
                 ctx -> {
@@ -1449,7 +1450,8 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                                                 new ApiError(
                                                         Errors.DISK_WRITE_LOCKED,
                                                         "disk write locked"))),
-                                leader));
+                                leader,
+                                Collections.emptyMap()));
 
         retryVerifyContext(
                 ctx -> {
@@ -1507,7 +1509,8 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                                                 new ApiError(
                                                         Errors.DISK_WRITE_LOCKED,
                                                         "disk write locked"))),
-                                leader));
+                                leader,
+                                Collections.emptyMap()));
 
         retryVerifyContext(
                 ctx -> {
@@ -1568,7 +1571,8 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                                                 new ApiError(
                                                         Errors.DISK_WRITE_LOCKED,
                                                         "disk write locked"))),
-                                leader));
+                                leader,
+                                Collections.emptyMap()));
 
         retryVerifyContext(
                 ctx -> {
@@ -2099,7 +2103,16 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                         System.currentTimeMillis()));
 
         try {
-            initCoordinatorChannel();
+            ConcurrentLinkedDeque<ControlledNotifyTrigger> pendingTriggers =
+                    new ConcurrentLinkedDeque<>();
+            Map<Integer, TabletServerGateway> gateways = new HashMap<>();
+            List<ControlledNotifyGateway> controlledGateways = new ArrayList<>();
+            for (int server : zookeeperClient.getSortedTabletServerList()) {
+                ControlledNotifyGateway gw = new ControlledNotifyGateway(server, pendingTriggers);
+                gateways.put(server, gw);
+                controlledGateways.add(gw);
+            }
+            testCoordinatorChannelManager.setGateways(gateways);
             TablePath t1 = TablePath.of(defaultDatabase, "test_reassignment_with_leader_change");
             Map<Integer, BucketAssignment> bucketAssignments = new HashMap<>();
             bucketAssignments.put(0, BucketAssignment.of(0, 1, 3));
@@ -2112,6 +2125,10 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                             false);
             TableBucket tb0 = new TableBucket(t1Id, 0);
             verifyIsr(tb0, 0, Arrays.asList(0, 1, 3));
+
+            // From now on, NotifyLeaderAndIsr responses are held until the test releases them.
+            controlledGateways.forEach(ControlledNotifyGateway::enableControlMode);
+            pendingTriggers.clear();
 
             // Replica 3 moves to 2 and the leader moves from 0 to 1, while the old leader 0 stays
             // in the target replicas. The plan puts the target leader first.
@@ -2140,6 +2157,34 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
             respCallback.get();
 
             verifyIsr(tb0, 1, Arrays.asList(0, 1, 2));
+
+            // Hold the planned leader's acknowledgement of the final state (its latest request)
+            // and release all others, including server 1's responses to the earlier requests.
+            ControlledNotifyTrigger finalLeaderAck = null;
+            for (ControlledNotifyTrigger trigger : pendingTriggers) {
+                if (trigger.getResponseServerId() == 1) {
+                    finalLeaderAck = trigger;
+                }
+            }
+            assertThat(finalLeaderAck).isNotNull();
+            assertThat(pendingTriggers.remove(finalLeaderAck)).isTrue();
+            drainPendingNotifyTriggers(pendingTriggers);
+            fromCtx(ctx -> null);
+
+            assertThat(countInProgressRebalanceTasks(tb0)).isEqualTo(1);
+            assertThat(eventProcessor.getRebalanceManager().listRebalanceProgress(null).status())
+                    .isEqualTo(RebalanceStatus.REBALANCING);
+
+            finalLeaderAck.complete(null);
+            retry(
+                    Duration.ofMinutes(1),
+                    () ->
+                            assertThat(
+                                            eventProcessor
+                                                    .getRebalanceManager()
+                                                    .listRebalanceProgress(null)
+                                                    .status())
+                                    .isEqualTo(RebalanceStatus.COMPLETED));
         } finally {
             ZOO_KEEPER_EXTENSION_WRAPPER
                     .getCustomExtension()
@@ -2267,19 +2312,16 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                         tableBucket, new ApiError(Errors.UNKNOWN_SERVER_ERROR, "failed"));
 
         assertThat(
-                        CoordinatorEventProcessor
-                                .isSuccessfulLeaderOnlyRebalanceResponseFromNewLeader(
-                                        successResult, 1, planForBucket))
+                        CoordinatorEventProcessor.isSuccessfulRebalanceResponseFromNewLeader(
+                                successResult, 1, planForBucket))
                 .isTrue();
         assertThat(
-                        CoordinatorEventProcessor
-                                .isSuccessfulLeaderOnlyRebalanceResponseFromNewLeader(
-                                        successResult, 0, planForBucket))
+                        CoordinatorEventProcessor.isSuccessfulRebalanceResponseFromNewLeader(
+                                successResult, 0, planForBucket))
                 .isFalse();
         assertThat(
-                        CoordinatorEventProcessor
-                                .isSuccessfulLeaderOnlyRebalanceResponseFromNewLeader(
-                                        failedResult, 1, planForBucket))
+                        CoordinatorEventProcessor.isSuccessfulRebalanceResponseFromNewLeader(
+                                failedResult, 1, planForBucket))
                 .isFalse();
     }
 
