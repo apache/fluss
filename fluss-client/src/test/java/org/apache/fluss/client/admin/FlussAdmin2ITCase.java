@@ -19,6 +19,7 @@
 
 package org.apache.fluss.client.admin;
 
+import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.AutoPartitionTimeUnit;
@@ -29,6 +30,7 @@ import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.messages.ListPartitionInfosRequest;
 import org.apache.fluss.rpc.messages.ListPartitionInfosResponse;
 import org.apache.fluss.rpc.messages.PbTablePath;
@@ -41,6 +43,8 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.apache.fluss.metadata.DataLakeFormat.PAIMON;
 import static org.apache.fluss.record.TestData.DATA1_PARTITIONED_TABLE_DESCRIPTOR;
@@ -58,6 +62,43 @@ import static org.assertj.core.api.Assertions.tuple;
  * 3000-line limit per file. Add new FlussAdmin integration tests here.
  */
 class FlussAdmin2ITCase extends ClientToServerITCaseBase {
+
+    @Test
+    void testReadOnlyRetryAvoidsStoppedRpcEndpointStillAdvertised() throws Exception {
+        List<String> expected = admin.listDatabases().get(10, TimeUnit.SECONDS);
+        RpcClient rpcClient = FLUSS_CLUSTER_EXTENSION.getRpcClient();
+        MetadataUpdater initial = new MetadataUpdater(clientConf, rpcClient);
+        ServerNode failed = initial.getCluster().getTabletServer(0);
+        AtomicReference<List<ServerNode>> refreshedNodes = new AtomicReference<>();
+        MetadataUpdater metadata =
+                new MetadataUpdater(rpcClient, clientConf, initial.getCluster()) {
+                    @Override
+                    public ServerNode getRandomTabletServer() {
+                        return failed;
+                    }
+
+                    @Override
+                    public void refreshClusterUntilAvailable() {
+                        super.refreshClusterUntilAvailable();
+                        refreshedNodes.set(getCluster().getAliveTabletServerList());
+                    }
+                };
+        try (FlussAdmin isolatedAdmin = new FlussAdmin(rpcClient, metadata)) {
+            // Leave the tablet registered while its RPC endpoint is stopped.
+            FLUSS_CLUSTER_EXTENSION
+                    .getTabletServerById(failed.id())
+                    .getRpcServer()
+                    .closeAsync()
+                    .get(10, TimeUnit.SECONDS);
+            assertThat(isolatedAdmin.listDatabases().get(10, TimeUnit.SECONDS))
+                    .containsExactlyInAnyOrderElementsOf(expected);
+            assertThat(refreshedNodes.get()).contains(failed);
+        } finally {
+            FLUSS_CLUSTER_EXTENSION.stopTabletServer(failed.id());
+            FLUSS_CLUSTER_EXTENSION.startTabletServer(failed.id());
+            FLUSS_CLUSTER_EXTENSION.waitUntilAllGatewayHasSameMetadata();
+        }
+    }
 
     @Test
     void testListPartitionInfos() throws Exception {
