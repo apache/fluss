@@ -38,8 +38,9 @@ import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.utils.ExceptionUtils;
 
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.RegisterExtension;
 
 import java.time.Duration;
 import java.util.concurrent.ExecutionException;
@@ -55,8 +56,7 @@ class ConsumerOffsetTableITCase {
     private static final String INTERNAL_LISTENER = "INTERNAL";
     private static final String CLIENT_LISTENER = "CLIENT";
 
-    @RegisterExtension
-    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
+    private final FlussClusterExtension flussCluster =
             FlussClusterExtension.builder()
                     .setNumOfTabletServers(1)
                     .setCoordinatorServerListeners(
@@ -70,16 +70,24 @@ class ConsumerOffsetTableITCase {
                     .setClusterConf(clusterConfiguration())
                     .build();
 
+    @BeforeEach
+    void setUp() throws Exception {
+        // System tables and their cached initialization state must share the cluster lifecycle.
+        flussCluster.start();
+    }
+
+    @AfterEach
+    void tearDown() throws Exception {
+        flussCluster.close();
+    }
+
     @Test
     void testInternalCreationIgnoresKvRestrictionAndClusterDataLakeFormat() throws Exception {
         String groupId = "group-with-cluster-lake-format";
         ensureConsumerOffsetTable(groupId);
 
         TableRegistration tableRegistration =
-                FLUSS_CLUSTER_EXTENSION
-                        .getZooKeeperClient()
-                        .getTable(SystemTables.CONSUMER_OFFSETS)
-                        .get();
+                flussCluster.getZooKeeperClient().getTable(SystemTables.CONSUMER_OFFSETS).get();
         TableConfig tableConfig = tableRegistration.getTableConfig();
         assertThat(tableConfig.getDataLakeFormat()).isEmpty();
         assertThat(tableRegistration.properties)
@@ -100,12 +108,11 @@ class ConsumerOffsetTableITCase {
     void testExternalRequestCannotCreateSystemTable() throws Exception {
         // RpcClient caches connections by server uid, so close a possible internal-listener
         // connection before connecting to the same coordinator through the client listener.
-        FLUSS_CLUSTER_EXTENSION
+        flussCluster
                 .getRpcClient()
-                .disconnect(FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode(CLIENT_LISTENER).uid())
+                .disconnect(flussCluster.getCoordinatorServerNode(CLIENT_LISTENER).uid())
                 .get();
-        AdminGateway externalGateway =
-                FLUSS_CLUSTER_EXTENSION.newCoordinatorClient(CLIENT_LISTENER);
+        AdminGateway externalGateway = flussCluster.newCoordinatorClient(CLIENT_LISTENER);
         TableDescriptor tableDescriptor = newConsumerOffsetTableDescriptor();
 
         assertSystemTableCreationRejected(
@@ -121,10 +128,9 @@ class ConsumerOffsetTableITCase {
                 externalGateway, SystemTables.CONSUMER_OFFSETS, tableDescriptor, true);
     }
 
-    private static void ensureConsumerOffsetTable(String groupId) throws Exception {
-        ServerNode tabletServer = FLUSS_CLUSTER_EXTENSION.getTabletServerNodes().iterator().next();
-        TabletServerGateway gateway =
-                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(tabletServer.id());
+    private void ensureConsumerOffsetTable(String groupId) throws Exception {
+        ServerNode tabletServer = flussCluster.getTabletServerNodes().iterator().next();
+        TabletServerGateway gateway = flussCluster.newTabletServerClientForNode(tabletServer.id());
 
         retry(
                 Duration.ofMinutes(1),
@@ -145,6 +151,8 @@ class ConsumerOffsetTableITCase {
                         throw e;
                     }
                 });
+        assertThat(flussCluster.getZooKeeperClient().tableExist(SystemTables.CONSUMER_OFFSETS))
+                .isTrue();
     }
 
     private static void assertSystemTableCreationRejected(
