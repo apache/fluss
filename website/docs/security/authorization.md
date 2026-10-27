@@ -91,7 +91,7 @@ Below is a summary of the currently public protocols and their relationship with
 | TABLE_EXISTS | DESCRIBE | Table | Returns `false` if the user lacks permission. |
 | LIST_TABLES | DESCRIBE | Table | Only tables that the user has permission to access are returned. |
 | LIST_PARTITION_INFOS | DESCRIBE | Table | Requires permission on the owning table. Partition-level ACLs are not checked. |
-| GET_METADATA | DESCRIBE | Table | Only table metadata that the user has permission to access is returned. Server discovery through `Admin.getServerNodes()` does not require cluster `DESCRIBE` permission and does not return tags or replica loads. |
+| GET_METADATA | DESCRIBE | Table | Only metadata that the user has permission to access is returned. |
 | GET_LATEST_KV_SNAPSHOTS | DESCRIBE | Table | |
 | GET_KV_SNAPSHOT_METADATA | DESCRIBE | Table | |
 | GET_LAKE_SNAPSHOT | DESCRIBE | Table | |
@@ -122,7 +122,6 @@ Below is a summary of the currently public protocols and their relationship with
 | LIST_REBALANCE_PROGRESS | DESCRIBE | Cluster | |
 | CANCEL_REBALANCE | WRITE | Cluster | |
 | GET_CLUSTER_HEALTH | DESCRIBE | Cluster | |
-| DESCRIBE_CLUSTER | DESCRIBE | Cluster | Returns live server nodes with tags and replica loads, including offline servers with assigned replicas. |
 | REGISTER_PRODUCER_OFFSETS | WRITE | Table | Requires `WRITE` on all tables in the request. |
 | GET_PRODUCER_OFFSETS | READ | Table | Offsets for tables without `READ` permission are filtered out. |
 | DELETE_PRODUCER_OFFSETS | WRITE | Table | Requires `WRITE` on all tables in the producer offset snapshot. |
