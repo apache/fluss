@@ -205,6 +205,128 @@ curl --fail http://127.0.0.1:8080/health
 curl --fail http://127.0.0.1:8080/ready
 ```
 
+## Run on Kubernetes with Helm
+
+The `helm/fluss-gateway/` chart deploys Gateway independently of the Fluss servers.
+It uses a standard Kubernetes Deployment, a REST Service, a ConfigMap, and an
+optional metrics Service; it requires no custom controller. Deploy ZooKeeper
+and Fluss first, following [Deploying with Helm Charts](./deploying-with-helm.md).
+The Gateway chart requires Kubernetes 1.19 or newer and Helm 3.8 or newer.
+
+From a source checkout, create a values file for the Gateway:
+
+```yaml
+image:
+  repository: fluss-gateway
+  tag: dev
+
+replicaCount: 1
+clusters:
+  default:
+    bootstrapServers: coordinator-server-hs.fluss.svc.cluster.local:9124
+```
+
+This example uses a development image. Build it with
+`GATEWAY_IMAGE=fluss-gateway:dev docker/fluss-gateway/build.sh`, then push it to a
+registry accessible to the Kubernetes nodes or load it into each node's image
+store. For a released image, set `image.repository` to `apache/fluss-gateway` and
+`image.tag` to the available release version. For a private registry, reference
+an existing image pull Secret with `image.pullSecrets: [registry]`. As in the
+Fluss chart, `image.registry` can be set separately from `image.repository`.
+
+The bootstrap address above assumes the server chart is installed in namespace
+`fluss`. Use the Fluss **client listener**, which the server chart exposes on
+port **9124** by default; port 9123 is its internal listener. Gateway pods must
+also reach all server addresses advertised by the Fluss cluster.
+
+Save the file as `gateway-values.yaml`, then run from the repository root:
+
+```bash
+helm upgrade --install fluss-gateway ./helm/fluss-gateway \
+  --namespace fluss --create-namespace \
+  -f gateway-values.yaml --wait --timeout 5m
+
+kubectl -n fluss port-forward service/fluss-gateway 8080:8080
+```
+
+In another terminal, check both the process and the backend connection:
+
+```bash
+curl --fail http://127.0.0.1:8080/health
+curl --fail http://127.0.0.1:8080/ready
+curl --fail http://127.0.0.1:8080/v1/clusters/default/databases
+```
+
+The last call accesses Fluss. `/health` and `/ready` check only the Gateway
+process and lifecycle, so their success does not establish backend connectivity.
+The default REST Service is `ClusterIP`. The current HTTP `trust` mode requires
+a trusted network boundary or an authenticated proxy before exposing the API
+outside that boundary.
+
+### Configure backend credentials
+
+For a Fluss cluster with SASL/PLAIN enabled, create a Secret in the Gateway
+namespace containing `username` and `password`, then add the following to your
+values file:
+
+```yaml
+clusters:
+  default:
+    securityProtocol: sasl
+    sasl:
+      existingSecret:
+        name: fluss-gateway-backend
+```
+
+The chart injects those keys through Secret references; credentials are not
+rendered into the ConfigMap or stored in chart values. For different Secret key
+names, set `sasl.existingSecret.usernameKey` and `sasl.existingSecret.passwordKey`.
+After changing an external Secret, run
+`kubectl -n fluss rollout restart deployment/fluss-gateway` to reload the
+environment variables. Backend SASL does not authenticate HTTP callers.
+
+Cluster IDs must match `^[a-z][a-z0-9_]{0,62}$`. SASL cluster IDs cannot contain
+consecutive underscores or end in an underscore, because Gateway uses double
+underscores as environment variable delimiters. To replace the default cluster
+with named clusters, set `clusters.default: null`; Helm otherwise merges maps.
+
+### Configure limits, monitoring, and upgrades
+
+Use `configurationOverrides` for additional flat Gateway settings, for example:
+
+```yaml
+configurationOverrides:
+  gateway.rest.write.max-request-bytes: 4MiB
+  gateway.rest.write.max-rows: 2500
+```
+
+The chart manages listener addresses, authentication, clusters, and lifecycle
+through dedicated values. It rejects overrides of those settings to keep them
+consistent with the Services and probes. See the
+[chart values](https://github.com/apache/fluss/blob/main/helm/fluss-gateway/values.yaml)
+for available options.
+
+Prometheus metrics use a separate internal headless Service, `fluss-gateway-metrics`,
+on port 9095 by default, allowing discovery of individual Gateway pods. Set
+`metrics.enabled: false` to disable it. Configure Prometheus to discover the
+supplied scrape annotations, or use `metrics.service.labels` to select the Service
+with an existing ServiceMonitor.
+
+Scale with `replicaCount` and upgrade with `helm upgrade`. Configuration changes
+update a pod-template checksum and trigger a rolling deployment, with
+`maxUnavailable: 0` and `maxSurge: 1`. Allow enough capacity for the extra pod
+during a rollout. The default 45-second termination grace period includes a
+5-second preStop delay and the Gateway's 30-second drain budget. If you increase
+`server.shutdownDrainTimeoutSeconds`, raise `terminationGracePeriodSeconds`
+above that budget plus 5 seconds.
+
+Uninstalling this independent release removes Gateway resources without
+uninstalling the Fluss server release:
+
+```bash
+helm uninstall fluss-gateway --namespace fluss
+```
+
 ## Health checks and graceful shutdown
 
 Map `GET /health` to liveness checks and `GET /ready` to readiness checks

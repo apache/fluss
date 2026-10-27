@@ -7,6 +7,10 @@ sidebar_position: 5
 
 This page provides instructions for deploying a Fluss cluster on Kubernetes using Helm charts. The chart creates a distributed streaming storage system with CoordinatorServer and TabletServer components.
 
+The stateless REST Gateway has a separate Helm chart and release. See
+[Deploying Fluss Gateway on Kubernetes](./deploying-gateway.md#run-on-kubernetes-with-helm)
+to connect a Gateway deployment to an existing Fluss cluster.
+
 ## Prerequisites
 
 Before installing the Fluss Helm chart, ensure you have:
@@ -94,7 +98,7 @@ helm install helm-repo/fluss
 #### Install from Local Chart
 
 ```bash
-helm install fluss ./helm
+helm install fluss ./helm/fluss
 ```
 
 #### Install with Custom Values
@@ -102,13 +106,13 @@ helm install fluss ./helm
 You can customize the installation by providing your own `values.yaml` file or setting individual parameters via the `--set` flag. Using a custom values file:
 
 ```bash
-helm install fluss ./helm -f my-values.yaml
+helm install fluss ./helm/fluss -f my-values.yaml
 ```
 
 Or for example to change the ZooKeeper address via the `--set` flag:
 
 ```bash
-helm install fluss ./helm \
+helm install fluss ./helm/fluss \
   --set configurationOverrides.zookeeper.address=<my-zk-cluster>:2181
 ```
 
@@ -831,10 +835,10 @@ tablet:
 
 ```bash
 # Upgrade to a newer chart version
-helm upgrade fluss ./helm
+helm upgrade fluss ./helm/fluss
 
 # Upgrade with new configuration
-helm upgrade fluss ./helm -f values-new.yaml
+helm upgrade fluss ./helm/fluss -f values-new.yaml
 ```
 
 ### Rolling Updates

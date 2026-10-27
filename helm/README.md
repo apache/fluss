@@ -16,61 +16,39 @@
  limitations under the License.
 -->
 
-# Fluss Helm Chart
+# Apache Fluss Helm charts
 
-This chart deploys an Apache Fluss cluster on Kubernetes, following Helm best practices.
+| Chart | Deploys | Deployment guide |
+| --- | --- | --- |
+| [fluss](fluss/) | Coordinator and Tablet servers | [Deploy Fluss](../website/docs/install-deploy/deploying-with-helm.md) |
+| [fluss-gateway](fluss-gateway/) | REST Gateway connected to an existing Fluss cluster | [Deploy Gateway](../website/docs/install-deploy/deploying-gateway.md#run-on-kubernetes-with-helm) |
+
+The charts are independent Helm releases, each with its own values, installation,
+upgrade, and removal. Installing Gateway does not install Fluss servers.
+The `helm/` directory is a collection of charts, not an installable chart.
+
+When installing from a source checkout, select the chart directory:
+
+```bash
+# Run from the repository root; prepare values using the deployment guides.
+helm install fluss ./helm/fluss -f fluss-values.yaml
+helm install fluss-gateway ./helm/fluss-gateway -f gateway-values.yaml
+```
 
 ## Development
 
-For how to build your local Fluss image and use it in Minikube refer to the
-[official documentation](https://fluss.apache.org/docs/next/install-deploy/deploying-with-helm/#installation).
-
-Refer to the [official documentation](https://fluss.apache.org/docs/next/install-deploy/deploying-with-helm/#configuration-parameters)
-as well for configuration values.
-
-We use the [`helm-unittest`](https://github.com/helm-unittest/helm-unittest) plugin for testing Fluss Helm charts.
-You can run tests locally via:
+Both charts use the [helm-unittest](https://github.com/helm-unittest/helm-unittest)
+plugin. After installing it, run the same checks used by CI from the repository root:
 
 ```bash
-# From the /helm folder:
-docker run -ti --rm -v $(pwd):/apps helmunittest/helm-unittest .
+for chart in fluss fluss-gateway; do
+  helm lint --strict "./helm/${chart}"
+  helm unittest "./helm/${chart}"
+  helm package "./helm/${chart}" --destination /tmp
+done
 ```
 
-### Validation Checks
-
-The chart runs the validation checks at install or upgrade time using templates in `_validate.tpl` file.
-
-The warnings are printed to the user, but errors abort the deployment.
-
-To add new validations, for example for a new feature:
-
-1. Define `fluss.<feature>.validateWarning` or `fluss.<feature>.validateError` templates in the feature `_<feature>.tpl` template file.
-2. Add the corresponding `include` calls to `fluss.validateWarning` or `fluss.validateError` in `_validate.tpl` template file.
-
-For example, for the `security` checks, include and update these methods in the `_validate.tpl` file:
-
-```
-{{- define "fluss.validateWarning" -}}
-...
-
-{{- $messages = append $messages (include "fluss.security.validateWarning" .) -}}
-
-...
-{{- end -}}
-
-{{- define "fluss.validateError" -}}
-...
-
-{{- $messages = append $messages (include "fluss.security.validateError" .) -}}
-
-...
-{{- end -}}
-```
-
-## Contributing
-
-Follow the [development section](#development) for local development.
-
-Every contribution should add a unit test to the [tests folder](tests).
-
-Whether relevant, update the [official documentation](../website/docs/install-deploy/deploying-with-helm.md).
+Keep chart-specific tests in each chart's `tests/` directory and update its
+deployment guide when behavior changes. The shared
+[release script](../tools/releasing/create_helm_packages.sh) packages both charts
+as separate archives with a common release version.

@@ -1,0 +1,157 @@
+{{/*
+Licensed to the Apache Software Foundation (ASF) under one
+or more contributor license agreements. See the NOTICE file
+distributed with this work for additional information
+regarding copyright ownership. The ASF licenses this file
+to you under the Apache License, Version 2.0 (the
+"License"); you may not use this file except in compliance
+with the License. You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "fluss-gateway.fullname" . }}
+  labels:
+    {{- include "fluss-gateway.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      {{- include "fluss-gateway.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include "fluss-gateway.configuration" . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "fluss-gateway.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 9999
+        runAsGroup: 9999
+        seccompProfile:
+          type: RuntimeDefault
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- range . }}
+        - name: {{ . | quote }}
+        {{- end }}
+      {{- end }}
+      containers:
+        - name: gateway
+          image: {{ include "fluss-gateway.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["--config", "/opt/fluss/conf/gateway.yaml"]
+          env:
+            # Image ENV defaults override the config file; keep listener overrides in sync.
+            - name: FLUSS_GATEWAY__REST__LISTEN
+              value: {{ printf "0.0.0.0:%v" .Values.server.restPort | quote }}
+            - name: FLUSS_GATEWAY__METRICS__EXPORTER__PROMETHEUS__LISTEN
+              value: {{ printf "0.0.0.0:%v" .Values.metrics.port | quote }}
+            - name: FLUSS_GATEWAY__ID
+              value: {{ include "fluss-gateway.fullname" . | quote }}
+            - name: FLUSS_GATEWAY__INSTANCE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: FLUSS_GATEWAY__HOST
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            {{- range $id := keys .Values.clusters | sortAlpha }}
+            {{- $cluster := index $.Values.clusters $id }}
+            {{- if eq (default "plaintext" $cluster.securityProtocol) "sasl" }}
+            {{- $secret := $cluster.sasl.existingSecret }}
+            - name: FLUSS_GATEWAY__CLUSTER__{{ $id | upper }}__CONNECTION__SERVICE__ACCOUNT
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secret.name | quote }}
+                  key: {{ default "username" $secret.usernameKey | quote }}
+            - name: FLUSS_GATEWAY__CLUSTER__{{ $id | upper }}__CONNECTION__SERVICE__SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secret.name | quote }}
+                  key: {{ default "password" $secret.passwordKey | quote }}
+            {{- end }}
+            {{- end }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          ports:
+            - name: rest
+              containerPort: {{ .Values.server.restPort }}
+            {{- if .Values.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
+            {{- end }}
+          startupProbe:
+            httpGet:
+              path: /health
+              port: rest
+            failureThreshold: 30
+            periodSeconds: 2
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: rest
+            periodSeconds: 5
+            timeoutSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: rest
+            periodSeconds: 10
+            timeoutSeconds: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sleep", "5"]
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /opt/fluss/conf
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "fluss-gateway.fullname" . }}-config
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

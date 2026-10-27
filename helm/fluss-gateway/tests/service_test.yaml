@@ -1,0 +1,120 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements. See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership. The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+suite: gateway REST service
+templates:
+  - templates/service.yaml
+tests:
+  - it: defaults to a private Service with a REST target port
+    asserts:
+      - equal:
+          path: spec.type
+          value: ClusterIP
+      - notExists:
+          path: spec.clusterIP
+      - equal:
+          path: spec.ports
+          value:
+            - {name: rest, port: 8080, targetPort: rest, protocol: TCP}
+
+  - it: permits custom exposure without exposing metrics on the REST Service
+    set:
+      service.type: LoadBalancer
+      service.port: 80
+      service.annotations: {example.com/load-balancer: private}
+    asserts:
+      - equal:
+          path: spec.type
+          value: LoadBalancer
+      - equal:
+          path: spec.ports
+          value:
+            - {name: rest, port: 80, targetPort: rest, protocol: TCP}
+      - equal:
+          path: metadata.annotations["example.com/load-balancer"]
+          value: private
+
+  - it: includes the release name in resource names and selectors
+    release:
+      name: green
+    asserts:
+      - equal:
+          path: metadata.name
+          value: green-fluss-gateway
+      - equal:
+          path: spec.selector
+          value:
+            app.kubernetes.io/name: fluss-gateway
+            app.kubernetes.io/instance: green
+
+  - it: preserves string selector labels for names that look like YAML booleans
+    set:
+      nameOverride: "true"
+    asserts:
+      - equal:
+          path: spec.selector["app.kubernetes.io/name"]
+          value: "true"
+
+---
+suite: gateway metrics service
+templates:
+  - templates/metrics-service.yaml
+tests:
+  - it: advertises the configured metrics port for Prometheus
+    set:
+      metrics.port: 19095
+    asserts:
+      - equal:
+          path: spec.type
+          value: ClusterIP
+      - equal:
+          path: spec.clusterIP
+          value: None
+      - equal:
+          path: metadata.annotations["prometheus.io/port"]
+          value: "19095"
+      - equal:
+          path: spec.ports
+          value:
+            - {name: metrics, port: 19095, targetPort: metrics, protocol: TCP}
+
+  - it: emits no metrics Service when disabled
+    set:
+      metrics.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: accepts discovery labels and annotations while preserving chart labels
+    set:
+      metrics.service.labels:
+        monitoring: prometheus
+        app.kubernetes.io/instance: another-release
+      metrics.service.annotations:
+        example.com/team: data
+    asserts:
+      - equal:
+          path: metadata.labels.monitoring
+          value: prometheus
+      - equal:
+          path: metadata.labels["app.kubernetes.io/instance"]
+          value: RELEASE-NAME
+      - equal:
+          path: metadata.annotations["example.com/team"]
+          value: data
+      - equal:
+          path: metadata.annotations["prometheus.io/scrape"]
+          value: "true"

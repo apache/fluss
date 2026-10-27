@@ -119,15 +119,15 @@ $ git checkout -b release-${SHORT_RELEASE_VERSION}
 $ git push origin release-${SHORT_RELEASE_VERSION}
 ```
 
-Check that the version in the Helm Chart matches `RELEASE_VERSION` in:
-- `helm/Chart.yaml`
-- `helm/values.yaml`
-- `helm/README.md`
+Check that the versions in both Helm charts match `RELEASE_VERSION` in:
+- `helm/fluss/Chart.yaml` (`version` and `appVersion`)
+- `helm/fluss-gateway/Chart.yaml` (`version` and `appVersion`)
+- `helm/fluss/values.yaml` (`image.tag`; Gateway defaults to its chart app version)
 
 If not, update the version in those files, then commit and push:
 
 ```bash
-$ git commit -m "[helm] Bump helm version to x.y.z" helm/Chart.yaml helm/values.yaml helm/README.md
+$ git commit -m "[helm] Bump helm version to x.y.z" helm/fluss/Chart.yaml helm/fluss-gateway/Chart.yaml helm/fluss/values.yaml
 $ git push origin release-${SHORT_RELEASE_VERSION}
 ```
   </TabItem>
@@ -139,17 +139,17 @@ If you're creating a new bugfix release (e.g., 1.0.1 instead of 1.0.0), you do n
 $ git checkout release-$SHORT_RELEASE_VERSION
 ```
 
-Update the version in the Helm Chart in:
-- `helm/Chart.yaml`
-- `helm/values.yaml`
-- `helm/README.md`
+Update the versions in both Helm charts in:
+- `helm/fluss/Chart.yaml` (`version` and `appVersion`)
+- `helm/fluss-gateway/Chart.yaml` (`version` and `appVersion`)
+- `helm/fluss/values.yaml` (`image.tag`; Gateway defaults to its chart app version)
 
 For a bugfix release you need to update the version in these files. For example, if you are releasing `1.0.1`, replace the previous version `1.0.0` with `1.0.1` in those files.
 
 And commit/push the version bump:
 
 ```bash
-$ git commit -m "[helm] Bump helm version to x.y.z" helm/Chart.yaml helm/values.yaml helm/README.md
+$ git commit -m "[helm] Bump helm version to x.y.z" helm/fluss/Chart.yaml helm/fluss-gateway/Chart.yaml helm/fluss/values.yaml
 $ git push origin release-${SHORT_RELEASE_VERSION}
 ```
 
@@ -236,17 +236,17 @@ $ git push origin main
 
 **(4) Upgrade Helm Charts version on main branch**
 
-Update the version in the Helm Chart in:
-- `helm/Chart.yaml`
-- `helm/values.yaml`
-- `helm/README.md`
+Update the versions in both Helm charts in:
+- `helm/fluss/Chart.yaml` (`version` and `appVersion`)
+- `helm/fluss-gateway/Chart.yaml` (`version` and `appVersion`)
+- `helm/fluss/values.yaml` (`image.tag`; Gateway defaults to its chart app version)
 
 For example, if the next major version is `1.1.0`, you should replace all the previous version `1.0.0` to the next release version `1.1.0`.
 
 And commit/push the version bump:
 
 ```bash
-$ git commit -m "[helm] Bump helm version to x.y.z" helm/Chart.yaml helm/values.yaml helm/README.md
+$ git commit -m "[helm] Bump helm version to x.y.z" helm/fluss/Chart.yaml helm/fluss-gateway/Chart.yaml helm/fluss/values.yaml
 $ git push origin main
 ```
 

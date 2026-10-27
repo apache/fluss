@@ -25,11 +25,13 @@ on:
   pull_request:
     paths:
       - 'helm/**'
+      - 'tools/releasing/create_helm_packages.sh'
       - '.github/workflows/helm-chart.yaml'
   push:
     branches: [main, release-*, ci-*]
     paths:
       - 'helm/**'
+      - 'tools/releasing/create_helm_packages.sh'
       - '.github/workflows/helm-chart.yaml'
 
 concurrency:
@@ -38,16 +40,22 @@ concurrency:
 
 jobs:
   test-helm-chart:
-    name: "Helm Lint and Unittest"
+    name: "Helm Lint and Unittest (${{ matrix.chart }})"
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        chart: [fluss, fluss-gateway]
     steps:
       - name: "Checkout code"
         uses: actions/checkout@v6
 
       - name: "Lint Helm chart"
-        run: helm lint ./helm
+        run: helm lint --strict ./helm/${{ matrix.chart }}
 
       - name: "Run helm-unittest"
         run: |
           helm plugin install https://github.com/helm-unittest/helm-unittest
-          helm unittest ./helm
+          helm unittest ./helm/${{ matrix.chart }}
+
+      - name: "Package Helm chart"
+        run: helm package ./helm/${{ matrix.chart }} --destination "$RUNNER_TEMP"
