@@ -28,10 +28,7 @@ import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonParser;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonToken;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.StreamReadConstraints;
-import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.DeserializationFeature;
-import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
-import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.node.ObjectNode;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.util.ByteBufferBackedInputStream;
 import org.apache.fluss.types.RowType;
 
@@ -45,19 +42,17 @@ import java.nio.ByteBuffer;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.Iterator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 /**
  * Decodes a strict UTF-8 JSON object according to the projected Fluss fields.
  *
  * <p>Unpaired surrogate escapes follow Jackson parsing and Fluss's default string encoding.
  *
- * <p>Jackson's node tree preserves ordinary decimal precision but normalizes signed zero. Extreme
- * exponents may be rejected or lose numeric fidelity during parsing, including in rescued JSON.
+ * <p>Converters consume Jackson tokens directly. A JSON subtree is materialized only when its value
+ * must be retained in the rescue column or converted to a string.
  */
 @Internal
 @ThreadSafe
@@ -70,8 +65,8 @@ public final class JsonKafkaFieldDecoder implements KafkaFieldDecoder {
     private final KafkaFieldProjection projection;
     private final boolean rescueEnabled;
     private final boolean nested;
-    private final Set<String> projectedFields = new HashSet<>();
-    private final JsonToFlussConverter[] converters;
+    private final Map<String, Integer> projectedFields = new HashMap<>();
+    private final JsonParserToFlussConverters.Converter[] converters;
 
     /** Creates a decoder from the schema validated by the shared Kafka table contract. */
     public JsonKafkaFieldDecoder(KafkaTableSchema schema) {
@@ -87,10 +82,10 @@ public final class JsonKafkaFieldDecoder implements KafkaFieldDecoder {
         } else {
             projection = schema.valueProjection();
         }
-        converters = new JsonToFlussConverter[projection.size()];
+        converters = new JsonParserToFlussConverters.Converter[projection.size()];
         for (int i = 0; i < projection.size(); i++) {
-            projectedFields.add(projection.nameAt(i));
-            converters[i] = JsonToFlussConverters.create(projection.dataTypeAt(i));
+            projectedFields.put(projection.nameAt(i), i);
+            converters[i] = JsonParserToFlussConverters.create(projection.dataTypeAt(i));
         }
     }
 
@@ -111,41 +106,50 @@ public final class JsonKafkaFieldDecoder implements KafkaFieldDecoder {
                 throw new KafkaRecordEncodingException(
                         "Kafka JSON record value must have an object root.");
             }
-            JsonNode root = OBJECT_MAPPER.readTree(parser);
-            if (parser.nextToken() != null) {
-                throw new KafkaRecordEncodingException(
-                        "Kafka record value is not valid strict UTF-8 JSON: trailing content.");
-            }
-            ObjectNode rescuedFields = rescueEnabled ? OBJECT_MAPPER.createObjectNode() : null;
-            Iterator<Map.Entry<String, JsonNode>> fields = root.fields();
-            while (fields.hasNext()) {
-                Map.Entry<String, JsonNode> field = fields.next();
-                String name = field.getKey();
+            Object[] values = new Object[projection.size()];
+            boolean[] present = new boolean[projection.size()];
+            JsonParserToFlussConverters.ObjectRescue rescuedFields =
+                    rescueEnabled ? JsonParserToFlussConverters.objectRescue() : null;
+            while (parser.nextToken() != JsonToken.END_OBJECT) {
+                String name = parser.getCurrentName();
+                parser.nextToken();
+                Integer position = projectedFields.get(name);
                 boolean reserved = !nested && KafkaTableSchema.isReservedName(name);
-                if (reserved || !projectedFields.contains(name)) {
+                if (reserved || position == null) {
                     if (!rescueEnabled) {
                         throw new KafkaRecordEncodingException(
                                 "Invalid Kafka record value at "
                                         + JsonPath.field(JsonPath.ROOT, name)
                                         + (reserved ? ": reserved field." : ": unknown field."));
                     }
-                    rescuedFields.set(name, field.getValue());
+                    rescuedFields.add(name, JsonParserToFlussConverters.capture(parser));
+                    continue;
                 }
-            }
-            Object[] values = new Object[projection.size()];
-            for (int i = 0; i < projection.size(); i++) {
-                String name = projection.nameAt(i);
-                values[i] =
-                        converters[i].convert(
-                                root.get(name),
+                values[position] =
+                        converters[position].convert(
+                                parser,
                                 JsonPath.field(JsonPath.ROOT, name),
-                                rescueEnabled ? rescued -> rescuedFields.set(name, rescued) : null);
+                                rescuedFields == null
+                                        ? null
+                                        : rescued -> rescuedFields.add(name, rescued));
+                present[position] = true;
+            }
+            if (parser.nextToken() != null) {
+                throw new KafkaRecordEncodingException(
+                        "Kafka record value is not valid strict UTF-8 JSON: trailing content.");
+            }
+            for (int i = 0; i < projection.size(); i++) {
+                if (!present[i]) {
+                    values[i] =
+                            converters[i].convertMissing(
+                                    JsonPath.field(JsonPath.ROOT, projection.nameAt(i)));
+                }
             }
             return new KafkaDecodedValue(
                     nested ? new Object[] {GenericRow.of(values)} : values,
                     rescuedFields == null || rescuedFields.isEmpty()
                             ? null
-                            : rescuedFields.toString());
+                            : rescuedFields.toJson(OBJECT_MAPPER));
         } catch (KafkaRecordEncodingException e) {
             throw e;
         } catch (IOException | RuntimeException e) {
@@ -164,9 +168,6 @@ public final class JsonKafkaFieldDecoder implements KafkaFieldDecoder {
                                 .maxStringLength(StreamReadConstraints.DEFAULT_MAX_STRING_LEN)
                                 .build());
         mapper.enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION);
-        mapper.enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS);
-        // TODO (#4863): preserve signed zero and extreme exponent/rescue fidelity when reading
-        // scalar tokens directly. Keep this PR on Jackson's complete-tree parsing path.
         return mapper;
     }
 }
