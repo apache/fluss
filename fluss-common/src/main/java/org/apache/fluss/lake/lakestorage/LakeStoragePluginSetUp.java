@@ -17,6 +17,7 @@
 
 package org.apache.fluss.lake.lakestorage;
 
+import org.apache.fluss.exception.IllegalConfigurationException;
 import org.apache.fluss.plugin.PluginManager;
 import org.apache.fluss.shaded.guava32.com.google.common.collect.Iterators;
 
@@ -38,11 +39,26 @@ public class LakeStoragePluginSetUp {
         Iterator<LakeStoragePlugin> lakeStoragePluginIterator =
                 getAllLakeStoragePlugins(pluginManager);
 
+        LakeStoragePlugin matchingPlugin = null;
         while (lakeStoragePluginIterator.hasNext()) {
             LakeStoragePlugin lakeStoragePlugin = lakeStoragePluginIterator.next();
             if (Objects.equals(lakeStoragePlugin.identifier(), dataLakeFormat)) {
-                return PluginLakeStorageWrapper.of(lakeStoragePlugin);
+                if (matchingPlugin != null) {
+                    throw new IllegalConfigurationException(
+                            "Multiple LakeStoragePlugins for datalake format '"
+                                    + dataLakeFormat
+                                    + "' found: "
+                                    + matchingPlugin.getClass().getName()
+                                    + ", "
+                                    + lakeStoragePlugin.getClass().getName()
+                                    + ".");
+                }
+                matchingPlugin = lakeStoragePlugin;
             }
+        }
+
+        if (matchingPlugin != null) {
+            return PluginLakeStorageWrapper.of(matchingPlugin);
         }
 
         // if come here, means we haven't found LakeStoragePlugin match the configured
