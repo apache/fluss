@@ -19,7 +19,9 @@ package org.apache.fluss.client.table;
 
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
+import org.apache.fluss.client.FlussConnection;
 import org.apache.fluss.client.admin.ClientToServerITCaseBase;
+import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.table.scanner.batch.BatchScanUtils;
 import org.apache.fluss.client.table.scanner.batch.BatchScanner;
 import org.apache.fluss.client.table.writer.UpsertWriter;
@@ -67,6 +69,45 @@ class TableKvScanITCase extends ClientToServerITCaseBase {
 
     private static final TableDescriptor PK_TABLE =
             TableDescriptor.builder().schema(PK_SCHEMA).distributedBy(BUCKETS, "id").build();
+
+    @Test
+    void rebuiltScannerRecoversFromCachedOfflineLeader() throws Exception {
+        TablePath path = TablePath.of(DB, "offline-leader-scan");
+        long tableId =
+                createTable(
+                        path,
+                        TableDescriptor.builder().schema(PK_SCHEMA).distributedBy(1, "id").build(),
+                        false);
+        waitAllReplicasReady(tableId, 1);
+        TableBucket bucket = new TableBucket(tableId, 0);
+        MetadataUpdater metadata = ((FlussConnection) conn).getMetadataUpdater();
+        try (Table table = conn.getTable(path)) {
+            upsertRows(table, 8);
+            try (BatchScanner warmup = table.newScan().createBatchScanner(bucket)) {
+                assertThat(idsOf(BatchScanUtils.collectRows(warmup)))
+                        .containsExactlyInAnyOrderElementsOf(rangeAsList(8));
+            }
+            int oldLeader = metadata.leaderFor(path, bucket);
+            FLUSS_CLUSTER_EXTENSION.stopTabletServer(oldLeader);
+            try {
+                assertThat(FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(bucket))
+                        .isNotEqualTo(oldLeader);
+                assertThat(metadata.leaderFor(path, bucket)).isEqualTo(oldLeader);
+                try (BatchScanner failed = table.newScan().createBatchScanner(bucket)) {
+                    assertThatThrownBy(() -> BatchScanUtils.collectRows(failed))
+                            .isInstanceOf(RuntimeException.class)
+                            .hasStackTraceContaining("NetworkException");
+                }
+                try (BatchScanner scanner = table.newScan().createBatchScanner(bucket)) {
+                    assertThat(idsOf(BatchScanUtils.collectRows(scanner)))
+                            .containsExactlyInAnyOrderElementsOf(rangeAsList(8));
+                }
+            } finally {
+                FLUSS_CLUSTER_EXTENSION.startTabletServer(oldLeader);
+                waitAllReplicasReady(tableId, 1);
+            }
+        }
+    }
 
     @Test
     void wholeTableScanReturnsAllRows() throws Exception {
