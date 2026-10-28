@@ -39,6 +39,12 @@ spec:
       protocol: TCP
       port: {{ .Values.listeners.client.port }}
       targetPort: client
+    {{- if (include "fluss.listeners.external.enabled" .) }}
+    - name: external
+      protocol: TCP
+      port: {{ include "fluss.listeners.external.port" . }}
+      targetPort: external
+    {{- end }}
   selector:
     {{- include "fluss.selectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: coordinator
