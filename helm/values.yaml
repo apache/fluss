@@ -88,6 +88,7 @@ tablet:
   annotations: {}
   service:
     annotations: {}
+    publishNotReadyAddresses: true
   podAnnotations: {}
   podLabels: {}
   podDisruptionBudget:
@@ -134,6 +135,7 @@ coordinator:
   annotations: {}
   service:
     annotations: {}
+    publishNotReadyAddresses: true
   podAnnotations: {}
   podLabels: {}
   podDisruptionBudget:

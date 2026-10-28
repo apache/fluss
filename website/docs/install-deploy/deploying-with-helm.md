@@ -485,6 +485,7 @@ making rotation fully hands-off.
 |-----------|-------------|---------|
 | `coordinator.annotations` | Annotations to add to the CoordinatorServer StatefulSet | `{}` |
 | `coordinator.service.annotations` | Annotations to add to the CoordinatorServer headless Service | `{}` |
+| `coordinator.service.publishNotReadyAddresses` | Publish DNS records for CoordinatorServer pods before they are Ready, so a restarting server stays resolvable by its advertised hostname | `true` |
 | `coordinator.extraVolumes` | Extra volumes to add to the CoordinatorServer pod spec | `[]` |
 | `coordinator.extraVolumeMounts` | Extra volume mounts to add to the coordinator container | `[]` |
 | `coordinator.initContainers` | Init containers to run before the coordinator container starts | `[]` |
@@ -497,6 +498,7 @@ making rotation fully hands-off.
 | `coordinator.podDisruptionBudget.maxUnavailable` | Maximum unavailable coordinator pods during disruption | Not set |
 | `tablet.annotations` | Annotations to add to the TabletServer StatefulSet | `{}` |
 | `tablet.service.annotations` | Annotations to add to the TabletServer headless Service | `{}` |
+| `tablet.service.publishNotReadyAddresses` | Publish DNS records for TabletServer pods before they are Ready, so a restarting server stays resolvable by its advertised hostname | `true` |
 | `tablet.extraVolumes` | Extra volumes to add to TabletServer pod specs | `[]` |
 | `tablet.extraVolumeMounts` | Extra volume mounts to add to the tablet container | `[]` |
 | `tablet.initContainers` | Init containers to run before the tablet container starts | `[]` |
