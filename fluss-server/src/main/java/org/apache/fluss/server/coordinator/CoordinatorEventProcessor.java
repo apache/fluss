@@ -1939,12 +1939,32 @@ public class CoordinatorEventProcessor implements EventProcessor {
     }
 
     private void awaitPlannedLeaderAck(TableBucket tableBucket) {
-        coordinatorContext
-                .getBucketLeaderAndIsr(tableBucket)
-                .ifPresent(
-                        leaderAndIsr ->
-                                rebalanceManager.awaitLeaderAck(
-                                        tableBucket, leaderAndIsr.bucketEpoch()));
+        RebalancePlanForBucket planForBucket =
+                rebalanceManager.getRebalancePlanForBucket(tableBucket);
+        Optional<LeaderAndIsr> leaderAndIsr = coordinatorContext.getBucketLeaderAndIsr(tableBucket);
+        if (planForBucket == null) {
+            return;
+        }
+        // Without a leader the task can neither be acknowledged nor safely re-run, so fail it.
+        if (!leaderAndIsr.isPresent()) {
+            LOG.warn(
+                    "No leader for tableBucket {} after applying its rebalance task.", tableBucket);
+            rebalanceManager.finishRebalanceTask(tableBucket, RebalanceStatus.FAILED);
+            return;
+        }
+        // The election picks the first live in-sync target replica, which is not the planned
+        // leader when that one is offline. Its ACK can then never arrive, so fail the task now
+        // instead of blocking the next migrations until the task timeout.
+        if (leaderAndIsr.get().leader() != planForBucket.getNewLeader()) {
+            LOG.warn(
+                    "Planned leader {} for tableBucket {} was not elected, current leader is {}.",
+                    planForBucket.getNewLeader(),
+                    tableBucket,
+                    leaderAndIsr.get().leader());
+            rebalanceManager.finishRebalanceTask(tableBucket, RebalanceStatus.FAILED);
+            return;
+        }
+        rebalanceManager.awaitLeaderAck(tableBucket, leaderAndIsr.get().bucketEpoch());
     }
 
     private boolean isReassignmentComplete(
