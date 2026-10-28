@@ -2745,6 +2745,26 @@ mod tests {
     }
 
     async fn check_poll_remote_projection(batch_mode: bool) -> Result<()> {
+        for compression in ["NONE", "LZ4_FRAME", "ZSTD"] {
+            for fields in [
+                vec![2, 1, 0],
+                vec![0],
+                vec![1],
+                vec![2],
+                vec![2, 0, 2],
+                vec![0, 1, 2],
+            ] {
+                check_poll_remote_projection_case(batch_mode, &fields, compression).await?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn check_poll_remote_projection_case(
+        batch_mode: bool,
+        fields: &[usize],
+        compression: &str,
+    ) -> Result<()> {
         use crate::metadata::DataField;
         use crate::row::DataGetters;
         use crate::test_utils::build_table_info_with_columns;
@@ -2771,10 +2791,14 @@ mod tests {
             ],
         );
         target.schema_id = 2;
-        let mut builder = MemoryLogRecordsArrowBuilder::new(
-            uncompressed_arrow_batch_config(1, source.get_row_type(), usize::MAX),
-            false,
+        let mut config = uncompressed_arrow_batch_config(1, source.get_row_type(), usize::MAX);
+        config.compression = crate::compression::ArrowCompressionInfo::from_conf(
+            &std::collections::HashMap::from([(
+                "table.log.arrow.compression.type".to_string(),
+                compression.to_string(),
+            )]),
         )?;
+        let mut builder = MemoryLogRecordsArrowBuilder::new(config, false)?;
         for name in [Some("alice"), None] {
             let mut row = GenericRow::new(2);
             row.set_field(0, 7_i32);
@@ -2796,7 +2820,7 @@ mod tests {
                 Arc::clone(&metadata),
                 Arc::new(RpcClient::new()),
                 &Config::default(),
-                Some(vec![2, 1, 0]),
+                Some(fields.to_vec()),
                 fixed_schema,
                 None,
                 test_admin(&metadata),
@@ -2809,7 +2833,7 @@ mod tests {
                 Arc::clone(&metadata),
                 Arc::clone(&inner.log_scanner_status),
                 &Config::default(),
-                Some(vec![2, 1, 0]),
+                Some(fields.to_vec()),
                 fixed_schema,
                 None,
                 test_scanner_metrics(&table_path),
@@ -2846,23 +2870,32 @@ mod tests {
                 let batch = batches[0].batch();
                 assert_eq!(
                     batch.schema(),
-                    to_arrow_schema(&target.get_row_type().project(&[2, 1, 0])?)?
+                    to_arrow_schema(&target.get_row_type().project(fields)?)?
                 );
                 assert_eq!(batch.num_rows(), 2);
-                assert_eq!(batch.column(0).null_count(), 2);
-                let names = batch
-                    .column(1)
-                    .as_any()
-                    .downcast_ref::<StringArray>()
-                    .unwrap();
-                assert_eq!(names.value(0), "alice");
-                assert!(names.is_null(1));
-                let ids = batch
-                    .column(2)
-                    .as_any()
-                    .downcast_ref::<Int32Array>()
-                    .unwrap();
-                assert_eq!(ids.values().as_ref(), &[7, 7]);
+                for (column, field) in fields.iter().enumerate() {
+                    match field {
+                        0 => {
+                            let ids = batch
+                                .column(column)
+                                .as_any()
+                                .downcast_ref::<Int32Array>()
+                                .unwrap();
+                            assert_eq!(ids.values().as_ref(), &[7, 7]);
+                        }
+                        1 => {
+                            let names = batch
+                                .column(column)
+                                .as_any()
+                                .downcast_ref::<StringArray>()
+                                .unwrap();
+                            assert_eq!(names.value(0), "alice");
+                            assert!(names.is_null(1));
+                        }
+                        2 => assert_eq!(batch.column(column).null_count(), 2),
+                        _ => unreachable!(),
+                    }
+                }
                 assert!(scanner.poll(Duration::ZERO).await?.is_empty());
             } else {
                 let scanner = LogScanner {
@@ -2873,11 +2906,20 @@ mod tests {
                 assert_eq!(records.len(), 2);
                 for (index, record) in records.iter().enumerate() {
                     assert_eq!(record.offset(), index as i64);
-                    assert!(record.row.is_null_at(0)?);
-                    assert_eq!(record.row.is_null_at(1)?, index == 1);
-                    assert_eq!(record.row.get_int(2)?, 7);
+                    for (column, field) in fields.iter().enumerate() {
+                        match field {
+                            0 => assert_eq!(record.row.get_int(column)?, 7),
+                            1 => {
+                                assert_eq!(record.row.is_null_at(column)?, index == 1);
+                                if index == 0 {
+                                    assert_eq!(record.row.get_string(column)?, "alice");
+                                }
+                            }
+                            2 => assert!(record.row.is_null_at(column)?),
+                            _ => unreachable!(),
+                        }
+                    }
                 }
-                assert_eq!(records[0].row.get_string(1)?, "alice");
                 assert!(scanner.poll(Duration::ZERO).await?.is_empty());
             }
             assert!(fetcher.resolver.resolve(1, true).is_some());
