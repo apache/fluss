@@ -17,12 +17,16 @@
 
 package org.apache.fluss.record;
 
+import org.apache.fluss.compression.ArrowCompressionInfo;
+import org.apache.fluss.compression.ArrowCompressionType;
 import org.apache.fluss.exception.InvalidColumnProjectionException;
 import org.apache.fluss.exception.SchemaNotExistException;
 import org.apache.fluss.metadata.LogFormat;
+import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.record.bytesview.BytesView;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableIterator;
 
@@ -39,6 +43,8 @@ import java.io.File;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.Stream;
@@ -52,6 +58,7 @@ import static org.apache.fluss.record.LogRecordBatchFormat.V0_RECORD_BATCH_HEADE
 import static org.apache.fluss.record.LogRecordBatchFormat.V1_RECORD_BATCH_HEADER_SIZE;
 import static org.apache.fluss.record.LogRecordReadContext.createArrowReadContext;
 import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
+import static org.apache.fluss.testutils.DataTestUtils.createBasicMemoryLogRecords;
 import static org.apache.fluss.testutils.DataTestUtils.createRecordsWithoutBaseLogOffset;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -228,18 +235,169 @@ class FileLogProjectionTest {
                             new Object[] {"i"},
                             new Object[] {"j"});
 
-            assertThatThrownBy(
-                            () ->
-                                    doProjection(
-                                            1L,
-                                            2,
-                                            projection,
-                                            records,
-                                            new int[] {0, 2},
-                                            records.sizeInBytes()))
-                    .isInstanceOf(InvalidColumnProjectionException.class)
-                    .hasMessage(
-                            "Projected fields [0, 2] is out of bound for schema with 2 fields.");
+            for (int[] fields :
+                    new int[][] {new int[] {0, 2}, new int[] {2}, new int[] {0, 1, 2}}) {
+                List<Object[]> expected = new ArrayList<>();
+                for (Object[] oldRow : TestData.DATA1) {
+                    Object[] row = new Object[fields.length];
+                    for (int i = 0; i < fields.length; i++) {
+                        row[i] = fields[i] < oldRow.length ? oldRow[fields[i]] : null;
+                    }
+                    expected.add(row);
+                }
+                assertEquals(
+                        doProjection(1L, 2, projection, records, fields, Integer.MAX_VALUE),
+                        expected);
+            }
+        }
+    }
+
+    static Stream<Arguments> schemaEvolutionArgs() {
+        List<Arguments> args = new ArrayList<>();
+        for (byte magic : new byte[] {LOG_MAGIC_VALUE_V0, LOG_MAGIC_VALUE_V1, LOG_MAGIC_VALUE_V2}) {
+            for (ArrowCompressionType compression : ArrowCompressionType.values()) {
+                for (boolean appendOnly : new boolean[] {false, true}) {
+                    args.add(Arguments.of(magic, compression, appendOnly));
+                }
+            }
+        }
+        return args.stream();
+    }
+
+    @ParameterizedTest
+    @MethodSource("schemaEvolutionArgs")
+    void testProjectionAcrossSchemaVersions(
+            byte magic, ArrowCompressionType compressionType, boolean appendOnly) throws Exception {
+        ArrowCompressionInfo compression =
+                new ArrowCompressionInfo(
+                        compressionType, compressionType == ArrowCompressionType.ZSTD ? 3 : -1);
+        Schema latestSchema =
+                Schema.newBuilder()
+                        .fromRowType(TestData.DATA2_ROW_TYPE)
+                        .column("d", DataTypes.INT())
+                        .build();
+        testingSchemaGetter.updateLatestSchemaInfo(new SchemaInfo(latestSchema, 3));
+        List<ChangeType> changes =
+                appendOnly
+                        ? Collections.nCopies(4, ChangeType.APPEND_ONLY)
+                        : Arrays.asList(
+                                ChangeType.INSERT,
+                                ChangeType.UPDATE_BEFORE,
+                                ChangeType.UPDATE_AFTER,
+                                ChangeType.DELETE);
+        try (FileLogRecords file = FileLogRecords.open(new File(tempDir, "evolution.log"))) {
+            for (int schemaId = 1; schemaId <= 3; schemaId++) {
+                List<Object[]> rows = new ArrayList<>();
+                for (int i = 0; i < 4; i++) {
+                    rows.add(Arrays.copyOf(new Object[] {i, "b", "c", i + 10}, schemaId + 1));
+                }
+                file.append(
+                        createBasicMemoryLogRecords(
+                                testingSchemaGetter.getSchema(schemaId).getRowType(),
+                                schemaId,
+                                (schemaId - 1) * 4L,
+                                123L,
+                                magic,
+                                7L,
+                                schemaId - 1,
+                                changes,
+                                rows,
+                                LogFormat.ARROW,
+                                compression,
+                                appendOnly));
+            }
+            file.flush();
+            FileLogProjection projection = new FileLogProjection(new ProjectionPushdownCache());
+            for (int[] fields : new int[][] {new int[] {0, 2, 3}, new int[] {2, 3}}) {
+                projection.setCurrentProjection(1L, testingSchemaGetter, compression, fields);
+                RowType outputType = latestSchema.getRowType().project(fields);
+                // Both fetch paths must preserve offsets, change types and batch schema IDs.
+                for (boolean singleBatch : new boolean[] {false, true}) {
+                    List<LogRecordBatch> batches = new ArrayList<>();
+                    if (singleBatch) {
+                        for (LogRecordBatch batch : file.batches()) {
+                            LogRecords projected =
+                                    new BytesViewLogRecords(
+                                            projection.projectRecordBatch(
+                                                    (FileLogInputStream.FileChannelLogRecordBatch)
+                                                            batch));
+                            projected.batches().forEach(batches::add);
+                        }
+                    } else {
+                        projection
+                                .project(file.channel(), 0, file.sizeInBytes(), Integer.MAX_VALUE)
+                                .batches()
+                                .forEach(batches::add);
+                    }
+                    assertThat(batches).hasSize(3);
+                    try (LogRecordReadContext context =
+                            createArrowReadContext(outputType, 3, testingSchemaGetter, true)) {
+                        int schemaId = 1;
+                        for (LogRecordBatch batch : batches) {
+                            assertThat(batch.schemaId()).isEqualTo((short) schemaId);
+                            int count = 0;
+                            try (CloseableIterator<LogRecord> records = batch.records(context)) {
+                                while (records.hasNext()) {
+                                    LogRecord record = records.next();
+                                    assertThat(record.logOffset())
+                                            .isEqualTo((schemaId - 1) * 4L + count);
+                                    assertThat(record.getChangeType())
+                                            .isEqualTo(changes.get(count));
+                                    InternalRow row = record.getRow();
+                                    assertThat(row.getFieldCount()).isEqualTo(fields.length);
+                                    for (int i = 0; i < fields.length; i++) {
+                                        if (fields[i] >= schemaId + 1) {
+                                            assertThat(row.isNullAt(i)).isTrue();
+                                        } else if (fields[i] == 2) {
+                                            assertThat(row.getString(i).toString()).isEqualTo("c");
+                                        } else {
+                                            assertThat(row.getInt(i))
+                                                    .isEqualTo(fields[i] == 0 ? count : count + 10);
+                                        }
+                                    }
+                                    count++;
+                                }
+                            }
+                            assertThat(count).isEqualTo(4);
+                            schemaId++;
+                        }
+                    }
+                }
+                assertThat(
+                                projection
+                                        .project(file.channel(), 0, file.sizeInBytes(), 64)
+                                        .sizeInBytes())
+                        .isZero();
+            }
+        }
+    }
+
+    @Test
+    void testProjectionMissingNestedColumns() throws Exception {
+        Schema latestSchema =
+                Schema.newBuilder()
+                        .fromRowType(TestData.DATA1_ROW_TYPE)
+                        .column("nested", DataTypes.ROW(DataTypes.INT(), DataTypes.STRING()))
+                        .column("array", DataTypes.ARRAY(DataTypes.INT()))
+                        .column("map", DataTypes.MAP(DataTypes.STRING(), DataTypes.INT()))
+                        .build();
+        testingSchemaGetter.updateLatestSchemaInfo(new SchemaInfo(latestSchema, 3));
+        try (FileLogRecords file =
+                createFileLogRecords(
+                        1, LOG_MAGIC_VALUE_V2, TestData.DATA1_ROW_TYPE, TestData.DATA1)) {
+            List<Object[]> result =
+                    doProjection(
+                            1L,
+                            3,
+                            new FileLogProjection(new ProjectionPushdownCache()),
+                            file,
+                            new int[] {0, 2, 3, 4},
+                            Integer.MAX_VALUE);
+            List<Object[]> expected = new ArrayList<>();
+            for (Object[] row : TestData.DATA1) {
+                expected.add(new Object[] {row[0], null, null, null});
+            }
+            assertEquals(result, expected);
         }
     }
 
