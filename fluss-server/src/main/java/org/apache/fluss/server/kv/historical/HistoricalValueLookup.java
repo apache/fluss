@@ -2,7 +2,7 @@
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to you under the Apache License, Version 2.0
+ * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
  * the License.  You may obtain a copy of the License at
  *
@@ -18,20 +18,21 @@
 package org.apache.fluss.server.kv.historical;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.record.BinaryValue;
 
 import javax.annotation.Nullable;
 
-/** Resolves a lake value already memoized for the current historical write request. */
+/** Looks up a previous value already memoized for the current historical write request. */
 @Internal
 @FunctionalInterface
 public interface HistoricalValueLookup {
 
     /**
-     * Returns the encoded value for the primary key, or null when it does not exist.
+     * Returns the decoded previous value, or null when the key was absent or deleted.
      *
-     * <p>This method is invoked while the KV write lock is held and must not perform lake or file
+     * <p>This method is invoked while the KV write lock is held and must not perform local or lake
      * I/O.
      */
     @Nullable
-    byte[] lookup(byte[] primaryKey);
+    BinaryValue lookup(byte[] primaryKey);
 }

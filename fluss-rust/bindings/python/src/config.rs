@@ -108,6 +108,9 @@ impl Config {
                                 ))
                             })?;
                     }
+                    "scanner.io.tmpdir" => {
+                        config.scanner_io_tmp_dir = Some(value);
+                    }
                     "scanner.log.max-poll-records" => {
                         config.scanner_log_max_poll_records =
                             value.parse::<usize>().map_err(|e| {
@@ -182,6 +185,16 @@ impl Config {
                                 ))
                             })?;
                     }
+                    "writer.retry-backoff-ms" => {
+                        config.writer_retry_backoff_ms = value.parse::<u64>().map_err(|e| {
+                            FlussError::new_err(format!("Invalid value '{value}' for '{key}': {e}"))
+                        })?;
+                    }
+                    "writer.retry-max-backoff-ms" => {
+                        config.writer_retry_max_backoff_ms = value.parse::<u64>().map_err(|e| {
+                            FlussError::new_err(format!("Invalid value '{value}' for '{key}': {e}"))
+                        })?;
+                    }
                     "writer.bucket.no-key-assigner" => {
                         config.writer_bucket_no_key_assigner =
                             value.parse::<fcore::config::NoKeyAssigner>().map_err(|e| {
@@ -189,6 +202,34 @@ impl Config {
                                     "Invalid value '{value}' for '{key}': {e}"
                                 ))
                             })?;
+                    }
+                    "lookup.queue-size" => {
+                        config.lookup_queue_size = value.parse::<usize>().map_err(|e| {
+                            FlussError::new_err(format!("Invalid value '{value}' for '{key}': {e}"))
+                        })?;
+                    }
+                    "lookup.max-batch-size" => {
+                        config.lookup_max_batch_size = value.parse::<usize>().map_err(|e| {
+                            FlussError::new_err(format!("Invalid value '{value}' for '{key}': {e}"))
+                        })?;
+                    }
+                    "lookup.batch-timeout-ms" => {
+                        config.lookup_batch_timeout_ms = value.parse::<u64>().map_err(|e| {
+                            FlussError::new_err(format!("Invalid value '{value}' for '{key}': {e}"))
+                        })?;
+                    }
+                    "lookup.max-inflight-requests" => {
+                        config.lookup_max_inflight_requests =
+                            value.parse::<usize>().map_err(|e| {
+                                FlussError::new_err(format!(
+                                    "Invalid value '{value}' for '{key}': {e}"
+                                ))
+                            })?;
+                    }
+                    "lookup.max-retries" => {
+                        config.lookup_max_retries = value.parse::<i32>().map_err(|e| {
+                            FlussError::new_err(format!("Invalid value '{value}' for '{key}': {e}"))
+                        })?;
                     }
                     "connect-timeout" => {
                         config.connect_timeout_ms = value.parse::<u64>().map_err(|e| {
@@ -337,6 +378,18 @@ impl Config {
         self.inner.scanner_remote_log_read_concurrency = num;
     }
 
+    /// Parent directory for remote log downloads.
+    /// None uses the OS temporary directory plus `/fluss`.
+    #[getter]
+    fn scanner_io_tmp_dir(&self) -> Option<String> {
+        self.inner.scanner_io_tmp_dir.clone()
+    }
+
+    #[setter]
+    fn set_scanner_io_tmp_dir(&mut self, path: Option<String>) {
+        self.inner.scanner_io_tmp_dir = path;
+    }
+
     /// Get the scanner log max poll records
     #[getter]
     fn scanner_log_max_poll_records(&self) -> usize {
@@ -437,6 +490,30 @@ impl Config {
     #[setter]
     fn set_writer_kv_backpressure_max_throttle_ms(&mut self, timeout: u64) {
         self.inner.writer_kv_backpressure_max_throttle_ms = timeout;
+    }
+
+    /// Get the base writer retry backoff in milliseconds
+    #[getter]
+    fn writer_retry_backoff_ms(&self) -> u64 {
+        self.inner.writer_retry_backoff_ms
+    }
+
+    /// Set the base writer retry backoff in milliseconds
+    #[setter]
+    fn set_writer_retry_backoff_ms(&mut self, backoff: u64) {
+        self.inner.writer_retry_backoff_ms = backoff;
+    }
+
+    /// Get the maximum writer retry backoff in milliseconds
+    #[getter]
+    fn writer_retry_max_backoff_ms(&self) -> u64 {
+        self.inner.writer_retry_max_backoff_ms
+    }
+
+    /// Set the maximum writer retry backoff in milliseconds
+    #[setter]
+    fn set_writer_retry_max_backoff_ms(&mut self, backoff: u64) {
+        self.inner.writer_retry_max_backoff_ms = backoff;
     }
 
     /// Get the connect timeout in milliseconds
@@ -545,6 +622,66 @@ impl Config {
     #[setter]
     fn set_scanner_log_fetch_max_bytes_for_bucket(&mut self, bytes: i32) {
         self.inner.scanner_log_fetch_max_bytes_for_bucket = bytes;
+    }
+
+    /// Get the maximum number of pending lookups
+    #[getter]
+    fn lookup_queue_size(&self) -> usize {
+        self.inner.lookup_queue_size
+    }
+
+    /// Set the maximum number of pending lookups
+    #[setter]
+    fn set_lookup_queue_size(&mut self, value: usize) {
+        self.inner.lookup_queue_size = value;
+    }
+
+    /// Get the maximum number of lookups merged into one request
+    #[getter]
+    fn lookup_max_batch_size(&self) -> usize {
+        self.inner.lookup_max_batch_size
+    }
+
+    /// Set the maximum number of lookups merged into one request
+    #[setter]
+    fn set_lookup_max_batch_size(&mut self, value: usize) {
+        self.inner.lookup_max_batch_size = value;
+    }
+
+    /// Get the maximum time in ms a lookup waits for its batch to fill
+    #[getter]
+    fn lookup_batch_timeout_ms(&self) -> u64 {
+        self.inner.lookup_batch_timeout_ms
+    }
+
+    /// Set the maximum time in ms a lookup waits for its batch to fill
+    #[setter]
+    fn set_lookup_batch_timeout_ms(&mut self, value: u64) {
+        self.inner.lookup_batch_timeout_ms = value;
+    }
+
+    /// Get the maximum number of unacknowledged lookup requests
+    #[getter]
+    fn lookup_max_inflight_requests(&self) -> usize {
+        self.inner.lookup_max_inflight_requests
+    }
+
+    /// Set the maximum number of unacknowledged lookup requests
+    #[setter]
+    fn set_lookup_max_inflight_requests(&mut self, value: usize) {
+        self.inner.lookup_max_inflight_requests = value;
+    }
+
+    /// Get the maximum number of lookup retries
+    #[getter]
+    fn lookup_max_retries(&self) -> i32 {
+        self.inner.lookup_max_retries
+    }
+
+    /// Set the maximum number of lookup retries
+    #[setter]
+    fn set_lookup_max_retries(&mut self, value: i32) {
+        self.inner.lookup_max_retries = value;
     }
 }
 

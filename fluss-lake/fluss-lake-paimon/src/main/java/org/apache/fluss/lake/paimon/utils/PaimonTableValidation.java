@@ -21,16 +21,25 @@ import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.metadata.TablePath;
 
 import org.apache.paimon.CoreOptions;
+import org.apache.paimon.options.ConfigOption;
+import org.apache.paimon.options.Options;
 import org.apache.paimon.schema.Schema;
 import org.apache.paimon.table.FileStoreTable;
+import org.apache.paimon.types.ArrayType;
 import org.apache.paimon.types.DataField;
+import org.apache.paimon.types.DataType;
+import org.apache.paimon.types.DataTypeDefaultVisitor;
 import org.apache.paimon.types.DataTypes;
+import org.apache.paimon.types.MapType;
 import org.apache.paimon.types.RowType;
+import org.apache.paimon.types.VarBinaryType;
+import org.apache.paimon.types.VarCharType;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.stream.Collectors;
 
 import static org.apache.fluss.lake.paimon.PaimonLakeCatalog.LEGACY_SYSTEM_COLUMNS;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.PAIMON_UNSETTABLE_OPTIONS;
@@ -39,6 +48,10 @@ import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
 
 /** Utils to verify whether the existing Paimon table is compatible with the table to be created. */
 public class PaimonTableValidation {
+
+    private static final Map<String, ConfigOption<?>> PAIMON_CORE_OPTIONS =
+            CoreOptions.getOptions().stream()
+                    .collect(Collectors.toMap(ConfigOption::key, option -> option));
 
     public static boolean isPaimonSchemaCompatible(Schema existingSchema, Schema newSchema) {
         // FIP-27: newly generated schemas are always clean (no system columns). When the existing
@@ -152,20 +165,21 @@ public class PaimonTableValidation {
 
     private static boolean equalPaimonOptions(
             Map<String, String> existingOptions, Map<String, String> newOptions) {
-        if (!Objects.equals(
-                existingOptions.get(PARTITION_GENERATE_LEGACY_NAME_OPTION_KEY),
-                Boolean.FALSE.toString())) {
-            return false;
-        }
-
+        Options existing = Options.fromMap(existingOptions);
+        Options proposed = Options.fromMap(newOptions);
         for (String option : PAIMON_UNSETTABLE_OPTIONS) {
-            if (!Objects.equals(existingOptions.get(option), newOptions.get(option))) {
+            if (PARTITION_GENERATE_LEGACY_NAME_OPTION_KEY.equals(option)) {
+                // Existing Paimon tables keep their partition path encoding. Fluss addresses
+                // partitions through logical values and Paimon APIs rather than the directory name.
+                continue;
+            }
+            if (!equalPaimonOption(option, existing, proposed)) {
                 return false;
             }
         }
 
         for (String option : CoreOptions.IMMUTABLE_OPTIONS) {
-            if (!Objects.equals(existingOptions.get(option), newOptions.get(option))) {
+            if (!equalPaimonOption(option, existing, proposed)) {
                 return false;
             }
         }
@@ -173,10 +187,68 @@ public class PaimonTableValidation {
         return true;
     }
 
+    private static boolean equalPaimonOption(String key, Options existing, Options proposed) {
+        ConfigOption<?> option = PAIMON_CORE_OPTIONS.get(key);
+        if (option != null) {
+            return Objects.equals(existing.get(option), proposed.get(option));
+        }
+        return Objects.equals(existing.get(key), proposed.get(key));
+    }
+
     private static boolean equalDataFieldIgnoreFieldId(
             DataField existingField, DataField newField) {
-        return Objects.equals(existingField.name(), newField.name())
-                && existingField.type().equalsIgnoreFieldId(newField.type());
+        if (!Objects.equals(existingField.name(), newField.name())) {
+            return false;
+        }
+
+        return existingField
+                .type()
+                .accept(PaimonTypeNormalizer.INSTANCE)
+                .equalsIgnoreFieldId(newField.type());
+    }
+
+    /**
+     * Normalizes existing Paimon types for comparison with the schema generated from Fluss. Fluss
+     * drops VARCHAR/VARBINARY lengths in nested types, so this visitor applies the same mapping.
+     */
+    private static final class PaimonTypeNormalizer extends DataTypeDefaultVisitor<DataType> {
+        private static final PaimonTypeNormalizer INSTANCE = new PaimonTypeNormalizer();
+
+        @Override
+        public DataType visit(VarCharType type) {
+            return DataTypes.STRING().copy(type.isNullable());
+        }
+
+        @Override
+        public DataType visit(VarBinaryType type) {
+            return DataTypes.BYTES().copy(type.isNullable());
+        }
+
+        @Override
+        public DataType visit(ArrayType type) {
+            return type.newElementType(type.getElementType().accept(this));
+        }
+
+        @Override
+        public DataType visit(MapType type) {
+            // Fluss MAP always makes its key non-nullable during conversion.
+            return type.newKeyValueType(
+                    type.getKeyType().accept(this).copy(false), type.getValueType().accept(this));
+        }
+
+        @Override
+        public DataType visit(RowType type) {
+            List<DataField> fields = new ArrayList<>(type.getFieldCount());
+            for (DataField field : type.getFields()) {
+                fields.add(field.newType(field.type().accept(this)));
+            }
+            return type.copy(fields);
+        }
+
+        @Override
+        protected DataType defaultMethod(DataType type) {
+            return type;
+        }
     }
 
     public static void checkTableIsEmpty(TablePath tablePath, FileStoreTable table) {

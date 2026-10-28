@@ -20,6 +20,8 @@ package org.apache.fluss.rpc.gateway;
 import org.apache.fluss.rpc.RpcGateway;
 import org.apache.fluss.rpc.messages.DatabaseExistsRequest;
 import org.apache.fluss.rpc.messages.DatabaseExistsResponse;
+import org.apache.fluss.rpc.messages.DescribeBucketsRequest;
+import org.apache.fluss.rpc.messages.DescribeBucketsResponse;
 import org.apache.fluss.rpc.messages.DescribeClusterConfigsRequest;
 import org.apache.fluss.rpc.messages.DescribeClusterConfigsResponse;
 import org.apache.fluss.rpc.messages.GetClusterHealthRequest;
@@ -103,6 +105,15 @@ public interface AdminReadOnlyGateway extends RpcGateway {
      */
     @RPC(api = ApiKeys.GET_TABLE_INFO)
     CompletableFuture<GetTableInfoResponse> getTableInfo(GetTableInfoRequest request);
+
+    /**
+     * Describes bucket metadata for a table, optionally filtered by a partition spec.
+     *
+     * @param request Request containing the table path and optional partition spec
+     * @return The bucket metadata response
+     */
+    @RPC(api = ApiKeys.DESCRIBE_BUCKETS)
+    CompletableFuture<DescribeBucketsResponse> describeBuckets(DescribeBucketsRequest request);
 
     /**
      * Return a {@link GetTableSchemaResponse} identified by the given {@link

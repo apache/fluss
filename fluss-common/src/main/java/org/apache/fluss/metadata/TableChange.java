@@ -24,6 +24,8 @@ import javax.annotation.Nullable;
 import java.util.Objects;
 import java.util.Optional;
 
+import static org.apache.fluss.utils.Preconditions.checkArgument;
+
 /** {@link TableChange} represents the modification of the Fluss Table. */
 public interface TableChange {
 
@@ -133,6 +135,18 @@ public interface TableChange {
     }
 
     /**
+     * Changes the default bucket count for newly created partitions.
+     *
+     * <p>Existing partitions retain their bucket counts.
+     *
+     * @param newBucketCount the new default bucket count; must be positive
+     * @return the bucket count change
+     */
+    static ModifyBucketCount modifyBucketCount(int newBucketCount) {
+        return new ModifyBucketCount(newBucketCount);
+    }
+
+    /**
      * A table change to set the table option.
      *
      * <p>It is equal to the following statement:
@@ -226,6 +240,50 @@ public interface TableChange {
         @Override
         public String toString() {
             return "ResetOption{" + "key='" + key + '\'' + '}';
+        }
+    }
+
+    /** A change to the table's distribution. */
+    interface DistributionChange extends TableChange {}
+
+    /** Changes the default bucket count for newly created partitions. */
+    final class ModifyBucketCount implements DistributionChange {
+
+        private final int newBucketCount;
+
+        private ModifyBucketCount(int newBucketCount) {
+            checkArgument(
+                    newBucketCount > 0,
+                    "Bucket count must be positive, but was %s.",
+                    newBucketCount);
+            this.newBucketCount = newBucketCount;
+        }
+
+        /** Returns the new default bucket count. */
+        public int getNewBucketCount() {
+            return newBucketCount;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (!(o instanceof ModifyBucketCount)) {
+                return false;
+            }
+            ModifyBucketCount that = (ModifyBucketCount) o;
+            return newBucketCount == that.newBucketCount;
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(newBucketCount);
+        }
+
+        @Override
+        public String toString() {
+            return "ModifyBucketCount{" + "newBucketCount=" + newBucketCount + '}';
         }
     }
 

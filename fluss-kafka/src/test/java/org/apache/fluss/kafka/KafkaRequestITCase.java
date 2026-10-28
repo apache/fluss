@@ -22,7 +22,6 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.metrics.util.NOPMetricsGroup;
-import org.apache.fluss.rpc.TestingTabletGatewayService;
 import org.apache.fluss.rpc.netty.server.NettyServer;
 import org.apache.fluss.rpc.netty.server.RequestsMetrics;
 
@@ -46,6 +45,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.net.InetSocketAddress;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
@@ -53,13 +53,16 @@ import java.util.HashMap;
 import java.util.Map;
 
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
+import static org.apache.fluss.utils.IOUtils.closeAll;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Integration test for Kafka request handling. */
-public class KafkaRequestITCase {
+public class KafkaRequestITCase extends KafkaServerTestBase {
     private Configuration conf;
     private NettyServer nettyServer;
     private NetworkClient client;
+    private ApiVersions apiVersions;
+    private Metrics metrics;
     private Node node;
 
     @BeforeEach
@@ -69,44 +72,30 @@ public class KafkaRequestITCase {
         conf.set(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS, 3);
         conf.set(ConfigOptions.KAFKA_ENABLED, true);
         nettyServer = startNettyServer();
-        client = createNetworkClient();
         Endpoint endpoint =
                 nettyServer.getBindEndpoints().stream()
                         .filter(e -> e.getListenerName().equals("KAFKA"))
                         .findFirst()
                         .get();
+        client = createNetworkClient(endpoint);
         node = new Node(0, endpoint.getHost(), endpoint.getPort());
     }
 
     @AfterEach
     public void cleanup() throws Exception {
-        if (nettyServer != null) {
-            nettyServer.close();
-        }
+        closeAll(client, metrics, nettyServer);
     }
 
     @Test
     public void testApiVersionsRequest() {
-        // initiate the connection
-        client.ready(node, 100);
-
-        // handle the connection, send the ApiVersionsRequest
-        client.poll(0, 1);
-
-        // check that the ApiVersionsRequest has been initiated
-        assertThat(client.hasInFlightRequests(node.idString())).isTrue();
+        client.ready(node, Time.SYSTEM.milliseconds());
 
         retry(
                 Duration.ofMinutes(1),
                 () -> {
-                    // handle completed receives
-                    client.poll(0, 100);
-
-                    // the ApiVersionsRequest is gone
-                    assertThat(client.hasInFlightRequests(node.idString())).isFalse();
-
-                    // various assertions
-                    assertThat(client.isReady(node, 100)).isTrue();
+                    client.poll(10, Time.SYSTEM.milliseconds());
+                    assertThat(apiVersions.get(node.idString())).isNotNull();
+                    assertThat(client.isReady(node, Time.SYSTEM.milliseconds())).isTrue();
                 });
     }
 
@@ -118,18 +107,18 @@ public class KafkaRequestITCase {
                         Arrays.asList(
                                 new Endpoint("localhost", 0, "INTERNAL"),
                                 new Endpoint("localhost", 0, "KAFKA")),
-                        new TestingTabletGatewayService(),
+                        createTabletService(),
                         metricGroup,
                         RequestsMetrics.createCoordinatorServerRequestMetrics(metricGroup));
         server.start();
         return server;
     }
 
-    private NetworkClient createNetworkClient() throws Exception {
+    private NetworkClient createNetworkClient(Endpoint endpoint) throws Exception {
         Map<String, Object> config = new HashMap<>();
         config.put("key.serializer", StringSerializer.class.getName());
         config.put("value.serializer", StringSerializer.class.getName());
-        Metrics metrics =
+        metrics =
                 new Metrics(
                         new MetricConfig(),
                         Collections.emptyList(),
@@ -145,14 +134,20 @@ public class KafkaRequestITCase {
                         metadataExpireMs,
                         new LogContext(),
                         new ClusterResourceListeners());
+        // the bootstrap is required to initialize the metadata with the broker address, otherwise
+        // the client will not be able to send requests
+        metadata.bootstrap(
+                Collections.singletonList(
+                        new InetSocketAddress(endpoint.getHost(), endpoint.getPort())));
         ProducerMetrics metricsRegistry = new ProducerMetrics(metrics);
         Sensor sensor = Sender.throttleTimeSensor(metricsRegistry.senderMetrics);
+        apiVersions = new ApiVersions();
         return ClientUtils.createNetworkClient(
                 new ProducerConfig(config),
                 metrics,
                 "test-client",
                 new LogContext(),
-                new ApiVersions(),
+                apiVersions,
                 Time.SYSTEM,
                 5,
                 metadata,

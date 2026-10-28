@@ -44,6 +44,7 @@ public class LoginManager {
 
     private int refCount;
     private final String loginKey;
+    private final boolean dynamic;
 
     /**
      * A global cache of LoginManager instances keyed by static JAAS configuration names (e.g.,
@@ -68,11 +69,13 @@ public class LoginManager {
      * @throws LoginException if the login operation fails due to invalid credentials, missing
      *     modules, or misconfigured JAAS settings
      */
-    private LoginManager(JaasContext jaasContext, String loginKey) throws LoginException {
+    private LoginManager(JaasContext jaasContext, String loginKey, boolean dynamic)
+            throws LoginException {
         this.login = new DefaultLogin();
         login.configure(jaasContext.name(), jaasContext.getConfiguration());
         login.login();
         this.loginKey = loginKey;
+        this.dynamic = dynamic;
     }
 
     public Subject subject() {
@@ -90,14 +93,14 @@ public class LoginManager {
             if (jaasConfigValue != null) {
                 loginManager = DYNAMIC_INSTANCES.get(jaasConfigValue);
                 if (loginManager == null) {
-                    loginManager = new LoginManager(jaasContext, jaasConfigValue);
+                    loginManager = new LoginManager(jaasContext, jaasConfigValue, true);
                     DYNAMIC_INSTANCES.put(jaasConfigValue, loginManager);
                 }
             } else {
                 String jaasContextName = jaasContext.name();
                 loginManager = STATIC_INSTANCES.get(jaasContextName);
                 if (loginManager == null) {
-                    loginManager = new LoginManager(jaasContext, jaasContextName);
+                    loginManager = new LoginManager(jaasContext, jaasContextName, false);
                     STATIC_INSTANCES.put(jaasContextName, loginManager);
                 }
             }
@@ -117,6 +120,11 @@ public class LoginManager {
             if (refCount == 0) {
                 throw new IllegalStateException("release() called on disposed " + this);
             } else if (refCount == 1) {
+                if (dynamic) {
+                    DYNAMIC_INSTANCES.remove(loginKey, this);
+                } else {
+                    STATIC_INSTANCES.remove(loginKey, this);
+                }
                 login.close();
             }
             --refCount;

@@ -18,6 +18,7 @@
 package org.apache.fluss.cluster;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.cluster.rebalance.ServerTag;
 
 import javax.annotation.Nullable;
 
@@ -39,6 +40,8 @@ public class ServerNode {
     /** rack info for ServerNode. Currently, only tabletServer has rack info. */
     private final @Nullable String rack;
 
+    private final @Nullable ServerTag serverTag;
+
     // Cache hashCode as it is called in performance sensitive parts of the code (e.g.
     // RecordAccumulator.ready)
     private Integer hash;
@@ -48,11 +51,22 @@ public class ServerNode {
     }
 
     public ServerNode(int id, String host, int port, ServerType serverType, @Nullable String rack) {
+        this(id, host, port, serverType, rack, null);
+    }
+
+    public ServerNode(
+            int id,
+            String host,
+            int port,
+            ServerType serverType,
+            @Nullable String rack,
+            @Nullable ServerTag serverTag) {
         this.id = id;
         this.host = host;
         this.port = port;
         this.serverType = serverType;
         this.rack = rack;
+        this.serverTag = serverTag;
         if (serverType == ServerType.COORDINATOR) {
             this.uid = "cs-" + id;
         } else {
@@ -94,6 +108,11 @@ public class ServerNode {
     /** The rack for this node. */
     public @Nullable String rack() {
         return rack;
+    }
+
+    /** The server tag for this node. */
+    public @Nullable ServerTag serverTag() {
+        return serverTag;
     }
 
     /**
@@ -140,6 +159,7 @@ public class ServerNode {
 
     @Override
     public String toString() {
-        return host + ":" + port + " (id: " + uid + ", rack: " + rack + ")";
+        String tag = serverTag == null ? "" : ", tag: " + serverTag;
+        return host + ":" + port + " (id: " + uid + ", rack: " + rack + tag + ")";
     }
 }

@@ -232,15 +232,17 @@ class KvPreWriteBufferTest {
         // +key0(lsn 0), +key1(lsn 1), +key2(lsn 2), +key3(lsn 3), -key2(lsn 4)
         for (int i = 0; i < 4; i++) {
             bufferInsert(buffer, "key" + i, "value" + i, i);
+            buffer.markWalBatchEnd(i + 1);
         }
         bufferDelete(buffer, "key2", 4);
+        buffer.markWalBatchEnd(5);
+        buffer.markWalBatchEnd(10);
 
         PreparedFlush preparedFlush = buffer.prepareFlush(10);
         List<PreparedFlush> segments = preparedFlush.split(0, 2);
 
         assertThat(segments).hasSize(3);
-        // Every segment boundary is the lsn of the first entry of the next segment; the last
-        // segment keeps the original target so the full flush range gets published.
+        // Each entry here is a complete WAL batch. The last segment includes the empty tail.
         assertThat(segments.get(0).entries()).hasSize(2);
         assertThat(segments.get(0).exclusiveUpToLogSequenceNumber()).isEqualTo(2);
         assertThat(segments.get(1).entries()).hasSize(2);
@@ -265,20 +267,23 @@ class KvPreWriteBufferTest {
         KvPreWriteBuffer buffer = new KvPreWriteBuffer(TestingMetricGroups.TABLET_SERVER_METRICS);
         // Entry payload sizes are 6, 5, and 5 bytes.
         bufferInsert(buffer, "a", "12345", 0);
+        buffer.markWalBatchEnd(1);
         bufferInsert(buffer, "b", "1234", 1);
+        buffer.markWalBatchEnd(2);
         bufferInsert(buffer, "c", "1234", 2);
+        buffer.markWalBatchEnd(3);
 
         PreparedFlush preparedFlush = buffer.prepareFlush(3);
         List<PreparedFlush> segments = preparedFlush.split(10, Integer.MAX_VALUE);
 
-        // Adding the second entry would exceed the limit, while the last two entries exactly fit.
+        // The first two complete batches cross the byte budget and close the first segment.
         assertThat(segments).hasSize(2);
-        assertThat(segments.get(0).entries()).hasSize(1);
-        assertThat(segments.get(0).exclusiveUpToLogSequenceNumber()).isEqualTo(1);
-        assertThat(segments.get(0).rowCountDiff()).isEqualTo(1);
-        assertThat(segments.get(1).entries()).hasSize(2);
+        assertThat(segments.get(0).entries()).hasSize(2);
+        assertThat(segments.get(0).exclusiveUpToLogSequenceNumber()).isEqualTo(2);
+        assertThat(segments.get(0).rowCountDiff()).isEqualTo(2);
+        assertThat(segments.get(1).entries()).hasSize(1);
         assertThat(segments.get(1).exclusiveUpToLogSequenceNumber()).isEqualTo(3);
-        assertThat(segments.get(1).rowCountDiff()).isEqualTo(2);
+        assertThat(segments.get(1).rowCountDiff()).isEqualTo(1);
     }
 
     @Test
@@ -286,7 +291,9 @@ class KvPreWriteBufferTest {
         KvPreWriteBuffer buffer = new KvPreWriteBuffer(TestingMetricGroups.TABLET_SERVER_METRICS);
         // The first entry is larger than the byte limit and must remain a non-empty singleton.
         bufferInsert(buffer, "a", "1234567890", 0);
+        buffer.markWalBatchEnd(1);
         bufferInsert(buffer, "b", "123", 1);
+        buffer.markWalBatchEnd(2);
 
         PreparedFlush preparedFlush = buffer.prepareFlush(2);
         List<PreparedFlush> segments = preparedFlush.split(10, Integer.MAX_VALUE);
@@ -301,11 +308,15 @@ class KvPreWriteBufferTest {
     @Test
     void testSplitPreparedFlushUsesFirstReachedLimit() {
         KvPreWriteBuffer buffer = new KvPreWriteBuffer(TestingMetricGroups.TABLET_SERVER_METRICS);
-        // Entry payload sizes are 2, 2, 6, and 5 bytes.
+        // Entry payload sizes are 2, 2, 11, and 5 bytes.
         bufferInsert(buffer, "a", "x", 0);
+        buffer.markWalBatchEnd(1);
         bufferInsert(buffer, "b", "y", 1);
-        bufferInsert(buffer, "c", "12345", 2);
+        buffer.markWalBatchEnd(2);
+        bufferInsert(buffer, "c", "1234567890", 2);
+        buffer.markWalBatchEnd(3);
         bufferInsert(buffer, "d", "1234", 3);
+        buffer.markWalBatchEnd(4);
 
         PreparedFlush preparedFlush = buffer.prepareFlush(4);
         List<PreparedFlush> segments = preparedFlush.split(10, 2);
@@ -325,28 +336,31 @@ class KvPreWriteBufferTest {
         KvPreWriteBuffer buffer = new KvPreWriteBuffer(TestingMetricGroups.TABLET_SERVER_METRICS);
         // Entry payload sizes are 6, 5, 5, and 6 bytes.
         bufferInsert(buffer, "a", "12345", 0);
+        buffer.markWalBatchEnd(1);
         bufferInsert(buffer, "b", "1234", 1);
+        buffer.markWalBatchEnd(2);
         bufferInsert(buffer, "c", "1234", 2);
+        buffer.markWalBatchEnd(3);
         bufferInsert(buffer, "d", "12345", 3);
+        buffer.markWalBatchEnd(4);
 
         PreparedFlush preparedFlush = buffer.prepareFlush(4);
         List<PreparedFlush> segments = preparedFlush.split(10, Integer.MAX_VALUE);
-        assertThat(segments).hasSize(3);
+        assertThat(segments).hasSize(2);
 
         // Model a storage rejection after the first segment landed: complete the written prefix,
         // abort the rest.
-        assertThat(buffer.completeFlush(segments.get(0))).isEqualTo(1);
+        assertThat(buffer.completeFlush(segments.get(0))).isEqualTo(2);
         buffer.abortFlush(segments.get(1));
-        buffer.abortFlush(segments.get(2));
 
         // The completed entries are gone; the aborted ones are ACTIVE again and can be prepared
         // by the retry, which must cover exactly the remaining range.
-        assertThat(buffer.pendingFlushBytes()).isEqualTo(16);
-        assertThat(buffer.getAllKvEntries()).hasSize(3);
+        assertThat(buffer.pendingFlushBytes()).isEqualTo(11);
+        assertThat(buffer.getAllKvEntries()).hasSize(2);
         PreparedFlush retry = buffer.prepareFlush(4);
-        assertThat(retry.entries()).hasSize(3);
-        assertThat(retry.entries().get(0).getLogSequenceNumber()).isEqualTo(1);
-        assertThat(retry.rowCountDiff()).isEqualTo(3);
+        assertThat(retry.entries()).hasSize(2);
+        assertThat(retry.entries().get(0).getLogSequenceNumber()).isEqualTo(2);
+        assertThat(retry.rowCountDiff()).isEqualTo(2);
     }
 
     private static void bufferInsert(
@@ -452,6 +466,72 @@ class KvPreWriteBufferTest {
         // Flush remaining (key2): decreases by 11
         flushBuffer(buffer, Long.MAX_VALUE);
         assertThat(buffer.pendingFlushBytes()).isEqualTo(0);
+    }
+
+    @Test
+    void testCompleteFlushDetachesFlushedEntriesFromPreviousChain() {
+        KvPreWriteBuffer buffer = new KvPreWriteBuffer(TestingMetricGroups.TABLET_SERVER_METRICS);
+        KvPreWriteBuffer.Key key = toKey("k");
+
+        buffer.insert(key, "v1".getBytes(), 1);
+        buffer.insert(key, "v2".getBytes(), 2);
+        buffer.insert(key, "v3".getBytes(), 3);
+        KvPreWriteBuffer.KvEntry v3 = buffer.getKvEntryMap().get(key);
+        buffer.insert(key, "v4".getBytes(), 4);
+        KvPreWriteBuffer.KvEntry v4 = buffer.getKvEntryMap().get(key);
+
+        // flush covers v1 and v2; v3 and v4 stay buffered
+        flushBuffer(buffer, 3);
+
+        // the buffered chain is cut at the flushed boundary: v3 no longer references
+        // the flushed v2, while the references to the still-buffered v3 are kept for rollback
+        assertThat(v3.getPreviousEntry()).isNull();
+        assertThat(v4.getPreviousEntry()).isSameAs(v3);
+        assertThat(v3.getNextEntry()).isSameAs(v4);
+
+        // read semantics are unchanged and only v3/v4 stay in the byte accounting
+        assertThat(getValue(buffer, "k")).isEqualTo("v4");
+        assertThat(buffer.pendingFlushBytes()).isEqualTo(6);
+
+        // across further flush cycles the chain never grows back: after flushing v3~v5,
+        // the remaining v6 references no flushed version any more
+        buffer.insert(key, "v5".getBytes(), 5);
+        buffer.insert(key, "v6".getBytes(), 6);
+        KvPreWriteBuffer.KvEntry v6 = buffer.getKvEntryMap().get(key);
+        flushBuffer(buffer, 6);
+        assertThat(v6.getPreviousEntry()).isNull();
+        assertThat(getValue(buffer, "k")).isEqualTo("v6");
+    }
+
+    @Test
+    void testTruncateRollbackSemanticsAfterFlushDetachment() {
+        KvPreWriteBuffer buffer = new KvPreWriteBuffer(TestingMetricGroups.TABLET_SERVER_METRICS);
+        KvPreWriteBuffer.Key key = toKey("k");
+
+        // v1@1, v2@2, v3@3; flush covers v1 and v2, v3 stays buffered
+        buffer.insert(key, "v1".getBytes(), 1);
+        buffer.insert(key, "v2".getBytes(), 2);
+        buffer.insert(key, "v3".getBytes(), 3);
+        flushBuffer(buffer, 3);
+
+        // truncating v3 rolls back to the newest version below the truncation point; all
+        // older versions are flushed, so the rollback target is the kv storage and the key
+        // disappears from the buffer - the same behavior as before the chain detachment
+        buffer.truncateTo(1, TruncateReason.ERROR);
+        assertThat(getValue(buffer, "k")).isNull();
+        assertThat(buffer.getKvEntryMap()).doesNotContainKey(key);
+        assertThat(buffer.getAllKvEntries()).isEmpty();
+
+        // rollback to a still-buffered previous version must keep working: after flushing v4,
+        // truncating v6 rolls the map back to the buffered v5
+        buffer.insert(key, "v4".getBytes(), 4);
+        buffer.insert(key, "v5".getBytes(), 5);
+        flushBuffer(buffer, 5);
+        buffer.insert(key, "v6".getBytes(), 6);
+        buffer.truncateTo(6, TruncateReason.ERROR);
+        assertThat(getValue(buffer, "k")).isEqualTo("v5");
+        // the retained predecessor no longer links forward to the truncated entry
+        assertThat(buffer.getKvEntryMap().get(key).getNextEntry()).isNull();
     }
 
     private static String getValue(KvPreWriteBuffer preWriteBuffer, String keyStr) {

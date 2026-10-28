@@ -21,6 +21,7 @@ Complete API reference for the Fluss Rust client.
 | `scanner_remote_log_prefetch_num`     | `usize`         | `4`                | Number of remote log segments to prefetch                                            |
 | `remote_file_download_thread_num`     | `usize`         | `3`                | Number of threads for remote log downloads                                           |
 | `scanner_remote_log_read_concurrency` | `usize`         | `4`                | Streaming read concurrency within a remote log file                                  |
+| `scanner_io_tmp_dir`                  | `Option<String>` | `None`            | Parent for remote log downloads; `None` uses the OS temporary directory plus `/fluss`              |
 | `scanner_log_max_poll_records`        | `usize`         | `500`              | Maximum number of records returned in a single poll()                                |
 | `scanner_log_fetch_max_bytes`         | `i32`           | `16777216` (16 MB) | Maximum bytes per fetch response for LogScanner                                      |
 | `scanner_log_fetch_min_bytes`         | `i32`           | `1`                | Minimum bytes the server must accumulate before returning a fetch response           |
@@ -281,13 +282,18 @@ for record in records {
 
 ## `ScanBatch`
 
-| Method                             | Description                    |
-|------------------------------------|--------------------------------|
-| `fn bucket(&self) -> &TableBucket` | Bucket this batch belongs to   |
-| `fn batch(&self) -> &RecordBatch`  | Arrow RecordBatch data         |
-| `fn base_offset(&self) -> i64`     | First record offset            |
-| `fn last_offset(&self) -> i64`     | Last record offset             |
-| `fn num_records(&self) -> usize`   | Number of records in the batch |
+| Method                              | Description                       |
+|-------------------------------------|-----------------------------------|
+| `fn bucket(&self) -> &TableBucket`  | Bucket this batch belongs to      |
+| `fn batch(&self) -> &RecordBatch`   | Arrow RecordBatch data            |
+| `fn base_offset(&self) -> i64`      | First record offset               |
+| `fn last_offset(&self) -> i64`      | Last record offset                |
+| `fn commit_timestamp(&self) -> i64` | Commit time in epoch milliseconds |
+| `fn num_records(&self) -> usize`    | Number of records in the batch    |
+
+`commit_timestamp` is `fluss::record::NO_COMMIT_TIMESTAMP` (`-1`) when the batch
+carries no single timestamp, which is the case for a limit scan because it
+merges several log batches into one Arrow batch.
 
 ## `TableUpsert`
 
@@ -315,7 +321,7 @@ for record in records {
 
 | Method                                                                       |  Description                |
 |------------------------------------------------------------------------------|-----------------------------|
-| `async fn lookup(&mut self, key: &impl InternalRow) -> Result<LookupResult>` | Lookup a row by primary key |
+| `async fn lookup(&self, key: &impl InternalRow) -> Result<LookupResult>`     | Lookup a row by primary key |
 
 ## `LookupResult`
 
@@ -442,10 +448,11 @@ A schema together with its server-assigned version id. Returned by [`FlussAdmin:
 
 ## `PartitionInfo`
 
-| Method                                   |  Description       |
-|------------------------------------------|--------------------|
-| `fn get_partition_id(&self) -> i64`      | Get partition ID   |
-| `fn get_partition_name(&self) -> String` | Get partition name |
+| Method                                   |  Description               |
+|------------------------------------------|----------------------------|
+| `fn get_partition_id(&self) -> i64`      | Get partition ID           |
+| `fn get_partition_name(&self) -> String` | Get partition name         |
+| `fn get_bucket_count(&self) -> i32`      | Get partition bucket count |
 
 ## `DatabaseDescriptor`
 

@@ -140,6 +140,7 @@ public final class FlussClusterExtension
     private final Clock clock;
     private final String[] racks;
     private final List<String> remoteDirNames;
+    private final boolean useRemoteDataDir;
 
     /** Creates a new {@link Builder} for {@link FlussClusterExtension}. */
     public static Builder builder() {
@@ -153,7 +154,8 @@ public final class FlussClusterExtension
             Configuration clusterConf,
             Clock clock,
             String[] racks,
-            List<String> remoteDirNames) {
+            List<String> remoteDirNames,
+            boolean useRemoteDataDir) {
         this.initialNumOfTabletServers = numOfTabletServers;
         this.tabletServers = new HashMap<>(numOfTabletServers);
         this.coordinatorServerListeners = coordinatorServerListeners;
@@ -166,6 +168,7 @@ public final class FlussClusterExtension
                 "racks must be not null and have the same length as numOfTabletServers");
         this.racks = racks;
         this.remoteDirNames = remoteDirNames;
+        this.useRemoteDataDir = useRemoteDataDir;
     }
 
     @Override
@@ -358,6 +361,7 @@ public final class FlussClusterExtension
         }
 
         setRemoteDataDir(tabletServerConf);
+        setRemoteDataDirs(tabletServerConf);
 
         TabletServer tabletServer = new TabletServer(tabletServerConf, clock);
         tabletServer.start();
@@ -396,7 +400,11 @@ public final class FlussClusterExtension
     }
 
     private void setRemoteDataDir(Configuration conf) {
-        conf.set(ConfigOptions.REMOTE_DATA_DIR, getRemoteDataDir());
+        if (useRemoteDataDir) {
+            conf.set(ConfigOptions.REMOTE_DATA_DIR, getRemoteDataDir());
+        } else {
+            conf.removeConfig(ConfigOptions.REMOTE_DATA_DIR);
+        }
     }
 
     private void setRemoteDataDirs(Configuration conf) {
@@ -699,6 +707,9 @@ public final class FlussClusterExtension
                     List<Integer> isr = leaderAndIsr.isr();
                     for (int replicaId : isr) {
                         TabletServer tabletServer = getTabletServerById(replicaId);
+                        assertThat(tabletServer)
+                                .as("Tablet server %s should be available.", replicaId)
+                                .isNotNull();
                         ReplicaManager replicaManager = tabletServer.getReplicaManager();
                         assertThat(replicaManager.getReplica(tableBucket))
                                 .isInstanceOf(ReplicaManager.OnlineReplica.class);
@@ -711,7 +722,11 @@ public final class FlussClusterExtension
                     }
 
                     int leader = leaderAndIsr.leader();
-                    ReplicaManager replicaManager = getTabletServerById(leader).getReplicaManager();
+                    TabletServer leaderServer = getTabletServerById(leader);
+                    assertThat(leaderServer)
+                            .as("Leader tablet server %s should be available.", leader)
+                            .isNotNull();
+                    ReplicaManager replicaManager = leaderServer.getReplicaManager();
                     assertThat(replicaManager.getReplicaOrException(tableBucket).isLeader())
                             .isTrue();
                 });
@@ -753,7 +768,11 @@ public final class FlussClusterExtension
             Map<String, PartitionRegistration> partitions =
                     zooKeeperClient.getPartitionRegistrations(tablePath);
             for (PartitionRegistration partition : partitions.values()) {
-                for (int bucketId = 0; bucketId < bucketCount; bucketId++) {
+                // partitions diverge from the table-level count after ALTER bucket.num
+                int partitionBucketCount =
+                        partition.getBucketCountOrDefault(
+                                bucketCount, tableRegistration.bucketCountEpoch);
+                for (int bucketId = 0; bucketId < partitionBucketCount; bucketId++) {
                     tableBuckets.add(
                             new TableBucket(tableId, partition.getPartitionId(), bucketId));
                 }
@@ -881,7 +900,9 @@ public final class FlussClusterExtension
                                 PhysicalTablePath.of(tablePath),
                                 tableBucket,
                                 replicas,
-                                leaderAndIsr));
+                                leaderAndIsr,
+                                3,
+                                0L));
         NotifyLeaderAndIsrRequest notifyLeaderAndIsrRequest =
                 ServerRpcMessageUtils.makeNotifyLeaderAndIsrRequest(
                         0, Collections.singletonList(reqForBucket));
@@ -1024,6 +1045,7 @@ public final class FlussClusterExtension
         private Clock clock = SystemClock.getInstance();
         private String[] racks = new String[] {"rack-0"};
         private List<String> remoteDirNames = Collections.emptyList();
+        private boolean useRemoteDataDir = true;
 
         private final Configuration clusterConf = new Configuration();
 
@@ -1084,6 +1106,12 @@ public final class FlussClusterExtension
             return this;
         }
 
+        /** Controls whether the cluster supplies the remote.data.dir configuration. */
+        public Builder setUseRemoteDataDir(boolean useRemoteDataDir) {
+            this.useRemoteDataDir = useRemoteDataDir;
+            return this;
+        }
+
         public FlussClusterExtension build() {
             if (numOfTabletServers > 1 && racks.length == 1) {
                 String[] racks = new String[numOfTabletServers];
@@ -1100,7 +1128,8 @@ public final class FlussClusterExtension
                     clusterConf,
                     clock,
                     racks,
-                    remoteDirNames);
+                    remoteDirNames,
+                    useRemoteDataDir);
         }
     }
 }

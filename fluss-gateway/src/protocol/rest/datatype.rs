@@ -268,9 +268,11 @@ impl From<&DataField> for WireRowField {
 impl TryFrom<WireDataType> for DataType {
     type Error = GatewayError;
 
-    /// Builds the native type using its constructors.
+    /// Builds and validates the native type using fluss-rs.
     fn try_from(data_type: WireDataType) -> Result<Self, Self::Error> {
-        to_native(data_type, 0)
+        let converted = to_native(data_type, 0)?;
+        converted.validate_row_field_names().map_err(invalid_type)?;
+        Ok(converted)
     }
 }
 
@@ -281,7 +283,7 @@ fn to_native(data_type: WireDataType, depth: usize) -> GatewayResult<DataType> {
             "the data type nests deeper than {MAX_TYPE_NESTING} levels"
         )));
     }
-    // TODO: Delegate length and ROW field validation once fluss-rs supports it.
+    // TODO: Delegate length validation once fluss-rs supports it.
     let converted = match data_type {
         WireDataType::Boolean { nullable } => {
             DataType::Boolean(BooleanType::with_nullable(nullable))
@@ -361,7 +363,7 @@ fn to_native(data_type: WireDataType, depth: usize) -> GatewayResult<DataType> {
     Ok(converted)
 }
 
-/// A type parameter the native constructor refused, which came from a caller's body.
+/// Native data-type validation failed for a value from the caller's body.
 fn invalid_type(error: fluss::error::Error) -> GatewayError {
     GatewayError::invalid_argument(format!("invalid data type: {error}"))
 }
@@ -586,7 +588,7 @@ mod tests {
     }
 
     #[test]
-    fn native_constructors_and_nesting_limit_define_validation() {
+    fn native_validation_and_nesting_limit_define_validation() {
         for body in [
             json!({"type": "DECIMAL", "precision": 0, "scale": 0}),
             json!({"type": "DECIMAL", "precision": 2, "scale": 3}),
@@ -616,12 +618,36 @@ mod tests {
             }
         }
 
-        let fields = ["", "a\nb", "id", "id"]
-            .into_iter()
-            .map(|name| DataField::new(name, DataType::Int(IntType::new()), None))
-            .collect();
-        let native = DataType::Row(RowType::new(fields));
+        let native = DataType::Row(RowType::new(vec![DataField::new(
+            "a\nb",
+            DataType::Int(IntType::new()),
+            None,
+        )]));
         assert_eq!(parse(render(&native)).unwrap(), native);
+
+        for body in [
+            json!({"type": "ROW", "fields": [
+                {"name": " ", "field_type": {"type": "INTEGER"}}
+            ]}),
+            json!({"type": "ROW", "fields": [
+                {"name": "id", "field_type": {"type": "INTEGER"}},
+                {"name": "id", "field_type": {"type": "STRING"}}
+            ]}),
+            json!({"type": "ARRAY", "element_type": {
+                "type": "MAP",
+                "key_type": {"type": "STRING"},
+                "value_type": {"type": "ROW", "fields": [
+                    {"name": "value", "field_type": {"type": "INTEGER"}},
+                    {"name": "value", "field_type": {"type": "BIGINT"}}
+                ]}
+            }}),
+        ] {
+            let wire: WireDataType =
+                serde_json::from_value(body.clone()).expect("the shape parses");
+            let error = DataType::try_from(wire).expect_err("invalid ROW fields are refused");
+            assert_eq!(error.kind(), ErrorKind::InvalidArgument, "{body}");
+            assert!(error.message().contains("Field names must"), "{body}");
+        }
 
         for depth in [MAX_TYPE_NESTING, MAX_TYPE_NESTING + 1] {
             let mut wire = WireDataType::Int { nullable: true };

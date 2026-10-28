@@ -29,7 +29,6 @@ import org.apache.fluss.row.ProjectedRow;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.AllocationManager;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocatorUtil;
-import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ChunkedAllocationManager;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.RowType;
@@ -145,7 +144,7 @@ public class LogRecordReadContext
                 dataRowType = rowType;
                 selectedFields = projection.getProjection();
             }
-            target = new ReadTarget(schemaId, dataRowType, selectedFields);
+            target = new ReadTarget(schemaId, dataRowType, selectedFields, logFormat);
         }
 
         if (logFormat == LogFormat.ARROW) {
@@ -173,8 +172,10 @@ public class LogRecordReadContext
             @Nullable ReadTarget target,
             boolean projectionPushDowned,
             SchemaGetter schemaGetter,
-            AllocationManager.Factory allocationManagerFactory) {
+            @Nullable AllocationManager.Factory allocationManagerFactory) {
         // TODO: use a more reasonable memory limit
+        // When allocationManagerFactory is null, the RootAllocator falls back to Arrow's default
+        // Netty-based allocator, so the context owns nothing beyond the allocator it closes.
         BufferAllocator allocator =
                 BufferAllocatorUtil.createBufferAllocator(allocationManagerFactory);
         return new LogRecordReadContext(
@@ -199,7 +200,8 @@ public class LogRecordReadContext
 
     /**
      * Creates a LogRecordReadContext for ARROW log format, that underlying Arrow resources are not
-     * reused.
+     * reused. The context uses Arrow's default Netty-based allocator, so no external allocation
+     * factory needs to be tracked or closed by the caller.
      *
      * @param rowType the schema of the table
      * @param schemaId the schemaId of the table
@@ -209,9 +211,8 @@ public class LogRecordReadContext
     public static LogRecordReadContext createArrowReadContext(
             RowType rowType, int schemaId, SchemaGetter schemaGetter) {
         int[] selectedFields = IntStream.range(0, rowType.getFieldCount()).toArray();
-        ReadTarget target = new ReadTarget(schemaId, rowType, selectedFields);
-        return createArrowReadContext(
-                -1L, target, false, schemaGetter, new ChunkedAllocationManager.ChunkedFactory());
+        ReadTarget target = new ReadTarget(schemaId, rowType, selectedFields, LogFormat.ARROW);
+        return createArrowReadContext(-1L, target, false, schemaGetter, null);
     }
 
     @VisibleForTesting
@@ -221,13 +222,8 @@ public class LogRecordReadContext
             SchemaGetter schemaGetter,
             boolean projectionPushDowned) {
         int[] selectedFields = IntStream.range(0, rowType.getFieldCount()).toArray();
-        ReadTarget target = new ReadTarget(schemaId, rowType, selectedFields);
-        return createArrowReadContext(
-                -1L,
-                target,
-                projectionPushDowned,
-                schemaGetter,
-                new ChunkedAllocationManager.ChunkedFactory());
+        ReadTarget target = new ReadTarget(schemaId, rowType, selectedFields, LogFormat.ARROW);
+        return createArrowReadContext(-1L, target, projectionPushDowned, schemaGetter, null);
     }
 
     /**
@@ -241,7 +237,7 @@ public class LogRecordReadContext
     public static LogRecordReadContext createIndexedReadContext(
             RowType rowType, int schemaId, SchemaGetter schemaGetter) {
         int[] selectedFields = IntStream.range(0, rowType.getFieldCount()).toArray();
-        ReadTarget target = new ReadTarget(schemaId, rowType, selectedFields);
+        ReadTarget target = new ReadTarget(schemaId, rowType, selectedFields, LogFormat.INDEXED);
         return createIndexedReadContext(-1L, target, schemaGetter);
     }
 
@@ -249,7 +245,7 @@ public class LogRecordReadContext
     public static LogRecordReadContext createCompactedRowReadContext(
             RowType rowType, int schemaId, SchemaGetter schemaGetter) {
         int[] selectedFields = IntStream.range(0, rowType.getFieldCount()).toArray();
-        ReadTarget target = new ReadTarget(schemaId, rowType, selectedFields);
+        ReadTarget target = new ReadTarget(schemaId, rowType, selectedFields, LogFormat.COMPACTED);
         return createCompactedRowReadContext(-1L, target, schemaGetter);
     }
 
@@ -305,7 +301,7 @@ public class LogRecordReadContext
                 id -> {
                     RowType batchRowType = schemaGetter.getSchema(id).getRowType();
                     int[] allFields = IntStream.range(0, batchRowType.getFieldCount()).toArray();
-                    return buildProjectedFieldGetters(batchRowType, allFields);
+                    return buildProjectedFieldGetters(batchRowType, allFields, logFormat);
                 });
     }
 
@@ -471,14 +467,17 @@ public class LogRecordReadContext
     // -------------------------------------------------------------------------
     //  Private helpers
     // -------------------------------------------------------------------------
-    static FieldGetter[] buildProjectedFieldGetters(RowType rowType, int[] selectedFields) {
+    static FieldGetter[] buildProjectedFieldGetters(
+            RowType rowType, int[] selectedFields, LogFormat logFormat) {
+        // ARROW already copies strings during deserialization;
+        // other formats reference pooled network buffers and need explicit copying.
+        boolean copyStrings = logFormat != LogFormat.ARROW;
         List<DataType> dataTypeList = rowType.getChildren();
         FieldGetter[] fieldGetters = new FieldGetter[selectedFields.length];
         for (int i = 0; i < fieldGetters.length; i++) {
-            // build deep field getter to support nested types
             fieldGetters[i] =
                     InternalRow.createDeepFieldGetter(
-                            dataTypeList.get(selectedFields[i]), selectedFields[i]);
+                            dataTypeList.get(selectedFields[i]), selectedFields[i], copyStrings);
         }
         return fieldGetters;
     }
@@ -508,11 +507,11 @@ public class LogRecordReadContext
         /** Pre-built field getters corresponding to {@link #selectedFields}. */
         final FieldGetter[] fieldGetters;
 
-        ReadTarget(int schemaId, RowType dataRowType, int[] selectedFields) {
+        ReadTarget(int schemaId, RowType dataRowType, int[] selectedFields, LogFormat logFormat) {
             this.schemaId = schemaId;
             this.dataRowType = dataRowType;
             this.selectedFields = selectedFields;
-            this.fieldGetters = buildProjectedFieldGetters(dataRowType, selectedFields);
+            this.fieldGetters = buildProjectedFieldGetters(dataRowType, selectedFields, logFormat);
         }
     }
 }

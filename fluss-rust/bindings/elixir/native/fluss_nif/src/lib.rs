@@ -30,9 +30,12 @@ mod atoms;
 mod config;
 mod connection;
 mod log_scanner;
+mod lookuper;
 mod row_convert;
 mod schema;
 mod table;
+mod table_upsert;
+mod upsert_writer;
 mod write_handle;
 
 use std::sync::LazyLock;

@@ -61,12 +61,12 @@ class HashBucketAssignerTest {
         InternalRow row3 = row(1, 2, "4", 5L);
         InternalRow row4 = row(1, 1, "4", 5L);
 
-        HashBucketAssigner hashBucketAssigner = new HashBucketAssigner(3);
+        HashBucketAssigner hashBucketAssigner = new HashBucketAssigner();
 
-        int bucket1 = hashBucketAssigner.assignBucket(keyEncoder.encodeKey(row1));
-        int bucket2 = hashBucketAssigner.assignBucket(keyEncoder.encodeKey(row2));
-        int bucket3 = hashBucketAssigner.assignBucket(keyEncoder.encodeKey(row3));
-        int bucket4 = hashBucketAssigner.assignBucket(keyEncoder.encodeKey(row4));
+        int bucket1 = hashBucketAssigner.assignBucket(keyEncoder.encodeKey(row1), 3);
+        int bucket2 = hashBucketAssigner.assignBucket(keyEncoder.encodeKey(row2), 3);
+        int bucket3 = hashBucketAssigner.assignBucket(keyEncoder.encodeKey(row3), 3);
+        int bucket4 = hashBucketAssigner.assignBucket(keyEncoder.encodeKey(row4), 3);
 
         assertThat(bucket1).isEqualTo(bucket2);
         assertThat(bucket1).isNotEqualTo(bucket3);
@@ -96,9 +96,9 @@ class HashBucketAssignerTest {
         }
 
         for (int bucketNumber = 3; bucketNumber < 10; bucketNumber++) {
-            HashBucketAssigner hashBucketAssigner = new HashBucketAssigner(bucketNumber);
+            HashBucketAssigner hashBucketAssigner = new HashBucketAssigner();
             for (byte[] key : keyList) {
-                int bucket = hashBucketAssigner.assignBucket(key);
+                int bucket = hashBucketAssigner.assignBucket(key, bucketNumber);
                 assertThat(bucket >= 0).isTrue();
                 assertThat(bucket < bucketNumber).isTrue();
             }
@@ -136,12 +136,12 @@ class HashBucketAssignerTest {
                 KeyEncoder.ofBucketKeyEncoder(
                         schema.getRowType(), bucketKey, DataLakeFormat.PAIMON);
         HashBucketAssigner bucketAssigner =
-                new HashBucketAssigner(3, BucketingFunction.of(DataLakeFormat.PAIMON));
+                new HashBucketAssigner(BucketingFunction.of(DataLakeFormat.PAIMON));
 
-        int row1Bucket = bucketAssigner.assignBucket(keyEncoder.encodeKey(row1));
-        int row2Bucket = bucketAssigner.assignBucket(keyEncoder.encodeKey(row2));
-        int row3Bucket = bucketAssigner.assignBucket(keyEncoder.encodeKey(row3));
-        int row4Bucket = bucketAssigner.assignBucket(keyEncoder.encodeKey(row4));
+        int row1Bucket = bucketAssigner.assignBucket(keyEncoder.encodeKey(row1), 3);
+        int row2Bucket = bucketAssigner.assignBucket(keyEncoder.encodeKey(row2), 3);
+        int row3Bucket = bucketAssigner.assignBucket(keyEncoder.encodeKey(row3), 3);
+        int row4Bucket = bucketAssigner.assignBucket(keyEncoder.encodeKey(row4), 3);
 
         if (isPartitioned) {
             // bucket key is the column 'a'

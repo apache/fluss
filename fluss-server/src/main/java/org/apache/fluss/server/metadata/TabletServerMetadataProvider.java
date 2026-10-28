@@ -83,9 +83,10 @@ public class TabletServerMetadataProvider extends ZkBasedMetadataProvider {
 
     @Override
     public List<TableMetadata> getTablesMetadataFromZK(Collection<TablePath> tablePaths) {
+        ServerMetadataSnapshot snapshot = metadataCache.getSnapshot();
         List<TableMetadata> result = super.getTablesMetadataFromZK(tablePaths);
         // Update local cache after successfully fetching from ZooKeeper
-        result.forEach(metadataCache::updateTableMetadata);
+        metadataCache.updateTableMetadata(result, snapshot);
         return result;
     }
 

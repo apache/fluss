@@ -212,7 +212,8 @@ the other architecture's executable.
 
 The supported Linux Gateway binaries include the following Rust crates
 under the Apache License, Version 2.0. Crates with additional conjunctive
-license obligations are also reproduced in the sections below.
+license obligations or incorporated components with separate licenses
+are also reproduced in the sections below.
 
 ahash@0.8.12
 anstream@1.0.0
@@ -389,37 +390,37 @@ zstd-sys@2.0.16+zstd.1.5.7
 The supported Linux Gateway binaries use the Rust crate aho-corasick@1.1.5.
 Project URL: https://github.com/BurntSushi/aho-corasick
 Declared license: Unlicense OR MIT
-Selected license obligations: MIT
+Selected crate license: MIT
 
 The supported Linux Gateway binaries use the Rust crate byteorder@1.5.0.
 Project URL: https://github.com/BurntSushi/byteorder
 Declared license: Unlicense OR MIT
-Selected license obligations: MIT
+Selected crate license: MIT
 
 The supported Linux Gateway binaries use the Rust crate csv@1.4.0.
 Project URL: https://github.com/BurntSushi/rust-csv
 Declared license: Unlicense/MIT
-Selected license obligations: MIT
+Selected crate license: MIT
 
 The supported Linux Gateway binaries use the Rust crate csv-core@0.1.13.
 Project URL: https://github.com/BurntSushi/rust-csv
 Declared license: Unlicense/MIT
-Selected license obligations: MIT
+Selected crate license: MIT
 
 The supported Linux Gateway binaries use the Rust crate jiff@0.2.35.
 Project URL: https://github.com/BurntSushi/jiff
 Declared license: Unlicense OR MIT
-Selected license obligations: MIT
+Selected crate license: MIT
 
 The supported Linux Gateway binaries use the Rust crate jiff-core@0.1.0.
 Project URL: https://github.com/BurntSushi/jiff/tree/master/crates/jiff-core
 Declared license: Unlicense OR MIT
-Selected license obligations: MIT
+Selected crate license: MIT
 
 The supported Linux Gateway binaries use the Rust crate memchr@2.8.3.
 Project URL: https://github.com/BurntSushi/memchr
 Declared license: Unlicense OR MIT
-Selected license obligations: MIT
+Selected crate license: MIT
 
 These crates ship identical license text, reproduced once below.
 
@@ -450,7 +451,7 @@ License file: LICENSE-MIT
 The supported Linux Gateway binaries use the Rust crate arrow-array@59.2.0.
 Project URL: https://github.com/apache/arrow-rs
 Declared license: Apache-2.0 AND MIT
-Selected license obligations: Apache-2.0 AND MIT
+Selected crate license: Apache-2.0 AND MIT
 
 License file: LICENSE-MIT
 | MIT License
@@ -479,7 +480,7 @@ License file: LICENSE-MIT
 The supported Linux Gateway binaries use the Rust crate atoi@2.0.0.
 Project URL: https://github.com/pacman82/atoi-rs
 Declared license: MIT
-Selected license obligations: MIT
+Selected crate license: MIT
 
 License file: LICENSE
 | MIT License
@@ -508,7 +509,7 @@ License file: LICENSE
 The supported Linux Gateway binaries use the Rust crate axum@0.8.9.
 Project URL: https://github.com/tokio-rs/axum
 Declared license: MIT
-Selected license obligations: MIT
+Selected crate license: MIT
 
 License file: LICENSE
 | Copyright (c) 2019 axum Contributors
@@ -541,7 +542,7 @@ License file: LICENSE
 The supported Linux Gateway binaries use the Rust crate axum-core@0.5.6.
 Project URL: https://github.com/tokio-rs/axum
 Declared license: MIT
-Selected license obligations: MIT
+Selected crate license: MIT
 
 License file: LICENSE
 | MIT License
@@ -576,12 +577,12 @@ License file: LICENSE
 The supported Linux Gateway binaries use the Rust crate bitvec@1.1.1.
 Project URL: https://bitvecto-rs.github.io/bitvec
 Declared license: MIT
-Selected license obligations: MIT
+Selected crate license: MIT
 
 The supported Linux Gateway binaries use the Rust crate wyz@0.5.1.
 Project URL: https://myrrlyn.net/crates/wyz
 Declared license: MIT
-Selected license obligations: MIT
+Selected crate license: MIT
 
 These crates ship identical license text, reproduced once below.
 
@@ -612,7 +613,7 @@ License file: LICENSE.txt
 The supported Linux Gateway binaries use the Rust crate bytes@1.12.1.
 Project URL: https://github.com/tokio-rs/bytes
 Declared license: MIT
-Selected license obligations: MIT
+Selected crate license: MIT
 
 License file: LICENSE
 | Copyright (c) 2018 Carl Lerche
@@ -645,7 +646,7 @@ License file: LICENSE
 The supported Linux Gateway binaries use the Rust crate dashmap@6.2.1.
 Project URL: https://github.com/xacrimon/dashmap
 Declared license: MIT
-Selected license obligations: MIT
+Selected crate license: MIT
 
 License file: LICENSE
 | MIT License
@@ -674,7 +675,7 @@ License file: LICENSE
 The supported Linux Gateway binaries use the Rust crate foldhash@0.2.0.
 Project URL: https://github.com/orlp/foldhash
 Declared license: Zlib
-Selected license obligations: Zlib
+Selected crate license: Zlib
 
 License file: LICENSE
 | Copyright (c) 2024 Orson Peters
@@ -701,7 +702,7 @@ License file: LICENSE
 The supported Linux Gateway binaries use the Rust crate funty@2.0.0.
 Project URL: https://github.com/myrrlyn/funty
 Declared license: MIT
-Selected license obligations: MIT
+Selected crate license: MIT
 
 License file: LICENSE.txt
 | MIT License
@@ -730,7 +731,7 @@ License file: LICENSE.txt
 The supported Linux Gateway binaries use the Rust crate generic-array@0.14.7.
 Project URL: https://github.com/fizyk20/generic-array.git
 Declared license: MIT
-Selected license obligations: MIT
+Selected crate license: MIT
 
 License file: LICENSE
 | The MIT License (MIT)
@@ -759,12 +760,12 @@ License file: LICENSE
 The supported Linux Gateway binaries use the Rust crate http-body@1.1.0.
 Project URL: https://github.com/hyperium/http-body
 Declared license: MIT
-Selected license obligations: MIT
+Selected crate license: MIT
 
 The supported Linux Gateway binaries use the Rust crate http-body-util@0.1.5.
 Project URL: https://github.com/hyperium/http-body
 Declared license: MIT
-Selected license obligations: MIT
+Selected crate license: MIT
 
 These crates ship identical license text, reproduced once below.
 
@@ -799,7 +800,7 @@ License file: LICENSE
 The supported Linux Gateway binaries use the Rust crate hyper@1.11.0.
 Project URL: https://hyper.rs
 Declared license: MIT
-Selected license obligations: MIT
+Selected crate license: MIT
 
 License file: LICENSE
 | Copyright (c) 2014-2026 Sean McArthur
@@ -826,7 +827,7 @@ License file: LICENSE
 The supported Linux Gateway binaries use the Rust crate hyper-util@0.1.20.
 Project URL: https://hyper.rs
 Declared license: MIT
-Selected license obligations: MIT
+Selected crate license: MIT
 
 License file: LICENSE
 | Copyright (c) 2023-2025 Sean McArthur
@@ -853,77 +854,77 @@ License file: LICENSE
 The supported Linux Gateway binaries use the Rust crate icu_collections@2.1.1.
 Project URL: https://icu4x.unicode.org
 Declared license: Unicode-3.0
-Selected license obligations: Unicode-3.0
+Selected crate license: Unicode-3.0
 
 The supported Linux Gateway binaries use the Rust crate icu_locale_core@2.1.1.
 Project URL: https://icu4x.unicode.org
 Declared license: Unicode-3.0
-Selected license obligations: Unicode-3.0
+Selected crate license: Unicode-3.0
 
 The supported Linux Gateway binaries use the Rust crate icu_normalizer@2.1.1.
 Project URL: https://icu4x.unicode.org
 Declared license: Unicode-3.0
-Selected license obligations: Unicode-3.0
+Selected crate license: Unicode-3.0
 
 The supported Linux Gateway binaries use the Rust crate icu_normalizer_data@2.1.1.
 Project URL: https://icu4x.unicode.org
 Declared license: Unicode-3.0
-Selected license obligations: Unicode-3.0
+Selected crate license: Unicode-3.0
 
 The supported Linux Gateway binaries use the Rust crate icu_properties@2.1.2.
 Project URL: https://icu4x.unicode.org
 Declared license: Unicode-3.0
-Selected license obligations: Unicode-3.0
+Selected crate license: Unicode-3.0
 
 The supported Linux Gateway binaries use the Rust crate icu_properties_data@2.1.2.
 Project URL: https://icu4x.unicode.org
 Declared license: Unicode-3.0
-Selected license obligations: Unicode-3.0
+Selected crate license: Unicode-3.0
 
 The supported Linux Gateway binaries use the Rust crate icu_provider@2.1.1.
 Project URL: https://icu4x.unicode.org
 Declared license: Unicode-3.0
-Selected license obligations: Unicode-3.0
+Selected crate license: Unicode-3.0
 
 The supported Linux Gateway binaries use the Rust crate litemap@0.8.2.
 Project URL: https://github.com/unicode-org/icu4x
 Declared license: Unicode-3.0
-Selected license obligations: Unicode-3.0
+Selected crate license: Unicode-3.0
 
 The supported Linux Gateway binaries use the Rust crate potential_utf@0.1.5.
 Project URL: https://icu4x.unicode.org
 Declared license: Unicode-3.0
-Selected license obligations: Unicode-3.0
+Selected crate license: Unicode-3.0
 
 The supported Linux Gateway binaries use the Rust crate tinystr@0.8.3.
 Project URL: https://github.com/unicode-org/icu4x
 Declared license: Unicode-3.0
-Selected license obligations: Unicode-3.0
+Selected crate license: Unicode-3.0
 
 The supported Linux Gateway binaries use the Rust crate writeable@0.6.3.
 Project URL: https://github.com/unicode-org/icu4x
 Declared license: Unicode-3.0
-Selected license obligations: Unicode-3.0
+Selected crate license: Unicode-3.0
 
 The supported Linux Gateway binaries use the Rust crate yoke@0.8.3.
 Project URL: https://github.com/unicode-org/icu4x
 Declared license: Unicode-3.0
-Selected license obligations: Unicode-3.0
+Selected crate license: Unicode-3.0
 
 The supported Linux Gateway binaries use the Rust crate zerofrom@0.1.8.
 Project URL: https://github.com/unicode-org/icu4x
 Declared license: Unicode-3.0
-Selected license obligations: Unicode-3.0
+Selected crate license: Unicode-3.0
 
 The supported Linux Gateway binaries use the Rust crate zerotrie@0.2.4.
 Project URL: https://icu4x.unicode.org
 Declared license: Unicode-3.0
-Selected license obligations: Unicode-3.0
+Selected crate license: Unicode-3.0
 
 The supported Linux Gateway binaries use the Rust crate zerovec@0.11.6.
 Project URL: https://github.com/unicode-org/icu4x
 Declared license: Unicode-3.0
-Selected license obligations: Unicode-3.0
+Selected crate license: Unicode-3.0
 
 These crates ship identical license text, reproduced once below.
 
@@ -979,7 +980,7 @@ License file: LICENSE
 The supported Linux Gateway binaries use the Rust crate libm@0.2.16.
 Project URL: https://github.com/rust-lang/compiler-builtins
 Declared license: MIT
-Selected license obligations: MIT
+Selected crate license: MIT
 
 License file: LICENSE.txt
 | rust-lang/libm as a whole is available for use under the MIT license:
@@ -1245,7 +1246,7 @@ License file: LICENSE.txt
 The supported Linux Gateway binaries use the Rust crate lz4_flex@0.14.0.
 Project URL: https://github.com/pseitz/lz4_flex
 Declared license: MIT
-Selected license obligations: MIT
+Selected crate license: MIT
 
 License file: LICENSE
 | The MIT License (MIT)
@@ -1273,7 +1274,7 @@ License file: LICENSE
 The supported Linux Gateway binaries use the Rust crate matchit@0.8.4.
 Project URL: https://github.com/ibraheemdev/matchit
 Declared license: MIT AND BSD-3-Clause
-Selected license obligations: MIT AND BSD-3-Clause
+Selected crate license: MIT AND BSD-3-Clause
 
 License file: LICENSE
 | MIT License
@@ -1333,17 +1334,17 @@ License file: LICENSE.httprouter
 The supported Linux Gateway binaries use the Rust crate metrics@0.24.6.
 Project URL: https://github.com/metrics-rs/metrics
 Declared license: MIT
-Selected license obligations: MIT
+Selected crate license: MIT
 
 The supported Linux Gateway binaries use the Rust crate metrics-exporter-prometheus@0.17.2.
 Project URL: https://github.com/metrics-rs/metrics
 Declared license: MIT
-Selected license obligations: MIT
+Selected crate license: MIT
 
 The supported Linux Gateway binaries use the Rust crate metrics-util@0.20.4.
 Project URL: https://github.com/metrics-rs/metrics
 Declared license: MIT
-Selected license obligations: MIT
+Selected crate license: MIT
 
 These crates ship identical license text, reproduced once below.
 
@@ -1372,7 +1373,7 @@ License file: LICENSE
 The supported Linux Gateway binaries use the Rust crate mio@1.2.2.
 Project URL: https://github.com/tokio-rs/mio
 Declared license: MIT
-Selected license obligations: MIT
+Selected crate license: MIT
 
 License file: LICENSE
 | Copyright (c) 2014 Carl Lerche and other MIO contributors
@@ -1399,7 +1400,7 @@ License file: LICENSE
 The supported Linux Gateway binaries use the Rust crate ordered-float@5.3.0.
 Project URL: https://github.com/reem/rust-ordered-float
 Declared license: MIT
-Selected license obligations: MIT
+Selected crate license: MIT
 
 License file: LICENSE-MIT
 | Copyright (c) 2015 Jonathan Reem
@@ -1432,7 +1433,7 @@ License file: LICENSE-MIT
 The supported Linux Gateway binaries use the Rust crate quanta@0.12.6.
 Project URL: https://github.com/metrics-rs/quanta
 Declared license: MIT
-Selected license obligations: MIT
+Selected crate license: MIT
 
 License file: LICENSE
 | // Copyright (c) 2019 Nuclear Furnace
@@ -1459,7 +1460,7 @@ License file: LICENSE
 The supported Linux Gateway binaries use the Rust crate quick-xml@0.38.4.
 Project URL: https://github.com/tafia/quick-xml
 Declared license: MIT
-Selected license obligations: MIT
+Selected crate license: MIT
 
 License file: LICENSE-MIT.md
 | The MIT License (MIT)
@@ -1490,7 +1491,7 @@ License file: LICENSE-MIT.md
 The supported Linux Gateway binaries use the Rust crate radium@0.7.0.
 Project URL: https://github.com/bitvecto-rs/radium
 Declared license: MIT
-Selected license obligations: MIT
+Selected crate license: MIT
 
 License file: LICENSE.txt
 | MIT License
@@ -1519,7 +1520,7 @@ License file: LICENSE.txt
 The supported Linux Gateway binaries use the Rust crate raw-cpuid@11.6.0.
 Project URL: https://github.com/gz/rust-cpuid
 Declared license: MIT
-Selected license obligations: MIT
+Selected crate license: MIT
 
 License file: LICENSE.md
 | The MIT License (MIT)
@@ -1545,10 +1546,75 @@ License file: LICENSE.md
 | THE SOFTWARE.
 --------------------------------------------------------------------------------
 
+The supported Linux Gateway binaries use the Rust crate regex-syntax@0.8.11.
+Project URL: https://github.com/rust-lang/regex/tree/master/regex-syntax
+Declared license: MIT OR Apache-2.0
+Selected crate license: Apache-2.0
+
+License file: src/unicode_tables/LICENSE-UNICODE
+| UNICODE, INC. LICENSE AGREEMENT - DATA FILES AND SOFTWARE
+|
+| Unicode Data Files include all data files under the directories
+| http://www.unicode.org/Public/, http://www.unicode.org/reports/,
+| http://www.unicode.org/cldr/data/, http://source.icu-project.org/repos/icu/, and
+| http://www.unicode.org/utility/trac/browser/.
+|
+| Unicode Data Files do not include PDF online code charts under the
+| directory http://www.unicode.org/Public/.
+|
+| Software includes any source code published in the Unicode Standard
+| or under the directories
+| http://www.unicode.org/Public/, http://www.unicode.org/reports/,
+| http://www.unicode.org/cldr/data/, http://source.icu-project.org/repos/icu/, and
+| http://www.unicode.org/utility/trac/browser/.
+|
+| NOTICE TO USER: Carefully read the following legal agreement.
+| BY DOWNLOADING, INSTALLING, COPYING OR OTHERWISE USING UNICODE INC.'S
+| DATA FILES ("DATA FILES"), AND/OR SOFTWARE ("SOFTWARE"),
+| YOU UNEQUIVOCALLY ACCEPT, AND AGREE TO BE BOUND BY, ALL OF THE
+| TERMS AND CONDITIONS OF THIS AGREEMENT.
+| IF YOU DO NOT AGREE, DO NOT DOWNLOAD, INSTALL, COPY, DISTRIBUTE OR USE
+| THE DATA FILES OR SOFTWARE.
+|
+| COPYRIGHT AND PERMISSION NOTICE
+|
+| Copyright © 1991-2018 Unicode, Inc. All rights reserved.
+| Distributed under the Terms of Use in http://www.unicode.org/copyright.html.
+|
+| Permission is hereby granted, free of charge, to any person obtaining
+| a copy of the Unicode data files and any associated documentation
+| (the "Data Files") or Unicode software and any associated documentation
+| (the "Software") to deal in the Data Files or Software
+| without restriction, including without limitation the rights to use,
+| copy, modify, merge, publish, distribute, and/or sell copies of
+| the Data Files or Software, and to permit persons to whom the Data Files
+| or Software are furnished to do so, provided that either
+| (a) this copyright and permission notice appear with all copies
+| of the Data Files or Software, or
+| (b) this copyright and permission notice appear in associated
+| Documentation.
+|
+| THE DATA FILES AND SOFTWARE ARE PROVIDED "AS IS", WITHOUT WARRANTY OF
+| ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE
+| WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+| NONINFRINGEMENT OF THIRD PARTY RIGHTS.
+| IN NO EVENT SHALL THE COPYRIGHT HOLDER OR HOLDERS INCLUDED IN THIS
+| NOTICE BE LIABLE FOR ANY CLAIM, OR ANY SPECIAL INDIRECT OR CONSEQUENTIAL
+| DAMAGES, OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE,
+| DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
+| TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+| PERFORMANCE OF THE DATA FILES OR SOFTWARE.
+|
+| Except as contained in this notice, the name of a copyright holder
+| shall not be used in advertising or otherwise to promote the sale,
+| use or other dealings in these Data Files or Software without prior
+| written authorization of the copyright holder.
+--------------------------------------------------------------------------------
+
 The supported Linux Gateway binaries use the Rust crate ring@0.17.14.
 Project URL: https://github.com/briansmith/ring
 Declared license: Apache-2.0 AND ISC
-Selected license obligations: Apache-2.0 AND ISC
+Selected crate license: Apache-2.0 AND ISC
 
 License file: LICENSE
 | *ring* uses an "ISC" license, like BoringSSL used to use, for new code
@@ -2099,7 +2165,7 @@ License file: third_party/fiat/LICENSE
 The supported Linux Gateway binaries use the Rust crate rustls-webpki@0.103.14.
 Project URL: https://github.com/rustls/webpki
 Declared license: ISC
-Selected license obligations: ISC
+Selected crate license: ISC
 
 License file: LICENSE
 | Except as otherwise noted, this project is licensed under the following
@@ -2126,7 +2192,7 @@ License file: LICENSE
 The supported Linux Gateway binaries use the Rust crate serde_yaml_ng@0.10.0.
 Project URL: https://github.com/acatton/serde-yaml-ng
 Declared license: MIT
-Selected license obligations: MIT
+Selected crate license: MIT
 
 License file: LICENSE
 |                                   MIT License
@@ -2156,7 +2222,7 @@ License file: LICENSE
 The supported Linux Gateway binaries use the Rust crate slab@0.4.12.
 Project URL: https://github.com/tokio-rs/slab
 Declared license: MIT
-Selected license obligations: MIT
+Selected crate license: MIT
 
 License file: LICENSE
 | Copyright (c) 2019 Carl Lerche
@@ -2189,7 +2255,7 @@ License file: LICENSE
 The supported Linux Gateway binaries use the Rust crate strsim@0.11.1.
 Project URL: https://github.com/rapidfuzz/strsim-rs
 Declared license: MIT
-Selected license obligations: MIT
+Selected crate license: MIT
 
 License file: LICENSE
 | The MIT License (MIT)
@@ -2220,7 +2286,7 @@ License file: LICENSE
 The supported Linux Gateway binaries use the Rust crate strum@0.26.3.
 Project URL: https://github.com/Peternator7/strum
 Declared license: MIT
-Selected license obligations: MIT
+Selected crate license: MIT
 
 License file: LICENSE
 | MIT License
@@ -2249,7 +2315,7 @@ License file: LICENSE
 The supported Linux Gateway binaries use the Rust crate subtle@2.6.1.
 Project URL: https://dalek.rs/
 Declared license: BSD-3-Clause
-Selected license obligations: BSD-3-Clause
+Selected crate license: BSD-3-Clause
 
 License file: LICENSE
 | Copyright (c) 2016-2017 Isis Agora Lovecruft, Henry de Valence. All rights reserved.
@@ -2286,7 +2352,7 @@ License file: LICENSE
 The supported Linux Gateway binaries use the Rust crate tap@1.0.1.
 Project URL: https://github.com/myrrlyn/tap
 Declared license: MIT
-Selected license obligations: MIT
+Selected crate license: MIT
 
 License file: LICENSE.txt
 | MIT License
@@ -2315,12 +2381,12 @@ License file: LICENSE.txt
 The supported Linux Gateway binaries use the Rust crate tokio@1.53.1.
 Project URL: https://tokio.rs
 Declared license: MIT
-Selected license obligations: MIT
+Selected crate license: MIT
 
 The supported Linux Gateway binaries use the Rust crate tokio-util@0.7.19.
 Project URL: https://tokio.rs
 Declared license: MIT
-Selected license obligations: MIT
+Selected crate license: MIT
 
 These crates ship identical license text, reproduced once below.
 
@@ -2351,17 +2417,17 @@ License file: LICENSE
 The supported Linux Gateway binaries use the Rust crate tower@0.5.3.
 Project URL: https://github.com/tower-rs/tower
 Declared license: MIT
-Selected license obligations: MIT
+Selected crate license: MIT
 
 The supported Linux Gateway binaries use the Rust crate tower-layer@0.3.3.
 Project URL: https://github.com/tower-rs/tower
 Declared license: MIT
-Selected license obligations: MIT
+Selected crate license: MIT
 
 The supported Linux Gateway binaries use the Rust crate tower-service@0.3.3.
 Project URL: https://github.com/tower-rs/tower
 Declared license: MIT
-Selected license obligations: MIT
+Selected crate license: MIT
 
 These crates ship identical license text, reproduced once below.
 
@@ -2396,7 +2462,7 @@ License file: LICENSE
 The supported Linux Gateway binaries use the Rust crate tower-http@0.6.11.
 Project URL: https://github.com/tower-rs/tower-http
 Declared license: MIT
-Selected license obligations: MIT
+Selected crate license: MIT
 
 License file: LICENSE
 | Copyright (c) 2019-2021 Tower Contributors
@@ -2429,7 +2495,7 @@ License file: LICENSE
 The supported Linux Gateway binaries use the Rust crate tracing@0.1.44.
 Project URL: https://tokio.rs
 Declared license: MIT
-Selected license obligations: MIT
+Selected crate license: MIT
 
 License file: LICENSE
 | Copyright (c) 2019 Tokio Contributors
@@ -2462,7 +2528,7 @@ License file: LICENSE
 The supported Linux Gateway binaries use the Rust crate tracing-core@0.1.36.
 Project URL: https://tokio.rs
 Declared license: MIT
-Selected license obligations: MIT
+Selected crate license: MIT
 
 License file: LICENSE
 | Copyright (c) 2019 Tokio Contributors
@@ -2518,7 +2584,7 @@ License file: src/spin/LICENSE
 The supported Linux Gateway binaries use the Rust crate try-lock@0.2.5.
 Project URL: https://github.com/seanmonstar/try-lock
 Declared license: MIT
-Selected license obligations: MIT
+Selected crate license: MIT
 
 License file: LICENSE
 | Copyright (c) 2018-2023 Sean McArthur
@@ -2546,7 +2612,7 @@ License file: LICENSE
 The supported Linux Gateway binaries use the Rust crate twox-hash@2.1.3.
 Project URL: https://github.com/shepmaster/twox-hash
 Declared license: MIT
-Selected license obligations: MIT
+Selected crate license: MIT
 
 License file: LICENSE.txt
 | The MIT License (MIT)
@@ -2575,12 +2641,12 @@ License file: LICENSE.txt
 The supported Linux Gateway binaries use the Rust crate unsafe-libyaml@0.2.11.
 Project URL: https://github.com/dtolnay/unsafe-libyaml
 Declared license: MIT
-Selected license obligations: MIT
+Selected crate license: MIT
 
 The supported Linux Gateway binaries use the Rust crate zmij@1.0.23.
 Project URL: https://github.com/dtolnay/zmij
 Declared license: MIT
-Selected license obligations: MIT
+Selected crate license: MIT
 
 These crates ship identical license text, reproduced once below.
 
@@ -2613,7 +2679,7 @@ License file: LICENSE-MIT
 The supported Linux Gateway binaries use the Rust crate untrusted@0.9.0.
 Project URL: https://github.com/briansmith/untrusted
 Declared license: ISC
-Selected license obligations: ISC
+Selected crate license: ISC
 
 License file: LICENSE.txt
 | // Copyright 2015-2016 Brian Smith.
@@ -2634,7 +2700,7 @@ License file: LICENSE.txt
 The supported Linux Gateway binaries use the Rust crate want@0.3.1.
 Project URL: https://github.com/seanmonstar/want
 Declared license: MIT
-Selected license obligations: MIT
+Selected crate license: MIT
 
 License file: LICENSE
 | Copyright (c) 2018-2019 Sean McArthur
@@ -2661,7 +2727,7 @@ License file: LICENSE
 The supported Linux Gateway binaries use the Rust crate webpki-roots@1.0.9.
 Project URL: https://github.com/rustls/webpki-roots
 Declared license: CDLA-Permissive-2.0
-Selected license obligations: CDLA-Permissive-2.0
+Selected crate license: CDLA-Permissive-2.0
 
 License file: LICENSE
 | # Community Data License Agreement - Permissive - Version 2.0
@@ -2730,7 +2796,7 @@ License file: LICENSE
 The supported Linux Gateway binaries use the Rust crate zstd@0.13.3.
 Project URL: https://github.com/gyscos/zstd-rs
 Declared license: MIT
-Selected license obligations: MIT
+Selected crate license: MIT
 
 License file: LICENSE
 | The MIT License (MIT)
@@ -2741,3 +2807,75 @@ License file: LICENSE
 | The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 |
 | THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+--------------------------------------------------------------------------------
+
+The supported Linux Gateway binaries use the Rust crate zstd-sys@2.0.16+zstd.1.5.7.
+Project URL: https://github.com/gyscos/zstd-rs
+Declared license: MIT/Apache-2.0
+Selected crate license: Apache-2.0
+
+License file: LICENSE.BSD-3-Clause
+| The auto-generated bindings are under the 3-clause BSD license:
+|
+| BSD License
+|
+| For Zstandard software
+|
+| Copyright (c) 2016-present, Facebook, Inc. All rights reserved.
+|
+| Redistribution and use in source and binary forms, with or without modification,
+| are permitted provided that the following conditions are met:
+|
+|  * Redistributions of source code must retain the above copyright notice, this
+|    list of conditions and the following disclaimer.
+|
+|  * Redistributions in binary form must reproduce the above copyright notice,
+|    this list of conditions and the following disclaimer in the documentation
+|    and/or other materials provided with the distribution.
+|
+|  * Neither the name Facebook nor the names of its contributors may be used to
+|    endorse or promote products derived from this software without specific
+|    prior written permission.
+|
+| THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+| ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+| WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+| DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+| ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+| (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+| LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+| ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+| (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+| SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+License file: zstd/LICENSE
+| BSD License
+|
+| For Zstandard software
+|
+| Copyright (c) Meta Platforms, Inc. and affiliates. All rights reserved.
+|
+| Redistribution and use in source and binary forms, with or without modification,
+| are permitted provided that the following conditions are met:
+|
+|  * Redistributions of source code must retain the above copyright notice, this
+|    list of conditions and the following disclaimer.
+|
+|  * Redistributions in binary form must reproduce the above copyright notice,
+|    this list of conditions and the following disclaimer in the documentation
+|    and/or other materials provided with the distribution.
+|
+|  * Neither the name Facebook, nor Meta, nor the names of its contributors may
+|    be used to endorse or promote products derived from this software without
+|    specific prior written permission.
+|
+| THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+| ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+| WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+| DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+| ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+| (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+| LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+| ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+| (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+| SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.

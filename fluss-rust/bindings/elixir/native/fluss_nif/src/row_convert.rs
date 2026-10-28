@@ -254,9 +254,7 @@ pub fn term_to_row<'a>(
     values: Term<'a>,
     columns: &[Column],
 ) -> Result<GenericRow<'static>, String> {
-    let list: Vec<Term<'a>> = values
-        .decode()
-        .map_err(|_| "expected a list of values".to_string())?;
+    let list = decode_list(values, "expected a list of values")?;
     if list.len() != columns.len() {
         return Err(format!(
             "expected {} values, got {}",
@@ -267,15 +265,156 @@ pub fn term_to_row<'a>(
 
     let mut row = GenericRow::new(columns.len());
     for (i, (term, col)) in list.iter().zip(columns.iter()).enumerate() {
-        if term.is_atom()
-            && let Ok(atom) = term.decode::<rustler::Atom>()
-            && atom == atoms::nil()
-        {
+        if is_nil(*term) {
             continue; // leave as null
         }
         row.set_field(i, term_to_datum(env, *term, col.data_type())?);
     }
+    check_not_null(&row, columns, 0..columns.len())?;
     Ok(row)
+}
+
+/// Build a full-width row from values for `indices` only, in that order; other fields stay
+/// null. Full width because the key encoder addresses columns by table position.
+pub fn term_to_sparse_row<'a>(
+    env: Env<'a>,
+    values: Term<'a>,
+    columns: &[Column],
+    indices: &[usize],
+) -> Result<GenericRow<'static>, String> {
+    let list = decode_list(values, "expected a list of values")?;
+    if list.len() != indices.len() {
+        return Err(format!(
+            "expected {} values for the target columns, got {}",
+            indices.len(),
+            list.len()
+        ));
+    }
+
+    let mut row = GenericRow::new(columns.len());
+    for (term, idx) in list.iter().zip(indices.iter().copied()) {
+        if is_nil(*term) {
+            continue; // leave as null
+        }
+        row.set_field(idx, term_to_datum(env, *term, columns[idx].data_type())?);
+    }
+    check_not_null(&row, columns, indices.iter().copied())?;
+    Ok(row)
+}
+
+/// Build a full-width row from a map keyed by column name. Keys must be among `indices`
+/// (every column if `None`), and NOT NULL targets need a non-nil value.
+pub fn map_to_row<'a>(
+    env: Env<'a>,
+    values: Term<'a>,
+    columns: &[Column],
+    indices: Option<&[usize]>,
+) -> Result<GenericRow<'static>, String> {
+    let entries: MapIterator<'a> = values
+        .decode()
+        .map_err(|_| "expected a map of column names to values".to_string())?;
+
+    let all_indices: Vec<usize>;
+    let targets: &[usize] = match indices {
+        Some(indices) => indices,
+        None => {
+            all_indices = (0..columns.len()).collect();
+            &all_indices
+        }
+    };
+
+    let mut row = GenericRow::new(columns.len());
+    // Duplicate keys only; nullness is checked on the row below.
+    let mut seen = vec![false; columns.len()];
+
+    for (key, value) in entries {
+        let name = term_to_column_name(key)?;
+        let idx = targets
+            .iter()
+            .copied()
+            .find(|&idx| columns[idx].name() == name)
+            .ok_or_else(|| {
+                let problem = if columns.iter().any(|column| column.name() == name) {
+                    "is not accepted here"
+                } else {
+                    "is unknown"
+                };
+                format!(
+                    "column `{}` {}; expected one of: {}",
+                    name,
+                    problem,
+                    target_column_names(columns, targets).join(", ")
+                )
+            })?;
+        if std::mem::replace(&mut seen[idx], true) {
+            return Err(format!("column `{name}` given more than once"));
+        }
+        row.set_field(idx, term_to_datum(env, value, columns[idx].data_type())?);
+    }
+
+    // Catches both an omitted key and an explicit nil: the row starts all-null.
+    check_not_null(&row, columns, targets.iter().copied())?;
+    Ok(row)
+}
+
+/// Core would reject the null later, with a type mismatch that doesn't name the column.
+fn check_not_null(
+    row: &GenericRow<'_>,
+    columns: &[Column],
+    indices: impl IntoIterator<Item = usize>,
+) -> Result<(), String> {
+    for idx in indices {
+        if row.values[idx].is_null() && !columns[idx].data_type().is_nullable() {
+            return Err(format!(
+                "NOT NULL column `{}` must not be nil or omitted",
+                columns[idx].name()
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Rustler's own list decode panics on an improper list such as `[1 | 2]`.
+pub fn decode_list<'a>(term: Term<'a>, error: &str) -> Result<Vec<Term<'a>>, String> {
+    term.list_length().map_err(|_| error.to_string())?;
+    term.decode().map_err(|_| error.to_string())
+}
+
+fn is_nil(term: Term<'_>) -> bool {
+    term.is_atom()
+        && term
+            .decode::<rustler::Atom>()
+            .is_ok_and(|atom| atom == atoms::nil())
+}
+
+/// Decode a column name given as either an atom or a string.
+pub fn term_to_column_name(term: Term<'_>) -> Result<String, String> {
+    if term.is_atom() {
+        term.atom_to_string()
+            .map_err(|_| "invalid atom column name".to_string())
+    } else {
+        term.decode::<String>()
+            .map_err(|_| "column names must be atoms or strings".to_string())
+    }
+}
+
+/// Core accepts a repeated column; `[0, 0]` would then expect two values for one column.
+/// Indices must be in range.
+pub fn check_distinct_columns(columns: &[Column], indices: &[usize]) -> Result<(), String> {
+    let mut seen = vec![false; columns.len()];
+    for &idx in indices {
+        if std::mem::replace(&mut seen[idx], true) {
+            return Err(format!("duplicate target column `{}`", columns[idx].name()));
+        }
+    }
+    Ok(())
+}
+
+fn target_column_names(columns: &[Column], targets: &[usize]) -> Vec<String> {
+    targets
+        .iter()
+        .map(|&idx| columns[idx].name().to_string())
+        .collect()
 }
 
 fn term_to_datum<'a>(
@@ -285,10 +424,7 @@ fn term_to_datum<'a>(
 ) -> Result<Datum<'static>, String> {
     // A nil term maps to Null regardless of the declared type. This is what lets
     // the Array/Map/Row arms recurse without special-casing null elements.
-    if term.is_atom()
-        && let Ok(atom) = term.decode::<rustler::Atom>()
-        && atom == atoms::nil()
-    {
+    if is_nil(term) {
         return Ok(Datum::Null);
     }
 
@@ -369,9 +505,7 @@ fn term_to_datum<'a>(
         }
         DataType::Array(at) => {
             let et = at.get_element_type();
-            let list: Vec<Term<'a>> = term
-                .decode()
-                .map_err(|_| "expected a list for array".to_string())?;
+            let list = decode_list(term, "expected a list for array")?;
             let mut writer = FlussArrayWriter::new(list.len(), et);
             for (i, elem) in list.iter().enumerate() {
                 let datum = term_to_datum(env, *elem, et)?;

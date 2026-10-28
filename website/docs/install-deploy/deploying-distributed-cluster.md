@@ -151,6 +151,65 @@ On **Node1**, **Node2** and **Node3**, start a TabletServer as follows.
 
 After that, you have successfully deployed a distributed Fluss cluster.
 
+## Fluss CoordinatorServer High Availability (HA) Setup
+
+By default, the distributed cluster example above deploys a single CoordinatorServer on Node0,
+which is a single point of failure for admin operations (e.g., creating databases/tables).
+Fluss supports built-in high availability (HA) for the CoordinatorServer based on ZooKeeper
+leader election, requiring no additional configuration options.
+
+### How it works
+
+When multiple CoordinatorServer instances point to the same ZooKeeper cluster, they participate
+in leader election. Exactly one is elected as the **leader** and serves the full coordinator
+services; the others run as **standby**. If the leader fails, a standby is promoted and
+increments the coordinator epoch to fence off the old leader.
+
+:::note
+During failover, admin operations (e.g., creating/dropping tables) are temporarily unavailable.
+Data reads and writes are not affected if no tablet server fails. The time to elect a new
+leader is bounded by `zookeeper.client.session-timeout` (default 60 seconds).
+:::
+
+### Configuring CoordinatorServer HA
+
+To enable HA, start at least two CoordinatorServer instances on different nodes, all configured
+with the same `zookeeper.address` and `zookeeper.path.root`. No extra configuration options are
+needed beyond what a distributed deployment already requires.
+
+Extending the four-node example above, add a second CoordinatorServer on a new node:
+
+**Node4**
+
+```yaml title="server.yaml"
+# coordinator server
+bind.listeners: FLUSS://192.168.10.104:9123
+
+zookeeper.address: 192.168.10.199:2181
+zookeeper.path.root: /fluss
+
+# When running in distributed mode, be sure to point to a remote path—
+# e.g. oss://bucket/path for OSS or hdfs://namenode:port/path for HDFS.
+# Otherwise, queries will fail with a “No such file or directory” error.
+remote.data.dir: hdfs://namenode:port/tmp/fluss-remote-data
+```
+
+### Starting CoordinatorServer HA
+
+To deploy a Fluss cluster with CoordinatorServer HA, you should first start a CoordinatorServer instance on **Node0**.
+Then, start the second CoordinatorServer instance on **Node4**.
+
+**CoordinatorServer**
+
+On **Node0** and **Node4**, start a CoordinatorServer as follows.
+
+```shell
+./bin/coordinator-server.sh start
+```
+
+After that, you have successfully deployed a distributed Fluss cluster with CoordinatorServer HA.
+
+
 ## Interacting with Fluss
 
 After the Fluss cluster is started, you can use **Fluss Client** (e.g., Flink SQL Client) to interact with Fluss.
@@ -169,12 +228,25 @@ You can start a Flink standalone cluster refer to [Flink Environment Preparation
 #### Add catalog
 
 In Flink SQL client, a catalog is created and named by executing the following query:
+
+- Single CoordinatorServer:
+
 ```sql title="Flink SQL"
 CREATE CATALOG fluss_catalog WITH (
   'type' = 'fluss',
   'bootstrap.servers' = '192.168.10.100:9123'
 );
 ```
+
+- CoordinatorServer HA:
+
+```sql title="Flink SQL"
+CREATE CATALOG fluss_catalog WITH (
+  'type' = 'fluss',
+  'bootstrap.servers' = '192.168.10.100:9123,192.168.10.104:9123'
+);
+```
+
 
 #### Do more with Fluss
 

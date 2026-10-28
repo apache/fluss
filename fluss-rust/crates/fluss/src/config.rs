@@ -42,7 +42,14 @@ const DEFAULT_WRITER_KV_BACKPRESSURE_MAX_THROTTLE_MS: u64 = 3000;
 
 const MAX_IN_FLIGHT_REQUESTS_PER_BUCKET_FOR_IDEMPOTENCE: usize = 5;
 const DEFAULT_ACKS: &str = "all";
-const DEFAULT_CONNECT_TIMEOUT_MS: u64 = 120_000;
+const DEFAULT_CONNECT_TIMEOUT_MS: u64 = 15_000;
+// Wait this long before resending a batch the server rejected with a retriable
+// error, doubling up to `DEFAULT_WRITER_RETRY_MAX_BACKOFF_MS`. Shaped like
+// Kafka's `retry.backoff.ms` / `retry.backoff.max.ms`, whose defaults are 100ms
+// and 1s. Without a backoff a transient rejection is resent on every sender poll
+// cycle, which turns one unhealthy leader into a request storm.
+const DEFAULT_WRITER_RETRY_BACKOFF_MS: u64 = 100;
+const DEFAULT_WRITER_RETRY_MAX_BACKOFF_MS: u64 = 1000;
 const DEFAULT_SECURITY_PROTOCOL: &str = "PLAINTEXT";
 const DEFAULT_SASL_MECHANISM: &str = "PLAIN";
 
@@ -77,6 +84,20 @@ pub struct Config {
     #[arg(long, default_value_t = DEFAULT_RETRIES)]
     pub writer_retries: i32,
 
+    /// Initial delay before a batch rejected with a retriable error is resent.
+    /// The delay doubles per attempt, up to `writer_retry_max_backoff_ms`, and
+    /// carries +/-20% jitter so buckets failing together do not resend in
+    /// lockstep. Mirrors Kafka's `retry.backoff.ms`. 0 resends immediately.
+    /// Default: 100.
+    #[arg(long, default_value_t = DEFAULT_WRITER_RETRY_BACKOFF_MS)]
+    pub writer_retry_backoff_ms: u64,
+
+    /// Ceiling for the exponentially growing retry delay. Mirrors Kafka's
+    /// `retry.backoff.max.ms`. Keeping it low bounds how long a bucket stays
+    /// idle after its leader becomes healthy again. Default: 1000.
+    #[arg(long, default_value_t = DEFAULT_WRITER_RETRY_MAX_BACKOFF_MS)]
+    pub writer_retry_max_backoff_ms: u64,
+
     #[arg(long, default_value_t = DEFAULT_WRITER_BATCH_SIZE)]
     pub writer_batch_size: i32,
 
@@ -108,6 +129,11 @@ pub struct Config {
     /// Download path always uses streaming reader.
     #[arg(long, default_value_t = DEFAULT_SCANNER_REMOTE_LOG_READ_CONCURRENCY)]
     pub scanner_remote_log_read_concurrency: usize,
+
+    /// Parent directory for downloaded remote logs. None uses the OS temporary directory plus `/fluss`.
+    /// Missing parent directories are created when a remote file is downloaded.
+    #[arg(long)]
+    pub scanner_io_tmp_dir: Option<String>,
 
     /// Maximum number of records returned in a single call to poll() for LogScanner.
     /// Default: 500 (matching Java CLIENT_SCANNER_LOG_MAX_POLL_RECORDS)
@@ -170,7 +196,7 @@ pub struct Config {
     pub writer_kv_backpressure_max_throttle_ms: u64,
 
     /// Connect timeout in milliseconds for TCP transport connect.
-    /// Default: 120000 (120 seconds).
+    /// Default: 15000 (15 seconds), matching Java `client.connect-timeout`.
     #[arg(long, default_value_t = DEFAULT_CONNECT_TIMEOUT_MS)]
     pub connect_timeout_ms: u64,
 
@@ -219,6 +245,11 @@ impl std::fmt::Debug for Config {
             .field("writer_request_max_size", &self.writer_request_max_size)
             .field("writer_acks", &self.writer_acks)
             .field("writer_retries", &self.writer_retries)
+            .field("writer_retry_backoff_ms", &self.writer_retry_backoff_ms)
+            .field(
+                "writer_retry_max_backoff_ms",
+                &self.writer_retry_max_backoff_ms,
+            )
             .field("writer_batch_size", &self.writer_batch_size)
             .field(
                 "writer_dynamic_batch_size_enabled",
@@ -236,6 +267,7 @@ impl std::fmt::Debug for Config {
                 "scanner_remote_log_prefetch_num",
                 &self.scanner_remote_log_prefetch_num,
             )
+            .field("scanner_io_tmp_dir", &self.scanner_io_tmp_dir)
             .field(
                 "remote_file_download_thread_num",
                 &self.remote_file_download_thread_num,
@@ -299,6 +331,8 @@ impl Default for Config {
             writer_request_max_size: DEFAULT_REQUEST_MAX_SIZE,
             writer_acks: String::from(DEFAULT_ACKS),
             writer_retries: i32::MAX,
+            writer_retry_backoff_ms: DEFAULT_WRITER_RETRY_BACKOFF_MS,
+            writer_retry_max_backoff_ms: DEFAULT_WRITER_RETRY_MAX_BACKOFF_MS,
             writer_batch_size: DEFAULT_WRITER_BATCH_SIZE,
             writer_dynamic_batch_size_enabled: DEFAULT_WRITER_DYNAMIC_BATCH_SIZE_ENABLED,
             writer_dynamic_batch_size_min: DEFAULT_WRITER_DYNAMIC_BATCH_SIZE_MIN,
@@ -306,6 +340,7 @@ impl Default for Config {
             scanner_remote_log_prefetch_num: DEFAULT_PREFETCH_NUM,
             remote_file_download_thread_num: DEFAULT_DOWNLOAD_THREADS,
             scanner_remote_log_read_concurrency: DEFAULT_SCANNER_REMOTE_LOG_READ_CONCURRENCY,
+            scanner_io_tmp_dir: None,
             scanner_log_max_poll_records: DEFAULT_MAX_POLL_RECORDS,
             scanner_log_fetch_max_bytes: DEFAULT_SCANNER_LOG_FETCH_MAX_BYTES,
             scanner_log_fetch_min_bytes: DEFAULT_SCANNER_LOG_FETCH_MIN_BYTES,

@@ -21,13 +21,21 @@ import org.apache.fluss.config.ConfigBuilder;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FileSystemPlugin;
+import org.apache.fluss.fs.gs.token.GSSecurityTokenReceiver;
 
 import com.google.cloud.hadoop.fs.gcs.GoogleHadoopFileSystem;
+import com.google.cloud.hadoop.util.HadoopCredentialConfiguration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.net.URI;
+import java.util.List;
+
+import static com.google.cloud.hadoop.fs.gcs.GoogleHadoopFileSystemConfiguration.DELEGATION_TOKEN_BINDING_CLASS;
+import static com.google.cloud.hadoop.util.HadoopCredentialConfiguration.SERVICE_ACCOUNT_JSON_KEYFILE_SUFFIX;
+import static com.google.cloud.hadoop.util.HadoopCredentialConfiguration.SERVICE_ACCOUNT_KEYFILE_SUFFIX;
+import static com.google.cloud.hadoop.util.HadoopCredentialConfiguration.SERVICE_ACCOUNT_PRIVATE_KEY_ID_SUFFIX;
 
 /** Simple factory for the Google Cloud Storage file system. */
 public class GSFileSystemPlugin implements FileSystemPlugin {
@@ -37,6 +45,11 @@ public class GSFileSystemPlugin implements FileSystemPlugin {
 
     private static final String HADOOP_CONFIG_PREFIX = "fs.gs.";
 
+    private static final String GCS_CONFIG_PREFIX = "fs.gs";
+
+    private static final List<String> CREDENTIAL_KEY_PREFIXES =
+            HadoopCredentialConfiguration.getConfigKeyPrefixes(GCS_CONFIG_PREFIX);
+
     @Override
     public String getScheme() {
         return "gs";
@@ -45,6 +58,13 @@ public class GSFileSystemPlugin implements FileSystemPlugin {
     @Override
     public FileSystem create(URI fsUri, Configuration flussConfig) throws IOException {
         org.apache.hadoop.conf.Configuration hadoopConfig = getHadoopConfiguration(flussConfig);
+        // Use the token received from the Fluss server only when no credentials are configured.
+        // The gate is on an already received token: servers never receive one, and a client
+        // whose server cannot issue tokens keeps its ambient credentials as before.
+        if (GSSecurityTokenReceiver.getAccessToken() != null
+                && !hasConfiguredCredentials(hadoopConfig)) {
+            GSSecurityTokenReceiver.updateHadoopConfig(hadoopConfig);
+        }
 
         // create the Google Hadoop FileSystem
         org.apache.hadoop.fs.FileSystem fs = new GoogleHadoopFileSystem();
@@ -73,6 +93,31 @@ public class GSFileSystemPlugin implements FileSystemPlugin {
             }
         }
         return conf;
+    }
+
+    /** Whether the connector is configured with credentials of its own, not ambient ones. */
+    private static boolean hasConfiguredCredentials(
+            org.apache.hadoop.conf.Configuration hadoopConfig) {
+        return isNotEmpty(
+                        SERVICE_ACCOUNT_JSON_KEYFILE_SUFFIX
+                                .withPrefixes(CREDENTIAL_KEY_PREFIXES)
+                                .get(hadoopConfig, hadoopConfig::get))
+                || isNotEmpty(
+                        SERVICE_ACCOUNT_KEYFILE_SUFFIX
+                                .withPrefixes(CREDENTIAL_KEY_PREFIXES)
+                                .get(hadoopConfig, hadoopConfig::get))
+                || isNotEmpty(
+                        SERVICE_ACCOUNT_PRIVATE_KEY_ID_SUFFIX
+                                .withPrefixes(CREDENTIAL_KEY_PREFIXES)
+                                .getPassword(hadoopConfig))
+                || HadoopCredentialConfiguration.getAccessTokenProviderImplClass(
+                                hadoopConfig, GCS_CONFIG_PREFIX)
+                        != null
+                || isNotEmpty(DELEGATION_TOKEN_BINDING_CLASS.get(hadoopConfig, hadoopConfig::get));
+    }
+
+    private static boolean isNotEmpty(String value) {
+        return value != null && !value.isEmpty();
     }
 
     private URI getInitURI(URI fsUri, org.apache.hadoop.conf.Configuration hadoopConfig) {

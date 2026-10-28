@@ -35,12 +35,18 @@ public class ArrowWalBuilder implements WalBuilder {
     private final ManagedPagedOutputView outputView;
     private final MemoryLogRecordsArrowBuilder recordsBuilder;
 
-    public ArrowWalBuilder(int schemaId, ArrowWriter writer, MemorySegmentPool memorySegmentPool)
+    /** Creates a WAL builder with optional append-only encoding (without a change-type vector). */
+    public ArrowWalBuilder(
+            int schemaId,
+            ArrowWriter writer,
+            MemorySegmentPool memorySegmentPool,
+            boolean appendOnly)
             throws IOException {
         this.memorySegmentPool = memorySegmentPool;
         this.outputView = new ManagedPagedOutputView(memorySegmentPool);
         this.recordsBuilder =
-                MemoryLogRecordsArrowBuilder.builder(schemaId, writer, outputView, false, null);
+                MemoryLogRecordsArrowBuilder.builder(
+                        schemaId, writer, outputView, appendOnly, null);
     }
 
     @Override

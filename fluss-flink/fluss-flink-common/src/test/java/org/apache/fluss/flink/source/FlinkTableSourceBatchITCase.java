@@ -104,7 +104,7 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
         String tableName = prepareSourceTable(new String[] {"name", "id"}, null);
         String query = String.format("SELECT * FROM %s WHERE id = 1 AND name = 'name1'", tableName);
 
-        assertThat(tEnv.explainSql(query))
+        assertThat(FlinkTableSourceITCase.withLowerCaseAnd(tEnv.explainSql(query)))
                 .contains(
                         String.format(
                                 "TableSourceScan(table=[[testcatalog, %s, %s, "
@@ -121,7 +121,7 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
         String tableName = prepareSourceTable(new String[] {"id", "name"}, null);
         String query = String.format("SELECT * FROM %s WHERE id = 1 AND name = 'name1'", tableName);
 
-        assertThat(tEnv.explainSql(query))
+        assertThat(FlinkTableSourceITCase.withLowerCaseAnd(tEnv.explainSql(query)))
                 .contains(
                         String.format(
                                 "TableSourceScan(table=[[testcatalog, %s, %s, "
@@ -162,7 +162,7 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
         String query =
                 String.format("SELECT * FROM %s WHERE id = 1 AND dt='%s'", tableName, partition1);
 
-        assertThat(tEnv.explainSql(query))
+        assertThat(FlinkTableSourceITCase.withLowerCaseAnd(tEnv.explainSql(query)))
                 .contains(
                         String.format(
                                 "TableSourceScan(table=[[testcatalog, %s, %s, "

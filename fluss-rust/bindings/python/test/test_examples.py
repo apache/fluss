@@ -59,6 +59,9 @@ EXAMPLES = _discover_examples()
 
 def test_examples_discovered():
     assert EXAMPLES, f"No runnable examples found in {EXAMPLES_DIR}"
+    assert "prefix_lookup" in {example.id for example in EXAMPLES}, (
+        "The prefix lookup example must be included in the CI example suite"
+    )
 
 
 @pytest.mark.parametrize("example_main", EXAMPLES)

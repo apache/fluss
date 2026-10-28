@@ -8,7 +8,7 @@ sidebar_position: 3
 ## Introduction
 
 [Lance](https://lancedb.github.io/lance/) is a modern table format optimized for machine learning and AI applications. 
-To integrate Fluss with Lance, you must enable lakehouse storage and configure Lance as the lakehouse storage. For more details, see [Deploying Streaming Lakehouse](../../install-deploy/deploying-streaming-lakehouse.md).
+To integrate Fluss with Lance, you must enable lakehouse storage and configure Lance as the lakehouse storage. For more details, see [Deploying Lakestream](../../install-deploy/deploying-streaming-lakehouse.md).
 
 ## Dependencies
 
@@ -69,7 +69,7 @@ CREATE TABLE fluss_order_with_lake (
 ```
 
 ### Start Tiering Service to Lance
-Then, you must start the datalake tiering service to tier Fluss's data to Lance. For guidance, you can refer to [Deploying Streaming Lakehouse](../../install-deploy/deploying-streaming-lakehouse.md). Although the example uses Paimon, the process is also applicable to Lance.
+Then, you must start the datalake tiering service to tier Fluss's data to Lance. For guidance, you can refer to [Deploying Lakestream](../../install-deploy/deploying-streaming-lakehouse.md). Although the example uses Paimon, the process is also applicable to Lance.
 
 For required JARs, you should follow this guidance:
 - Put the Fluss Flink connector JAR into `${FLINK_HOME}/lib`; pick the connector matching your Flink version (see [Dependencies](../../engine-flink/getting-started.md#dependencies)). For Flink 1.20, use [fluss-flink-1.20-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-flink-1.20/$FLUSS_VERSION$/fluss-flink-1.20-$FLUSS_VERSION$.jar).
@@ -89,7 +89,7 @@ Make sure to use Lance-specific configurations as parameters when starting the F
     --datalake.lance.access_key_id <access_key_id>
 ```
 
-> **NOTE**: Fluss v0.8 only supports tiering log tables to Lance.
+> **NOTE**: Fluss v$FLUSS_VERSION_SHORT$ currently supports tiering Log Tables to Lance only.
 
 > **NOTE**: The Lance connector leverages Arrow Java library, which operates on off-heap memory. To prevent `java.lang.OutOfMemoryError: Direct buffer memory` error in Flink Task Manager, please increase the value of `taskmanager.memory.task.off-heap.size` in `<FLINK_HOME>/conf/config.yaml` to at least `'512m'` (e.g., `taskmanager.memory.task.off-heap.size: 512m`). You may need to adjust this value higher (such as `'1g'`) depending on your workload and data size.
 
@@ -169,8 +169,7 @@ CREATE TABLE product_embeddings (
     product_id BIGINT,
     product_name STRING,
     embedding ARRAY<FLOAT>,
-    tags ARRAY<STRING>,
-    PRIMARY KEY (product_id) NOT ENFORCED
+    tags ARRAY<STRING>
 ) WITH (
     'table.datalake.enabled' = 'true',
     'table.datalake.freshness' = '30s'

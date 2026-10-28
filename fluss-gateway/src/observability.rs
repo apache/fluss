@@ -21,8 +21,10 @@
 //! and label sets. Families for future capabilities are added alongside their implementations.
 //!
 //! Labels describe an operation or a bounded outcome. `cluster`, sourced from validated configuration, is the
-//! only resource-name label the gateway itself emits.
+//! only resource-name label the gateway itself emits. Configured Gateway and instance identities are attached
+//! to every family as global labels.
 
+use crate::config::ServerConfig;
 use log::{LevelFilter, Log, Metadata, Record};
 use metrics::Unit;
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
@@ -51,6 +53,12 @@ impl Log for StderrLogger {
 
 static LOGGER: StderrLogger = StderrLogger;
 static METRICS_HANDLE: OnceLock<PrometheusHandle> = OnceLock::new();
+
+const GATEWAY_ID_LABEL: &str = "gateway_id";
+const INSTANCE_ID_LABEL: &str = "instance_id";
+const HOST_LABEL: &str = "host";
+#[cfg(test)]
+const IDENTITY_LABELS: &[&str] = &[GATEWAY_ID_LABEL, INSTANCE_ID_LABEL, HOST_LABEL];
 
 /// Buckets for the duration histograms, spanning a fast local answer to a request that runs into the
 /// configured deadline.
@@ -197,20 +205,33 @@ pub fn init_logging() {
 }
 
 /// Installs the process-wide Prometheus recorder before the Fluss client creates metric handles.
-pub fn init_metrics(enabled: bool) -> Result<(), String> {
-    if !enabled || METRICS_HANDLE.get().is_some() {
+pub fn init_metrics(server: &ServerConfig) -> Result<(), String> {
+    if !server.metrics.enabled || METRICS_HANDLE.get().is_some() {
         return Ok(());
     }
-    let recorder = PrometheusBuilder::new()
-        .set_buckets(DURATION_BUCKETS)
-        .map_err(|error| format!("failed to configure histogram buckets: {error}"))?
-        .build_recorder();
+    let recorder = prometheus_builder(server)?.build_recorder();
     let handle = recorder.handle();
     metrics::set_global_recorder(recorder)
         .map_err(|error| format!("failed to install Prometheus recorder: {error}"))?;
     let _ = METRICS_HANDLE.set(handle);
     describe_metrics();
     Ok(())
+}
+
+fn prometheus_builder(server: &ServerConfig) -> Result<PrometheusBuilder, String> {
+    let mut builder = PrometheusBuilder::new()
+        .set_buckets(DURATION_BUCKETS)
+        .map_err(|error| format!("failed to configure histogram buckets: {error}"))?;
+    for (key, value) in [
+        (GATEWAY_ID_LABEL, server.gateway_id.as_deref()),
+        (INSTANCE_ID_LABEL, server.instance_id.as_deref()),
+        (HOST_LABEL, server.host.as_deref()),
+    ] {
+        if let Some(value) = value {
+            builder = builder.add_global_label(key, value.to_string());
+        }
+    }
+    Ok(builder)
 }
 
 /// Records one completed REST request against the matched route template, never the raw URI.
@@ -518,6 +539,11 @@ mod tests {
                 assert!(
                     !FORBIDDEN.contains(label),
                     "metric {} has forbidden label {label}",
+                    definition.name
+                );
+                assert!(
+                    !IDENTITY_LABELS.contains(label),
+                    "metric {} shadows global identity label {label}",
                     definition.name
                 );
             }

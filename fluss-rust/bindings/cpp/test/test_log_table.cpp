@@ -26,6 +26,7 @@
 #include <limits>
 #include <thread>
 #include <tuple>
+#include <unordered_map>
 
 #include "test_utils.h"
 
@@ -555,6 +556,9 @@ TEST_F(LogTableTest, LimitScan) {
     for (const auto& b : first) {
         EXPECT_EQ(b->GetTableId(), table_id);
         EXPECT_EQ(b->GetBucketId(), 0);
+        // A limit scan merges every log batch it read into one Arrow batch, so
+        // there is no single commit timestamp to report.
+        EXPECT_EQ(b->GetCommitTimestamp(), fluss::ArrowRecordBatch::NO_COMMIT_TIMESTAMP);
         rows += b->NumRows();
     }
     // The server may return fewer rows than the limit, but never more.
@@ -1037,6 +1041,56 @@ TEST_F(LogTableTest, TestPollBatches) {
         ASSERT_FALSE(proj_batches.Empty());
         EXPECT_EQ(proj_batches[0]->GetArrowRecordBatch()->num_columns(), 1)
             << "Projected batch should have 1 column (id), not 2";
+    }
+
+    // Test 6: the record and batch paths read the same commit timestamp off the
+    // same log batch header, so they must agree for every offset a batch
+    // covers. This is exact and clock-independent, unlike a "looks like a
+    // recent timestamp" bound, and it also catches a batch that was handed some
+    // other log batch's timestamp.
+    {
+        fluss::Table record_table;
+        ASSERT_OK(conn.GetTable(table_path, record_table));
+        auto record_scan = record_table.NewScan();
+        fluss::LogScanner record_scanner;
+        ASSERT_OK(record_scan.CreateLogScanner(record_scanner));
+        ASSERT_OK(record_scanner.Subscribe(0, 0));
+
+        std::vector<std::pair<int64_t, int64_t>> record_stamps;
+        fluss_test::PollRecords(
+            record_scanner, 8,
+            [](const fluss::ScanRecord& rec) { return std::make_pair(rec.offset, rec.timestamp); },
+            record_stamps);
+        ASSERT_FALSE(record_stamps.empty());
+        const std::unordered_map<int64_t, int64_t> timestamp_by_offset(record_stamps.begin(),
+                                                                      record_stamps.end());
+
+        fluss::Table batch_table;
+        ASSERT_OK(conn.GetTable(table_path, batch_table));
+        auto batch_scan = batch_table.NewScan();
+        fluss::RecordBatchLogScanner batch_scanner;
+        ASSERT_OK(batch_scan.CreateRecordBatchLogScanner(batch_scanner));
+        ASSERT_OK(batch_scanner.Subscribe(0, 0));
+
+        fluss::ArrowRecordBatches parity_batches;
+        ASSERT_OK(batch_scanner.Poll(10000, parity_batches));
+        ASSERT_FALSE(parity_batches.Empty());
+
+        int checked = 0;
+        for (const auto& batch : parity_batches) {
+            for (int64_t offset = batch->GetBaseOffset(); offset <= batch->GetLastOffset();
+                 ++offset) {
+                auto found = timestamp_by_offset.find(offset);
+                ASSERT_TRUE(found != timestamp_by_offset.end())
+                    << "the record path never reported offset " << offset;
+                EXPECT_EQ(batch->GetCommitTimestamp(), found->second)
+                    << "batch at offset " << batch->GetBaseOffset() << " reports "
+                    << batch->GetCommitTimestamp() << ", record at offset " << offset
+                    << " reports " << found->second;
+                ++checked;
+            }
+        }
+        EXPECT_GT(checked, 0) << "no batch offsets were checked";
     }
 
     ASSERT_OK(adm.DropTable(table_path, false));

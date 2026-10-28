@@ -128,10 +128,24 @@ async fn run_limit_scan(pending: &PendingScan, bucket: &TableBucket) -> Result<S
     let leader = pending
         .metadata
         .leader_for(&pending.table_info.table_path, bucket)
-        .await?
-        .ok_or_else(|| {
-            Error::leader_not_available(format!("No leader found for table bucket: {bucket}"))
-        })?;
+        .await?;
+    let bucket_count = pending
+        .metadata
+        .get_cluster()
+        .bucket_count(bucket.table_or_partition());
+    if let Some(bucket_count) = bucket_count {
+        if bucket.bucket_id() >= bucket_count {
+            return Err(Error::IllegalArgument {
+                message: format!(
+                    "Bucket id {} out of range for {bucket_count} buckets",
+                    bucket.bucket_id()
+                ),
+            });
+        }
+    }
+    let leader = leader.ok_or_else(|| {
+        Error::leader_not_available(format!("No leader found for table bucket: {bucket}"))
+    })?;
     let connection = pending.rpc_client.get_connection(&leader).await?;
 
     let request = LimitScanRequest::new(
@@ -139,7 +153,8 @@ async fn run_limit_scan(pending: &PendingScan, bucket: &TableBucket) -> Result<S
         bucket.partition_id(),
         bucket.bucket_id(),
         pending.limit,
-    );
+    )
+    .with_routing_bucket_count(bucket_count);
     let response = connection.request(request).await?;
 
     if let Some(error_code) = response.error_code

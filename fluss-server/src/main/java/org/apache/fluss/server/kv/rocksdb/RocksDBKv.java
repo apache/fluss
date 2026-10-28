@@ -22,21 +22,22 @@ import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.metrics.Counter;
 import org.apache.fluss.metrics.Histogram;
 import org.apache.fluss.rocksdb.RocksDBOperationUtils;
+import org.apache.fluss.rocksdb.RocksIteratorWrapper;
 import org.apache.fluss.server.kv.KvCloseMode;
 import org.apache.fluss.server.utils.ResourceGuard;
-import org.apache.fluss.utils.BytesUtils;
 import org.apache.fluss.utils.IOUtils;
 
-import org.rocksdb.Cache;
-import org.rocksdb.ColumnFamilyHandle;
-import org.rocksdb.ColumnFamilyOptions;
-import org.rocksdb.MutableDBOptions;
-import org.rocksdb.ReadOptions;
-import org.rocksdb.RocksDB;
-import org.rocksdb.RocksDBException;
-import org.rocksdb.RocksIterator;
-import org.rocksdb.Statistics;
-import org.rocksdb.WriteOptions;
+import io.github.fluss_contrib.rocksdb.Cache;
+import io.github.fluss_contrib.rocksdb.ColumnFamilyHandle;
+import io.github.fluss_contrib.rocksdb.ColumnFamilyOptions;
+import io.github.fluss_contrib.rocksdb.MutableDBOptions;
+import io.github.fluss_contrib.rocksdb.ReadOptions;
+import io.github.fluss_contrib.rocksdb.RocksDB;
+import io.github.fluss_contrib.rocksdb.RocksDBException;
+import io.github.fluss_contrib.rocksdb.RocksIterator;
+import io.github.fluss_contrib.rocksdb.Slice;
+import io.github.fluss_contrib.rocksdb.Statistics;
+import io.github.fluss_contrib.rocksdb.WriteOptions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -44,12 +45,13 @@ import javax.annotation.Nullable;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
-/** A wrapper for the operation of {@link org.rocksdb.RocksDB}. */
+/** A wrapper for the operation of {@link io.github.fluss_contrib.rocksdb.RocksDB}. */
 public class RocksDBKv implements AutoCloseable {
 
     private static final Logger LOG = LoggerFactory.getLogger(RocksDBKv.class);
@@ -209,22 +211,92 @@ public class RocksDBKv implements AutoCloseable {
         }
     }
 
-    public List<byte[]> prefixLookup(byte[] prefixKey) {
-        List<byte[]> pkList = new ArrayList<>();
-        ReadOptions readOptions = new ReadOptions();
-        RocksIterator iterator = db.newIterator(defaultColumnFamilyHandle, readOptions);
+    /**
+     * Fixes a prefix lookup's read view without seeking. The caller must serialize creation with
+     * tablet mutations and close, and must close the returned lookup after use.
+     */
+    public PrefixLookup openPrefixLookup(byte[] prefixKey) throws IOException {
+        ResourceGuard.Lease lease = rocksDBResourceGuard.acquireResource();
+        Slice upperBoundSlice = null;
+        ReadOptions readOptions = null;
+        RocksIterator iterator = null;
         try {
-            iterator.seek(prefixKey);
-            while (iterator.isValid() && BytesUtils.prefixEquals(prefixKey, iterator.key())) {
-                pkList.add(iterator.value());
-                iterator.next();
+            byte[] upperBound = prefixUpperBound(prefixKey);
+            if (upperBound != null) {
+                upperBoundSlice = new Slice(upperBound);
             }
-        } finally {
-            readOptions.close();
-            iterator.close();
+            readOptions = new ReadOptions().setTotalOrderSeek(true);
+            if (upperBoundSlice != null) {
+                readOptions.setIterateUpperBound(upperBoundSlice);
+            }
+            iterator = db.newIterator(defaultColumnFamilyHandle, readOptions);
+            return new PrefixLookup(
+                    prefixKey.clone(), iterator, readOptions, upperBoundSlice, lease);
+        } catch (Throwable t) {
+            IOUtils.closeQuietly(iterator);
+            IOUtils.closeQuietly(readOptions);
+            IOUtils.closeQuietly(upperBoundSlice);
+            lease.close();
+            throw t;
+        }
+    }
+
+    /**
+     * A single-owner prefix read with a fixed iterator view and a lease on its RocksDB instance.
+     */
+    public static class PrefixLookup implements AutoCloseable {
+        private final byte[] prefixKey;
+        private final RocksIteratorWrapper iterator;
+        private final ReadOptions readOptions;
+        // The upper bound must outlive the iterator and read options that reference it.
+        @Nullable private final Slice upperBoundSlice;
+        private final ResourceGuard.Lease lease;
+        private boolean closed;
+
+        private PrefixLookup(
+                byte[] prefixKey,
+                RocksIterator iterator,
+                ReadOptions readOptions,
+                @Nullable Slice upperBoundSlice,
+                ResourceGuard.Lease lease) {
+            this.prefixKey = prefixKey;
+            this.iterator = new RocksIteratorWrapper(iterator);
+            this.readOptions = readOptions;
+            this.upperBoundSlice = upperBoundSlice;
+            this.lease = lease;
         }
 
-        return pkList;
+        /** Seeks and collects values from the view fixed when this lookup was opened. */
+        public List<byte[]> readAll() throws IOException {
+            if (closed) {
+                throw new IOException("Prefix lookup is closed.");
+            }
+            List<byte[]> values = new ArrayList<>();
+            try {
+                iterator.seek(prefixKey);
+                while (iterator.isValid()) {
+                    values.add(iterator.value());
+                    iterator.next();
+                }
+            } catch (RuntimeException e) {
+                if (e.getCause() instanceof RocksDBException) {
+                    throw new IOException("Failed to iterate prefix lookup.", e.getCause());
+                }
+                throw e;
+            }
+            return values;
+        }
+
+        @Override
+        public void close() {
+            if (!closed) {
+                closed = true;
+                IOUtils.closeQuietly(iterator);
+                IOUtils.closeQuietly(readOptions);
+                IOUtils.closeQuietly(upperBoundSlice);
+                lease.close();
+            }
+        }
     }
 
     public List<byte[]> limitScan(Integer limit) {
@@ -481,5 +553,19 @@ public class RocksDBKv implements AutoCloseable {
         int window = level0SlowdownWritesTrigger - flussL0SlowdownTrigger;
         long offset = Math.min(l0Files - flussL0SlowdownTrigger, (long) window - 1);
         return (float) offset / window;
+    }
+
+    /** Returns the exclusive bytewise bound, or null if the prefix has no finite upper bound. */
+    @Nullable
+    private static byte[] prefixUpperBound(byte[] prefix) {
+        for (int i = prefix.length - 1; i >= 0; i--) {
+            if ((prefix[i] & 0xff) != 0xff) {
+                byte[] upperBound = Arrays.copyOf(prefix, i + 1);
+                upperBound[i]++;
+                return upperBound;
+            }
+        }
+        // Empty and all-0xff prefixes match every key at or after the seek position.
+        return null;
     }
 }

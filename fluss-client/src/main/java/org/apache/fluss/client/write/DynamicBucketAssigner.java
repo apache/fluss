@@ -28,9 +28,9 @@ import javax.annotation.Nullable;
 abstract class DynamicBucketAssigner implements BucketAssigner {
 
     @Override
-    public int assignBucket(@Nullable byte[] bucketKey, Cluster cluster) {
-        return assignBucket(cluster);
+    public int assignBucket(@Nullable byte[] bucketKey, Cluster cluster, int bucketCount) {
+        return assignBucket(cluster, bucketCount);
     }
 
-    public abstract int assignBucket(Cluster cluster);
+    public abstract int assignBucket(Cluster cluster, int bucketCount);
 }

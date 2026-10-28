@@ -32,6 +32,8 @@ on:
       - 'fluss-server/**'
       - 'fluss-common/**'
       - 'fluss-dist/**'
+      - 'LICENSE-bin'
+      - 'NOTICE-bin'
       - 'docker/fluss/**'
       - 'fluss-rust/crates/**'
       - 'fluss-rust/bindings/**'
@@ -47,6 +49,8 @@ on:
       - 'fluss-server/**'
       - 'fluss-common/**'
       - 'fluss-dist/**'
+      - 'LICENSE-bin'
+      - 'NOTICE-bin'
       - 'docker/fluss/**'
       - 'fluss-rust/crates/**'
       - 'fluss-rust/bindings/**'
@@ -60,19 +64,23 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
+# At peak hours ubuntu-latest jobs wait over an hour, while jobs on an explicit
+# label start within minutes. So jobs here name a label directly.
 jobs:
   # Decide which client suites to run, mirroring the per-binding scoping the
   # standalone fluss-rust repo had: a client suite runs only when its own
   # sources, the core fluss-rs crate, or the server/proto changed. On non-PR
-  # events (push to main, manual) everything runs.
+  # events (push to main, manual) everything runs. It only needs git and grep,
+  # so the small ubuntu-slim runner is enough.
   detect-changes:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
       python: ${{ steps.filter.outputs.python }}
       cpp: ${{ steps.filter.outputs.cpp }}
       elixir: ${{ steps.filter.outputs.elixir }}
       gateway: ${{ steps.filter.outputs.gateway }}
+      runner: ${{ steps.filter.outputs.runner }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -90,7 +98,7 @@ jobs:
           # a change to this workflow itself should exercise every suite
           has '^\.github/workflows/client-integration\.yml' && all=true || true
           protocol=false; core=false; py=false; cpp=false; ex=false; gateway=false
-          has '^(fluss-rpc/src/main/proto/|fluss-server/|fluss-common/|fluss-dist/|docker/fluss/)' && protocol=true || true
+          has '^(fluss-rpc/src/main/proto/|fluss-server/|fluss-common/|fluss-dist/|LICENSE-bin$|NOTICE-bin$|docker/fluss/)' && protocol=true || true
           has '^(fluss-rust/crates/|fluss-rust/Cargo\.)' && core=true || true
           has '^fluss-rust/bindings/python/' && py=true || true
           has '^fluss-rust/bindings/cpp/' && cpp=true || true
@@ -98,7 +106,11 @@ jobs:
           has '^fluss-gateway/' && gateway=true || true
           # a suite runs if: non-PR (all) OR core crate OR server/proto OR its own sources changed
           gate() { if [ "$all" = true ] || [ "$core" = true ] || [ "$protocol" = true ] || [ "$1" = true ]; then echo true; else echo false; fi; }
+          # PRs run on arm64, whose queue stays short at peak hours. Pushes to main
+          # run on x86, so a merge that breaks only x86 still shows up there.
+          if [ "${{ github.event_name }}" = "pull_request" ]; then runner=ubuntu-24.04-arm; else runner=ubuntu-24.04; fi
           {
+            echo "runner=$runner"
             echo "rust=$(gate false)"
             echo "python=$(gate $py)"
             echo "cpp=$(gate $cpp)"
@@ -107,12 +119,14 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
   # Build the server image from THIS source tree once; cache it on server/proto
-  # hashes so client-only PRs restore it instead of rebuilding. The saved image
-  # is uploaded as an artifact and loaded by every client integration job.
+  # hashes so client-only PRs restore it instead of rebuilding. The key also
+  # holds the CPU architecture, because PRs and main run on different ones.
+  # The saved image is uploaded as an artifact and loaded by every client
+  # integration job.
   build-server-image:
     needs: detect-changes
     if: needs.detect-changes.outputs.rust == 'true' || needs.detect-changes.outputs.python == 'true' || needs.detect-changes.outputs.cpp == 'true' || needs.detect-changes.outputs.elixir == 'true' || needs.detect-changes.outputs.gateway == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.detect-changes.outputs.runner }}
     steps:
       - uses: actions/checkout@v6
 
@@ -121,7 +135,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /tmp/fluss-dev.tar
-          key: fluss-dev-image-${{ hashFiles('fluss-server/**', 'fluss-common/**', 'fluss-rpc/**', 'fluss-dist/**', 'docker/fluss/**', 'pom.xml') }}
+          key: fluss-dev-image-${{ runner.arch }}-${{ hashFiles('fluss-server/**', 'fluss-common/**', 'fluss-rpc/**', 'fluss-dist/**', 'LICENSE-bin', 'NOTICE-bin', 'docker/fluss/**', 'pom.xml') }}
 
       - name: Set up JDK 17
         if: steps.image-cache.outputs.cache-hit != 'true'
@@ -135,10 +149,14 @@ jobs:
         if: steps.image-cache.outputs.cache-hit != 'true'
         run: |
           ./mvnw -B --no-transfer-progress clean package -pl fluss-dist -am -DskipTests
+          cmp LICENSE-bin build-target/LICENSE
+          cmp NOTICE-bin build-target/NOTICE
           rm -rf docker/fluss/build-target
           mkdir -p docker/fluss/build-target
           cp -r build-target/* docker/fluss/build-target/
           docker build -t fluss:dev docker/fluss
+          docker run --rm --network none --read-only --entrypoint /bin/sh fluss:dev \
+            -c 'test -s /opt/fluss/LICENSE && test -s /opt/fluss/NOTICE'
           docker save fluss:dev -o /tmp/fluss-dev.tar
 
       - name: Upload server image
@@ -152,7 +170,7 @@ jobs:
     needs: [detect-changes, build-server-image]
     if: needs.detect-changes.outputs.rust == 'true'
     timeout-minutes: 60
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.detect-changes.outputs.runner }}
     defaults:
       run:
         working-directory: fluss-rust
@@ -181,7 +199,7 @@ jobs:
     needs: [detect-changes, build-server-image]
     if: needs.detect-changes.outputs.gateway == 'true'
     timeout-minutes: 60
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.detect-changes.outputs.runner }}
     defaults:
       run:
         working-directory: fluss-gateway
@@ -216,7 +234,7 @@ jobs:
     needs: [detect-changes, build-server-image]
     if: needs.detect-changes.outputs.python == 'true'
     timeout-minutes: 60
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.detect-changes.outputs.runner }}
     strategy:
       matrix:
         python: ["3.9", "3.10", "3.11", "3.12"]
@@ -240,7 +258,7 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - name: Install uv
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
       - name: Rust Cache
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
@@ -280,7 +298,7 @@ jobs:
     needs: [detect-changes]
     if: needs.detect-changes.outputs.python == 'true'
     timeout-minutes: 30
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.detect-changes.outputs.runner }}
     defaults:
       run:
         working-directory: fluss-rust
@@ -291,7 +309,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install uv
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
       - name: Rust Cache
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
@@ -312,7 +330,7 @@ jobs:
     needs: [detect-changes, build-server-image]
     if: needs.detect-changes.outputs.cpp == 'true'
     timeout-minutes: 60
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.detect-changes.outputs.runner }}
     defaults:
       run:
         working-directory: fluss-rust
@@ -340,7 +358,7 @@ jobs:
         with:
           workspaces: fluss-rust
       - name: Setup sccache
-        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
       - name: Build fluss-test-cluster binary
         run: cargo build -p fluss-test-cluster
       - name: Build C++ bindings and tests
@@ -366,7 +384,7 @@ jobs:
     needs: [detect-changes, build-server-image]
     if: needs.detect-changes.outputs.elixir == 'true'
     timeout-minutes: 60
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.detect-changes.outputs.runner }}
     defaults:
       run:
         working-directory: fluss-rust
@@ -386,7 +404,7 @@ jobs:
       - name: Load server image
         run: docker load -i /tmp/fluss-dev.tar
       - name: Set up BEAM
-        uses: erlef/setup-beam@fc68ffb90438ef2936bbb3251622353b3dcb2f93 # v1.24.0
+        uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
         with:
           otp-version: ${{ env.OTP_VERSION }}
           elixir-version: ${{ env.ELIXIR_VERSION }}

@@ -22,11 +22,17 @@ Complete API reference for the Fluss Python client.
 | `scanner_remote_log_prefetch_num`     | `scanner.remote-log.prefetch-num`     | Get/set number of remote log segments to prefetch                                       |
 | `remote_file_download_thread_num`     | `remote-file.download-thread-num`     | Get/set number of threads for remote log downloads                                      |
 | `scanner_remote_log_read_concurrency` | `scanner.remote-log.read-concurrency` | Get/set streaming read concurrency within a remote log file                             |
+| `scanner_io_tmp_dir`                  | `scanner.io.tmpdir`                  | Parent for remote log downloads; `None` uses the OS temporary directory plus `/fluss`                |
 | `scanner_log_max_poll_records`        | `scanner.log.max-poll-records`        | Get/set max number of records returned in a single poll()                               |
 | `scanner_log_fetch_max_bytes`         | `scanner.log.fetch.max-bytes`         | Get/set maximum bytes per fetch response for LogScanner                                 |
 | `scanner_log_fetch_min_bytes`         | `scanner.log.fetch.min-bytes`         | Get/set minimum bytes the server must accumulate before returning a fetch response      |
 | `scanner_log_fetch_wait_max_time_ms`  | `scanner.log.fetch.wait-max-time-ms`  | Get/set maximum time (ms) the server may wait to satisfy min-bytes                      |
 | `scanner_log_fetch_max_bytes_for_bucket` | `scanner.log.fetch.max-bytes-for-bucket` | Get/set maximum bytes per fetch response per bucket for LogScanner                |
+| `lookup_queue_size`                   | `lookup.queue-size`                   | Get/set maximum number of pending lookups (default `25600`)                             |
+| `lookup_max_batch_size`               | `lookup.max-batch-size`               | Get/set maximum number of lookups merged into one request (default `128`)               |
+| `lookup_batch_timeout_ms`             | `lookup.batch-timeout-ms`             | Get/set maximum time in ms a lookup waits for its batch to fill (default `100`)         |
+| `lookup_max_inflight_requests`        | `lookup.max-inflight-requests`        | Get/set maximum number of unacknowledged lookup requests (default `128`)                |
+| `lookup_max_retries`                  | `lookup.max-retries`                  | Get/set maximum number of lookup retries (default `2147483647`)                         |
 | `connect_timeout_ms`                  | `connect-timeout`                     | Get/set TCP connect timeout in milliseconds                                             |
 | `security_protocol`                   | `security.protocol`                   | Get/set security protocol (`"PLAINTEXT"` or `"sasl"`)                                   |
 | `security_sasl_mechanism`             | `security.sasl.mechanism`             | Get/set SASL mechanism (only `"PLAIN"` is supported)                                    |
@@ -314,12 +320,17 @@ for record in scan_records:
 
 ## `RecordBatch`
 
-| Property                   | Description                  |
-|----------------------------|------------------------------|
-| `.batch -> pa.RecordBatch` | Arrow RecordBatch data       |
-| `.bucket -> TableBucket`   | Bucket this batch belongs to |
-| `.base_offset -> int`      | First record offset          |
-| `.last_offset -> int`      | Last record offset           |
+| Property                   | Description                       |
+|----------------------------|-----------------------------------|
+| `.batch -> pa.RecordBatch` | Arrow RecordBatch data            |
+| `.bucket -> TableBucket`   | Bucket this batch belongs to      |
+| `.base_offset -> int`      | First record offset               |
+| `.last_offset -> int`      | Last record offset                |
+| `.commit_timestamp -> int` | Commit time in epoch milliseconds |
+
+`.commit_timestamp` is `fluss.NO_COMMIT_TIMESTAMP` (`-1`) when the batch carries
+no single timestamp, which is the case for a limit scan because it merges several
+log batches into one Arrow batch.
 
 ## `Schema`
 
@@ -371,10 +382,11 @@ for record in scan_records:
 
 ## `PartitionInfo`
 
-| Property                 |  Description   |
-|--------------------------|----------------|
-| `.partition_id -> int`   | Partition ID   |
-| `.partition_name -> str` | Partition name |
+| Property                 |  Description           |
+|--------------------------|------------------------|
+| `.partition_id -> int`   | Partition ID           |
+| `.partition_name -> str` | Partition name         |
+| `.bucket_count -> int`   | Partition bucket count |
 
 ## `DatabaseDescriptor`
 

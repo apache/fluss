@@ -129,6 +129,25 @@ message CreateTableRequest {
 message CreateTableResponse {
 }
 
+message CreateTableFromLakeRequest {
+  required PbTablePath table_path = 1;
+  repeated PbKeyValue options = 2;
+}
+
+message CreateTableFromLakeResponse {
+  required PbTableInfo table_info = 1;
+}
+
+message PbTableInfo {
+  required int64 table_id = 1;
+  required int32 schema_id = 2;
+  required bytes table_json = 3;
+  required int64 created_time = 4;
+  required int64 modified_time = 5;
+  optional string remote_data_dir = 6;
+  optional int64 bucket_count_epoch = 7;
+}
+
 // alter table request and response
 message AlterTableRequest {
   required PbTablePath table_path = 1;
@@ -138,6 +157,11 @@ message AlterTableRequest {
   repeated PbDropColumn drop_columns = 5;
   repeated PbRenameColumn rename_columns = 6;
   repeated PbModifyColumn modify_columns = 7;
+  optional PbModifyBucketCount modify_bucket_count = 8;
+}
+
+message PbModifyBucketCount {
+  required int32 new_bucket_count = 1;
 }
 
 message AlterTableResponse {
@@ -157,6 +181,19 @@ message GetTableInfoResponse {
   required int64 created_time = 4;
   required int64 modified_time = 5;
   optional string remote_data_dir = 6;
+  optional int64 bucket_count_epoch = 7;
+}
+
+// describe buckets request and response
+message DescribeBucketsRequest {
+  required PbTablePath table_path = 1;
+  optional PbPartitionSpec partition_spec = 2;
+}
+
+message DescribeBucketsResponse {
+  required PbTablePath table_path = 1;
+  required int64 table_id = 2;
+  repeated PbBucketInfo bucket_info = 3;
 }
 
 // list tables request and response
@@ -214,6 +251,18 @@ message UpdateMetadataRequest {
 }
 
 message UpdateMetadataResponse {
+}
+
+// describe cluster request and response
+message DescribeClusterRequest {
+}
+
+message DescribeClusterResponse {
+  optional PbServerNode coordinator_server = 1;
+  // Live tablet servers with addresses, racks and server tags.
+  repeated PbServerNode tablet_servers = 2;
+  // Also includes offline servers with assigned replicas. Missing loads are not zero counts.
+  repeated PbTabletServerLoad tablet_server_loads = 3;
 }
 
 // produce log request and response
@@ -295,6 +344,7 @@ message LimitScanRequest {
   optional int64 partition_id = 3;
   required int32 bucket_id = 4;
   required int32 limit = 5;
+  optional int32 routing_bucket_count = 6;
 }
 
 message LimitScanResponse{
@@ -315,6 +365,7 @@ message PbScanReqForBucket {
   required int32 bucket_id = 3;
   // If set, stops returning rows after this many records.
   optional int64 limit = 4;
+  optional int32 routing_bucket_count = 5;
 }
 
 message ScanKvRequest {
@@ -399,9 +450,90 @@ message ListOffsetsRequest {
   optional int64 partition_id = 4;
   repeated int32 bucket_id = 5 [packed = true]; // it is recommended to use packed for repeated numerics to get more efficient encoding
   optional int64 startTimestamp = 6;
+  optional int32 routing_bucket_count = 7;
 }
 message ListOffsetsResponse {
   repeated PbListOffsetsRespForBucket buckets_resp = 1;
+}
+
+// Find consumer group owner request and response.
+message FindConsumerGroupOwnerRequest {
+  required string group_id = 1;
+}
+
+// All failures are returned through the RPC ErrorResponse envelope.
+message FindConsumerGroupOwnerResponse {
+  required PbServerNode owner = 1;
+}
+
+// Commit consumer offsets request and response.
+message CommitConsumerOffsetsRequest {
+  required string group_id = 1;
+  // An empty list, or tables containing no buckets, is a valid no-op and produces an empty
+  // successful response.
+  repeated PbCommitConsumerOffsetsRequestTable tables = 2;
+}
+
+// Request-level failures, such as authentication, authorization, malformed requests, or an
+// unexpected server failure, are returned through the RPC ErrorResponse envelope. Logical commit
+// failures, including group validation, ownership, and bucket write failures, are reported in each
+// PbCommitConsumerOffsetsResponseBucket.
+message CommitConsumerOffsetsResponse {
+  repeated PbCommitConsumerOffsetsResponseTable tables = 1;
+}
+
+// Get consumer offsets request and response.
+message GetConsumerOffsetsRequest {
+  required string group_id = 1;
+  // When true, tables must be empty and the server returns all committed offsets of the group.
+  // When false, only requested buckets are returned; an empty list, or tables containing no
+  // buckets, is a valid no-op and produces an empty successful response.
+  optional bool all_offsets = 2;
+  repeated PbGetConsumerOffsetsRequestTable tables = 3;
+}
+
+// Group-wide or request-level failures are returned through the RPC ErrorResponse envelope.
+// Failures affecting only one requested bucket are reported in the corresponding
+// PbGetConsumerOffsetsResponseBucket.
+message GetConsumerOffsetsResponse {
+  repeated PbGetConsumerOffsetsResponseTable tables = 1;
+}
+
+// Delete consumer offsets request and response.
+message DeleteConsumerOffsetsRequest {
+  required string group_id = 1;
+  // An empty list, or tables containing no buckets, is a valid no-op and produces an empty
+  // successful response.
+  repeated PbDeleteConsumerOffsetsRequestTable tables = 2;
+}
+
+// Group-wide or request-level failures are returned through the RPC ErrorResponse envelope.
+// Failures affecting only one requested bucket are reported in the corresponding
+// PbDeleteConsumerOffsetsResponseBucket.
+message DeleteConsumerOffsetsResponse {
+  repeated PbDeleteConsumerOffsetsResponseTable tables = 1;
+}
+
+// Lists consumer groups currently owned by the tablet server receiving this request. This is not
+// a cluster-wide listing; callers that need a cluster-wide view must query every tablet server and
+// merge the responses.
+message ListConsumerGroupsRequest {}
+
+// All failures are returned through the RPC ErrorResponse envelope.
+message ListConsumerGroupsResponse {
+  repeated PbListedGroup groups = 1;
+}
+
+// Delete consumer groups request and response.
+message DeleteConsumerGroupsRequest {
+  // An empty list is a valid no-op and produces an empty successful response.
+  repeated string groups = 1;
+}
+
+// Request-level failures are returned through the RPC ErrorResponse envelope. A failure affecting
+// one group is reported in the corresponding PbDeletedGroup.
+message DeleteConsumerGroupsResponse {
+  repeated PbDeletedGroup groups = 1;
 }
 
 // commit kv snapshot request and response
@@ -507,10 +639,12 @@ message InitWriterResponse {
 message ListPartitionInfosRequest {
   required PbTablePath table_path = 1;
   optional PbPartitionSpec partial_partition_spec = 2;
+  optional bool include_system_partitions = 3;
 }
 
 message ListPartitionInfosResponse {
   repeated PbPartitionInfo partitions_info = 1;
+  optional bool system_partitions_included = 2;
 }
 
 // list remote log manifest entries (one per bucket of a table or partition)
@@ -738,12 +872,28 @@ message AddServerTagRequest {
 message AddServerTagResponse {
 }
 
+message AddServerTagByRackRequest {
+  repeated string racks = 1;
+  required int32 server_tag = 2;
+}
+
+message AddServerTagByRackResponse {
+}
+
 message RemoveServerTagRequest {
   repeated int32 server_ids = 1 [packed = true];
   required int32 server_tag = 2;
 }
 
 message RemoveServerTagResponse {
+}
+
+message RemoveServerTagByRackRequest {
+  repeated string racks = 1;
+  required int32 server_tag = 2;
+}
+
+message RemoveServerTagByRackResponse {
 }
 
 message RebalanceRequest {
@@ -818,6 +968,15 @@ message GetClusterHealthResponse {
 
 
 // --------------- Inner classes ----------------
+message PbTabletServerLoad {
+  required int32 server_id = 1;
+  required int32 num_replicas = 2;
+  required int32 in_sync_replicas = 3;
+  required int32 num_leader_replicas = 4;
+  required int32 active_leader_replicas = 5;
+  required int32 leaderless_replicas = 6;
+}
+
 message PbApiVersion {
   required int32 api_key = 1;
   required int32 min_version = 2;
@@ -840,12 +999,14 @@ message PbPhysicalTablePath {
 //   * versions <= 0.6: host and port are used.
 //   * versions >= 0.7: listeners is used to replace host and port.
 // For MetadataResponse and UpdateMetadataRequest: Fluss versions >= 0.7: we add rack for each tabletServer
+// For DescribeClusterResponse: Fluss versions >= 1.1: we add server_tag for each tabletServer
 message PbServerNode {
   required int32 node_id = 1;
   required string host = 2;
   required int32 port = 3;
   optional string listeners = 4;
   optional string rack = 5;
+  optional int32 server_tag = 6;
 }
 
 message PbTableMetadata {
@@ -860,6 +1021,8 @@ message PbTableMetadata {
   required int64 created_time = 6;
   required int64 modified_time = 7;
   optional string remote_data_dir = 8;
+  // A table-level, monotonically increasing version for bucket.num changes.
+  optional int64 bucket_count_epoch = 9;
 
   // TODO add a new filed 'deleted_table' to indicate this table is deleted in UpdateMetadataRequest.
   // trace by: https://github.com/apache/fluss/issues/981
@@ -871,6 +1034,8 @@ message PbPartitionMetadata {
   required string partition_name = 2;
   required int64 partition_id = 3;
   repeated PbBucketMetadata bucket_metadata = 4;
+  // the actual bucket count for this partition, used for per-partition bucket rescale
+  optional int32 bucket_count = 5;
 }
 
 message PbBucketMetadata {
@@ -885,10 +1050,27 @@ message PbBucketMetadata {
   repeated int32 isr = 6 [packed = true];
 }
 
+message PbBucketInfo {
+  optional int64 partition_id = 1;
+  optional string partition_name = 2;
+  required int32 bucket_id = 3;
+  // optional as the leader may not be elected yet
+  optional int32 leader_id = 4;
+  repeated int32 replica_id = 5 [packed = true];
+  optional int32 leader_epoch = 6;
+  // Generation of the complete leader/ISR state.
+  // Absence indicates legacy metadata; -1 indicates no leader/ISR state exists.
+  optional int32 bucket_epoch = 7;
+  repeated int32 isr = 8 [packed = true];
+}
+
 message PbProduceLogReqForBucket {
   optional int64 partition_id = 1;
   required int32 bucket_id = 2;
   required bytes records = 3;
+  // The original partition name for a historical write; unset for a normal write.
+  optional string original_partition_name = 4;
+  optional int32 routing_bucket_count = 5;
 }
 
 message PbProduceLogRespForBucket {
@@ -897,6 +1079,8 @@ message PbProduceLogRespForBucket {
   optional int32 error_code = 3;
   optional string error_message = 4;
   optional int64 base_offset = 5;
+  // The original partition name echoed from a historical write request; unset for a normal write.
+  optional string original_partition_name = 6;
 }
 
 message PbFetchLogReqForTable {
@@ -917,6 +1101,7 @@ message PbFetchLogReqForBucket {
   // TODO leader epoch
   required int64 fetch_offset = 3;
   required int32 max_fetch_bytes = 4;
+  optional int32 routing_bucket_count = 5;
 }
 
 message PbFetchLogRespForTable {
@@ -936,6 +1121,9 @@ message PbFetchLogRespForBucket {
   // non-empty records field when only trailing batches were filtered. The client should start
   // its next fetch from the later of this offset and the end of the records it received.
   optional int64 filtered_end_offset = 9;
+  // The safe local log retention boundary confirmed by a committed KV snapshot. This is only
+  // returned for KV follower fetches and is distinct from the physical log_start_offset.
+  optional int64 min_retain_offset = 10;
 }
 
 message PbPutKvReqForBucket {
@@ -944,6 +1132,9 @@ message PbPutKvReqForBucket {
   required bytes records = 3;
   // The original partition name for historical PK writes. It is unset for normal writes.
   optional string original_partition_name = 4;
+  // the bucket count the sender used to form bucket_id; the server compares it against the
+  // actual count to detect stale routing. Not authoritative metadata.
+  optional int32 routing_bucket_count = 5;
 }
 
 message PbPutKvRespForBucket {
@@ -968,6 +1159,7 @@ message PbLookupReqForBucket {
   repeated bytes keys = 3;
   // The original partition name for historical lookup. It is unset for normal lookup.
   optional string original_partition_name = 4;
+  optional int32 routing_bucket_count = 5;
 }
 
 message PbLookupRespForBucket {
@@ -993,6 +1185,7 @@ message PbPrefixLookupReqForBucket {
   optional int64 partition_id = 1;
   required int32 bucket_id = 2;
   repeated bytes keys = 3;
+  optional int32 routing_bucket_count = 4;
 }
 
 message PbPrefixLookupRespForBucket {
@@ -1062,6 +1255,8 @@ message PbNotifyLeaderAndIsrReqForBucket {
   repeated int32 isr = 6 [packed = true];
   required int32 bucket_epoch = 7;
   repeated int32 standby_replicas = 8 [packed = true];
+  optional int32 bucket_count = 9;
+  optional int64 bucket_count_epoch = 10;
 }
 
 message PbNotifyLeaderAndIsrRespForBucket {
@@ -1132,6 +1327,8 @@ message PbPartitionInfo {
   required int64 partition_id = 1;
   required PbPartitionSpec partition_spec = 2;
   optional string remote_data_dir = 3;
+  // the actual bucket count for this partition, used for per-partition bucket rescale
+  optional int32 bucket_count = 4;
 }
 
 message PbPartitionSpec {
@@ -1339,9 +1536,110 @@ message PbKvSnapshotLeaseForBucket {
   required int64 snapshot_id = 3;
 }
 
+// ---- CommitConsumerOffsets ----
+
+message PbCommitConsumerOffsetsRequestTable {
+  required int64 table_id = 1;
+  repeated PbCommitConsumerOffsetsRequestBucket buckets = 2;
+}
+
+message PbCommitConsumerOffsetsRequestBucket {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+  required int64 offset = 3;
+  optional string metadata = 4;
+}
+
+message PbCommitConsumerOffsetsResponseTable {
+  required int64 table_id = 1;
+  repeated PbCommitConsumerOffsetsResponseBucket buckets = 2;
+}
+
+message PbCommitConsumerOffsetsResponseBucket {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+  // Absent means that the commit succeeded for this bucket.
+  optional int32 error_code = 3;
+  // Set only when error_code is present and additional diagnostic information is available.
+  optional string error_message = 4;
+}
+
+// ---- GetConsumerOffsets ----
+
+message PbGetConsumerOffsetsRequestTable {
+  required int64 table_id = 1;
+  repeated PbGetConsumerOffsetsRequestBucket buckets = 2;
+}
+
+message PbGetConsumerOffsetsRequestBucket {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+}
+
+message PbGetConsumerOffsetsResponseTable {
+  required int64 table_id = 1;
+  repeated PbGetConsumerOffsetsResponseBucket buckets = 2;
+}
+
+message PbGetConsumerOffsetsResponseBucket {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+  // Absent with no error means not committed.
+  optional int64 offset = 3;
+  // Absent means that no user metadata was committed.
+  optional string metadata = 4;
+  // Absent means that the fetch succeeded for this bucket.
+  optional int32 error_code = 5;
+  // Set only when error_code is present and additional diagnostic information is available.
+  optional string error_message = 6;
+}
+
+// ---- DeleteConsumerOffsets ----
+
+message PbDeleteConsumerOffsetsRequestTable {
+  required int64 table_id = 1;
+  repeated PbDeleteConsumerOffsetsRequestBucket buckets = 2;
+}
+
+message PbDeleteConsumerOffsetsRequestBucket {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+}
+
+message PbDeleteConsumerOffsetsResponseTable {
+  required int64 table_id = 1;
+  repeated PbDeleteConsumerOffsetsResponseBucket buckets = 2;
+}
+
+message PbDeleteConsumerOffsetsResponseBucket {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+  // Absent means that the delete succeeded for this bucket.
+  optional int32 error_code = 3;
+  // Set only when error_code is present and additional diagnostic information is available.
+  optional string error_message = 4;
+}
+
+// ---- ListConsumerGroups ----
+
+message PbListedGroup {
+  required string group_id = 1;
+}
+
+// ---- DeleteConsumerGroups ----
+
+message PbDeletedGroup {
+  required string group_id = 1;
+  // Absent means that the group was deleted successfully.
+  optional int32 error_code = 2;
+  // Set only when error_code is present and additional diagnostic information is available.
+  optional string error_message = 3;
+}
+
 message PbTableStatsReqForBucket {
   optional int64 partition_id = 1;
   required int32 bucket_id = 2;
+  optional int32 routing_bucket_count = 3;
 }
 
 message PbTableStatsRespForBucket {

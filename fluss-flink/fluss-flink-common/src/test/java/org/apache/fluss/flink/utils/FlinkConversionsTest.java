@@ -20,6 +20,7 @@ package org.apache.fluss.flink.utils;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.flink.catalog.TestSchemaResolver;
 import org.apache.fluss.metadata.KvFormat;
+import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -73,6 +74,26 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link FlinkConversions}. */
 public class FlinkConversionsTest {
+
+    @Test
+    void testConvertBucketCountChange() {
+        assertThat(
+                        FlinkConversions.toFlussTableChanges(
+                                org.apache.flink.table.catalog.TableChange.set(
+                                        BUCKET_NUMBER.key(), "8")))
+                .containsExactly(TableChange.modifyBucketCount(8));
+        assertThat(
+                        FlinkConversions.toFlussTableChanges(
+                                org.apache.flink.table.catalog.TableChange.set("key", "value")))
+                .containsExactly(TableChange.set("key", "value"));
+        assertThatThrownBy(
+                        () ->
+                                FlinkConversions.toFlussTableChanges(
+                                        org.apache.flink.table.catalog.TableChange.set(
+                                                BUCKET_NUMBER.key(), "0")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Bucket count must be positive");
+    }
 
     @Test
     void testTypeConversion() {

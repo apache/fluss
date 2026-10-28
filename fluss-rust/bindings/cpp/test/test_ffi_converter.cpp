@@ -62,6 +62,27 @@ TEST(FfiConverterTest, KvBackpressureConfiguration) {
     EXPECT_TRUE(fluss::ErrorCode::IsRetriable(72));
 }
 
+TEST(FfiConverterTest, RemoteLogDirectoryConfiguration) {
+    fluss::Configuration config;
+    EXPECT_TRUE(config.scanner_io_tmp_dir.empty());
+    EXPECT_TRUE(fluss::utils::to_ffi_config(config).scanner_io_tmp_dir.empty());
+    config.scanner_io_tmp_dir = "/tmp/fluss logs";
+    auto ffi_config = fluss::utils::to_ffi_config(config);
+    EXPECT_EQ(std::string(ffi_config.scanner_io_tmp_dir), "/tmp/fluss logs");
+}
+
+TEST(FfiConverterTest, WriterRetryBackoffConfiguration) {
+    fluss::Configuration config;
+    EXPECT_EQ(config.writer_retry_backoff_ms, 100u);
+    EXPECT_EQ(config.writer_retry_max_backoff_ms, 1000u);
+
+    config.writer_retry_backoff_ms = 250;
+    config.writer_retry_max_backoff_ms = 5000;
+    auto ffi_config = fluss::utils::to_ffi_config(config);
+    EXPECT_EQ(ffi_config.writer_retry_backoff_ms, 250u);
+    EXPECT_EQ(ffi_config.writer_retry_max_backoff_ms, 5000u);
+}
+
 // --- DataType value semantics ---
 
 TEST(DataTypeTest, DefaultNullable) { EXPECT_TRUE(DataType::Int().nullable()); }

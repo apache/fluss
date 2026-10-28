@@ -2,56 +2,230 @@
 sidebar_label: Overview
 title: Table Overview
 sidebar_position: 1
+description: "Design Apache Fluss tables by choosing table types, schemas, primary keys, partitions, buckets, merge behavior, and retention policies."
 ---
-import ThemedImage from '@site/src/components/ThemedImage';
+
+{/*
+Licensed to the Apache Software Foundation (ASF) under one or more
+contributor license agreements. See the NOTICE file distributed with
+this work for additional information regarding copyright ownership.
+The ASF licenses this file to You under the Apache License, Version 2.0
+(the "License"); you may not use this file except in compliance with
+the License. You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/}
 
 # Table Overview
 
+A Fluss table combines a typed schema with rules for storing, distributing, updating, and retaining rows. Those choices determine how applications write data, how readers access it, and how the workload uses cluster resources.
+
+This overview introduces the logical and physical structure of tables, then explains the design decisions to make before creating one. For the servers and storage services that implement this model, see [Fluss Architecture](../concepts/architecture.mdx).
+
+## Start with the Access Pattern
+
+Begin with the data the application needs to preserve and the operations its consumers perform.
+
+| Design question | Fluss mechanism |
+| --- | --- |
+| Must each event remain independently readable within a retention window? | A log table stores appended records without replacing earlier rows. |
+| Must applications update an entity and look up its current state? | A primary key table maintains row state by key and records its changes. |
+| Should data be managed or filtered in groups, such as by date? | Partition columns organize rows into separately managed partitions. |
+| How should writes and reads share cluster capacity? | Bucket count and bucket keys control distribution and parallelism. |
+| Which update should win when a key appears again? | The primary key table's merge engine defines how writes combine with stored state. |
+| How long are current state and change history needed? | Log TTL, key-value TTL, and partition retention govern different data lifecycles. |
+
+These decisions are related. For example, partitioning a primary key table by date also makes that date part of the row's identity. Retaining current rows for a month does not automatically retain a month of their change history.
+
 ## Database
-A Database is a collection of Table objects. You can create/delete databases or create/modify/delete tables under a database.
+
+A **database** is a namespace containing tables. A table is identified by its database and table name, such as `commerce.orders`. Applications can use databases to group related datasets while configuring schemas, distribution, and retention independently for each table.
+
+Native client APIs expose database and table administration. In Flink SQL, a Fluss catalog makes those objects available through SQL. The examples on this page assume that a Fluss catalog is already configured and selected; see [Flink DDL](../engine-flink/ddl.md) for setup.
+
+```sql title="Flink SQL"
+CREATE DATABASE commerce;
+USE commerce;
+```
 
 ## Table
-In Fluss, a Table is the fundamental unit of user data storage, organized into rows and columns. Tables are stored within specific databases, adhering to a hierarchical structure (database -> table).
 
-Tables are classified into two types based on the presence of a primary key:
-- **Log Tables:**
-  - Designed for append-only scenarios.
-  - Support only INSERT operations.
-- **Primary Key Tables:**
-  - Used for updating and managing data in business databases.
-  - Support INSERT, UPDATE, and DELETE operations based on the defined primary key.
+A **table** defines named, typed columns together with optional primary keys, partition keys, bucket keys, and table properties. The presence of a primary key determines the table type.
 
-A Table becomes a [Partitioned Table](/table-design/data-distribution/partitioning.md) when a partition column is defined. Data with the same partition value is stored in the same partition. Partition columns can be applied to both Log Tables and Primary Key Tables, but with specific considerations:
-- **For Log Tables**, partitioning is commonly used for log data, typically based on date columns, to facilitate data separation and cleaning.
-- **For Primary Key Tables**, the partition column must be a subset of the primary key to ensure uniqueness.
+| Property | Log table | Primary key table |
+| --- | --- | --- |
+| Row identity | Each append creates another record. | The primary key identifies the row to insert, update, or delete. |
+| Writes | Append only. | Upsert and delete, subject to the selected merge engine's restrictions. |
+| Repeated values | Repeated records remain separate appends. | Writes for an existing key are processed using the merge engine. |
+| Typical reads | Streaming consumption and replay by bucket offset. | Key lookups, supported snapshot scans, and change consumption. |
+| Storage | Ordered log. | Current key-value state and an ordered log of changes. |
+| Typical uses | Events, activity streams, and ingestion logs. | Entity state, reference data, and maintained results. |
 
-This design ensures efficient data organization, flexibility in handling different use cases, and adherence to data integrity constraints.
+### Log Tables
+
+Choose a log table when records represent events that should remain individually consumable. An `order_created` event and a later `order_shipped` event can both remain in the log even if they refer to the same order. Repeating an `event_id` does not, by itself, deduplicate records.
+
+Log readers track progress through offsets within each bucket. Records in one bucket have an order, but there is no single ordering across all buckets. When related events need to reach the same bucket, define an appropriate hash bucket key.
+
+See [Log Tables](table-types/log-table.md) for write behavior, log consumption, compression, and projected reads.
+
+### Primary Key Tables
+
+Choose a primary key table when a row represents the current state of an entity, such as an order or user profile. An upsert for an existing key updates its state according to the merge engine. The default engine retains the last written row; additional engines support other update rules.
+
+A primary key table also exposes changes for downstream processing. Keeping one current row per key does not remove the need to plan changelog retention for consumers that may fall behind or need to replay data.
+
+Full-key lookups retrieve the matching row. Supported clients and connectors also provide snapshot scans and prefix lookups, with constraints on key order and bucket keys. See [Primary Key Tables](table-types/pk-table.md) and the [Client Support Matrix](../apis/client-support-matrix.md) for the available operations.
+
+## Schema and Key Design
+
+Select column types for the values applications exchange, including numeric precision, timestamp semantics, and nullability. For example, use an appropriate `DECIMAL` precision and scale for monetary values and define a consistent timestamp interpretation across writers. Consult [Data Types](data-types.md) and the client support matrix for type availability and mappings.
+
+Three kinds of keys serve different purposes:
+
+| Key | Purpose | Primary key table constraints |
+| --- | --- | --- |
+| Primary key | Defines row identity and the target of updates and lookups. | Includes every partition column. |
+| Partition key | Selects the partition containing the row. | Must be a subset of the primary key. |
+| Bucket key | Hashes the row to a bucket within its table or partition. | Must be a subset of the primary key, excluding partition columns. |
+
+For primary key tables, the default bucket key is the primary key with partition columns removed. Explicit bucket keys must not contain partition columns for either table type.
+
+Choose a stable primary key that matches the application's identity model. If an order should have one current row throughout its lifetime, an unpartitioned table keyed by `order_id` may be appropriate. A table partitioned by `order_date` with primary key `(order_date, order_id)` instead treats the same order ID on different dates as different keys. Writing a new key does not remove a row stored under the previous key.
+
+### Schema Evolution
+
+Fluss supports adding nullable columns at the end of an existing schema without rewriting stored data. Existing rows have no stored value for the new columns and are read with null values for those fields. Schema changes have constraints, so plan keys and required fields at table creation and consult [Adding Columns](../engine-flink/ddl.md#add-columns) before evolving a table.
+
+For lake-enabled tables, evolution must also be supported by the selected lake format. Apply supported schema changes through Fluss so the managed lake schema stays aligned with the Fluss table.
 
 ## Table Data Organization
 
-<ThemedImage
-    alt="Table Data Organization"
-    light="data_organization_light.png"
-    dark="data_organization.png"
-/>
+The logical hierarchy is a database containing tables, with optional partitions and one or more buckets. Tablets are the physical storage structures used to serve each bucket.
 
 ### Partition
-A **partition** is a logical division of a table's data into smaller, more manageable subsets based on the values of one or more specified columns, known as partition columns.
-Each unique value (or combination of values) in the partition column(s) defines a distinct partition.
 
+A **partition** groups rows by a distinct value or combination of values in the partition columns. For example, a table partitioned by `event_date` stores each date's records in a separate partition. Supported readers can use partition filters to limit the data they scan, and operators can manage retention in whole partitions.
+
+Both table types support partitioning. Fluss provides manual partition management, automatic time-based partition management, and client-side dynamic creation when writes encounter new partition values. These mechanisms can coexist, but their configuration and client support differ.
+
+Choose partition columns that match filtering and lifecycle requirements. A column with many distinct values can create a large number of partitions, each with its own buckets and associated storage overhead. Bucketing provides parallelism within each partition, so a partition does not need to represent one server or one writer.
+
+See [Partitioning](data-distribution/partitioning.md) for creation strategies, multi-column partitions, and historical partition access.
 
 ### Bucket
-A **bucket** horizontally divides the data of a table/partition into `N` buckets according to the bucketing policy.
-The number of buckets `N` can be configured per table. A bucket is the smallest unit of data migration and backup.
-The data of a bucket consists of a LogTablet and a (optional) KvTablet.
+
+A **bucket** divides a table or partition into a unit of storage placement, replication, and processing parallelism. The `bucket.num` property controls the number of buckets. Multiple buckets can reside on the same TabletServer, and their replicas can be reassigned as the cluster changes.
+
+For primary key tables, hash bucketing ensures that operations on a key route to the same bucket. Log tables use sticky assignment by default, which groups records into batches, and can also use round-robin or hash assignment.
+
+Choose bucket keys with enough distinct values to distribute the workload. Hashing on a heavily skewed value can concentrate traffic in one bucket even when many buckets exist. Adding TabletServers does not split an individual hot key across servers.
+
+Bucket count balances parallelism against the overhead of additional replicas, files, and storage instances. In a partitioned table, each partition captures the configured bucket count when it is created. Altering `bucket.num` affects future partitions only, including those created dynamically; existing and already pre-created partitions retain their original counts. This operation does not redistribute existing records.
+
+See [Bucketing](data-distribution/bucketing.md) for assignment strategies and the rules for changing bucket counts.
 
 ### LogTablet
-A **LogTablet** needs to be generated for each bucket of Log and Primary Key Tables.
-For Log Tables, the LogTablet is both the primary table data and the log data. For Primary Key Tables, the LogTablet acts
-as the log data for the primary table data.
-- **Segment:** The smallest unit of log storage in the **LogTablet**. A segment consists of an **.index** file and a **.log** data file.
-- **.index:** An `offset sparse index` that maps message relative offsets to their corresponding physical byte addresses in the .log file.
-- **.log:** Compact arrangement of log data.
+
+Every bucket has log storage. A **LogTablet** contains the appended records of a log table or the changes of a primary key table. It is organized into log segments with data files and indexes that support locating records by offset and timestamp.
+
+The bucket's log can be replicated across TabletServers. Older segments can also be uploaded to remote storage and remain readable within the configured retention period. For primary key tables, the log supports both change consumption and recovery of key-value state.
 
 ### KvTablet
-Each bucket of the Primary Key Table needs to generate a KvTablet. Underlying, each KvTablet corresponds to an embedded RocksDB instance. RocksDB is an LSM (log structured merge) engine which helps KvTablet support high-performance updates and lookup queries.
+
+A **KvTablet** maintains a primary key bucket's current state in an embedded RocksDB instance. The bucket leader hosts this state alongside its log and serves key-based operations.
+
+Follower replicas replicate the log without maintaining equivalent live KvTablets. Recovery normally restores a remote key-value snapshot and replays subsequent log records. The [architecture guide](../concepts/architecture.mdx#replication-and-recovery) explains replication and recovery in more detail.
+
+## Update and Change Semantics
+
+A primary key defines which rows are related; the **merge engine** defines what to do when another write arrives for that key.
+
+| Merge engine | Behavior | Example use |
+| --- | --- | --- |
+| [Default (LastRow)](merge-engines/default.md) | Applies the latest write; supports partial updates when configured. | Current order or profile state. |
+| [FirstRow](merge-engines/first-row.md) | Retains the first record for a key. | Deduplicating repeated event identifiers. |
+| [Versioned](merge-engines/versioned.md) | Uses a version column to accept records whose version is at least the stored version. | Handling out-of-order entity updates. |
+| [Aggregation](merge-engines/aggregation.md) | Combines values using configured per-column aggregate functions. | Maintaining counters or aggregated results. |
+
+The engines differ in delete, partial-update, and changelog support. Select one using its documented semantics, especially when consuming upstream change events. The default last-write behavior follows write processing order; it does not automatically choose the largest event timestamp.
+
+The **changelog image** is a separate choice from the merge engine and storage format. The default `FULL` image includes before and after records for updates. `WAL` omits update-before records, which affects consumers that need previous values. Check these requirements before tuning a table for lookup or ingestion performance.
+
+[Virtual Tables](virtual-tables.md) expose change records through names such as `orders$changelog` and, for primary key tables, `orders$binlog`. They read the retained Fluss log; a lake snapshot does not reconstruct expired change history for these interfaces.
+
+## Retention and Storage Layout
+
+Plan current state, replay history, and partition lifetime separately.
+
+| Mechanism | Controls | Design implication |
+| --- | --- | --- |
+| `table.log.ttl` | Retention of log-table records or primary key changelogs. | Cover consumer lag, restart time, and required replay history. |
+| `table.log.local-ttl` and `table.log.tiered.local-segments` | Cleanup of local log copies after upload to remote storage. | Local retention determines the hot working set; remote logs can remain readable longer. |
+| `table.kv.ttl` | Expiration of individual primary key rows. | Current state can have a different lifetime from its changelog. |
+| Auto-partition retention | Expiration of entire time partitions. | All data in an expired partition is subject to that lifecycle, regardless of longer row or log TTLs. |
+
+Expiration and cleanup run asynchronously. Key-value TTL cleanup does not emit delete events to the changelog, so downstream consumers should not rely on it to receive row-deletion notifications. Local log cleanup also has independent time-based and segment-count policies; a local TTL alone does not guarantee that every record remains local for that duration. See [Data Retention and TTL](data-distribution/ttl.md) for the complete behavior and configuration constraints.
+
+The log format is another independent setting. `ARROW`, the default, uses a columnar layout that supports selective column reads. `COMPACTED` uses a row-oriented encoding. A format controls representation, while the table type and merge engine control row semantics. In particular, selecting `COMPACTED` does not make a log table deduplicate records by key. See [Data Formats](data-formats.md) for the trade-offs and supported combinations.
+
+Lakehouse tiering can maintain an additional representation for historical access. Its retention, freshness, and schema rules depend on the lake integration. Review [Lakestream Overview](../streaming-lakehouse/overview.mdx) when designing a table for both streaming and lakehouse readers.
+
+## Example Table Designs
+
+These examples use Flink SQL in the `commerce` database created above. The bucket counts illustrate the configuration; size them for the workload and cluster.
+
+### Partitioned Order Events
+
+An append-only table preserves individual order events, groups them by date for lifecycle management, and hashes by order ID to route related events within each date to the same bucket.
+
+```sql title="Flink SQL"
+CREATE TABLE order_events (
+    event_date STRING,
+    event_id STRING,
+    order_id BIGINT,
+    event_type STRING,
+    event_time TIMESTAMP(3)
+) PARTITIONED BY (event_date)
+WITH (
+    'bucket.num' = '8',
+    'bucket.key' = 'order_id',
+    'table.log.ttl' = '7 d'
+);
+
+ALTER TABLE order_events ADD PARTITION (event_date = '2026-10-05');
+```
+
+This table has no primary key, so two appends with the same `event_id` remain separate records. Hashing by `order_id` gives bucket-local ordering within a date partition; it does not provide ordering across dates. The explicit partition creation shown here does not enable automatic partition expiration.
+
+### Current Order State
+
+An unpartitioned primary key table maintains one current row per order, supports lookups by order ID, and retains a separate window of change history.
+
+```sql title="Flink SQL"
+CREATE TABLE orders (
+    order_id BIGINT,
+    customer_id BIGINT,
+    status STRING,
+    total_amount DECIMAL(18, 2),
+    updated_at TIMESTAMP(3),
+    PRIMARY KEY (order_id) NOT ENFORCED
+) WITH (
+    'bucket.num' = '8',
+    'table.log.ttl' = '7 d'
+);
+```
+
+The default bucket key is `order_id`, and the default merge engine applies the latest write for each order. The `NOT ENFORCED` clause is part of Flink's primary key declaration syntax; Fluss still uses the key to maintain row state. Log expiration removes old change history without expiring current rows. The `updated_at` column does not control merge order unless a suitable merge engine is explicitly configured.
+
+## Continue Designing Your Table
+
+Before creating production tables, confirm the row identity and update rules, estimate partition and bucket counts, and define retention for both current state and replay history. Verify that the chosen client or engine supports the required reads, writes, data types, and lakehouse features.
+
+Use [Flink DDL](../engine-flink/ddl.md), [Spark DDL](../engine-spark/ddl.md), or the [Java Client](../apis/java/index.md) to create and evolve tables. The detailed chapters on [Table Types](table-types/pk-table.md), [Partitioning](data-distribution/partitioning.md), [Bucketing](data-distribution/bucketing.md), [Merge Engines](merge-engines/index.md), and [Retention](data-distribution/ttl.md) provide the constraints behind each design choice.

@@ -64,6 +64,31 @@ class TabletServerMetricGroupTest {
                 .isEqualTo(256L);
     }
 
+    @Test
+    void testSharedWriteBufferMetrics() {
+        TabletServerMetricGroup metricGroup =
+                new TabletServerMetricGroup(
+                        NOPMetricRegistry.INSTANCE, "cluster", "rack", "host", 0);
+        metricGroup.setSharedWriteBufferMetrics(() -> 40L, 128L);
+
+        assertThat(gaugeValue(metricGroup, MetricNames.ROCKSDB_SHARED_WRITE_BUFFER_USAGE))
+                .isEqualTo(40L);
+        assertThat(gaugeValue(metricGroup, MetricNames.ROCKSDB_SHARED_WRITE_BUFFER_CAPACITY))
+                .isEqualTo(128L);
+    }
+
+    @Test
+    void testWalMemoryPoolMetrics() {
+        TabletServerMetricGroup metricGroup =
+                new TabletServerMetricGroup(
+                        NOPMetricRegistry.INSTANCE, "cluster", "rack", "host", 0);
+        metricGroup.registerKvWalMemoryPoolMetrics(() -> 100L, 256L);
+
+        assertThat(gaugeValue(metricGroup, MetricNames.KV_WAL_MEMORY_POOL_USAGE)).isEqualTo(100L);
+        assertThat(gaugeValue(metricGroup, MetricNames.KV_WAL_MEMORY_POOL_CAPACITY))
+                .isEqualTo(256L);
+    }
+
     private static Object gaugeValue(TabletServerMetricGroup metricGroup, String metricName) {
         return ((Gauge<?>) metricGroup.getMetrics().get(metricName)).getValue();
     }

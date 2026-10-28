@@ -21,6 +21,7 @@ import lightTheme from './src/utils/prismLight';
 import darkTheme from './src/utils/prismDark';
 import versionReplace from './src/plugins/remark-version-replace/index';
 import { loadVersionData } from './src/utils/versionData';
+import {prepareBlogPosts} from './src/utils/blogPosts';
 const { versionsMap, latestVersion } = loadVersionData();
 
 const config: Config = {
@@ -170,6 +171,9 @@ const config: Config = {
         },
         blog: {
           showReadingTime: false,
+          // The card index filters the full archive, including older posts.
+          postsPerPage: 'ALL',
+          processBlogPosts: prepareBlogPosts,
           feedOptions: {
             type: ['rss', 'atom'],
             xslt: true,
@@ -270,7 +274,7 @@ const config: Config = {
 
   ],
   themeConfig: {
-    image: 'img/logo/png/colored_logo.png',
+    image: 'img/social/fluss-social-card.png',
     colorMode: {
       defaultMode: 'light',
       disableSwitch: false,
@@ -296,6 +300,10 @@ const config: Config = {
           position: 'left',
           type: 'dropdown',
           items: [
+            {
+              label: 'User Stories',
+              to: '/user-stories',
+            },
             {
               label: 'Talks',
               to: '/learn/talks',
@@ -348,6 +356,7 @@ const config: Config = {
         {
           title: 'Community',
           items: [
+            {label: 'User Stories', to: '/user-stories'},
             {label: 'GitHub', href: 'https://github.com/apache/fluss'},
             {label: 'Slack', href: 'https://join.slack.com/t/apache-fluss/shared_invite/zt-473vgmvjr-cmIma~_iAA4cN02o5u2pDQ'},
             {label: 'Welcome', to: '/community/welcome'},

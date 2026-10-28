@@ -1,60 +1,32 @@
 ---
-title: "Lakehouse Overview"
+title: "Lakestream Overview"
 sidebar_position: 1
+description: "How Apache Fluss coordinates streaming and lakehouse tables through shared metadata, managed tiering, and supported reads."
 ---
-import ThemedImage from '@site/src/components/ThemedImage';
 
-# Lakehouse Overview
+# Lakestream Overview
 
-## Introducing Lakehouse
+Fluss provides the streaming table layer and lakehouse integration for a Lakestream foundation. A Flink tiering job maintains the lake representation, and supported readers use the recorded tiering progress to access data across both layers. For the definitions and diagrams, see [Streamhouse and Lakestream](../concepts/streamhouse-and-lakestream.mdx).
 
-Lakehouse represents a new, open architecture that combines the best elements of data lakes and data warehouses. 
-It combines data lake scalability and cost-effectiveness with data warehouse reliability and performance. 
-The well-known data lake formats such as [Apache Iceberg](https://iceberg.apache.org/), [Apache Paimon](https://paimon.apache.org/), [Apache Hudi](https://hudi.apache.org/) and [Delta Lake](https://delta.io/) play key roles in the Lakehouse architecture,
-facilitating a harmonious balance between data storage, reliability, and analytical capabilities within a single, unified platform.
+## Metadata, Tiering, and Reads
 
-Lakehouse, as a modern architecture, is effective in addressing the complex needs of data management and analytics.
-However, they struggle to meet real-time analytics scenarios that require sub-second-level data freshness due to limitations in their implementation.
-With these data lake formats, you will get into a contradictory situation:
+Three mechanisms keep the layers coordinated:
 
-1. If you require low latency, then you must write and commit frequently, resulting in many small Parquet files. This becomes inefficient for
-reads which must now deal with masses of small files.
-2. If you require reading efficiency, then you accumulate data until you can write to large Parquet files, but this results in much higher latency.
+1. **Shared metadata** identifies the table, defines its schema, and maps its physical representations and progress. Streaming buckets and lake partitions need a defined relationship; their layouts need not be identical.
+2. **Managed tiering** maintains the lake representation from streaming data. In Fluss, the [Tiering Service](tiering-service.md) runs as an Apache Flink job. It writes and commits lake data, then records the associated streaming progress. This is storage maintenance; application transformations run separately in compute engines.
+3. **Supported union reads** use a committed lake representation and its associated streaming progress to read the additional data needed from Fluss. Append-only reads must avoid gaps and duplicate records caused by overlap. Mutable-table reads must also respect versions, updates, and deletes.
 
-Overall, these data lake formats typically achieve data freshness at best within minute-level granularity, even under optimal usage conditions.
+A lake-only query observes committed lake data. A [Union Read](union-read.md) accesses the relevant data across both layers through an integration that understands their coordination. A lake-compatible engine alone does not automatically provide union reads. Read behavior depends on the table type, lake format, engine, and execution mode; the architecture does not imply a simultaneous snapshot across all tables and engines.
 
-## Streaming Lakehouse: Unified Stream & Lakehouse
+## Supported Integrations
 
-Fluss is a streaming storage supporting streaming reads and writes with sub-second low latency.
-With [Lakehouse Storage](../maintenance/tiered-storage/lakehouse-storage.md), Fluss unifies data streaming and data Lakehouse by serving real-time streaming data on top of Lakehouse.
-This not only brings low latency to data Lakehouse, but also adds powerful analytics to data streams.
+Application writes enter through supported Fluss table interfaces, while tiering maintains the lake representation. Schema changes must follow the supported Fluss workflow so both representations remain coordinated.
 
-To build a Streaming Lakehouse, Fluss maintains a tiering service that compacts real-time data from the Fluss cluster into the data lake format stored in the Lakehouse Storage.
-The data in the Fluss cluster, stored in streaming Arrow format, is optimized for low-latency read and write operations, making it ideal for short-term data storage. In contrast, the compacted data in the Lakehouse, stored in Parquet format with higher compression, is optimized for efficient analytics and long-term storage.
-The data in the Fluss cluster serves as a real-time data layer, retaining days of data with sub-second-level freshness. In contrast, the data in the Lakehouse serves as a historical data layer, retaining months of data with minute-level freshness.
-
-<ThemedImage
-    alt="Lakestream"
-    light="streamhouse_light.png"
-    dark="streamhouse.png"
-/>
-
-The core idea of Streaming Lakehouse is shared data and shared metadata between stream and Lakehouse, avoiding data duplication and metadata inconsistency.
-Some powerful features it provides are:
-
-- **Unified Metadata**: Fluss provides unified table metadata for both data in Stream and Lakehouse. Users only need to manage one table and can access real-time streaming data, historical data, or both combined.
-- **Union Reads**: Compute engines that perform queries on the table will read the union of the real-time streaming data and Lakehouse data. Currently, Flink and Spark support union reads, with more engines on the roadmap.
-- **Real-Time Lakehouse**: The union reads help Lakehouse evolving from near-real-time analytics to truly real-time analytics. This empowers businesses to gain more valuable insights from real-time data.
-- **Analytical Streams**: The union reads help data streams to have the powerful analytics capabilities. This reduces complexity when developing streaming applications, simplifies debugging, and allows for immediate access to live data insights.
-- **Connect to Lakehouse Ecosystem**: Fluss keeps the table metadata in sync with data lake catalogs while compacting data into Lakehouse. As a result, external engines like Spark, StarRocks, Flink, and Trino can read the data directly. They simply connect to the data lake catalog.
-
-Currently, Fluss supports [Paimon](datalake-formats/paimon.md), [Iceberg](datalake-formats/iceberg.md), [Hudi](datalake-formats/hudi.md), and [Lance](datalake-formats/lance.md) as Lakehouse Storage. Support for additional data lake formats is on the roadmap.
+Fluss integrates with [Paimon](datalake-formats/paimon.md), [Iceberg](datalake-formats/iceberg.md), [Hudi](datalake-formats/hudi.md), and [Lance](datalake-formats/lance.md). Check the documentation for your deployed release and the selected format and engine for supported table types, reads, writes, and schema evolution.
 
 ## Getting Started
 
-Ready to build your Streaming Lakehouse? Here's a recommended path:
-
-1. **Hands-on Tutorial**: Follow the [Lakehouse Quickstart](../quickstart/lakehouse.md) to build a working Streaming Lakehouse in minutes using Docker
-2. **Understand the Architecture**: Learn how [Tiering Service](tiering-service.md) continuously syncs data to your data lake
-3. **Query Your Data**: Explore [Union Read](union-read.md) to query real-time and historical data together
-4. **Production Deployment**: See [Deploying Streaming Lakehouse](../install-deploy/deploying-streaming-lakehouse.md) for cluster setup
+1. **Try Lakestream**: Follow the [Lakestream Quickstart](../quickstart/lakehouse.md) using Docker.
+2. **Understand Maintenance**: Learn how the [Tiering Service](tiering-service.md) maintains the lake representation.
+3. **Choose an Access Path**: Explore [Union Read](union-read.md) and lake-only reads.
+4. **Deploy**: Follow [Deploying Lakestream](../install-deploy/deploying-streaming-lakehouse.md).

@@ -32,12 +32,14 @@ import org.apache.fluss.metadata.AggFunction;
 import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DeleteBehavior;
+import org.apache.fluss.metadata.KafkaTableSchema;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypeRoot;
@@ -121,6 +123,8 @@ public class TableDescriptorValidation {
             }
         }
 
+        KafkaTableSchema.validate(tableDescriptor);
+
         // check distribution
         checkDistribution(tableDescriptor, maxBucketNum);
         checkPrimaryKey(tableDescriptor);
@@ -129,6 +133,7 @@ public class TableDescriptorValidation {
         checkLogFormat(tableConf, hasPrimaryKey);
         checkArrowCompression(tableConf);
         checkMergeEngine(tableConf, hasPrimaryKey, schema);
+        checkUpsertSkipUnchanged(tableConf, hasPrimaryKey);
         checkDeleteBehavior(tableConf, hasPrimaryKey);
         checkTieredLog(tableConf);
         checkHistoricalPartition(tableDescriptor, tableConf);
@@ -139,6 +144,7 @@ public class TableDescriptorValidation {
         checkSystemColumns(schema.getRowType());
         validateStatisticsConfig(tableDescriptor);
         checkTableLakeFormatMatchesCluster(tableConf, clusterDataLakeFormat);
+        checkCustomLakePathSupported(tableConf, clusterDataLakeFormat);
     }
 
     /** Validates the schema after altering table columns. */
@@ -153,6 +159,10 @@ public class TableDescriptorValidation {
         } else {
             validateNoAggregationFunctions(newSchema);
         }
+        TableDescriptor updated =
+                TableDescriptor.builder(table.toTableDescriptor()).schema(newSchema).build();
+        KafkaTableSchema.validate(updated);
+        KafkaTableSchema.validateTablePath(table.getTablePath(), updated);
     }
 
     private static void checkTableLakeFormatMatchesCluster(
@@ -161,21 +171,16 @@ public class TableDescriptorValidation {
             return;
         }
 
-        if (!tableConf.get(ConfigOptions.TABLE_DATALAKE_ENABLED)) {
-            return;
-        }
-
         Optional<DataLakeFormat> tableDataLakeFormat =
                 tableConf.getOptional(ConfigOptions.TABLE_DATALAKE_FORMAT);
         if (tableDataLakeFormat.isPresent() && tableDataLakeFormat.get() != clusterDataLakeFormat) {
             throw new InvalidConfigException(
                     String.format(
-                            "'%s' ('%s') must match cluster '%s' ('%s') when '%s' is enabled.",
+                            "'%s' ('%s') must match cluster '%s' ('%s').",
                             ConfigOptions.TABLE_DATALAKE_FORMAT.key(),
                             tableDataLakeFormat.get(),
                             ConfigOptions.DATALAKE_FORMAT.key(),
-                            clusterDataLakeFormat,
-                            ConfigOptions.TABLE_DATALAKE_ENABLED.key()));
+                            clusterDataLakeFormat));
         }
     }
 
@@ -214,10 +219,6 @@ public class TableDescriptorValidation {
                             DataLakeFormat.PAIMON,
                             dataLakeFormat.get()));
         }
-        if (!tableDescriptor.hasPrimaryKey()) {
-            unmetRequirements.add("the table must define a primary key");
-        }
-
         int partitionKeyCount = tableDescriptor.getPartitionKeys().size();
         if (partitionKeyCount != 1) {
             unmetRequirements.add(
@@ -232,6 +233,32 @@ public class TableDescriptorValidation {
                             "'%s' has unmet requirements: %s.",
                             ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED.key(),
                             String.join("; ", unmetRequirements)));
+        }
+    }
+
+    private static void checkCustomLakePathSupported(
+            Configuration tableConf, @Nullable DataLakeFormat clusterDataLakeFormat) {
+        boolean hasLakePathOption =
+                tableConf.contains(ConfigOptions.TABLE_DATALAKE_DATABASE_NAME)
+                        || tableConf.contains(ConfigOptions.TABLE_DATALAKE_TABLE_NAME);
+        if (!hasLakePathOption) {
+            return;
+        }
+
+        tableConf
+                .getOptional(ConfigOptions.TABLE_DATALAKE_DATABASE_NAME)
+                .ifPresent(TablePath::validateDatabaseName);
+        tableConf
+                .getOptional(ConfigOptions.TABLE_DATALAKE_TABLE_NAME)
+                .ifPresent(TablePath::validateTableName);
+
+        DataLakeFormat dataLakeFormat =
+                tableConf
+                        .getOptional(ConfigOptions.TABLE_DATALAKE_FORMAT)
+                        .orElse(clusterDataLakeFormat);
+        if (dataLakeFormat != DataLakeFormat.PAIMON) {
+            throw new InvalidConfigException(
+                    "Custom lake table path is only supported for Paimon.");
         }
     }
 
@@ -436,6 +463,10 @@ public class TableDescriptorValidation {
             throw new InvalidTableException("Bucket number must be set.");
         }
         int bucketCount = tableDescriptor.getTableDistribution().get().getBucketCount().get();
+        if (bucketCount <= 0) {
+            throw new InvalidTableException(
+                    String.format("Bucket count must be greater than 0, but is %s.", bucketCount));
+        }
         if (bucketCount > maxBucketNum) {
             throw new TooManyBucketsException(
                     String.format(
@@ -577,6 +608,35 @@ public class TableDescriptorValidation {
                 // Validate aggregation function parameters for aggregation merge engine
                 validateAggregationFunctionParameters(schema);
             }
+        }
+    }
+
+    private static void checkUpsertSkipUnchanged(Configuration tableConf, boolean hasPrimaryKey) {
+        if (!tableConf.get(ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED)) {
+            return;
+        }
+        String option = ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED.key();
+        if (!hasPrimaryKey) {
+            throw new InvalidConfigException(
+                    String.format("'%s' is only supported for primary key tables.", option));
+        }
+        if (tableConf.getOptional(ConfigOptions.TABLE_MERGE_ENGINE).isPresent()) {
+            throw new InvalidConfigException(
+                    String.format(
+                            "'%s' cannot be combined with '%s'.",
+                            option, ConfigOptions.TABLE_MERGE_ENGINE.key()));
+        }
+        if (tableConf.get(ConfigOptions.TABLE_CHANGELOG_IMAGE) == ChangelogImage.WAL) {
+            throw new InvalidConfigException(
+                    String.format(
+                            "'%s' requires '%s' to be FULL.",
+                            option, ConfigOptions.TABLE_CHANGELOG_IMAGE.key()));
+        }
+        if (tableConf.getOptional(ConfigOptions.TABLE_KV_TTL).isPresent()) {
+            throw new InvalidConfigException(
+                    String.format(
+                            "'%s' cannot be combined with '%s'.",
+                            option, ConfigOptions.TABLE_KV_TTL.key()));
         }
     }
 

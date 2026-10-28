@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::client::metadata::Metadata;
-use crate::cluster::ServerNode;
+use crate::cluster::{Cluster, ServerNode};
 use crate::metadata::{
     AclFilter, AclInfo, AcquireKvSnapshotLeaseResult, ActiveKvSnapshots, AlterConfig,
     AlterTableChanges, BucketStatsRequest, ClusterHealth, CreateAclResult, DatabaseDescriptor,
@@ -24,7 +24,7 @@ use crate::metadata::{
     KvSnapshotLeaseForTable, KvSnapshotMetadata, LakeSnapshot, LakeSnapshotInfo, LatestKvSnapshots,
     PartitionInfo, PartitionSpec, PhysicalTablePath, ProducerOffsets, ProducerTableOffsets,
     RebalanceProgress, RegisterProducerResult, RemoteLogManifestEntry, Schema, SchemaInfo,
-    ServerTag, TableBucket, TableDescriptor, TableInfo, TablePath, TableStats,
+    ServerTag, TableBucket, TableDescriptor, TableInfo, TableOrPartition, TablePath, TableStats,
 };
 use crate::rpc::message::{
     AcquireKvSnapshotLeaseRequest, AddServerTagRequest, AlterClusterConfigsRequest,
@@ -46,6 +46,7 @@ use crate::rpc::{RpcClient, ServerConnection};
 use crate::error::{Error, Result};
 use crate::proto::GetTableInfoResponse;
 use crate::{BucketId, PartitionId, SnapshotId, TableId};
+use futures::future::try_join_all;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::task::JoinHandle;
@@ -170,6 +171,7 @@ impl FlussAdmin {
             table_json,
             created_time,
             modified_time,
+            bucket_count_epoch,
             ..
         } = response;
         let table_descriptor = parse_table_descriptor(&table_json)?;
@@ -180,7 +182,8 @@ impl FlussAdmin {
             table_descriptor,
             created_time,
             modified_time,
-        ))
+        )
+        .with_bucket_count_epoch(bucket_count_epoch.unwrap_or(0)))
     }
 
     /// List all tables in the given database
@@ -212,7 +215,15 @@ impl FlussAdmin {
                 partial_partition_spec,
             ))
             .await?;
-        Ok(response.get_partitions_info())
+        let partitions = response.get_partitions_info();
+        if partitions
+            .iter()
+            .all(|partition| partition.get_bucket_count() > 0)
+        {
+            return Ok(partitions);
+        }
+        let table_info = self.get_table_info(table_path).await?;
+        fill_bucket_counts(partitions, &table_info)
     }
 
     /// Create a new partition for a partitioned table.
@@ -467,10 +478,13 @@ impl FlussAdmin {
                 .push(*bucket_id);
         }
 
+        let routing_bucket_count =
+            cluster.bucket_count(TableOrPartition::of(table_id, partition_id));
         let mut list_offsets_requests = HashMap::new();
         for (leader_id, bucket_ids) in node_for_bucket_list {
             let request =
-                ListOffsetsRequest::new(table_id, partition_id, bucket_ids, offset_spec.clone());
+                ListOffsetsRequest::new(table_id, partition_id, bucket_ids, offset_spec.clone())
+                    .with_routing_bucket_count(routing_bucket_count);
             list_offsets_requests.insert(leader_id, request);
         }
         Ok(list_offsets_requests)
@@ -545,39 +559,90 @@ impl FlussAdmin {
         ignore_if_not_exists: bool,
         changes: AlterTableChanges,
     ) -> Result<()> {
+        changes.validate()?;
         let _response = self
             .admin_gateway()
             .await?
             .request(AlterTableRequest::new(
                 table_path,
                 ignore_if_not_exists,
-                changes.config_changes,
-                changes.add_columns,
-                changes.drop_columns,
-                changes.rename_columns,
-                changes.modify_columns,
+                changes,
             ))
             .await?;
         Ok(())
     }
 
     /// Get table statistics for buckets. Pass empty `target_columns` to request stats for all columns.
+    ///
+    /// The table must be in the metadata cache, as it is after [`Self::get_table_info`].
     pub async fn get_table_stats(
         &self,
         table_id: TableId,
         buckets_req: Vec<BucketStatsRequest>,
         target_columns: Vec<i32>,
     ) -> Result<TableStats> {
-        let response = self
-            .admin_gateway()
-            .await?
-            .request(GetTableStatsRequest::new(
-                table_id,
-                buckets_req,
-                target_columns,
-            ))
+        if buckets_req.is_empty() {
+            return Ok(TableStats {
+                buckets: Vec::new(),
+            });
+        }
+        let table_path = self
+            .metadata
+            .get_cluster()
+            .get_table_path_by_id(table_id)
+            .cloned()
+            .ok_or_else(|| Error::IllegalArgument {
+                message: format!("Table id {table_id} is not in the metadata cache."),
+            })?;
+        // Nothing else refreshes a cached partition's leaders, so refresh them with the table.
+        let partition_ids: Vec<PartitionId> = buckets_req
+            .iter()
+            .filter_map(|bucket| bucket.partition_id)
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+        self.metadata
+            .update_tables_metadata(
+                &HashSet::from([&table_path]),
+                &HashSet::new(),
+                partition_ids,
+            )
             .await?;
-        Ok(TableStats::from_pb(&response))
+
+        let cluster = self.metadata.get_cluster();
+        let mut requests = Vec::new();
+        for (leader_id, buckets) in group_stats_requests_by_leader(&cluster, table_id, buckets_req)?
+        {
+            let tablet_server = cluster
+                .get_tablet_server(leader_id)
+                .cloned()
+                .ok_or_else(|| {
+                    Error::leader_not_available(format!(
+                        "Tablet server {leader_id} is not found in metadata cache."
+                    ))
+                })?;
+            let request = GetTableStatsRequest::new(table_id, buckets, target_columns.clone())
+                .with_routing_bucket_counts(|partition_id| {
+                    cluster.bucket_count(TableOrPartition::of(table_id, partition_id))
+                });
+            requests.push((tablet_server, request));
+        }
+        let responses = try_join_all(requests.into_iter().map(
+            |(tablet_server, request)| async move {
+                self.rpc_client
+                    .get_connection(&tablet_server)
+                    .await?
+                    .request(request)
+                    .await
+            },
+        ))
+        .await?;
+        Ok(TableStats {
+            buckets: responses
+                .iter()
+                .flat_map(|response| TableStats::from_pb(response).buckets)
+                .collect(),
+        })
     }
 
     /// Get the latest KV snapshots for a table (optionally scoped to one partition).
@@ -887,10 +952,154 @@ impl FlussAdmin {
     }
 }
 
+fn group_stats_requests_by_leader(
+    cluster: &Cluster,
+    table_id: TableId,
+    buckets: Vec<BucketStatsRequest>,
+) -> Result<HashMap<i32, Vec<BucketStatsRequest>>> {
+    let mut buckets_by_leader: HashMap<i32, Vec<BucketStatsRequest>> = HashMap::new();
+    for bucket in buckets {
+        let table_bucket =
+            TableBucket::new_with_partition(table_id, bucket.partition_id, bucket.bucket_id);
+        let leader = cluster.leader_for(&table_bucket).ok_or_else(|| {
+            Error::leader_not_available(format!(
+                "No leader found for table bucket: {table_bucket}."
+            ))
+        })?;
+        buckets_by_leader
+            .entry(leader.id())
+            .or_default()
+            .push(bucket);
+    }
+    Ok(buckets_by_leader)
+}
+
+/// Gives the table's bucket count to partitions from a server that sent none, which is only
+/// correct while the table has never changed `bucket.num`.
+fn fill_bucket_counts(
+    partitions: Vec<PartitionInfo>,
+    table_info: &TableInfo,
+) -> Result<Vec<PartitionInfo>> {
+    if table_info.get_bucket_count_epoch() > 0 {
+        return Err(Error::UnexpectedError {
+            message: format!(
+                "The server sent no partition bucket counts for {}, whose bucket count changed.",
+                table_info.table_path
+            ),
+            source: None,
+        });
+    }
+    Ok(partitions
+        .into_iter()
+        .map(|partition| match partition.get_bucket_count() {
+            0 => partition.with_bucket_count(table_info.num_buckets),
+            _ => partition,
+        })
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::parse_table_descriptor;
-    use crate::error::Error;
+    use super::{fill_bucket_counts, group_stats_requests_by_leader, parse_table_descriptor};
+    use crate::cluster::{BucketLocation, Cluster, ServerNode, ServerType};
+    use crate::error::{Error, FlussError};
+    use crate::metadata::{
+        BucketStatsRequest, PartitionInfo, PhysicalTablePath, ResolvedPartitionSpec, TableBucket,
+        TablePath,
+    };
+    use crate::test_utils::build_table_info;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    const TABLE_ID: i64 = 1;
+
+    fn cluster(leaders: [Option<i32>; 4]) -> Cluster {
+        let table_path = TablePath::new("db", "tbl");
+        let physical_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path.clone())));
+        let servers: HashMap<i32, ServerNode> = (1..=2)
+            .map(|id| {
+                let node =
+                    ServerNode::new(id, "127.0.0.1".to_string(), 9000, ServerType::TabletServer);
+                (id, node)
+            })
+            .collect();
+        let locations: Vec<BucketLocation> = leaders
+            .iter()
+            .enumerate()
+            .map(|(bucket, leader)| {
+                BucketLocation::new(
+                    TableBucket::new(TABLE_ID, bucket as i32),
+                    leader.map(|id| servers[&id].clone()),
+                    Arc::clone(&physical_path),
+                )
+            })
+            .collect();
+        Cluster::new(
+            None,
+            servers,
+            HashMap::from([(physical_path, locations.clone())]),
+            locations
+                .into_iter()
+                .map(|location| (location.table_bucket.clone(), location))
+                .collect(),
+            HashMap::from([(table_path.clone(), TABLE_ID)]),
+            HashMap::from([(
+                table_path.clone(),
+                build_table_info(table_path, TABLE_ID, 4),
+            )]),
+            HashMap::new(),
+            HashMap::new(),
+        )
+    }
+
+    fn all_buckets() -> Vec<BucketStatsRequest> {
+        (0..4)
+            .map(|bucket| BucketStatsRequest::new(None, bucket))
+            .collect()
+    }
+
+    #[test]
+    fn table_stats_requests_are_grouped_by_bucket_leader() {
+        let cluster = cluster([Some(1), Some(2), Some(1), Some(2)]);
+        let grouped = group_stats_requests_by_leader(&cluster, TABLE_ID, all_buckets()).unwrap();
+        let bucket_ids = |leader: i32| -> Vec<i32> {
+            grouped[&leader]
+                .iter()
+                .map(|bucket| bucket.bucket_id)
+                .collect()
+        };
+        assert_eq!(grouped.len(), 2);
+        assert_eq!(bucket_ids(1), vec![0, 2]);
+        assert_eq!(bucket_ids(2), vec![1, 3]);
+    }
+
+    #[test]
+    fn a_bucket_without_a_leader_fails_the_table_stats_request() {
+        let cluster = cluster([Some(1), None, Some(1), Some(1)]);
+        let error = group_stats_requests_by_leader(&cluster, TABLE_ID, all_buckets()).unwrap_err();
+        assert_eq!(
+            error.api_error(),
+            Some(FlussError::LeaderNotAvailableException)
+        );
+    }
+
+    fn partition(id: i64, bucket_count: i32) -> PartitionInfo {
+        let spec = ResolvedPartitionSpec::new(Arc::from(["p".to_string()]), vec![id.to_string()])
+            .expect("spec");
+        PartitionInfo::new(id, spec).with_bucket_count(bucket_count)
+    }
+
+    #[test]
+    fn partitions_without_a_count_get_the_table_count_while_never_rescaled() {
+        let table_info = build_table_info(TablePath::new("db", "tbl"), 1, 4);
+        let filled = fill_bucket_counts(vec![partition(1, 0), partition(2, 8)], &table_info)
+            .expect("filled");
+        let counts: Vec<i32> = filled.iter().map(|p| p.get_bucket_count()).collect();
+        assert_eq!(counts, vec![4, 8]);
+
+        let rescaled = table_info.with_bucket_count_epoch(1);
+        assert!(fill_bucket_counts(vec![partition(1, 0)], &rescaled).is_err());
+    }
 
     #[test]
     fn test_parse_table_descriptor_rejects_malformed_json() {

@@ -60,7 +60,22 @@ abstract class FlussMicroBatchStream(
   lazy val bucketOffsetsRetriever: BucketOffsetsRetrieverImpl =
     new BucketOffsetsRetrieverImpl(admin, tableInfo.getTablePath)
 
-  lazy val partitionInfos: util.List[PartitionInfo] = admin.listPartitionInfos(tablePath).get()
+  lazy val partitionInfos: util.List[PartitionInfo] = {
+    val infos = admin.listPartitionInfos(tablePath).get()
+    // Fail fast if any partition's bucket count differs from the table-level count.
+    // Per-partition bucket count rescale (ALTER bucket.num) is not yet supported in Spark.
+    val tableBucketCount = tableInfo.getNumBuckets
+    infos.asScala.foreach {
+      info =>
+        if (info.getBucketCount != tableBucketCount) {
+          throw new UnsupportedOperationException(
+            s"Spark does not yet support per-partition bucket count rescale. " +
+              s"Table $tablePath partition ${info.getPartitionName} has bucket count " +
+              s"${info.getBucketCount} but the table-level count is $tableBucketCount.")
+        }
+    }
+    infos
+  }
 
   private var allDataForTriggerAvailableNow: Option[TableBucketOffsets] = None
 

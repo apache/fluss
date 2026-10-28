@@ -39,6 +39,7 @@ use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
 use std::fmt;
 use std::io::Cursor;
+use std::marker::PhantomData;
 use std::ops::DerefMut;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -46,7 +47,7 @@ use std::task::Poll;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, BufStream, WriteHalf};
 use tokio::sync::Mutex as AsyncMutex;
-use tokio::sync::oneshot::{Sender, channel};
+use tokio::sync::oneshot::{Receiver, Sender, channel};
 use tokio::task::JoinHandle;
 
 pub type MessengerTransport = ServerConnectionInner<BufStream<Transport>>;
@@ -84,18 +85,28 @@ pub struct ServerApiVersions {
 }
 
 impl ServerApiVersions {
-    /// Build from the server's advertised API version list.
-    pub(crate) fn new(server_versions: &[PbApiVersion]) -> Self {
+    /// Build from the server's advertised API version list, returning an error if a relevant
+    /// protocol value cannot be represented by the client's API version types.
+    pub(crate) fn new(server_versions: &[PbApiVersion]) -> Result<Self, Error> {
+        let to_i16 = |field_name: &str, value: i32| {
+            i16::try_from(value).map_err(|source| Error::UnexpectedError {
+                message: format!(
+                    "Server advertised {field_name} value {value}, which is outside the supported i16 range"
+                ),
+                source: Some(Box::new(source)),
+            })
+        };
+
         let mut versions = HashMap::new();
         for sv in server_versions {
-            let api_key = ApiKey::from(i16::try_from(sv.api_key).unwrap());
+            let api_key = ApiKey::from(to_i16("api_key", sv.api_key)?);
             // Skip unknown API keys — the client does not support them.
             let client_range = match api_key.supported_versions() {
                 Some(range) => range,
                 None => continue,
             };
-            let server_min = i16::try_from(sv.min_version).unwrap();
-            let server_max = i16::try_from(sv.max_version).unwrap();
+            let server_min = to_i16("min_version", sv.min_version)?;
+            let server_max = to_i16("max_version", sv.max_version)?;
             let min_version = client_range.min().0.max(server_min);
             let max_version = client_range.max().0.min(server_max);
             if min_version > max_version {
@@ -115,7 +126,7 @@ impl ServerApiVersions {
                 versions.insert(api_key, Ok(ApiVersion(max_version)));
             }
         }
-        Self { versions }
+        Ok(Self { versions })
     }
 
     /// Get the negotiated (highest usable) version for a given API key.
@@ -270,7 +281,7 @@ impl RpcClient {
         let request = ApiVersionsRequest::new("fluss-rust", env!("CARGO_PKG_VERSION"));
         let response = connection.request(request).await?;
         validate_server_type(expected_server_type, response.server_type)?;
-        let api_versions = ServerApiVersions::new(&response.api_versions);
+        let api_versions = ServerApiVersions::new(&response.api_versions)?;
         *connection.api_versions.lock() = Some(api_versions);
         Ok(())
     }
@@ -543,7 +554,25 @@ where
         R: RequestBody + Send + WriteType<Vec<u8>>,
         R::ResponseBody: ReadType<Cursor<Vec<u8>>>,
     {
+        self.dispatch_request(msg).await?.receive().await
+    }
+
+    /// Writes the complete request frame without waiting for the response.
+    ///
+    /// Ordered callers must serialize this phase, including connection acquisition, rather
+    /// than racing multiple dispatch futures for the socket lock. The returned handle owns
+    /// response decoding, request registration and round-trip metrics. The caller must
+    /// retain the connection until the response completes, keeping its read task alive.
+    pub(crate) async fn dispatch_request<R>(
+        &self,
+        msg: R,
+    ) -> Result<PendingResponse<R::ResponseBody>, Error>
+    where
+        R: RequestBody + Send + WriteType<Vec<u8>>,
+        R::ResponseBody: ReadType<Cursor<Vec<u8>>>,
+    {
         let api_version = self.resolve_api_version(R::API_KEY)?;
+        msg.check_version(api_version)?;
         let request_id = self.request_id.fetch_add(1, Ordering::SeqCst) & 0x7FFFFFFF;
         let header = RequestHeader {
             request_api_key: R::API_KEY,
@@ -564,8 +593,7 @@ where
 
         // to prevent stale data in inner state, ensure that we would remove the request again if we are cancelled while
         // sending the request
-        let _cleanup_on_cancel =
-            CleanupRequestStateOnCancel::new(Arc::clone(&self.state), request_id);
+        let registration = CleanupRequestStateOnCancel::new(Arc::clone(&self.state), request_id);
 
         match self.state.lock().deref_mut() {
             ConnectionState::RequestMap(map) => {
@@ -581,7 +609,61 @@ where
         self.send_message(buf)
             .await
             .inspect_err(|_| request_metrics.complete(0))?;
-        _cleanup_on_cancel.message_sent();
+        Ok(PendingResponse {
+            rx,
+            request_metrics,
+            _registration: registration,
+            api_key: R::API_KEY,
+            api_version,
+            response_type: PhantomData,
+        })
+    }
+
+    async fn send_message(&self, msg: Vec<u8>) -> Result<(), RpcError> {
+        let mut stream_write = Arc::clone(&self.stream_write).lock_owned().await;
+        let state = Arc::clone(&self.state);
+        if let ConnectionState::Poison(error) = &*state.lock() {
+            return Err(RpcError::Poisoned(Arc::clone(error)));
+        }
+
+        // use a wrapper so that cancellation doesn't cancel the send operation and leaves half-send messages on the wire
+        let fut = CancellationSafeFuture::new(async move {
+            let result = async {
+                stream_write.write_message(&msg).await?;
+                stream_write.flush().await?;
+                Ok(())
+            }
+            .await;
+            // This must live inside the cancellation-safe future: if the caller is
+            // cancelled mid-frame, a failure of its background write still poisons
+            // the connection before the write lock is released to another request.
+            result.map_err(|error| RpcError::Poisoned(state.lock().poison(error)))
+        });
+
+        fut.await
+    }
+}
+
+/// An already-dispatched request whose response may be awaited independently of later writes.
+pub(crate) struct PendingResponse<T> {
+    rx: Receiver<Result<Response, RpcError>>,
+    request_metrics: RequestMetricsLifecycle,
+    _registration: CleanupRequestStateOnCancel,
+    api_key: ApiKey,
+    api_version: ApiVersion,
+    response_type: PhantomData<fn() -> T>,
+}
+
+impl<T: ReadType<Cursor<Vec<u8>>>> PendingResponse<T> {
+    pub(crate) async fn receive(self) -> Result<T, Error> {
+        let Self {
+            rx,
+            mut request_metrics,
+            _registration,
+            api_key,
+            api_version,
+            ..
+        } = self;
         let mut response = rx
             .await
             .map_err(|e| Error::UnexpectedError {
@@ -602,7 +684,7 @@ where
             });
         }
 
-        let body = R::ResponseBody::read(&mut response.data).map_err(RpcError::ReadMessageError)?;
+        let body = T::read(&mut response.data).map_err(RpcError::ReadMessageError)?;
 
         let read_bytes = response.data.position();
         let message_bytes = response.data.into_inner().len() as u64;
@@ -610,36 +692,12 @@ where
             return Err(RpcError::TooMuchData {
                 message_size: message_bytes,
                 read: read_bytes,
-                api_key: R::API_KEY,
+                api_key,
                 api_version,
             }
             .into());
         }
         Ok(body)
-    }
-
-    async fn send_message(&self, msg: Vec<u8>) -> Result<(), RpcError> {
-        match self.send_message_inner(msg).await {
-            Ok(()) => Ok(()),
-            Err(e) => {
-                // need to poison the stream because message framing might be out-of-sync
-                let mut state = self.state.lock();
-                Err(RpcError::Poisoned(state.poison(e)))
-            }
-        }
-    }
-
-    async fn send_message_inner(&self, msg: Vec<u8>) -> Result<(), RpcError> {
-        let mut stream_write = Arc::clone(&self.stream_write).lock_owned().await;
-
-        // use a wrapper so that cancellation doesn't cancel the send operation and leaves half-send messages on the wire
-        let fut = CancellationSafeFuture::new(async move {
-            stream_write.write_message(&msg).await?;
-            stream_write.flush().await?;
-            Ok(())
-        });
-
-        fut.await
     }
 }
 
@@ -729,37 +787,23 @@ where
     }
 }
 
-/// Helper that ensures that a request is removed when a request is cancelled before it was actually sent out.
+/// Unregisters a cancelled request, both during dispatch and while waiting for its response.
 struct CleanupRequestStateOnCancel {
     state: Arc<Mutex<ConnectionState>>,
     request_id: i32,
-    message_sent: bool,
 }
 
 impl CleanupRequestStateOnCancel {
     /// Create new helper.
-    ///
-    /// You must call [`message_sent`](Self::message_sent) when the request was sent.
     fn new(state: Arc<Mutex<ConnectionState>>, request_id: i32) -> Self {
-        Self {
-            state,
-            request_id,
-            message_sent: false,
-        }
-    }
-
-    /// Request was sent. Do NOT clean the state any longer.
-    fn message_sent(mut self) {
-        self.message_sent = true;
+        Self { state, request_id }
     }
 }
 
 impl Drop for CleanupRequestStateOnCancel {
     fn drop(&mut self) {
-        if !self.message_sent {
-            if let ConnectionState::RequestMap(map) = self.state.lock().deref_mut() {
-                map.remove(&self.request_id);
-            }
+        if let ConnectionState::RequestMap(map) = self.state.lock().deref_mut() {
+            map.remove(&self.request_id);
         }
     }
 }
@@ -772,12 +816,11 @@ mod tests {
     use crate::rpc::api_version::ApiVersion;
     use crate::rpc::frame::{ReadError, WriteError};
     use crate::rpc::message::{ReadType, RequestBody, WriteType};
+    use futures::FutureExt;
     use metrics::{SharedString, Unit};
     use metrics_util::CompositeKey;
     use metrics_util::debugging::{DebugValue, DebuggingRecorder};
-    use std::sync::OnceLock;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt, BufStream};
-    use tokio::sync::Mutex as AsyncMutex;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt, BufStream, DuplexStream};
 
     // -- Test-only request/response types --------------------------------
 
@@ -897,23 +940,11 @@ mod tests {
 
     // -- Recorder setup --------------------------------------------------
 
-    /// Shared test recorder (installed once per test binary).
-    static TEST_SNAPSHOTTER: OnceLock<metrics_util::debugging::Snapshotter> = OnceLock::new();
-    static TEST_LOCK: OnceLock<AsyncMutex<()>> = OnceLock::new();
+    // Each metrics test uses a local recorder on its current-thread Tokio runtime,
+    // so concurrent real-RPC tests cannot change or consume its metric samples.
 
-    fn test_snapshotter() -> &'static metrics_util::debugging::Snapshotter {
-        TEST_SNAPSHOTTER.get_or_init(|| {
-            let recorder = DebuggingRecorder::new();
-            let snapshotter = recorder.snapshotter();
-            recorder
-                .install()
-                .expect("debugging recorder install should succeed in this test binary");
-            snapshotter
-        })
-    }
-
-    fn test_lock() -> &'static AsyncMutex<()> {
-        TEST_LOCK.get_or_init(|| AsyncMutex::new(()))
+    fn server_api_versions(server_versions: &[PbApiVersion]) -> ServerApiVersions {
+        ServerApiVersions::new(server_versions).unwrap()
     }
 
     type SnapshotEntry = (CompositeKey, Option<Unit>, Option<SharedString>, DebugValue);
@@ -990,16 +1021,129 @@ mod tests {
 
     // -- Tests -----------------------------------------------------------
 
+    /// ProduceLog-only version table, so `dispatch_request` skips the real handshake.
+    fn produce_api_versions() -> ServerApiVersions {
+        server_api_versions(&[PbApiVersion {
+            api_key: 1014,
+            min_version: 0,
+            max_version: 0,
+        }])
+    }
+
+    /// Connection over an in-memory duplex with ProduceLog already negotiated.
+    fn duplex_conn(
+        capacity: usize,
+    ) -> (ServerConnectionInner<BufStream<DuplexStream>>, DuplexStream) {
+        let (client, server) = tokio::io::duplex(capacity);
+        let conn = ServerConnectionInner::new(BufStream::new(client), usize::MAX, Arc::from("t"));
+        *conn.api_versions.lock() = Some(produce_api_versions());
+        (conn, server)
+    }
+
+    /// Reads one request frame and returns its request id.
+    async fn read_request_id(server: &mut DuplexStream) -> i32 {
+        let len = server.read_i32().await.unwrap();
+        let mut frame = vec![0; len as usize];
+        server.read_exact(&mut frame).await.unwrap();
+        i32::from_be_bytes(frame[4..8].try_into().unwrap())
+    }
+
+    async fn write_empty_response(server: &mut DuplexStream, request_id: i32) {
+        server.write_i32(5).await.unwrap();
+        server.write_u8(0).await.unwrap();
+        server.write_i32(request_id).await.unwrap();
+    }
+
+    /// Metrics for the dispatched path are covered by the `request_` metrics tests below,
+    /// which now run through `dispatch_request` + `PendingResponse::receive` as well.
+    #[tokio::test]
+    async fn dispatched_response_keeps_registration_until_ack() {
+        let (conn, mut server) = duplex_conn(4096);
+        let pending = conn.dispatch_request(TestProduceRequest).await.unwrap();
+        assert!(matches!(&*conn.state.lock(), ConnectionState::RequestMap(map) if map.len() == 1));
+        let request_id = read_request_id(&mut server).await;
+        write_empty_response(&mut server, request_id).await;
+        pending.receive().await.unwrap();
+        assert!(matches!(&*conn.state.lock(), ConnectionState::RequestMap(map) if map.is_empty()));
+    }
+
+    #[tokio::test]
+    async fn cancelling_dispatched_response_unregisters_request() {
+        let (conn, _server) = duplex_conn(4096);
+        let pending = conn.dispatch_request(TestProduceRequest).await.unwrap();
+        assert!(matches!(&*conn.state.lock(), ConnectionState::RequestMap(map) if map.len() == 1));
+        drop(pending);
+        assert!(matches!(&*conn.state.lock(), ConnectionState::RequestMap(map) if map.is_empty()));
+    }
+
+    #[tokio::test]
+    async fn cancelled_partial_dispatch_still_poisoned_on_write_failure() {
+        let (writer, server) = tokio::io::duplex(8);
+        // Keep the read side open on its own transport: otherwise dropping the write
+        // peer can poison through read EOF and mask a broken write-error path.
+        let (reader, _read_peer) = tokio::io::duplex(8);
+        let conn = ServerConnectionInner::new(
+            BufStream::new(tokio::io::join(reader, writer)),
+            usize::MAX,
+            Arc::from("t"),
+        );
+        *conn.api_versions.lock() = Some(produce_api_versions());
+        // A 12-byte frame cannot fit the 8-byte transport, so dropping this future leaves
+        // the cancellation-safe write running in the background.
+        assert!(
+            conn.dispatch_request(TestProduceRequest)
+                .now_or_never()
+                .is_none()
+        );
+        assert!(matches!(&*conn.state.lock(), ConnectionState::RequestMap(map) if map.is_empty()));
+        drop(server);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !conn.is_poisoned() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("cancelled write did not poison the connection");
+        assert!(conn.dispatch_request(TestProduceRequest).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn cancelled_partial_dispatch_finishes_before_next_frame() {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let (conn, mut server) = duplex_conn(8);
+            assert!(
+                conn.dispatch_request(TestProduceRequest)
+                    .now_or_never()
+                    .is_none()
+            );
+            let (pending, ()) = tokio::join!(conn.dispatch_request(TestProduceRequest), async {
+                // Cancellation must finish the first frame before the successor writes.
+                for expected_id in 0..2 {
+                    assert_eq!(read_request_id(&mut server).await, expected_id);
+                }
+                write_empty_response(&mut server, 1).await;
+            });
+            pending.unwrap().receive().await.unwrap();
+            assert!(!conn.is_poisoned());
+            assert!(
+                matches!(&*conn.state.lock(), ConnectionState::RequestMap(map) if map.is_empty())
+            );
+        })
+        .await
+        .expect("cancelled partial write blocked its successor");
+    }
+
     #[tokio::test]
     async fn request_records_metrics_for_reportable_api_key() {
-        let _test_guard = test_lock().lock().await;
-        let snapshotter = test_snapshotter();
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        let _recorder_guard = metrics::set_default_local_recorder(&recorder);
 
         let (client, server) = tokio::io::duplex(4096);
         tokio::spawn(mock_echo_server(server));
 
         let conn = ServerConnectionInner::new(BufStream::new(client), usize::MAX, Arc::from("t"));
-        *conn.api_versions.lock() = Some(ServerApiVersions::new(&[PbApiVersion {
+        *conn.api_versions.lock() = Some(server_api_versions(&[PbApiVersion {
             api_key: 1014,
             min_version: 0,
             max_version: 0,
@@ -1037,14 +1181,15 @@ mod tests {
 
     #[tokio::test]
     async fn request_skips_metrics_for_non_reportable_api_key() {
-        let _test_guard = test_lock().lock().await;
-        let snapshotter = test_snapshotter();
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        let _recorder_guard = metrics::set_default_local_recorder(&recorder);
 
         let (client, server) = tokio::io::duplex(4096);
         tokio::spawn(mock_echo_server(server));
 
         let conn = ServerConnectionInner::new(BufStream::new(client), usize::MAX, Arc::from("t"));
-        *conn.api_versions.lock() = Some(ServerApiVersions::new(&[PbApiVersion {
+        *conn.api_versions.lock() = Some(server_api_versions(&[PbApiVersion {
             api_key: 1012,
             min_version: 0,
             max_version: 0,
@@ -1079,13 +1224,14 @@ mod tests {
 
     #[tokio::test]
     async fn request_records_completion_metrics_when_send_fails() {
-        let _test_guard = test_lock().lock().await;
-        let snapshotter = test_snapshotter();
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        let _recorder_guard = metrics::set_default_local_recorder(&recorder);
 
         let (client, server) = tokio::io::duplex(64);
         drop(server); // force write failure on request path
         let conn = ServerConnectionInner::new(BufStream::new(client), usize::MAX, Arc::from("t"));
-        *conn.api_versions.lock() = Some(ServerApiVersions::new(&[PbApiVersion {
+        *conn.api_versions.lock() = Some(server_api_versions(&[PbApiVersion {
             api_key: 1014,
             min_version: 0,
             max_version: 0,
@@ -1131,14 +1277,15 @@ mod tests {
 
     #[tokio::test]
     async fn request_records_completion_metrics_when_server_returns_api_error() {
-        let _test_guard = test_lock().lock().await;
-        let snapshotter = test_snapshotter();
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        let _recorder_guard = metrics::set_default_local_recorder(&recorder);
 
         let (client, server) = tokio::io::duplex(4096);
         tokio::spawn(mock_error_server(server));
 
         let conn = ServerConnectionInner::new(BufStream::new(client), usize::MAX, Arc::from("t"));
-        *conn.api_versions.lock() = Some(ServerApiVersions::new(&[PbApiVersion {
+        *conn.api_versions.lock() = Some(server_api_versions(&[PbApiVersion {
             api_key: 1014,
             min_version: 0,
             max_version: 0,
@@ -1189,6 +1336,11 @@ mod tests {
             ApiVersion(3)
         );
 
+        assert_eq!(
+            resolve_api_version_for(None, ApiKey::AlterTable).unwrap(),
+            ApiVersion(1)
+        );
+
         let server_versions = vec![
             // PutKv: server v0..v3, client v0..v3 → negotiated v3
             PbApiVersion {
@@ -1196,7 +1348,7 @@ mod tests {
                 min_version: 0,
                 max_version: 3,
             },
-            // ProduceLog: server v0..v2, client v0 only → negotiated v0
+            // ProduceLog: server v0..v2, client v0..v1 → negotiated v1
             PbApiVersion {
                 api_key: 1014,
                 min_version: 0,
@@ -1215,7 +1367,7 @@ mod tests {
                 max_version: 5,
             },
         ];
-        let negotiated = ServerApiVersions::new(&server_versions);
+        let negotiated = server_api_versions(&server_versions);
 
         // Successful negotiation cases
         assert_eq!(
@@ -1223,7 +1375,7 @@ mod tests {
             ApiVersion(3)
         );
 
-        let old_server_versions = ServerApiVersions::new(&[PbApiVersion {
+        let old_server_versions = server_api_versions(&[PbApiVersion {
             api_key: 1016,
             min_version: 0,
             max_version: 2,
@@ -1238,7 +1390,7 @@ mod tests {
             negotiated
                 .highest_available_version(ApiKey::ProduceLog)
                 .unwrap(),
-            ApiVersion(0)
+            ApiVersion(1)
         );
 
         // Disjoint range → error
@@ -1262,10 +1414,61 @@ mod tests {
 
         // Key not advertised by server → error
         assert!(
-            ServerApiVersions::new(&[])
+            server_api_versions(&[])
                 .highest_available_version(ApiKey::FetchLog)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn server_api_versions_returns_error_for_out_of_range_api_key() {
+        let api_key = i32::from(i16::MAX) + 1;
+        let error = ServerApiVersions::new(&[PbApiVersion {
+            api_key,
+            min_version: 0,
+            max_version: 0,
+        }])
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            Error::UnexpectedError { message, .. }
+                if message.contains("api_key") && message.contains(&api_key.to_string())
+        ));
+    }
+
+    #[test]
+    fn server_api_versions_returns_error_for_out_of_range_min_version() {
+        let min_version = i32::from(i16::MAX) + 1;
+        let error = ServerApiVersions::new(&[PbApiVersion {
+            api_key: 1014,
+            min_version,
+            max_version: 0,
+        }])
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            Error::UnexpectedError { message, .. }
+                if message.contains("min_version") && message.contains(&min_version.to_string())
+        ));
+    }
+
+    #[test]
+    fn server_api_versions_returns_error_for_out_of_range_max_version() {
+        let max_version = i32::from(i16::MIN) - 1;
+        let error = ServerApiVersions::new(&[PbApiVersion {
+            api_key: 1014,
+            min_version: 0,
+            max_version,
+        }])
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            Error::UnexpectedError { message, .. }
+                if message.contains("max_version") && message.contains(&max_version.to_string())
+        ));
     }
 
     #[test]

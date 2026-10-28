@@ -34,9 +34,12 @@ public class LookupBatch {
 
     private final List<LookupQuery> lookups;
 
-    LookupBatch(LookupBatchKey lookupBatchKey) {
+    private final int bucketCount;
+
+    LookupBatch(LookupBatchKey lookupBatchKey, int bucketCount) {
         this.lookupBatchKey = lookupBatchKey;
         this.lookups = new ArrayList<>();
+        this.bucketCount = bucketCount;
     }
 
     public void addLookup(LookupQuery lookup) {
@@ -53,6 +56,11 @@ public class LookupBatch {
 
     public @Nullable String originalPartitionName() {
         return lookupBatchKey.originalPartitionName();
+    }
+
+    /** The bucket count the bucketId was calculated with, or 0 if unknown (legacy). */
+    public int getBucketCount() {
+        return bucketCount;
     }
 
     LookupBatchKey lookupBatchKey() {
