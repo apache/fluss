@@ -215,17 +215,17 @@ public interface LogRecordBatch {
         ArrowReadPlan getArrowReadPlan(int schemaId);
 
         /**
-         * If the read context defines an output projection (for example, log records may add new
-         * columns or reorder columns, but reader need a static schema for the output rows), return
-         * a {@link ProjectedRow} that describes the projected output row for the given schemaId.
-         * The returned object is used by readers to transform or materialize rows according to the
-         * output projection. Returns {@code null} if no output projection is configured.
+         * Returns an output row mapping for {@link LogFormat#INDEXED} and {@link
+         * LogFormat#COMPACTED} records. The mapping adapts the batch's schema to the fixed output
+         * schema, including reordered or missing columns. Returns {@code null} if no remapping is
+         * needed.
          *
-         * <p>For {@link LogFormat#ARROW}, this is the output row of {@link #getArrowReadPlan(int)},
-         * on which only the selected fields may be read.
+         * <p>For {@link LogFormat#ARROW}, obtain the output mapping from {@link
+         * ArrowReadPlan#createOutputRow()} on the plan returned by {@link #getArrowReadPlan(int)}.
          *
          * @param schemaId the current row schema id
          * @return a {@link ProjectedRow} describing the output projection, or {@code null} if none
+         * @throws IllegalArgumentException if the log format is not INDEXED or COMPACTED
          */
         @Nullable
         ProjectedRow getOutputProjectedRow(int schemaId);

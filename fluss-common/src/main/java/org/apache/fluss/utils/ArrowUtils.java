@@ -66,6 +66,7 @@ import org.apache.fluss.shaded.arrow.com.google.flatbuffers.FlatBufferBuilder;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.flatbuf.BodyCompression;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.flatbuf.Buffer;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.flatbuf.FieldNode;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.flatbuf.Message;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.flatbuf.MessageHeader;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.flatbuf.RecordBatch;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ArrowBuf;
@@ -140,7 +141,9 @@ import org.apache.fluss.types.TinyIntType;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.channels.Channels;
+import java.nio.channels.FileChannel;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -229,30 +232,15 @@ public class ArrowUtils {
             // allocate and copy the entire body, including all unselected columns.
             MessageMetadataResult metadata = MessageSerializer.readMessage(channel);
             checkArgument(metadata != null, "Missing Arrow record batch metadata.");
-            checkArgument(
-                    metadata.headerType() == MessageHeader.RecordBatch,
-                    "Expected Arrow record batch, but found message type %s.",
-                    metadata.headerType());
             long bodyLength = metadata.getMessageBodyLength();
-            checkArgument(
-                    bodyLength >= 0 && bodyLength <= input.remaining(),
-                    "Invalid Arrow body length %s: only %s bytes available.",
-                    bodyLength,
-                    input.remaining());
-            RecordBatch batch = (RecordBatch) metadata.getMessage().header(new RecordBatch());
-            checkArgument(
-                    batch.nodesLength() == nodeCount,
-                    "Expected %s Arrow field nodes, but found %s.",
-                    nodeCount,
-                    batch.nodesLength());
-            checkArgument(
-                    batch.buffersLength() == bufferCount,
-                    "Expected %s Arrow buffers, but found %s.",
-                    bufferCount,
-                    batch.buffersLength());
+            RecordBatch batch =
+                    projectedBatchMetadata(
+                            metadata.getMessage(), input.remaining(), nodeCount, bufferCount);
+            int bodyOffset = input.position();
             return copySelectedBuffers(
-                    segment,
-                    input.position(),
+                    (offset, target, targetOffset, length) ->
+                            target.setBytes(
+                                    targetOffset, segment.wrap(bodyOffset + offset, length)),
                     bodyLength,
                     batch,
                     allocator,
@@ -261,6 +249,75 @@ public class ArrowUtils {
         } catch (IOException e) {
             throw new FlussRuntimeException(
                     "Failed to deserialize projected Arrow record batch.", e);
+        }
+    }
+
+    /**
+     * Deserializes selected field nodes and buffers directly from a file. Only the IPC metadata is
+     * staged on heap; selected buffers are read into Arrow-owned memory. The channel remains open
+     * and its position is unchanged. Index arrays use the same layout as the memory overload.
+     */
+    public static ArrowRecordBatch deserializeProjectedArrowRecordBatch(
+            FileChannel channel,
+            long arrowOffset,
+            int arrowLength,
+            BufferAllocator allocator,
+            int nodeCount,
+            int bufferCount,
+            int[] nodeIndexes,
+            int[] bufferIndexes) {
+        checkArgument(nodeIndexes != null && bufferIndexes != null, "A projection is required.");
+        try {
+            checkArgument(
+                    arrowOffset >= 0
+                            && arrowLength >= Integer.BYTES
+                            && arrowOffset <= channel.size() - arrowLength,
+                    "Invalid Arrow file range [%s, %s).",
+                    arrowOffset,
+                    arrowOffset + arrowLength);
+            ByteBuffer prefix = ByteBuffer.allocate(Integer.BYTES).order(ByteOrder.LITTLE_ENDIAN);
+            FileUtils.readFullyOrFail(channel, prefix, arrowOffset, "Arrow IPC prefix");
+            int metadataLength = prefix.getInt(0);
+            int prefixLength = Integer.BYTES;
+            if (metadataLength == MessageSerializer.IPC_CONTINUATION_TOKEN) {
+                prefixLength += Integer.BYTES;
+                checkArgument(arrowLength >= prefixLength, "Truncated Arrow IPC prefix.");
+                prefix.clear();
+                FileUtils.readFullyOrFail(
+                        channel, prefix, arrowOffset + Integer.BYTES, "Arrow metadata length");
+                metadataLength = prefix.getInt(0);
+            }
+            // Validate before allocating, and never read metadata from the following log batch.
+            checkArgument(
+                    metadataLength > 0 && metadataLength <= arrowLength - prefixLength,
+                    "Invalid Arrow metadata length: %s.",
+                    metadataLength);
+            ByteBuffer metadataBuffer = ByteBuffer.allocate(metadataLength);
+            FileUtils.readFullyOrFail(
+                    channel, metadataBuffer, arrowOffset + prefixLength, "Arrow metadata");
+            metadataBuffer.flip();
+            Message metadata = Message.getRootAsMessage(metadataBuffer);
+            RecordBatch batch =
+                    projectedBatchMetadata(
+                            metadata,
+                            arrowLength - prefixLength - metadataLength,
+                            nodeCount,
+                            bufferCount);
+            long bodyOffset = arrowOffset + prefixLength + metadataLength;
+            return copySelectedBuffers(
+                    (offset, target, targetOffset, length) ->
+                            FileUtils.readFullyOrFail(
+                                    channel,
+                                    target.nioBuffer(targetOffset, length),
+                                    bodyOffset + offset,
+                                    "projected Arrow buffer"),
+                    metadata.bodyLength(),
+                    batch,
+                    allocator,
+                    nodeIndexes,
+                    bufferIndexes);
+        } catch (IOException e) {
+            throw new FlussRuntimeException("Failed to read projected Arrow record batch.", e);
         }
     }
 
@@ -341,14 +398,44 @@ public class ArrowUtils {
 
     // ------------------------------------------------------------------------------------------
 
+    private static RecordBatch projectedBatchMetadata(
+            Message metadata, int remaining, int nodeCount, int bufferCount) {
+        checkArgument(
+                metadata.headerType() == MessageHeader.RecordBatch,
+                "Expected Arrow record batch, but found message type %s.",
+                metadata.headerType());
+        checkArgument(
+                metadata.bodyLength() >= 0 && metadata.bodyLength() <= remaining,
+                "Invalid Arrow body length %s: only %s bytes available.",
+                metadata.bodyLength(),
+                remaining);
+        RecordBatch batch = (RecordBatch) metadata.header(new RecordBatch());
+        checkArgument(
+                batch.nodesLength() == nodeCount,
+                "Expected %s Arrow field nodes, but found %s.",
+                nodeCount,
+                batch.nodesLength());
+        checkArgument(
+                batch.buffersLength() == bufferCount,
+                "Expected %s Arrow buffers, but found %s.",
+                bufferCount,
+                batch.buffersLength());
+        return batch;
+    }
+
+    @FunctionalInterface
+    private interface SelectedBufferReader {
+        void read(int offset, ArrowBuf target, long targetOffset, int length) throws IOException;
+    }
+
     private static ArrowRecordBatch copySelectedBuffers(
-            MemorySegment segment,
-            int bodyOffset,
+            SelectedBufferReader reader,
             long bodyLength,
             RecordBatch batch,
             BufferAllocator allocator,
             int[] nodeIndexes,
-            int[] bufferIndexes) {
+            int[] bufferIndexes)
+            throws IOException {
         checkArgument(
                 batch.length() >= 0 && batch.length() <= Integer.MAX_VALUE,
                 "Invalid Arrow record count: %s.",
@@ -394,7 +481,9 @@ public class ArrowUtils {
             long offset = 0;
             for (int i = 0; i < bufferIndexes.length; i++) {
                 int length = lengths[i];
-                body.setBytes(offset, segment.wrap(bodyOffset + offsets[i], length));
+                if (length > 0) {
+                    reader.read(offsets[i], body, offset, length);
+                }
                 buffers.add(body.slice(offset, length));
                 offset += DataSizeRoundingUtil.roundUpTo8Multiple((long) length);
             }

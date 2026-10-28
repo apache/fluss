@@ -17,20 +17,28 @@
 
 package org.apache.fluss.record;
 
+import org.apache.fluss.compression.ArrowCompressionInfo;
+import org.apache.fluss.compression.ArrowCompressionType;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.utils.CloseableIterator;
+import org.apache.fluss.utils.Projection;
 
 import org.apache.arrow.vector.IntVector;
 import org.apache.arrow.vector.VarCharVector;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.File;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
+import java.util.stream.Stream;
 
 import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V0;
 import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V1;
@@ -38,14 +46,115 @@ import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V2;
 import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO;
 import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
 import static org.apache.fluss.record.TestData.TEST_SCHEMA_GETTER;
+import static org.apache.fluss.testutils.DataTestUtils.createBasicMemoryLogRecords;
 import static org.apache.fluss.testutils.DataTestUtils.createRecordsWithoutBaseLogOffset;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.verify;
 
 /** Test for {@link FileLogInputStream}. */
 public class FileLogInputStreamTest extends LogTestBase {
     private @TempDir File tempDir;
+
+    @ParameterizedTest
+    @MethodSource("projectedFileModes")
+    void testProjectedFileRecords(
+            byte magic, ArrowCompressionType compression, boolean appendOnly, boolean checkCrc)
+            throws Exception {
+        List<ChangeType> changeTypes =
+                appendOnly
+                        ? Arrays.asList(ChangeType.APPEND_ONLY, ChangeType.APPEND_ONLY)
+                        : Arrays.asList(ChangeType.UPDATE_BEFORE, ChangeType.UPDATE_AFTER);
+        MemoryLogRecords memory =
+                createBasicMemoryLogRecords(
+                        DATA1_ROW_TYPE,
+                        DEFAULT_SCHEMA_ID,
+                        42L,
+                        1234L,
+                        magic,
+                        7L,
+                        3,
+                        changeTypes,
+                        Arrays.asList(new Object[] {10, "before"}, new Object[] {20, "after"}),
+                        LogFormat.ARROW,
+                        new ArrowCompressionInfo(compression, -1),
+                        appendOnly);
+        try (FileLogRecords file = FileLogRecords.open(new File(tempDir, "projected.log"));
+                LogRecordReadContext context =
+                        LogRecordReadContext.createReadContext(
+                                DATA1_TABLE_INFO,
+                                true,
+                                LogRecordReadContext.SchemaResolution.TARGET,
+                                Projection.of(new int[] {0}),
+                                TEST_SCHEMA_GETTER,
+                                null)) {
+            file.append(memory);
+            file.append(memory);
+            FileLogInputStream stream = new FileLogInputStream(file, 0, file.sizeInBytes());
+            for (int batchIndex = 0; batchIndex < 2; batchIndex++) {
+                FileLogInputStream.FileChannelLogRecordBatch batch = spy(stream.nextBatch());
+                if (checkCrc) {
+                    batch.ensureValid();
+                }
+                try (CloseableIterator<LogRecord> records = batch.records(context)) {
+                    for (int i = 0; i < 2; i++) {
+                        assertThat(records.hasNext()).isTrue();
+                        LogRecord record = records.next();
+                        assertThat(record.logOffset()).isEqualTo(42L + i);
+                        assertThat(record.timestamp()).isEqualTo(1234L);
+                        assertThat(record.getChangeType()).isEqualTo(changeTypes.get(i));
+                        assertThat(record.getRow().getInt(0)).isEqualTo((i + 1) * 10);
+                        assertThat(record.getRow().isNullAt(1)).isTrue();
+                    }
+                    assertThat(records.hasNext()).isFalse();
+                }
+                if (!checkCrc) {
+                    verify(batch, never()).loadFullBatch();
+                }
+                assertThat(context.getBufferAllocator().getAllocatedMemory()).isZero();
+                // Header access and a later explicit CRC validation still refer to the original
+                // batch.
+                assertThat(batch.writerId()).isEqualTo(7L);
+                assertThat(batch.batchSequence()).isEqualTo(3);
+                batch.ensureValid();
+            }
+        }
+    }
+
+    @Test
+    void testProjectedFileRecordsWithStatistics() throws Exception {
+        MemoryLogRecords memory =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        DATA1, DATA1_ROW_TYPE, 100L, DEFAULT_SCHEMA_ID);
+        try (FileLogRecords file = FileLogRecords.open(new File(tempDir, "statistics.log"));
+                LogRecordReadContext context =
+                        LogRecordReadContext.createReadContext(
+                                DATA1_TABLE_INFO,
+                                true,
+                                LogRecordReadContext.SchemaResolution.TARGET,
+                                Projection.of(new int[] {1}),
+                                TEST_SCHEMA_GETTER,
+                                null)) {
+            file.append(memory);
+            FileLogInputStream.FileChannelLogRecordBatch batch =
+                    spy(new FileLogInputStream(file, 0, file.sizeInBytes()).nextBatch());
+            assertThat(batch.getStatistics(context)).isPresent();
+            try (CloseableIterator<LogRecord> records = batch.records(context)) {
+                for (int i = 0; i < DATA1.size(); i++) {
+                    LogRecord record = records.next();
+                    assertThat(record.logOffset()).isEqualTo(100L + i);
+                    assertThat(record.getRow().getString(1).toString()).isEqualTo(DATA1.get(i)[1]);
+                }
+                assertThat(records.hasNext()).isFalse();
+            }
+            verify(batch, never()).loadFullBatch();
+            assertThat(context.getBufferAllocator().getAllocatedMemory()).isZero();
+        }
+    }
 
     @ParameterizedTest
     @ValueSource(bytes = {LOG_MAGIC_VALUE_V0, LOG_MAGIC_VALUE_V1})
@@ -306,5 +415,19 @@ public class FileLogInputStreamTest extends LogTestBase {
                 }
             }
         }
+    }
+
+    private static Stream<Arguments> projectedFileModes() {
+        List<Arguments> modes = new ArrayList<>();
+        for (byte magic : new byte[] {LOG_MAGIC_VALUE_V0, LOG_MAGIC_VALUE_V1, LOG_MAGIC_VALUE_V2}) {
+            for (ArrowCompressionType compression : ArrowCompressionType.values()) {
+                for (boolean appendOnly : new boolean[] {false, true}) {
+                    for (boolean checkCrc : new boolean[] {false, true}) {
+                        modes.add(Arguments.of(magic, compression, appendOnly, checkCrc));
+                    }
+                }
+            }
+        }
+        return modes.stream();
     }
 }

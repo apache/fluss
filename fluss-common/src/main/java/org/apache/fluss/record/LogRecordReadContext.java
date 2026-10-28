@@ -42,6 +42,7 @@ import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.IntStream;
 
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** A simple implementation for {@link LogRecordBatch.ReadContext}. */
@@ -368,9 +369,9 @@ public class LogRecordReadContext
     @Nullable
     @Override
     public ProjectedRow getOutputProjectedRow(int schemaId) {
-        if (logFormat == LogFormat.ARROW) {
-            return getArrowReadPlan(schemaId).createOutputRow();
-        }
+        checkArgument(
+                logFormat == LogFormat.INDEXED || logFormat == LogFormat.COMPACTED,
+                "Only indexed and compacted log formats provide output projected rows.");
         int[] mapping = getSchemaEvolutionMapping(schemaId);
         return mapping == null ? null : ProjectedRow.from(mapping);
     }

@@ -244,7 +244,7 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
 
         switch (logFormat) {
             case ARROW:
-                return columnRecordIterator(context.getArrowReadPlan(schemaId), timestamp);
+                return columnRecordIterator(context.getArrowReadPlan(schemaId));
             case INDEXED:
                 return rowRecordIterator(
                         context.getRowType(schemaId),
@@ -384,8 +384,7 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
         };
     }
 
-    private CloseableIterator<LogRecord> columnRecordIterator(ArrowReadPlan plan, long timestamp) {
-        ProjectedRow outputProjection = plan.createOutputRow();
+    private CloseableIterator<LogRecord> columnRecordIterator(ArrowReadPlan plan) {
         boolean isAppendOnly = isAppendOnly();
         int recordsDataOffset = recordsDataOffset();
         if (isAppendOnly) {
@@ -394,12 +393,7 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
             int arrowOffset = position + recordsDataOffset;
             int arrowLength = sizeInBytes() - recordsDataOffset;
             ArrowReader reader = plan.load(segment, arrowOffset, arrowLength);
-            return new ArrowLogRecordIterator(plan, reader, timestamp, outputProjection) {
-                @Override
-                protected ChangeType getChangeType(int rowId) {
-                    return ChangeType.APPEND_ONLY;
-                }
-            };
+            return columnRecordIterator(plan, reader, null);
         } else {
             // with change type, decode the change type vector first,
             // the arrow data starts after the change type vector
@@ -409,16 +403,24 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
             int arrowOffset = changeTypeOffset + changeTypeVector.sizeInBytes();
             int arrowLength = sizeInBytes() - recordsDataOffset - changeTypeVector.sizeInBytes();
             ArrowReader reader = plan.load(segment, arrowOffset, arrowLength);
-            return new ArrowLogRecordIterator(plan, reader, timestamp, outputProjection) {
-                @Override
-                protected ChangeType getChangeType(int rowId) {
-                    return changeTypeVector.getChangeType(rowId);
-                }
-            };
+            return columnRecordIterator(plan, reader, changeTypeVector);
         }
     }
 
-    private boolean isAppendOnly() {
+    /** Creates an iterator from already loaded Arrow data and this batch's header. */
+    CloseableIterator<LogRecord> columnRecordIterator(
+            ArrowReadPlan plan, ArrowReader reader, @Nullable ChangeTypeVector changeTypes) {
+        return new ArrowLogRecordIterator(plan, reader, commitTimestamp(), plan.createOutputRow()) {
+            @Override
+            protected ChangeType getChangeType(int rowId) {
+                return changeTypes == null
+                        ? ChangeType.APPEND_ONLY
+                        : changeTypes.getChangeType(rowId);
+            }
+        };
+    }
+
+    boolean isAppendOnly() {
         return (attributes() & APPEND_ONLY_FLAG_MASK) > 0;
     }
 

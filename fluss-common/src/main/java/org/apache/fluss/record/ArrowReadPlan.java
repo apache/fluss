@@ -35,6 +35,7 @@ import org.apache.fluss.utils.ArrowUtils;
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.NotThreadSafe;
 
+import java.nio.channels.FileChannel;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.BitSet;
@@ -127,6 +128,35 @@ public final class ArrowReadPlan implements AutoCloseable {
     /** Returns the row type of the loaded vectors: the selected source fields in source order. */
     public RowType getLoadedRowType() {
         return loadedRowType;
+    }
+
+    /** Returns whether this plan skips any source fields. */
+    public boolean isProjected() {
+        return nodeIndexes != null;
+    }
+
+    /**
+     * Loads a projected batch from a file, reading only IPC metadata and selected buffers. The
+     * channel remains open and its position is unchanged. Whole-batch CRC validation, if required,
+     * must happen before calling this method.
+     */
+    public ArrowReader load(FileChannel channel, long arrowOffset, int arrowLength) {
+        try (ArrowRecordBatch batch =
+                ArrowUtils.deserializeProjectedArrowRecordBatch(
+                        channel,
+                        arrowOffset,
+                        arrowLength,
+                        allocator,
+                        nodeCount,
+                        bufferCount,
+                        nodeIndexes,
+                        bufferIndexes)) {
+            new FlussVectorLoader(root, ArrowCompressionFactory.INSTANCE).load(batch);
+            return ArrowUtils.createArrowReader(root, loadedRowType);
+        } catch (RuntimeException | Error e) {
+            root.clear();
+            throw e;
+        }
     }
 
     /**
