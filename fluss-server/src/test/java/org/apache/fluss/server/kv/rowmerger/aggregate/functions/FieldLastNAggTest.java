@@ -20,14 +20,21 @@ package org.apache.fluss.server.kv.rowmerger.aggregate.functions;
 
 import org.apache.fluss.metadata.AggFunctionType;
 import org.apache.fluss.metadata.AggFunctions;
+import org.apache.fluss.row.BinaryArray;
+import org.apache.fluss.row.BinaryRow.BinaryRowFormat;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericArray;
 import org.apache.fluss.row.InternalArray;
+import org.apache.fluss.row.array.CompactedArray;
+import org.apache.fluss.row.array.IndexedArray;
+import org.apache.fluss.row.serializer.ArraySerializer;
 import org.apache.fluss.server.kv.rowmerger.aggregate.factory.FieldAggregatorFactory;
 import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -39,6 +46,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class FieldLastNAggTest {
 
     private static final ArrayType BIGINTS = DataTypes.ARRAY(DataTypes.BIGINT());
+    private static final ArrayType STRINGS = DataTypes.ARRAY(DataTypes.STRING());
 
     @Test
     void testKeepsTheLastN() {
@@ -143,6 +151,52 @@ class FieldLastNAggTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
+    @ParameterizedTest
+    @EnumSource(
+            value = BinaryRowFormat.class,
+            names = {"COMPACTED", "INDEXED"})
+    void testBinaryArraysAreSplicedInTheirOwnFormat(BinaryRowFormat format) {
+        // size 2 drops elements of the input too, size 4 only elements of the accumulator
+        for (int size : new int[] {2, 4}) {
+            FieldLastNAgg agg = new FieldLastNAgg(STRINGS, size);
+            Object spliced = null;
+            Object generic = null;
+            for (int i = 0; i < 5; i++) {
+                // a value kept in the slot, a null and a value in the variable-length part
+                Object[] input = {
+                    BinaryString.fromString("s" + i),
+                    null,
+                    BinaryString.fromString("long value " + i)
+                };
+                spliced = agg.agg(spliced, binaryStrings(format, input));
+                generic = agg.agg(generic, new GenericArray(input));
+                assertThat(toStrings(spliced))
+                        .as("size %s, merge %s", size, i)
+                        .isEqualTo(toStrings(generic));
+            }
+            assertThat(spliced)
+                    .isInstanceOf(
+                            format == BinaryRowFormat.COMPACTED
+                                    ? CompactedArray.class
+                                    : IndexedArray.class);
+        }
+    }
+
+    @Test
+    void testArraysOfDifferentClassesAreNotSpliced() {
+        FieldLastNAgg agg = new FieldLastNAgg(STRINGS, 2);
+        GenericArray older = new GenericArray(new Object[] {BinaryString.fromString("a")});
+        BinaryArray newer =
+                binaryStrings(
+                        BinaryRowFormat.COMPACTED,
+                        new Object[] {BinaryString.fromString("b"), BinaryString.fromString("c")});
+
+        Object result = agg.agg(older, newer);
+
+        assertThat(result).isInstanceOf(GenericArray.class);
+        assertThat(toStrings(result)).containsExactly("b", "c");
+    }
+
     private static GenericArray longs(long... values) {
         return new GenericArray(values);
     }
@@ -152,6 +206,20 @@ class FieldLastNAggTest {
         List<Long> out = new ArrayList<>();
         for (int i = 0; i < a.size(); i++) {
             out.add(a.getLong(i));
+        }
+        return out;
+    }
+
+    private static BinaryArray binaryStrings(BinaryRowFormat format, Object[] elements) {
+        return new ArraySerializer(DataTypes.STRING(), format)
+                .toBinaryArray(new GenericArray(elements));
+    }
+
+    private static List<String> toStrings(Object array) {
+        InternalArray a = (InternalArray) array;
+        List<String> out = new ArrayList<>();
+        for (int i = 0; i < a.size(); i++) {
+            out.add(a.isNullAt(i) ? null : a.getString(i).toString());
         }
         return out;
     }
