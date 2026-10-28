@@ -645,9 +645,11 @@ public class TabletServiceITCase {
                 "the primary key table not exists for TableBucket");
     }
 
-    @Test
-    void testPrefixLookup() throws Exception {
-        TablePath tablePath = TablePath.of("test_db_1", "test_prefix_lookup_t1");
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testPrefixLookup(boolean prefixBloomEnabled) throws Exception {
+        TablePath tablePath =
+                TablePath.of("test_db_1", "test_prefix_lookup_t1_" + prefixBloomEnabled);
         Schema schema =
                 Schema.newBuilder()
                         .column("a", DataTypes.INT())
@@ -668,6 +670,9 @@ public class TabletServiceITCase {
                         .schema(schema)
                         .distributedBy(3, "a", "b")
                         .property(ConfigOptions.TABLE_KV_TTL.key(), "1 h")
+                        .property(
+                                ConfigOptions.TABLE_KV_PREFIX_BLOOM_ENABLED.key(),
+                                Boolean.toString(prefixBloomEnabled))
                         .build();
         long tableId = createTable(FLUSS_CLUSTER_EXTENSION, tablePath, descriptor);
         TableBucket tb = new TableBucket(tableId, 0);

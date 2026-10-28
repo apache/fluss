@@ -2010,6 +2010,15 @@ public class ConfigOptions {
                             "The format of the kv records in kv store. The default value is `compacted`. "
                                     + "The supported formats are `compacted` and `indexed`.");
 
+    public static final ConfigOption<Boolean> TABLE_KV_PREFIX_BLOOM_ENABLED =
+            key("table.kv.prefix-bloom.enabled")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Whether to enable prefix Bloom filters for the encoded bucket-key prefix of a primary key table. "
+                                    + "Requires compacted primary-key encoding and bucket keys that form a leading prefix of the physical primary key. "
+                                    + "Historical KV state is excluded. Filters are built for new SST files through flush and compaction. This option cannot be altered after table creation.");
+
     /** The version of the KV format. */
     public static final ConfigOption<Integer> TABLE_KV_FORMAT_VERSION =
             key("table.kv.format-version")

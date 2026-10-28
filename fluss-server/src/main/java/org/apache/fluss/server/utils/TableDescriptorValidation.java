@@ -41,6 +41,7 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.encode.KvValueLayout;
+import org.apache.fluss.server.kv.rocksdb.RocksDBPrefixBloomUtils;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypeRoot;
 import org.apache.fluss.types.RowType;
@@ -139,6 +140,7 @@ public class TableDescriptorValidation {
         checkHistoricalPartition(tableDescriptor, tableConf);
         checkKvTTL(tableConf, schema, hasPrimaryKey);
         checkKvFormatVersion(tableConf);
+        RocksDBPrefixBloomUtils.createPrefixLayout(tableDescriptor);
         checkKvValueLayout(tableConf, hasPrimaryKey);
         checkPartition(tableConf, tableDescriptor.getPartitionKeys(), schema.getRowType());
         checkSystemColumns(schema.getRowType());

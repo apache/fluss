@@ -98,6 +98,11 @@ public class TableConfig {
         return config.getOptional(ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED).orElse(false);
     }
 
+    /** Whether prefix Bloom filters are enabled for this primary key table. */
+    public boolean isKvPrefixBloomEnabled() {
+        return config.get(ConfigOptions.TABLE_KV_PREFIX_BLOOM_ENABLED);
+    }
+
     /** Gets the log TTL of the table. */
     public long getLogTTLMs() {
         return config.get(ConfigOptions.TABLE_LOG_TTL).toMillis();

@@ -75,6 +75,8 @@ import org.apache.fluss.utils.clock.SystemClock;
 import io.github.fluss_contrib.rocksdb.AbstractCompactionFilter;
 import io.github.fluss_contrib.rocksdb.AbstractCompactionFilterFactory;
 import io.github.fluss_contrib.rocksdb.Cache;
+import io.github.fluss_contrib.rocksdb.ColumnFamilyOptions;
+import io.github.fluss_contrib.rocksdb.PrefixLayout;
 import io.github.fluss_contrib.rocksdb.RateLimiter;
 import io.github.fluss_contrib.rocksdb.ReadOptions;
 import io.github.fluss_contrib.rocksdb.RocksIterator;
@@ -332,7 +334,8 @@ public final class KvTablet {
                 null,
                 autoIncrementManager,
                 SystemClock.getInstance(),
-                new TableConfig(new Configuration()));
+                new TableConfig(new Configuration()),
+                null);
     }
 
     static KvTablet create(
@@ -357,7 +360,8 @@ public final class KvTablet {
             @Nullable Runnable flushCompleteListener,
             AutoIncrementManager autoIncrementManager,
             Clock clock,
-            TableConfig tableConfig)
+            TableConfig tableConfig,
+            @Nullable PrefixLayout prefixLayout)
             throws IOException {
         return create(
                 tablePath,
@@ -382,7 +386,8 @@ public final class KvTablet {
                 flushCompleteListener,
                 autoIncrementManager,
                 clock,
-                tableConfig);
+                tableConfig,
+                prefixLayout);
     }
 
     public static KvTablet create(
@@ -430,7 +435,8 @@ public final class KvTablet {
                 flushCompleteListener,
                 autoIncrementManager,
                 clock,
-                tableConfig);
+                tableConfig,
+                null);
     }
 
     private static KvTablet create(
@@ -456,7 +462,8 @@ public final class KvTablet {
             @Nullable Runnable flushCompleteListener,
             AutoIncrementManager autoIncrementManager,
             Clock clock,
-            TableConfig tableConfig)
+            TableConfig tableConfig,
+            @Nullable PrefixLayout prefixLayout)
             throws IOException {
         checkNotNull(tableConfig, "tableConfig must not be null.");
         boolean historicalPartition =
@@ -490,6 +497,8 @@ public final class KvTablet {
                                         ? RowTtlCompactionFilterFactory.create(
                                                 kvValueLayout, rowTtl.get(), clock)
                                         : null;
+        // Historical keys wrap the primary key with a partition-name length and name.
+        // The primary-key prefix layout does not describe that storage encoding.
         RocksDBKv kv =
                 buildRocksDBKv(
                         serverConf,
@@ -499,7 +508,8 @@ public final class KvTablet {
                         sharedWriteBufferManager,
                         statisticsRegistry,
                         tableBucket.getTableId(),
-                        compactionFilterFactory);
+                        compactionFilterFactory,
+                        historicalPartition ? null : prefixLayout);
 
         // Create RocksDB statistics accessor (will be registered to TableMetricGroup by Replica)
         // Pass ResourceGuard to ensure thread-safe access during concurrent close operations
@@ -585,7 +595,8 @@ public final class KvTablet {
                 null,
                 autoIncrementManager,
                 clock,
-                tableConfig);
+                tableConfig,
+                null);
     }
 
     private static RocksDBKv buildRocksDBKv(
@@ -598,14 +609,20 @@ public final class KvTablet {
             long tableId,
             @Nullable
                     AbstractCompactionFilterFactory<? extends AbstractCompactionFilter<?>>
-                            compactionFilterFactory)
+                            compactionFilterFactory,
+            @Nullable PrefixLayout prefixLayout)
             throws IOException {
         @Nullable RocksDBResourceContainer rocksDBResourceContainer = null;
         boolean resourcesOwnedByBuilder = false;
         try {
+            Configuration rocksDBConfiguration = configuration;
+            if (prefixLayout != null && !configuration.get(ConfigOptions.KV_USE_BLOOM_FILTER)) {
+                rocksDBConfiguration = new Configuration(configuration);
+                rocksDBConfiguration.set(ConfigOptions.KV_USE_BLOOM_FILTER, true);
+            }
             rocksDBResourceContainer =
                     new RocksDBResourceContainer(
-                            configuration,
+                            rocksDBConfiguration,
                             kvDir,
                             true,
                             sharedRateLimiter,
@@ -614,11 +631,12 @@ public final class KvTablet {
             if (statisticsRegistry != null) {
                 rocksDBResourceContainer.useSharedStatistics(statisticsRegistry.acquire(tableId));
             }
+            ColumnFamilyOptions columnOptions = rocksDBResourceContainer.getColumnOptions();
+            if (prefixLayout != null) {
+                columnOptions.useLayoutPrefixExtractor(prefixLayout);
+            }
             RocksDBKvBuilder rocksDBKvBuilder =
-                    new RocksDBKvBuilder(
-                                    kvDir,
-                                    rocksDBResourceContainer,
-                                    rocksDBResourceContainer.getColumnOptions())
+                    new RocksDBKvBuilder(kvDir, rocksDBResourceContainer, columnOptions)
                             .setFlussL0SlowdownTrigger(
                                     configuration.get(
                                             ConfigOptions.KV_BACKPRESSURE_L0_SLOWDOWN_TRIGGER));

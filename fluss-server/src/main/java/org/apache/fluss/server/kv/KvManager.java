@@ -37,6 +37,7 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.TabletManagerBase;
 import org.apache.fluss.server.kv.autoinc.AutoIncrementManager;
 import org.apache.fluss.server.kv.autoinc.ZkSequenceGeneratorFactory;
+import org.apache.fluss.server.kv.rocksdb.RocksDBPrefixBloomUtils;
 import org.apache.fluss.server.kv.rocksdb.RocksDBResourceContainer;
 import org.apache.fluss.server.kv.rocksdb.RocksDBStatisticsRegistry;
 import org.apache.fluss.server.kv.rowmerger.RowMerger;
@@ -591,7 +592,12 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
                                     flushCompleteListener,
                                     autoIncrementManager,
                                     clock,
-                                    tableConfig);
+                                    tableConfig,
+                                    tableConfig.isKvPrefixBloomEnabled()
+                                            ? RocksDBPrefixBloomUtils.createPrefixLayout(
+                                                    getTableInfo(
+                                                            zkClient, tablePath.getTablePath()))
+                                            : null);
                     currentKvs.put(tableBucket, tablet);
 
                     LOG.info(
@@ -765,7 +771,8 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
                         flushCompleteListener,
                         autoIncrementManager,
                         clock,
-                        tableConfig);
+                        tableConfig,
+                        RocksDBPrefixBloomUtils.createPrefixLayout(tableInfo));
         currentKvs.put(tableBucket, kvTablet);
 
         return kvTablet;

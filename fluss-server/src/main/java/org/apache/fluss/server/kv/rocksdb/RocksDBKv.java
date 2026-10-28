@@ -305,7 +305,7 @@ public class RocksDBKv implements AutoCloseable {
             if (upperBound != null) {
                 upperBoundSlice = new Slice(upperBound);
             }
-            readOptions = new ReadOptions().setTotalOrderSeek(true);
+            readOptions = new ReadOptions().setTotalOrderSeek(true).setPrefixSameAsStart(true);
             if (upperBoundSlice != null) {
                 readOptions.setIterateUpperBound(upperBoundSlice);
             }
