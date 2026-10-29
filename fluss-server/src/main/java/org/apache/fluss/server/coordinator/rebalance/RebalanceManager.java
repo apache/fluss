@@ -104,10 +104,11 @@ import static org.apache.fluss.utils.Preconditions.checkState;
  *
  * <p>Only one bucket occupies the normal execution slot. TIMEOUT releases that slot but remains
  * non-final and tracked; reaching the configured tracking limit pauses admission of new buckets.
- * Cancellation is persisted before local state changes. New pending tasks are canceled directly;
- * recovered or admitted tasks must still be at their origin to be canceled. Recovery admits
- * intermediate tasks into reconciliation up to the configured tracking limit, and still requires a
- * current leader acknowledgement even when the persisted state already matches the target.
+ * Cancellation is persisted before local state changes, including which buckets were canceled. New
+ * pending tasks are canceled directly; recovered or admitted tasks must still be at their origin to
+ * be canceled. Recovery admits intermediate tasks into reconciliation up to the configured tracking
+ * limit, and still requires a current leader acknowledgement even when the persisted state already
+ * matches the target.
  *
  * <p>The overall rebalance remains REBALANCING while buckets are pending, running, or timed out,
  * and while its final state cannot be persisted. Once all buckets are final, any failed bucket
@@ -301,14 +302,17 @@ public class RebalanceManager {
 
         for (Map.Entry<TableBucket, RebalancePlanForBucket> entry :
                 rebalanceTask.getExecutePlan().entrySet()) {
-            if (rebalanceExecutor.isRebalanceTaskAtOrigin(entry.getValue())) {
+            if (rebalanceTask.getCanceledBuckets().contains(entry.getKey())) {
+                finishedRebalanceTasks.put(
+                        entry.getKey(), RebalanceResultForBucket.of(entry.getValue(), CANCELED));
+            } else if (rebalanceExecutor.isRebalanceTaskAtOrigin(entry.getValue())) {
                 addPendingTask(entry.getKey(), entry.getValue());
             } else {
                 addRecoveredIntermediateTask(entry.getKey(), entry.getValue());
             }
         }
         if (cancelRequested) {
-            cancelPendingTasks();
+            cancelPendingTasks(findTasksToCancel());
         }
 
         if (inProgressRebalanceTasks.isEmpty()) {
@@ -417,24 +421,29 @@ public class RebalanceManager {
             return;
         }
 
-        Map<TableBucket, RebalancePlanForBucket> executePlan = allRebalancePlans();
+        Set<TableBucket> tasksToCancel = findTasksToCancel();
+        Set<TableBucket> canceledBuckets = canceledBuckets();
+        canceledBuckets.addAll(tasksToCancel);
         try {
             zkClient.registerRebalanceTask(
-                    new RebalanceTask(currentRebalanceId, REBALANCING, executePlan, true));
+                    new RebalanceTask(
+                            currentRebalanceId,
+                            REBALANCING,
+                            allRebalancePlans(),
+                            true,
+                            canceledBuckets));
         } catch (Exception e) {
             throw new RebalanceFailureException(
                     "Failed to persist rebalance cancellation request.", e);
         }
 
         cancelRequested = true;
-        cancelPendingTasks();
+        cancelPendingTasks(tasksToCancel);
 
         // Admitted tasks that have not changed anything yet can be given up on right away: there
         // is no half-applied assignment to drain, so cancellation does not have to wait for them.
         for (RebalanceTaskAttempt attempt : activeAttempts()) {
-            RebalanceResultForBucket result =
-                    inProgressRebalanceTasks.get(attempt.executionKey.getTableBucket());
-            if (result != null && rebalanceExecutor.isRebalanceTaskAtOrigin(result.plan())) {
+            if (tasksToCancel.contains(attempt.executionKey.getTableBucket())) {
                 finishRebalanceTask(attempt.executionKey, CANCELED);
             }
         }
@@ -448,13 +457,32 @@ public class RebalanceManager {
                 currentRebalanceId);
     }
 
-    private void cancelPendingTasks() {
+    private Set<TableBucket> findTasksToCancel() {
+        Set<TableBucket> tasksToCancel = new HashSet<>();
+        for (TableBucket bucket : pendingRebalanceTasks) {
+            RebalanceResultForBucket result = inProgressRebalanceTasks.get(bucket);
+            if (result != null
+                    && (!recoveredRebalance
+                            || rebalanceExecutor.isRebalanceTaskAtOrigin(result.plan()))) {
+                tasksToCancel.add(bucket);
+            }
+        }
+        for (RebalanceTaskAttempt attempt : activeAttempts()) {
+            TableBucket bucket = attempt.executionKey.getTableBucket();
+            RebalanceResultForBucket result = inProgressRebalanceTasks.get(bucket);
+            if (result != null && rebalanceExecutor.isRebalanceTaskAtOrigin(result.plan())) {
+                tasksToCancel.add(bucket);
+            }
+        }
+        return tasksToCancel;
+    }
+
+    private void cancelPendingTasks(Set<TableBucket> tasksToCancel) {
         Iterator<TableBucket> pending = pendingRebalanceTasks.iterator();
         while (pending.hasNext()) {
             TableBucket bucket = pending.next();
-            RebalanceResultForBucket result = inProgressRebalanceTasks.get(bucket);
-            // A recovered pending task may have changed after it was classified at startup.
-            if (!recoveredRebalance || rebalanceExecutor.isRebalanceTaskAtOrigin(result.plan())) {
+            if (tasksToCancel.contains(bucket)) {
+                RebalanceResultForBucket result = inProgressRebalanceTasks.get(bucket);
                 pending.remove();
                 inProgressRebalanceTasks.remove(bucket);
                 finishedRebalanceTasks.put(
@@ -680,7 +708,11 @@ public class RebalanceManager {
         try {
             zkClient.registerRebalanceTask(
                     new RebalanceTask(
-                            currentRebalanceId, finalStatus, allRebalancePlans(), cancelRequested));
+                            currentRebalanceId,
+                            finalStatus,
+                            allRebalancePlans(),
+                            cancelRequested,
+                            canceledBuckets()));
         } catch (Exception e) {
             rebalanceStatus = REBALANCING;
             finalizationPending = true;
@@ -808,6 +840,17 @@ public class RebalanceManager {
             plans.put(entry.getKey(), entry.getValue().plan());
         }
         return plans;
+    }
+
+    private Set<TableBucket> canceledBuckets() {
+        Set<TableBucket> canceledBuckets = new HashSet<>();
+        for (Map.Entry<TableBucket, RebalanceResultForBucket> entry :
+                finishedRebalanceTasks.entrySet()) {
+            if (entry.getValue().status() == CANCELED) {
+                canceledBuckets.add(entry.getKey());
+            }
+        }
+        return canceledBuckets;
     }
 
     private RebalanceStatus aggregateFinalStatus() {

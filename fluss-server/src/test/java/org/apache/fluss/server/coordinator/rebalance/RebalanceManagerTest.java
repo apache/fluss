@@ -257,6 +257,7 @@ public class RebalanceManagerTest {
         RebalanceTask storedTask = zookeeperClient.getRebalanceTask().get();
         assertThat(storedTask.getRebalanceStatus()).isEqualTo(REBALANCING);
         assertThat(storedTask.isCancelRequested()).isTrue();
+        assertThat(storedTask.getCanceledBuckets()).containsExactly(tb2);
         assertThat(rebalanceManager.isCancelRequested()).isTrue();
         assertThat(
                         rebalanceManager
@@ -314,6 +315,25 @@ public class RebalanceManagerTest {
         assertThat(rebalanceManager.getRebalanceStatus()).isEqualTo(FAILED);
         assertThat(zookeeperClient.getRebalanceTask().get().getRebalanceStatus()).isEqualTo(FAILED);
         assertThat(zookeeperClient.getRebalanceTask().get().isCancelRequested()).isTrue();
+    }
+
+    @Test
+    void testRecoverPreservesExplicitlyCanceledBucket() throws Exception {
+        TableBucket canceledBucket = new TableBucket(1L, 0);
+        TableBucket intermediateBucket = new TableBucket(1L, 1);
+        Map<TableBucket, RebalancePlanForBucket> plans = plans(canceledBucket, intermediateBucket);
+
+        rebalanceManager.recoverRebalance(
+                new RebalanceTask(
+                        "recover-explicit-cancel-test",
+                        REBALANCING,
+                        plans,
+                        true,
+                        Collections.singleton(canceledBucket)));
+
+        Map<TableBucket, RebalanceStatus> statuses = statuses(rebalanceManager);
+        assertThat(statuses.get(canceledBucket)).isEqualTo(CANCELED);
+        assertThat(statuses.get(intermediateBucket)).isEqualTo(TIMEOUT);
     }
 
     @Test
