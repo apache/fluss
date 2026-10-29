@@ -22,6 +22,7 @@ import org.apache.fluss.config.ConfigOption;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.ReadableConfig;
+import org.apache.fluss.row.encode.KeyPrefixLayout;
 import org.apache.fluss.server.kv.KvManager;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.IOUtils;
@@ -183,9 +184,9 @@ public class RocksDBResourceContainer implements AutoCloseable {
             RateLimiter sharedRateLimiter,
             @Nullable Cache sharedBlockCache,
             @Nullable WriteBufferManager sharedWriteBufferManager,
-            @Nullable PrefixLayout prefixLayout) {
-        validateConfiguration(configuration, prefixLayout != null);
-        this.prefixLayout = prefixLayout;
+            @Nullable KeyPrefixLayout keyPrefixLayout) {
+        validateConfiguration(configuration, keyPrefixLayout != null);
+        this.prefixLayout = keyPrefixLayout == null ? null : toRocksDBPrefixLayout(keyPrefixLayout);
         this.configuration = configuration;
 
         this.instanceRocksDBPath =
@@ -466,6 +467,39 @@ public class RocksDBResourceContainer implements AutoCloseable {
         }
 
         return currentOptions.setTableFormatConfig(blockBasedTableConfig);
+    }
+
+    private static PrefixLayout toRocksDBPrefixLayout(KeyPrefixLayout layout) {
+        List<PrefixLayout.Step> steps = new ArrayList<>();
+        for (KeyPrefixLayout.Component component : layout.getComponents()) {
+            switch (component) {
+                case FIXED1:
+                    steps.add(PrefixLayout.fixed(1));
+                    break;
+                case FIXED2:
+                    steps.add(PrefixLayout.fixed(2));
+                    break;
+                case FIXED4:
+                    steps.add(PrefixLayout.fixed(4));
+                    break;
+                case FIXED8:
+                    steps.add(PrefixLayout.fixed(8));
+                    break;
+                case VARINT32:
+                    steps.add(PrefixLayout.varint32());
+                    break;
+                case VARINT64:
+                    steps.add(PrefixLayout.varint64());
+                    break;
+                case BYTES_VARINT32:
+                    steps.add(PrefixLayout.bytesVarint32());
+                    break;
+                default:
+                    throw new IllegalArgumentException(
+                            "Unsupported key layout component: " + component);
+            }
+        }
+        return PrefixLayout.of(steps.toArray(new PrefixLayout.Step[0]));
     }
 
     private boolean useBloomFilter() {

@@ -31,6 +31,8 @@ import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.row.encode.CompactedKeyEncoder;
+import org.apache.fluss.server.kv.KvManager;
+import org.apache.fluss.server.kv.TableKeyPrefixLayoutResolver;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 
@@ -54,7 +56,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests admission of prefix Bloom filters against the actual primary-key encoder. */
-class RocksDBPrefixBloomUtilsTest {
+class RocksDBPrefixBloomTest {
 
     @Test
     void testDisabledByDefault() {
@@ -62,7 +64,7 @@ class RocksDBPrefixBloomUtilsTest {
                 TableDescriptor.builder()
                         .schema(Schema.newBuilder().column("value", DataTypes.STRING()).build())
                         .build();
-        assertThat(RocksDBPrefixBloomUtils.createPrefixLayout(table)).isNull();
+        assertThat(TableKeyPrefixLayoutResolver.resolve(table)).isNull();
     }
 
     @Test
@@ -72,7 +74,7 @@ class RocksDBPrefixBloomUtilsTest {
                         .schema(Schema.newBuilder().column("value", DataTypes.STRING()).build())
                         .property(ConfigOptions.TABLE_KV_PREFIX_BLOOM_ENABLED.key(), "true")
                         .build();
-        assertThatThrownBy(() -> RocksDBPrefixBloomUtils.createPrefixLayout(table))
+        assertThatThrownBy(() -> TableKeyPrefixLayoutResolver.resolve(table))
                 .isInstanceOf(InvalidTableException.class)
                 .hasMessageContaining("primary key");
     }
@@ -80,7 +82,7 @@ class RocksDBPrefixBloomUtilsTest {
     @Test
     void testBucketKeysMustBeLeadingPhysicalKeyFields() {
         TableDescriptor table = table().distributedBy(1, "id").build();
-        assertThatThrownBy(() -> RocksDBPrefixBloomUtils.createPrefixLayout(table))
+        assertThatThrownBy(() -> TableKeyPrefixLayoutResolver.resolve(table))
                 .isInstanceOf(InvalidTableException.class)
                 .hasMessageContaining("leading prefix");
     }
@@ -94,7 +96,7 @@ class RocksDBPrefixBloomUtilsTest {
                 table().property(ConfigOptions.TABLE_KV_FORMAT_VERSION.key(), "2")
                         .property(ConfigOptions.TABLE_DATALAKE_FORMAT.key(), lakeFormat.name())
                         .build();
-        assertThat(RocksDBPrefixBloomUtils.createPrefixLayout(table)).isNotNull();
+        assertThat(TableKeyPrefixLayoutResolver.resolve(table)).isNotNull();
     }
 
     @Test
@@ -105,7 +107,7 @@ class RocksDBPrefixBloomUtilsTest {
                                 ConfigOptions.TABLE_DATALAKE_FORMAT.key(),
                                 DataLakeFormat.PAIMON.name())
                         .build();
-        assertThatThrownBy(() -> RocksDBPrefixBloomUtils.createPrefixLayout(table))
+        assertThatThrownBy(() -> TableKeyPrefixLayoutResolver.resolve(table))
                 .isInstanceOf(InvalidTableException.class)
                 .hasMessageContaining("PaimonKeyEncoder");
     }
@@ -118,7 +120,7 @@ class RocksDBPrefixBloomUtilsTest {
                                 ConfigOptions.TABLE_DATALAKE_FORMAT.key(),
                                 DataLakeFormat.HUDI.name())
                         .build();
-        assertThat(RocksDBPrefixBloomUtils.createPrefixLayout(table)).isNotNull();
+        assertThat(TableKeyPrefixLayoutResolver.resolve(table)).isNotNull();
     }
 
     @Test
@@ -130,7 +132,7 @@ class RocksDBPrefixBloomUtilsTest {
                                 ConfigOptions.TABLE_DATALAKE_FORMAT.key(),
                                 DataLakeFormat.PAIMON.name())
                         .build();
-        assertThatThrownBy(() -> RocksDBPrefixBloomUtils.createPrefixLayout(table))
+        assertThatThrownBy(() -> TableKeyPrefixLayoutResolver.resolve(table))
                 .isInstanceOf(InvalidTableException.class)
                 .hasMessageContaining("PaimonKeyEncoder");
     }
@@ -150,10 +152,10 @@ class RocksDBPrefixBloomUtilsTest {
                         .distributedBy(1, "bucket")
                         .property(ConfigOptions.TABLE_KV_PREFIX_BLOOM_ENABLED.key(), "true")
                         .build();
-        assertThat(RocksDBPrefixBloomUtils.createPrefixLayout(table)).isNotNull();
+        assertThat(TableKeyPrefixLayoutResolver.resolve(table)).isNotNull();
         TableInfo info =
                 TableInfo.of(TablePath.of("db", "table"), 1L, 1, table, "/tmp/fluss", 0L, 0L);
-        assertThat(RocksDBPrefixBloomUtils.createPrefixLayout(info)).isNotNull();
+        assertThat(TableKeyPrefixLayoutResolver.resolve(info)).isNotNull();
     }
 
     @ParameterizedTest
@@ -233,13 +235,16 @@ class RocksDBPrefixBloomUtilsTest {
         }
         for (int reopen = 0; reopen < 2; reopen++) {
             RocksDBResourceContainer resources =
-                    new RocksDBResourceContainer(config, dir.toFile(), true);
+                    new RocksDBResourceContainer(
+                            config,
+                            dir.toFile(),
+                            true,
+                            KvManager.getDefaultRateLimiter(),
+                            null,
+                            null,
+                            TableKeyPrefixLayoutResolver.resolve(table));
             ColumnFamilyOptions options =
-                    resources
-                            .getColumnOptions()
-                            .useLayoutPrefixExtractor(
-                                    RocksDBPrefixBloomUtils.createPrefixLayout(table))
-                            .setDisableAutoCompactions(true);
+                    resources.getColumnOptions().setDisableAutoCompactions(true);
             try (RocksDBKv kv = new RocksDBKvBuilder(dir.toFile(), resources, options).build()) {
                 if (reopen == 0) {
                     for (String bucket : Arrays.asList("000", "mid", "zzz")) {

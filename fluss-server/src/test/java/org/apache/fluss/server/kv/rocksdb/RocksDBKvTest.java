@@ -28,6 +28,8 @@ import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.encode.CompactedKeyEncoder;
 import org.apache.fluss.server.kv.KvCloseMode;
+import org.apache.fluss.server.kv.KvManager;
+import org.apache.fluss.server.kv.TableKeyPrefixLayoutResolver;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 
@@ -181,12 +183,16 @@ class RocksDBKvTest {
                         .build();
         Configuration config = new Configuration();
         config.set(ConfigOptions.KV_PARTITIONED_INDEX_FILTERS, partitioned);
-        RocksDBResourceContainer resources = new RocksDBResourceContainer(config, tempDir.toFile());
+        RocksDBResourceContainer resources =
+                new RocksDBResourceContainer(
+                        config,
+                        tempDir.toFile(),
+                        false,
+                        KvManager.getDefaultRateLimiter(),
+                        null,
+                        null,
+                        TableKeyPrefixLayoutResolver.resolve(table));
         ColumnFamilyOptions columnOptions = resources.getColumnOptions();
-        if (prefixBloomEnabled) {
-            columnOptions.useLayoutPrefixExtractor(
-                    RocksDBPrefixBloomUtils.createPrefixLayout(table));
-        }
         try (RocksDBKv kv =
                 new RocksDBKvBuilder(tempDir.toFile(), resources, columnOptions).build()) {
             kv.put(key1, new byte[] {1});

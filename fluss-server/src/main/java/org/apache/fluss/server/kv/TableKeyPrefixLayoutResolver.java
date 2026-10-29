@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.server.kv.rocksdb;
+package org.apache.fluss.server.kv;
 
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.TableConfig;
@@ -26,21 +26,18 @@ import org.apache.fluss.row.encode.KeyEncoder;
 import org.apache.fluss.row.encode.KeyPrefixLayout;
 import org.apache.fluss.types.RowType;
 
-import io.github.fluss_contrib.rocksdb.PrefixLayout;
-
 import javax.annotation.Nullable;
 
-import java.util.ArrayList;
 import java.util.List;
 
-/** Adapts encoder-owned byte layouts to RocksDB prefix extractors. */
-public final class RocksDBPrefixBloomUtils {
-    private RocksDBPrefixBloomUtils() {}
+/** Resolves table-specific prefix layouts from the primary-key encoder. */
+public final class TableKeyPrefixLayoutResolver {
+    private TableKeyPrefixLayoutResolver() {}
 
     /** Derives the bucket-key prefix layout, or returns null when the option is disabled. */
     @Nullable
-    public static PrefixLayout createPrefixLayout(TableDescriptor table) {
-        return createPrefixLayout(
+    public static KeyPrefixLayout resolve(TableDescriptor table) {
+        return resolve(
                 table.getSchema().getRowType(),
                 table.getPhysicalPrimaryKeys(),
                 table.getBucketKeys(),
@@ -49,8 +46,8 @@ public final class RocksDBPrefixBloomUtils {
 
     /** Derives the layout from the persisted key-format and distribution metadata. */
     @Nullable
-    public static PrefixLayout createPrefixLayout(TableInfo table) {
-        return createPrefixLayout(
+    public static KeyPrefixLayout resolve(TableInfo table) {
+        return resolve(
                 table.getRowType(),
                 table.getPhysicalPrimaryKeys(),
                 table.getBucketKeys(),
@@ -58,7 +55,7 @@ public final class RocksDBPrefixBloomUtils {
     }
 
     @Nullable
-    private static PrefixLayout createPrefixLayout(
+    private static KeyPrefixLayout resolve(
             RowType rowType,
             List<String> primaryKeys,
             List<String> bucketKeys,
@@ -78,43 +75,12 @@ public final class RocksDBPrefixBloomUtils {
         KeyEncoder encoder =
                 KeyEncoder.ofPrimaryKeyEncoder(
                         rowType, primaryKeys, config, bucketKeys.equals(primaryKeys));
-        KeyPrefixLayout layout =
-                encoder.getPrefixLayout(bucketKeys.size())
-                        .orElseThrow(
-                                () ->
-                                        new InvalidTableException(
-                                                "Prefix Bloom filters cannot describe primary-key encoder "
-                                                        + encoder.getClass().getSimpleName()
-                                                        + "."));
-        List<PrefixLayout.Step> steps = new ArrayList<>();
-        for (KeyPrefixLayout.Component component : layout.getComponents()) {
-            switch (component) {
-                case FIXED1:
-                    steps.add(PrefixLayout.fixed(1));
-                    break;
-                case FIXED2:
-                    steps.add(PrefixLayout.fixed(2));
-                    break;
-                case FIXED4:
-                    steps.add(PrefixLayout.fixed(4));
-                    break;
-                case FIXED8:
-                    steps.add(PrefixLayout.fixed(8));
-                    break;
-                case VARINT32:
-                    steps.add(PrefixLayout.varint32());
-                    break;
-                case VARINT64:
-                    steps.add(PrefixLayout.varint64());
-                    break;
-                case BYTES_VARINT32:
-                    steps.add(PrefixLayout.bytesVarint32());
-                    break;
-                default:
-                    throw new IllegalArgumentException(
-                            "Unsupported key layout component: " + component);
-            }
-        }
-        return PrefixLayout.of(steps.toArray(new PrefixLayout.Step[0]));
+        return encoder.getPrefixLayout(bucketKeys.size())
+                .orElseThrow(
+                        () ->
+                                new InvalidTableException(
+                                        "Prefix Bloom filters cannot describe primary-key encoder "
+                                                + encoder.getClass().getSimpleName()
+                                                + "."));
     }
 }
