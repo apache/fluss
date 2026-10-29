@@ -130,7 +130,7 @@ set:
     port: 9249
 
 tests:
-  - it: should prefix every resource name with the release name
+  - it: should prefix every resource name with the full name
     asserts:
       - equal:
           path: metadata.name
@@ -168,6 +168,40 @@ tests:
           path: metadata.name
           value: alpha-tablet-server-metrics-hs
         template: templates/svc-metrics-tablet.yaml
+
+  - it: should use fullnameOverride as the prefix
+    set:
+      fullnameOverride: orders
+    asserts:
+      - equal:
+          path: metadata.name
+          value: orders-conf-file
+        template: templates/configmap.yaml
+      - equal:
+          path: metadata.name
+          value: orders-coordinator-server
+        template: templates/sts-coordinator.yaml
+      - equal:
+          path: metadata.name
+          value: orders-tablet-server-hs
+        template: templates/svc-tablet.yaml
+
+  - it: should not repeat the chart name when the release name contains it
+    release:
+      name: fluss-orders
+    asserts:
+      - equal:
+          path: metadata.name
+          value: fluss-orders-conf-file
+        template: templates/configmap.yaml
+      - equal:
+          path: metadata.name
+          value: fluss-orders-coordinator-server
+        template: templates/sts-coordinator.yaml
+      - equal:
+          path: metadata.name
+          value: fluss-orders-tablet-server-hs
+        template: templates/svc-tablet.yaml
 
   - it: should point the StatefulSets at the unique headless Services
     asserts:

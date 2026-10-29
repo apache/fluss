@@ -167,7 +167,7 @@ The following table lists the configurable parameters of the Fluss chart, and th
 |-----------|-------------|---------|
 | `nameOverride` | Override the name of the chart | `""` |
 | `fullnameOverride` | Override the full name of the resources | `""` |
-| `uniqueResourceNames` | Give every resource a name unique to the release, and scope the ZooKeeper root path to the release too, so that several Fluss clusters can share a namespace. See [Running several Fluss clusters in one namespace](#running-several-fluss-clusters-in-one-namespace). | `false` |
+| `uniqueResourceNames` | Give every resource a name unique to the release, and scope the ZooKeeper root path to the namespace and release, so that several Fluss clusters can share a namespace. See [Running several Fluss clusters in one namespace](#running-several-fluss-clusters-in-one-namespace). | `false` |
 
 ### Image Parameters
 
@@ -899,11 +899,11 @@ needs the new name afterwards: the coordinator StatefulSet name from the render
 below, plus `-hs`.
 
 Pin the ZooKeeper root path the release uses today, so the new pods inherit the
-existing cluster metadata. That is `/fluss` unless the release overrides
-`zookeeper.path.root`:
+existing cluster metadata. Read it from the running configuration:
 
 ```bash
-helm get values <release> -n <namespace> --all | grep zookeeper.path.root
+kubectl get configmap fluss-conf-file -n <namespace> \
+  -o jsonpath='{.data.server\.yaml}' | grep zookeeper.path.root
 ```
 
 ```yaml
@@ -1007,7 +1007,7 @@ command run against the wrong one acts on another cluster. Then:
    Do not skip the wait: a claim cannot be deleted while a pod still refers to
    it, and one left stuck in `Terminating` fails the upgrade at step 5.
 
-3. Delete the old claims. Each volume becomes `Released`.
+3. Delete every old claim listed in step 1. Each volume becomes `Released`.
 
    ```bash
    kubectl delete pvc -n <namespace> data-coordinator-server-0 \
@@ -1033,7 +1033,7 @@ command run against the wrong one acts on another cluster. Then:
      "path": "/spec/claimRef",
      "value": {
        "namespace": "<namespace>",
-       "name": "data-<new-statefulset>-0"
+       "name": "data-<new-statefulset>-<ordinal>"
      }
    }]'
    ```

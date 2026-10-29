@@ -28,7 +28,8 @@ image:
   pullSecrets: []
 
 # Gives every resource a name unique to this release, and scopes the ZooKeeper
-# root path to the release too, so several Fluss clusters can share a namespace.
+# root path to the namespace and release, so several Fluss clusters can share
+# a namespace.
 # Off by default, an existing release must opt in deliberately.
 uniqueResourceNames: false
 
