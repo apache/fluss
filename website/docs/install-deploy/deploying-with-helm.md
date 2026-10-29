@@ -893,22 +893,33 @@ Turning on `uniqueResourceNames` renames the StatefulSets, and a StatefulSet
 cannot be renamed in place. Helm creates the new one and deletes the old one,
 so the pods are replaced rather than rolled and the cluster restarts.
 
-Pin the old ZooKeeper root path in the same upgrade so the new pods inherit the
-existing cluster metadata:
+The headless Services are renamed too. Anything that reaches the cluster through
+`coordinator-server-hs`, such as `bootstrap.servers` in clients and Flink jobs,
+needs the new name afterwards: the coordinator StatefulSet name from the render
+below, plus `-hs`.
+
+Pin the ZooKeeper root path the release uses today, so the new pods inherit the
+existing cluster metadata. That is `/fluss` unless the release overrides
+`zookeeper.path.root`:
+
+```bash
+helm get values <release> -n <namespace> --all | grep zookeeper.path.root
+```
 
 ```yaml
 uniqueResourceNames: true
 configurationOverrides:
-  zookeeper.path.root: /fluss
+  zookeeper.path.root: /fluss   # or the root the release already uses
 ```
 
-Without the pin they start against an empty `/fluss-<namespace>/<release>` and the old
-cluster's metadata is left behind.
+Without the pin they start against an empty `/fluss-<namespace>/<release>` and
+the old cluster's metadata is left behind.
 
-The pin is permanent: this release keeps `/fluss` for good. That is safe to
-leave alongside others, because the scoped root is a sibling rather than a
-child — Fluss uses the root as a ZooKeeper namespace, so a release nested under
-this one would sit among its data.
+The pin is permanent: this release keeps its current root for good. That is
+safe to leave alongside others, because the scoped roots sit under
+`/fluss-<namespace>`, a sibling of `/fluss` rather than a child. Fluss uses the
+root as a ZooKeeper namespace, so a release nested under this one would sit
+among its data.
 
 The claims created from `volumeClaimTemplates` are named
 `data-<statefulset>-<ordinal>`, so renaming the StatefulSets renames every
@@ -920,7 +931,7 @@ Read the new StatefulSet names off a render rather than assuming a prefix:
 contains `fluss`, and `fullnameOverride` replaces it outright.
 
 ```bash
-helm template <release> ./helm --set uniqueResourceNames=true -f <your-values> \
+helm template <release> ./helm -n <namespace> --set uniqueResourceNames=true -f <your-values> \
   | awk '/^kind: StatefulSet/{f=1} f&&/^  name:/{print $2; f=0}'
 ```
 
@@ -945,7 +956,7 @@ plan a maintenance window. If a GitOps controller syncs this release, suspend
 it first, or it will recreate the StatefulSets you delete in step 2.
 :::
 
-Rehearse this on a non-production cluster first. Binding behaviour varies by
+Test this on a non-production cluster first. Binding behaviour varies by
 storage class: reserving a volume under `WaitForFirstConsumer` — the default on
 EKS and GKE — takes a different path through the scheduler than immediate
 binding does.
@@ -954,13 +965,15 @@ Do not change `storage.size` in this upgrade. Each new claim has to fit the
 volume you reserve for it, and one that asks for more will not bind at all: the
 pod never starts and the data is never picked up.
 
-Back up or snapshot the volumes before you start. Then:
+Back up or snapshot the volumes before you start. Pass `-n <namespace>` to
+every command below: the old names are the same in every namespace, so a
+command run against the wrong one acts on another cluster. Then:
 
 1. Write down which volume backs which claim. You need this mapping in step 4,
    and it is gone once the claims are deleted.
 
    ```bash
-   kubectl get pvc -l app.kubernetes.io/instance=<release> \
+   kubectl get pvc -n <namespace> -l app.kubernetes.io/instance=<release> \
      -o custom-columns=CLAIM:.metadata.name,VOLUME:.spec.volumeName
    ```
 
@@ -987,8 +1000,8 @@ Back up or snapshot the volumes before you start. Then:
    without them until step 5.
 
    ```bash
-   kubectl delete statefulset coordinator-server tablet-server
-   kubectl wait --for=delete pod -l app.kubernetes.io/instance=<release> --timeout=5m
+   kubectl delete statefulset -n <namespace> coordinator-server tablet-server
+   kubectl wait --for=delete pod -n <namespace> -l app.kubernetes.io/instance=<release> --timeout=5m
    ```
 
    Do not skip the wait: a claim cannot be deleted while a pod still refers to
@@ -997,7 +1010,7 @@ Back up or snapshot the volumes before you start. Then:
 3. Delete the old claims. Each volume becomes `Released`.
 
    ```bash
-   kubectl delete pvc data-coordinator-server-0 \
+   kubectl delete pvc -n <namespace> data-coordinator-server-0 \
      data-tablet-server-0 data-tablet-server-1 data-tablet-server-2
    ```
 
@@ -1026,17 +1039,24 @@ Back up or snapshot the volumes before you start. Then:
    ```
 
    Check the result before going on. Every volume should read `Available`
-   with its new claim name against it:
+   with this namespace and its new claim name against it:
 
    ```bash
-   kubectl get pv -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,CLAIM:.spec.claimRef.name
+   kubectl get pv -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,NAMESPACE:.spec.claimRef.namespace,CLAIM:.spec.claimRef.name
    ```
 
 5. Run the upgrade, repeating every `-f` and `--set` the release already had
-   alongside the two new settings. Do not reach for `--reuse-values`: it drops
-   values set on the command line, including the root path pin. The new
-   StatefulSets create their claims, each binds to the volume reserved for it,
-   and the pods come up on the original disks.
+   alongside the settings above:
+
+   ```bash
+   helm upgrade <release> ./helm -n <namespace> -f <your-values> -f <the-settings-above>
+   ```
+
+   Do not use `--reuse-values`: it replaces the new chart's defaults with the
+   old release's values. Pass every value explicitly, or use
+   `--reset-then-reuse-values` (Helm 3.14 or later). The new StatefulSets create
+   their claims, each binds to the volume reserved for it, and the pods come up
+   on the original disks.
 
 If it goes wrong, the way back is the way in. The volumes are on `Retain`, so
 patch each `claimRef` to the old claim name instead and upgrade again without
