@@ -537,6 +537,8 @@ Performs point lookups by primary key. Obtained from `TableLookup::CreateLookupe
 |---------------------------------------------------------------------|-----------------------------|
 | `Lookup(const GenericRow& pk_row, LookupResult& out) const -> Result` | Lookup a row by primary key |
 | `Lookup(const GenericRow& pk_row, PendingLookup& out) const -> Result` | Start a lookup without blocking; `out` waits for its row |
+| `LookupAsync(const GenericRow& pk_row, uint64_t request_id) const -> Result` | Start a lookup and associate it with an application request ID |
+| `Poll(int64_t timeout_ms, std::vector<LookupCompletion>& out) const -> Result` | Collect completed lookups in completion order |
 
 Each blocking lookup waits for its batch, up to `lookup_batch_timeout_ms`. To look up many keys from one thread, start them all, then wait for each:
 
@@ -554,6 +556,36 @@ for (auto& lookup : pending) {
     }
 }
 ```
+
+For fan-out workloads, use `LookupAsync` and `Poll` instead of retaining one
+pending handle per key:
+
+```cpp
+for (size_t i = 0; i < keys.size(); ++i) {
+    if (!lookuper.LookupAsync(keys[i], i).Ok()) {
+        // This lookup did not start.
+    }
+}
+std::vector<fluss::LookupCompletion> completed;
+while (completed.size() < keys.size()) {
+    if (!lookuper.Poll(1000, completed).Ok()) {
+        // Handle a polling error.
+    }
+}
+for (const auto& completion : completed) {
+    if (completion.result.Ok() && completion.lookup.Found()) {
+        // Match the result with completion.request_id.
+    }
+}
+```
+
+`Poll` waits for at most `timeout_ms` for the first completion and then drains
+already completed lookups. A timeout is not an error and does not cancel
+unfinished lookups. Each `LookupCompletion` contains the caller-supplied
+`request_id`, a per-lookup `result`, and the `lookup` result. The completion
+queue is owned by the lookuper and is safe to use from multiple threads.
+The queue holds up to 1024 completed lookups; if it is full, lookup tasks
+remain pending until the caller polls and makes room.
 
 ## `PendingLookup`
 
@@ -573,6 +605,13 @@ Performs prefix (bucket-key) lookups, returning all rows whose primary key start
 |---------------------------------------------------------------------------------------|-----------------------------------------------|
 | `PrefixLookup(const GenericRow& prefix_row, PrefixLookupResult& out) const -> Result` | Look up all rows matching the prefix columns  |
 | `PrefixLookup(const GenericRow& prefix_row, PendingPrefixLookup& out) const -> Result` | Start a lookup without blocking; `out` waits for its rows |
+| `PrefixLookupAsync(const GenericRow& prefix_row, uint64_t request_id) const -> Result` | Start a prefix lookup with an application request ID |
+| `Poll(int64_t timeout_ms, std::vector<PrefixLookupCompletion>& out) const -> Result` | Collect completed prefix lookups in completion order |
+
+`PrefixLookupAsync` and `PrefixLookuper::Poll` have the same timeout and
+completion-order semantics as the point-lookup polling API. Each
+`PrefixLookupCompletion` contains the request ID, per-lookup status, and a
+`PrefixLookupResult`.
 
 ## `LogScanner`
 

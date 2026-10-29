@@ -76,6 +76,26 @@ not apply to `CreateBucketBatchScanner()`.
   [C++ API reference](../../website/docs/user-guide/cpp/api-reference.md) and
   [log-table examples](../../website/docs/user-guide/cpp/example/log-tables.md).
 
+For fan-out key lookups, `Lookuper::LookupAsync` and `Lookuper::Poll` return
+completed requests in completion order without requiring one pending handle per
+request:
+
+```cpp
+std::vector<fluss::LookupCompletion> completed;
+for (size_t i = 0; i < keys.size(); ++i) {
+    lookuper.LookupAsync(keys[i], i);
+}
+while (completed.size() < keys.size()) {
+    lookuper.Poll(1000, completed);
+}
+```
+
+Each completion carries the caller's request ID, a per-lookup `Result`, and the
+lookup result. `PrefixLookuper::PrefixLookupAsync` and its `Poll` overload
+provide the same behavior for prefix lookups.
+The completion queue holds up to 1024 results; when it is full, lookup tasks
+wait for the caller to poll before publishing more completions.
+
 The SDK executes `WriteCallback` (`void(const WriteCompletion&)`) on one shared
 worker, serially in dispatch order and off the I/O threads. `WriteCompletion.result`
 is the write outcome; copy it before passing it to another worker.

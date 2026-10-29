@@ -269,7 +269,8 @@ ffi::MapWriterInner* make_map_writer_arrow(size_t capacity, std::shared_ptr<arro
 // ArrayWriter — builder for array values backed by Rust ArrayWriterInner
 // ============================================================================
 
-ArrayWriter::ArrayWriter(size_t size, DataType element_type) : element_type_(std::move(element_type)) {
+ArrayWriter::ArrayWriter(size_t size, DataType element_type)
+    : element_type_(std::move(element_type)) {
     if (detail::is_compound(element_type_)) {
         inner_ = make_array_writer_arrow(size, detail::to_arrow_type(element_type_),
                                          element_type_.nullable());
@@ -277,10 +278,12 @@ ArrayWriter::ArrayWriter(size_t size, DataType element_type) : element_type_(std
     }
 
     auto flat = utils::flatten_array_type(element_type_);
-    int32_t leaf_type_id = flat.nesting > 0 ? flat.leaf_type : static_cast<int32_t>(element_type_.id());
-    uint32_t leaf_precision = static_cast<uint32_t>(flat.nesting > 0 ? flat.leaf_precision
-                                                                      : element_type_.precision());
-    uint32_t leaf_scale = static_cast<uint32_t>(flat.nesting > 0 ? flat.leaf_scale : element_type_.scale());
+    int32_t leaf_type_id =
+        flat.nesting > 0 ? flat.leaf_type : static_cast<int32_t>(element_type_.id());
+    uint32_t leaf_precision =
+        static_cast<uint32_t>(flat.nesting > 0 ? flat.leaf_precision : element_type_.precision());
+    uint32_t leaf_scale =
+        static_cast<uint32_t>(flat.nesting > 0 ? flat.leaf_scale : element_type_.scale());
     uint32_t array_nesting = static_cast<uint32_t>(flat.nesting);
 
     auto box = ffi::new_array_writer(size, leaf_type_id, leaf_precision, leaf_scale, array_nesting);
@@ -329,12 +332,30 @@ size_t ArrayWriter::Size() const noexcept {
         if (!inner_) throw std::logic_error(name ": not available (moved-from or null)"); \
     } while (0)
 
-void ArrayWriter::SetNull(size_t idx) { CHECK_AW("ArrayWriter"); inner_->aw_set_null(idx); }
-void ArrayWriter::SetBool(size_t idx, bool v) { CHECK_AW("ArrayWriter"); inner_->aw_set_bool(idx, v); }
-void ArrayWriter::SetInt32(size_t idx, int32_t v) { CHECK_AW("ArrayWriter"); inner_->aw_set_i32(idx, v); }
-void ArrayWriter::SetInt64(size_t idx, int64_t v) { CHECK_AW("ArrayWriter"); inner_->aw_set_i64(idx, v); }
-void ArrayWriter::SetFloat32(size_t idx, float v) { CHECK_AW("ArrayWriter"); inner_->aw_set_f32(idx, v); }
-void ArrayWriter::SetFloat64(size_t idx, double v) { CHECK_AW("ArrayWriter"); inner_->aw_set_f64(idx, v); }
+void ArrayWriter::SetNull(size_t idx) {
+    CHECK_AW("ArrayWriter");
+    inner_->aw_set_null(idx);
+}
+void ArrayWriter::SetBool(size_t idx, bool v) {
+    CHECK_AW("ArrayWriter");
+    inner_->aw_set_bool(idx, v);
+}
+void ArrayWriter::SetInt32(size_t idx, int32_t v) {
+    CHECK_AW("ArrayWriter");
+    inner_->aw_set_i32(idx, v);
+}
+void ArrayWriter::SetInt64(size_t idx, int64_t v) {
+    CHECK_AW("ArrayWriter");
+    inner_->aw_set_i64(idx, v);
+}
+void ArrayWriter::SetFloat32(size_t idx, float v) {
+    CHECK_AW("ArrayWriter");
+    inner_->aw_set_f32(idx, v);
+}
+void ArrayWriter::SetFloat64(size_t idx, double v) {
+    CHECK_AW("ArrayWriter");
+    inner_->aw_set_f64(idx, v);
+}
 
 void ArrayWriter::SetString(size_t idx, const std::string& v) {
     CHECK_AW("ArrayWriter");
@@ -411,19 +432,18 @@ MapWriter::MapWriter(size_t capacity, DataType key_type, DataType value_type)
 
     // Keys are scalar; values may be a (possibly nested) ARRAY, so flatten them.
     auto value_flat = utils::flatten_array_type(value_type_);
-    int32_t value_leaf = value_flat.nesting > 0 ? value_flat.leaf_type
-                                                : static_cast<int32_t>(value_type_.id());
+    int32_t value_leaf =
+        value_flat.nesting > 0 ? value_flat.leaf_type : static_cast<int32_t>(value_type_.id());
     uint32_t value_precision = static_cast<uint32_t>(
         value_flat.nesting > 0 ? value_flat.leaf_precision : value_type_.precision());
-    uint32_t value_scale = static_cast<uint32_t>(
-        value_flat.nesting > 0 ? value_flat.leaf_scale : value_type_.scale());
+    uint32_t value_scale =
+        static_cast<uint32_t>(value_flat.nesting > 0 ? value_flat.leaf_scale : value_type_.scale());
     uint32_t value_nesting = static_cast<uint32_t>(value_flat.nesting);
 
-    auto box = ffi::new_map_writer(capacity,
-                                   static_cast<int32_t>(key_type_.id()),
+    auto box = ffi::new_map_writer(capacity, static_cast<int32_t>(key_type_.id()),
                                    static_cast<uint32_t>(key_type_.precision()),
-                                   static_cast<uint32_t>(key_type_.scale()),
-                                   value_leaf, value_precision, value_scale, value_nesting);
+                                   static_cast<uint32_t>(key_type_.scale()), value_leaf,
+                                   value_precision, value_scale, value_nesting);
     inner_ = box.into_raw();
 }
 
@@ -464,17 +484,38 @@ MapWriter& MapWriter::operator=(MapWriter&& other) noexcept {
 
 bool MapWriter::Available() const { return inner_ != nullptr; }
 
-void MapWriter::SetKeyBool(bool k) { CHECK_AW("MapWriter"); inner_->mw_key_bool(k); }
-void MapWriter::SetKeyInt32(int32_t k) { CHECK_AW("MapWriter"); inner_->mw_key_i32(k); }
-void MapWriter::SetKeyInt64(int64_t k) { CHECK_AW("MapWriter"); inner_->mw_key_i64(k); }
-void MapWriter::SetKeyFloat32(float k) { CHECK_AW("MapWriter"); inner_->mw_key_f32(k); }
-void MapWriter::SetKeyFloat64(double k) { CHECK_AW("MapWriter"); inner_->mw_key_f64(k); }
-void MapWriter::SetKeyString(const std::string& k) { CHECK_AW("MapWriter"); inner_->mw_key_str(k); }
+void MapWriter::SetKeyBool(bool k) {
+    CHECK_AW("MapWriter");
+    inner_->mw_key_bool(k);
+}
+void MapWriter::SetKeyInt32(int32_t k) {
+    CHECK_AW("MapWriter");
+    inner_->mw_key_i32(k);
+}
+void MapWriter::SetKeyInt64(int64_t k) {
+    CHECK_AW("MapWriter");
+    inner_->mw_key_i64(k);
+}
+void MapWriter::SetKeyFloat32(float k) {
+    CHECK_AW("MapWriter");
+    inner_->mw_key_f32(k);
+}
+void MapWriter::SetKeyFloat64(double k) {
+    CHECK_AW("MapWriter");
+    inner_->mw_key_f64(k);
+}
+void MapWriter::SetKeyString(const std::string& k) {
+    CHECK_AW("MapWriter");
+    inner_->mw_key_str(k);
+}
 void MapWriter::SetKeyBytes(const std::vector<uint8_t>& k) {
     CHECK_AW("MapWriter");
     inner_->mw_key_bytes(rust::Slice<const uint8_t>(k.data(), k.size()));
 }
-void MapWriter::SetKeyDate(fluss::Date k) { CHECK_AW("MapWriter"); inner_->mw_key_date(k.days_since_epoch); }
+void MapWriter::SetKeyDate(fluss::Date k) {
+    CHECK_AW("MapWriter");
+    inner_->mw_key_date(k.days_since_epoch);
+}
 void MapWriter::SetKeyTime(fluss::Time k) {
     CHECK_AW("MapWriter");
     inner_->mw_key_time(k.millis_since_midnight);
@@ -483,20 +524,47 @@ void MapWriter::SetKeyTimestamp(fluss::Timestamp k) {
     CHECK_AW("MapWriter");
     inner_->mw_key_timestamp(k.epoch_millis, k.nano_of_millisecond);
 }
-void MapWriter::SetKeyDecimal(const std::string& k) { CHECK_AW("MapWriter"); inner_->mw_key_decimal_str(k); }
+void MapWriter::SetKeyDecimal(const std::string& k) {
+    CHECK_AW("MapWriter");
+    inner_->mw_key_decimal_str(k);
+}
 
-void MapWriter::SetValueNull() { CHECK_AW("MapWriter"); inner_->mw_value_null(); }
-void MapWriter::SetValueBool(bool v) { CHECK_AW("MapWriter"); inner_->mw_value_bool(v); }
-void MapWriter::SetValueInt32(int32_t v) { CHECK_AW("MapWriter"); inner_->mw_value_i32(v); }
-void MapWriter::SetValueInt64(int64_t v) { CHECK_AW("MapWriter"); inner_->mw_value_i64(v); }
-void MapWriter::SetValueFloat32(float v) { CHECK_AW("MapWriter"); inner_->mw_value_f32(v); }
-void MapWriter::SetValueFloat64(double v) { CHECK_AW("MapWriter"); inner_->mw_value_f64(v); }
-void MapWriter::SetValueString(const std::string& v) { CHECK_AW("MapWriter"); inner_->mw_value_str(v); }
+void MapWriter::SetValueNull() {
+    CHECK_AW("MapWriter");
+    inner_->mw_value_null();
+}
+void MapWriter::SetValueBool(bool v) {
+    CHECK_AW("MapWriter");
+    inner_->mw_value_bool(v);
+}
+void MapWriter::SetValueInt32(int32_t v) {
+    CHECK_AW("MapWriter");
+    inner_->mw_value_i32(v);
+}
+void MapWriter::SetValueInt64(int64_t v) {
+    CHECK_AW("MapWriter");
+    inner_->mw_value_i64(v);
+}
+void MapWriter::SetValueFloat32(float v) {
+    CHECK_AW("MapWriter");
+    inner_->mw_value_f32(v);
+}
+void MapWriter::SetValueFloat64(double v) {
+    CHECK_AW("MapWriter");
+    inner_->mw_value_f64(v);
+}
+void MapWriter::SetValueString(const std::string& v) {
+    CHECK_AW("MapWriter");
+    inner_->mw_value_str(v);
+}
 void MapWriter::SetValueBytes(const std::vector<uint8_t>& v) {
     CHECK_AW("MapWriter");
     inner_->mw_value_bytes(rust::Slice<const uint8_t>(v.data(), v.size()));
 }
-void MapWriter::SetValueDate(fluss::Date v) { CHECK_AW("MapWriter"); inner_->mw_value_date(v.days_since_epoch); }
+void MapWriter::SetValueDate(fluss::Date v) {
+    CHECK_AW("MapWriter");
+    inner_->mw_value_date(v.days_since_epoch);
+}
 void MapWriter::SetValueTime(fluss::Time v) {
     CHECK_AW("MapWriter");
     inner_->mw_value_time(v.millis_since_midnight);
@@ -533,7 +601,10 @@ void MapWriter::SetValueArray(ArrayWriter&& v) {
     v.Destroy();
 }
 
-void MapWriter::Commit() { CHECK_AW("MapWriter"); inner_->mw_commit(); }
+void MapWriter::Commit() {
+    CHECK_AW("MapWriter");
+    inner_->mw_commit();
+}
 
 // ============================================================================
 // Value — one recursive handle for complex (ARRAY/MAP/ROW) reads
@@ -560,9 +631,9 @@ Value& Value::operator=(Value&& other) noexcept {
 }
 
 // NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
-#define CHECK_VALUE()                                                                  \
-    do {                                                                               \
-        if (!inner_) throw std::logic_error("Value: not available (moved-from)");      \
+#define CHECK_VALUE()                                                             \
+    do {                                                                          \
+        if (!inner_) throw std::logic_error("Value: not available (moved-from)"); \
     } while (0)
 
 TypeId Value::Type() const noexcept {
@@ -573,18 +644,39 @@ bool Value::IsNull() const noexcept {
     assert(inner_ && "Value::IsNull called on moved-from instance");
     return inner_->v_is_null();
 }
-bool Value::GetBool() const { CHECK_VALUE(); return inner_->v_get_bool(); }
-int32_t Value::GetInt32() const { CHECK_VALUE(); return inner_->v_get_i32(); }
-int64_t Value::GetInt64() const { CHECK_VALUE(); return inner_->v_get_i64(); }
-float Value::GetFloat32() const { CHECK_VALUE(); return inner_->v_get_f32(); }
-double Value::GetFloat64() const { CHECK_VALUE(); return inner_->v_get_f64(); }
-std::string Value::GetString() const { CHECK_VALUE(); return std::string(inner_->v_get_str()); }
+bool Value::GetBool() const {
+    CHECK_VALUE();
+    return inner_->v_get_bool();
+}
+int32_t Value::GetInt32() const {
+    CHECK_VALUE();
+    return inner_->v_get_i32();
+}
+int64_t Value::GetInt64() const {
+    CHECK_VALUE();
+    return inner_->v_get_i64();
+}
+float Value::GetFloat32() const {
+    CHECK_VALUE();
+    return inner_->v_get_f32();
+}
+double Value::GetFloat64() const {
+    CHECK_VALUE();
+    return inner_->v_get_f64();
+}
+std::string Value::GetString() const {
+    CHECK_VALUE();
+    return std::string(inner_->v_get_str());
+}
 std::vector<uint8_t> Value::GetBytes() const {
     CHECK_VALUE();
     auto rv = inner_->v_get_bytes();
     return {rv.data(), rv.data() + rv.size()};
 }
-fluss::Date Value::GetDate() const { CHECK_VALUE(); return fluss::Date{inner_->v_get_date_days()}; }
+fluss::Date Value::GetDate() const {
+    CHECK_VALUE();
+    return fluss::Date{inner_->v_get_date_days()};
+}
 fluss::Time Value::GetTime() const {
     CHECK_VALUE();
     return fluss::Time{inner_->v_get_time_millis()};
@@ -597,8 +689,14 @@ std::string Value::GetDecimalString() const {
     CHECK_VALUE();
     return std::string(inner_->v_get_decimal_str());
 }
-size_t Value::Size() const { CHECK_VALUE(); return inner_->v_size(); }
-size_t Value::FieldCount() const { CHECK_VALUE(); return inner_->v_field_count(); }
+size_t Value::Size() const {
+    CHECK_VALUE();
+    return inner_->v_size();
+}
+size_t Value::FieldCount() const {
+    CHECK_VALUE();
+    return inner_->v_field_count();
+}
 Value Value::At(size_t i) const {
     CHECK_VALUE();
     auto box = inner_->v_at(i);
@@ -1157,9 +1255,7 @@ Value LookupResult::GetValue(size_t idx) const {
     return Value(box.into_raw());
 }
 
-Value LookupResult::GetValue(const std::string& name) const {
-    return GetValue(Resolve(name));
-}
+Value LookupResult::GetValue(const std::string& name) const { return GetValue(Resolve(name)); }
 
 // ============================================================================
 // Table
@@ -1254,9 +1350,9 @@ Result Table::GetArrowSchema(std::shared_ptr<arrow::Schema>& out) const {
     }
     // Ours, so no allocation crosses the boundary: Rust fills it in and
     // ImportSchema releases it.
-    struct ArrowSchema c_schema {};
-    auto result = utils::from_ffi_result(
-        table_->get_arrow_schema(reinterpret_cast<size_t>(&c_schema)));
+    struct ArrowSchema c_schema{};
+    auto result =
+        utils::from_ffi_result(table_->get_arrow_schema(reinterpret_cast<size_t>(&c_schema)));
     if (!result.Ok()) {
         return result;
     }
@@ -1719,7 +1815,8 @@ Result AppendWriter::Append(const GenericRow& row, WriteCallback callback) {
         return reserved;
     }
     WriteResult pending;
-    auto result = AppendWithBudget(row, pending, callback_capacity_->RemainingBudgetMs(submit_start));
+    auto result =
+        AppendWithBudget(row, pending, callback_capacity_->RemainingBudgetMs(submit_start));
     if (result.Ok()) {
         return pending.Notify(std::move(completion));
     }
@@ -1759,9 +1856,9 @@ Result AppendWriter::AppendArrowBatchWithBudget(const std::shared_ptr<arrow::Rec
 
     // Rust takes ownership of both pointers immediately via Box::from_raw(),
     // so after this call C++ must NOT free them.
-    auto ffi_result = writer_->append_arrow_batch(reinterpret_cast<size_t>(array_heap),
-                                                  reinterpret_cast<size_t>(schema_heap),
-                                                  submit_budget_ms);
+    auto ffi_result =
+        writer_->append_arrow_batch(reinterpret_cast<size_t>(array_heap),
+                                    reinterpret_cast<size_t>(schema_heap), submit_budget_ms);
     auto result = utils::from_ffi_result(ffi_result.result);
     if (result.Ok()) {
         out.Destroy();
@@ -1786,8 +1883,8 @@ Result AppendWriter::AppendArrowBatch(const std::shared_ptr<arrow::RecordBatch>&
         return reserved;
     }
     WriteResult pending;
-    auto result =
-        AppendArrowBatchWithBudget(batch, pending, callback_capacity_->RemainingBudgetMs(submit_start));
+    auto result = AppendArrowBatchWithBudget(batch, pending,
+                                             callback_capacity_->RemainingBudgetMs(submit_start));
     if (result.Ok()) {
         return pending.Notify(std::move(completion));
     }
@@ -1856,7 +1953,7 @@ Result UpsertWriter::Upsert(const GenericRow& row, WriteResult& out) {
 }
 
 Result UpsertWriter::UpsertWithBudget(const GenericRow& row, WriteResult& out,
-                                     int64_t submit_budget_ms) {
+                                      int64_t submit_budget_ms) {
     if (!Available()) {
         return utils::make_client_error("UpsertWriter not available");
     }
@@ -1887,7 +1984,8 @@ Result UpsertWriter::Upsert(const GenericRow& row, WriteCallback callback) {
         return reserved;
     }
     WriteResult pending;
-    auto result = UpsertWithBudget(row, pending, callback_capacity_->RemainingBudgetMs(submit_start));
+    auto result =
+        UpsertWithBudget(row, pending, callback_capacity_->RemainingBudgetMs(submit_start));
     if (result.Ok()) {
         return pending.Notify(std::move(completion));
     }
@@ -1904,7 +2002,7 @@ Result UpsertWriter::Delete(const GenericRow& row, WriteResult& out) {
 }
 
 Result UpsertWriter::DeleteWithBudget(const GenericRow& row, WriteResult& out,
-                                     int64_t submit_budget_ms) {
+                                      int64_t submit_budget_ms) {
     if (!Available()) {
         return utils::make_client_error("UpsertWriter not available");
     }
@@ -1935,7 +2033,8 @@ Result UpsertWriter::Delete(const GenericRow& row, WriteCallback callback) {
         return reserved;
     }
     WriteResult pending;
-    auto result = DeleteWithBudget(row, pending, callback_capacity_->RemainingBudgetMs(submit_start));
+    auto result =
+        DeleteWithBudget(row, pending, callback_capacity_->RemainingBudgetMs(submit_start));
     if (result.Ok()) {
         return pending.Notify(std::move(completion));
     }
@@ -2013,6 +2112,45 @@ Result Lookuper::Lookup(const GenericRow& pk_row, PendingLookup& out) const {
         out = PendingLookup(utils::ptr_from_ffi<ffi::PendingLookup>(ffi_result));
     }
     return result;
+}
+
+Result Lookuper::LookupAsync(const GenericRow& pk_row, uint64_t request_id) const {
+    if (!Available()) {
+        return utils::make_client_error("Lookuper not available");
+    }
+    if (!pk_row.Available()) {
+        return utils::make_client_error("GenericRow not available");
+    }
+    return utils::from_ffi_result(lookuper_->lookup_async_poll(*pk_row.inner_, request_id));
+}
+
+Result Lookuper::Poll(int64_t timeout_ms, std::vector<LookupCompletion>& out) const {
+    if (!Available()) {
+        return utils::make_client_error("Lookuper not available");
+    }
+    auto poll = [&](int64_t wait_ms) { return lookuper_->poll_lookup(wait_ms); };
+    bool first = true;
+    while (first || !out.empty()) {
+        auto ffi_result = poll(first ? timeout_ms : 0);
+        auto result = utils::from_ffi_result(ffi_result.result);
+        if (!result.Ok()) {
+            return result;
+        }
+        if (ffi_result.ptr == 0) {
+            break;
+        }
+        auto completion = utils::ptr_from_ffi<ffi::LookupCompletion>(ffi_result);
+        if (!completion) {
+            break;
+        }
+        LookupCompletion item;
+        item.request_id = completion->lookup_completion_request_id();
+        item.result = item.lookup.Adopt(completion->lookup_completion_take_result().into_raw());
+        ffi::delete_lookup_completion(completion);
+        out.push_back(std::move(item));
+        first = false;
+    }
+    return {};
 }
 
 // ============================================================================
@@ -2120,6 +2258,46 @@ Result PrefixLookuper::PrefixLookup(const GenericRow& prefix_row, PendingPrefixL
         out = PendingPrefixLookup(utils::ptr_from_ffi<ffi::PendingPrefixLookup>(ffi_result));
     }
     return result;
+}
+
+Result PrefixLookuper::PrefixLookupAsync(const GenericRow& prefix_row, uint64_t request_id) const {
+    if (!Available()) {
+        return utils::make_client_error("PrefixLookuper not available");
+    }
+    if (!prefix_row.Available()) {
+        return utils::make_client_error("GenericRow not available");
+    }
+    return utils::from_ffi_result(
+        lookuper_->prefix_lookup_async_poll(*prefix_row.inner_, request_id));
+}
+
+Result PrefixLookuper::Poll(int64_t timeout_ms, std::vector<PrefixLookupCompletion>& out) const {
+    if (!Available()) {
+        return utils::make_client_error("PrefixLookuper not available");
+    }
+    bool first = true;
+    while (first || !out.empty()) {
+        auto ffi_result = lookuper_->poll_prefix_lookup(first ? timeout_ms : 0);
+        auto result = utils::from_ffi_result(ffi_result.result);
+        if (!result.Ok()) {
+            return result;
+        }
+        if (ffi_result.ptr == 0) {
+            break;
+        }
+        auto completion = utils::ptr_from_ffi<ffi::PrefixLookupCompletion>(ffi_result);
+        if (!completion) {
+            break;
+        }
+        PrefixLookupCompletion item;
+        item.request_id = completion->prefix_lookup_completion_request_id();
+        item.result =
+            item.lookup.Adopt(completion->prefix_lookup_completion_take_result().into_raw());
+        ffi::delete_prefix_lookup_completion(completion);
+        out.push_back(std::move(item));
+        first = false;
+    }
+    return {};
 }
 
 Result PrefixLookupResult::Adopt(ffi::PrefixLookupResultInner* inner) {
@@ -2324,8 +2502,8 @@ Result LogScanner::Poll(int64_t timeout_ms, ScanRecords& out) {
 }
 
 ArrowRecordBatch::ArrowRecordBatch(std::shared_ptr<arrow::RecordBatch> batch, int64_t table_id,
-                                   int64_t partition_id, int32_t bucket_id,
-                                   int64_t base_offset, int64_t commit_timestamp) noexcept
+                                   int64_t partition_id, int32_t bucket_id, int64_t base_offset,
+                                   int64_t commit_timestamp) noexcept
     : batch_(std::move(batch)),
       table_id_(table_id),
       partition_id_(partition_id),
@@ -2507,8 +2685,7 @@ Result RecordBatchLogScanner::CreateRecordBatchLogReaderFromRanges(
 Result RecordBatchLogScanner::CreateRecordBatchLogReaderBetweenTimestamps(
     const Admin& admin, const std::vector<TableBucket>& buckets, const TimestampRange& range,
     RecordBatchLogReader& out) && {
-    auto result =
-        scanner_.CreateRecordBatchLogReaderBetweenTimestamps(admin, buckets, range, out);
+    auto result = scanner_.CreateRecordBatchLogReaderBetweenTimestamps(admin, buckets, range, out);
     if (result.Ok()) {
         scanner_ = LogScanner();
     }
@@ -2725,7 +2902,7 @@ Result RecordBatchLogReader::CollectAllBatches(int64_t timeout_ms, ArrowRecordBa
                 "CollectAllBatches timed out before every stopping offset was reached");
         default:
             return utils::make_client_error("Unknown bounded read status: " +
-                                           std::to_string(ffi_result.status));
+                                            std::to_string(ffi_result.status));
     }
 }
 
