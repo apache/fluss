@@ -412,7 +412,8 @@ pub struct DefaultCompletedFetch {
     /// can be returned together.
     pending_records: Vec<ScanRecord>,
     last_record: Option<ScanRecord>,
-    cached_record_error: Option<String>,
+    // Keep decode failures until this fetch is discarded after a subscription change.
+    cached_record_error: Option<Arc<Error>>,
     corrupt_last_record: bool,
 }
 
@@ -594,7 +595,7 @@ impl DefaultCompletedFetch {
                     return FetchStep::SchemaRequired(schema_id);
                 }
                 Err(e) => {
-                    self.cached_record_error = Some(e.to_string());
+                    self.cached_record_error = Some(Arc::new(e));
                 }
             }
         }
@@ -621,16 +622,14 @@ impl DefaultCompletedFetch {
     }
 
     fn fetch_error(&self) -> Error {
-        let mut message = format!(
-            "Received exception when fetching the next record from {table_bucket}. If needed, please back to past the record to continue scanning.",
-            table_bucket = self.table_bucket
-        );
-        if let Some(cause) = self.cached_record_error.as_deref() {
-            message.push_str(&format!(" Cause: {cause}"));
-        }
         Error::UnexpectedError {
-            message,
-            source: None,
+            message: format!(
+                "Failed to read log data at offset {} for bucket {}",
+                self.next_fetch_offset, self.table_bucket
+            ),
+            source: self.cached_record_error.as_ref().map(|error| {
+                Box::new(Arc::clone(error)) as Box<dyn std::error::Error + Send + Sync>
+            }),
         }
     }
     /// Get the next batch with its base offset and commit timestamp.
@@ -722,16 +721,21 @@ impl CompletedFetch for DefaultCompletedFetch {
     }
 
     fn has_pending_error(&self) -> bool {
-        self.error.is_some()
+        self.error.is_some() || self.cached_record_error.is_some()
     }
 
     fn defer_error(&mut self, error: Error) {
+        // Decode failures are already cached and must survive repeated polls.
+        if self.cached_record_error.is_some() {
+            return;
+        }
         self.error = Some(error);
         self.consumed = false;
     }
 
     fn fetch_records(&mut self, max_records: usize) -> Result<FetchResult<Vec<ScanRecord>>> {
         if let Some(error) = self.error.take() {
+            self.drain();
             return Err(error);
         }
 
@@ -802,6 +806,10 @@ impl CompletedFetch for DefaultCompletedFetch {
             return Err(error);
         }
 
+        if self.cached_record_error.is_some() {
+            return Err(self.fetch_error());
+        }
+
         if let Some(api_error) = self.api_error.as_ref() {
             return Err(Error::FlussAPIError {
                 api_error: ApiError {
@@ -821,11 +829,10 @@ impl CompletedFetch for DefaultCompletedFetch {
             let step = match self.next_fetched_batch() {
                 Ok(step) => step,
                 Err(error) => {
+                    self.cached_record_error = Some(Arc::new(error));
                     if batches.is_empty() {
-                        self.drain();
-                        return Err(error);
+                        return Err(self.fetch_error());
                     }
-                    self.defer_error(error);
                     return Ok(FetchResult::Data(batches));
                 }
             };
@@ -1070,6 +1077,10 @@ impl PendingFetch for RemotePendingFetch {
 mod tests {
     use super::*;
     use crate::client::table::read_context_resolver::ReadContextResolver;
+    use crate::client::table::remote_log::{
+        FetchResult as DownloadResult, RemoteLogDownloadRequest, RemoteLogDownloader,
+        RemoteLogFetcher,
+    };
     use crate::client::{EARLIEST_OFFSET, WriteRecord};
     use crate::metadata::{
         Column, DataField, DataTypes, PhysicalTablePath, RowType, Schema, TableDescriptor,
@@ -1085,6 +1096,9 @@ mod tests {
         build_table_info, build_table_info_with_columns, uncompressed_arrow_batch_config,
     };
     use arrow::array::{Array, Int32Array, StringArray};
+    use std::future::Future;
+    use std::path::PathBuf;
+    use std::pin::Pin;
     use std::sync::Arc;
 
     fn expect_data<T>(result: FetchResult<T>) -> T {
@@ -1144,8 +1158,37 @@ mod tests {
         assert_eq!(fetch.records_read(), 1);
         assert_eq!(fetch.next_fetch_offset(), 1);
         assert!(!fetch.is_consumed());
-        assert!(fetch.fetch_batches(10).is_err());
-        assert!(fetch.is_consumed());
+        let error = match fetch.fetch_batches(10) {
+            Err(error) => error,
+            Ok(_) => panic!("expected decode error"),
+        };
+        let message = error.to_string();
+        assert!(
+            message.contains(&TableBucket::new(1, 0).to_string()),
+            "{message}"
+        );
+        assert!(message.contains("offset 1"), "{message}");
+        assert!(message.contains("Invalid continuation marker"), "{message}");
+        assert!(std::error::Error::source(&error).is_some());
+        assert!(!fetch.is_consumed());
+        // Repeated reads retain the same cause and never continue the batch iterator.
+        let cause = fetch.cached_record_error.as_ref().unwrap().clone();
+        for _ in 0..3 {
+            assert_eq!(
+                fetch
+                    .fetch_batches(10)
+                    .err()
+                    .expect("cached decode error")
+                    .to_string(),
+                message
+            );
+            assert!(Arc::ptr_eq(
+                &cause,
+                fetch.cached_record_error.as_ref().unwrap()
+            ));
+            assert_eq!(fetch.next_fetch_offset(), 1);
+            assert_eq!(fetch.records_read(), 1);
+        }
         Ok(())
     }
 
@@ -1285,14 +1328,6 @@ mod tests {
 
     #[tokio::test]
     async fn pending_file_open_failure_preserves_offset_and_releases_permit() -> Result<()> {
-        use crate::client::table::remote_log::{
-            FetchResult as DownloadResult, RemoteLogDownloadRequest, RemoteLogDownloader,
-            RemoteLogFetcher,
-        };
-        use std::future::Future;
-        use std::path::PathBuf;
-        use std::pin::Pin;
-
         struct MissingFileFetcher(PathBuf);
         impl RemoteLogFetcher for MissingFileFetcher {
             fn fetch(
