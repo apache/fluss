@@ -105,7 +105,7 @@ Name of the coordinator metrics headless Service. Already unique per release,
 so the naming scheme leaves it alone.
 */}}
 {{- define "fluss.coordinator.metricsServiceName" -}}
-{{- printf "%s-coordinator-server-metrics-hs" .Release.Name | trunc 63 | trimSuffix "-" -}}
+{{- printf "%s-coordinator-server-metrics-hs" .Release.Name -}}
 {{- end -}}
 
 {{/*
@@ -113,7 +113,7 @@ Name of the tablet metrics headless Service. Already unique per release, so the
 naming scheme leaves it alone.
 */}}
 {{- define "fluss.tablet.metricsServiceName" -}}
-{{- printf "%s-tablet-server-metrics-hs" .Release.Name | trunc 63 | trimSuffix "-" -}}
+{{- printf "%s-tablet-server-metrics-hs" .Release.Name -}}
 {{- end -}}
 
 {{/*

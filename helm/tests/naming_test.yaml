@@ -281,3 +281,31 @@ tests:
       name: a-very-long-fluss-release-name-that-will-not-fit
     asserts:
       - notFailedTemplate: {}
+
+---
+
+suite: metrics-service-names
+templates:
+  - templates/svc-metrics-coordinator.yaml
+  - templates/svc-metrics-tablet.yaml
+set:
+  metrics.reporters: prometheus
+  metrics.prometheus:
+    port: 9249
+
+tests:
+  # The names are not truncated, as before this option existed: a release name
+  # too long for them fails at install rather than producing a shortened name
+  # that scrape configs no longer match.
+  - it: should not truncate the metrics Service names for long release names
+    release:
+      name: rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr
+    asserts:
+      - equal:
+          path: metadata.name
+          value: rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr-coordinator-server-metrics-hs
+        template: templates/svc-metrics-coordinator.yaml
+      - equal:
+          path: metadata.name
+          value: rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr-tablet-server-metrics-hs
+        template: templates/svc-metrics-tablet.yaml
