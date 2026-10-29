@@ -374,13 +374,16 @@ public abstract class AbstractPrometheusReporter implements MetricReporter {
                             labelValues,
                             histogram.getCount()));
             final HistogramStatistics statistics = histogram.getStatistics();
+            // Like Prometheus client summaries, an empty window reports NaN quantiles so the
+            // series stays continuous instead of going stale.
+            final boolean emptyWindow = statistics.size() == 0;
             for (final Double quantile : QUANTILES) {
                 samples.add(
                         new MetricFamilySamples.Sample(
                                 metricName,
                                 labelNamesWithQuantile,
                                 addToList(labelValues, quantile.toString()),
-                                statistics.getQuantile(quantile)));
+                                emptyWindow ? Double.NaN : statistics.getQuantile(quantile)));
             }
         }
     }

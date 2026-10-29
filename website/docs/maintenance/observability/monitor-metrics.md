@@ -12,7 +12,7 @@ Fluss supports different metric types: **Counters**, **Gauges**, **Histograms**,
 
 - `Gauge`: Provides a value of any type at a point in time.
 - `Counter`: Used to count values by incrementing and decrementing.
-- `Histogram`: Measure the statistical distribution of a set of values including the min, max, mean, standard deviation and percentile.
+- `Histogram`: Measure the statistical distribution of a set of values including the min, max, mean, standard deviation and percentile. Built-in histograms only consider samples from the last five minutes; see [Histograms](metric-reporters.md#histograms).
 - `Meter`: The gauge exports the meter's rate.
 
 Fluss client also has supported built-in metrics to measure operations of **write to**, **read from** fluss cluster, 

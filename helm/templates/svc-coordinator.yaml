@@ -30,6 +30,7 @@ metadata:
 spec:
   clusterIP: None
   type: ClusterIP
+  publishNotReadyAddresses: {{ .Values.coordinator.service.publishNotReadyAddresses }}
   ports:
     - name: internal
       protocol: TCP

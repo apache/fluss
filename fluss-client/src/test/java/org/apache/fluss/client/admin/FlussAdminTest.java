@@ -19,13 +19,13 @@
 package org.apache.fluss.client.admin;
 
 import org.apache.fluss.client.metadata.MetadataUpdater;
+import org.apache.fluss.client.utils.TestingRpcClient;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.AuthorizationException;
 import org.apache.fluss.exception.UnsupportedVersionException;
-import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.messages.ApiMessage;
 import org.apache.fluss.rpc.messages.DescribeClusterResponse;
 import org.apache.fluss.rpc.messages.MetadataResponse;
@@ -42,7 +42,6 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.BiFunction;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -177,38 +176,5 @@ class FlussAdminTest {
         CompletableFuture<ApiMessage> result = new CompletableFuture<>();
         result.completeExceptionally(error);
         return result;
-    }
-
-    private static class TestingRpcClient implements RpcClient {
-        private final BiFunction<ServerNode, ApiKeys, CompletableFuture<ApiMessage>> response;
-
-        private TestingRpcClient(
-                BiFunction<ServerNode, ApiKeys, CompletableFuture<ApiMessage>> response) {
-            this.response = response;
-        }
-
-        @Override
-        public boolean connect(ServerNode node) {
-            return true;
-        }
-
-        @Override
-        public CompletableFuture<Void> disconnect(String serverUid) {
-            return CompletableFuture.completedFuture(null);
-        }
-
-        @Override
-        public boolean isReady(String serverUid) {
-            return true;
-        }
-
-        @Override
-        public CompletableFuture<ApiMessage> sendRequest(
-                ServerNode node, ApiKeys apiKey, ApiMessage request) {
-            return response.apply(node, apiKey);
-        }
-
-        @Override
-        public void close() {}
     }
 }

@@ -23,11 +23,13 @@ import org.apache.fluss.metrics.Histogram;
 import org.apache.fluss.metrics.Meter;
 import org.apache.fluss.metrics.Metric;
 import org.apache.fluss.metrics.SimpleCounter;
+import org.apache.fluss.metrics.TestingExpiringHistogram;
 import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.metrics.util.TestHistogram;
 import org.apache.fluss.metrics.util.TestMeter;
 import org.apache.fluss.shaded.guava32.com.google.common.collect.Iterators;
 import org.apache.fluss.utils.NetUtils;
+import org.apache.fluss.utils.clock.ManualClock;
 
 import com.mashape.unirest.http.HttpResponse;
 import com.mashape.unirest.http.Unirest;
@@ -36,6 +38,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
@@ -143,6 +146,59 @@ class PrometheusReporterTest {
                                     + quantile
                                     + "\n");
         }
+    }
+
+    @Test
+    void emptyHistogramWindowReportsNaNQuantilesAndCumulativeCount() throws UnirestException {
+        TestHistogram histogram = new TestHistogram();
+        histogram.setCount(10);
+        histogram.setSize(0);
+
+        String histogramName = "idleHistogram";
+        String response = addMetricAndPollResponse(histogram, histogramName);
+
+        assertThat(response)
+                .contains(createExpectedPollResponse(histogramName, "_count", "summary", "10.0"));
+        for (String quantile : Arrays.asList("0.5", "0.75", "0.95", "0.98", "0.99", "0.999")) {
+            assertThat(response)
+                    .contains(
+                            SCOPE_PREFIX
+                                    + histogramName
+                                    + "{"
+                                    + DIMENSIONS
+                                    + ",quantile=\""
+                                    + quantile
+                                    + "\",} NaN\n");
+        }
+    }
+
+    @Test
+    void expiringHistogramReportsNaNQuantilesUntilNextObservation() throws UnirestException {
+        ManualClock clock = new ManualClock();
+        TestingExpiringHistogram histogram =
+                new TestingExpiringHistogram(3, Duration.ofMinutes(5), clock);
+        histogram.update(100);
+
+        String metricName = "expiringHistogram";
+        String quantileSeries =
+                SCOPE_PREFIX + metricName + "{" + DIMENSIONS + ",quantile=\"0.99\",} ";
+
+        String response = addMetricAndPollResponse(histogram, metricName);
+        assertThat(response)
+                .contains(createExpectedPollResponse(metricName, "_count", "summary", "1.0"))
+                .contains(quantileSeries + "100.0\n");
+
+        clock.advanceTime(Duration.ofMinutes(5));
+        response = pollMetrics(reporter.getPort()).getBody();
+        assertThat(response)
+                .contains(createExpectedPollResponse(metricName, "_count", "summary", "1.0"))
+                .contains(quantileSeries + "NaN\n");
+
+        histogram.update(10);
+        response = pollMetrics(reporter.getPort()).getBody();
+        assertThat(response)
+                .contains(createExpectedPollResponse(metricName, "_count", "summary", "2.0"))
+                .contains(quantileSeries + "10.0\n");
     }
 
     /**
