@@ -123,6 +123,8 @@ class RequestProcessorMetricsTest {
                                 .get(0)
                                 .metric;
         assertThat(histogram.getCount()).isEqualTo(1);
-        assertThat(sum.getCount()).isPositive();
+        assertThat(sum.getCount())
+                .isEqualTo(histogram.getStatistics().getValues()[0])
+                .isNotNegative();
     }
 }
