@@ -398,6 +398,14 @@ impl Cluster {
                 Arc::new(table_path),
                 Some(partition_name),
             ));
+            // Partition ids only ever grow, so a lower id than the cached one comes from a
+            // server that hasn't seen the partition re-created yet.
+            if partitions_id_by_path
+                .get(&physical_table_path)
+                .is_some_and(|cached_id| *cached_id > partition_id)
+            {
+                continue;
+            }
 
             partitions_id_by_path.insert(Arc::clone(&physical_table_path), partition_id);
 
@@ -1237,6 +1245,42 @@ mod tests {
             Some(2)
         );
         assert_eq!(cluster.get_partition_id(&partition_path), None);
+        assert_eq!(cluster.bucket_count(TableOrPartition::Partition(10)), None);
+    }
+
+    #[test]
+    fn from_metadata_response_keeps_a_re_created_partition_over_stale_metadata() {
+        let partition = |partition_id| PbPartitionMetadata {
+            table_id: 1,
+            partition_name: "p1".to_string(),
+            partition_id,
+            bucket_metadata: vec![pb_bucket(0)],
+            bucket_count: Some(2),
+        };
+        let current = pb_metadata_response(
+            vec![pb_table_metadata("parts", 1, true, vec![])],
+            vec![partition(11)],
+        );
+        let current = Cluster::from_metadata_response(current, None).unwrap();
+        let partition_path = PhysicalTablePath::of_partitioned(
+            Arc::new(TablePath::new("db", "parts")),
+            Some("p1".to_string()),
+        );
+
+        let stale = pb_metadata_response(vec![], vec![partition(10)]);
+        let cluster = Cluster::from_metadata_response(stale, Some(&current)).unwrap();
+
+        assert_eq!(cluster.get_partition_id(&partition_path), Some(11));
+        assert!(
+            cluster
+                .leader_for(&TableBucket::new_with_partition(1, Some(11), 0))
+                .is_some()
+        );
+        assert!(
+            cluster
+                .leader_for(&TableBucket::new_with_partition(1, Some(10), 0))
+                .is_none()
+        );
         assert_eq!(cluster.bucket_count(TableOrPartition::Partition(10)), None);
     }
 }

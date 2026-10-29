@@ -1639,6 +1639,8 @@ struct Configuration {
     int32_t writer_dynamic_batch_size_min{256 * 1024};
     // Bucket assigner for tables without bucket keys: "sticky" or "round_robin"
     std::string writer_bucket_no_key_assigner{"sticky"};
+    // Create a missing partition on write; if false, such writes fail with PARTITION_NOT_EXISTS
+    bool writer_dynamic_create_partition_enabled{true};
     // Number of remote log batches to prefetch during scanning
     size_t scanner_remote_log_prefetch_num{4};
     // Number of threads for downloading remote log data

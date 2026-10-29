@@ -59,6 +59,7 @@ pub struct NifConfig {
     pub writer_kv_backpressure_max_throttle_ms: Option<u64>,
     pub writer_dynamic_batch_size_enabled: Option<bool>,
     pub writer_dynamic_batch_size_min: Option<i32>,
+    pub writer_dynamic_create_partition_enabled: Option<bool>,
     pub writer_enable_idempotence: Option<bool>,
     pub writer_max_inflight_requests_per_bucket: Option<u64>,
     pub writer_request_max_size: Option<i32>,
@@ -124,6 +125,9 @@ impl NifConfig {
         }
         if let Some(size) = self.writer_dynamic_batch_size_min {
             config.writer_dynamic_batch_size_min = size;
+        }
+        if let Some(enabled) = self.writer_dynamic_create_partition_enabled {
+            config.writer_dynamic_create_partition_enabled = enabled;
         }
         if let Some(acks) = self.writer_acks {
             config.writer_acks = acks;
@@ -215,12 +219,25 @@ mod tests {
             writer_kv_backpressure_max_throttle_ms: None,
             writer_dynamic_batch_size_enabled: None,
             writer_dynamic_batch_size_min: None,
+            writer_dynamic_create_partition_enabled: None,
             writer_enable_idempotence: None,
             writer_max_inflight_requests_per_bucket: None,
             writer_request_max_size: None,
             writer_retries: None,
             writer_retry_backoff_ms: None,
             writer_retry_max_backoff_ms: None,
+        }
+    }
+
+    #[test]
+    fn writer_dynamic_create_partition_enabled_is_preserved_in_core_config() {
+        for (enabled, expected) in [(None, true), (Some(false), false), (Some(true), true)] {
+            let mut config = default_config();
+            config.writer_dynamic_create_partition_enabled = enabled;
+            assert_eq!(
+                config.into_core().writer_dynamic_create_partition_enabled,
+                expected
+            );
         }
     }
 

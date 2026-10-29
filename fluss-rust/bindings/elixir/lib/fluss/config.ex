@@ -63,6 +63,7 @@ defmodule Fluss.Config do
             writer_kv_backpressure_max_throttle_ms: nil,
             writer_dynamic_batch_size_enabled: nil,
             writer_dynamic_batch_size_min: nil,
+            writer_dynamic_create_partition_enabled: nil,
             writer_enable_idempotence: nil,
             writer_max_inflight_requests_per_bucket: nil,
             writer_request_max_size: nil,
@@ -100,6 +101,7 @@ defmodule Fluss.Config do
           writer_kv_backpressure_max_throttle_ms: non_neg_integer() | nil,
           writer_dynamic_batch_size_enabled: boolean() | nil,
           writer_dynamic_batch_size_min: non_neg_integer() | nil,
+          writer_dynamic_create_partition_enabled: boolean() | nil,
           writer_enable_idempotence: boolean() | nil,
           writer_max_inflight_requests_per_bucket: non_neg_integer() | nil,
           writer_request_max_size: non_neg_integer() | nil,
@@ -245,6 +247,11 @@ defmodule Fluss.Config do
   def set_writer_dynamic_batch_size_min(%__MODULE__{} = config, size)
       when is_non_neg_integer(size),
       do: %{config | writer_dynamic_batch_size_min: size}
+
+  @spec set_writer_dynamic_create_partition_enabled(t(), boolean()) :: t()
+  def set_writer_dynamic_create_partition_enabled(%__MODULE__{} = config, enabled)
+      when is_boolean(enabled),
+      do: %{config | writer_dynamic_create_partition_enabled: enabled}
 
   @spec set_writer_enable_idempotence(t(), boolean()) :: t()
   def set_writer_enable_idempotence(%__MODULE__{} = config, enabled)

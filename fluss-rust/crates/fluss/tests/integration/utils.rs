@@ -90,6 +90,10 @@ pub fn get_shared_cluster() -> Arc<FlussTestingCluster> {
     Arc::new(SHARED_CLUSTER.clone())
 }
 
+pub fn server_predates_1_0() -> bool {
+    fluss_test_cluster::fluss_version().starts_with("0.")
+}
+
 pub async fn create_table(
     admin: &FlussAdmin,
     table_path: &TablePath,

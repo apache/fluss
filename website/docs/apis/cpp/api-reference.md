@@ -26,6 +26,7 @@ Complete API reference for the Fluss C++ client.
 | `writer_dynamic_batch_size_min`       | `int32_t`     | `262144` (256 KB)    | Lower bound for the dynamic batch size estimator (ignored when disabled)                 |
 | `writer_batch_timeout_ms`             | `int64_t`     | `100`                | Maximum time in ms to wait for a writer batch to fill up before sending                  |
 | `writer_bucket_no_key_assigner`       | `std::string` | `"sticky"`           | Bucket assignment strategy for tables without bucket keys: `"sticky"` or `"round_robin"` |
+| `writer_dynamic_create_partition_enabled` | `bool`    | `true`               | Create a partition that a write targets but that does not exist yet. When `false`, such writes fail with `PARTITION_NOT_EXISTS` |
 | `scanner_remote_log_prefetch_num`     | `size_t`      | `4`                  | Number of remote log segments to prefetch                                                |
 | `remote_file_download_thread_num`     | `size_t`      | `3`                  | Number of threads for remote log downloads                                               |
 | `scanner_remote_log_read_concurrency` | `size_t`      | `4`                  | Streaming read concurrency within a remote log file                                      |

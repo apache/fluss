@@ -195,6 +195,17 @@ impl Config {
                             FlussError::new_err(format!("Invalid value '{value}' for '{key}': {e}"))
                         })?;
                     }
+                    "writer.dynamic-create-partition.enabled" => {
+                        config.writer_dynamic_create_partition_enabled = match value.as_str() {
+                            "true" => true,
+                            "false" => false,
+                            other => {
+                                return Err(FlussError::new_err(format!(
+                                    "Invalid value '{other}' for '{key}', expected 'true' or 'false'"
+                                )));
+                            }
+                        };
+                    }
                     "writer.bucket.no-key-assigner" => {
                         config.writer_bucket_no_key_assigner =
                             value.parse::<fcore::config::NoKeyAssigner>().map_err(|e| {
@@ -430,6 +441,18 @@ impl Config {
                 ))
             })?;
         Ok(())
+    }
+
+    /// Get whether writes create the partitions they target that don't exist yet
+    #[getter]
+    fn writer_dynamic_create_partition_enabled(&self) -> bool {
+        self.inner.writer_dynamic_create_partition_enabled
+    }
+
+    /// Set whether writes create the partitions they target that don't exist yet
+    #[setter]
+    fn set_writer_dynamic_create_partition_enabled(&mut self, enabled: bool) {
+        self.inner.writer_dynamic_create_partition_enabled = enabled;
     }
 
     /// Get whether idempotent writes are enabled

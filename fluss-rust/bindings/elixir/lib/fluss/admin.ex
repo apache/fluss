@@ -22,8 +22,9 @@ defmodule Fluss.Admin do
   `create_*` and `drop_*` take keyword options, listed on each function.
 
   A partition spec maps partition columns (atoms or strings) to string values, e.g.
-  `%{region: "EU"}`. Partitions of a table that isn't auto-partitioned must be created before
-  writing to them.
+  `%{region: "EU"}`. A write to a partition that doesn't exist creates it, unless
+  `Fluss.Config.set_writer_dynamic_create_partition_enabled/2` turns that off, in which case the
+  write fails with `:partition_not_exists`.
 
   Malformed arguments (a non-string name, an unknown option, a bad partition spec) raise
   `ArgumentError`; errors from the server are returned as `{:error, %Fluss.Error{}}`.

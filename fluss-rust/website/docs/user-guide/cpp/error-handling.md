@@ -178,20 +178,20 @@ if (!result.Ok()) {
 
 ### Partition Not Found
 
-Writing to a partitioned primary key table before creating partitions:
+With `writer_dynamic_create_partition_enabled` set to `false`, a write to a partition that doesn't exist fails:
 
 ```cpp
-// This will fail if partitions are not created first
 auto row = table.NewRow();
 row.Set("user_id", 1);
 row.Set("region", "US");
 row.Set("score", static_cast<int64_t>(100));
 fluss::WriteResult wr;
 fluss::Result result = writer.Upsert(row, wr);
-if (!result.Ok()) {
-    if (result.error_code == fluss::ErrorCode::PARTITION_NOT_EXISTS) {
-        std::cerr << "Partition not found, create partitions before writing" << std::endl;
-    }
+if (result.Ok()) {
+    result = wr.Wait();
+}
+if (!result.Ok() && result.error_code == fluss::ErrorCode::PARTITION_NOT_EXISTS) {
+    std::cerr << "Partition not found, create partitions before writing" << std::endl;
 }
 ```
 
@@ -235,4 +235,4 @@ if (!result.Ok()) {
 1. **Always check `Result`**: Never ignore the return value of operations that return `Result`.
 2. **Handle errors gracefully**: Log errors and retry or fail gracefully rather than crashing.
 3. **Verify connection state**: Use `Available()` to check connection validity before operations.
-4. **Create partitions before writing**: For partitioned primary key tables, always create partitions before attempting upserts.
+4. **Create partitions before writing when dynamic creation is off**: With `writer_dynamic_create_partition_enabled` set to `false`, writes to a partition that doesn't exist fail with `PARTITION_NOT_EXISTS`.

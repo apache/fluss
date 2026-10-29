@@ -15,14 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::client::admin::FlussAdmin;
 use crate::client::broadcast;
 use crate::client::metadata::Metadata;
 use crate::client::write::IdempotenceManager;
 use crate::client::write::batch::WriteBatch;
 use crate::client::{ReadyWriteBatch, RecordAccumulator};
+use crate::cluster::Cluster;
 use crate::error::Error::UnexpectedError;
-use crate::error::{FlussError, Result};
-use crate::metadata::{PhysicalTablePath, TableBucket, TablePath};
+use crate::error::{Error, FlussError, Result};
+use crate::metadata::{PhysicalTablePath, ResolvedPartitionSpec, TableBucket, TablePath};
 use crate::metrics::WriterMetrics;
 use crate::proto::{
     PbProduceLogRespForBucket, PbPutKvRespForBucket, PbTablePath, ProduceLogResponse, PutKvResponse,
@@ -52,6 +54,11 @@ const RETRY_BACKOFF_MULTIPLIER: f64 = 2.0;
 const RETRY_BACKOFF_JITTER: f64 = 0.2;
 
 type SendFuture<'a> = Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
+/// Resolves to the unknown leaders it refreshed and what to do with them next.
+type RefreshFuture<'a> =
+    Pin<Box<dyn Future<Output = (HashSet<Arc<PhysicalTablePath>>, RefreshOutcome)> + Send + 'a>>;
+/// Resolves to the partition it tried to create.
+type CreateFuture<'a> = Pin<Box<dyn Future<Output = Arc<PhysicalTablePath>> + Send + 'a>>;
 type DispatchFuture<'a> =
     Pin<Box<dyn Future<Output = (i32, Result<Vec<SendFuture<'a>>>)> + Send + 'a>>;
 
@@ -61,6 +68,18 @@ type DrainResult = (
     Option<u64>,
     HashSet<Arc<PhysicalTablePath>>,
 );
+
+/// What a metadata refresh for unknown leaders leaves to the run loop.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum RefreshOutcome {
+    /// Nothing until the next refresh.
+    Done,
+    /// The server failed the request because a partition is missing, so each path is refreshed
+    /// again on its own.
+    RefreshEach,
+    /// The partition is missing and should be created.
+    Create,
+}
 
 /// At most one drained round per node. Further batches stay in the accumulator, retaining its
 /// memory budget and retry ordering. A round holds its node's dispatch slot only while its
@@ -135,6 +154,8 @@ pub struct Sender {
     retry_max_backoff_ms: u64,
     idempotence_manager: Arc<IdempotenceManager>,
     metrics: Arc<WriterMetrics>,
+    /// Creates the missing partitions that writes target. `None` fails those writes instead.
+    partition_creator: Option<Arc<FlussAdmin>>,
 }
 
 impl Sender {
@@ -164,7 +185,14 @@ impl Sender {
             retry_max_backoff_ms,
             idempotence_manager,
             metrics,
+            partition_creator: None,
         }
+    }
+
+    /// Creates missing partitions through `admin` instead of failing their writes.
+    pub fn with_partition_creator(mut self, admin: Arc<FlussAdmin>) -> Self {
+        self.partition_creator = Some(admin);
+        self
     }
 
     const WRITER_ID_RETRY_TIMES: u32 = 3;
@@ -301,12 +329,14 @@ impl Sender {
         ))
     }
 
-    /// Refresh metadata for buckets with unknown leaders. Runs as a concurrent
-    /// maintenance task so it never blocks the response-processing hot path.
+    /// Refreshes the metadata of unknown leaders in one request. Runs as a concurrent
+    /// maintenance task so it never blocks the response-processing hot path. The request is
+    /// bounded by the request timeout, so a lost response doesn't keep its paths from later
+    /// refreshes.
     async fn refresh_unknown_leaders(
         &self,
         unknown_leaders: &HashSet<Arc<PhysicalTablePath>>,
-    ) -> Result<()> {
+    ) -> Result<RefreshOutcome> {
         let mut table_paths: HashSet<&TablePath> = HashSet::new();
         let mut physical_table_paths: HashSet<&Arc<PhysicalTablePath>> = HashSet::new();
 
@@ -318,21 +348,201 @@ impl Sender {
             }
         }
 
-        if let Err(e) = self
-            .metadata
-            .update_tables_metadata(&table_paths, &physical_table_paths, vec![])
+        match self
+            .with_request_timeout(self.metadata.update_tables_metadata(
+                &table_paths,
+                &physical_table_paths,
+                vec![],
+            ))
             .await
         {
-            match e.api_error() {
-                Some(FlussError::PartitionNotExists) => {
-                    warn!("Partition does not exist during metadata update, continuing: {e}");
+            Ok(()) => {
+                debug!("Updated metadata for unknown leader tables: {unknown_leaders:?}");
+                Ok(RefreshOutcome::Done)
+            }
+            Err(e) if e.api_error() == Some(FlussError::PartitionNotExists) => {
+                Ok(RefreshOutcome::RefreshEach)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Refreshes unknown leaders that the server failed together because a partition is
+    /// missing: the tables in one request and each partition in a request of its own. The run
+    /// loop handles each completion on its own, so a partition whose refresh is slow or lost
+    /// holds up neither the creation of another missing partition nor the refresh of others.
+    fn refresh_each<'a>(
+        &'a self,
+        unknown_leaders: HashSet<Arc<PhysicalTablePath>>,
+    ) -> Vec<RefreshFuture<'a>> {
+        let (partitions, tables): (HashSet<_>, HashSet<_>) = unknown_leaders
+            .into_iter()
+            .partition(|path| path.get_partition_name().is_some());
+        let mut refreshes: Vec<RefreshFuture<'a>> = Vec::with_capacity(partitions.len() + 1);
+        if !tables.is_empty() {
+            refreshes.push(Box::pin(async move {
+                let table_paths = tables.iter().map(|path| path.get_table_path()).collect();
+                if let Err(e) = self
+                    .with_request_timeout(self.metadata.update_tables_metadata(
+                        &table_paths,
+                        &HashSet::new(),
+                        vec![],
+                    ))
+                    .await
+                {
+                    warn!("Failed to refresh metadata for unknown leader tables: {e}");
                 }
-                _ => return Err(e),
+                (tables, RefreshOutcome::Done)
+            }));
+        }
+        for path in partitions {
+            refreshes.push(Box::pin(async move {
+                let outcome = self.refresh_partition(&path).await;
+                (HashSet::from([path]), outcome)
+            }));
+        }
+        refreshes
+    }
+
+    /// Refreshes one partition from the server, as a cached partition may be missing a leader
+    /// or have been dropped. Returns `Create` when it is missing and should be created. Without
+    /// a partition creator its queued writes fail instead. Other errors are left to the next
+    /// refresh.
+    async fn refresh_partition(&self, path: &Arc<PhysicalTablePath>) -> RefreshOutcome {
+        match self
+            .with_request_timeout(
+                self.metadata
+                    .update_physical_table_metadata(std::slice::from_ref(path)),
+            )
+            .await
+        {
+            Ok(()) => return RefreshOutcome::Done,
+            Err(e) if e.api_error() == Some(FlussError::PartitionNotExists) => {}
+            Err(e) => {
+                warn!("Failed to refresh metadata for partition {path}: {e}");
+                return RefreshOutcome::Done;
             }
         }
+        // Cached leaders of a dropped partition would keep receiving its writes.
+        self.metadata
+            .invalidate_physical_table_meta(&HashSet::from([path.as_ref().clone()]));
 
-        debug!("Updated metadata for unknown leader tables: {unknown_leaders:?}");
-        Ok(())
+        if self.partition_creator.is_some() {
+            return RefreshOutcome::Create;
+        }
+        warn!("Failing pending writes to {path}: the partition does not exist");
+        self.accumulator.fail_queued_batches_for_partition(
+            path,
+            None,
+            broadcast::Error::WriteFailed {
+                code: FlussError::PartitionNotExists.code(),
+                message: format!(
+                    "Partition {path} does not exist and dynamic partition creation is disabled."
+                ),
+            },
+        );
+        RefreshOutcome::Done
+    }
+
+    /// Creates a partition that writes target. Runs on its own, so a slow coordinator doesn't
+    /// hold up the metadata refresh of other partitions. The next refresh finds the partition
+    /// once the tablet servers learn about it. Until then, a refresh after this attempt asks to
+    /// create it again, which the coordinator ignores. The attempt and the cluster refresh after
+    /// a retriable failure are each bounded by the request timeout, so a lost response doesn't
+    /// block the partition's later attempts.
+    async fn create_missing_partition(&self, path: &PhysicalTablePath) {
+        let Some(admin) = &self.partition_creator else {
+            return;
+        };
+        let cluster = self.metadata.get_cluster();
+        let coordinator = cluster.get_coordinator_server().map(|node| node.url());
+        let result = self
+            .with_request_timeout(self.create_partition(admin, path, &cluster))
+            .await;
+        match result {
+            Ok(()) => {
+                debug!("Partition {path} was created, or already existed, for pending writes")
+            }
+            Err(e)
+                if coordinator.is_none()
+                    || e.is_retriable()
+                    || e.api_error() == Some(FlussError::NotCoordinatorLeaderException) =>
+            {
+                warn!(
+                    "Failed to create partition {path} on coordinator {}, retrying: {e}",
+                    coordinator.as_deref().unwrap_or("unknown")
+                );
+                // While only missing partitions are asked for, every metadata refresh fails, so
+                // a coordinator that moved, or that a metadata response left out, is only found
+                // by refreshing the cluster on its own.
+                if let Err(e) = self
+                    .with_request_timeout(self.metadata.update_tables_metadata(
+                        &HashSet::new(),
+                        &HashSet::new(),
+                        vec![],
+                    ))
+                    .await
+                {
+                    warn!(
+                        "Failed to refresh the cluster after creating partition {path} failed: {e}"
+                    );
+                }
+            }
+            Err(e) => {
+                // Only the writes of the table the partition was created for, as a table
+                // re-created under the same path meanwhile has its own partitions.
+                let table_id = cluster
+                    .opt_get_table(path.get_table_path())
+                    .map(|table_info| table_info.table_id);
+                warn!(
+                    "Failing pending writes to {path} of table_id={table_id:?}: creating the partition failed: {e}"
+                );
+                let message = format!("Failed to create partition {path}: {e}");
+                let error = match &e {
+                    Error::FlussAPIError { api_error } => broadcast::Error::WriteFailed {
+                        code: api_error.code,
+                        message,
+                    },
+                    _ => broadcast::Error::Client { message },
+                };
+                self.accumulator
+                    .fail_queued_batches_for_partition(path, table_id, error);
+            }
+        }
+    }
+
+    /// Fails `request` as retriable when it gets no response within the request timeout.
+    async fn with_request_timeout<T>(&self, request: impl Future<Output = Result<T>>) -> Result<T> {
+        let timeout = Duration::from_millis(self.max_request_timeout_ms as u64);
+        tokio::time::timeout(timeout, request)
+            .await
+            .unwrap_or_else(|_| {
+                Err(Error::FlussAPIError {
+                    api_error: FlussError::RequestTimeOut
+                        .to_api_error(Some(format!("No response within {timeout:?}"))),
+                })
+            })
+    }
+
+    async fn create_partition(
+        &self,
+        admin: &FlussAdmin,
+        path: &PhysicalTablePath,
+        cluster: &Cluster,
+    ) -> Result<()> {
+        let table_path = path.get_table_path();
+        let partition_name = path
+            .get_partition_name()
+            .ok_or_else(|| Error::IllegalArgument {
+                message: format!("{path} is not a partition"),
+            })?;
+        let partition_keys = Arc::clone(cluster.get_table(table_path)?.get_partition_keys());
+        let partition_spec =
+            ResolvedPartitionSpec::try_from_partition_name(partition_keys, partition_name)?
+                .to_partition_spec();
+        admin
+            .create_partition(table_path, &partition_spec, true)
+            .await
     }
 
     fn add_to_inflight_batches(&self, batches: &HashMap<i32, Vec<ReadyWriteBatch>>) {
@@ -980,6 +1190,16 @@ impl Sender {
             .update_tables_metadata(&table_path_refs, &physical_table_path_refs, vec![])
             .await
         {
+            if e.api_error() == Some(FlussError::PartitionNotExists) {
+                // Without leaders, the partitions are refreshed one by one, which finds the
+                // missing one.
+                let partitions = physical_table_path
+                    .iter()
+                    .filter(|path| path.get_partition_name().is_some())
+                    .map(|path| path.as_ref().clone())
+                    .collect();
+                self.metadata.invalidate_physical_table_meta(&partitions);
+            }
             warn!("Failed to update metadata after write error: {e:?}");
         }
     }
@@ -1143,14 +1363,23 @@ impl Sender {
     /// - When writer_id isn't ready, a drain tick is a no-op but the loop stays
     ///   responsive (notified/init/meta can still wake it).
     /// - A metadata refresh for unknown leaders starts at least the retry backoff
-    ///   after the previous one ended, so a bucket without a leader is not polled
+    ///   after the last one ended, so a bucket without a leader is not polled
     ///   as fast as the server answers.
+    /// - Each path has at most one metadata refresh in flight, and each completion
+    ///   is handled on its own. A path whose refresh is slow or lost holds up
+    ///   neither the refresh nor the creation of another partition.
+    /// - At most one creation per missing partition runs at a time, beside the
+    ///   refresh rather than inside it. Shutdown waits for a creation only through
+    ///   the writes that need it, so a lost response doesn't hold it up.
     pub async fn run_with_shutdown(&self, mut shutdown_rx: mpsc::Receiver<()>) -> Result<()> {
         let mut pending: FuturesUnordered<SendFuture<'_>> = FuturesUnordered::new();
         let mut dispatches: FuturesUnordered<DispatchFuture<'_>> = FuturesUnordered::new();
         let mut queues = SendQueues::default();
         let mut init_futs: FuturesUnordered<SendFuture<'_>> = FuturesUnordered::new();
-        let mut meta_futs: FuturesUnordered<SendFuture<'_>> = FuturesUnordered::new();
+        let mut meta_futs: FuturesUnordered<RefreshFuture<'_>> = FuturesUnordered::new();
+        let mut create_futs: FuturesUnordered<CreateFuture<'_>> = FuturesUnordered::new();
+        let mut creating: HashSet<Arc<PhysicalTablePath>> = HashSet::new();
+        let mut refreshing: HashSet<Arc<PhysicalTablePath>> = HashSet::new();
         let mut pending_unknown: HashSet<Arc<PhysicalTablePath>> = HashSet::new();
         let mut next_refresh_at = Instant::now();
 
@@ -1188,15 +1417,20 @@ impl Sender {
                 init_futs.push(Box::pin(self.maybe_wait_for_writer_id()));
             }
 
-            // Spawn metadata refresh if we have accumulated unknown leaders,
-            // no refresh is currently running and the backoff has passed.
-            if !pending_unknown.is_empty()
-                && meta_futs.is_empty()
-                && Instant::now() >= next_refresh_at
-            {
+            // Spawn metadata refresh if we have accumulated unknown leaders and the
+            // backoff has passed.
+            if !pending_unknown.is_empty() && Instant::now() >= next_refresh_at {
                 let leaders = std::mem::take(&mut pending_unknown);
+                refreshing.extend(leaders.iter().cloned());
                 meta_futs.push(Box::pin(async move {
-                    self.refresh_unknown_leaders(&leaders).await
+                    let outcome =
+                        self.refresh_unknown_leaders(&leaders)
+                            .await
+                            .unwrap_or_else(|e| {
+                                warn!("Metadata refresh for unknown leaders failed: {e}");
+                                RefreshOutcome::Done
+                            });
+                    (leaders, outcome)
                 }));
             }
 
@@ -1213,7 +1447,11 @@ impl Sender {
                             if let Some(d) = delay {
                                 next_delay_ms = d.max(1);
                             }
-                            pending_unknown.extend(unknown_leaders);
+                            pending_unknown.extend(
+                                unknown_leaders
+                                    .into_iter()
+                                    .filter(|path| !refreshing.contains(path)),
+                            );
                             queues.enqueue(batches);
                         }
                         Err(e) => {
@@ -1226,7 +1464,7 @@ impl Sender {
             queues.dispatch(self, &dispatches);
             // A slow node or metadata refresh must not suppress another node's timer.
             let waiting_to_drain = self.accumulator.has_undrained() && init_futs.is_empty();
-            let refresh_due = !pending_unknown.is_empty() && meta_futs.is_empty();
+            let refresh_due = !pending_unknown.is_empty();
             let refresh_at = tokio::time::Instant::from_std(next_refresh_at);
             debug_assert!(next_delay_ms >= 1);
 
@@ -1272,11 +1510,31 @@ impl Sender {
                 }
 
                 // Metadata refresh completed — new leaders may now be known.
-                Some(result) = meta_futs.next(), if !meta_futs.is_empty() => {
-                    if let Err(e) = result {
-                        warn!("Metadata refresh for unknown leaders failed: {e}");
+                Some((paths, outcome)) = meta_futs.next(), if !meta_futs.is_empty() => {
+                    if outcome == RefreshOutcome::RefreshEach {
+                        // The paths stay in `refreshing` until their own refreshes complete.
+                        meta_futs.extend(self.refresh_each(paths));
+                    } else {
+                        for path in paths {
+                            refreshing.remove(&path);
+                            if outcome == RefreshOutcome::Create
+                                && creating.insert(Arc::clone(&path))
+                            {
+                                create_futs.push(Box::pin(async move {
+                                    self.create_missing_partition(&path).await;
+                                    path
+                                }));
+                            }
+                        }
+                        next_refresh_at =
+                            Instant::now() + Duration::from_millis(self.retry_backoff_ms);
+                        need_drain = true;
                     }
-                    next_refresh_at = Instant::now() + Duration::from_millis(self.retry_backoff_ms);
+                }
+
+                // Partition creation completed — a later refresh may now find it.
+                Some(path) = create_futs.next(), if !create_futs.is_empty() => {
+                    creating.remove(&path);
                     need_drain = true;
                 }
 
@@ -1379,7 +1637,7 @@ mod tests {
     use super::*;
     use crate::client::write::write_format::WriteFormat;
     use crate::client::{ResultHandle, WriteRecord};
-    use crate::cluster::{Cluster, ServerType};
+    use crate::cluster::ServerType;
     use crate::config::Config;
     use crate::metadata::{PhysicalTablePath, TableInfo, TablePath};
     use crate::proto::{
@@ -1401,6 +1659,8 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{TcpListener, TcpStream};
     use tokio::task::JoinHandle;
+
+    mod partition_creation;
 
     fn disabled_idempotence() -> Arc<IdempotenceManager> {
         Arc::new(IdempotenceManager::new(false, 5))
