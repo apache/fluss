@@ -214,7 +214,7 @@ final class KvManagerTest {
         conf.set(ConfigOptions.KV_USE_BLOOM_FILTER, false);
         Configuration tableConf = new Configuration();
         if (enabled) {
-            conf.set(ConfigOptions.KV_PREFIX_BLOOM_ENABLED, true);
+            conf.set(ConfigOptions.KV_USE_PREFIX_BLOOM_FILTER, true);
         }
         tableConf.set(ConfigOptions.TABLE_KV_FORMAT_VERSION, paimon ? 1 : 2);
         if (paimon) {
@@ -270,7 +270,7 @@ final class KvManagerTest {
         assertStoredKeyReadable(tablet.getRocksDBKv(), key);
         assertThat(conf.get(ConfigOptions.KV_USE_BLOOM_FILTER)).isFalse();
         kvManager.shutdown();
-        conf.set(ConfigOptions.KV_PREFIX_BLOOM_ENABLED, !enabled);
+        conf.set(ConfigOptions.KV_USE_PREFIX_BLOOM_FILTER, !enabled);
         kvManager =
                 KvManager.create(
                         conf,

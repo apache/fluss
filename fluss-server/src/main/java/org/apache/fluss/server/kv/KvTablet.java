@@ -360,7 +360,7 @@ public final class KvTablet {
             throws IOException {
         TableConfig tableConfig = tableInfo.getTableConfig();
         KeyPrefixLayout prefixLayout = null;
-        if (serverConf.get(ConfigOptions.KV_PREFIX_BLOOM_ENABLED)) {
+        if (serverConf.get(ConfigOptions.KV_USE_PREFIX_BLOOM_FILTER)) {
             if (HISTORICAL_PARTITION_VALUE.equals(tablePath.getPartitionName())) {
                 LOG.info(
                         "Prefix Bloom filters disabled for historical KV tablet {} of {}: unsupported partition-name key envelope.",

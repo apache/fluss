@@ -152,7 +152,7 @@ public class TabletServiceITCase {
             FlussClusterExtension.builder()
                     .setNumOfTabletServers(3)
                     .setClusterConf(
-                            new Configuration().set(ConfigOptions.KV_PREFIX_BLOOM_ENABLED, true))
+                            new Configuration().set(ConfigOptions.KV_USE_PREFIX_BLOOM_FILTER, true))
                     .build();
 
     @Test

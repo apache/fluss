@@ -2760,8 +2760,8 @@ public class ConfigOptions {
                             "If true, every newly created SST file will contain a Bloom filter. "
                                     + "It is enabled by default.");
 
-    public static final ConfigOption<Boolean> KV_PREFIX_BLOOM_ENABLED =
-            key("kv.rocksdb.prefix-bloom.enabled")
+    public static final ConfigOption<Boolean> KV_USE_PREFIX_BLOOM_FILTER =
+            key("kv.rocksdb.use-prefix-bloom-filter")
                     .booleanType()
                     .defaultValue(false)
                     .withDescription(
