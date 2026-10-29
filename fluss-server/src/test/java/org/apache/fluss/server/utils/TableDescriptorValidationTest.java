@@ -55,45 +55,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class TableDescriptorValidationTest {
 
     @Test
-    void testPrefixBloomRequiresPrimaryKey() {
-        assertThatThrownBy(
-                        () ->
-                                TableDescriptorValidation.validateTableDescriptor(
-                                        logTableWithProperty(
-                                                ConfigOptions.TABLE_KV_PREFIX_BLOOM_ENABLED.key(),
-                                                "true"),
-                                        100,
-                                        null))
-                .isInstanceOf(InvalidTableException.class)
-                .hasMessageContaining("primary key");
-    }
-
-    @Test
-    void testPrefixBloomCanBeEnabledForCompactedPrimaryKeys() {
-        assertThatCode(
-                        () ->
-                                TableDescriptorValidation.validateTableDescriptor(
-                                        pkTableWithProperty(
-                                                ConfigOptions.TABLE_KV_PREFIX_BLOOM_ENABLED.key(),
-                                                "true"),
-                                        100,
-                                        null))
-                .doesNotThrowAnyException();
-    }
-
-    @Test
-    void testPrefixBloomCannotBeAltered() {
-        assertThatThrownBy(
-                        () ->
-                                TableDescriptorValidation.validateAlterTableProperties(
-                                        plainTableInfo(),
-                                        Collections.singleton(
-                                                ConfigOptions.TABLE_KV_PREFIX_BLOOM_ENABLED.key())))
-                .isInstanceOf(InvalidAlterTableException.class)
-                .hasMessageContaining(ConfigOptions.TABLE_KV_PREFIX_BLOOM_ENABLED.key());
-    }
-
-    @Test
     void testSkipUnchangedUpsertsWithDefaultMergeBehavior() {
         TableDescriptorValidation.validateTableDescriptor(
                 pkTableWithProperty(ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED.key(), "true"),

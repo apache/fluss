@@ -17,70 +17,70 @@
 
 package org.apache.fluss.server.kv;
 
-import org.apache.fluss.config.Configuration;
-import org.apache.fluss.config.TableConfig;
-import org.apache.fluss.exception.InvalidTableException;
-import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.row.encode.KeyEncoder;
 import org.apache.fluss.row.encode.KeyPrefixLayout;
-import org.apache.fluss.types.RowType;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
 import java.util.List;
 
-/** Resolves table-specific prefix layouts from the primary-key encoder. */
+/** Resolves compatible table prefix layouts without changing unsupported tables' behavior. */
 public final class TableKeyPrefixLayoutResolver {
+    private static final Logger LOG = LoggerFactory.getLogger(TableKeyPrefixLayoutResolver.class);
+
     private TableKeyPrefixLayoutResolver() {}
 
-    /** Derives the bucket-key prefix layout, or returns null when the option is disabled. */
-    @Nullable
-    public static KeyPrefixLayout resolve(TableDescriptor table) {
-        return resolve(
-                table.getSchema().getRowType(),
-                table.getPhysicalPrimaryKeys(),
-                table.getBucketKeys(),
-                new TableConfig(Configuration.fromMap(table.getProperties())));
-    }
-
-    /** Derives the layout from the persisted key-format and distribution metadata. */
+    /**
+     * Returns a supported bucket-key layout, or null and logs the reason for skipping the table.
+     */
     @Nullable
     public static KeyPrefixLayout resolve(TableInfo table) {
-        return resolve(
-                table.getRowType(),
-                table.getPhysicalPrimaryKeys(),
-                table.getBucketKeys(),
-                table.getTableConfig());
-    }
-
-    @Nullable
-    private static KeyPrefixLayout resolve(
-            RowType rowType,
-            List<String> primaryKeys,
-            List<String> bucketKeys,
-            TableConfig config) {
-        if (!config.isKvPrefixBloomEnabled()) {
-            return null;
-        }
+        List<String> primaryKeys = table.getPhysicalPrimaryKeys();
+        List<String> bucketKeys = table.getBucketKeys();
         if (primaryKeys.isEmpty() || bucketKeys.isEmpty()) {
-            throw new InvalidTableException(
-                    "Prefix Bloom filters require a primary key table with bucket keys.");
+            LOG.info(
+                    "Prefix Bloom filters disabled for table {} (id={}): no physical primary key or bucket key.",
+                    table.getTablePath(),
+                    table.getTableId());
+            return null;
         }
         if (bucketKeys.size() > primaryKeys.size()
                 || !primaryKeys.subList(0, bucketKeys.size()).equals(bucketKeys)) {
-            throw new InvalidTableException(
-                    "Prefix Bloom filters require bucket keys to form a leading prefix of the physical primary key.");
+            LOG.info(
+                    "Prefix Bloom filters disabled for table {} (id={}): bucket keys {} are not a leading prefix of physical primary keys {}.",
+                    table.getTablePath(),
+                    table.getTableId(),
+                    bucketKeys,
+                    primaryKeys);
+            return null;
         }
-        KeyEncoder encoder =
-                KeyEncoder.ofPrimaryKeyEncoder(
-                        rowType, primaryKeys, config, bucketKeys.equals(primaryKeys));
-        return encoder.getPrefixLayout(bucketKeys.size())
-                .orElseThrow(
-                        () ->
-                                new InvalidTableException(
-                                        "Prefix Bloom filters cannot describe primary-key encoder "
-                                                + encoder.getClass().getSimpleName()
-                                                + "."));
+        try {
+            KeyEncoder encoder =
+                    KeyEncoder.ofPrimaryKeyEncoder(
+                            table.getRowType(),
+                            primaryKeys,
+                            table.getTableConfig(),
+                            table.isDefaultBucketKey());
+            KeyPrefixLayout layout = encoder.getPrefixLayout(bucketKeys.size()).orElse(null);
+            if (layout == null) {
+                LOG.info(
+                        "Prefix Bloom filters disabled for table {} (id={}): unsupported key encoder {}.",
+                        table.getTablePath(),
+                        table.getTableId(),
+                        encoder.getClass().getSimpleName());
+            }
+            return layout;
+        } catch (IllegalArgumentException | UnsupportedOperationException e) {
+            LOG.info(
+                    "Prefix Bloom filters disabled for table {} (id={}): unsupported key layout: {}",
+                    table.getTablePath(),
+                    table.getTableId(),
+                    e.getMessage());
+            return null;
+        }
     }
 }

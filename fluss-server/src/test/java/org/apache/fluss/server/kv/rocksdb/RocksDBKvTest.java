@@ -22,6 +22,8 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.SimpleCounter;
 import org.apache.fluss.metrics.util.TestHistogram;
 import org.apache.fluss.row.BinaryString;
@@ -174,13 +176,7 @@ class RocksDBKvTest {
         byte[] key4 = keyEncoder.encodeKey(GenericRow.of(BinaryString.fromString("ab"), 4));
         byte[] other = keyEncoder.encodeKey(GenericRow.of(BinaryString.fromString("ac"), 1));
         TableDescriptor table =
-                TableDescriptor.builder()
-                        .schema(schema)
-                        .distributedBy(1, "bucket")
-                        .property(
-                                ConfigOptions.TABLE_KV_PREFIX_BLOOM_ENABLED.key(),
-                                Boolean.toString(prefixBloomEnabled))
-                        .build();
+                TableDescriptor.builder().schema(schema).distributedBy(1, "bucket").build();
         Configuration config = new Configuration();
         config.set(ConfigOptions.KV_PARTITIONED_INDEX_FILTERS, partitioned);
         RocksDBResourceContainer resources =
@@ -191,7 +187,17 @@ class RocksDBKvTest {
                         KvManager.getDefaultRateLimiter(),
                         null,
                         null,
-                        TableKeyPrefixLayoutResolver.resolve(table));
+                        prefixBloomEnabled
+                                ? TableKeyPrefixLayoutResolver.resolve(
+                                        TableInfo.of(
+                                                TablePath.of("db", "table"),
+                                                1L,
+                                                1,
+                                                table,
+                                                "/tmp/fluss",
+                                                0L,
+                                                0L))
+                                : null);
         ColumnFamilyOptions columnOptions = resources.getColumnOptions();
         try (RocksDBKv kv =
                 new RocksDBKvBuilder(tempDir.toFile(), resources, columnOptions).build()) {

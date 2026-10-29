@@ -359,36 +359,49 @@ public final class KvTablet {
             TableInfo tableInfo)
             throws IOException {
         TableConfig tableConfig = tableInfo.getTableConfig();
-        // Historical keys prepend a partition-name envelope to the encoded primary key.
-        KeyPrefixLayout prefixLayout =
-                HISTORICAL_PARTITION_VALUE.equals(tablePath.getPartitionName())
-                        ? null
-                        : TableKeyPrefixLayoutResolver.resolve(tableInfo);
-        return create(
-                tablePath,
+        KeyPrefixLayout prefixLayout = null;
+        if (serverConf.get(ConfigOptions.KV_PREFIX_BLOOM_ENABLED)) {
+            if (HISTORICAL_PARTITION_VALUE.equals(tablePath.getPartitionName())) {
+                LOG.info(
+                        "Prefix Bloom filters disabled for historical KV tablet {} of {}: unsupported partition-name key envelope.",
+                        tableBucket,
+                        tablePath);
+            } else {
+                prefixLayout = TableKeyPrefixLayoutResolver.resolve(tableInfo);
+            }
+        }
+        KvTablet tablet =
+                create(
+                        tablePath,
+                        tableBucket,
+                        logTablet,
+                        kvTabletDir,
+                        serverConf,
+                        serverMetricGroup,
+                        arrowBufferAllocator,
+                        memorySegmentPool,
+                        kvFormat,
+                        rowMerger,
+                        arrowCompressionInfo,
+                        schemaGetter,
+                        changelogImage,
+                        sharedRateLimiter,
+                        sharedBlockCache,
+                        sharedWriteBufferManager,
+                         statisticsRegistry,
+                        kvFlushScheduler,
+                        false,
+                        flushCompleteListener,
+                        autoIncrementManager,
+                        clock,
+                        tableConfig,
+                        prefixLayout);
+        LOG.info(
+                "Opened KV tablet {} of {} with prefix Bloom filters {}.",
                 tableBucket,
-                logTablet,
-                kvTabletDir,
-                serverConf,
-                serverMetricGroup,
-                arrowBufferAllocator,
-                memorySegmentPool,
-                kvFormat,
-                rowMerger,
-                arrowCompressionInfo,
-                schemaGetter,
-                changelogImage,
-                sharedRateLimiter,
-                sharedBlockCache,
-                sharedWriteBufferManager,
-                statisticsRegistry,
-                kvFlushScheduler,
-                false,
-                flushCompleteListener,
-                autoIncrementManager,
-                clock,
-                tableConfig,
-                prefixLayout);
+                tablePath,
+                prefixLayout == null ? "disabled" : "enabled");
+        return tablet;
     }
 
     @VisibleForTesting

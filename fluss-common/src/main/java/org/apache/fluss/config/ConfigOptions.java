@@ -2010,15 +2010,6 @@ public class ConfigOptions {
                             "The format of the kv records in kv store. The default value is `compacted`. "
                                     + "The supported formats are `compacted` and `indexed`.");
 
-    public static final ConfigOption<Boolean> TABLE_KV_PREFIX_BLOOM_ENABLED =
-            key("table.kv.prefix-bloom.enabled")
-                    .booleanType()
-                    .defaultValue(false)
-                    .withDescription(
-                            "Whether to enable prefix Bloom filters for the encoded bucket-key prefix of a primary key table. "
-                                    + "Requires compacted primary-key encoding and bucket keys that form a leading prefix of the physical primary key. "
-                                    + "Historical KV state is excluded. Filters are built for new SST files through flush and compaction. This option cannot be altered after table creation.");
-
     /** The version of the KV format. */
     public static final ConfigOption<Integer> TABLE_KV_FORMAT_VERSION =
             key("table.kv.format-version")
@@ -2768,6 +2759,17 @@ public class ConfigOptions {
                     .withDescription(
                             "If true, every newly created SST file will contain a Bloom filter. "
                                     + "It is enabled by default.");
+
+    public static final ConfigOption<Boolean> KV_PREFIX_BLOOM_ENABLED =
+            key("kv.rocksdb.prefix-bloom.enabled")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Enables prefix Bloom filters for all compatible primary-key KV tables. "
+                                    + "Unsupported key layouts and historical KV state retain their existing behavior, "
+                                    + "with the fallback reason logged. Requires restarting TabletServers to apply to existing KV instances. "
+                                    + "Filters are built for new SST files through flush and compaction; existing SSTs remain readable. "
+                                    + "Compatible tables use a Bloom filter policy even when kv.rocksdb.use-bloom-filter is false.");
 
     public static final ConfigOption<Double> KV_BLOOM_FILTER_BITS_PER_KEY =
             key("kv.rocksdb.bloom-filter.bits-per-key")
