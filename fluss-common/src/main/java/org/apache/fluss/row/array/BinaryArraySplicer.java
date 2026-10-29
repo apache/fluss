@@ -20,6 +20,7 @@ package org.apache.fluss.row.array;
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.row.BinaryArray;
+import org.apache.fluss.row.BinaryArrayWriter;
 import org.apache.fluss.row.BinarySection;
 import org.apache.fluss.row.BinarySegmentUtils;
 import org.apache.fluss.row.Decimal;
@@ -32,6 +33,9 @@ import javax.annotation.Nullable;
 
 import java.util.Arrays;
 
+import static org.apache.fluss.row.AbstractBinaryWriter.NON_COMPACT_DECIMAL_SIZE;
+import static org.apache.fluss.row.AbstractBinaryWriter.NON_COMPACT_TIMESTAMP_SIZE;
+import static org.apache.fluss.row.BinaryArrayWriter.roundNumberOfBytesToNearestWord;
 import static org.apache.fluss.types.DataTypeChecks.getPrecision;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 
@@ -39,9 +43,9 @@ import static org.apache.fluss.utils.Preconditions.checkArgument;
  * Builds a {@link BinaryArray} from runs of elements of other binary arrays, by copying bytes
  * instead of reading and rewriting each element.
  *
- * <p>The result has the bytes the {@link org.apache.fluss.row.BinaryArrayWriter} would write, and
- * the class of the sources. Call {@link #supports(DataType)} and {@link #canSplice(InternalArray,
- * InternalArray)} first, and rebuild the array element by element when either returns false.
+ * <p>The result has the bytes the {@link BinaryArrayWriter} would write, and the class of the
+ * sources. Call {@link #supports(DataType)} and {@link #canSplice(InternalArray, InternalArray)}
+ * first, and rebuild the array element by element when either returns false.
  */
 @Internal
 public final class BinaryArraySplicer {
@@ -54,21 +58,18 @@ public final class BinaryArraySplicer {
         INLINE_OR_VARIABLE,
         /** In the variable-length part: nested arrays, maps and rows. */
         VARIABLE,
-        /** In a 16-byte block: non-compact decimals. */
+        /** In a fixed-size block: non-compact decimals. */
         DECIMAL,
-        /** In an 8-byte block, with the nanoseconds in the slot: non-compact timestamps. */
+        /** In a fixed-size block, with the nanoseconds in the slot: non-compact timestamps. */
         TIMESTAMP
     }
-
-    private static final int DECIMAL_BYTES = 16;
-    private static final int TIMESTAMP_BYTES = 8;
 
     private final DataType elementType;
     private final int elementSize;
     private final DataLayout layout;
 
     private BinaryArray[] sources = new BinaryArray[2];
-    private int[] froms = new int[2];
+    private int[] starts = new int[2];
     private int[] counts = new int[2];
     private int runs;
 
@@ -103,14 +104,14 @@ public final class BinaryArraySplicer {
     }
 
     /**
-     * Appends the elements {@code [from, from + count)} of the source to the result.
+     * Appends the elements {@code [start, start + count)} of the source to the result.
      *
      * @param source a binary array of the same class as the sources appended before
-     * @param from the position of the first element to append
+     * @param start the position of the first element to append
      * @param count the number of elements to append, may be 0
      * @return this splicer
      */
-    public BinaryArraySplicer append(BinaryArray source, int from, int count) {
+    public BinaryArraySplicer append(BinaryArray source, int start, int count) {
         // not checkArgument: it would box the arguments on every call
         if (!isSpliceable(source) || source.getSegments().length != 1) {
             throw new IllegalArgumentException("Cannot splice " + source.getClass().getName());
@@ -122,19 +123,19 @@ public final class BinaryArraySplicer {
                             + " with "
                             + source.getClass().getName());
         }
-        if (from < 0 || count < 0 || from + count > source.size()) {
+        if (start < 0 || count < 0 || start > source.size() || count > source.size() - start) {
             throw new IllegalArgumentException(
                     String.format(
                             "Elements [%s, %s) are out of the bounds of an array of size %s",
-                            from, from + count, source.size()));
+                            start, (long) start + count, source.size()));
         }
         if (runs == sources.length) {
             sources = Arrays.copyOf(sources, runs * 2);
-            froms = Arrays.copyOf(froms, runs * 2);
+            starts = Arrays.copyOf(starts, runs * 2);
             counts = Arrays.copyOf(counts, runs * 2);
         }
         sources[runs] = source;
-        froms[runs] = from;
+        starts[runs] = start;
         counts[runs] = count;
         runs++;
         return this;
@@ -153,7 +154,7 @@ public final class BinaryArraySplicer {
             variableSize += runVariableSizes[i];
         }
         int headerSize = BinaryArray.calculateHeaderInBytes(numElements);
-        int fixedSize = roundToWord(headerSize + elementSize * numElements);
+        int fixedSize = roundNumberOfBytesToNearestWord(headerSize + elementSize * numElements);
         byte[] bytes = new byte[fixedSize + variableSize];
         MemorySegment out = MemorySegment.wrap(bytes);
         out.putInt(0, numElements);
@@ -197,7 +198,7 @@ public final class BinaryArraySplicer {
         int blockStart = -1;
         int nextOffset = -1;
         boolean contiguous = true;
-        for (int i = froms[run]; i < froms[run] + counts[run]; i++) {
+        for (int i = starts[run]; i < starts[run] + counts[run]; i++) {
             if (BinarySegmentUtils.bitGet(segment, base + 4, i)) {
                 continue;
             }
@@ -240,7 +241,7 @@ public final class BinaryArraySplicer {
             int position,
             int cursor) {
         BinaryArray source = sources[run];
-        int from = froms[run];
+        int start = starts[run];
         int count = counts[run];
         if (count == 0) {
             return cursor;
@@ -249,13 +250,13 @@ public final class BinaryArraySplicer {
         int base = source.getOffset();
         int sourceSlots = base + BinaryArray.calculateHeaderInBytes(source.size());
         segment.get(
-                sourceSlots + from * elementSize,
+                sourceSlots + start * elementSize,
                 bytes,
                 headerSize + position * elementSize,
                 count * elementSize);
 
         if (layout == DataLayout.SLOT) {
-            copyNulls(segment, base, from, count, bytes, out, headerSize, position);
+            copyNulls(segment, base, start, count, bytes, out, headerSize, position);
             return cursor;
         }
         if (blockStart >= 0) {
@@ -263,7 +264,7 @@ public final class BinaryArraySplicer {
             int shift = cursor - blockStart;
             for (int i = 0; i < count; i++) {
                 int slot = headerSize + (position + i) * elementSize;
-                if (BinarySegmentUtils.bitGet(segment, base + 4, from + i)) {
+                if (BinarySegmentUtils.bitGet(segment, base + 4, start + i)) {
                     setNull(bytes, out, slot, position + i);
                     continue;
                 }
@@ -278,7 +279,7 @@ public final class BinaryArraySplicer {
         }
         for (int i = 0; i < count; i++) {
             int slot = headerSize + (position + i) * elementSize;
-            if (BinarySegmentUtils.bitGet(segment, base + 4, from + i)) {
+            if (BinarySegmentUtils.bitGet(segment, base + 4, start + i)) {
                 setNull(bytes, out, slot, position + i);
                 continue;
             }
@@ -311,11 +312,11 @@ public final class BinaryArraySplicer {
         switch (layout) {
             case INLINE_OR_VARIABLE:
             case VARIABLE:
-                return roundToWord((int) offsetAndSize);
+                return roundNumberOfBytesToNearestWord((int) offsetAndSize);
             case DECIMAL:
-                return DECIMAL_BYTES;
+                return NON_COMPACT_DECIMAL_SIZE;
             case TIMESTAMP:
-                return TIMESTAMP_BYTES;
+                return NON_COMPACT_TIMESTAMP_SIZE;
             default:
                 throw new IllegalStateException("Unexpected layout: " + layout);
         }
@@ -333,15 +334,15 @@ public final class BinaryArraySplicer {
     private void copyNulls(
             MemorySegment segment,
             int base,
-            int from,
+            int start,
             int count,
             byte[] bytes,
             MemorySegment out,
             int headerSize,
             int position) {
         int nullBits = base + 4;
-        int end = from + count;
-        int i = from;
+        int end = start + count;
+        int i = start;
         while (i < end) {
             // 64 aligned null bits are one long, and lie inside the header while i + 64 <= size
             if ((i & 63) == 0 && i + 64 <= end && segment.getLong(nullBits + (i >>> 3)) == 0L) {
@@ -349,7 +350,7 @@ public final class BinaryArraySplicer {
                 continue;
             }
             if (BinarySegmentUtils.bitGet(segment, nullBits, i)) {
-                int target = position + i - from;
+                int target = position + i - start;
                 setNull(bytes, out, headerSize + target * elementSize, target);
             }
             i++;
@@ -416,9 +417,5 @@ public final class BinaryArraySplicer {
                 // a type added later is not spliced until its layout is known
                 return null;
         }
-    }
-
-    private static int roundToWord(int numBytes) {
-        return (numBytes + 7) & ~7;
     }
 }

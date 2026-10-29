@@ -39,6 +39,12 @@ import static org.apache.fluss.row.BinarySection.MAX_FIX_PART_DATA_SIZE;
  */
 public abstract class AbstractBinaryWriter implements BinaryWriter {
 
+    /** Bytes a non-compact decimal takes in the variable-length part, enough for any precision. */
+    public static final int NON_COMPACT_DECIMAL_SIZE = 16;
+
+    /** Bytes a non-compact timestamp takes in the variable-length part, for its milliseconds. */
+    public static final int NON_COMPACT_TIMESTAMP_SIZE = 8;
+
     protected MemorySegment segment;
 
     protected int cursor;
@@ -127,7 +133,7 @@ public abstract class AbstractBinaryWriter implements BinaryWriter {
             writeLong(pos, value.toUnscaledLong());
         } else {
             // grow the global buffer before writing data.
-            ensureCapacity(16);
+            ensureCapacity(NON_COMPACT_DECIMAL_SIZE);
 
             // zero-out the bytes
             segment.putLong(cursor, 0L);
@@ -141,7 +147,7 @@ public abstract class AbstractBinaryWriter implements BinaryWriter {
                 setOffsetAndSize(pos, cursor, 0);
             } else {
                 final byte[] bytes = value.toUnscaledBytes();
-                assert bytes.length <= 16;
+                assert bytes.length <= NON_COMPACT_DECIMAL_SIZE;
 
                 // Write the bytes to the variable length portion.
                 segment.put(cursor, bytes, 0, bytes.length);
@@ -149,7 +155,7 @@ public abstract class AbstractBinaryWriter implements BinaryWriter {
             }
 
             // move the cursor forward.
-            cursor += 16;
+            cursor += NON_COMPACT_DECIMAL_SIZE;
         }
     }
 
@@ -159,7 +165,7 @@ public abstract class AbstractBinaryWriter implements BinaryWriter {
             writeLong(pos, value.getMillisecond());
         } else {
             // store the nanoOfMillisecond in fixed-length part as offset and nanoOfMillisecond
-            ensureCapacity(8);
+            ensureCapacity(NON_COMPACT_TIMESTAMP_SIZE);
 
             if (value == null) {
                 setNullBit(pos);
@@ -171,7 +177,7 @@ public abstract class AbstractBinaryWriter implements BinaryWriter {
                 setOffsetAndSize(pos, cursor, value.getNanoOfMillisecond());
             }
 
-            cursor += 8;
+            cursor += NON_COMPACT_TIMESTAMP_SIZE;
         }
     }
 
@@ -181,7 +187,7 @@ public abstract class AbstractBinaryWriter implements BinaryWriter {
             writeLong(pos, value.getEpochMillisecond());
         } else {
             // store the nanoOfMillisecond in fixed-length part as offset and nanoOfMillisecond
-            ensureCapacity(8);
+            ensureCapacity(NON_COMPACT_TIMESTAMP_SIZE);
 
             if (value == null) {
                 setNullBit(pos);
@@ -193,7 +199,7 @@ public abstract class AbstractBinaryWriter implements BinaryWriter {
                 setOffsetAndSize(pos, cursor, value.getNanoOfMillisecond());
             }
 
-            cursor += 8;
+            cursor += NON_COMPACT_TIMESTAMP_SIZE;
         }
     }
 

@@ -107,22 +107,24 @@ class BinaryArraySplicerTest {
             for (int round = 0; round < ROUNDS; round++) {
                 BinaryArray first = write(type, format, randomTopLevelElements(type, random));
                 BinaryArray second = write(type, format, randomTopLevelElements(type, random));
+                moveBehindRandomBytes(first, random);
+                moveBehindRandomBytes(second, random);
                 maybeNullOneInPlace(first, random);
                 maybeNullOneInPlace(second, random);
-                int firstFrom = random.nextInt(first.size() + 1);
-                int firstCount = random.nextInt(first.size() - firstFrom + 1);
-                int secondFrom = random.nextInt(second.size() + 1);
-                int secondCount = random.nextInt(second.size() - secondFrom + 1);
+                int firstStart = random.nextInt(first.size() + 1);
+                int firstCount = random.nextInt(first.size() - firstStart + 1);
+                int secondStart = random.nextInt(second.size() + 1);
+                int secondCount = random.nextInt(second.size() - secondStart + 1);
 
                 BinaryArray spliced =
                         new BinaryArraySplicer(type)
-                                .append(first, firstFrom, firstCount)
-                                .append(second, secondFrom, secondCount)
+                                .append(first, firstStart, firstCount)
+                                .append(second, secondStart, secondCount)
                                 .build();
 
                 List<Object> elements = new ArrayList<>();
-                addElements(elements, type, first, firstFrom, firstCount);
-                addElements(elements, type, second, secondFrom, secondCount);
+                addElements(elements, type, first, firstStart, firstCount);
+                addElements(elements, type, second, secondStart, secondCount);
                 BinaryArray expected = write(type, format, elements.toArray());
                 // BinaryArray#equals compares bytes only, not the class
                 assertThat(spliced)
@@ -274,6 +276,10 @@ class BinaryArraySplicerTest {
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new BinaryArraySplicer(type).append(compacted, -1, 1))
                 .isInstanceOf(IllegalArgumentException.class);
+        // start + count overflows to a negative number
+        assertThatThrownBy(
+                        () -> new BinaryArraySplicer(type).append(compacted, Integer.MAX_VALUE, 2))
+                .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(
                         () ->
                                 new BinaryArraySplicer(type)
@@ -289,6 +295,19 @@ class BinaryArraySplicerTest {
         return new ArraySerializer(type, format).toBinaryArray(new GenericArray(elements));
     }
 
+    /**
+     * Copies the array to a random offset of a new buffer and points it there, with random bytes
+     * before and after it, the way an array sits among the other fields of a row.
+     */
+    private static void moveBehindRandomBytes(BinaryArray array, Random random) {
+        int size = array.getSizeInBytes();
+        int offset = random.nextInt(16);
+        byte[] bytes = new byte[offset + size + random.nextInt(16)];
+        random.nextBytes(bytes);
+        array.getSegments()[0].get(array.getOffset(), bytes, offset, size);
+        array.pointTo(MemorySegment.wrap(bytes), offset, size);
+    }
+
     /** Sometimes nulls an element in place, which leaves a gap in the variable-length data. */
     private static void maybeNullOneInPlace(BinaryArray array, Random random) {
         if (array.size() > 0 && random.nextInt(3) == 0) {
@@ -297,9 +316,9 @@ class BinaryArraySplicerTest {
     }
 
     private static void addElements(
-            List<Object> elements, DataType type, BinaryArray source, int from, int count) {
+            List<Object> elements, DataType type, BinaryArray source, int start, int count) {
         InternalArray.ElementGetter getter = InternalArray.createElementGetter(type);
-        for (int i = from; i < from + count; i++) {
+        for (int i = start; i < start + count; i++) {
             elements.add(getter.getElementOrNull(source, i));
         }
     }
