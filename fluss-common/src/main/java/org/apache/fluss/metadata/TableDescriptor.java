@@ -152,11 +152,6 @@ public final class TableDescriptor implements Serializable {
         return schema;
     }
 
-    /** Returns the primary-key columns stored in each partition's physical key. */
-    public List<String> getPhysicalPrimaryKeys() {
-        return schema.getPhysicalPrimaryKeys(partitionKeys);
-    }
-
     /** Returns the bucket key of the table, empty if no bucket key is set. */
     public List<String> getBucketKeys() {
         return this.getTableDistribution()
