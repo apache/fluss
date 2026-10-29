@@ -74,6 +74,8 @@ import java.util.Set;
 import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 
+import static org.apache.fluss.utils.Preconditions.checkState;
+
 /**
  * Processes a KV record batch into local state mutations and the corresponding WAL records.
  *
@@ -351,9 +353,7 @@ public final class KvWriteProcessor {
 
             if (prefetchEnabled
                     && previousValueLookup == null
-                    && (currentValue == null
-                            ? !shouldIgnoreDeletion(currentMerger)
-                            : !canSkipOldValueLookup(currentMerger, autoIncrementUpdater))
+                    && requiresPreviousValue(row, currentMerger, autoIncrementUpdater)
                     && !stateAccessor.containsBufferedKey(key)) {
                 // Start prefetch only on a required buffer miss. Full-row WAL batches and batches
                 // served entirely by the buffer retain their single-pass processing.
@@ -364,6 +364,13 @@ public final class KvWriteProcessor {
                         primaryKey -> {
                             KvPreWriteBuffer.Key savedKey =
                                     stateAccessor.encodeKey(primaryKey, null);
+                            // Buffered keys are excluded from prefetch and stay buffered while the
+                            // write lock is held, so every later buffer miss must have been
+                            // prefetched. Fail instead of treating an absent entry as a missing
+                            // row, which would turn an update into an insert.
+                            checkState(
+                                    savedValues.containsKey(savedKey),
+                                    "The previous value of a buffer miss was not prefetched.");
                             byte[] value = savedValues.get(savedKey);
                             return value == null ? null : valueDecoder.decodeValue(value);
                         };
@@ -407,13 +414,21 @@ public final class KvWriteProcessor {
         KvRecordBatch.ReadContext readContext =
                 KvRecordReadContext.createReadContext(kvFormat, schemaGetter);
         for (KvRecord record : kvRecords.records(readContext)) {
-            if (record.getRow() == null
-                    ? !shouldIgnoreDeletion(currentMerger)
-                    : !canSkipOldValueLookup(currentMerger, autoIncrementUpdater)) {
+            if (requiresPreviousValue(record.getRow(), currentMerger, autoIncrementUpdater)) {
                 keys.add(stateAccessor.encodeKey(BytesUtils.toArray(record.getKey()), null));
             }
         }
         return stateAccessor.prefetchRocksDBValues(keys);
+    }
+
+    /** Returns whether applying a record with the given row (null for a delete) reads its key. */
+    private boolean requiresPreviousValue(
+            @Nullable BinaryRow row,
+            RowMerger currentMerger,
+            AutoIncrementUpdater autoIncrementUpdater) {
+        return row == null
+                ? !shouldIgnoreDeletion(currentMerger)
+                : !canSkipOldValueLookup(currentMerger, autoIncrementUpdater);
     }
 
     private long processDeletion(

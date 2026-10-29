@@ -229,12 +229,19 @@ final class KvManagerTest {
         }
         Statistics statistics = kvTablet.getRocksDBKv().getStatistics();
         long calls = statistics.getTickerCount(TickerType.NUMBER_MULTIGET_CALLS);
+        long multiGetKeys = statistics.getTickerCount(TickerType.NUMBER_MULTIGET_KEYS_READ);
         long gets = statistics.getTickerCount(TickerType.NUMBER_KEYS_READ);
         put(kvTablet, records);
         assertThat(statistics.getTickerCount(TickerType.NUMBER_MULTIGET_CALLS) - calls)
                 .isEqualTo(enabled ? 1 : 0);
-        assertThat(statistics.getTickerCount(TickerType.NUMBER_KEYS_READ) - gets)
-                .isEqualTo(enabled ? 0 : records.length);
+        assertThat(statistics.getTickerCount(TickerType.NUMBER_MULTIGET_KEYS_READ) - multiGetKeys)
+                .isEqualTo(enabled ? records.length : 0);
+        if (!enabled) {
+            // Without batching, every buffer miss uses its own point read. With batching, the
+            // point reads depend on how many keys MultiGet misses, as each miss is re-read.
+            assertThat(statistics.getTickerCount(TickerType.NUMBER_KEYS_READ) - gets)
+                    .isEqualTo(records.length);
+        }
     }
 
     @Test

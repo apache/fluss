@@ -49,15 +49,21 @@ import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.fluss.utils.concurrent.FlussScheduler;
 
+import io.github.fluss_contrib.rocksdb.FlushOptions;
 import io.github.fluss_contrib.rocksdb.Statistics;
 import io.github.fluss_contrib.rocksdb.TickerType;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.File;
+import java.io.IOException;
+import java.io.RandomAccessFile;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -65,6 +71,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Stream;
 
 import static org.apache.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
 import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
@@ -75,6 +82,7 @@ import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
 import static org.apache.fluss.server.kv.KvTabletTestUtils.flushAndWait;
 import static org.apache.fluss.testutils.DataTestUtils.createBasicMemoryLogRecords;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests batched old-value reads in {@link KvTablet}. */
 class KvTabletOldValueTest {
@@ -199,8 +207,9 @@ class KvTabletOldValueTest {
                 .isEqualTo(batchOldValueLookupEnabled ? 1 : 0);
         assertThat(statistics.getTickerCount(TickerType.NUMBER_MULTIGET_KEYS_READ) - keys)
                 .isEqualTo(batchOldValueLookupEnabled ? 2 : 0);
+        // MultiGet re-reads the "missing" miss with a point read to tell it from a read error.
         assertThat(statistics.getTickerCount(TickerType.NUMBER_KEYS_READ) - gets)
-                .isEqualTo(batchOldValueLookupEnabled ? 0 : 3);
+                .isEqualTo(batchOldValueLookupEnabled ? 1 : 3);
         checkEqual(
                 readLogRecords(offset),
                 Collections.singletonList(
@@ -268,6 +277,101 @@ class KvTabletOldValueTest {
         checkEqual(
                 readLogRecords(offset),
                 Collections.singletonList(logRecords(offset, expectedChanges, expectedRows)));
+    }
+
+    @Test
+    void testSkipUnchangedUpsertsUsePrefetchedOldValues() throws Exception {
+        Map<String, String> config = new HashMap<>();
+        config.put(ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED.key(), "true");
+        initLogTabletAndKvTablet(DATA1_SCHEMA_PK, config);
+        List<KvRecord> initialRecords = new ArrayList<>();
+        for (int i = 0; i < 8; i++) {
+            initialRecords.add(kvRecordFactory.ofRecord("k" + i, new Object[] {i, "v" + i}));
+        }
+        kvTablet.putAsLeader(kvRecordBatchFactory.ofRecords(initialRecords), null);
+        flushAndWait(kvTablet, Long.MAX_VALUE);
+
+        // Rewrite every flushed row unchanged except k1, then repeat k1's new value so the
+        // second write is compared against the buffered value instead of the prefetched one.
+        List<KvRecord> records = new ArrayList<>();
+        for (int i = 0; i < 8; i++) {
+            records.add(
+                    kvRecordFactory.ofRecord(
+                            "k" + i, new Object[] {i, i == 1 ? "changed" : "v" + i}));
+        }
+        records.add(kvRecordFactory.ofRecord("k1", new Object[] {1, "changed"}));
+        long offset = logTablet.localLogEndOffset();
+        Statistics statistics = kvTablet.getRocksDBKv().getStatistics();
+        long calls = statistics.getTickerCount(TickerType.NUMBER_MULTIGET_CALLS);
+        long keys = statistics.getTickerCount(TickerType.NUMBER_MULTIGET_KEYS_READ);
+        kvTablet.putAsLeader(kvRecordBatchFactory.ofRecords(records), null);
+
+        assertThat(statistics.getTickerCount(TickerType.NUMBER_MULTIGET_CALLS) - calls)
+                .isEqualTo(1);
+        assertThat(statistics.getTickerCount(TickerType.NUMBER_MULTIGET_KEYS_READ) - keys)
+                .isEqualTo(8);
+        checkEqual(
+                readLogRecords(offset),
+                Collections.singletonList(
+                        logRecords(
+                                offset,
+                                Arrays.asList(ChangeType.UPDATE_BEFORE, ChangeType.UPDATE_AFTER),
+                                Arrays.asList(
+                                        new Object[] {1, "v1"}, new Object[] {1, "changed"}))));
+    }
+
+    @Test
+    void testPrefetchReadErrorFailsBatchAndRollsBackAppliedRecords() throws Exception {
+        Map<String, String> config = new HashMap<>();
+        config.put("table.changelog.image", "WAL");
+        initLogTabletAndKvTablet(DATA1_SCHEMA_PK, config);
+        kvTablet.putAsLeader(
+                kvRecordBatchFactory.ofRecords(
+                        kvRecordFactory.ofRecord("k1", new Object[] {1, "v1"})),
+                null);
+        flushAndWait(kvTablet, Long.MAX_VALUE);
+        try (FlushOptions options = new FlushOptions().setWaitForFlush(true)) {
+            kvTablet.getRocksDBKv().getDb().flush(options);
+        }
+        // Corrupt the data block before it is read, so the read is not served from the cache.
+        try (Stream<Path> files = Files.walk(tmpKvDir.toPath())) {
+            Path sst = files.filter(path -> path.toString().endsWith(".sst")).findFirst().get();
+            try (RandomAccessFile file = new RandomAccessFile(sst.toFile(), "rw")) {
+                int firstByte = file.readUnsignedByte();
+                file.seek(0);
+                file.writeByte(firstByte ^ 0xff);
+            }
+        }
+        // Full-row WAL upserts do not read old values, so k2 stays buffered without a read.
+        kvTablet.putAsLeader(
+                kvRecordBatchFactory.ofRecords(
+                        kvRecordFactory.ofRecord("k2", new Object[] {2, "v2"})),
+                null);
+
+        // The buffered k2 upserts are applied before deleting the flushed k1 starts the
+        // prefetch, whose read hits the corrupted block.
+        List<KvRecord> records = new ArrayList<>();
+        for (int i = 0; i < 7; i++) {
+            records.add(kvRecordFactory.ofRecord("k2", new Object[] {2, "v2-" + i}));
+        }
+        records.add(kvRecordFactory.ofRecord("k1", null));
+        long offset = logTablet.localLogEndOffset();
+        assertThatThrownBy(
+                        () -> kvTablet.putAsLeader(kvRecordBatchFactory.ofRecords(records), null))
+                .isInstanceOf(IOException.class)
+                .hasStackTraceContaining("checksum");
+        assertThat(logTablet.localLogEndOffset()).isEqualTo(offset);
+
+        // Deleting k2 must emit its last committed value, not one from the failed batch.
+        kvTablet.putAsLeader(
+                kvRecordBatchFactory.ofRecords(kvRecordFactory.ofRecord("k2", null)), null);
+        checkEqual(
+                readLogRecords(offset),
+                Collections.singletonList(
+                        logRecords(
+                                offset,
+                                Collections.singletonList(ChangeType.DELETE),
+                                Collections.singletonList(new Object[] {2, "v2"}))));
     }
 
     private LogRecords readLogRecords(long startOffset) throws Exception {
