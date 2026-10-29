@@ -35,6 +35,8 @@ import org.apache.flink.api.connector.source.Boundedness;
 
 import javax.annotation.Nullable;
 
+import java.util.UUID;
+
 /**
  * A Flink DataStream source implementation for reading data from Fluss tables.
  *
@@ -162,7 +164,9 @@ public class FlussSource<OUT> extends FlinkSource<OUT> {
                 streaming,
                 null,
                 lakeSource,
-                LeaseContext.DEFAULT);
+                new LeaseContext(
+                        UUID.randomUUID().toString(),
+                        LeaseContext.DEFAULT.getKvSnapshotLeaseDurationMs()));
     }
 
     /**
