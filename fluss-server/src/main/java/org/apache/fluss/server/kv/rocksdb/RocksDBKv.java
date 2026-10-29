@@ -206,12 +206,10 @@ public class RocksDBKv implements AutoCloseable {
     /**
      * Gets the values for the given keys in the same order as the input keys.
      *
-     * <p>{@link RocksDB#multiGetAsList(List)} reports a key that could not be read (for example
-     * because of a block checksum mismatch on a corrupted SST file) as {@code null} - the very same
-     * value it uses to signal a genuine miss. Reporting a read error as "key not found" would
-     * silently hide data loss, so every {@code null} is re-checked with {@link #get(byte[])}, which
-     * throws on read errors. A genuine miss only pays for one extra lookup and stays cheap as it is
-     * served from the bloom filter / block cache.
+     * <p>{@link RocksDB#multiGetAsList(List)} returns {@code null} both for a missing key and for a
+     * key whose read failed (for example, a block checksum mismatch). Each {@code null} is
+     * therefore re-read with {@link #get(byte[])}, which throws on read errors, so a missing key
+     * costs one extra point lookup.
      *
      * @throws IOException if any key failed to be read from RocksDB
      */
@@ -225,9 +223,6 @@ public class RocksDBKv implements AutoCloseable {
 
         for (int i = 0; i < values.size(); i++) {
             if (values.get(i) == null) {
-                // Either the key really does not exist, or the underlying read failed. get() throws
-                // on the latter, which is the whole point of this re-check; if it returns, the key
-                // is a genuine miss and null is the correct answer.
                 values.set(i, get(keys.get(i)));
             }
         }
@@ -324,37 +319,26 @@ public class RocksDBKv implements AutoCloseable {
 
     public List<byte[]> limitScan(Integer limit) throws IOException {
         List<byte[]> pkList = new ArrayList<>();
-        ReadOptions readOptions = new ReadOptions();
-        RocksIterator iterator = db.newIterator(defaultColumnFamilyHandle, readOptions);
-
-        int count = 0;
-        try {
+        // The wrapper checks the iterator status when it becomes invalid, so a read error fails the
+        // scan instead of being reported as the end of the data.
+        try (ReadOptions readOptions = new ReadOptions();
+                RocksIteratorWrapper iterator =
+                        new RocksIteratorWrapper(
+                                db.newIterator(defaultColumnFamilyHandle, readOptions))) {
+            int count = 0;
             iterator.seekToFirst();
             while (iterator.isValid() && count < limit) {
                 pkList.add(iterator.value());
                 iterator.next();
                 count++;
             }
-        } finally {
-            readOptions.close();
-            iterator.close();
+        } catch (RuntimeException e) {
+            if (e.getCause() instanceof RocksDBException) {
+                throw new IOException("Failed to iterate limit scan.", e.getCause());
+            }
+            throw e;
         }
-
-        // Same reasoning as in prefixLookup(): never turn a read error into an empty/short result.
-        checkIteratorStatus(iterator);
-
         return pkList;
-    }
-
-    /**
-     * Fails the current operation if the iterator was stopped by an error instead of end-of-range.
-     */
-    private static void checkIteratorStatus(RocksIterator iterator) throws IOException {
-        try {
-            iterator.status();
-        } catch (RocksDBException e) {
-            throw new IOException("Fail to iterate RocksDB.", e);
-        }
     }
 
     public void put(byte[] key, byte[] value) throws IOException {

@@ -38,9 +38,12 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.RandomAccessFile;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
-import java.util.List;
+import java.util.Collections;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -515,45 +518,35 @@ class RocksDBKvTest {
         assertThat(kv.currentPressure()).isEqualTo(0f);
     }
 
-    /**
-     * Regression test for #4484: {@code db.multiGetAsList()} reports a key that could not be read
-     * as {@code null}, exactly like a genuine miss, so a corrupted SST turned a read error into a
-     * silent "key not found". {@link RocksDBKv#multiGet(List)} must instead fail, consistently with
-     * {@link RocksDBKv#get(byte[])}.
-     *
-     * <p>The failure is injected through {@code get()}, the method {@code multiGet()} uses to
-     * re-check every {@code null} returned by {@code multiGetAsList()}. Corrupting an SST on disk
-     * does not work here: RocksDB opens a database with {@code paranoid_checks} enabled by default,
-     * so the instance would fail to open at all and the read path would never be reached.
-     */
     @Test
-    void testMultiGetFailsOnReadError(@TempDir Path tempDir) throws Exception {
+    void testReadErrorsAreNotReportedAsMissingKeys(@TempDir Path tempDir) throws Exception {
         byte[] key = new byte[] {1, 2, 3, 4, 5};
-        byte[] val = new byte[] {10, 20, 30, 40, 50};
-        // A key that is never written, so multiGetAsList reports it as null - the same value it
-        // uses both for a genuine miss and for a key whose read failed.
-        byte[] failingKey = new byte[] {7, 7, 7};
+        try (RocksDBKv kv = buildRocksDBKv(tempDir.toFile())) {
+            kv.put(key, new byte[] {10, 20, 30, 40, 50});
+            try (FlushOptions options = new FlushOptions().setWaitForFlush(true)) {
+                kv.db.flush(options);
+            }
+            // Corrupt the data block before it is read, so neither read is served from the cache.
+            try (Stream<Path> files = Files.walk(tempDir)) {
+                Path sst = files.filter(path -> path.toString().endsWith(".sst")).findFirst().get();
+                try (RandomAccessFile file = new RandomAccessFile(sst.toFile(), "rw")) {
+                    int firstByte = file.readUnsignedByte();
+                    file.seek(0);
+                    file.writeByte(firstByte ^ 0xff);
+                }
+            }
 
-        RocksDBKv realKv = buildRocksDBKv(tempDir.toFile());
-        realKv.put(key, val);
-        RocksDBKv rocksDBKv = spy(realKv);
-
-        try {
-            // The missed key is one whose underlying read actually failed: make the re-check raise
-            // the error, as a real corrupted block does. multiGet() must not swallow it.
-            doThrow(new IOException("Fail to get key.")).when(rocksDBKv).get(failingKey);
-
-            assertThatThrownBy(() -> rocksDBKv.multiGet(Arrays.asList(key, failingKey)))
+            assertThatThrownBy(() -> kv.multiGet(Collections.singletonList(key)))
                     .isInstanceOf(IOException.class)
-                    .hasMessageContaining("Fail to get key");
-
-            // A key that really does not exist is a genuine miss: the re-check returns null and
-            // multiGet() must still report it as null instead of turning it into an error.
-            byte[] missingKey = new byte[] {9, 9, 9};
-            assertThat(rocksDBKv.multiGet(Arrays.asList(key, missingKey)))
-                    .containsExactly(val, null);
-        } finally {
-            rocksDBKv.close();
+                    .hasCauseInstanceOf(RocksDBException.class)
+                    .satisfies(
+                            error -> assertThat(error.getCause()).hasMessageContaining("checksum"));
+            assertThatThrownBy(() -> kv.limitScan(10))
+                    .isInstanceOf(IOException.class)
+                    .hasMessage("Failed to iterate limit scan.")
+                    .hasCauseInstanceOf(RocksDBException.class)
+                    .satisfies(
+                            error -> assertThat(error.getCause()).hasMessageContaining("checksum"));
         }
     }
 
