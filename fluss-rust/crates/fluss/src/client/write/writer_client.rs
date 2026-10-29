@@ -17,6 +17,7 @@
 
 use crate::TableId;
 use crate::bucketing::BucketingFunction;
+use crate::client::admin::FlussAdmin;
 use crate::client::metadata::Metadata;
 use crate::client::write::IdempotenceManager;
 use crate::client::write::broadcast;
@@ -53,7 +54,9 @@ pub struct WriterClient {
 }
 
 impl WriterClient {
-    pub fn new(config: Config, metadata: Arc<Metadata>) -> Result<Self> {
+    /// `admin` creates the missing partitions that writes target when
+    /// `writer_dynamic_create_partition_enabled` is set.
+    pub fn new(config: Config, metadata: Arc<Metadata>, admin: Arc<FlussAdmin>) -> Result<Self> {
         let ack = Self::get_ack(&config)?;
 
         let idempotence_manager = Arc::new(IdempotenceManager::new(
@@ -72,7 +75,7 @@ impl WriterClient {
         // recorder once and share the cached handles with the sender.
         let metrics = Arc::new(WriterMetrics::new());
 
-        let sender = Arc::new(Sender::new(
+        let mut sender = Sender::new(
             metadata.clone(),
             accumulator.clone(),
             config.writer_request_max_size,
@@ -83,7 +86,11 @@ impl WriterClient {
             config.writer_retry_max_backoff_ms,
             Arc::clone(&idempotence_manager),
             Arc::clone(&metrics),
-        ));
+        );
+        if config.writer_dynamic_create_partition_enabled {
+            sender = sender.with_partition_creator(admin);
+        }
+        let sender = Arc::new(sender);
 
         let join_handle = tokio::spawn(async move {
             if let Err(e) = sender.run_with_shutdown(shutdown_rx).await {
@@ -322,14 +329,23 @@ impl WriterClient {
 mod tests {
     use super::*;
     use crate::metadata::{DataTypes, Schema, TableDescriptor};
+    use crate::rpc::RpcClient;
     use crate::test_utils::{build_cluster, build_table_info};
+
+    fn test_writer_client(cluster: Arc<Cluster>) -> Result<WriterClient> {
+        let metadata = Arc::new(Metadata::new_for_test(cluster));
+        let admin = Arc::new(FlussAdmin::new(
+            Arc::new(RpcClient::new()),
+            metadata.clone(),
+        ));
+        WriterClient::new(Config::default(), metadata, admin)
+    }
 
     #[tokio::test]
     async fn a_recreated_table_gets_an_assigner_for_its_bucket_key() -> Result<()> {
         let table_path = TablePath::new("db", "tbl");
         let cluster = Arc::new(build_cluster(&table_path, 1, 2));
-        let writer =
-            WriterClient::new(Config::default(), Arc::new(Metadata::new_for_test(cluster)))?;
+        let writer = test_writer_client(cluster)?;
         let physical_table_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path.clone())));
         let keyless = Arc::new(build_table_info(table_path.clone(), 1, 2));
         let keyed = {
@@ -364,8 +380,7 @@ mod tests {
     async fn routing_a_dropped_table_reports_table_not_exist() -> Result<()> {
         let table_path = TablePath::new("db", "dropped");
         let cluster = Arc::new(build_cluster(&TablePath::new("db", "other"), 1, 2));
-        let writer =
-            WriterClient::new(Config::default(), Arc::new(Metadata::new_for_test(cluster)))?;
+        let writer = test_writer_client(cluster)?;
         let physical_table_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path.clone())));
         let table_info = build_table_info(table_path, 2, 2);
 

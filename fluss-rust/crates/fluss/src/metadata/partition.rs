@@ -123,6 +123,25 @@ impl ResolvedPartitionSpec {
         }
     }
 
+    /// Like [`Self::from_partition_name`], but fails when the name doesn't split into one
+    /// value per key, which a value containing the separator causes.
+    pub fn try_from_partition_name(
+        partition_keys: Arc<[String]>,
+        partition_name: &str,
+    ) -> Result<Self> {
+        let spec = Self::from_partition_name(partition_keys, partition_name);
+        if spec.partition_values.len() != spec.partition_keys.len() {
+            return Err(Error::IllegalArgument {
+                message: format!(
+                    "Partition name '{partition_name}' has {} values for the partition keys {:?}. A partition value can't contain '{PARTITION_SPEC_SEPARATOR}'.",
+                    spec.partition_values.len(),
+                    spec.partition_keys
+                ),
+            });
+        }
+        Ok(spec)
+    }
+
     pub fn from_partition_qualified_name(qualified_partition_name: &str) -> Result<Self> {
         let mut keys = Vec::new();
         let mut values = Vec::new();
@@ -399,6 +418,19 @@ mod tests {
         );
 
         assert_eq!(spec.get_partition_values(), &["2024-01-15", "US"]);
+    }
+
+    #[test]
+    fn test_resolved_partition_spec_try_from_partition_name() {
+        let keys: Arc<[String]> = Arc::from(["date".to_string(), "region".to_string()]);
+        let spec =
+            ResolvedPartitionSpec::try_from_partition_name(Arc::clone(&keys), "2024-01-15$US")
+                .unwrap();
+        assert_eq!(spec.get_partition_values(), &["2024-01-15", "US"]);
+
+        let error =
+            ResolvedPartitionSpec::try_from_partition_name(keys, "2024-01-15$US$EU").unwrap_err();
+        assert!(error.to_string().contains("can't contain '$'"), "{error}");
     }
 
     #[test]

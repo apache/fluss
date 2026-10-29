@@ -31,7 +31,15 @@ admin.create_table(&table_path, &table_descriptor, true).await?;
 
 ### Writing to Partitioned Log Tables
 
-**Partitions must exist before writing data, otherwise the client will by default retry indefinitely.** Include partition column values in each row, the client routes records to the correct partition automatically.
+Include partition column values in each row, the client routes records to the correct partition automatically. A write to a partition that doesn't exist creates it, unless `writer_dynamic_create_partition_enabled` is `false`, in which case the write fails with `PartitionNotExists`. The server still validates a created partition, e.g. its values and, from Fluss 1.0 on, whether it is within an auto-partitioned table's retention. With idempotence enabled, the default, a write already sent to a partition that was dropped meanwhile fails with `PartitionNotExists` instead of re-creating it; writing it again creates the partition.
+
+:::warning
+Before Fluss 1.0, the server also creates a partition outside an auto-partitioned table's retention. The write succeeds, but the partition and its rows are deleted at the next auto-partition check (`auto-partition.check.interval`, 10 minutes by default).
+:::
+
+:::note
+Unlike the Java client, this client doesn't support historical partition access yet. With `table.datalake.historical-partition.enabled`, a write to an expired partition isn't routed to the table's `__historical__` partition, but handled as any other missing partition.
+:::
 
 ```rust
 use fluss::metadata::PartitionSpec;
@@ -39,7 +47,7 @@ use std::collections::HashMap;
 
 let table = conn.get_table(&table_path).await?;
 
-// Create the partition before writing
+// Optional: a write creates a missing partition by default
 let mut partition_values = HashMap::new();
 partition_values.insert("dt", "2024-01-15");
 partition_values.insert("region", "US");
@@ -162,7 +170,7 @@ admin.create_table(&table_path, &table_descriptor, true).await?;
 
 ### Writing to Partitioned Primary Key Tables
 
-**Partitions must exist before upserting data, otherwise the client will by default retry indefinitely.**
+As with log tables, an upsert to a partition that doesn't exist creates it by default.
 
 ```rust
 use fluss::metadata::PartitionSpec;
@@ -170,7 +178,7 @@ use std::collections::HashMap;
 
 let table = conn.get_table(&table_path).await?;
 
-// Create partitions first
+// Optional: an upsert creates a missing partition by default
 for (region, zone) in [("APAC", "1"), ("EMEA", "2"), ("US", "3")] {
     let mut values = HashMap::new();
     values.insert("region", region);

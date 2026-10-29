@@ -143,7 +143,11 @@ impl FlussConnection {
         }
 
         // 4. Initialize the client since we are certain it doesn't exist yet.
-        let new_client = Arc::new(WriterClient::new(self.args.clone(), self.metadata.clone())?);
+        let new_client = Arc::new(WriterClient::new(
+            self.args.clone(),
+            self.metadata.clone(),
+            self.get_admin()?,
+        )?);
 
         // 5. Store and return the newly created client.
         *writer_guard = Some(new_client.clone());

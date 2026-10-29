@@ -283,6 +283,30 @@ impl Metadata {
         self.notify_cluster_changed();
     }
 
+    /// Drops the cached leaders of `partition_path` if it still resolves to `partition_id` of
+    /// table `table_id`, and returns whether it does. A partition found missing by a request sent
+    /// before the cache learned a newer table or partition under the path says nothing about it.
+    pub fn invalidate_partition_if_unchanged(
+        &self,
+        partition_path: &PhysicalTablePath,
+        table_id: Option<TableId>,
+        partition_id: Option<PartitionId>,
+    ) -> bool {
+        {
+            let mut cluster_guard = self.cluster.write();
+            if cluster_guard.get_table_id(partition_path.get_table_path()) != table_id
+                || cluster_guard.get_partition_id(partition_path) != partition_id
+            {
+                return false;
+            }
+            let updated_cluster = cluster_guard
+                .invalidate_physical_table_meta(&HashSet::from([partition_path.clone()]));
+            *cluster_guard = Arc::new(updated_cluster);
+        }
+        self.notify_cluster_changed();
+        true
+    }
+
     /// Fetches the table id from the cluster, bypassing the local cache.
     /// Returns `Ok(None)` when the table does not exist. Unlike the metadata
     /// refresh, which wraps a missing table in a generic server error, this
@@ -872,6 +896,17 @@ mod tests {
         assert!(cluster.get_table_id(&table_path).is_none());
         assert!(cluster.opt_get_table(&table_path).is_none());
         assert!(cluster.leader_for(&TableBucket::new(1, 0)).is_none());
+    }
+
+    #[test]
+    fn invalidate_partition_if_unchanged_skips_a_newer_table() {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let metadata = Metadata::new_for_test(build_cluster_arc(&table_path, 2, 1));
+        let partition_path =
+            PhysicalTablePath::of_partitioned(Arc::new(table_path), Some("p1".to_string()));
+
+        assert!(!metadata.invalidate_partition_if_unchanged(&partition_path, Some(1), None));
+        assert!(metadata.invalidate_partition_if_unchanged(&partition_path, Some(2), None));
     }
 
     #[test]
