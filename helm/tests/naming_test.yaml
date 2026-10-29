@@ -215,6 +215,7 @@ templates:
   - templates/configmap.yaml
 release:
   name: alpha
+  namespace: team
 
 tests:
   - it: should keep the shared ZooKeeper root path by default
@@ -223,13 +224,26 @@ tests:
           path: data["server.yaml"]
           pattern: 'zookeeper\.path\.root: /fluss\n'
 
-  - it: should scope the ZooKeeper root path to the release when opted in
+  - it: should scope the ZooKeeper root path to the namespace and release when opted in
     set:
       uniqueResourceNames: true
     asserts:
       - matchRegex:
           path: data["server.yaml"]
-          pattern: 'zookeeper\.path\.root: /fluss-alpha'
+          pattern: 'zookeeper\.path\.root: /fluss-team/alpha\n'
+
+  # A hyphen would be ambiguous here: namespace "team-a" with release "orders"
+  # and namespace "team" with release "a-orders" would share /fluss-team-a-orders.
+  - it: should keep namespace and release in separate path segments
+    release:
+      name: a-orders
+      namespace: team
+    set:
+      uniqueResourceNames: true
+    asserts:
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: 'zookeeper\.path\.root: /fluss-team/a-orders\n'
 
 ---
 
