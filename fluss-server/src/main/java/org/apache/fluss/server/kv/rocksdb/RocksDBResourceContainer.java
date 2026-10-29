@@ -38,6 +38,7 @@ import io.github.fluss_contrib.rocksdb.HyperClockCache;
 import io.github.fluss_contrib.rocksdb.IndexType;
 import io.github.fluss_contrib.rocksdb.InfoLogLevel;
 import io.github.fluss_contrib.rocksdb.PlainTableConfig;
+import io.github.fluss_contrib.rocksdb.PrefixLayout;
 import io.github.fluss_contrib.rocksdb.RateLimiter;
 import io.github.fluss_contrib.rocksdb.ReadOptions;
 import io.github.fluss_contrib.rocksdb.Statistics;
@@ -83,6 +84,8 @@ public class RocksDBResourceContainer implements AutoCloseable {
 
     /** The configurations from file. */
     private final ReadableConfig configuration;
+
+    @Nullable private final PrefixLayout prefixLayout;
 
     private final boolean enableStatistics;
 
@@ -162,7 +165,27 @@ public class RocksDBResourceContainer implements AutoCloseable {
             RateLimiter sharedRateLimiter,
             @Nullable Cache sharedBlockCache,
             @Nullable WriteBufferManager sharedWriteBufferManager) {
-        validateConfiguration(configuration);
+        this(
+                configuration,
+                instanceBasePath,
+                enableStatistics,
+                sharedRateLimiter,
+                sharedBlockCache,
+                sharedWriteBufferManager,
+                null);
+    }
+
+    /** Creates RocksDB options with a matching prefix extractor and Bloom filter policy. */
+    public RocksDBResourceContainer(
+            ReadableConfig configuration,
+            @Nullable File instanceBasePath,
+            boolean enableStatistics,
+            RateLimiter sharedRateLimiter,
+            @Nullable Cache sharedBlockCache,
+            @Nullable WriteBufferManager sharedWriteBufferManager,
+            @Nullable PrefixLayout prefixLayout) {
+        validateConfiguration(configuration, prefixLayout != null);
+        this.prefixLayout = prefixLayout;
         this.configuration = configuration;
 
         this.instanceRocksDBPath =
@@ -180,12 +203,16 @@ public class RocksDBResourceContainer implements AutoCloseable {
 
     /** Validates metadata options before allocating RocksDB resources. */
     public static void validateConfiguration(ReadableConfig configuration) {
+        validateConfiguration(configuration, false);
+    }
+
+    private static void validateConfiguration(ReadableConfig configuration, boolean prefixBloom) {
         if (configuration.get(ConfigOptions.KV_PARTITIONED_INDEX_FILTERS)) {
             checkArgument(
                     configuration.get(ConfigOptions.KV_METADATA_BLOCK_SIZE).getBytes() > 0,
                     "%s must be positive when partitioning is enabled.",
                     ConfigOptions.KV_METADATA_BLOCK_SIZE.key());
-            if (configuration.get(ConfigOptions.KV_USE_BLOOM_FILTER)) {
+            if (prefixBloom || configuration.get(ConfigOptions.KV_USE_BLOOM_FILTER)) {
                 checkArgument(
                         !configuration.get(ConfigOptions.KV_BLOOM_FILTER_BLOCK_BASED_MODE),
                         "%s must be false to use partitioned Bloom filters.",
@@ -256,7 +283,9 @@ public class RocksDBResourceContainer implements AutoCloseable {
 
         // load configurable options on top of pre-defined profile
         setColumnFamilyOptionsFromConfigurableOptions(opt, handlesToClose);
-
+        if (prefixLayout != null) {
+            opt.useLayoutPrefixExtractor(prefixLayout);
+        }
         return opt;
     }
 
@@ -414,8 +443,7 @@ public class RocksDBResourceContainer implements AutoCloseable {
         boolean partitioning = configuration.get(ConfigOptions.KV_PARTITIONED_INDEX_FILTERS);
         blockBasedTableConfig.setIndexType(
                 partitioning ? IndexType.kTwoLevelIndexSearch : IndexType.kBinarySearch);
-        blockBasedTableConfig.setPartitionFilters(
-                partitioning && internalGetOption(ConfigOptions.KV_USE_BLOOM_FILTER));
+        blockBasedTableConfig.setPartitionFilters(partitioning && useBloomFilter());
 
         // Configure index and filter blocks caching
         blockBasedTableConfig.setCacheIndexAndFilterBlocks(
@@ -428,7 +456,7 @@ public class RocksDBResourceContainer implements AutoCloseable {
         blockBasedTableConfig.setPinTopLevelIndexAndFilter(
                 internalGetOption(ConfigOptions.KV_PIN_TOP_LEVEL_INDEX_AND_FILTER));
 
-        if (internalGetOption(ConfigOptions.KV_USE_BLOOM_FILTER)) {
+        if (useBloomFilter()) {
             final double bitsPerKey = internalGetOption(ConfigOptions.KV_BLOOM_FILTER_BITS_PER_KEY);
             final boolean blockBasedMode =
                     internalGetOption(ConfigOptions.KV_BLOOM_FILTER_BLOCK_BASED_MODE);
@@ -438,6 +466,10 @@ public class RocksDBResourceContainer implements AutoCloseable {
         }
 
         return currentOptions.setTableFormatConfig(blockBasedTableConfig);
+    }
+
+    private boolean useBloomFilter() {
+        return prefixLayout != null || internalGetOption(ConfigOptions.KV_USE_BLOOM_FILTER);
     }
 
     /**

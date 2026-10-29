@@ -22,12 +22,8 @@ import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
-import org.apache.fluss.row.Decimal;
-import org.apache.fluss.row.TimestampLtz;
-import org.apache.fluss.row.TimestampNtz;
-import org.apache.fluss.row.encode.CompactedKeyEncoder;
 import org.apache.fluss.row.encode.KeyEncoder;
-import org.apache.fluss.types.DataType;
+import org.apache.fluss.row.encode.KeyPrefixLayout;
 import org.apache.fluss.types.RowType;
 
 import io.github.fluss_contrib.rocksdb.PrefixLayout;
@@ -35,43 +31,25 @@ import io.github.fluss_contrib.rocksdb.PrefixLayout;
 import javax.annotation.Nullable;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 
-import static org.apache.fluss.types.DataTypeChecks.getPrecision;
-
-/** Derives native prefix layouts from the primary-key encoding used by a table. */
+/** Adapts encoder-owned byte layouts to RocksDB prefix extractors. */
 public final class RocksDBPrefixBloomUtils {
-
     private RocksDBPrefixBloomUtils() {}
 
     /** Derives the bucket-key prefix layout, or returns null when the option is disabled. */
     @Nullable
     public static PrefixLayout createPrefixLayout(TableDescriptor table) {
-        TableConfig config = new TableConfig(Configuration.fromMap(table.getProperties()));
-        if (!config.isKvPrefixBloomEnabled()) {
-            return null;
-        }
-        List<String> primaryKeys =
-                table.getSchema().getPrimaryKey().isPresent()
-                        ? new ArrayList<>(table.getSchema().getPrimaryKey().get().getColumnNames())
-                        : new ArrayList<>();
-        primaryKeys.removeAll(table.getPartitionKeys());
         return createPrefixLayout(
                 table.getSchema().getRowType(),
-                primaryKeys,
-                table.getTableDistribution().isPresent()
-                        ? table.getTableDistribution().get().getBucketKeys()
-                        : Collections.emptyList(),
-                config);
+                table.getPhysicalPrimaryKeys(),
+                table.getBucketKeys(),
+                new TableConfig(Configuration.fromMap(table.getProperties())));
     }
 
     /** Derives the layout from the persisted key-format and distribution metadata. */
     @Nullable
     public static PrefixLayout createPrefixLayout(TableInfo table) {
-        if (!table.getTableConfig().isKvPrefixBloomEnabled()) {
-            return null;
-        }
         return createPrefixLayout(
                 table.getRowType(),
                 table.getPhysicalPrimaryKeys(),
@@ -79,11 +57,15 @@ public final class RocksDBPrefixBloomUtils {
                 table.getTableConfig());
     }
 
+    @Nullable
     private static PrefixLayout createPrefixLayout(
             RowType rowType,
             List<String> primaryKeys,
             List<String> bucketKeys,
             TableConfig config) {
+        if (!config.isKvPrefixBloomEnabled()) {
+            return null;
+        }
         if (primaryKeys.isEmpty() || bucketKeys.isEmpty()) {
             throw new InvalidTableException(
                     "Prefix Bloom filters require a primary key table with bucket keys.");
@@ -96,69 +78,43 @@ public final class RocksDBPrefixBloomUtils {
         KeyEncoder encoder =
                 KeyEncoder.ofPrimaryKeyEncoder(
                         rowType, primaryKeys, config, bucketKeys.equals(primaryKeys));
-        if (!(encoder instanceof CompactedKeyEncoder)) {
-            throw new InvalidTableException(
-                    "Prefix Bloom filters cannot describe primary-key encoder "
-                            + encoder.getClass().getSimpleName()
-                            + ". Compacted primary-key encoding is required.");
-        }
+        KeyPrefixLayout layout =
+                encoder.getPrefixLayout(bucketKeys.size())
+                        .orElseThrow(
+                                () ->
+                                        new InvalidTableException(
+                                                "Prefix Bloom filters cannot describe primary-key encoder "
+                                                        + encoder.getClass().getSimpleName()
+                                                        + "."));
         List<PrefixLayout.Step> steps = new ArrayList<>();
-        for (String key : bucketKeys) {
-            appendCompactedField(steps, rowType.getTypeAt(rowType.getFieldIndex(key)));
+        for (KeyPrefixLayout.Component component : layout.getComponents()) {
+            switch (component) {
+                case FIXED1:
+                    steps.add(PrefixLayout.fixed(1));
+                    break;
+                case FIXED2:
+                    steps.add(PrefixLayout.fixed(2));
+                    break;
+                case FIXED4:
+                    steps.add(PrefixLayout.fixed(4));
+                    break;
+                case FIXED8:
+                    steps.add(PrefixLayout.fixed(8));
+                    break;
+                case VARINT32:
+                    steps.add(PrefixLayout.varint32());
+                    break;
+                case VARINT64:
+                    steps.add(PrefixLayout.varint64());
+                    break;
+                case BYTES_VARINT32:
+                    steps.add(PrefixLayout.bytesVarint32());
+                    break;
+                default:
+                    throw new IllegalArgumentException(
+                            "Unsupported key layout component: " + component);
+            }
         }
         return PrefixLayout.of(steps.toArray(new PrefixLayout.Step[0]));
-    }
-
-    private static void appendCompactedField(List<PrefixLayout.Step> steps, DataType type) {
-        switch (type.getTypeRoot()) {
-            case BOOLEAN:
-            case TINYINT:
-                steps.add(PrefixLayout.fixed(1));
-                break;
-            case SMALLINT:
-                steps.add(PrefixLayout.fixed(2));
-                break;
-            case INTEGER:
-            case DATE:
-            case TIME_WITHOUT_TIME_ZONE:
-                steps.add(PrefixLayout.varint32());
-                break;
-            case BIGINT:
-                steps.add(PrefixLayout.varint64());
-                break;
-            case FLOAT:
-                steps.add(PrefixLayout.fixed(4));
-                break;
-            case DOUBLE:
-                steps.add(PrefixLayout.fixed(8));
-                break;
-            case CHAR:
-            case STRING:
-            case BINARY:
-            case BYTES:
-                steps.add(PrefixLayout.bytesVarint32());
-                break;
-            case DECIMAL:
-                steps.add(
-                        Decimal.isCompact(getPrecision(type))
-                                ? PrefixLayout.varint64()
-                                : PrefixLayout.bytesVarint32());
-                break;
-            case TIMESTAMP_WITHOUT_TIME_ZONE:
-                steps.add(PrefixLayout.varint64());
-                if (!TimestampNtz.isCompact(getPrecision(type))) {
-                    steps.add(PrefixLayout.varint32());
-                }
-                break;
-            case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
-                steps.add(PrefixLayout.varint64());
-                if (!TimestampLtz.isCompact(getPrecision(type))) {
-                    steps.add(PrefixLayout.varint32());
-                }
-                break;
-            default:
-                throw new InvalidTableException(
-                        "Prefix Bloom filters cannot describe primary-key type " + type + ".");
-        }
     }
 }

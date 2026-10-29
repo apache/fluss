@@ -152,6 +152,11 @@ public final class TableDescriptor implements Serializable {
         return schema;
     }
 
+    /** Returns the primary-key columns stored in each partition's physical key. */
+    public List<String> getPhysicalPrimaryKeys() {
+        return schema.getPhysicalPrimaryKeys(partitionKeys);
+    }
+
     /** Returns the bucket key of the table, empty if no bucket key is set. */
     public List<String> getBucketKeys() {
         return this.getTableDistribution()
@@ -434,8 +439,7 @@ public final class TableDescriptor implements Serializable {
     private static List<String> defaultBucketKeyOfPrimaryKeyTable(
             Schema schema, List<String> partitionKeys) {
         checkArgument(schema.getPrimaryKey().isPresent(), "Primary key must be set.");
-        List<String> bucketKeys = new ArrayList<>(schema.getPrimaryKey().get().getColumnNames());
-        bucketKeys.removeAll(partitionKeys);
+        List<String> bucketKeys = schema.getPhysicalPrimaryKeys(partitionKeys);
         if (bucketKeys.isEmpty()) {
             throw new IllegalArgumentException(
                     String.format(

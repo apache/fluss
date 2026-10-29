@@ -31,6 +31,7 @@ import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.Counter;
 import org.apache.fluss.record.ChangeType;
@@ -49,6 +50,7 @@ import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.PreparedFlush;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKv;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKvBuilder;
+import org.apache.fluss.server.kv.rocksdb.RocksDBPrefixBloomUtils;
 import org.apache.fluss.server.kv.rocksdb.RocksDBResourceContainer;
 import org.apache.fluss.server.kv.rocksdb.RocksDBStatistics;
 import org.apache.fluss.server.kv.rocksdb.RocksDBStatisticsRegistry;
@@ -75,7 +77,6 @@ import org.apache.fluss.utils.clock.SystemClock;
 import io.github.fluss_contrib.rocksdb.AbstractCompactionFilter;
 import io.github.fluss_contrib.rocksdb.AbstractCompactionFilterFactory;
 import io.github.fluss_contrib.rocksdb.Cache;
-import io.github.fluss_contrib.rocksdb.ColumnFamilyOptions;
 import io.github.fluss_contrib.rocksdb.PrefixLayout;
 import io.github.fluss_contrib.rocksdb.RateLimiter;
 import io.github.fluss_contrib.rocksdb.ReadOptions;
@@ -286,12 +287,8 @@ public final class KvTablet {
     }
 
     /**
-     * Creates a kv tablet with a dedicated {@link KvFlushScheduler} that is closed together with
-     * the tablet. Production code must use {@link #create(PhysicalTablePath, TableBucket,
-     * LogTablet, File, Configuration, TabletServerMetricGroup, BufferAllocator, MemorySegmentPool,
-     * KvFormat, RowMerger, ArrowCompressionInfo, SchemaGetter, ChangelogImage, RateLimiter, Cache,
-     * KvFlushScheduler, Runnable, AutoIncrementManager, Clock, TableConfig)} with the shared
-     * scheduler owned by {@link KvManager}.
+     * Creates a test tablet with a dedicated flush scheduler. Production tablets are created by
+     * {@link KvManager} with a shared scheduler and persisted table metadata.
      */
     @VisibleForTesting
     public static KvTablet create(
@@ -360,9 +357,14 @@ public final class KvTablet {
             @Nullable Runnable flushCompleteListener,
             AutoIncrementManager autoIncrementManager,
             Clock clock,
-            TableConfig tableConfig,
-            @Nullable PrefixLayout prefixLayout)
+            TableInfo tableInfo)
             throws IOException {
+        TableConfig tableConfig = tableInfo.getTableConfig();
+        // Historical keys prepend a partition-name envelope to the encoded primary key.
+        PrefixLayout prefixLayout =
+                HISTORICAL_PARTITION_VALUE.equals(tablePath.getPartitionName())
+                        ? null
+                        : RocksDBPrefixBloomUtils.createPrefixLayout(tableInfo);
         return create(
                 tablePath,
                 tableBucket,
@@ -390,6 +392,7 @@ public final class KvTablet {
                 prefixLayout);
     }
 
+    @VisibleForTesting
     public static KvTablet create(
             PhysicalTablePath tablePath,
             TableBucket tableBucket,
@@ -497,8 +500,6 @@ public final class KvTablet {
                                         ? RowTtlCompactionFilterFactory.create(
                                                 kvValueLayout, rowTtl.get(), clock)
                                         : null;
-        // Historical keys wrap the primary key with a partition-name length and name.
-        // The primary-key prefix layout does not describe that storage encoding.
         RocksDBKv kv =
                 buildRocksDBKv(
                         serverConf,
@@ -509,7 +510,7 @@ public final class KvTablet {
                         statisticsRegistry,
                         tableBucket.getTableId(),
                         compactionFilterFactory,
-                        historicalPartition ? null : prefixLayout);
+                        prefixLayout);
 
         // Create RocksDB statistics accessor (will be registered to TableMetricGroup by Replica)
         // Pass ResourceGuard to ensure thread-safe access during concurrent close operations
@@ -553,6 +554,7 @@ public final class KvTablet {
                 tableConfig.isUpsertSkipUnchanged());
     }
 
+    @VisibleForTesting
     public static KvTablet create(
             PhysicalTablePath tablePath,
             TableBucket tableBucket,
@@ -615,28 +617,23 @@ public final class KvTablet {
         @Nullable RocksDBResourceContainer rocksDBResourceContainer = null;
         boolean resourcesOwnedByBuilder = false;
         try {
-            Configuration rocksDBConfiguration = configuration;
-            if (prefixLayout != null && !configuration.get(ConfigOptions.KV_USE_BLOOM_FILTER)) {
-                rocksDBConfiguration = new Configuration(configuration);
-                rocksDBConfiguration.set(ConfigOptions.KV_USE_BLOOM_FILTER, true);
-            }
             rocksDBResourceContainer =
                     new RocksDBResourceContainer(
-                            rocksDBConfiguration,
+                            configuration,
                             kvDir,
                             true,
                             sharedRateLimiter,
                             sharedBlockCache,
-                            sharedWriteBufferManager);
+                            sharedWriteBufferManager,
+                            prefixLayout);
             if (statisticsRegistry != null) {
                 rocksDBResourceContainer.useSharedStatistics(statisticsRegistry.acquire(tableId));
             }
-            ColumnFamilyOptions columnOptions = rocksDBResourceContainer.getColumnOptions();
-            if (prefixLayout != null) {
-                columnOptions.useLayoutPrefixExtractor(prefixLayout);
-            }
             RocksDBKvBuilder rocksDBKvBuilder =
-                    new RocksDBKvBuilder(kvDir, rocksDBResourceContainer, columnOptions)
+                    new RocksDBKvBuilder(
+                                    kvDir,
+                                    rocksDBResourceContainer,
+                                    rocksDBResourceContainer.getColumnOptions())
                             .setFlussL0SlowdownTrigger(
                                     configuration.get(
                                             ConfigOptions.KV_BACKPRESSURE_L0_SLOWDOWN_TRIGGER));

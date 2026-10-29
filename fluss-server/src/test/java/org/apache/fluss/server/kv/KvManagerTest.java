@@ -20,9 +20,7 @@ package org.apache.fluss.server.kv;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
-import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.FlussRuntimeException;
-import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
@@ -30,6 +28,7 @@ import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.Gauge;
 import org.apache.fluss.metrics.MetricNames;
@@ -96,7 +95,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Stream;
 
-import static org.apache.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA_PK;
 import static org.apache.fluss.record.TestData.DATA2_SCHEMA;
 import static org.apache.fluss.server.kv.KvTabletTestUtils.flushAndWait;
@@ -233,10 +231,8 @@ final class KvManagerTest {
                         physicalPath,
                         tableBucket1,
                         log,
-                        KvFormat.COMPACTED,
+                        KvManager.getTableInfo(zkClient, path),
                         getter,
-                        new TableConfig(tableConf),
-                        DEFAULT_COMPRESSION,
                         null);
         byte[] key =
                 new CompactedKeyEncoder(schema.getRowType(), new int[] {1, 2})
@@ -1190,10 +1186,15 @@ final class KvManagerTest {
                 physicalTablePath,
                 tableBucket,
                 logTablet,
-                KvFormat.COMPACTED,
+                TableInfo.of(
+                        tablePath,
+                        tableBucket.getTableId(),
+                        schemaId,
+                        TableDescriptor.builder().schema(DATA1_SCHEMA_PK).distributedBy(3).build(),
+                        tempDir.toURI().toString(),
+                        0L,
+                        0L),
                 schemaGetter,
-                new TableConfig(new Configuration()),
-                DEFAULT_COMPRESSION,
                 null);
     }
 

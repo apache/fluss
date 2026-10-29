@@ -882,7 +882,8 @@ public final class Replica {
      */
     private Optional<CompletedSnapshot> initKvTablet(KvRecovery recovery) {
         checkNotNull(kvManager);
-        TableConfig tableConfig = getTableConfig();
+        TableInfo recoveryTableInfo = tableInfo;
+        TableConfig tableConfig = recoveryTableInfo.getTableConfig();
         long startTime = clock.milliseconds();
         LOG.info("Start to init kv tablet for {} of table {}.", tableBucket, physicalPath);
 
@@ -950,10 +951,8 @@ public final class Replica {
                                 physicalPath,
                                 tableBucket,
                                 logTablet,
-                                tableConfig.getKvFormat(),
+                                recoveryTableInfo,
                                 schemaGetter,
-                                tableConfig,
-                                arrowCompressionInfo,
                                 this::onKvFlushComplete);
 
                 rowCount =
