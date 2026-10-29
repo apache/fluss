@@ -196,7 +196,7 @@ public class FlussAdmin implements Admin {
         this.gateway =
                 RetryableGatewayClientProxy.createRetryableGatewayProxy(
                         rawGateway,
-                        () -> refreshCoordinatorMetadata(client, metadataUpdater),
+                        metadataUpdater::refreshClusterUntilAvailable,
                         refreshExecutor,
                         cause ->
                                 cause instanceof NotCoordinatorLeaderException
@@ -221,17 +221,6 @@ public class FlussAdmin implements Admin {
                         refreshExecutor,
                         AdminGateway.class);
         this.metadataUpdater = metadataUpdater;
-    }
-
-    private static void refreshCoordinatorMetadata(
-            RpcClient client, MetadataUpdater metadataUpdater) {
-        metadataUpdater.refreshClusterUntilAvailable();
-        ServerNode coordinator = metadataUpdater.getCoordinatorServer();
-        if (coordinator != null) {
-            // Coordinator nodes share the same cs-0 UID. Discard the connection that returned
-            // NotCoordinatorLeaderException so the retry opens one to the refreshed endpoint.
-            client.disconnect(coordinator.uid()).join();
-        }
     }
 
     @Override
