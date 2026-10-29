@@ -469,9 +469,9 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
         long tableId = createTableWithReplicas(origin, 2);
         TableBucket running = new TableBucket(tableId, 0);
         TableBucket pending = new TableBucket(tableId, 1);
-        // An unrelated leader election must not make the pending plan look started. For a
-        // leader-only plan, the elected leader is neither the original nor the target leader.
-        int pendingLeader = leaderOnly ? 2 : 1;
+        // A leader election must not make the pending plan look started. For a leader-only plan,
+        // the ordinary election deliberately chooses the plan's target before it is admitted.
+        int pendingLeader = 1;
         List<Integer> pendingIsr = leaderOnly ? origin : Arrays.asList(0, 1);
         if (!leaderOnly) {
             adjustRebalanceIsr(pending, pendingIsr);
@@ -508,6 +508,14 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
                 .isEqualTo(new BucketAssignment(origin));
         verifyIsr(pending, pendingLeader, pendingIsr);
 
+        // A later failover must not revive the canceled plan and move the leader back to its old
+        // target.
+        int expectedFinalPendingLeader = pendingLeader;
+        if (leaderOnly) {
+            expectedFinalPendingLeader = 2;
+            changeLeader(pending, expectedFinalPendingLeader);
+        }
+
         adjustRebalanceIsr(running, Arrays.asList(0, 1, 2, 3));
         retry(
                 Duration.ofMinutes(1),
@@ -520,7 +528,7 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
                 .isEqualTo(RebalanceStatus.CANCELED);
         assertThat(zookeeperClient.getTableAssignment(tableId).get().getBucketAssignment(1))
                 .isEqualTo(new BucketAssignment(origin));
-        verifyIsr(pending, pendingLeader, pendingIsr);
+        verifyIsr(pending, expectedFinalPendingLeader, pendingIsr);
         verifyIsr(running, 0, target);
     }
 

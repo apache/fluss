@@ -27,6 +27,7 @@ import org.junit.jupiter.api.Test;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -86,17 +87,22 @@ public class RebalanceTaskJsonSerdeTest extends JsonSerdeTestBase<RebalanceTask>
                         Arrays.asList(0, 1, 2),
                         Arrays.asList(3, 4, 5)));
         return new RebalanceTask[] {
-            new RebalanceTask("rebalance-task-21jd", NOT_STARTED, bucketPlan)
+            new RebalanceTask(
+                    "rebalance-task-21jd",
+                    NOT_STARTED,
+                    bucketPlan,
+                    true,
+                    Collections.singleton(new TableBucket(0L, 0)))
         };
     }
 
     @Override
     protected String[] expectedJsons() {
         return new String[] {
-            "{\"version\":2,\"rebalance_id\":\"rebalance-task-21jd\",\"rebalance_status\":0,\"cancel_requested\":false,\"rebalance_plan\":"
+            "{\"version\":2,\"rebalance_id\":\"rebalance-task-21jd\",\"rebalance_status\":0,\"cancel_requested\":true,\"rebalance_plan\":"
                     + "[{\"table_id\":0,\"buckets\":"
                     + "[{\"bucket_id\":1,\"original_leader\":1,\"new_leader\":1,\"origin_replicas\":[0,1,2],\"new_replicas\":[1,2,3]},"
-                    + "{\"bucket_id\":0,\"original_leader\":0,\"new_leader\":3,\"origin_replicas\":[0,1,2],\"new_replicas\":[3,4,5]}]},"
+                    + "{\"bucket_id\":0,\"canceled\":true,\"original_leader\":0,\"new_leader\":3,\"origin_replicas\":[0,1,2],\"new_replicas\":[3,4,5]}]},"
                     + "{\"table_id\":1,\"partition_id\":0,\"buckets\":["
                     + "{\"bucket_id\":0,\"original_leader\":0,\"new_leader\":3,\"origin_replicas\":[0,1,2],\"new_replicas\":[3,4,5]},"
                     + "{\"bucket_id\":1,\"original_leader\":1,\"new_leader\":1,\"origin_replicas\":[0,1,2],\"new_replicas\":[1,2,3]}]},"
@@ -110,7 +116,8 @@ public class RebalanceTaskJsonSerdeTest extends JsonSerdeTestBase<RebalanceTask>
         String legacyJson =
                 expectedJsons()[0]
                         .replace("\"version\":2", "\"version\":1")
-                        .replace(",\"cancel_requested\":false", "");
+                        .replace(",\"cancel_requested\":true", "")
+                        .replace(",\"canceled\":true", "");
 
         RebalanceTask rebalanceTask =
                 JsonSerdeUtils.readValue(
@@ -118,6 +125,7 @@ public class RebalanceTaskJsonSerdeTest extends JsonSerdeTestBase<RebalanceTask>
                         RebalanceTaskJsonSerde.INSTANCE);
 
         assertThat(rebalanceTask.isCancelRequested()).isFalse();
+        assertThat(rebalanceTask.getCanceledBuckets()).isEmpty();
         assertThat(rebalanceTask.getExecutePlan()).hasSize(5);
     }
 }
