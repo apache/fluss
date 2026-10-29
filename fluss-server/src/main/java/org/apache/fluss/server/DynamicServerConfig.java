@@ -52,6 +52,7 @@ import static org.apache.fluss.config.ConfigOptions.DATALAKE_FORMAT;
 import static org.apache.fluss.config.ConfigOptions.KV_LEADER_REPLICA_MEMORY_RESERVED;
 import static org.apache.fluss.config.ConfigOptions.KV_SHARED_RATE_LIMITER_BYTES_PER_SEC;
 import static org.apache.fluss.config.ConfigOptions.KV_SNAPSHOT_INTERVAL;
+import static org.apache.fluss.config.ConfigOptions.KV_WRITE_BATCH_OLD_VALUE_LOOKUP_ENABLED;
 import static org.apache.fluss.config.ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER;
 import static org.apache.fluss.config.ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED;
 import static org.apache.fluss.config.ConfigOptions.NETTY_SERVER_MAX_QUEUED_HISTORICAL_REQUESTS;
@@ -87,6 +88,7 @@ class DynamicServerConfig {
                             KV_LEADER_REPLICA_MEMORY_RESERVED.key(),
                             KV_SHARED_RATE_LIMITER_BYTES_PER_SEC.key(),
                             KV_SNAPSHOT_INTERVAL.key(),
+                            KV_WRITE_BATCH_OLD_VALUE_LOOKUP_ENABLED.key(),
                             SERVER_DATA_DISK_WRITE_RECOVER_RATIO.key(),
                             SERVER_DATA_DISK_WRITE_LIMIT_RATIO.key(),
                             SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO.key(),

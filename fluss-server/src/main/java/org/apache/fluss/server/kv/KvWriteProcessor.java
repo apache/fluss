@@ -71,6 +71,7 @@ import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 
 /**
@@ -122,6 +123,7 @@ public final class KvWriteProcessor {
     @Nullable private final RowTtlTimestampProvider rowTtlTimestampProvider;
     private final Clock clock;
     private final boolean skipUnchangedUpsert;
+    private final BooleanSupplier batchOldValueLookupEnabled;
 
     /** Creates a KV write processor. */
     public KvWriteProcessor(
@@ -139,7 +141,8 @@ public final class KvWriteProcessor {
             ValueDecoder valueDecoder,
             @Nullable RowTtlTimestampProvider rowTtlTimestampProvider,
             Clock clock,
-            boolean skipUnchangedUpsert) {
+            boolean skipUnchangedUpsert,
+            BooleanSupplier batchOldValueLookupEnabled) {
         this.tableBucket = tableBucket;
         this.logTablet = logTablet;
         this.arrowWriterProvider = arrowWriterProvider;
@@ -160,6 +163,7 @@ public final class KvWriteProcessor {
         this.rowTtlTimestampProvider = rowTtlTimestampProvider;
         this.clock = clock;
         this.skipUnchangedUpsert = skipUnchangedUpsert;
+        this.batchOldValueLookupEnabled = batchOldValueLookupEnabled;
     }
 
     /** Processes a KV batch against the supplied state and appends its WAL. */
@@ -334,7 +338,8 @@ public final class KvWriteProcessor {
                 KvRecordReadContext.createReadContext(kvFormat, schemaGetter);
 
         boolean prefetchEnabled =
-                originalPartitionName == null
+                batchOldValueLookupEnabled.getAsBoolean()
+                        && originalPartitionName == null
                         && kvRecords.getRecordCount() >= MIN_BATCH_SIZE_FOR_PREFETCH;
         Function<byte[], BinaryValue> previousValueLookup =
                 historicalValueLookup == null ? null : historicalValueLookup::lookup;

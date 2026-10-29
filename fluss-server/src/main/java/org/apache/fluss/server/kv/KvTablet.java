@@ -102,6 +102,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.function.BooleanSupplier;
 
 import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
@@ -231,7 +232,8 @@ public final class KvTablet {
             @Nullable RowTtlTimestampProvider rowTtlTimestampProvider,
             Clock clock,
             boolean rowTtlEnabled,
-            boolean skipUnchangedUpsert) {
+            boolean skipUnchangedUpsert,
+            BooleanSupplier batchOldValueLookupEnabled) {
         this.physicalPath = physicalPath;
         this.tableBucket = tableBucket;
         this.historicalPartition =
@@ -270,7 +272,8 @@ public final class KvTablet {
                         valueDecoder,
                         rowTtlTimestampProvider,
                         clock,
-                        skipUnchangedUpsert);
+                        skipUnchangedUpsert,
+                        batchOldValueLookupEnabled);
         this.rocksDBStatistics = rocksDBStatistics;
         this.autoIncrementManager = autoIncrementManager;
         this.flushCompleteListener = flushCompleteListener;
@@ -332,7 +335,8 @@ public final class KvTablet {
                 null,
                 autoIncrementManager,
                 SystemClock.getInstance(),
-                new TableConfig(new Configuration()));
+                new TableConfig(new Configuration()),
+                null);
     }
 
     static KvTablet create(
@@ -357,7 +361,8 @@ public final class KvTablet {
             @Nullable Runnable flushCompleteListener,
             AutoIncrementManager autoIncrementManager,
             Clock clock,
-            TableConfig tableConfig)
+            TableConfig tableConfig,
+            BooleanSupplier batchOldValueLookupEnabled)
             throws IOException {
         return create(
                 tablePath,
@@ -382,7 +387,8 @@ public final class KvTablet {
                 flushCompleteListener,
                 autoIncrementManager,
                 clock,
-                tableConfig);
+                tableConfig,
+                batchOldValueLookupEnabled);
     }
 
     public static KvTablet create(
@@ -430,7 +436,8 @@ public final class KvTablet {
                 flushCompleteListener,
                 autoIncrementManager,
                 clock,
-                tableConfig);
+                tableConfig,
+                null);
     }
 
     private static KvTablet create(
@@ -456,9 +463,12 @@ public final class KvTablet {
             @Nullable Runnable flushCompleteListener,
             AutoIncrementManager autoIncrementManager,
             Clock clock,
-            TableConfig tableConfig)
+            TableConfig tableConfig,
+            @Nullable BooleanSupplier batchOldValueLookupEnabled)
             throws IOException {
         checkNotNull(tableConfig, "tableConfig must not be null.");
+        boolean initialBatchOldValueLookupEnabled =
+                serverConf.get(ConfigOptions.KV_WRITE_BATCH_OLD_VALUE_LOOKUP_ENABLED);
         boolean historicalPartition =
                 HISTORICAL_PARTITION_VALUE.equals(tablePath.getPartitionName());
         Optional<Duration> rowTtl = tableConfig.getKvTTL();
@@ -540,7 +550,10 @@ public final class KvTablet {
                 rowTtlTimestampProvider,
                 clock,
                 rowTtl.isPresent(),
-                tableConfig.isUpsertSkipUnchanged());
+                tableConfig.isUpsertSkipUnchanged(),
+                batchOldValueLookupEnabled == null
+                        ? () -> initialBatchOldValueLookupEnabled
+                        : batchOldValueLookupEnabled);
     }
 
     public static KvTablet create(
@@ -585,7 +598,8 @@ public final class KvTablet {
                 null,
                 autoIncrementManager,
                 clock,
-                tableConfig);
+                tableConfig,
+                null);
     }
 
     private static RocksDBKv buildRocksDBKv(

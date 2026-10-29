@@ -52,10 +52,10 @@ import org.apache.fluss.utils.concurrent.FlussScheduler;
 import io.github.fluss_contrib.rocksdb.Statistics;
 import io.github.fluss_contrib.rocksdb.TickerType;
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -160,8 +160,13 @@ class KvTabletOldValueTest {
                         tableConf);
     }
 
-    @Test
-    void testBatchOldValuesPreserveOrderedChangelogAndBufferedTombstones() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testBatchOldValuesPreserveOrderedChangelogAndBufferedTombstones(
+            boolean batchOldValueLookupEnabled) throws Exception {
+        if (!batchOldValueLookupEnabled) {
+            conf.set(ConfigOptions.KV_WRITE_BATCH_OLD_VALUE_LOOKUP_ENABLED, false);
+        }
         initLogTabletAndKvTablet(DATA1_SCHEMA_PK, new HashMap<>());
         kvTablet.putAsLeader(
                 kvRecordBatchFactory.ofRecords(
@@ -191,10 +196,11 @@ class KvTabletOldValueTest {
                         kvRecordFactory.ofRecord("k3", null)),
                 null);
         assertThat(statistics.getTickerCount(TickerType.NUMBER_MULTIGET_CALLS) - calls)
-                .isEqualTo(1);
+                .isEqualTo(batchOldValueLookupEnabled ? 1 : 0);
         assertThat(statistics.getTickerCount(TickerType.NUMBER_MULTIGET_KEYS_READ) - keys)
-                .isEqualTo(2);
-        assertThat(statistics.getTickerCount(TickerType.NUMBER_KEYS_READ) - gets).isZero();
+                .isEqualTo(batchOldValueLookupEnabled ? 2 : 0);
+        assertThat(statistics.getTickerCount(TickerType.NUMBER_KEYS_READ) - gets)
+                .isEqualTo(batchOldValueLookupEnabled ? 0 : 3);
         checkEqual(
                 readLogRecords(offset),
                 Collections.singletonList(

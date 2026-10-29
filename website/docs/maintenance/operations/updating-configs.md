@@ -24,6 +24,7 @@ Currently, the supported dynamically updatable server configurations include:
   rolled after the effective local cleanup TTL expires and the high watermark reaches the log end
   offset. See [TTL](../../table-design/data-distribution/ttl.md#local-log-ttl).
 - `kv.rocksdb.shared-rate-limiter.bytes-per-sec`: Control RocksDB flush and compaction write rate shared across all RocksDB instances on the TabletServer. The rate limiter is always enabled. Set to a lower value (e.g., 100MB) to limit the rate, or a very high value to effectively disable rate limiting.
+- `kv.write.batch-old-value-lookup.enabled`: Enable or disable batched old-value lookups in the normal KV write path. Defaults to `true`. Changes apply to subsequent write batches on existing and newly created tablets.
 - `security.sasl.plain.credentials`: Add, change, or remove the users that can authenticate with SASL/PLAIN, see [Authentication](security/authentication.md#managing-multiple-users).
 - `server.historical-partition.thread-pool.max-size`: Change the maximum number of threads used for historical partition operations.
 - `netty.server.max-queued-historical-requests`: Change the maximum number of in-flight historical partition operations, including lookups and writes, before throttling new operations.
