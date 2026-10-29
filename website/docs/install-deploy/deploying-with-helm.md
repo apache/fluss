@@ -589,6 +589,13 @@ security:
       mechanism: ""
 ```
 
+Each server pod publishes the advertised address of every listener as an environment variable named `FLUSS_ADVERTISED_LISTENER_<LISTENER_NAME>`, with a `<host>:<port>` value. The server reads its `advertised.listeners` from these variables, so the published and the registered addresses are the same. With the default listeners, `tablet-server-0` in namespace `fluss` gets:
+
+```
+FLUSS_ADVERTISED_LISTENER_CLIENT=tablet-server-0.tablet-server-hs.fluss.svc.cluster.local:9124
+FLUSS_ADVERTISED_LISTENER_INTERNAL=<pod IP>:9123
+```
+
 ### Enabling Secure Connection
 
 With the helm deployment, you can specify authentication mechanisms when connecting to the Fluss cluster.

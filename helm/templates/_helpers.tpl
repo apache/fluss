@@ -131,3 +131,46 @@ imagePullSecrets:
 {{- end -}}
 {{- end -}}
 
+
+{{/*
+Env entries publishing each listener's advertised address as
+FLUSS_ADVERTISED_LISTENER_<NAME>=<host>:<port>, one per entry in .Values.listeners.
+Fluss advertises a listener missing from advertised.listeners at its bind address,
+so INTERNAL is published as the pod IP; the others use the pod's headless-service DNS name.
+The values reference POD_* via $(VAR), so they must be rendered after those entries.
+Usage: include "fluss.listeners.advertisedEnv" (dict "root" . "service" "coordinator-server-hs")
+*/}}
+{{- define "fluss.listeners.advertisedEnv" -}}
+{{- $service := .service -}}
+{{- range $name, $listener := .root.Values.listeners }}
+- name: FLUSS_ADVERTISED_LISTENER_{{ upper $name }}
+  {{- if eq $name "internal" }}
+  value: $(POD_IP):{{ $listener.port }}
+  {{- else }}
+  value: $(POD_NAME).{{ $service }}.$(POD_NAMESPACE).svc.cluster.local:{{ $listener.port }}
+  {{- end }}
+{{- end }}
+{{- end -}}
+
+{{/*
+bind.listeners value: every listener bound on the pod IP.
+*/}}
+{{- define "fluss.listeners.bind" -}}
+{{- $out := list -}}
+{{- range $name, $listener := .Values.listeners -}}
+{{- $out = append $out (printf "%s://${POD_IP}:%v" (upper $name) $listener.port) -}}
+{{- end -}}
+{{- join ", " $out -}}
+{{- end -}}
+
+{{/*
+advertised.listeners value, read from the env entries of "fluss.listeners.advertisedEnv"
+so the published addresses and the configured ones cannot differ.
+*/}}
+{{- define "fluss.listeners.advertised" -}}
+{{- $out := list -}}
+{{- range $name, $_ := .Values.listeners -}}
+{{- $out = append $out (printf "%s://${FLUSS_ADVERTISED_LISTENER_%s}" (upper $name) (upper $name)) -}}
+{{- end -}}
+{{- join ", " $out -}}
+{{- end -}}
