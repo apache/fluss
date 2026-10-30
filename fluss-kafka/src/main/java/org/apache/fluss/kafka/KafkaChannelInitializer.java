@@ -40,6 +40,7 @@ public class KafkaChannelInitializer extends NettyChannelInitializer {
     private final String listenerName;
     private final int maxRequestSize;
     private final @Nullable Supplier<ServerAuthenticator> authenticatorSupplier;
+    private final @Nullable KafkaRequestMetrics requestMetrics;
     private final LengthFieldPrepender prepender = new LengthFieldPrepender(4);
 
     /** Creates a channel initializer with an optional per-connection authenticator supplier. */
@@ -49,11 +50,28 @@ public class KafkaChannelInitializer extends NettyChannelInitializer {
             long maxIdleTimeSeconds,
             int maxRequestSize,
             @Nullable Supplier<ServerAuthenticator> authenticatorSupplier) {
+        this(
+                requestChannels,
+                listenerName,
+                maxIdleTimeSeconds,
+                maxRequestSize,
+                authenticatorSupplier,
+                null);
+    }
+
+    KafkaChannelInitializer(
+            RequestChannel[] requestChannels,
+            String listenerName,
+            long maxIdleTimeSeconds,
+            int maxRequestSize,
+            @Nullable Supplier<ServerAuthenticator> authenticatorSupplier,
+            @Nullable KafkaRequestMetrics requestMetrics) {
         super(maxIdleTimeSeconds);
         this.requestChannels = requestChannels;
         this.listenerName = listenerName;
         this.maxRequestSize = maxRequestSize;
         this.authenticatorSupplier = authenticatorSupplier;
+        this.requestMetrics = requestMetrics;
     }
 
     @Override
@@ -75,6 +93,7 @@ public class KafkaChannelInitializer extends NettyChannelInitializer {
                                         MathUtils.murmurHash(ch.id().hashCode())
                                                 % requestChannels.length],
                                 listenerName,
-                                authenticatorSupplier));
+                                authenticatorSupplier,
+                                requestMetrics));
     }
 }

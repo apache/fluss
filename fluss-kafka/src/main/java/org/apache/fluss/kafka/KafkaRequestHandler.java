@@ -77,6 +77,7 @@ public class KafkaRequestHandler implements RequestHandler<KafkaRequest> {
 
     @Override
     public void processRequest(KafkaRequest request) {
+        request.processingStarted();
         dispatcher
                 .dispatch(request)
                 .whenComplete(

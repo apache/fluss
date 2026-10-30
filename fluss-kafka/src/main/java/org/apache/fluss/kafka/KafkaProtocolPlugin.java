@@ -22,6 +22,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.cluster.ServerReconfigurable;
 import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.kafka.mapping.KafkaTopicMapper;
+import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.rpc.RpcGatewayService;
 import org.apache.fluss.rpc.netty.server.RequestChannel;
 import org.apache.fluss.rpc.netty.server.RequestHandler;
@@ -30,12 +31,17 @@ import org.apache.fluss.security.acl.FlussPrincipal;
 import org.apache.fluss.security.auth.AuthenticationFactory;
 import org.apache.fluss.security.auth.ServerAuthenticator;
 import org.apache.fluss.security.auth.sasl.plain.PlainSaslServerConfigManager;
+import org.apache.fluss.server.metrics.group.TableMetricGroup;
+import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.server.tablet.TabletService;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandler;
+
+import org.apache.kafka.common.errors.InvalidTopicException;
 
 import javax.annotation.Nullable;
 
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -52,10 +58,12 @@ public class KafkaProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
     private static final String PLAINTEXT_AUTH_PROTOCOL = "plaintext";
 
     private Configuration conf;
+    private KafkaTopicMapper topicMapper;
     private PlainSaslServerConfigManager plainSaslServerConfigManager;
     private Map<String, Supplier<ServerAuthenticator>> authenticatorSuppliers =
             Collections.emptyMap();
     private Set<String> saslListenerNames = Collections.emptySet();
+    private final Map<String, KafkaRequestMetrics> requestMetricsByListener = new HashMap<>();
 
     @Override
     public String name() {
@@ -68,6 +76,7 @@ public class KafkaProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
         this.saslListenerNames = saslListenerNames(conf);
         this.plainSaslServerConfigManager = new PlainSaslServerConfigManager(conf);
         this.conf = plainSaslServerConfigManager.getConfiguration();
+        this.topicMapper = new KafkaTopicMapper(this.conf);
         this.authenticatorSuppliers =
                 AuthenticationFactory.loadServerAuthenticatorSuppliers(this.conf);
     }
@@ -80,6 +89,14 @@ public class KafkaProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
     @Override
     public ChannelHandler createChannelHandler(
             RequestChannel[] requestChannels, String listenerName) {
+        return createChannelHandler(requestChannels, listenerName, null);
+    }
+
+    @Override
+    public ChannelHandler createChannelHandler(
+            RequestChannel[] requestChannels,
+            String listenerName,
+            @Nullable MetricGroup serverMetricGroup) {
         Supplier<ServerAuthenticator> authenticatorSupplier = null;
         if (saslListenerNames.contains(listenerName)) {
             authenticatorSupplier =
@@ -93,7 +110,19 @@ public class KafkaProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
                 listenerName,
                 conf.get(ConfigOptions.NETTY_CONNECTION_MAX_IDLE_TIME).getSeconds(),
                 (int) conf.get(ConfigOptions.NETTY_SERVER_MAX_REQUEST_SIZE).getBytes(),
-                authenticatorSupplier);
+                authenticatorSupplier,
+                serverMetricGroup == null
+                        ? null
+                        : requestMetricsByListener.computeIfAbsent(
+                                listenerName,
+                                name ->
+                                        new KafkaRequestMetrics(
+                                                serverMetricGroup
+                                                        .addGroup("kafka")
+                                                        .addGroup("listener", name),
+                                                topic ->
+                                                        tableRequestMetricGroup(
+                                                                serverMetricGroup, name, topic))));
     }
 
     @Override
@@ -121,6 +150,29 @@ public class KafkaProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
     @Override
     public void reconfigure(Configuration newConfig) throws ConfigException {
         plainSaslServerConfigManager.reconfigure(newConfig);
+    }
+
+    @Nullable
+    private MetricGroup tableRequestMetricGroup(
+            MetricGroup serverMetricGroup, String listenerName, String topicName) {
+        if (!(serverMetricGroup instanceof TabletServerMetricGroup)) {
+            return null;
+        }
+        final TableMetricGroup tableGroup;
+        try {
+            tableGroup =
+                    ((TabletServerMetricGroup) serverMetricGroup)
+                            .getTableMetricGroup(topicMapper.toTablePath(topicName));
+        } catch (InvalidTopicException e) {
+            return null;
+        }
+        if (tableGroup == null || tableGroup.isClosed()) {
+            return null;
+        }
+        return tableGroup
+                .addGroup("kafka")
+                .addGroup("listener", listenerName)
+                .addGroup("request", "PRODUCE");
     }
 
     private static void validateKafkaAuthenticationConfiguration(Configuration configuration) {

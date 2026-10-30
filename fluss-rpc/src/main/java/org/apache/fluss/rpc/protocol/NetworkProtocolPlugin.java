@@ -18,6 +18,7 @@
 package org.apache.fluss.rpc.protocol;
 
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.plugin.Plugin;
 import org.apache.fluss.rpc.RpcGatewayService;
 import org.apache.fluss.rpc.netty.server.RequestChannel;
@@ -46,6 +47,12 @@ public interface NetworkProtocolPlugin extends Plugin {
      * the network protocol.
      */
     ChannelHandler createChannelHandler(RequestChannel[] requestChannels, String listenerName);
+
+    /** Creates a channel handler with access to the server's metrics. */
+    default ChannelHandler createChannelHandler(
+            RequestChannel[] requestChannels, String listenerName, MetricGroup serverMetricGroup) {
+        return createChannelHandler(requestChannels, listenerName);
+    }
 
     /**
      * Creates a {@link RequestHandler} for processing the incoming requests of the network

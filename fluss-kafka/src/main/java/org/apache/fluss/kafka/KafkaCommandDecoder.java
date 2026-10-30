@@ -65,6 +65,7 @@ public class KafkaCommandDecoder extends SimpleChannelInboundHandler<ByteBuf> {
     private final RequestChannel requestChannel;
     private final String listenerName;
     private final KafkaSaslConnection saslConnection;
+    private final @Nullable KafkaRequestMetrics requestMetrics;
 
     // Need to use a Queue to store the inflight responses, because Kafka clients require the
     // responses to be sent in order.
@@ -86,9 +87,18 @@ public class KafkaCommandDecoder extends SimpleChannelInboundHandler<ByteBuf> {
             RequestChannel requestChannel,
             String listenerName,
             @Nullable Supplier<ServerAuthenticator> authenticatorSupplier) {
+        this(requestChannel, listenerName, authenticatorSupplier, null);
+    }
+
+    KafkaCommandDecoder(
+            RequestChannel requestChannel,
+            String listenerName,
+            @Nullable Supplier<ServerAuthenticator> authenticatorSupplier,
+            @Nullable KafkaRequestMetrics requestMetrics) {
         super(false);
         this.requestChannel = requestChannel;
         this.listenerName = listenerName;
+        this.requestMetrics = requestMetrics;
         this.saslConnection =
                 authenticatorSupplier == null
                         ? KafkaSaslConnection.plaintext()
@@ -97,6 +107,7 @@ public class KafkaCommandDecoder extends SimpleChannelInboundHandler<ByteBuf> {
 
     @Override
     public void channelRead0(ChannelHandlerContext ctx, ByteBuf buffer) throws Exception {
+        long receivedTimeNs = requestMetrics == null ? 0 : requestMetrics.nanoTime();
         CompletableFuture<AbstractResponse> future = new CompletableFuture<>();
         KafkaRequest request = null;
         try {
@@ -119,6 +130,9 @@ public class KafkaCommandDecoder extends SimpleChannelInboundHandler<ByteBuf> {
             request =
                     parseRequest(
                             ctx, future, buffer, listenerName, saslConnection, header, nioBuffer);
+            if (requestMetrics != null) {
+                request.startTracking(requestMetrics, receivedTimeNs);
+            }
             inflightResponses.addLast(request);
             future.whenCompleteAsync((r, t) -> sendResponse(ctx), ctx.executor());
             requestChannel.putRequest(request);
@@ -129,6 +143,7 @@ public class KafkaCommandDecoder extends SimpleChannelInboundHandler<ByteBuf> {
             }
         } catch (Throwable t) {
             if (request != null) {
+                request.cancel();
                 request.releaseBuffer();
             }
             LOG.error("Error handling request", t);
@@ -227,10 +242,20 @@ public class KafkaCommandDecoder extends SimpleChannelInboundHandler<ByteBuf> {
 
             inflightResponses.pollFirst();
             if (isActive.get()) {
-                ByteBuf buffer = request.responseBuffer();
-                ChannelFuture responseFuture =
-                        ctx.writeAndFlush(buffer)
-                                .addListener(ChannelFutureListener.CLOSE_ON_FAILURE);
+                KafkaRequest responseRequest = request;
+                ChannelFuture responseFuture;
+                try {
+                    request.responseDequeued();
+                    ByteBuf buffer = request.responseBuffer();
+                    responseFuture =
+                            ctx.writeAndFlush(buffer)
+                                    .addListener(
+                                            result -> responseRequest.finish(!result.isSuccess()))
+                                    .addListener(ChannelFutureListener.CLOSE_ON_FAILURE);
+                } catch (Throwable failure) {
+                    request.finish(true);
+                    throw failure;
+                }
                 if (request.shouldCloseConnectionAfterResponse()) {
                     isActive.set(false);
                     saslConnection.close();
@@ -242,6 +267,7 @@ public class KafkaCommandDecoder extends SimpleChannelInboundHandler<ByteBuf> {
                     break;
                 }
             } else {
+                request.cancel();
                 request.releaseBuffer();
             }
         }

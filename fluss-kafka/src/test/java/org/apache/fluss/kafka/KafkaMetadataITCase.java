@@ -260,6 +260,8 @@ public class KafkaMetadataITCase {
                                     .get()
                                     .isExists())
                     .isTrue();
+            // Replica readiness does not imply that the Kafka metadata cache has caught up.
+            awaitTopicsReady(node, "fluss.events");
             for (short version = 0; version <= 11; version++) {
                 MetadataResponse response = query(node, named(version, "events", "fluss.events"));
                 assertThat(response.data().topics().find("events").errorCode())
@@ -271,6 +273,7 @@ public class KafkaMetadataITCase {
                     createTable(
                             cluster, TablePath.of("custom_default", "events"), topicDescriptor());
             cluster.waitUntilTableReady(customId);
+            awaitTopicsReady(node, "events", "custom_default.events", "fluss.events");
             for (short version = 0; version <= 11; version++) {
                 MetadataResponse response =
                         query(
@@ -374,6 +377,14 @@ public class KafkaMetadataITCase {
         } finally {
             cluster.close();
         }
+    }
+
+    private static void awaitTopicsReady(ServerNode node, String... topics) throws Exception {
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        assertThat(query(node, named((short) 11, topics)).errorCounts())
+                                .containsOnlyKeys(Errors.NONE));
     }
 
     private static void awaitTopicError(ServerNode node, String topic, Errors error)

@@ -32,6 +32,8 @@ import org.apache.fluss.metrics.groups.AbstractMetricGroup;
 import org.apache.fluss.metrics.registry.MetricRegistry;
 import org.apache.fluss.server.kv.rocksdb.RocksDBStatistics;
 
+import javax.annotation.Nullable;
+
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.LongSupplier;
@@ -344,5 +346,11 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
                 metricGroupByTable.remove(tablePath);
             }
         }
+    }
+
+    /** Returns the metrics for a locally hosted table, or null if it has no local buckets. */
+    @Nullable
+    public TableMetricGroup getTableMetricGroup(TablePath tablePath) {
+        return metricGroupByTable.get(tablePath);
     }
 }
