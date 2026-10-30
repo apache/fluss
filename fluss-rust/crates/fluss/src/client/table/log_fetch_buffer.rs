@@ -82,6 +82,10 @@ pub(crate) trait CompletedFetch: Send + Sync {
     fn api_error(&self) -> Option<&ApiError>;
     fn fetch_error_context(&self) -> Option<&FetchErrorContext>;
     fn take_error(&mut self) -> Option<Error>;
+    /// Whether a previous fetch initialization or batch read failed.
+    fn has_pending_error(&self) -> bool;
+    /// Retain an error for the next poll without discarding earlier results.
+    fn defer_error(&mut self, error: Error);
     fn fetch_records(&mut self, max_records: usize) -> Result<FetchResult<Vec<ScanRecord>>>;
     fn fetch_batches(&mut self, max_batches: usize) -> Result<FetchResult<Vec<FetchedBatch>>>;
     fn is_consumed(&self) -> bool;
@@ -119,6 +123,7 @@ enum FetchStep<T> {
 /// Represents a pending fetch that is waiting to be completed
 pub trait PendingFetch: Send + Sync {
     fn table_bucket(&self) -> &TableBucket;
+    fn fetch_offset(&self) -> i64;
     fn is_completed(&self) -> bool;
     fn to_completed_fetch(self: Box<Self>) -> Result<Box<dyn CompletedFetch>>;
 }
@@ -232,20 +237,21 @@ impl LogFetchBuffer {
         // holding both locks simultaneously.
         let mut completed_to_push: Vec<Box<dyn CompletedFetch>> = Vec::new();
         let mut has_completed = false;
-        let mut pending_error: Option<Error> = None;
+        let mut pending_error: Option<(Error, i64)> = None;
         {
             let mut pending_map = self.pending_fetches.lock();
             if let Some(pendings) = pending_map.get_mut(table_bucket) {
                 while let Some(front) = pendings.front() {
                     if front.is_completed() {
                         let pending = pendings.pop_front().unwrap();
+                        let fetch_offset = pending.fetch_offset();
                         match pending.to_completed_fetch() {
                             Ok(completed) => {
                                 completed_to_push.push(completed);
                                 has_completed = true;
                             }
                             Err(e) => {
-                                pending_error = Some(e);
+                                pending_error = Some((e, fetch_offset));
                                 has_completed = true;
                                 break;
                             }
@@ -260,11 +266,11 @@ impl LogFetchBuffer {
             }
         }
 
-        if let Some(error) = pending_error {
+        if let Some((error, fetch_offset)) = pending_error {
             let error_fetch = DefaultCompletedFetch::from_error(
                 table_bucket.clone(),
                 error,
-                -1,
+                fetch_offset,
                 Arc::clone(&self.resolver),
             );
             completed_to_push.push(Box::new(error_fetch));
@@ -361,6 +367,10 @@ impl PendingFetch for CompletedPendingFetch {
         self.completed_fetch.table_bucket()
     }
 
+    fn fetch_offset(&self) -> i64 {
+        self.completed_fetch.next_fetch_offset()
+    }
+
     fn is_completed(&self) -> bool {
         true
     }
@@ -404,7 +414,8 @@ pub struct DefaultCompletedFetch {
     /// can be returned together.
     pending_records: Vec<ScanRecord>,
     last_record: Option<ScanRecord>,
-    cached_record_error: Option<String>,
+    // Keep decode failures until this fetch is discarded after a subscription change.
+    cached_record_error: Option<Arc<Error>>,
     corrupt_last_record: bool,
 }
 
@@ -586,7 +597,7 @@ impl DefaultCompletedFetch {
                     return FetchStep::SchemaRequired(schema_id);
                 }
                 Err(e) => {
-                    self.cached_record_error = Some(e.to_string());
+                    self.cached_record_error = Some(Arc::new(e));
                 }
             }
         }
@@ -613,16 +624,14 @@ impl DefaultCompletedFetch {
     }
 
     fn fetch_error(&self) -> Error {
-        let mut message = format!(
-            "Received exception when fetching the next record from {table_bucket}. If needed, please back to past the record to continue scanning.",
-            table_bucket = self.table_bucket
-        );
-        if let Some(cause) = self.cached_record_error.as_deref() {
-            message.push_str(&format!(" Cause: {cause}"));
-        }
         Error::UnexpectedError {
-            message,
-            source: None,
+            message: format!(
+                "Failed to read log data at offset {} for bucket {}",
+                self.next_fetch_offset, self.table_bucket
+            ),
+            source: self.cached_record_error.as_ref().map(|error| {
+                Box::new(Arc::clone(error)) as Box<dyn std::error::Error + Send + Sync>
+            }),
         }
     }
     /// Get the next batch with its base offset and commit timestamp.
@@ -715,8 +724,22 @@ impl CompletedFetch for DefaultCompletedFetch {
         self.error.take()
     }
 
+    fn has_pending_error(&self) -> bool {
+        self.error.is_some() || self.cached_record_error.is_some()
+    }
+
+    fn defer_error(&mut self, error: Error) {
+        // Decode failures are already cached and must survive repeated polls.
+        if self.cached_record_error.is_some() {
+            return;
+        }
+        self.error = Some(error);
+        self.consumed = false;
+    }
+
     fn fetch_records(&mut self, max_records: usize) -> Result<FetchResult<Vec<ScanRecord>>> {
         if let Some(error) = self.error.take() {
+            self.drain();
             return Err(error);
         }
 
@@ -783,7 +806,12 @@ impl CompletedFetch for DefaultCompletedFetch {
 
     fn fetch_batches(&mut self, max_batches: usize) -> Result<FetchResult<Vec<FetchedBatch>>> {
         if let Some(error) = self.error.take() {
+            self.drain();
             return Err(error);
+        }
+
+        if self.cached_record_error.is_some() {
+            return Err(self.fetch_error());
         }
 
         if let Some(api_error) = self.api_error.as_ref() {
@@ -802,7 +830,17 @@ impl CompletedFetch for DefaultCompletedFetch {
         let mut batches = Vec::with_capacity(max_batches.min(16));
 
         for _ in 0..max_batches {
-            match self.next_fetched_batch()? {
+            let step = match self.next_fetched_batch() {
+                Ok(step) => step,
+                Err(error) => {
+                    self.cached_record_error = Some(Arc::new(error));
+                    if batches.is_empty() {
+                        return Err(self.fetch_error());
+                    }
+                    return Ok(FetchResult::Data(batches));
+                }
+            };
+            match step {
                 FetchStep::InProgress(fetched_batch) => batches.push(fetched_batch),
                 FetchStep::End => break,
                 FetchStep::SchemaRequired(schema_id) => {
@@ -892,6 +930,14 @@ impl CompletedFetch for RemoteCompletedFetch {
         self.inner.take_error()
     }
 
+    fn has_pending_error(&self) -> bool {
+        self.inner.has_pending_error()
+    }
+
+    fn defer_error(&mut self, error: Error) {
+        self.inner.defer_error(error);
+    }
+
     fn fetch_records(&mut self, max_records: usize) -> Result<FetchResult<Vec<ScanRecord>>> {
         self.inner.fetch_records(max_records)
     }
@@ -972,6 +1018,10 @@ impl PendingFetch for RemotePendingFetch {
         &self.segment.table_bucket
     }
 
+    fn fetch_offset(&self) -> i64 {
+        self.fetch_offset
+    }
+
     fn is_completed(&self) -> bool {
         self.download_future.is_done()
     }
@@ -1031,6 +1081,10 @@ impl PendingFetch for RemotePendingFetch {
 mod tests {
     use super::*;
     use crate::client::table::read_context_resolver::ReadContextResolver;
+    use crate::client::table::remote_log::{
+        FetchResult as DownloadResult, RemoteLogDownloadRequest, RemoteLogDownloader,
+        RemoteLogFetcher,
+    };
     use crate::client::{EARLIEST_OFFSET, WriteRecord};
     use crate::metadata::{
         Column, DataField, DataTypes, PhysicalTablePath, RowType, Schema, TableDescriptor,
@@ -1046,6 +1100,9 @@ mod tests {
         build_table_info, build_table_info_with_columns, uncompressed_arrow_batch_config,
     };
     use arrow::array::{Array, Int32Array, StringArray};
+    use std::future::Future;
+    use std::path::PathBuf;
+    use std::pin::Pin;
     use std::sync::Arc;
 
     fn expect_data<T>(result: FetchResult<T>) -> T {
@@ -1055,6 +1112,88 @@ mod tests {
                 panic!("unexpected missing schema {schema_id}")
             }
         }
+    }
+
+    #[test]
+    fn batch_decode_error_follows_already_collected_data() -> Result<()> {
+        let table_path = TablePath::new("db", "tbl");
+        let table_info = Arc::new(build_table_info_with_columns(
+            table_path.clone(),
+            1,
+            1,
+            vec![DataField::new("id", DataTypes::int(), None)],
+        ));
+        let row_type = table_info.get_row_type();
+        let mut builder = MemoryLogRecordsArrowBuilder::new(
+            uncompressed_arrow_batch_config(1, row_type, usize::MAX),
+            false,
+        )?;
+        let mut row = GenericRow::new(1);
+        row.set_field(0, 42_i32);
+        builder.append(&WriteRecord::for_append(
+            table_info.clone(),
+            Arc::new(PhysicalTablePath::of(Arc::new(table_path))),
+            1,
+            &row,
+        ))?;
+        let mut data = builder.build()?;
+        let commit_timestamp = 1234_i64;
+        data[COMMIT_TIMESTAMP_OFFSET..COMMIT_TIMESTAMP_OFFSET + COMMIT_TIMESTAMP_LENGTH]
+            .copy_from_slice(&commit_timestamp.to_le_bytes());
+        let mut corrupted = data.clone();
+        corrupted[..8].copy_from_slice(&1_i64.to_le_bytes());
+        corrupted[RECORDS_OFFSET..].fill(0);
+        data.extend(corrupted);
+
+        let mut fetch = DefaultCompletedFetch::new(
+            TableBucket::new(1, 0),
+            LogRecordsBatches::new(data.clone()),
+            data.len(),
+            test_resolver()?,
+            false,
+            0,
+            0,
+        );
+        let batches = expect_data(fetch.fetch_batches(10)?);
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].base_offset, 0);
+        assert_eq!(batches[0].commit_timestamp, commit_timestamp);
+        assert_eq!(batches[0].batch.num_rows(), 1);
+        assert_eq!(fetch.records_read(), 1);
+        assert_eq!(fetch.next_fetch_offset(), 1);
+        assert!(!fetch.is_consumed());
+        let error = match fetch.fetch_batches(10) {
+            Err(error) => error,
+            Ok(_) => panic!("expected decode error"),
+        };
+        let message = error.to_string();
+        assert!(
+            message.contains(&TableBucket::new(1, 0).to_string()),
+            "{message}"
+        );
+        assert!(message.contains("offset 1"), "{message}");
+        assert!(message.contains("Invalid continuation marker"), "{message}");
+        assert!(std::error::Error::source(&error).is_some());
+        assert!(!fetch.is_consumed());
+        // Repeated reads retain the same cause and never continue the batch iterator.
+        let cause = fetch.cached_record_error.as_ref().unwrap().clone();
+        for _ in 0..3 {
+            assert_eq!(
+                fetch
+                    .fetch_batches(10)
+                    .err()
+                    .expect("cached decode error")
+                    .to_string(),
+                message
+            );
+            assert!(Arc::ptr_eq(
+                &cause,
+                fetch.cached_record_error.as_ref().unwrap()
+            ));
+            assert_eq!(fetch.next_fetch_offset(), 1);
+            assert_eq!(fetch.records_read(), 1);
+        }
+        Ok(())
     }
 
     fn test_resolver() -> Result<Arc<ReadContextResolver>> {
@@ -1168,6 +1307,10 @@ mod tests {
             &self.table_bucket
         }
 
+        fn fetch_offset(&self) -> i64 {
+            5
+        }
+
         fn is_completed(&self) -> bool {
             true
         }
@@ -1190,6 +1333,65 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pending_file_open_failure_preserves_offset_and_releases_permit() -> Result<()> {
+        struct MissingFileFetcher(PathBuf);
+        impl RemoteLogFetcher for MissingFileFetcher {
+            fn fetch(
+                &self,
+                _: &RemoteLogDownloadRequest,
+            ) -> Pin<Box<dyn Future<Output = Result<DownloadResult>> + Send>> {
+                let file_path = self.0.clone();
+                Box::pin(async move {
+                    Ok(DownloadResult {
+                        file_path,
+                        file_size: 0,
+                    })
+                })
+            }
+        }
+        let directory = tempfile::tempdir()?;
+        let downloader = RemoteLogDownloader::new_with_fetcher(
+            Arc::new(MissingFileFetcher(directory.path().join("missing.log"))),
+            1,
+            1,
+            crate::test_utils::test_scanner_metrics(&TablePath::new("db", "tbl")),
+        )?;
+        let segment = RemoteLogSegment {
+            segment_id: "missing".to_string(),
+            start_offset: 0,
+            end_offset: 10,
+            size_in_bytes: 0,
+            table_bucket: TableBucket::new(1, 0),
+            max_timestamp: 0,
+        };
+        let buffer = LogFetchBuffer::new(test_resolver()?);
+        // The second download needs the sole permit released by the first failure.
+        for offset in [5, 6] {
+            let download = downloader.request_remote_log("unused", &segment);
+            let ready = Arc::new(Notify::new());
+            let notification = ready.clone();
+            download.on_complete(move || notification.notify_one());
+            buffer.pend(Box::new(RemotePendingFetch::new(
+                segment.clone(),
+                download,
+                0,
+                offset,
+                10,
+                test_resolver()?,
+            )));
+            tokio::time::timeout(Duration::from_secs(5), ready.notified())
+                .await
+                .unwrap();
+            buffer.try_complete(&segment.table_bucket);
+            let mut failed = buffer.poll().expect("file-open error");
+            assert_eq!(failed.next_fetch_offset(), offset);
+            assert!(failed.take_error().is_some());
+            assert!(buffer.poll().is_none());
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn await_not_empty_returns_pending_error() {
         let buffer = LogFetchBuffer::new(test_resolver().unwrap());
         let table_bucket = TableBucket::new(1, 0);
@@ -1202,6 +1404,7 @@ mod tests {
         assert!(matches!(result, Ok(true)));
 
         let mut completed = buffer.poll().expect("completed fetch");
+        assert_eq!(completed.next_fetch_offset(), 5);
         assert!(completed.take_error().is_some());
     }
 
