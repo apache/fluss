@@ -58,6 +58,10 @@ object SparkToFlussTypeVisitor {
   }
 
   private def visitPrimitiveType(t: SparkDataType): FlussDataType = {
+    if (SparkTypeChecks.hasUnsupportedCollation(t)) {
+      throw new UnsupportedOperationException(
+        s"Data type(${t.catalogString}) is not supported: Fluss only supports UTF8_BINARY collation")
+    }
     t match {
       case _: org.apache.spark.sql.types.BooleanType =>
         new BooleanType()

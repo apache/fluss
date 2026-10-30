@@ -23,6 +23,8 @@ STAGE_FLINK2="flink2"
 STAGE_SPARK="spark3"
 STAGE_SPARK_LAKE="spark3-lake"
 STAGE_SPARK_SCALA213="spark3-scala213"
+STAGE_SPARK4="spark4"
+STAGE_SPARK4_LAKE="spark4-lake"
 STAGE_LAKE="lake"
 
 SPARK_LAKE_TEST_TAG="org.apache.fluss.spark.lake.SparkLakeTest"
@@ -44,14 +46,21 @@ MODULES_COMMON_SPARK="\
 fluss-spark,\
 fluss-spark/fluss-spark-common,\
 fluss-spark/fluss-spark-ut,\
+fluss-spark/fluss-spark-tiering,\
 "
 
 MODULES_SPARK3="\
 fluss-spark,\
 fluss-spark/fluss-spark-common,\
 fluss-spark/fluss-spark-ut,\
+fluss-spark/fluss-spark-tiering,\
 fluss-spark/fluss-spark-3.5,\
 fluss-spark/fluss-spark-3.4,\
+"
+
+MODULES_SPARK4="\
+fluss-spark,\
+fluss-spark/fluss-spark-4.2\
 "
 
 MODULES_LAKE="\
@@ -70,6 +79,7 @@ function get_test_modules_for_stage() {
     local modules_flink1=$MODULES_FLINK1
     local modules_flink2=$MODULES_FLINK2
     local modules_spark3=$MODULES_SPARK3
+    local modules_spark4=$MODULES_SPARK4
     local modules_lake=$MODULES_LAKE
     local negated_flink1=\!${MODULES_FLINK1//,/,\!}
     local negated_flink2=\!${MODULES_FLINK2//,/,\!}
@@ -88,13 +98,19 @@ function get_test_modules_for_stage() {
             echo "-pl fluss-test-coverage,$modules_flink2"
         ;;
         (${STAGE_SPARK})
-            echo "-DtagsToExclude=$SPARK_LAKE_TEST_TAG -pl fluss-test-coverage,$modules_spark3"
+            echo "-Pspark3.4,spark3.5 -DtagsToExclude=$SPARK_LAKE_TEST_TAG -pl fluss-test-coverage,$modules_spark3"
         ;;
         (${STAGE_SPARK_LAKE})
-            echo "-DtagsToInclude=$SPARK_LAKE_TEST_TAG -pl fluss-test-coverage,$modules_spark3"
+            echo "-Pspark3.4,spark3.5 -DtagsToInclude=$SPARK_LAKE_TEST_TAG -pl fluss-test-coverage,$modules_spark3"
         ;;
         (${STAGE_SPARK_SCALA213})
-            echo "-Pscala-2.13 -DtagsToExclude=$SPARK_LAKE_TEST_TAG -pl fluss-test-coverage,$modules_spark3"
+            echo "-Pspark3.4,spark3.5,scala-2.13 -DtagsToExclude=$SPARK_LAKE_TEST_TAG -pl fluss-test-coverage,$modules_spark3"
+        ;;
+        (${STAGE_SPARK4})
+            echo "-Pspark4 -DtagsToExclude=$SPARK_LAKE_TEST_TAG -pl fluss-test-coverage,$modules_spark4"
+        ;;
+        (${STAGE_SPARK4_LAKE})
+            echo "-Pspark4 -DtagsToInclude=$SPARK_LAKE_TEST_TAG -pl fluss-test-coverage,$modules_spark4"
         ;;
         (${STAGE_LAKE})
             echo "-pl fluss-test-coverage,$modules_lake"

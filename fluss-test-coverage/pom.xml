@@ -267,7 +267,51 @@
                                             <excludes>
                                                 <exclude>fluss-test-coverage/**</exclude>
                                                 <exclude>fluss-test-utils/**</exclude>
+                                                <exclude>fluss-spark/fluss-spark-4.2/**</exclude>
                                             </excludes>
+                                        </resource>
+                                    </resources>
+                                    <outputDirectory>${project.build.directory}/classes</outputDirectory>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+        <profile>
+            <id>test-spark4</id>
+            <dependencies>
+                <!-- Include Spark 4 classes/data in report-aggregate and order it after its tests. -->
+                <dependency>
+                    <groupId>org.apache.fluss</groupId>
+                    <artifactId>fluss-spark-4.2_2.13</artifactId>
+                    <version>${project.version}</version>
+                    <scope>compile</scope>
+                </dependency>
+            </dependencies>
+            <build>
+                <plugins>
+                    <!-- required by jacoco for the goal: check to work -->
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-resources-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>copy-class-files</id>
+                                <phase>generate-resources</phase>
+                                <goals>
+                                    <goal>copy-resources</goal>
+                                </goals>
+                                <configuration>
+                                    <overwrite>false</overwrite>
+                                    <resources>
+                                        <resource>
+                                            <directory>${project.basedir}/../</directory>
+                                            <includes>
+                                                <include>fluss-spark/fluss-spark-4.2/target/classes/**</include>
+                                            </includes>
                                         </resource>
                                     </resources>
                                     <outputDirectory>${project.build.directory}/classes</outputDirectory>
