@@ -65,7 +65,9 @@ final class RequestProcessorPool {
             requestChannels[i] = requestChannel;
             // bind processor to a single channel to make requests from the
             // same channel processed serializable
-            processors[i] = new RequestProcessor(i, requestChannel, service, requestHandlers);
+            processors[i] =
+                    new RequestProcessor(
+                            i, requestChannel, service, requestHandlers, requestsMetrics);
             requestsMetrics.gauge(
                     PROCESSOR_INDEX,
                     String.valueOf(i),

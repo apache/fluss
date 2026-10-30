@@ -706,7 +706,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>Gauge</td>
     </tr>
     <tr>
-      <td rowspan="7">
+      <td rowspan="9">
           request_produceLog
           request_putKv
           request_historicalPutKv
@@ -738,8 +738,18 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
     </tr>
     <tr>
       <td>requestProcessTimeMs</td>
-      <td>The time the current TabletServer node spends to process a request.</td>
+      <td>Time from request dequeue until the response future completes, including asynchronous waits such as delayed writes.</td>
       <td>Histogram</td>
+    </tr>
+    <tr>
+      <td>requestSyncProcessTimeUs</td>
+      <td>Time a request occupies a TabletServer request worker, from dequeue through synchronous processing and request-buffer release. Includes failed requests but excludes later asynchronous waits.</td>
+      <td>Histogram</td>
+    </tr>
+    <tr>
+      <td>requestSyncProcessTimeUsSum</td>
+      <td>Cumulative request worker occupancy in microseconds for each request type. Use its increase over an interval to compare worker time consumed by request types.</td>
+      <td>Counter</td>
     </tr>
     <tr>
       <td>requestQueueTimeMs</td>

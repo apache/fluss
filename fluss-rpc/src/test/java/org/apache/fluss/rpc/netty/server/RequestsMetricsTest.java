@@ -18,6 +18,8 @@
 package org.apache.fluss.rpc.netty.server;
 
 import org.apache.fluss.metrics.CharacterFilter;
+import org.apache.fluss.metrics.Counter;
+import org.apache.fluss.metrics.Histogram;
 import org.apache.fluss.metrics.Meter;
 import org.apache.fluss.metrics.Metric;
 import org.apache.fluss.metrics.MetricNames;
@@ -39,6 +41,40 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /** Tests for {@link RequestsMetrics}. */
 class RequestsMetricsTest {
+
+    @Test
+    void synchronousProcessingTimeAccumulatesByRequestType() {
+        RecordingMetricRegistry registry = new RecordingMetricRegistry();
+        RequestsMetrics requestsMetrics =
+                RequestsMetrics.createTabletServerRequestMetrics(
+                        new GenericMetricGroup(registry, null, "tabletserver"));
+        RequestsMetrics.Metrics metrics =
+                requestsMetrics.getMetrics(ApiKeys.GET_METADATA.id, false, false).get();
+
+        metrics.recordSyncProcessTimeUs(0);
+        metrics.recordSyncProcessTimeUs(13);
+        metrics.recordSyncProcessTimeUs(29);
+
+        Histogram histogram =
+                (Histogram)
+                        registry.metrics(MetricNames.REQUEST_SYNC_PROCESS_TIME_US, "metadata")
+                                .get(0)
+                                .metric;
+        Counter sum =
+                (Counter)
+                        registry.metrics(MetricNames.REQUEST_SYNC_PROCESS_TIME_US_SUM, "metadata")
+                                .get(0)
+                                .metric;
+        Counter lookupSum =
+                (Counter)
+                        registry.metrics(MetricNames.REQUEST_SYNC_PROCESS_TIME_US_SUM, "lookup")
+                                .get(0)
+                                .metric;
+        assertThat(histogram.getCount()).isEqualTo(3);
+        assertThat(histogram.getStatistics().getValues()).containsExactly(0, 13, 29);
+        assertThat(sum.getCount()).isEqualTo(42);
+        assertThat(lookupSum.getCount()).isZero();
+    }
 
     @Test
     void errorsKeepAggregateAndRegisterBreakdownByError() {
