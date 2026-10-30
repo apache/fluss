@@ -30,6 +30,7 @@ import org.apache.fluss.exception.AuthorizationException;
 import org.apache.fluss.exception.DiskWriteLockedException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidBucketRoutingException;
+import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.exception.NetworkException;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
 import org.apache.fluss.exception.PartitionNotExistException;
@@ -168,6 +169,46 @@ final class SenderTest {
                                 tableInfo,
                                 now))
                 .isFalse();
+    }
+
+    @Test
+    void testAbortsOnlyExpiredMissingPartition() throws Exception {
+        sender.destroyResources();
+        TableInfo tableInfo = createPartitionedTableInfo(AutoPartitionTimeUnit.DAY, 7, false);
+        PhysicalTablePath expiredPath = PhysicalTablePath.of(tableInfo.getTablePath(), "20000101");
+        PhysicalTablePath activePath = PhysicalTablePath.of(tableInfo.getTablePath(), "20990101");
+        TableBucket expiredBucket = new TableBucket(tableInfo.getTableId(), 20L, 0);
+        TableBucket activeBucket = new TableBucket(tableInfo.getTableId(), 21L, 0);
+        metadataUpdater =
+                new TestingMetadataUpdater(
+                        Collections.singletonMap(tableInfo.getTablePath(), tableInfo)) {
+                    @Override
+                    public void updatePhysicalTableMetadata(
+                            Set<PhysicalTablePath> physicalTablePaths) {
+                        throw new PartitionNotExistException("Partition does not exist.");
+                    }
+                };
+        Map<PhysicalTablePath, TableBucket> tableBucketsByPath = new HashMap<>();
+        tableBucketsByPath.put(expiredPath, expiredBucket);
+        tableBucketsByPath.put(activePath, activeBucket);
+        Cluster cluster = partitionedCluster(tableInfo, tableBucketsByPath);
+        metadataUpdater.updateCluster(cluster);
+        sender = setupWithIdempotenceState();
+
+        CompletableFuture<Exception> expiredFuture =
+                appendKvRecord(tableInfo, expiredPath, 1, cluster);
+        CompletableFuture<Exception> activeFuture =
+                appendKvRecord(tableInfo, activePath, 2, cluster);
+        metadataUpdater.invalidPhysicalTableBucketMeta(Collections.singleton(expiredPath));
+
+        sender.runOnce();
+
+        assertThat(expiredFuture.get()).isInstanceOf(InvalidPartitionException.class);
+        assertThat(activeFuture).isNotDone();
+        assertThat(sender.isRunning()).isTrue();
+
+        node1Gateway().response(0, createPutKvResponse(activeBucket, 1L));
+        assertThat(activeFuture.get()).isNull();
     }
 
     @ParameterizedTest
