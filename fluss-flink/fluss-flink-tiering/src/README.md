@@ -61,11 +61,15 @@ taskmanager.numberOfTaskSlots: 4
 pipeline.name: fluss-lake-tiering
 ```
 
+A value containing `#` is truncated at the comment marker (inherited `server.yaml` parser
+behavior), so avoid `#` in configuration values.
+
 The parallelism must stay within the number of slots the embedded runtime offers, so configure
 `taskmanager.numberOfTaskSlots` alongside `parallelism.default`; startup fails fast when it does
-not. If `parallelism.default` is not set, the embedded runtime runs the job at the machine's CPU
-core count and the slot check cannot catch it, so set both `parallelism.default` and
-`taskmanager.numberOfTaskSlots` explicitly.
+not. If `parallelism.default` is unset, the embedded runtime runs the tiering source at the
+machine's CPU core count (Flink's default local parallelism). When `taskmanager.numberOfTaskSlots`
+is pinned below that, the service fails fast at startup. Set both `parallelism.default` and
+`taskmanager.numberOfTaskSlots` explicitly to control the parallelism and slot budget.
 
 ### Docker image
 
@@ -90,7 +94,13 @@ and `hadoop-client-runtime` for Iceberg with the Glue or Hadoop catalog (see the
 at `website/docs/streaming-lakehouse/datalake-catalogs/glue.md`). Configuration
 is provided by mounting a file at `/opt/fluss/conf/tiering.yaml` (or setting `TIERING_CONFIG_FILE`),
 or by passing `key: value` pairs through the `FLUSS_TIERING_PROPERTIES` environment variable;
-values may reference environment variables as `${VAR}`.
+values may reference environment variables as `${VAR}`. A `${VAR}` reference to a variable that
+is not set aborts startup with exit code 1 and an error naming the variable.
+
+Unless `JAVA_TOOL_OPTIONS` is set, the image starts the JVM with
+`-XX:MaxRAMPercentage=60.0 -XX:MaxDirectMemorySize=512m`, sizing the heap from the container memory
+limit; setting `JAVA_TOOL_OPTIONS` replaces these defaults entirely, so an override must configure
+both the heap and the direct memory.
 
 ### Helm chart
 

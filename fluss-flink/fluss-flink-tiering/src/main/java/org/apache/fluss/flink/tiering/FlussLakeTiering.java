@@ -21,6 +21,7 @@ package org.apache.fluss.flink.tiering;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.provider.ConfigProviders;
+import org.apache.fluss.exception.IllegalConfigurationException;
 import org.apache.fluss.flink.adapter.MultipleParameterToolAdapter;
 
 import org.apache.flink.configuration.JobManagerOptions;
@@ -35,6 +36,7 @@ import java.util.ServiceLoader;
 import static org.apache.flink.configuration.RestartStrategyOptions.RestartStrategyType.EXPONENTIAL_DELAY;
 import static org.apache.flink.runtime.executiongraph.failover.FailoverStrategyFactoryLoader.FULL_RESTART_STRATEGY_NAME;
 import static org.apache.fluss.flink.tiering.source.TieringSourceOptions.DATA_LAKE_CONFIG_PREFIX;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.PropertiesUtils.extractAndRemovePrefix;
 import static org.apache.fluss.utils.PropertiesUtils.extractPrefix;
 
@@ -59,6 +61,10 @@ public class FlussLakeTiering {
     protected final Configuration lakeConfig;
     protected final Configuration lakeTieringConfig;
 
+    /**
+     * Creates the tiering service from command line arguments; see {@link #FlussLakeTiering(Map,
+     * org.apache.flink.configuration.Configuration)} for the parameter and failure semantics.
+     */
     public FlussLakeTiering(String[] args) {
         this(
                 MultipleParameterToolAdapter.fromArgs(args).toMap(),
@@ -77,15 +83,22 @@ public class FlussLakeTiering {
      *
      * <p>The Flink configuration is applied to the execution environment that runs the tiering job,
      * on top of the full-restart failover and the exponential-delay restart strategy configured by
-     * this class. Embedding hosts use it to tune the Flink runtime, e.g. the parallelism via {@code
-     * parallelism.default} or the job name via {@code pipeline.name}.
+     * this class: the given configuration is modified in place, the failover and restart strategy
+     * keys are set on it. Embedding hosts use it to tune the Flink runtime, e.g. the parallelism
+     * via {@code parallelism.default} or the job name via {@code pipeline.name}.
      *
      * @param paramsMap the raw tiering service parameters, merged from all configuration sources
      * @param flinkConfig the configuration for the Flink runtime executing the tiering job
+     * @throws IllegalArgumentException if {@code fluss.bootstrap.servers} or {@code
+     *     datalake.format} is missing from the parameters
+     * @throws IllegalConfigurationException if a config provider marker is malformed, references an
+     *     undeclared provider, or fails to resolve
      */
     public FlussLakeTiering(
             Map<String, String> paramsMap,
             org.apache.flink.configuration.Configuration flinkConfig) {
+        checkNotNull(paramsMap, "%s must not be null", "paramsMap");
+        checkNotNull(flinkConfig, "%s must not be null", "flinkConfig");
         // parse params
         Map<String, String> resolvedParams = resolveConfigProviders(paramsMap);
 

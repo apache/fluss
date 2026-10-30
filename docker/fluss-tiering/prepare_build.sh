@@ -27,9 +27,12 @@ set -o pipefail
 # with ./mvnw install) and the third-party lake bundles from Maven Central.
 #
 # Overrides:
-#   MAVEN_LOCAL_REPO            local Maven repository (default ~/.m2/repository)
+#   MAVEN_LOCAL_REPO               local Maven repository (default ~/.m2/repository)
 #   TIERING_IMAGE_RELEASE_VERSION  Fluss version (default: read from the root pom)
-#   SKIP_DOWNLOAD=true          never download; fail on jars missing locally
+#   TIERING_IMAGE_BUILD_DIR        build directory (default <script dir>/build-target)
+#   MAVEN_CENTRAL                  Maven repository for the downloads
+#                                  (default https://repo1.maven.org/maven2)
+#   SKIP_DOWNLOAD=true             never download; fail on jars missing locally
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 REPOSITORY_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd -P)"
@@ -41,15 +44,53 @@ fluss_version="${TIERING_IMAGE_RELEASE_VERSION:-$(grep -A1 '<artifactId>fluss</a
 paimon_version="$(sed -n 's/.*<paimon.version>\(.*\)<\/paimon.version>.*/\1/p' "${REPOSITORY_ROOT}/pom.xml")"
 iceberg_version="$(sed -n 's/.*<iceberg.version>\(.*\)<\/iceberg.version>.*/\1/p' "${REPOSITORY_ROOT}/pom.xml")"
 # Matches the flink-shaded-hadoop-2-uber version shipped with the Fluss server distribution.
-hadoop_version="2.8.3-10.0"
+hadoop_version="$(grep -A1 '<artifactId>flink-shaded-hadoop-2-uber</artifactId>' "${REPOSITORY_ROOT}/fluss-dist/pom.xml" | sed -n 's/.*<version>\(.*\)<\/version>.*/\1/p')"
 
 if [[ -z "${fluss_version}" ]]; then
     echo "Could not determine the Fluss version from ${REPOSITORY_ROOT}/pom.xml." >&2
     exit 1
 fi
+if [[ -z "${hadoop_version}" ]]; then
+    echo "Could not determine the flink-shaded-hadoop-2-uber version from ${REPOSITORY_ROOT}/fluss-dist/pom.xml." >&2
+    exit 1
+fi
 
 LIB_DIR="${BUILD_DIR}/lib"
 mkdir -p "${LIB_DIR}"
+
+# Computes the SHA-1 digest of a file. shasum ships with macOS and with the
+# Perl toolkits of most Linux distributions; sha1sum covers the rest.
+sha1_of() {
+    if command -v shasum >/dev/null 2>&1; then
+        shasum -a 1 "$1" | awk '{print $1}'
+    else
+        sha1sum "$1" | awk '{print $1}'
+    fi
+}
+
+# Verifies a downloaded jar against the .sha1 sidecar published next to it on
+# the repository. A sidecar that fails to download only warns and lets the
+# build continue (mirrors may not carry sidecars); a sidecar that disagrees
+# with the jar aborts the build.
+verify_downloaded_jar() {
+    local jar_path="$1" sha1_url="$2"
+    local sidecar="${jar_path}.sha1"
+    if ! curl --fail --silent --show-error --location --output "${sidecar}" "${sha1_url}"; then
+        echo "Warning: no checksum sidecar at ${sha1_url}; continuing without verifying ${jar_path}." >&2
+        rm -f "${sidecar}"
+        return 0
+    fi
+    local expected actual
+    # the sidecar carries either a bare digest or a "digest  filename" pair
+    expected="$(tr -d '\r\n' < "${sidecar}" | awk '{print $1}')"
+    actual="$(sha1_of "${jar_path}")"
+    if [[ "${actual}" != "${expected}" ]]; then
+        echo "Checksum mismatch for ${jar_path}: expected ${expected}, computed ${actual}." >&2
+        exit 1
+    fi
+    rm -f "${sidecar}"
+    echo "Verified $(basename "${jar_path}") against its checksum sidecar."
+}
 
 resolve_jar() {
     local group_path="$1" artifact="$2" version="$3" jar="$4"
@@ -66,8 +107,14 @@ resolve_jar() {
     local remote_url="${MAVEN_CENTRAL}/${group_path//.//}/${artifact}/${version}/${jar}"
     echo "Downloading ${remote_url}"
     curl --fail --silent --show-error --location --output "${LIB_DIR}/${jar}" "${remote_url}"
+    verify_downloaded_jar "${LIB_DIR}/${jar}" "${remote_url}.sha1"
 }
 
+# The fluss-flink-1.20 module and the iceberg-flink-runtime-1.20 artifact below track the
+# Flink version of the Dockerfile base image and the fluss-flink-1.20 build commands in
+# fluss-flink/fluss-flink-tiering/src/README.md and
+# website/docs/streaming-lakehouse/tiering-service.md; change them all together.
+# When changing the bundled jars, update expected_jar_prefixes in smoke-test.sh.
 resolve_jar org.apache.fluss fluss-flink-tiering "${fluss_version}" "fluss-flink-tiering-${fluss_version}.jar"
 resolve_jar org.apache.fluss fluss-flink-1.20 "${fluss_version}" "fluss-flink-1.20-${fluss_version}.jar"
 resolve_jar org.apache.fluss fluss-lake-paimon "${fluss_version}" "fluss-lake-paimon-${fluss_version}.jar"

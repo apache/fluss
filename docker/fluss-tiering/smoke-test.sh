@@ -35,11 +35,26 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if ! docker run --rm "${IMAGE}" bash -c \
-    'ls /opt/flink/lib | grep -q "fluss-flink-tiering-"'; then
-    echo "The image does not bundle the Fluss tiering jar." >&2
-    exit 1
-fi
+# Every jar that prepare_build.sh assembles must be bundled; a missing copy
+# of any of them fails the smoke test.
+expected_jar_prefixes=(
+    "fluss-flink-tiering-"
+    "fluss-flink-1.20-"
+    "fluss-lake-paimon-"
+    "fluss-lake-iceberg-"
+    "fluss-lake-lance-"
+    "paimon-bundle-"
+    # The 1.20 suffix tracks the Dockerfile base image and the flink-flink-1.20 module in prepare_build.sh.
+    "iceberg-flink-runtime-1.20-"
+    "flink-shaded-hadoop-2-uber-"
+)
+bundled_jars="$(docker run --rm "${IMAGE}" bash -c 'ls /opt/flink/lib')"
+for expected_jar_prefix in "${expected_jar_prefixes[@]}"; do
+    if ! grep -q "${expected_jar_prefix}" <<< "${bundled_jars}"; then
+        echo "The image does not bundle the ${expected_jar_prefix} jar." >&2
+        exit 1
+    fi
+done
 
 help_output="$(docker run --rm "${IMAGE}" help)"
 if ! grep -q "tieringService" <<< "${help_output}"; then

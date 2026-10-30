@@ -33,9 +33,11 @@
 #   taskmanager.numberOfTaskSlots: 4
 #   pipeline.name: fluss-lake-tiering
 #
-# If parallelism.default is not set, the embedded runtime runs the job at the
-# machine's CPU core count and the slot check cannot catch it, so set both
-# parallelism.default and taskmanager.numberOfTaskSlots explicitly.
+# If parallelism.default is unset, the embedded runtime runs the tiering source
+# at the machine's CPU core count (Flink's default local parallelism). When
+# taskmanager.numberOfTaskSlots is pinned below that, the service fails fast at
+# startup. Set both parallelism.default and taskmanager.numberOfTaskSlots
+# explicitly to control the parallelism and slot budget.
 #
 # Values may reference environment variables as ${VAR}. Additional key-value
 # pairs can be provided through the FLUSS_TIERING_PROPERTIES environment

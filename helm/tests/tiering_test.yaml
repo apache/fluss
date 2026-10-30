@@ -80,6 +80,19 @@ tests:
           pattern: 'datalake\.format: paimon'
         template: templates/configmap-tiering.yaml
 
+  - it: should default the embedded Flink runtime to a single-threaded tiering job
+    set:
+      tiering.enabled: true
+    asserts:
+      - matchRegex:
+          path: data["tiering.yaml"]
+          pattern: 'parallelism\.default: 1'
+        template: templates/configmap-tiering.yaml
+      - matchRegex:
+          path: data["tiering.yaml"]
+          pattern: 'taskmanager\.numberOfTaskSlots: 1'
+        template: templates/configmap-tiering.yaml
+
   - it: should keep an explicit fluss.bootstrap.servers
     set:
       tiering.enabled: true
@@ -175,3 +188,45 @@ tests:
       - matchRegexRaw:
           pattern: 'ConfigMap fluss-tiering-conf-file'
         template: templates/NOTES.txt
+
+  - it: should wire configured secret env entries into the tiering configuration and pod
+    set:
+      tiering.enabled: true
+      secrets.env:
+        - name: PAIMON_S3_ACCESS_KEY
+          secretName: fluss-paimon-creds
+          key: access-key
+    asserts:
+      - matchRegex:
+          path: data["tiering.yaml"]
+          pattern: 'config\.providers: env'
+        template: templates/configmap-tiering.yaml
+      - matchRegex:
+          path: data["tiering.yaml"]
+          pattern: 'config\.providers\.env\.param\.allowlist\.pattern: PAIMON_S3_ACCESS_KEY'
+        template: templates/configmap-tiering.yaml
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PAIMON_S3_ACCESS_KEY
+            valueFrom:
+              secretKeyRef:
+                name: fluss-paimon-creds
+                key: access-key
+        template: templates/deploy-tiering.yaml
+
+  - it: should give the tiering resources fullname-prefixed names when uniqueResourceNames is set
+    release:
+      name: alpha
+    set:
+      tiering.enabled: true
+      uniqueResourceNames: true
+    asserts:
+      - equal:
+          path: metadata.name
+          value: alpha-fluss-tiering-service
+        template: templates/deploy-tiering.yaml
+      - equal:
+          path: metadata.name
+          value: alpha-fluss-tiering-conf-file
+        template: templates/configmap-tiering.yaml

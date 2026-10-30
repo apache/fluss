@@ -211,7 +211,9 @@ coordinator:
 # state, so the service needs no checkpoint storage either.
 tiering:
   enabled: false
-  replicas: 1
+  # Each replica is an independent tiering instance claiming tables from the coordinator;
+  # raise this to spread tables across instances, and parallelism.default to scale one instance.
+  numberOfReplicas: 1
   # Seconds to wait after SIGTERM before the tiering pod is force-killed. The tiering job is
   # stateless (progress persists in Fluss lake snapshots), so this only needs to cover a clean
   # shutdown of the embedded Flink runtime.
@@ -222,6 +224,7 @@ tiering:
     # Defaults to the chart appVersion when empty.
     tag: ""
     pullPolicy: IfNotPresent
+    # Pull secrets come from the top-level image.pullSecrets, shared with the server images.
   # Rendered into /opt/fluss/conf/tiering.yaml in the tiering pod. Keys with
   # the fluss., datalake., or lake.tiering. prefix configure the tiering
   # service (Fluss bootstrap servers, lake catalog, tiering behavior); every
@@ -229,12 +232,15 @@ tiering:
   # parallelism.default or taskmanager.numberOfTaskSlots. datalake.format
   # must be set when the service is enabled.
   configurationOverrides:
+    # The default install runs the tiering service single-threaded; scale it by raising both keys.
+    parallelism.default: 1
+    taskmanager.numberOfTaskSlots: 1
     datalake.format: paimon
     datalake.paimon.metastore: filesystem
     datalake.paimon.warehouse: /tmp/paimon
-  # fluss.bootstrap.servers defaults to this release's coordinator client
-  # listener. Override it here to tier for a Fluss cluster outside this
-  # release, e.g. fluss.bootstrap.servers: fluss.example.com:9124.
+    # fluss.bootstrap.servers defaults to this release's coordinator client
+    # listener. Override it here to tier for a Fluss cluster outside this
+    # release, e.g. fluss.bootstrap.servers: fluss.example.com:9124.
   extraVolumes: []
   extraVolumeMounts: []
   extraEnv: []
@@ -242,6 +248,8 @@ tiering:
   annotations: {}
   podAnnotations: {}
   podLabels: {}
+  # podDisruptionBudget is omitted on purpose: the tiering worker is stateless and freely
+  # disruptible (progress lives in lake snapshots), so no PDB is needed.
   affinity: {}
   nodeSelector: {}
   tolerations: []
@@ -355,7 +363,13 @@ metrics:
     port: 9250
 
 resources:
-  # Default resources for the tiering service, which runs a full Flink runtime in a single JVM.
+  # The server components keep the Helm scaffold's advice of shipping no default
+  # resources — the recommendation helm create writes into every new chart — so the
+  # chart stays runnable in small environments such as Minikube. The tiering service
+  # ships bounded defaults instead: it runs a full embedded Flink runtime in a single
+  # JVM, and its default JVM memory settings (60% of the container memory limit as
+  # heap, plus 512m direct memory) are only predictable when the container is
+  # memory-bounded. Override or clear these values like any other chart values.
   tieringService:
     requests:
       cpu: 1

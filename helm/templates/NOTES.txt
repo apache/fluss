@@ -28,7 +28,7 @@ APP VERSION: {{ .Chart.AppVersion }}
 ### Lake tiering service
 
 The embedded-Flink lake tiering service runs as Deployment {{ include "fluss.tiering.name" . }}
-with {{ .Values.tiering.replicas }} replica(s), tiering Fluss tables to
+with {{ .Values.tiering.numberOfReplicas }} replica(s), tiering Fluss tables to
 {{ index .Values.tiering.configurationOverrides "datalake.format" }}. It reads its configuration
 from ConfigMap {{ include "fluss.tiering.configMapName" . }} (key tiering.yaml).
 

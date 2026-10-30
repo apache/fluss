@@ -18,6 +18,7 @@
 
 package org.apache.fluss.flink.tiering;
 
+import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.GlobalConfiguration;
 import org.apache.fluss.exception.IllegalConfigurationException;
@@ -35,6 +36,7 @@ import javax.annotation.Nullable;
 import java.io.File;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.apache.fluss.flink.tiering.FlussLakeTiering.FLUSS_CONF_PREFIX;
 import static org.apache.fluss.flink.tiering.FlussLakeTiering.LAKE_TIERING_CONFIG_PREFIX;
@@ -61,17 +63,20 @@ import static org.apache.fluss.flink.tiering.source.TieringSourceOptions.DATA_LA
  * pipeline.name} for the job name.
  *
  * <p>Startup fails fast on configurations the embedded runtime cannot honor: {@code config.file} is
- * only accepted on the command line, and a positive {@code parallelism.default} must stay within
- * {@code taskmanager.numberOfTaskSlots} because the tiering job's source runs at the default
- * parallelism. If {@code parallelism.default} is unset, the embedded runtime runs the job at the
- * machine's CPU core count and the slot check cannot catch it, so set {@code parallelism.default}
- * and {@code taskmanager.numberOfTaskSlots} explicitly.
+ * only accepted on the command line, and the parallelism the job runs at must stay within {@code
+ * taskmanager.numberOfTaskSlots} because the tiering job's source runs at the default parallelism.
+ * If {@code parallelism.default} is unset, the embedded runtime runs the tiering source at the
+ * machine's CPU core count (Flink's default local parallelism); when {@code
+ * taskmanager.numberOfTaskSlots} is pinned below that, the service fails fast at startup. Set both
+ * {@code parallelism.default} and {@code taskmanager.numberOfTaskSlots} explicitly to control the
+ * parallelism and slot budget.
  *
  * <p>The tiering job is unbounded: this entrypoint blocks until the job reaches a terminal state.
  * The tiering job is stateless (progress is persisted through lake snapshots tracked by Fluss), so
  * on a terminal failure the process exits with a non-zero code and the surrounding container or
  * process supervisor simply starts it again.
  */
+@PublicEvolving
 public class EmbeddedFlussLakeTiering extends FlussLakeTiering {
 
     private static final Logger LOG = LoggerFactory.getLogger(EmbeddedFlussLakeTiering.class);
@@ -103,10 +108,16 @@ public class EmbeddedFlussLakeTiering extends FlussLakeTiering {
      * <p>The tiering parameters use the same keys as the command line of {@link
      * FlussLakeTieringEntrypoint}; see {@link FlussLakeTiering} for the expected shapes. The Flink
      * configuration tunes the embedded Flink runtime that executes the tiering job. Startup fails
-     * fast when the configured default parallelism exceeds the number of task slots.
+     * fast when the parallelism the job runs at exceeds the number of task slots.
      *
      * @param tieringParams the tiering service parameters
      * @param flinkConfig the configuration for the embedded Flink runtime
+     * @throws IllegalArgumentException if {@code fluss.bootstrap.servers} or {@code
+     *     datalake.format} is missing from the tiering parameters
+     * @throws IllegalConfigurationException if a config provider marker is malformed, references an
+     *     undeclared provider, or fails to resolve
+     * @throws IllegalConfigurationException if the parallelism the job runs at exceeds the number
+     *     of task slots pinned by {@code taskmanager.numberOfTaskSlots}
      */
     public EmbeddedFlussLakeTiering(Map<String, String> tieringParams, Configuration flinkConfig) {
         super(tieringParams, flinkConfig);
@@ -230,22 +241,50 @@ public class EmbeddedFlussLakeTiering extends FlussLakeTiering {
     }
 
     /**
-     * Fails fast when the configured default parallelism exceeds the number of task slots of the
-     * embedded Flink runtime.
+     * Fails fast when the parallelism the embedded Flink runtime runs the tiering job at exceeds
+     * the number of task slots it offers.
      *
      * <p>The tiering job's source runs at the environment default parallelism ({@code
      * parallelism.default}) while only the committer and the sink are pinned to parallelism 1, so
      * the default parallelism must not exceed the slots ({@code taskmanager.numberOfTaskSlots}) the
-     * embedded runtime offers. An unset or negative ({@code -1}, auto) parallelism skips the check.
+     * embedded runtime offers. The check applies only when {@code taskmanager.numberOfTaskSlots}
+     * pins the slot budget: with it unset, the embedded runtime sizes its slots to the job's
+     * demand, so no budget can be exceeded whatever the parallelism. With an unset {@code
+     * parallelism.default} and pinned slots, the embedded runtime runs the job at the machine's CPU
+     * core count (Flink's default local parallelism), so that core count is the effective
+     * parallelism to validate. A negative {@code parallelism.default} is passed through to Flink's
+     * own defaults and skips the check.
      *
      * @param flinkConfig the configuration for the embedded Flink runtime
-     * @throws IllegalConfigurationException if the default parallelism exceeds the task slots
+     * @throws IllegalConfigurationException if the parallelism the job runs at exceeds the task
+     *     slots
      */
-    private static void validateParallelismAgainstSlots(Configuration flinkConfig) {
-        int parallelism = flinkConfig.get(CoreOptions.DEFAULT_PARALLELISM);
+    static void validateParallelismAgainstSlots(Configuration flinkConfig) {
+        // The embedded runtime sizes its task slots to the job's maximum parallelism whenever
+        // taskmanager.numberOfTaskSlots is unset, so only a pinned slot budget can be exceeded.
+        if (!flinkConfig.getOptional(TaskManagerOptions.NUM_TASK_SLOTS).isPresent()) {
+            return;
+        }
+        // An unset parallelism.default makes the embedded runtime run the job at the machine's
+        // CPU core count (Flink's default local parallelism), so that count is the effective
+        // parallelism to validate.
+        Optional<Integer> configuredParallelism =
+                flinkConfig.getOptional(CoreOptions.DEFAULT_PARALLELISM);
+        int parallelism = configuredParallelism.orElse(Runtime.getRuntime().availableProcessors());
         int slots = flinkConfig.get(TaskManagerOptions.NUM_TASK_SLOTS);
         if (parallelism <= 0 || parallelism <= slots) {
             return;
+        }
+        if (!configuredParallelism.isPresent()) {
+            throw new IllegalConfigurationException(
+                    String.format(
+                            "Invalid configuration for the embedded Flink runtime: parallelism.default "
+                                    + "is unset, so the embedded runtime runs the tiering job at the "
+                                    + "machine's CPU core count (%d), but the runtime only offers %d task "
+                                    + "slot(s) (taskmanager.numberOfTaskSlots). Set parallelism.default "
+                                    + "explicitly (at most %d), or set taskmanager.numberOfTaskSlots to "
+                                    + "at least %d.",
+                            parallelism, slots, slots, parallelism));
         }
         throw new IllegalConfigurationException(
                 String.format(

@@ -28,6 +28,12 @@
 #
 # The image is built from this directory as the build context:
 #   docker buildx build --file Dockerfile --tag fluss-tiering:dev .
+#
+# The Flink version of the base image must change together with the fluss-flink-1.20 module
+# and the iceberg-flink-runtime-1.20 artifact in prepare_build.sh, the jar prefixes in
+# smoke-test.sh, and the fluss-flink-1.20 build commands in
+# fluss-flink/fluss-flink-tiering/src/README.md and
+# website/docs/streaming-lakehouse/tiering-service.md.
 FROM flink:1.20.3-scala_2.12-java17
 
 ARG FLUSS_VERSION=dev
@@ -46,12 +52,6 @@ ENV TIERING_CONFIG_FILE=${FLUSS_HOME}/conf/tiering.yaml
 
 WORKDIR ${FLUSS_HOME}
 
-# envsubst (gettext-base) substitutes the ${VAR} references in the tiering
-# configuration; the base Flink image does not ship it.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends gettext-base \
-    && rm -rf /var/lib/apt/lists/*
-
 # Fluss jars for the tiering service and the supported lake formats, following
 # the documented tiering service layout of the Flink lib directory.
 COPY build-target/lib/ /opt/flink/lib/
@@ -64,6 +64,8 @@ COPY tiering.yaml ${TIERING_CONFIG_FILE}
 
 COPY docker-entrypoint.sh /
 RUN ["chmod", "+x", "/docker-entrypoint.sh"]
+# The base image creates the flink user; the tiering service runs as that user instead of root.
+USER flink
 ENTRYPOINT ["/docker-entrypoint.sh"]
 # Run the tiering service by default: the base image's CMD ("help") would
 # otherwise be passed to this entrypoint on a plain container run.

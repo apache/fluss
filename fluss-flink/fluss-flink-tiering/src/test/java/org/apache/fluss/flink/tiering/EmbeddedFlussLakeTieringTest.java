@@ -22,8 +22,10 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.exception.IllegalConfigurationException;
 
 import org.apache.flink.api.common.JobExecutionResult;
+import org.apache.flink.api.common.restartstrategy.RestartStrategies;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.JobManagerOptions;
+import org.apache.flink.core.execution.JobClient;
 import org.apache.flink.streaming.api.functions.sink.v2.DiscardingSink;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -41,6 +43,7 @@ import static org.apache.flink.configuration.RestartStrategyOptions.RESTART_STRA
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assumptions.assumeThat;
 
 /** Test for {@link EmbeddedFlussLakeTiering}. */
 class EmbeddedFlussLakeTieringTest {
@@ -191,10 +194,45 @@ class EmbeddedFlussLakeTieringTest {
 
         // the embedded runtime executes a bounded job on the local Flink
         // cluster with the parallelism from the unprefixed config entries
+        assertThat(tiering.execEnv.getParallelism()).isEqualTo(2);
         tiering.execEnv.fromElements(1, 2, 3).sinkTo(new DiscardingSink<>()).name("end");
         JobExecutionResult result = tiering.execEnv.execute("embedded-runtime-smoke");
 
         assertThat(result).isNotNull();
+    }
+
+    /**
+     * A terminal failure of the tiering job propagates out of {@link
+     * EmbeddedFlussLakeTiering#runEmbedded()}, so the {@code main()} method exits non-zero and the
+     * container supervisor restarts the service.
+     */
+    @Test
+    void testRunEmbeddedPropagatesTerminalJobFailure() {
+        Map<String, String> tieringParams =
+                params(
+                        "fluss.bootstrap.servers", "localhost:9123",
+                        "datalake.format", "paimon");
+        EmbeddedFlussLakeTiering tiering =
+                new EmbeddedFlussLakeTiering(tieringParams, new Configuration()) {
+
+                    @Override
+                    protected JobClient run() throws Exception {
+                        // a bounded job that fails on its first element; with no
+                        // restarts the failure is terminal
+                        execEnv.setRestartStrategy(RestartStrategies.noRestart());
+                        execEnv.fromElements(1, 2, 3)
+                                .map(
+                                        value -> {
+                                            throw new IllegalStateException("expected job failure");
+                                        })
+                                .sinkTo(new DiscardingSink<>());
+                        return execEnv.executeAsync("bounded-failing-job");
+                    }
+                };
+
+        assertThatThrownBy(tiering::runEmbedded)
+                .hasRootCauseInstanceOf(IllegalStateException.class)
+                .hasRootCauseMessage("expected job failure");
     }
 
     @Test
@@ -248,6 +286,43 @@ class EmbeddedFlussLakeTieringTest {
                         params("parallelism.default", "-1", "taskmanager.numberOfTaskSlots", "1"));
 
         assertThatCode(() -> new EmbeddedFlussLakeTiering(tieringParams, flinkConfig))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void testUnsetParallelismWithPinnedSlotsFailsFast() {
+        // an unset parallelism.default makes the embedded runtime run the job
+        // at the CPU core count, which exceeds one slot on any machine with
+        // more than one CPU
+        assumeThat(Runtime.getRuntime().availableProcessors()).isGreaterThan(1);
+        Configuration flinkConfig =
+                EmbeddedFlussLakeTiering.extractFlinkConfig(
+                        params("taskmanager.numberOfTaskSlots", "1"));
+
+        assertThatThrownBy(
+                        () -> EmbeddedFlussLakeTiering.validateParallelismAgainstSlots(flinkConfig))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining("parallelism.default is unset");
+    }
+
+    @Test
+    void testUnsetParallelismAndSlotsSkipSlotCheck() {
+        // with both keys unset, the embedded runtime sizes its slots to the
+        // job's demand, so there is no slot budget to validate
+        Configuration flinkConfig = new Configuration();
+
+        assertThatCode(() -> EmbeddedFlussLakeTiering.validateParallelismAgainstSlots(flinkConfig))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void testParallelismWithUnsetSlotsSkipsSlotCheck() {
+        // with only the parallelism pinned, the embedded runtime sizes its
+        // slots to the job's demand, so there is no slot budget to validate
+        Configuration flinkConfig =
+                EmbeddedFlussLakeTiering.extractFlinkConfig(params("parallelism.default", "4"));
+
+        assertThatCode(() -> EmbeddedFlussLakeTiering.validateParallelismAgainstSlots(flinkConfig))
                 .doesNotThrowAnyException();
     }
 

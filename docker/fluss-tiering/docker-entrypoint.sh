@@ -48,6 +48,18 @@ prepare_configuration() {
     referenced_vars="$(grep -oE '\$\{[A-Za-z_][A-Za-z0-9_]*\}' "${RUNTIME_CONFIG_FILE}" \
         | sort -u | tr -d '${}' | sed 's/^/$/' | tr '\n' ' ' || true)"
     if [ -n "${referenced_vars}" ]; then
+        # Fail fast on unset variables instead of substituting them with an empty
+        # string: an empty fluss.bootstrap.servers would pass the service's null
+        # check and surface later as a confusing client error.
+        local var
+        for var in ${referenced_vars}; do
+            local var_name="${var#\$}"
+            if [ -z "${!var_name:-}" ]; then
+                echo "The tiering configuration references the environment variable ${var_name}, which is not set." >&2
+                echo "Set ${var_name} or remove the reference from the tiering configuration." >&2
+                exit 1
+            fi
+        done
         envsubst "${referenced_vars}" < "${RUNTIME_CONFIG_FILE}" > "${RUNTIME_CONFIG_FILE}.tmp" \
             && mv "${RUNTIME_CONFIG_FILE}.tmp" "${RUNTIME_CONFIG_FILE}"
     fi
@@ -55,25 +67,28 @@ prepare_configuration() {
 
 args=("$@")
 
-if [ "$1" = "help" ]; then
+if [ "${1:-}" = "help" ]; then
   printf "Usage: $(basename "$0") (tieringService)\n"
   printf "    Or $(basename "$0") help\n\n"
   exit 0
-elif [ "$1" = "tieringService" ]; then
+elif [ "${1:-}" = "tieringService" ]; then
   args=("${args[@]:1}")
   echo "Starting the embedded Fluss lake tiering service"
   prepare_configuration
 
-  # The embedded Flink runtime runs in this single JVM, so give it most of the
-  # container memory unless the operator configured the JVM explicitly.
+  # The embedded Flink runtime runs in this single JVM. Heap and direct memory
+  # together must stay below the container memory limit to leave headroom for
+  # metaspace and native memory, unless the operator configured the JVM
+  # explicitly via JAVA_TOOL_OPTIONS.
   if [ -z "${JAVA_TOOL_OPTIONS:-}" ]; then
-      export JAVA_TOOL_OPTIONS="-XX:MaxRAMPercentage=75.0"
+      export JAVA_TOOL_OPTIONS="-XX:MaxRAMPercentage=60.0 -XX:MaxDirectMemorySize=512m"
   fi
 
-  # Arrow (the log record format) requires java.nio to be opened on Java 9+;
-  # the flink-run path gets this from the Flink distribution's env defaults,
-  # the embedded runtime must set it itself. Operators can pass further JVM
-  # options via JAVA_TOOL_OPTIONS (picked up by the JVM above).
+  # Arrow (the log record format) requires java.nio to be opened on Java 9+.
+  # Fluss's own launch scripts (fluss-daemon.sh and fluss-console.sh) set this
+  # flag for the JVMs they start; the embedded runtime bypasses those scripts,
+  # so it sets the flag itself. Operators can pass further JVM options via
+  # JAVA_TOOL_OPTIONS (picked up by the JVM above).
   exec java \
     -XX:+IgnoreUnrecognizedVMOptions \
     --add-opens=java.base/java.nio=ALL-UNNAMED \
