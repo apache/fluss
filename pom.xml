@@ -70,6 +70,7 @@
         <module>fluss-lake</module>
         <module>fluss-kafka</module>
         <module>fluss-docgen</module>
+        <module>fluss-microbench</module>
         <module>tools/ci/fluss-ci-tools</module>
     </modules>
 
