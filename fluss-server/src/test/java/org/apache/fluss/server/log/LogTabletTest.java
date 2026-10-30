@@ -30,11 +30,13 @@ import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.LogTestBase;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
+import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableIterator;
+import org.apache.fluss.utils.clock.Clock;
+import org.apache.fluss.utils.clock.ManualClock;
 import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.fluss.utils.concurrent.FlussScheduler;
-import org.apache.fluss.utils.concurrent.Scheduler;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -636,6 +638,111 @@ final class LogTabletTest extends LogTestBase {
     }
 
     @Test
+    void testFreshWriterCannotSkipFirstSequenceWithManualClock() throws Exception {
+        conf.set(ConfigOptions.WRITER_ID_EXPIRATION_TIME, Duration.ofSeconds(10));
+        conf.set(ConfigOptions.WRITER_ID_EXPIRATION_CHECK_INTERVAL, Duration.ofSeconds(1));
+        ManualClock clock = new ManualClock();
+        LogTablet log = createLogTablet(conf, clock);
+        try {
+            long writerId = 23L;
+            assertThatThrownBy(
+                            () ->
+                                    log.appendAsLeader(
+                                            genMemoryLogRecordsWithWriterId(
+                                                    DATA1, writerId, 1, 0L)))
+                    .isInstanceOf(OutOfOrderSequenceException.class);
+            assertThat(log.activeWriters()).isEmpty();
+            assertThat(
+                            log.appendAsLeader(
+                                            genMemoryLogRecordsWithWriterId(DATA1, writerId, 0, 0L))
+                                    .firstOffset())
+                    .isZero();
+            assertThat(
+                            log.appendAsLeader(
+                                            genMemoryLogRecordsWithWriterId(DATA1, writerId, 1, 0L))
+                                    .firstOffset())
+                    .isEqualTo((long) DATA1.size());
+            assertThat(activeWritersWithLastBatchSequence(log)).containsEntry(writerId, 1);
+            FetchDataInfo fetched =
+                    readLog(log, 0L, Integer.MAX_VALUE, FetchIsolation.LOG_END, true);
+            assertThat(fetched.getRecords().batches())
+                    .hasSize(2)
+                    .allSatisfy(
+                            batch -> {
+                                assertThat(batch.commitTimestamp()).isZero();
+                                assertThat(batch.getRecordCount()).isEqualTo(DATA1.size());
+                            });
+        } finally {
+            log.close();
+        }
+    }
+
+    @Test
+    void testPeriodicWriterExpirationUsesManualClock() throws Exception {
+        conf.set(ConfigOptions.WRITER_ID_EXPIRATION_TIME, Duration.ofSeconds(10));
+        conf.set(ConfigOptions.WRITER_ID_EXPIRATION_CHECK_INTERVAL, Duration.ofSeconds(1));
+        ManualClock clock = new ManualClock();
+        ManuallyTriggeredScheduledExecutorService executor =
+                new ManuallyTriggeredScheduledExecutorService();
+        scheduler.shutdown();
+        scheduler =
+                new FlussScheduler(1) {
+                    @Override
+                    public ScheduledFuture<?> schedule(
+                            String name, Runnable task, long delayMs, long periodMs) {
+                        // Trigger the expiration callback synchronously to avoid timer races.
+                        return executor.scheduleAtFixedRate(
+                                task, delayMs, periodMs, TimeUnit.MILLISECONDS);
+                    }
+                };
+        LogTablet log = createLogTablet(conf, clock);
+        try {
+            long writerId = 23L;
+            log.appendAsLeader(genMemoryLogRecordsWithWriterId(DATA1, writerId, 0, 0L));
+            executor.triggerPeriodicScheduledTasks();
+            assertThat(log.activeWriters()).containsKey(writerId);
+            clock.advanceTime(
+                    conf.get(ConfigOptions.WRITER_ID_EXPIRATION_TIME).toMillis() + 1,
+                    TimeUnit.MILLISECONDS);
+            executor.triggerPeriodicScheduledTasks();
+            assertThat(log.activeWriters()).isEmpty();
+        } finally {
+            log.close();
+            executor.shutdown();
+        }
+    }
+
+    @Test
+    void testWriterSnapshotReloadUsesManualClock() throws Exception {
+        conf.set(ConfigOptions.WRITER_ID_EXPIRATION_TIME, Duration.ofSeconds(10));
+        conf.set(ConfigOptions.WRITER_ID_EXPIRATION_CHECK_INTERVAL, Duration.ofSeconds(1));
+        ManualClock clock = new ManualClock();
+        LogTablet log = createLogTablet(conf, clock);
+        File directory = log.getLogDir();
+        long writerId = 23L;
+        try {
+            log.appendAsLeader(genMemoryLogRecordsWithWriterId(DATA1, writerId, 0, 0L));
+        } finally {
+            log.close();
+        }
+        log = createLogTablet(conf, clock, directory);
+        try {
+            assertThat(activeWritersWithLastBatchSequence(log)).containsEntry(writerId, 0);
+        } finally {
+            log.close();
+        }
+        clock.advanceTime(
+                conf.get(ConfigOptions.WRITER_ID_EXPIRATION_TIME).toMillis() + 1,
+                TimeUnit.MILLISECONDS);
+        log = createLogTablet(conf, clock, directory);
+        try {
+            assertThat(log.activeWriters()).isEmpty();
+        } finally {
+            log.close();
+        }
+    }
+
+    @Test
     void testDuplicateAppends() throws Exception {
         long writerId = 1L;
         // Pad the beginning of the log.
@@ -690,14 +797,21 @@ final class LogTabletTest extends LogTestBase {
     }
 
     private LogTablet createLogTablet(Configuration config) throws Exception {
+        return createLogTablet(config, SystemClock.getInstance());
+    }
+
+    private LogTablet createLogTablet(Configuration config, Clock clock) throws Exception {
         File logDir =
                 LogTestUtils.makeRandomLogTabletDir(
                         tempDir,
                         DATA1_TABLE_PATH.getDatabaseName(),
                         DATA1_TABLE_ID,
                         DATA1_TABLE_PATH.getTableName());
-        Scheduler scheduler = new FlussScheduler(1);
-        scheduler.startup();
+        return createLogTablet(config, clock, logDir);
+    }
+
+    private LogTablet createLogTablet(Configuration config, Clock clock, File logDir)
+            throws Exception {
         return LogTablet.create(
                 tempDir,
                 PhysicalTablePath.of(DATA1_TABLE_PATH),
@@ -711,7 +825,7 @@ final class LogTabletTest extends LogTestBase {
                 LogFormat.ARROW,
                 1,
                 false,
-                SystemClock.getInstance(),
+                clock,
                 true);
     }
 
