@@ -17,23 +17,23 @@
 
 package org.apache.fluss.server.coordinator.event;
 
-import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.server.coordinator.rebalance.RebalanceExecutionKey;
 
 /** An event fired when a rebalance task exceeds the timeout without completing. */
 public class RebalanceTaskTimeoutEvent implements CoordinatorEvent {
 
-    private final TableBucket tableBucket;
+    private final RebalanceExecutionKey executionKey;
 
-    public RebalanceTaskTimeoutEvent(TableBucket tableBucket) {
-        this.tableBucket = tableBucket;
+    public RebalanceTaskTimeoutEvent(RebalanceExecutionKey executionKey) {
+        this.executionKey = executionKey;
     }
 
-    public TableBucket getTableBucket() {
-        return tableBucket;
+    public RebalanceExecutionKey getExecutionKey() {
+        return executionKey;
     }
 
     @Override
     public String toString() {
-        return "RebalanceTaskTimeoutEvent{tableBucket=" + tableBucket + "}";
+        return "RebalanceTaskTimeoutEvent{executionKey=" + executionKey + "}";
     }
 }
