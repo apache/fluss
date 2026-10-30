@@ -36,6 +36,7 @@ import org.apache.fluss.record.GenericRecord;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericRow;
+import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.types.DataType;
@@ -45,6 +46,7 @@ import org.apache.fluss.utils.types.Tuple2;
 import org.apache.iceberg.PartitionSpec;
 import org.apache.iceberg.Snapshot;
 import org.apache.iceberg.Table;
+import org.apache.iceberg.TableProperties;
 import org.apache.iceberg.catalog.Catalog;
 import org.apache.iceberg.catalog.Namespace;
 import org.apache.iceberg.catalog.SupportsNamespaces;
@@ -60,9 +62,11 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.annotation.Nullable;
 
+import java.io.Closeable;
 import java.io.File;
 import java.io.IOException;
 import java.time.Instant;
@@ -94,6 +98,11 @@ import static org.apache.iceberg.expressions.Expressions.bucket;
 import static org.apache.iceberg.expressions.Expressions.equal;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /** Unit test for tiering to Iceberg via {@link IcebergLakeTieringFactory}. */
 class IcebergTieringTest {
@@ -117,12 +126,15 @@ class IcebergTieringTest {
     }
 
     private static Stream<Arguments> tieringWriteArgs() {
-        return Stream.of(
-                // isPrimaryKeyTable, isPartitionedTable
-                Arguments.of(true, true),
-                Arguments.of(true, false),
-                Arguments.of(false, true),
-                Arguments.of(false, false));
+        return Stream.of(2, 3)
+                .flatMap(
+                        formatVersion ->
+                                Stream.of(
+                                        // isPrimaryKeyTable, isPartitionedTable, formatVersion
+                                        Arguments.of(true, true, formatVersion),
+                                        Arguments.of(true, false, formatVersion),
+                                        Arguments.of(false, true, formatVersion),
+                                        Arguments.of(false, false, formatVersion)));
     }
 
     private static Stream<Arguments> temporalIdentifierArgs() {
@@ -164,28 +176,34 @@ class IcebergTieringTest {
             Type icebergTemporalType,
             Object flussTemporalValue,
             Object expectedIcebergValue) {
-        return Stream.of(
-                Arguments.of(
-                        typeName,
-                        "write",
-                        UPDATE_AFTER,
-                        flussTemporalType,
-                        icebergTemporalType,
-                        flussTemporalValue,
-                        expectedIcebergValue),
-                Arguments.of(
-                        typeName,
-                        "delete",
-                        UPDATE_BEFORE,
-                        flussTemporalType,
-                        icebergTemporalType,
-                        flussTemporalValue,
-                        expectedIcebergValue));
+        return Stream.of(2, 3)
+                .flatMap(
+                        formatVersion ->
+                                Stream.of(
+                                        Arguments.of(
+                                                typeName,
+                                                "write",
+                                                UPDATE_AFTER,
+                                                flussTemporalType,
+                                                icebergTemporalType,
+                                                flussTemporalValue,
+                                                expectedIcebergValue,
+                                                formatVersion),
+                                        Arguments.of(
+                                                typeName,
+                                                "delete",
+                                                UPDATE_BEFORE,
+                                                flussTemporalType,
+                                                icebergTemporalType,
+                                                flussTemporalValue,
+                                                expectedIcebergValue,
+                                                formatVersion)));
     }
 
     @ParameterizedTest
     @MethodSource("tieringWriteArgs")
-    void testTieringWriteTable(boolean isPrimaryKeyTable, boolean isPartitionedTable)
+    void testTieringWriteTable(
+            boolean isPrimaryKeyTable, boolean isPartitionedTable, int formatVersion)
             throws Exception {
         TablePath tablePath =
                 TablePath.of(
@@ -199,6 +217,10 @@ class IcebergTieringTest {
         TableInfo tableInfo = createTableInfo(tablePath, isPrimaryKeyTable, isPartitionedTable);
 
         Table icebergTable = icebergCatalog.loadTable(toIceberg(tablePath));
+        icebergTable
+                .updateProperties()
+                .set(TableProperties.FORMAT_VERSION, Integer.toString(formatVersion))
+                .commit();
 
         Map<Tuple2<String, Integer>, List<LogRecord>> recordsByBucket = new HashMap<>();
         Map<Long, String> partitionIdAndName =
@@ -291,13 +313,19 @@ class IcebergTieringTest {
             DataType flussTemporalType,
             Type icebergTemporalType,
             Object flussTemporalValue,
-            Object expectedIcebergValue)
+            Object expectedIcebergValue,
+            int formatVersion)
             throws Exception {
         TablePath tablePath =
                 TablePath.of(
                         "iceberg", "test_temporal_identifier_" + operationName + "_" + typeName);
         TableInfo tableInfo =
                 createTemporalIdentifierTable(tablePath, flussTemporalType, icebergTemporalType);
+        icebergCatalog
+                .loadTable(toIceberg(tablePath))
+                .updateProperties()
+                .set(TableProperties.FORMAT_VERSION, Integer.toString(formatVersion))
+                .commit();
 
         GenericRow insertRow = temporalIdentifierRow(flussTemporalValue, "before");
         GenericRow changeRow =
@@ -344,6 +372,57 @@ class IcebergTieringTest {
                 assertThat(rows.hasNext()).isFalse();
             }
         }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testCloseCatalogAfterWriteFailure(boolean catalogCloseFails) throws Exception {
+        TablePath tablePath = TablePath.of("iceberg", "test_close_catalog_after_write_failure");
+        createTable(tablePath, true, false);
+        TableInfo tableInfo = createTableInfo(tablePath, true, false);
+        icebergCatalog
+                .loadTable(toIceberg(tablePath))
+                .updateProperties()
+                .set(TableProperties.FORMAT_VERSION, "3")
+                .commit();
+
+        Catalog catalog = spy(icebergCatalog);
+        IcebergCatalogProvider provider = mock(IcebergCatalogProvider.class);
+        when(provider.get()).thenReturn(catalog);
+        WriterInitContext context = mock(WriterInitContext.class);
+        when(context.tablePath()).thenReturn(tablePath);
+        when(context.tableInfo()).thenReturn(tableInfo);
+        when(context.tableBucket()).thenReturn(new TableBucket(0, 0));
+        IOException catalogFailure = new IOException("injected catalog close failure");
+        if (catalogCloseFails) {
+            doThrow(catalogFailure).when((Closeable) catalog).close();
+        }
+        IcebergLakeWriter writer = new IcebergLakeWriter(provider, context);
+
+        // Fail inside the real V3 task writer, which remembers the error and rethrows it on close.
+        InternalRow row = mock(InternalRow.class);
+        when(row.getFieldCount()).thenReturn(3);
+        IllegalStateException writeFailure = new IllegalStateException("injected write failure");
+        when(row.getInt(0)).thenThrow(writeFailure);
+        assertThatThrownBy(() -> writer.write(new GenericRecord(0L, 0L, INSERT, row)))
+                .isInstanceOf(IOException.class)
+                .hasCause(writeFailure);
+
+        assertThatThrownBy(writer::close)
+                .isInstanceOf(IOException.class)
+                .satisfies(
+                        failure -> {
+                            Throwable taskWriterFailure = failure.getCause();
+                            assertThat(taskWriterFailure).isInstanceOf(IOException.class);
+                            assertThat(taskWriterFailure.getCause()).isSameAs(writeFailure);
+                            if (catalogCloseFails) {
+                                assertThat(taskWriterFailure.getSuppressed())
+                                        .containsExactly(catalogFailure);
+                            } else {
+                                assertThat(taskWriterFailure.getSuppressed()).isEmpty();
+                            }
+                        });
+        verify((Closeable) catalog).close();
     }
 
     @Test

@@ -36,7 +36,7 @@ import java.io.IOException;
 import static org.apache.fluss.lake.iceberg.utils.IcebergConversions.toPartition;
 
 /** A generic task equality delta writer. * */
-class GenericRecordDeltaWriter extends BaseTaskWriter<Record> {
+class GenericRecordDeltaWriter extends BaseTaskWriter<Record> implements DeltaWriter {
     private final GenericEqualityDeltaWriter deltaWriter;
 
     public GenericRecordDeltaWriter(
@@ -62,6 +62,7 @@ class GenericRecordDeltaWriter extends BaseTaskWriter<Record> {
         deltaWriter.write(row);
     }
 
+    @Override
     public void delete(Record row) throws IOException {
         deltaWriter.delete(row);
     }

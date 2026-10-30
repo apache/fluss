@@ -41,7 +41,7 @@ public class DeltaTaskWriter extends RecordWriter {
 
     @Override
     public void write(LogRecord record) throws Exception {
-        GenericRecordDeltaWriter deltaWriter = (GenericRecordDeltaWriter) taskWriter;
+        DeltaWriter deltaWriter = (DeltaWriter) taskWriter;
         flussRecordAsIcebergRecord.setFlussRecord(record);
         switch (record.getChangeType()) {
             case INSERT:
