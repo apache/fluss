@@ -70,7 +70,13 @@ elif [ "$1" = "tieringService" ]; then
       export JAVA_TOOL_OPTIONS="-XX:MaxRAMPercentage=75.0"
   fi
 
+  # Arrow (the log record format) requires java.nio to be opened on Java 9+;
+  # the flink-run path gets this from the Flink distribution's env defaults,
+  # the embedded runtime must set it itself. Operators can pass further JVM
+  # options via JAVA_TOOL_OPTIONS (picked up by the JVM above).
   exec java \
+    -XX:+IgnoreUnrecognizedVMOptions \
+    --add-opens=java.base/java.nio=ALL-UNNAMED \
     -Dlog4j.configurationFile="${FLINK_HOME}/conf/log4j-console.properties" \
     -cp "${FLINK_HOME}/lib/*" \
     org.apache.fluss.flink.tiering.EmbeddedFlussLakeTiering \
