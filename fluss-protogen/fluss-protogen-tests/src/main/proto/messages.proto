@@ -51,3 +51,13 @@ message E {
   optional NE nested_errors = 4;
 }
 
+message ErrorContainer {
+  optional E optional_error = 1;
+  repeated E errors = 2;
+}
+
+message RecursiveError {
+  optional int32 error_code = 1;
+  optional string error_message = 2;
+  optional RecursiveError child = 3;
+}
