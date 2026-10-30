@@ -21,6 +21,8 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.exception.LogSegmentOffsetOverflowException;
 import org.apache.fluss.metadata.LogFormat;
+import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.predicate.PredicateBuilder;
 import org.apache.fluss.record.FileLogProjection;
@@ -32,6 +34,9 @@ import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.LogTestBase;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.record.ProjectionPushdownCache;
+import org.apache.fluss.record.TestingSchemaGetter;
+import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableIterator;
 
 import org.junit.jupiter.api.Test;
@@ -917,6 +922,86 @@ final class LogSegmentTest extends LogTestBase {
             // The offset metadata should use the requested startOffset (50),
             // NOT the first included batch's baseLogOffset (53)
             assertThat(read.getFetchOffsetMetadata().getMessageOffset()).isEqualTo(50);
+        }
+    }
+
+    @Test
+    void testReadMakesProgressWhenSchemaEvolutionExpandsProjectedBatch() throws Exception {
+        Schema oldSchema = Schema.newBuilder().fromRowType(DATA1_ROW_TYPE).build();
+        Schema.Builder schemaBuilder = Schema.newBuilder().fromSchema(oldSchema);
+        int[] fields = new int[17];
+        fields[0] = 0;
+        for (int i = 1; i < fields.length; i++) {
+            schemaBuilder.column("added" + i, DataTypes.STRING());
+            fields[i] = i + 1;
+        }
+        Schema newSchema = schemaBuilder.build();
+        TestingSchemaGetter schemaGetter = new TestingSchemaGetter(new SchemaInfo(oldSchema, 1));
+        schemaGetter.updateLatestSchemaInfo(new SchemaInfo(newSchema, 2));
+        FileLogProjection projection = new FileLogProjection(new ProjectionPushdownCache());
+        projection.setCurrentProjection(
+                1L,
+                schemaGetter,
+                org.apache.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION,
+                fields);
+        LogSegment segment = createSegment(40);
+        try {
+            MemoryLogRecords first =
+                    createRecordsWithoutBaseLogOffset(
+                            DATA1_ROW_TYPE, 1, 40, 123L, magic, DATA1, LogFormat.ARROW);
+            MemoryLogRecords second =
+                    createRecordsWithoutBaseLogOffset(
+                            DATA1_ROW_TYPE, 1, 50, 123L, magic, DATA1, LogFormat.ARROW);
+            segment.append(49, -1L, -1L, first);
+            segment.append(59, -1L, -1L, second);
+            int budget = first.sizeInBytes();
+            assertThat(
+                            segment.read(
+                                            40,
+                                            budget,
+                                            segment.getSizeInBytes(),
+                                            false,
+                                            projection,
+                                            null)
+                                    .getRecords()
+                                    .sizeInBytes())
+                    .isZero();
+            RowType outputType = newSchema.getRowType().project(fields);
+            try (LogRecordReadContext context =
+                    LogRecordReadContext.createArrowReadContext(
+                            outputType, 2, schemaGetter, true)) {
+                // Each oversized response must contain one complete batch, so the caller
+                // can advance to the second batch instead of retrying an empty fetch.
+                for (long offset : new long[] {40, 50}) {
+                    LogRecords result =
+                            segment.read(
+                                            offset,
+                                            budget,
+                                            segment.getSizeInBytes(),
+                                            true,
+                                            projection,
+                                            null)
+                                    .getRecords();
+                    assertThat(result.sizeInBytes()).isGreaterThan(budget);
+                    int count = 0;
+                    for (LogRecordBatch batch : result.batches()) {
+                        try (CloseableIterator<LogRecord> records = batch.records(context)) {
+                            while (records.hasNext()) {
+                                LogRecord record = records.next();
+                                assertThat(record.logOffset()).isEqualTo(offset + count);
+                                assertThat(record.getRow().getInt(0)).isEqualTo(count + 1);
+                                for (int i = 1; i < fields.length; i++) {
+                                    assertThat(record.getRow().isNullAt(i)).isTrue();
+                                }
+                                count++;
+                            }
+                        }
+                    }
+                    assertThat(count).isEqualTo(DATA1.size());
+                }
+            }
+        } finally {
+            segment.close();
         }
     }
 
