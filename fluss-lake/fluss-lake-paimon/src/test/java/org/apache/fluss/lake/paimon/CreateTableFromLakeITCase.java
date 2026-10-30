@@ -23,7 +23,13 @@ import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.InvalidTableException;
+import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
+import org.apache.fluss.exception.TableAlreadyExistException;
+import org.apache.fluss.metadata.AggFunctions;
 import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.metadata.DeleteBehavior;
+import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
@@ -33,15 +39,27 @@ import org.apache.paimon.catalog.Catalog;
 import org.apache.paimon.catalog.CatalogContext;
 import org.apache.paimon.catalog.CatalogFactory;
 import org.apache.paimon.catalog.Identifier;
+import org.apache.paimon.data.BinaryString;
+import org.apache.paimon.data.GenericRow;
 import org.apache.paimon.options.Options;
 import org.apache.paimon.schema.Schema;
+import org.apache.paimon.table.FileStoreTable;
 import org.apache.paimon.table.Table;
+import org.apache.paimon.table.sink.BatchTableCommit;
+import org.apache.paimon.table.sink.BatchTableWrite;
+import org.apache.paimon.table.sink.BatchWriteBuilder;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
+
+import javax.annotation.Nullable;
 
 import java.nio.file.Files;
+import java.time.Duration;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
@@ -84,6 +102,286 @@ class CreateTableFromLakeITCase {
         if (connection != null) {
             connection.close();
         }
+    }
+
+    @Test
+    void testCreatePrimaryKeyTableWithExistingData() throws Exception {
+        TablePath tablePath = TablePath.of("promote_primary_key_database", "existing_data");
+        createPaimonTable(
+                tablePath,
+                Schema.newBuilder()
+                        .column(
+                                "id",
+                                org.apache.paimon.types.DataTypes.BIGINT().notNull(),
+                                "identifier")
+                        .column("payload", org.apache.paimon.types.DataTypes.STRING())
+                        .primaryKey("id")
+                        .option(CoreOptions.BUCKET.key(), "4")
+                        .comment("existing primary-key table")
+                        .build());
+        FileStoreTable sourceTable = (FileStoreTable) paimonCatalog.getTable(toPaimon(tablePath));
+        BatchWriteBuilder writeBuilder = sourceTable.newBatchWriteBuilder();
+        try (BatchTableWrite write = writeBuilder.newWrite();
+                BatchTableCommit commit = writeBuilder.newCommit()) {
+            write.write(GenericRow.of(1L, BinaryString.fromString("existing")));
+            commit.commit(write.prepareCommit());
+        }
+        Long snapshotId = sourceTable.snapshotManager().latestSnapshotId();
+        assertThat(snapshotId).isNotNull();
+        assertThat(admin.databaseExists(tablePath.getDatabaseName()).get()).isFalse();
+
+        Map<String, String> options = Collections.emptyMap();
+        TableInfo created = admin.createTableFromLake(tablePath, options).get();
+        assertThat(created.getSchema().getPrimaryKeyColumnNames()).containsExactly("id");
+        assertThat(created.getTableConfig().isDataLakeEnabled()).isFalse();
+        assertThatThrownBy(() -> admin.getLatestLakeSnapshot(tablePath).get())
+                .cause()
+                .isInstanceOf(LakeTableSnapshotNotExistException.class);
+
+        FileStoreTable unchanged = (FileStoreTable) paimonCatalog.getTable(toPaimon(tablePath));
+        assertThat(unchanged.schema()).isEqualTo(sourceTable.schema());
+        assertThat(unchanged.snapshotManager().latestSnapshotId()).isEqualTo(snapshotId);
+
+        assertThatThrownBy(() -> admin.createTableFromLake(tablePath, options).get())
+                .cause()
+                .isInstanceOf(TableAlreadyExistException.class);
+        assertThat(admin.getTableInfo(tablePath).get()).isEqualTo(created);
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+        "partial-update,true",
+        "partial-update,false",
+        "aggregation,true",
+        "aggregation,false"
+    })
+    void testCreatePrimaryKeyTableWithMergeSemantics(String engine, boolean ignoreDelete)
+            throws Exception {
+        TablePath tablePath =
+                TablePath.of(DATABASE, "promote_" + engine.replace('-', '_') + "_" + ignoreDelete);
+        boolean aggregation = "aggregation".equals(engine);
+        Schema.Builder schema =
+                Schema.newBuilder()
+                        .column("id", org.apache.paimon.types.DataTypes.BIGINT().notNull())
+                        .column("amount", org.apache.paimon.types.DataTypes.BIGINT())
+                        .column("payload", org.apache.paimon.types.DataTypes.STRING())
+                        .primaryKey("id")
+                        .option(CoreOptions.BUCKET.key(), "4")
+                        .option(CoreOptions.MERGE_ENGINE.key(), engine)
+                        .option(CoreOptions.IGNORE_DELETE.key(), Boolean.toString(ignoreDelete))
+                        .option(CoreOptions.IGNORE_UPDATE_BEFORE.key(), "true")
+                        .option(
+                                CoreOptions.PARTIAL_UPDATE_REMOVE_RECORD_ON_DELETE.key(),
+                                Boolean.toString(!ignoreDelete))
+                        .option(
+                                CoreOptions.AGGREGATION_REMOVE_RECORD_ON_DELETE.key(),
+                                Boolean.toString(!ignoreDelete));
+        if (aggregation) {
+            schema.option("fields.amount.aggregate-function", "sum");
+        }
+        createPaimonTable(tablePath, schema.build());
+
+        TableInfo created =
+                admin.createTableFromLake(tablePath, Collections.<String, String>emptyMap()).get();
+        assertThat(created.getTableConfig().getMergeEngineType())
+                .contains(MergeEngineType.AGGREGATION);
+        assertThat(created.getTableConfig().getDeleteBehavior())
+                .contains(ignoreDelete ? DeleteBehavior.IGNORE : DeleteBehavior.ALLOW);
+        assertThat(created.getSchema().getAggFunction("amount"))
+                .contains(
+                        aggregation ? AggFunctions.SUM() : AggFunctions.LAST_VALUE_IGNORE_NULLS());
+        assertThat(created.getSchema().getAggFunction("payload"))
+                .contains(AggFunctions.LAST_VALUE_IGNORE_NULLS());
+        assertThat(created.getTableConfig().isDataLakeEnabled()).isFalse();
+        assertThatThrownBy(
+                        () ->
+                                admin.createTableFromLake(
+                                                tablePath, Collections.<String, String>emptyMap())
+                                        .get())
+                .cause()
+                .isInstanceOf(TableAlreadyExistException.class);
+        // Request the opposite DELETE behavior when reusing the existing Fluss table.
+        // IGNORE and ALLOW are both explicitly derived, so neither can be overridden.
+        assertCreateTableFromLakeFails(
+                tablePath,
+                ConfigOptions.TABLE_DELETE_BEHAVIOR.key(),
+                ignoreDelete ? "allow" : "ignore",
+                "cannot be set");
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+        // engine, ignoreDelete, removeOnDelete, function, ignoreRetract, expectedMessage
+        // Partial-update cannot accept tiering retractions with both options disabled.
+        "partial-update, false, false, , false, partial-update.remove-record-on-delete",
+        // Aggregation's default DELETE retracts field contributions, which Fluss cannot map.
+        "aggregation, false, false, sum, false, aggregation.remove-record-on-delete",
+        // SUM must retract the previous aggregate result before accumulating the next one.
+        "aggregation, true, false, sum, true, fields.amount.ignore-retract",
+        // MAX must ignore retractions, including when whole-row DELETE is enabled.
+        "aggregation, true, false, max, false, fields.amount.ignore-retract",
+        "aggregation, false, true, max, false, fields.amount.ignore-retract"
+    })
+    void testRejectUnsafePrimaryKeyMergeSemantics(
+            String engine,
+            boolean ignoreDelete,
+            boolean removeOnDelete,
+            @Nullable String function,
+            boolean ignoreRetract,
+            String expectedMessage)
+            throws Exception {
+        TablePath tablePath =
+                TablePath.of(
+                        DATABASE,
+                        String.format(
+                                "unsafe_merge_%s_%s_%s_%s",
+                                engine.replace('-', '_'), ignoreDelete, removeOnDelete, function));
+        Schema.Builder schema =
+                Schema.newBuilder()
+                        .column("id", org.apache.paimon.types.DataTypes.BIGINT().notNull())
+                        .column("amount", org.apache.paimon.types.DataTypes.BIGINT())
+                        .primaryKey("id")
+                        .option(CoreOptions.BUCKET.key(), "4")
+                        .option(CoreOptions.MERGE_ENGINE.key(), engine)
+                        .option(CoreOptions.IGNORE_DELETE.key(), Boolean.toString(ignoreDelete))
+                        .option(CoreOptions.IGNORE_UPDATE_BEFORE.key(), "true")
+                        .option(
+                                CoreOptions.PARTIAL_UPDATE_REMOVE_RECORD_ON_DELETE.key(),
+                                Boolean.toString(removeOnDelete))
+                        .option(
+                                CoreOptions.AGGREGATION_REMOVE_RECORD_ON_DELETE.key(),
+                                Boolean.toString(removeOnDelete));
+        if (function != null) {
+            schema.option("fields.amount.aggregate-function", function)
+                    .option("fields.amount.ignore-retract", Boolean.toString(ignoreRetract));
+        }
+        createPaimonTable(tablePath, schema.build());
+
+        assertThatThrownBy(
+                        () ->
+                                admin.createTableFromLake(
+                                                tablePath, Collections.<String, String>emptyMap())
+                                        .get())
+                .cause()
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining(expectedMessage);
+        assertThat(admin.tableExists(tablePath).get()).isFalse();
+    }
+
+    @Test
+    void testPrimaryKeyDerivedOptionsCannotBeOverridden() throws Exception {
+        TablePath tablePath = TablePath.of(DATABASE, "promote_versioned");
+        createPaimonTable(
+                tablePath,
+                Schema.newBuilder()
+                        .column("id", org.apache.paimon.types.DataTypes.BIGINT().notNull())
+                        .column("version", org.apache.paimon.types.DataTypes.BIGINT().notNull())
+                        .column(
+                                "event_time",
+                                org.apache.paimon.types.DataTypes.TIMESTAMP_WITH_LOCAL_TIME_ZONE(3))
+                        .primaryKey("id")
+                        .option(CoreOptions.BUCKET.key(), "4")
+                        .option(CoreOptions.SEQUENCE_FIELD.key(), "version")
+                        .option(CoreOptions.IGNORE_DELETE.key(), "true")
+                        .option(CoreOptions.RECORD_LEVEL_EXPIRE_TIME.key(), "7 d")
+                        .option(CoreOptions.RECORD_LEVEL_TIME_FIELD.key(), "event_time")
+                        .build());
+
+        assertCreateTableFromLakeFails(
+                tablePath,
+                ConfigOptions.TABLE_MERGE_ENGINE.key(),
+                "first_row",
+                "is derived as '" + MergeEngineType.VERSIONED + "'");
+        assertCreateTableFromLakeFails(
+                tablePath,
+                ConfigOptions.TABLE_MERGE_ENGINE_VERSION_COLUMN.key(),
+                "id",
+                "is derived as 'version'");
+        assertCreateTableFromLakeFails(
+                tablePath, ConfigOptions.TABLE_KV_TTL.key(), "1 d", "is derived as");
+        assertCreateTableFromLakeFails(
+                tablePath, ConfigOptions.TABLE_KV_TTL.key(), "invalid", "is derived as");
+        assertCreateTableFromLakeFails(
+                tablePath, ConfigOptions.TABLE_MERGE_ENGINE.key(), "invalid", "is derived as");
+        assertCreateTableFromLakeFails(tablePath, "bucket.num", "8", "uses 4 buckets");
+        assertThat(admin.tableExists(tablePath).get()).isFalse();
+
+        TableInfo created =
+                admin.createTableFromLake(
+                                tablePath,
+                                Collections.singletonMap(
+                                        ConfigOptions.TABLE_KV_TTL.key(), "604800000 ms"))
+                        .get();
+        assertThat(created.getTableConfig().getMergeEngineType())
+                .contains(MergeEngineType.VERSIONED);
+        assertThat(created.getProperties().get(ConfigOptions.TABLE_KV_TTL))
+                .isEqualTo(Duration.ofDays(7));
+    }
+
+    @ParameterizedTest
+    @CsvSource({", allow", ", ignore", "first_row, ignore", "versioned, ignore"})
+    void testSetPrimaryKeyOptionsNotDerivedFromLake(
+            @Nullable String mergeEngine, String deleteBehavior) throws Exception {
+        TablePath tablePath =
+                TablePath.of(DATABASE, "primary_key_options_" + mergeEngine + "_" + deleteBehavior);
+        createPaimonTable(
+                tablePath,
+                Schema.newBuilder()
+                        .column("id", org.apache.paimon.types.DataTypes.BIGINT().notNull())
+                        .column("version", org.apache.paimon.types.DataTypes.BIGINT().notNull())
+                        .primaryKey("id")
+                        .option(CoreOptions.BUCKET.key(), "4")
+                        .build());
+
+        Map<String, String> options = new HashMap<>();
+        options.put(ConfigOptions.TABLE_DELETE_BEHAVIOR.key(), deleteBehavior);
+        if (mergeEngine != null) {
+            options.put(ConfigOptions.TABLE_MERGE_ENGINE.key(), mergeEngine);
+        }
+        if ("versioned".equals(mergeEngine)) {
+            options.put(ConfigOptions.TABLE_MERGE_ENGINE_VERSION_COLUMN.key(), "version");
+        }
+        TableInfo created = admin.createTableFromLake(tablePath, options).get();
+        assertThat(created.getProperties().toMap()).containsAllEntriesOf(options);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testCreatePartitionedPrimaryKeyTable(boolean inferAutoPartition) throws Exception {
+        TablePath tablePath =
+                TablePath.of(DATABASE, "promote_partitioned_primary_key_" + inferAutoPartition);
+        Schema.Builder schema =
+                Schema.newBuilder()
+                        .column("id", org.apache.paimon.types.DataTypes.BIGINT().notNull())
+                        .column("dt", org.apache.paimon.types.DataTypes.STRING().notNull())
+                        .column("region", org.apache.paimon.types.DataTypes.STRING().notNull())
+                        .primaryKey("region", "id", "dt")
+                        .partitionKeys("dt", "region")
+                        .option(CoreOptions.BUCKET.key(), "4");
+        Map<String, String> options = new HashMap<>();
+        if (inferAutoPartition) {
+            schema.option(CoreOptions.PARTITION_TIMESTAMP_PATTERN.key(), "$dt")
+                    .option(CoreOptions.PARTITION_TIMESTAMP_FORMATTER.key(), "yyyy-MM-dd");
+        } else {
+            options.put(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED.key(), "true");
+            options.put(ConfigOptions.TABLE_AUTO_PARTITION_KEY.key(), "dt");
+            options.put(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT.key(), "DAY");
+            options.put(ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE.key(), "0");
+        }
+        createPaimonTable(tablePath, schema.build());
+
+        TableInfo created = admin.createTableFromLake(tablePath, options).get();
+        assertThat(created.getSchema().getPrimaryKeyColumnNames())
+                .containsExactly("region", "id", "dt");
+        assertThat(created.getPartitionKeys()).containsExactly("dt", "region");
+        assertThat(created.getBucketKeys()).containsExactly("id");
+        assertThat(created.getProperties().get(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED))
+                .isTrue();
+        assertThat(created.getProperties().get(ConfigOptions.TABLE_AUTO_PARTITION_KEY))
+                .isEqualTo("dt");
+        assertThat(created.getProperties().get(ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE))
+                .isZero();
+        assertThat(created.getTableConfig().isDataLakeEnabled()).isFalse();
     }
 
     @Test

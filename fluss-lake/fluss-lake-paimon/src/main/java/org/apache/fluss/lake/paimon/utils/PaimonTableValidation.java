@@ -53,6 +53,7 @@ public class PaimonTableValidation {
             CoreOptions.getOptions().stream()
                     .collect(Collectors.toMap(ConfigOption::key, option -> option));
 
+    /** Checks physical schema compatibility while retaining native merge options. */
     public static boolean isPaimonSchemaCompatible(Schema existingSchema, Schema newSchema) {
         // FIP-27: newly generated schemas are always clean (no system columns). When the existing
         // table is a legacy table that still carries the three system columns (recognisable by the
@@ -179,6 +180,20 @@ public class PaimonTableValidation {
         }
 
         for (String option : CoreOptions.IMMUTABLE_OPTIONS) {
+            // When creating a Fluss table with datalake enabled, the Paimon table defaults to
+            // deduplicate and remove-record-on-delete=false even if Fluss uses aggregation,
+            // unless native Paimon options are explicitly set. When creating a Fluss table from
+            // an existing Paimon partial-update or aggregation table, Fluss uses aggregation
+            // while the Paimon table retains its native merge/delete settings.
+            // Comparing these defaults with the source would reject enablement and later
+            // schema changes even when the source merge semantics passed conversion checks.
+            // Skip only this comparison: tiering continues to use the existing Paimon merge
+            // engine and options, and attempts to alter these immutable options remain rejected.
+            if (CoreOptions.MERGE_ENGINE.key().equals(option)
+                    || CoreOptions.AGGREGATION_REMOVE_RECORD_ON_DELETE.key().equals(option)
+                    || CoreOptions.PARTIAL_UPDATE_REMOVE_RECORD_ON_DELETE.key().equals(option)) {
+                continue;
+            }
             if (!equalPaimonOption(option, existing, proposed)) {
                 return false;
             }

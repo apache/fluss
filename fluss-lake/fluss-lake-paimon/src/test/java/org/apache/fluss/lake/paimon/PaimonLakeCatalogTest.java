@@ -44,6 +44,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import java.io.File;
 import java.util.Arrays;
@@ -491,6 +493,46 @@ class PaimonLakeCatalogTest {
                         .option(CoreOptions.BUCKET_FUNCTION_TYPE.key(), "mod")
                         .build();
         assertThat(isPaimonSchemaCompatible(schema, schemaWithDifferentImmutableOption)).isFalse();
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+        "merge-engine,aggregation",
+        "aggregation.remove-record-on-delete,true",
+        "partial-update.remove-record-on-delete,true"
+    })
+    void testPaimonSchemaCompatibilityWithExistingMergeOptions(String key, String value) {
+        List<String> primaryKeys = Arrays.asList("id", "pt");
+        List<String> partitionKeys = Collections.singletonList("pt");
+        org.apache.paimon.schema.Schema existingSchema =
+                createPaimonSchemaBuilder(primaryKeys, partitionKeys, "1", "id")
+                        .option(key, value)
+                        .build();
+        org.apache.paimon.schema.Schema expectedSchema =
+                createPaimonSchemaBuilder(primaryKeys, partitionKeys, "1", "id").build();
+
+        assertThat(isPaimonSchemaCompatible(existingSchema, expectedSchema)).isTrue();
+
+        assertThat(
+                        isPaimonSchemaCompatible(
+                                existingSchema,
+                                createPaimonSchemaBuilder(primaryKeys, partitionKeys, "2", "id")
+                                        .build()))
+                .isFalse();
+        assertThat(
+                        isPaimonSchemaCompatible(
+                                existingSchema,
+                                createPaimonSchemaBuilder(primaryKeys, partitionKeys, "1", "id")
+                                        .option(CoreOptions.BUCKET_FUNCTION_TYPE.key(), "mod")
+                                        .build()))
+                .isFalse();
+        assertThat(
+                        isPaimonSchemaCompatible(
+                                existingSchema,
+                                createPaimonSchemaBuilder(primaryKeys, partitionKeys, "1", "id")
+                                        .column("extra", org.apache.paimon.types.DataTypes.INT())
+                                        .build()))
+                .isFalse();
     }
 
     @Test
