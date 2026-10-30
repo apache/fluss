@@ -17,14 +17,15 @@
 
 package org.apache.fluss.flink.sink;
 
-import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.bucketing.BucketingFunction;
 import org.apache.fluss.client.table.getter.PartitionGetter;
+import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.flink.row.RowWithOp;
 import org.apache.fluss.flink.sink.serializer.FlussSerializationSchema;
 import org.apache.fluss.flink.sink.serializer.SerializerInitContextImpl;
 import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.KeyEncoder;
 import org.apache.fluss.types.RowType;
@@ -48,11 +49,11 @@ public class FlinkRowDataChannelComputer<InputT> implements ChannelComputer<Inpu
     private final List<String> bucketKeys;
     private final List<String> partitionKeys;
     private final FlussSerializationSchema<InputT> serializationSchema;
+    private final @Nullable PartitionBucketCountResolver partitionBucketCountResolver;
 
     private transient int numChannels;
     private transient BucketingFunction bucketingFunction;
     private transient KeyEncoder bucketKeyEncoder;
-    private transient boolean combineShuffleWithPartitionName;
     private transient @Nullable PartitionGetter partitionGetter;
 
     public FlinkRowDataChannelComputer(
@@ -60,6 +61,8 @@ public class FlinkRowDataChannelComputer<InputT> implements ChannelComputer<Inpu
             List<String> bucketKeys,
             List<String> partitionKeys,
             @Nullable DataLakeFormat lakeFormat,
+            TablePath tablePath,
+            Configuration flussConfig,
             int numBucket,
             FlussSerializationSchema<InputT> serializationSchema) {
         this.flussRowType = flussRowType;
@@ -67,6 +70,12 @@ public class FlinkRowDataChannelComputer<InputT> implements ChannelComputer<Inpu
         this.partitionKeys = partitionKeys;
         this.lakeFormat = lakeFormat;
         this.numBucket = numBucket;
+        // Non-partitioned tables fix the bucket count to the table-level value; partitioned
+        // tables resolve the actual per-partition count at runtime.
+        this.partitionBucketCountResolver =
+                partitionKeys.isEmpty()
+                        ? null
+                        : new PartitionBucketCountResolver(tablePath, flussConfig, numBucket);
         this.serializationSchema = serializationSchema;
     }
 
@@ -80,11 +89,6 @@ public class FlinkRowDataChannelComputer<InputT> implements ChannelComputer<Inpu
         } else {
             this.partitionGetter = new PartitionGetter(flussRowType, partitionKeys);
         }
-
-        // Use shared logic from ChannelComputer to determine sharding strategy
-        this.combineShuffleWithPartitionName =
-                ChannelComputer.shouldCombinePartitionInSharding(
-                        partitionGetter != null, numBucket, numChannels);
 
         try {
             // no need to read real database, thus assume to deserialize the fluss row as same as
@@ -101,14 +105,25 @@ public class FlinkRowDataChannelComputer<InputT> implements ChannelComputer<Inpu
             RowWithOp rowWithOp = serializationSchema.serialize(record);
             InternalRow row = rowWithOp.getRow();
 
-            int bucketId = bucketingFunction.bucketing(bucketKeyEncoder.encodeKey(row), numBucket);
-            if (!combineShuffleWithPartitionName) {
+            if (partitionBucketCountResolver == null) {
+                // Non-partitioned table: the bucket count is fixed to the table-level value.
+                int bucketId =
+                        bucketingFunction.bucketing(bucketKeyEncoder.encodeKey(row), numBucket);
                 return ChannelComputer.select(bucketId, numChannels);
-            } else {
-                checkNotNull(partitionGetter, "partitionGetter is null");
-                String partitionName = partitionGetter.getPartition(row);
+            }
+
+            checkNotNull(partitionGetter, "partitionGetter is null");
+            String partitionName = partitionGetter.getPartition(row);
+            // Resolve the partition's actual bucket count Sharding with the stale table-level
+            // value would scatter the records of one bucket across multiple writer subtasks
+            // and eventually break sink recovery.
+            int bucketCount = partitionBucketCountResolver.bucketCountOf(partitionName);
+            int bucketId =
+                    bucketingFunction.bucketing(bucketKeyEncoder.encodeKey(row), bucketCount);
+            if (ChannelComputer.shouldCombinePartitionInSharding(true, bucketCount, numChannels)) {
                 return ChannelComputer.select(partitionName, bucketId, numChannels);
             }
+            return ChannelComputer.select(bucketId, numChannels);
         } catch (Exception e) {
             throw new FlussRuntimeException(
                     String.format(
@@ -121,10 +136,5 @@ public class FlinkRowDataChannelComputer<InputT> implements ChannelComputer<Inpu
     @Override
     public String toString() {
         return "BUCKET";
-    }
-
-    @VisibleForTesting
-    boolean isCombineShuffleWithPartitionName() {
-        return combineShuffleWithPartitionName;
     }
 }

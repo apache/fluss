@@ -237,6 +237,8 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
                             bucketKeys,
                             partitionKeys,
                             lakeFormat,
+                            tablePath,
+                            flussConfig,
                             numBucket,
                             flussSerializationSchema),
                     input.getParallelism());
@@ -356,6 +358,8 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
                                             bucketKeys,
                                             partitionKeys,
                                             lakeFormat,
+                                            tablePath,
+                                            flussConfig,
                                             numBucket,
                                             flussSerializationSchema),
                                     input.getParallelism());
