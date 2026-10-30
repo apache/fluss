@@ -1561,7 +1561,14 @@ mod tests {
             tables.push(table);
         }
         let target = &tables[2];
-        for fields in [vec![0], vec![2], vec![2, 0], vec![1, 0], vec![2, 1, 0]] {
+        for fields in [
+            vec![0],
+            vec![2],
+            vec![2, 0],
+            vec![1, 0],
+            vec![2, 1, 0],
+            vec![2, 0, 2],
+        ] {
             let full_schema = to_arrow_schema(target.get_row_type())?;
             let output_schema = ReadContext::project_schema(full_schema.clone(), &fields)?;
             let row_type = Arc::new(target.get_row_type().project(&fields)?);
