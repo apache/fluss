@@ -214,6 +214,61 @@ class FlussPrimaryKeyReadITCase {
     }
 
     @Test
+    void testDefaultPrimaryKeyBucketPruningAcrossKvFormats() throws Exception {
+        for (int formatVersion : new int[] {1, 2}) {
+            String name = "bucket_kv_format_" + formatVersion;
+            TablePath tablePath = path(name);
+            admin.createTable(
+                            tablePath,
+                            TableDescriptor.builder()
+                                    .schema(SCHEMA)
+                                    .distributedBy(8)
+                                    .property(ConfigOptions.TABLE_KV_FORMAT_VERSION, formatVersion)
+                                    .build(),
+                            false)
+                    .get(30, TimeUnit.SECONDS);
+            CLUSTER.waitUntilTableReady(
+                    admin.getTableInfo(tablePath).get(30, TimeUnit.SECONDS).getTableId());
+
+            try (Table table = connection.getTable(tablePath)) {
+                UpsertWriter writer = table.newUpsert().createWriter();
+                List<CompletableFuture<?>> writes = new ArrayList<>();
+                for (int id = 0; id < 64; id++) {
+                    writes.add(writer.upsert(row(id, "value-" + id)));
+                }
+                CompletableFuture.allOf(writes.toArray(new CompletableFuture[0]))
+                        .get(30, TimeUnit.SECONDS);
+            }
+            assertThat(runner.execute("SELECT count(*) FROM " + name).getOnlyValue())
+                    .isEqualTo(64L);
+
+            for (int id : new int[] {0, 1, 7, 17, 42, 63}) {
+                int before = gate.createdSources();
+
+                assertThat(rows("SELECT id, name FROM " + name + " WHERE id = " + id))
+                        .containsExactly(Arrays.asList(id, "value-" + id));
+                assertThat(gate.createdSources() - before).isEqualTo(1);
+            }
+
+            int before = gate.createdSources();
+
+            assertThat(rows("SELECT id FROM " + name + " WHERE id IN (7, 42)" + " ORDER BY id"))
+                    .containsExactly(Collections.singletonList(7), Collections.singletonList(42));
+            assertThat(gate.createdSources() - before).isEqualTo(8);
+
+            before = gate.createdSources();
+            assertThat(
+                            rows(
+                                    "SELECT id FROM "
+                                            + name
+                                            + " WHERE id = 17"
+                                            + " AND length(name) > 100"))
+                    .isEmpty();
+            assertThat(gate.createdSources() - before).isEqualTo(1);
+        }
+    }
+
+    @Test
     void testSnapshotOpensAfterPlanning() throws Exception {
         createTable("open_boundary", SCHEMA, 1);
         upsert("open_boundary", row(1, "old"), row(2, "delete"));
