@@ -17,6 +17,7 @@
 
 package org.apache.fluss.metadata;
 
+import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 
@@ -179,7 +180,7 @@ class TableSchemaTest {
                                 DataTypes.FIELD("f3", DataTypes.STRING(), 9)));
         assertThat(schema.getRowType().equalsWithFieldId(expectedType)).isTrue();
 
-        // Schema.Builder.fromColumns won't reassign field id.
+        // Schema.Builder.fromColumns preserves field IDs when column IDs are set.
         List<Schema.Column> columns =
                 Arrays.asList(
                         new Schema.Column("f0", DataTypes.STRING().copy(false), null, 0),
@@ -257,6 +258,71 @@ class TableSchemaTest {
                                                 DataTypes.FIELD("n1", DataTypes.STRING(), 10)),
                                         2)));
         assertThat(schema.getRowType().equalsWithFieldId(expectedType)).isTrue();
+    }
+
+    @Test
+    void testFromColumnsWithUnknownColumnIds() {
+        RowType nestedType =
+                DataTypes.ROW(
+                        DataTypes.FIELD("n0", DataTypes.INT().copy(false), "nested comment"),
+                        DataTypes.FIELD(
+                                "n1", DataTypes.ROW(DataTypes.FIELD("m0", DataTypes.STRING()))));
+        List<Schema.Column> columns =
+                Arrays.asList(
+                        new Schema.Column("f0", DataTypes.STRING()),
+                        new Schema.Column("f1", nestedType, "row comment"),
+                        new Schema.Column("f2", DataTypes.BIGINT(), "aggregate comment")
+                                .withAggFunction(AggFunctions.SUM()));
+
+        Schema.Builder builder = Schema.newBuilder().fromColumns(columns);
+        Schema schema = builder.build();
+
+        assertThat(schema.getColumnIds()).containsExactly(0, 1, 5);
+        assertThat(schema.getHighestFieldId()).isEqualTo(5);
+        RowType expectedType =
+                DataTypes.ROW(
+                        DataTypes.FIELD("n0", DataTypes.INT().copy(false), "nested comment", 2),
+                        DataTypes.FIELD(
+                                "n1",
+                                DataTypes.ROW(DataTypes.FIELD("m0", DataTypes.STRING(), 4)),
+                                3));
+        assertThat(((RowType) schema.getColumn("f1").getDataType()).equalsWithFieldId(expectedType))
+                .isTrue();
+        assertThat(schema.getColumn("f1").getComment()).contains("row comment");
+        assertThat(schema.getColumn("f2").getComment()).contains("aggregate comment");
+        assertThat(schema.getColumn("f2").getAggFunction()).contains(AggFunctions.SUM());
+        assertThat(columns)
+                .extracting(Schema.Column::getColumnId)
+                .containsOnly(Schema.Column.UNKNOWN_COLUMN_ID);
+        assertThat(nestedType.getFields())
+                .extracting(field -> field.getFieldId())
+                .containsExactly(-1, -1);
+
+        Schema extendedSchema = builder.column("f3", DataTypes.STRING()).build();
+        assertThat(extendedSchema.getColumnIds()).containsExactly(0, 1, 5, 6);
+        assertThat(extendedSchema.getHighestFieldId()).isEqualTo(6);
+    }
+
+    @Test
+    void testFromColumnsWithUnknownColumnIdAndAssignedNestedFieldId() {
+        assertMixedFieldIdsRejected(
+                Schema.Column.UNKNOWN_COLUMN_ID, Schema.Column.UNKNOWN_COLUMN_ID, 2);
+    }
+
+    @Test
+    void testFromColumnsWithAssignedColumnIdAndUnknownNestedFieldId() {
+        assertMixedFieldIdsRejected(0, 1, Schema.Column.UNKNOWN_COLUMN_ID);
+    }
+
+    @Test
+    void testFromColumnsWithMixedColumnIds() {
+        List<Schema.Column> columns =
+                Arrays.asList(
+                        new Schema.Column("f0", DataTypes.INT(), null, 0),
+                        new Schema.Column("f1", DataTypes.STRING()));
+
+        assertThatThrownBy(() -> Schema.newBuilder().fromColumns(columns))
+                .isInstanceOf(IllegalStateException.class);
     }
 
     @Test
@@ -425,5 +491,35 @@ class TableSchemaTest {
                 .isEqualTo(AggFunctions.STRING_AGG(", "));
         assertThat(schemaStringAgg.getAggFunction("items").get().getParameter("delimiter"))
                 .isEqualTo(", ");
+    }
+
+    private static void assertMixedFieldIdsRejected(
+            int columnId, int parentFieldId, int nestedFieldId) {
+        RowType rowType =
+                DataTypes.ROW(
+                        DataTypes.FIELD(
+                                "parent",
+                                DataTypes.ROW(
+                                        DataTypes.FIELD("child", DataTypes.INT(), nestedFieldId)),
+                                parentFieldId));
+        for (DataType dataType :
+                Arrays.asList(
+                        rowType,
+                        DataTypes.ARRAY(rowType),
+                        DataTypes.MAP(rowType, DataTypes.STRING()),
+                        DataTypes.MAP(DataTypes.STRING(), rowType))) {
+            assertThatThrownBy(
+                            () ->
+                                    Schema.newBuilder()
+                                            .fromColumns(
+                                                    Collections.singletonList(
+                                                            new Schema.Column(
+                                                                    "f0", dataType, null,
+                                                                    columnId))))
+                    .as("Mixed field IDs in %s", dataType)
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessage(
+                            "All field IDs (including nested fields) must be set or none of them must be set.");
+        }
     }
 }
