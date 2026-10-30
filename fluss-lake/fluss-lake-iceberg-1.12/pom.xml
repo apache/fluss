@@ -438,6 +438,25 @@
                                     <pattern>org.apache.hc.core5</pattern>
                                     <shadedPattern>org.apache.iceberg.shaded.org.apache.hc.core5</shadedPattern>
                                 </relocation>
+                                <!-- Named individually rather than as org.apache.commons: the
+                                     shade plugin rewrites every reference matching a pattern,
+                                     including ones to classes this jar does not bundle. -->
+                                <relocation>
+                                    <pattern>org.apache.commons.codec</pattern>
+                                    <shadedPattern>org.apache.fluss.shaded.org.apache.commons.codec</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>org.apache.commons.compress</pattern>
+                                    <shadedPattern>org.apache.fluss.shaded.org.apache.commons.compress</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>org.apache.commons.lang3</pattern>
+                                    <shadedPattern>org.apache.fluss.shaded.org.apache.commons.lang3</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>org.apache.commons.pool</pattern>
+                                    <shadedPattern>org.apache.fluss.shaded.org.apache.commons.pool</shadedPattern>
+                                </relocation>
                             </relocations>
                             <filters>
                                 <filter>
@@ -447,6 +466,9 @@
                                         <exclude>NOTICE</exclude>
                                         <exclude>META-INF/versions/21/**</exclude>
                                         <exclude>META-INF/versions/17/**</exclude>
+                                        <!-- The shade plugin does not relocate Multi-Release entries,
+                                             so these would leak jackson at its original package. -->
+                                        <exclude>META-INF/versions/*/com/fasterxml/**</exclude>
                                     </excludes>
                                 </filter>
                                 <filter>
