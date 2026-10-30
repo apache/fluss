@@ -895,6 +895,11 @@ Read-only result of a prefix lookup — zero or more matched rows. Each row is a
 when the batch carries no single timestamp, which is the case for a limit scan
 because it merges several log batches into one Arrow batch.
 
+`GetSchemaId()` returns the ID of the schema the log batch was written with. It can
+differ from the schema of the batch's columns, because the scanner aligns every batch
+to the table schema it was created with. It returns `ArrowRecordBatch::NO_SCHEMA_ID`
+(`-1`) for a limit scan, which merges several log batches into one.
+
 ## `ArrowRecordBatches`
 
 | Method                   |  Description                               |

@@ -1822,6 +1822,102 @@ mod table_test {
         }
     }
 
+    /// Each Arrow batch reports the schema ID it was written with, even when a
+    /// fixed-schema scan aligns its columns to a newer schema.
+    #[tokio::test]
+    async fn record_batch_scanner_reports_source_schema_id_after_add_column() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("Failed to get admin");
+
+        let table_path = TablePath::new("fluss", "test_batch_schema_id_after_add_column");
+        create_table(
+            &admin,
+            &table_path,
+            &TableDescriptor::builder()
+                .schema(
+                    Schema::builder()
+                        .column("id", DataTypes::int())
+                        .column("name", DataTypes::string())
+                        .build()
+                        .unwrap(),
+                )
+                .distributed_by(Some(1), vec!["id".to_string()])
+                .build()
+                .unwrap(),
+        )
+        .await;
+        wait_for_table_ready(&admin, &table_path).await;
+
+        let table_v1 = connection.get_table(&table_path).await.unwrap();
+        let writer = table_v1.new_append().unwrap().create_writer().unwrap();
+        writer
+            .append_arrow_batch(
+                record_batch!(("id", Int32, [1, 2]), ("name", Utf8, ["a", "b"])).unwrap(),
+            )
+            .unwrap();
+        writer.flush().await.unwrap();
+
+        let age_type_json =
+            serde_json::to_vec(&DataTypes::int().serialize_json().unwrap()).unwrap();
+        admin
+            .alter_table(
+                &table_path,
+                false,
+                AlterTableChanges {
+                    add_columns: vec![AddColumn {
+                        column_name: "age".to_string(),
+                        data_type_json: age_type_json,
+                        comment: None,
+                        position: ColumnPositionType::Last,
+                    }],
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let table_v2 = connection.get_table(&table_path).await.unwrap();
+        let writer = table_v2.new_append().unwrap().create_writer().unwrap();
+        writer
+            .append_arrow_batch(
+                record_batch!(
+                    ("id", Int32, [3]),
+                    ("name", Utf8, ["c"]),
+                    ("age", Int32, [30])
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        writer.flush().await.unwrap();
+
+        let old_id = table_v1.get_table_info().get_schema_id();
+        let new_id = table_v2.get_table_info().get_schema_id();
+        assert_ne!(old_id, new_id);
+
+        for fixed_schema in [false, true] {
+            let scanner = table_v2
+                .new_scan()
+                .with_fixed_schema(fixed_schema)
+                .create_record_batch_log_scanner()
+                .unwrap();
+            scanner.subscribe(0, EARLIEST_OFFSET).await.unwrap();
+            let batches: Vec<(i64, i32, usize)> = collect_batches(&scanner, 3)
+                .await
+                .iter()
+                .map(|b| (b.base_offset(), b.schema_id(), b.batch().num_columns()))
+                .collect();
+            let old_columns = if fixed_schema { 3 } else { 2 };
+            assert_eq!(
+                batches,
+                vec![(0, old_id, old_columns), (2, new_id, 3)],
+                "fixed_schema={fixed_schema}"
+            );
+        }
+
+        admin.drop_table(&table_path, false).await.unwrap();
+    }
+
     /// Polls a record-batch scanner until it has yielded `expected_rows` rows.
     async fn collect_batches(
         scanner: &RecordBatchLogScanner,
