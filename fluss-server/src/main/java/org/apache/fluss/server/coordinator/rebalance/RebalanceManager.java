@@ -577,21 +577,22 @@ public class RebalanceManager {
         }
         inProgressRebalanceTasks.put(
                 tableBucket, RebalanceResultForBucket.of(result.plan(), TIMEOUT));
-        attempt.onTimedOut(clock.milliseconds(), observeBucketState(tableBucket));
+        attempt.onTimedOut(
+                clock.milliseconds(), observeReconciliationState(tableBucket, result.plan()));
         enqueueReconciliation(attempt);
         processNewRebalanceTask();
         return true;
     }
 
     /**
-     * Returns the plan to reconcile for the given attempt, or null if the attempt is stale or has
-     * just been given up on.
+     * Prepares the given attempt for reconciliation and returns its plan, or null if the attempt is
+     * stale or has just been completed or given up on.
      *
      * <p>Reconciliation has to terminate. Otherwise a bucket that can never converge, for example
      * because a target server is gone for good, keeps the overall rebalance in a non-final status
      * and every later rebalance request is rejected forever.
      */
-    public synchronized @Nullable RebalancePlanForBucket getPlanForReconciliation(
+    public synchronized @Nullable RebalancePlanForBucket prepareReconciliation(
             RebalanceExecutionKey executionKey) {
         queuedReconcileEvents.remove(executionKey);
         TableBucket tableBucket = executionKey.getTableBucket();
@@ -610,7 +611,7 @@ public class RebalanceManager {
 
         // Called on the coordinator event loop, so reading the coordinator state is safe here.
         long now = clock.milliseconds();
-        String observedState = observeBucketState(tableBucket);
+        String observedState = observeReconciliationState(tableBucket, result.plan());
         boolean targetsLive =
                 rebalanceExecutor
                         .getCoordinatorContext()
@@ -660,7 +661,8 @@ public class RebalanceManager {
             RebalanceTaskAttempt attempt =
                     new RebalanceTaskAttempt(
                             new RebalanceExecutionKey(currentRebalanceId, tableBucket), now);
-            attempt.onTimedOut(now, observeBucketState(tableBucket));
+            attempt.onTimedOut(
+                    now, observeReconciliationState(tableBucket, resultForBucket.plan()));
             timedOutRebalanceTasks.put(tableBucket, attempt);
             enqueueReconciliation(attempt);
         }
@@ -785,24 +787,37 @@ public class RebalanceManager {
     }
 
     /**
-     * Returns the observable state of a bucket, used to detect whether a timed-out task is still
-     * making progress.
+     * Returns the target-relevant state of a bucket, used to detect whether a timed-out task is
+     * still making progress.
      *
      * <p>The leader and bucket epochs are deliberately left out: a reconciliation re-sends the
-     * current state and can bump them without the migration moving forward at all.
+     * current state and can bump them without the migration moving forward at all. Assignment,
+     * leader, and ISR changes involving only replicas outside the target are also excluded because
+     * they do not move the migration toward its target.
      */
-    private String observeBucketState(TableBucket tableBucket) {
+    private String observeReconciliationState(
+            TableBucket tableBucket, RebalancePlanForBucket plan) {
         CoordinatorContext coordinatorContext = rebalanceExecutor.getCoordinatorContext();
+        Set<Integer> targetReplicas = new HashSet<>(plan.getNewReplicas());
+        List<Integer> assignment = coordinatorContext.getAssignment(tableBucket);
+        Set<Integer> assignedTargetReplicas = new TreeSet<>(assignment);
+        assignedTargetReplicas.retainAll(targetReplicas);
         StringBuilder observed =
-                new StringBuilder(coordinatorContext.getAssignment(tableBucket).toString());
+                new StringBuilder("targetAssignment=")
+                        .append(assignment.equals(plan.getNewReplicas()))
+                        .append("|assignedTargets=")
+                        .append(assignedTargetReplicas);
         coordinatorContext
                 .getBucketLeaderAndIsr(tableBucket)
                 .ifPresent(
-                        leaderAndIsr ->
-                                observed.append("|leader=")
-                                        .append(leaderAndIsr.leader())
-                                        .append("|isr=")
-                                        .append(new TreeSet<>(leaderAndIsr.isr())));
+                        leaderAndIsr -> {
+                            Set<Integer> targetIsr = new TreeSet<>(leaderAndIsr.isr());
+                            targetIsr.retainAll(targetReplicas);
+                            observed.append("|targetLeader=")
+                                    .append(leaderAndIsr.leader() == plan.getNewLeader())
+                                    .append("|targetIsr=")
+                                    .append(targetIsr);
+                        });
         return observed.toString();
     }
 
@@ -864,6 +879,7 @@ public class RebalanceManager {
 
     private ClusterModel buildClusterModel(CoordinatorContext coordinatorContext) {
         Map<Integer, ServerInfo> liveTabletServers = coordinatorContext.getLiveTabletServers();
+        Set<Integer> liveTabletServerIds = coordinatorContext.liveTabletServerSet();
         Map<Integer, ServerTag> serverTags = coordinatorContext.getServerTags();
 
         Map<Integer, ServerModel> serverModelMap = new HashMap<>();
@@ -907,7 +923,8 @@ public class RebalanceManager {
                 continue;
             }
             assignment =
-                    assignmentForOptimization(coordinatorContext, tableBucket, assignment, isr);
+                    assignmentForOptimization(
+                            coordinatorContext, liveTabletServerIds, tableBucket, assignment, isr);
             for (int i = 0; i < assignment.size(); i++) {
                 int replica = assignment.get(i);
                 clusterModel.createReplica(replica, tableBucket, i, leader == replica);
@@ -918,6 +935,7 @@ public class RebalanceManager {
 
     private List<Integer> assignmentForOptimization(
             CoordinatorContext context,
+            Set<Integer> liveTabletServerIds,
             TableBucket bucket,
             List<Integer> assignment,
             LeaderAndIsr leaderAndIsr) {
@@ -939,7 +957,7 @@ public class RebalanceManager {
         List<Integer> replicas = new ArrayList<>(assignment);
         replicas.sort(
                 Comparator.comparing((Integer replica) -> replica != leaderAndIsr.leader())
-                        .thenComparing(replica -> !context.liveTabletServerSet().contains(replica))
+                        .thenComparing(replica -> !liveTabletServerIds.contains(replica))
                         .thenComparing(replica -> !leaderAndIsr.isr().contains(replica))
                         .thenComparing(
                                 replica ->

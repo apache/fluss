@@ -151,6 +151,8 @@ coordinator.rebalance.max-tracked-timed-out-tasks: 8
 - `no-progress-timeout`: A timed-out bucket migration is marked `FAILED` after this duration without observed bucket-state progress, even when its target servers are live. Progress resets the timer, so this is not a limit on the total migration duration. Either timeout can cause a migration to fail.
 - `max-tracked-timed-out-tasks`: New bucket migrations stop being admitted when this many timed-out migrations remain non-final. Admission resumes when a tracked migration reaches a final status. A higher limit allows more migrations to remain active and increases coordinator and ZooKeeper work.
 
+Only target-relevant assignment, leader, and ISR changes count as observed progress. Changes involving only replicas that are being removed do not reset either progress timer.
+
 Both durations must be at least `1 ms` and fit in a signed 64-bit millisecond value; the task limit must be at least `1`. Invalid values prevent coordinator initialization. Timeouts are evaluated during periodic reconciliation, so the transition to `FAILED` can occur after the configured duration has elapsed.
 
 ### 4. Cancel Rebalance (If Needed)

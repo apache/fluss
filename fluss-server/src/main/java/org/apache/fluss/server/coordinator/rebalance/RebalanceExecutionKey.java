@@ -31,10 +31,6 @@ public final class RebalanceExecutionKey {
         this.tableBucket = tableBucket;
     }
 
-    public String getRebalanceId() {
-        return rebalanceId;
-    }
-
     public TableBucket getTableBucket() {
         return tableBucket;
     }

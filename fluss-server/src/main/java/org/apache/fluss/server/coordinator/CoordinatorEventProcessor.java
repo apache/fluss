@@ -210,6 +210,9 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
     private final long offlineLeaderRetryDelayMs;
     private final CompletedSnapshotStoreManager completedSnapshotStoreManager;
     private final LakeTableHelper lakeTableHelper;
+    // Tracks whether the current in-memory assignment for an active rebalance bucket has been
+    // confirmed in ZooKeeper. A write attempt invalidates the entry before it starts.
+    private final Map<TableBucket, Boolean> assignmentPersistenceByBucket = new HashMap<>();
     private ScheduledFuture<?> offlineLeaderRetryTask;
 
     public CoordinatorEventProcessor(
@@ -360,6 +363,7 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
         coordinatorEventManager.close();
         rebalanceManager.close();
         onShutdown();
+        assignmentPersistenceByBucket.clear();
         coordinatorContext.resetContext();
         updateObservedKvLeaderReplicaCount();
     }
@@ -389,6 +393,7 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
     }
 
     private void initCoordinatorContext() throws Exception {
+        assignmentPersistenceByBucket.clear();
         long start = System.currentTimeMillis();
         // get all coordinator servers
         List<String> currentCoordinatorServers = zooKeeperClient.getCoordinatorServerList();
@@ -786,7 +791,17 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
             completeFromCallable(
                     rebalanceEvent.getRespCallback(), () -> processRebalance(rebalanceEvent));
         } else if (event instanceof RecoverRebalanceEvent) {
-            rebalanceManager.recoverRebalance(((RecoverRebalanceEvent) event).getRebalanceTask());
+            RebalanceTask rebalanceTask = ((RecoverRebalanceEvent) event).getRebalanceTask();
+            assignmentPersistenceByBucket.clear();
+            rebalanceManager.recoverRebalance(rebalanceTask);
+            // The coordinator context was rebuilt from ZooKeeper before recovery was submitted,
+            // so its current assignments are already confirmed without another per-bucket read.
+            for (TableBucket tableBucket : rebalanceTask.getExecutePlan().keySet()) {
+                if (rebalanceManager.getRebalancePlanForBucket(tableBucket) != null
+                        && !coordinatorContext.getAssignment(tableBucket).isEmpty()) {
+                    assignmentPersistenceByBucket.put(tableBucket, true);
+                }
+            }
         } else if (event instanceof CancelRebalanceEvent) {
             CancelRebalanceEvent cancelRebalanceEvent = (CancelRebalanceEvent) event;
             completeFromCallable(
@@ -802,9 +817,12 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
         } else if (event instanceof ReconcileRebalanceTaskEvent) {
             ReconcileRebalanceTaskEvent reconcileEvent = (ReconcileRebalanceTaskEvent) event;
             RebalancePlanForBucket plan =
-                    rebalanceManager.getPlanForReconciliation(reconcileEvent.getExecutionKey());
+                    rebalanceManager.prepareReconciliation(reconcileEvent.getExecutionKey());
             if (plan != null) {
                 tryToExecuteRebalanceTask(plan);
+            } else {
+                assignmentPersistenceByBucket.remove(
+                        reconcileEvent.getExecutionKey().getTableBucket());
             }
         } else if (event instanceof FinalizeRebalanceEvent) {
             rebalanceManager.retryFinalizeRebalance(
@@ -1665,6 +1683,7 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
 
             // 2. execute rebalance plan.
             Map<TableBucket, RebalancePlanForBucket> executePlan = rebalanceTask.getExecutePlan();
+            assignmentPersistenceByBucket.clear();
             zooKeeperClient.registerRebalanceTask(rebalanceTask);
             rebalanceManager.registerRebalance(rebalanceTask.getRebalanceId(), executePlan);
         } catch (Exception e) {
@@ -1737,7 +1756,7 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                             new ReassignmentLeaderElection(newReplicas));
                 }
             } else {
-                rebalanceManager.finishRebalanceTask(tableBucket, RebalanceStatus.COMPLETED);
+                finishRebalanceTask(tableBucket, RebalanceStatus.COMPLETED);
             }
         } catch (Exception e) {
             LOG.warn(
@@ -1788,14 +1807,13 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                     int currentLeader = leaderAndIsr.leader();
                     if (currentLeader == planForBucket.getNewLeader()) {
                         // leader action finish.
-                        rebalanceManager.finishRebalanceTask(
-                                tableBucket, RebalanceStatus.COMPLETED);
+                        finishRebalanceTask(tableBucket, RebalanceStatus.COMPLETED);
                     }
                 } else if (notifyLeaderAndIsrResultForBucket.succeeded()
                         && advanceReassignment(tableBucket, reassignment, false)
                         && isSuccessfulReassignmentResponseFromLeader(
                                 responseServerId, requestContext)) {
-                    rebalanceManager.finishRebalanceTask(tableBucket, RebalanceStatus.COMPLETED);
+                    finishRebalanceTask(tableBucket, RebalanceStatus.COMPLETED);
                 }
             } catch (Exception e) {
                 LOG.warn(
@@ -1864,8 +1882,13 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                 "Complete rebalance task {} because its table bucket was deleted or is being "
                         + "deleted.",
                 tableBucket);
-        rebalanceManager.finishRebalanceTask(tableBucket, RebalanceStatus.COMPLETED);
+        finishRebalanceTask(tableBucket, RebalanceStatus.COMPLETED);
         return true;
+    }
+
+    private void finishRebalanceTask(TableBucket tableBucket, RebalanceStatus status) {
+        rebalanceManager.finishRebalanceTask(tableBucket, status);
+        assignmentPersistenceByBucket.remove(tableBucket);
     }
 
     private void tryToCompleteRebalanceTaskOnLeaderAndIsrChange(TableBucket tableBucket) {
@@ -2150,6 +2173,11 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
 
     private boolean isReplicaAssignmentPersisted(
             TableBucket tableBucket, List<Integer> expectedReplicas) throws Exception {
+        Boolean persisted = assignmentPersistenceByBucket.get(tableBucket);
+        if (persisted != null) {
+            return persisted;
+        }
+
         BucketAssignment bucketAssignment;
         if (tableBucket.getPartitionId() == null) {
             Optional<TableAssignment> assignment =
@@ -2166,7 +2194,10 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                             ? assignment.get().getBucketAssignment(tableBucket.getBucket())
                             : null;
         }
-        return bucketAssignment != null && bucketAssignment.getReplicas().equals(expectedReplicas);
+        boolean assignmentMatches =
+                bucketAssignment != null && bucketAssignment.getReplicas().equals(expectedReplicas);
+        assignmentPersistenceByBucket.put(tableBucket, assignmentMatches);
+        return assignmentMatches;
     }
 
     private void maybeReassignedBucketLeaderIfRequired(
@@ -2215,6 +2246,7 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
 
     private void updateReplicaAssignmentForBucket(
             TableBucket tableBucket, List<Integer> targetReplicas) throws Exception {
+        assignmentPersistenceByBucket.remove(tableBucket);
         long tableId = tableBucket.getTableId();
         @Nullable Long partitionId = tableBucket.getPartitionId();
         if (partitionId == null) {
@@ -2243,6 +2275,7 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                     new PartitionAssignment(tableId, newPartitionAssignment),
                     coordinatorContext.getCoordinatorZkVersion());
         }
+        assignmentPersistenceByBucket.put(tableBucket, true);
     }
 
     private List<AdjustIsrResultForBucket> tryProcessAdjustIsr(
