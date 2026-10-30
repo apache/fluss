@@ -227,19 +227,29 @@ public final class NettyServer implements RpcServer {
             RequestsMetrics requestsMetrics) {
         List<String> listeners =
                 endpoints.stream().map(Endpoint::getListenerName).collect(Collectors.toList());
+        List<String> kafkaListenerNames = conf.get(ConfigOptions.KAFKA_LISTENER_NAMES);
+        List<String> kafkaEndpoints =
+                listeners.stream()
+                        .filter(kafkaListenerNames::contains)
+                        .collect(Collectors.toList());
+        if (!kafkaEndpoints.isEmpty()) {
+            checkState(
+                    serverType == ServerType.TABLET_SERVER,
+                    "Kafka protocol endpoints %s are only supported on TabletServer, but the server type is %s",
+                    kafkaEndpoints,
+                    serverType);
+            checkState(
+                    conf.get(ConfigOptions.KAFKA_ENABLED),
+                    "Kafka protocol endpoints %s are configured, but the Kafka service is disabled",
+                    kafkaEndpoints);
+        }
+
         List<NetworkProtocolPlugin> protocolPlugins = new ArrayList<>();
         if (conf.get(ConfigOptions.KAFKA_ENABLED)) {
             NetworkProtocolPlugin kafkaPlugin =
                     loadProtocolPlugin(NetworkProtocolPlugin.KAFKA_PROTOCOL_NAME);
             kafkaPlugin.setup(conf);
-            List<String> kafkaListenerNames = kafkaPlugin.listenerNames();
-            boolean hasKafkaEndpoint =
-                    endpoints.stream()
-                            .anyMatch(
-                                    endpoint ->
-                                            kafkaListenerNames.contains(
-                                                    endpoint.getListenerName()));
-            if (hasKafkaEndpoint) {
+            if (!kafkaEndpoints.isEmpty()) {
                 listeners.removeAll(kafkaListenerNames);
                 protocolPlugins.add(kafkaPlugin);
             }
