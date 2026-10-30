@@ -318,6 +318,11 @@ class FlinkCatalogTest {
                                 options),
                         resolvedSchema);
         catalog.createTable(this.tableInDefaultDb, table2, false);
+        // Wait for auto-created partitions before teardown drops the table. Otherwise, an
+        // unfinished auto-partition task can recreate an empty table node in ZooKeeper and
+        // cause subsequent catalog tests to fail when reading the table metadata.
+        FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(
+                TablePath.of(tableInDefaultDb.getDatabaseName(), tableInDefaultDb.getObjectName()));
         tableCreated = catalog.getTable(this.tableInDefaultDb);
         // need to overwrite the option
         addedOptions.put(BUCKET_KEY.key(), "third");
