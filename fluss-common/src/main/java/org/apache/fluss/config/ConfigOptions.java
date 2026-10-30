@@ -2736,6 +2736,17 @@ public class ConfigOptions {
                             "If true, every newly created SST file will contain a Bloom filter. "
                                     + "It is enabled by default.");
 
+    public static final ConfigOption<Boolean> KV_USE_PREFIX_BLOOM_FILTER =
+            key("kv.rocksdb.use-prefix-bloom-filter")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Enables prefix Bloom filters for all compatible primary-key KV tables. "
+                                    + "Unsupported key layouts and historical KV state retain their existing behavior, "
+                                    + "with the fallback reason logged. Requires restarting TabletServers to apply to existing KV instances. "
+                                    + "Filters are built for new SST files through flush and compaction; existing SSTs remain readable. "
+                                    + "Compatible tables use a Bloom filter policy even when kv.rocksdb.use-bloom-filter is false.");
+
     public static final ConfigOption<Double> KV_BLOOM_FILTER_BITS_PER_KEY =
             key("kv.rocksdb.bloom-filter.bits-per-key")
                     .doubleType()

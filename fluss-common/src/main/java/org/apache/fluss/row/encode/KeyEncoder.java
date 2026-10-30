@@ -38,6 +38,20 @@ public interface KeyEncoder {
     /** Encode the key of given row to byte array. */
     byte[] encodeKey(InternalRow row);
 
+    /**
+     * Describes the bytes of the first {@code fieldCount} encoded key fields.
+     *
+     * <p>An empty result means that this encoder cannot describe the requested prefix. The layout
+     * must follow the same field order and byte encoding as {@link #encodeKey(InternalRow)}.
+     * Encoders that support layouts require a positive count no greater than their encoded field
+     * count and reject invalid counts with {@link IllegalArgumentException}.
+     *
+     * @param fieldCount number of leading encoded fields to include, in this encoder's field order
+     */
+    default Optional<KeyPrefixLayout> getPrefixLayout(int fieldCount) {
+        return Optional.empty();
+    }
+
     // -------------------------------------------------------------------------
     //  Factory Methods
     // -------------------------------------------------------------------------

@@ -18,9 +18,6 @@
 package org.apache.fluss.server.log;
 
 import org.apache.fluss.config.ConfigOptions;
-import org.apache.fluss.config.Configuration;
-import org.apache.fluss.config.TableConfig;
-import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.SchemaInfo;
@@ -50,7 +47,6 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
 
-import static org.apache.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
 import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA_PK;
@@ -276,27 +272,21 @@ final class DroppedTableRecoveryTest extends LogTestBase {
         log2.flush(false);
 
         // Create KV tablets
-        TableConfig tableConfig =
-                new TableConfig(Configuration.fromMap(DATA1_TABLE_DESCRIPTOR.getProperties()));
         KvTablet kvTablet1 =
                 kvManager.getOrCreateKv(
                         PhysicalTablePath.of(tablePath),
                         tableBucket1,
                         log1,
-                        KvFormat.COMPACTED,
+                        KvManager.getTableInfo(zkClient, tablePath),
                         new TestingSchemaGetter(new SchemaInfo(DATA1_SCHEMA_PK, 0)),
-                        tableConfig,
-                        DEFAULT_COMPRESSION,
                         null);
         KvTablet kvTablet2 =
                 kvManager.getOrCreateKv(
                         PhysicalTablePath.of(tablePath),
                         tableBucket2,
                         log2,
-                        KvFormat.COMPACTED,
+                        KvManager.getTableInfo(zkClient, tablePath),
                         new TestingSchemaGetter(new SchemaInfo(DATA1_SCHEMA_PK, 0)),
-                        tableConfig,
-                        DEFAULT_COMPRESSION,
                         null);
 
         // Get directories before shutdown
@@ -368,17 +358,13 @@ final class DroppedTableRecoveryTest extends LogTestBase {
         log.flush(false);
 
         // Create KV tablet
-        TableConfig tableConfig =
-                new TableConfig(Configuration.fromMap(DATA1_TABLE_DESCRIPTOR.getProperties()));
         KvTablet kvTablet =
                 kvManager.getOrCreateKv(
                         partitionedTablePath,
                         partitionedTableBucket,
                         log,
-                        KvFormat.COMPACTED,
+                        KvManager.getTableInfo(zkClient, partitionedTablePath.getTablePath()),
                         new TestingSchemaGetter(new SchemaInfo(DATA1_SCHEMA, 0)),
-                        tableConfig,
-                        DEFAULT_COMPRESSION,
                         null);
 
         String kvDir = kvTablet.getKvTabletDir().getAbsolutePath();

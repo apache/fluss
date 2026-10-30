@@ -168,6 +168,13 @@ public final class Schema implements Serializable {
         return getPrimaryKey().map(PrimaryKey::getColumnNames).orElse(Collections.emptyList());
     }
 
+    /** Returns primary-key columns in encoding order, excluding partition columns. */
+    public List<String> getPhysicalPrimaryKeys(List<String> partitionKeys) {
+        List<String> keys = new ArrayList<>(getPrimaryKeyColumnNames());
+        keys.removeAll(partitionKeys);
+        return keys;
+    }
+
     /**
      * Serialize the schema to a JSON byte array.
      *

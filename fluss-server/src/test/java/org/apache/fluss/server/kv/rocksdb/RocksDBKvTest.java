@@ -17,14 +17,21 @@
 
 package org.apache.fluss.server.kv.rocksdb;
 
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.SimpleCounter;
 import org.apache.fluss.metrics.util.TestHistogram;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.encode.CompactedKeyEncoder;
 import org.apache.fluss.server.kv.KvCloseMode;
+import org.apache.fluss.server.kv.KvManager;
+import org.apache.fluss.server.kv.TableKeyPrefixLayoutResolver;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 
@@ -34,6 +41,7 @@ import io.github.fluss_contrib.rocksdb.RocksDBException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.File;
@@ -146,10 +154,18 @@ class RocksDBKvTest {
         }
     }
 
-    @Test
-    void testPrefixLookupWithEncodedKeysAndMixedSstAndMemtable(@TempDir Path tempDir)
+    @ParameterizedTest
+    @CsvSource({"false, false", "false, true", "true, false", "true, true"})
+    void testPrefixLookupWithEncodedKeysAndMixedSstAndMemtable(
+            boolean prefixBloomEnabled, boolean partitioned, @TempDir Path tempDir)
             throws Exception {
-        RowType keyType = RowType.of(DataTypes.STRING(), DataTypes.INT());
+        Schema schema =
+                Schema.newBuilder()
+                        .column("bucket", DataTypes.STRING())
+                        .column("id", DataTypes.INT())
+                        .primaryKey("bucket", "id")
+                        .build();
+        RowType keyType = schema.getRowType();
         CompactedKeyEncoder keyEncoder = new CompactedKeyEncoder(keyType);
         CompactedKeyEncoder prefixEncoder = new CompactedKeyEncoder(keyType, new int[] {0});
         byte[] prefix = prefixEncoder.encodeKey(GenericRow.of(BinaryString.fromString("ab"), 0));
@@ -158,7 +174,32 @@ class RocksDBKvTest {
         byte[] key3 = keyEncoder.encodeKey(GenericRow.of(BinaryString.fromString("ab"), 3));
         byte[] key4 = keyEncoder.encodeKey(GenericRow.of(BinaryString.fromString("ab"), 4));
         byte[] other = keyEncoder.encodeKey(GenericRow.of(BinaryString.fromString("ac"), 1));
-        try (RocksDBKv kv = buildRocksDBKv(tempDir.toFile())) {
+        TableDescriptor table =
+                TableDescriptor.builder().schema(schema).distributedBy(1, "bucket").build();
+        Configuration config = new Configuration();
+        config.set(ConfigOptions.KV_PARTITIONED_INDEX_FILTERS, partitioned);
+        RocksDBResourceContainer resources =
+                new RocksDBResourceContainer(
+                        config,
+                        tempDir.toFile(),
+                        false,
+                        KvManager.getDefaultRateLimiter(),
+                        null,
+                        null,
+                        prefixBloomEnabled
+                                ? TableKeyPrefixLayoutResolver.resolve(
+                                        TableInfo.of(
+                                                TablePath.of("db", "table"),
+                                                1L,
+                                                1,
+                                                table,
+                                                "/tmp/fluss",
+                                                0L,
+                                                0L))
+                                : null);
+        ColumnFamilyOptions columnOptions = resources.getColumnOptions();
+        try (RocksDBKv kv =
+                new RocksDBKvBuilder(tempDir.toFile(), resources, columnOptions).build()) {
             kv.put(key1, new byte[] {1});
             kv.put(key2, new byte[] {2});
             kv.put(key3, new byte[] {3});

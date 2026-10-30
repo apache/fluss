@@ -18,7 +18,6 @@
 package org.apache.fluss.server.kv;
 
 import org.apache.fluss.annotation.VisibleForTesting;
-import org.apache.fluss.compression.ArrowCompressionInfo;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
@@ -28,7 +27,6 @@ import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.exception.KvStorageException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.memory.LazyMemorySegmentPool;
-import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
@@ -538,19 +536,18 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
      * @param tablePath the table path of the bucket belongs to
      * @param tableBucket the table bucket
      * @param logTablet the cdc log tablet of the kv tablet
-     * @param kvFormat the kv format
+     * @param tableInfo the table metadata used to configure and encode this tablet
      * @param flushCompleteListener invoked after each kv flush that made progress, nullable
      */
     public KvTablet getOrCreateKv(
             PhysicalTablePath tablePath,
             TableBucket tableBucket,
             LogTablet logTablet,
-            KvFormat kvFormat,
+            TableInfo tableInfo,
             SchemaGetter schemaGetter,
-            TableConfig tableConfig,
-            ArrowCompressionInfo arrowCompressionInfo,
             @Nullable Runnable flushCompleteListener)
             throws Exception {
+        TableConfig tableConfig = tableInfo.getTableConfig();
         return inKvLock(
                 tableBucket,
                 () -> {
@@ -560,7 +557,8 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
 
                     File tabletDir =
                             getOrCreateTabletDir(logTablet.getDataDir(), tablePath, tableBucket);
-                    RowMerger merger = RowMerger.create(tableConfig, kvFormat, schemaGetter);
+                    RowMerger merger =
+                            RowMerger.create(tableConfig, tableConfig.getKvFormat(), schemaGetter);
                     AutoIncrementManager autoIncrementManager =
                             new AutoIncrementManager(
                                     schemaGetter,
@@ -578,9 +576,9 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
                                     serverMetricGroup,
                                     arrowBufferAllocator,
                                     memorySegmentPool,
-                                    kvFormat,
+                                    tableConfig.getKvFormat(),
                                     merger,
-                                    arrowCompressionInfo,
+                                    tableConfig.getArrowCompressionInfo(),
                                     schemaGetter,
                                     tableConfig.getChangelogImage(),
                                     sharedRocksDBRateLimiter,
@@ -591,7 +589,7 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
                                     flushCompleteListener,
                                     autoIncrementManager,
                                     clock,
-                                    tableConfig);
+                                    tableInfo);
                     currentKvs.put(tableBucket, tablet);
 
                     LOG.info(
@@ -765,7 +763,7 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
                         flushCompleteListener,
                         autoIncrementManager,
                         clock,
-                        tableConfig);
+                        tableInfo);
         currentKvs.put(tableBucket, kvTablet);
 
         return kvTablet;

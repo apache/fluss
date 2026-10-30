@@ -22,6 +22,7 @@ import org.apache.fluss.config.ConfigOption;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.ReadableConfig;
+import org.apache.fluss.row.encode.KeyPrefixLayout;
 import org.apache.fluss.server.kv.KvManager;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.IOUtils;
@@ -38,6 +39,7 @@ import io.github.fluss_contrib.rocksdb.HyperClockCache;
 import io.github.fluss_contrib.rocksdb.IndexType;
 import io.github.fluss_contrib.rocksdb.InfoLogLevel;
 import io.github.fluss_contrib.rocksdb.PlainTableConfig;
+import io.github.fluss_contrib.rocksdb.PrefixLayout;
 import io.github.fluss_contrib.rocksdb.RateLimiter;
 import io.github.fluss_contrib.rocksdb.ReadOptions;
 import io.github.fluss_contrib.rocksdb.Statistics;
@@ -83,6 +85,8 @@ public class RocksDBResourceContainer implements AutoCloseable {
 
     /** The configurations from file. */
     private final ReadableConfig configuration;
+
+    @Nullable private final PrefixLayout prefixLayout;
 
     private final boolean enableStatistics;
 
@@ -162,7 +166,27 @@ public class RocksDBResourceContainer implements AutoCloseable {
             RateLimiter sharedRateLimiter,
             @Nullable Cache sharedBlockCache,
             @Nullable WriteBufferManager sharedWriteBufferManager) {
-        validateConfiguration(configuration);
+        this(
+                configuration,
+                instanceBasePath,
+                enableStatistics,
+                sharedRateLimiter,
+                sharedBlockCache,
+                sharedWriteBufferManager,
+                null);
+    }
+
+    /** Creates RocksDB options with a matching prefix extractor and Bloom filter policy. */
+    public RocksDBResourceContainer(
+            ReadableConfig configuration,
+            @Nullable File instanceBasePath,
+            boolean enableStatistics,
+            RateLimiter sharedRateLimiter,
+            @Nullable Cache sharedBlockCache,
+            @Nullable WriteBufferManager sharedWriteBufferManager,
+            @Nullable KeyPrefixLayout keyPrefixLayout) {
+        validateConfiguration(configuration, keyPrefixLayout != null);
+        this.prefixLayout = keyPrefixLayout == null ? null : toRocksDBPrefixLayout(keyPrefixLayout);
         this.configuration = configuration;
 
         this.instanceRocksDBPath =
@@ -180,12 +204,16 @@ public class RocksDBResourceContainer implements AutoCloseable {
 
     /** Validates metadata options before allocating RocksDB resources. */
     public static void validateConfiguration(ReadableConfig configuration) {
+        validateConfiguration(configuration, false);
+    }
+
+    private static void validateConfiguration(ReadableConfig configuration, boolean prefixBloom) {
         if (configuration.get(ConfigOptions.KV_PARTITIONED_INDEX_FILTERS)) {
             checkArgument(
                     configuration.get(ConfigOptions.KV_METADATA_BLOCK_SIZE).getBytes() > 0,
                     "%s must be positive when partitioning is enabled.",
                     ConfigOptions.KV_METADATA_BLOCK_SIZE.key());
-            if (configuration.get(ConfigOptions.KV_USE_BLOOM_FILTER)) {
+            if (prefixBloom || configuration.get(ConfigOptions.KV_USE_BLOOM_FILTER)) {
                 checkArgument(
                         !configuration.get(ConfigOptions.KV_BLOOM_FILTER_BLOCK_BASED_MODE),
                         "%s must be false to use partitioned Bloom filters.",
@@ -256,7 +284,9 @@ public class RocksDBResourceContainer implements AutoCloseable {
 
         // load configurable options on top of pre-defined profile
         setColumnFamilyOptionsFromConfigurableOptions(opt, handlesToClose);
-
+        if (prefixLayout != null) {
+            opt.useLayoutPrefixExtractor(prefixLayout);
+        }
         return opt;
     }
 
@@ -414,8 +444,7 @@ public class RocksDBResourceContainer implements AutoCloseable {
         boolean partitioning = configuration.get(ConfigOptions.KV_PARTITIONED_INDEX_FILTERS);
         blockBasedTableConfig.setIndexType(
                 partitioning ? IndexType.kTwoLevelIndexSearch : IndexType.kBinarySearch);
-        blockBasedTableConfig.setPartitionFilters(
-                partitioning && internalGetOption(ConfigOptions.KV_USE_BLOOM_FILTER));
+        blockBasedTableConfig.setPartitionFilters(partitioning && useBloomFilter());
 
         // Configure index and filter blocks caching
         blockBasedTableConfig.setCacheIndexAndFilterBlocks(
@@ -428,7 +457,7 @@ public class RocksDBResourceContainer implements AutoCloseable {
         blockBasedTableConfig.setPinTopLevelIndexAndFilter(
                 internalGetOption(ConfigOptions.KV_PIN_TOP_LEVEL_INDEX_AND_FILTER));
 
-        if (internalGetOption(ConfigOptions.KV_USE_BLOOM_FILTER)) {
+        if (useBloomFilter()) {
             final double bitsPerKey = internalGetOption(ConfigOptions.KV_BLOOM_FILTER_BITS_PER_KEY);
             final boolean blockBasedMode =
                     internalGetOption(ConfigOptions.KV_BLOOM_FILTER_BLOCK_BASED_MODE);
@@ -438,6 +467,43 @@ public class RocksDBResourceContainer implements AutoCloseable {
         }
 
         return currentOptions.setTableFormatConfig(blockBasedTableConfig);
+    }
+
+    private static PrefixLayout toRocksDBPrefixLayout(KeyPrefixLayout layout) {
+        List<PrefixLayout.Step> steps = new ArrayList<>();
+        for (KeyPrefixLayout.Component component : layout.getComponents()) {
+            switch (component) {
+                case FIXED1:
+                    steps.add(PrefixLayout.fixed(1));
+                    break;
+                case FIXED2:
+                    steps.add(PrefixLayout.fixed(2));
+                    break;
+                case FIXED4:
+                    steps.add(PrefixLayout.fixed(4));
+                    break;
+                case FIXED8:
+                    steps.add(PrefixLayout.fixed(8));
+                    break;
+                case VARINT32:
+                    steps.add(PrefixLayout.varint32());
+                    break;
+                case VARINT64:
+                    steps.add(PrefixLayout.varint64());
+                    break;
+                case BYTES_VARINT32:
+                    steps.add(PrefixLayout.bytesVarint32());
+                    break;
+                default:
+                    throw new IllegalArgumentException(
+                            "Unsupported key layout component: " + component);
+            }
+        }
+        return PrefixLayout.of(steps.toArray(new PrefixLayout.Step[0]));
+    }
+
+    private boolean useBloomFilter() {
+        return prefixLayout != null || internalGetOption(ConfigOptions.KV_USE_BLOOM_FILTER);
     }
 
     /**
