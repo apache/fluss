@@ -1287,7 +1287,8 @@ public class FlinkSourceEnumerator
                             bucketOffsetsRetriever,
                             stoppingOffsetsInitializer,
                             tableInfo.getNumBuckets(),
-                            this::listPartitions);
+                            this::listPartitions,
+                            partitionFilters);
             List<SourceSplitBase> generatedSplits =
                     lakeSplitGenerator.generateHybridLakeFlussSplits();
             if (generatedSplits == null) {
