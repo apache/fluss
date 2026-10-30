@@ -66,13 +66,18 @@ public class DynamicPartitionCreator {
         this.fatalErrorHandler = fatalErrorHandler;
     }
 
-    /** Ensures the partition exists, creating it asynchronously when enabled. */
-    public void checkAndCreatePartitionAsync(
+    /**
+     * Ensures the partition exists, creating it asynchronously when enabled.
+     *
+     * @return whether this call initiated or observed asynchronous partition creation whose
+     *     metadata may not yet be visible
+     */
+    public boolean checkAndCreatePartitionAsync(
             PhysicalTablePath physicalTablePath, TableInfo tableInfo) {
         String partitionName = physicalTablePath.getPartitionName();
         if (partitionName == null) {
             // no need to check and create partition
-            return;
+            return false;
         }
 
         Optional<Long> partitionIdOpt = metadataUpdater.getPartitionId(physicalTablePath);
@@ -83,6 +88,7 @@ public class DynamicPartitionCreator {
                 // if the partition is already in inflightPartitionsToCreate, we should skip
                 // creating it.
                 LOG.debug("Partition {} is already being created, skipping.", physicalTablePath);
+                return true;
             } else if (forceCheckPartitionExist(physicalTablePath)) {
                 // if the partition exists, we should skip creating it.
                 LOG.debug("Partition {} already exists, skipping.", physicalTablePath);
@@ -112,8 +118,10 @@ public class DynamicPartitionCreator {
                     LOG.debug(
                             "Partition {} is already being created, skipping.", physicalTablePath);
                 }
+                return true;
             }
         }
+        return false;
     }
 
     private boolean forceCheckPartitionExist(PhysicalTablePath physicalTablePath) {

@@ -20,6 +20,7 @@ package org.apache.fluss.client.table;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.ClientToServerITCaseBase;
+import org.apache.fluss.client.admin.OffsetSpec.LatestSpec;
 import org.apache.fluss.client.lookup.LookupResult;
 import org.apache.fluss.client.lookup.Lookuper;
 import org.apache.fluss.client.table.scanner.Scan;
@@ -40,6 +41,8 @@ import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.MergeEngineType;
+import org.apache.fluss.metadata.PartitionInfo;
+import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
@@ -69,6 +72,7 @@ import javax.annotation.Nullable;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -123,6 +127,77 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         try (Table table = conn.getTable(DATA1_TABLE_PATH)) {
             AppendWriter appendWriter = table.newAppend().createWriter();
             appendWriter.append(row(1, "a")).get();
+        }
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+        "ARROW,false",
+        "INDEXED,false",
+        "COMPACTED,false",
+        "ARROW,true",
+        "INDEXED,true",
+        "COMPACTED,true"
+    })
+    void testAppendToExplicitBucket(String format, boolean partitioned) throws Exception {
+        TablePath path = TablePath.of("test_db_1", "explicit_bucket_" + format + partitioned);
+        TableDescriptor.Builder builder =
+                TableDescriptor.builder()
+                        .schema(DATA1_SCHEMA)
+                        .distributedBy(3)
+                        .logFormat(LogFormat.valueOf(format));
+        if (partitioned) {
+            builder.partitionedBy("b");
+        }
+        createTable(path, builder.build(), false);
+        Long partitionId = null;
+        if (partitioned) {
+            admin.createPartition(
+                            path, new PartitionSpec(Collections.singletonMap("b", "p1")), false)
+                    .get();
+            PartitionInfo partition = admin.listPartitionInfos(path).get().get(0);
+            partitionId = partition.getPartitionId();
+        }
+        try (Table table = conn.getTable(path);
+                LogScanner scanner = table.newScan().createLogScanner()) {
+            AppendWriter writer = table.newAppend().createWriter();
+            assertThatThrownBy(() -> writer.append(row(0, "p1"), -1))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> writer.append(row(0, "p1"), 3))
+                    .hasRootCauseInstanceOf(IllegalArgumentException.class)
+                    .hasStackTraceContaining("out of range");
+            for (int i = 0; i < 20; i++) {
+                writer.append(row(i, "p1"), 1).get();
+            }
+            Map<Integer, Long> offsets =
+                    (partitioned
+                                    ? admin.listOffsets(
+                                            path, "p1", Arrays.asList(0, 1, 2), new LatestSpec())
+                                    : admin.listOffsets(
+                                            path, Arrays.asList(0, 1, 2), new LatestSpec()))
+                            .all()
+                            .get();
+            assertThat(offsets).containsEntry(0, 0L).containsEntry(1, 20L).containsEntry(2, 0L);
+            if (partitioned) {
+                scanner.subscribeFromBeginning(partitionId, 1);
+            } else {
+                scanner.subscribeFromBeginning(1);
+            }
+            TableBucket expectedBucket =
+                    new TableBucket(table.getTableInfo().getTableId(), partitionId, 1);
+            int count = 0;
+            while (count < 20) {
+                ScanRecords records = scanner.poll(Duration.ofSeconds(1));
+                for (TableBucket bucket : records.buckets()) {
+                    assertThat(bucket).isEqualTo(expectedBucket);
+                    for (ScanRecord record : records.records(bucket)) {
+                        assertThatRow(record.getRow())
+                                .withSchema(DATA1_ROW_TYPE)
+                                .isEqualTo(row(count++, "p1"));
+                    }
+                }
+            }
+            assertThat(count).isEqualTo(20);
         }
     }
 

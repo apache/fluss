@@ -31,10 +31,13 @@ import org.apache.fluss.client.table.scanner.log.LogScanner;
 import org.apache.fluss.client.table.scanner.log.MultiTableLogScanner;
 import org.apache.fluss.client.table.scanner.log.MultiTableRecords;
 import org.apache.fluss.client.table.scanner.log.ScanRecords;
+import org.apache.fluss.client.write.WriteCallback;
+import org.apache.fluss.client.write.WriteRecord;
 import org.apache.fluss.client.write.WriterClient;
 import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
@@ -50,15 +53,20 @@ import java.lang.reflect.Proxy;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
 
 /** ITCase for {@link MultiTableWriter} / {@link MultiTableWriterImpl}. */
 class MultiTableWriterITCase extends ClientToServerITCaseBase {
@@ -109,6 +117,86 @@ class MultiTableWriterITCase extends ClientToServerITCaseBase {
         // Verify through a log scanner bound to the table.
         List<GenericRow> actual = pollAllAppendRows(tp, recordCount);
         assertThat(actual).containsExactlyInAnyOrderElementsOf(expected);
+    }
+
+    @Test
+    void testWriteLogTableToExplicitBuckets() throws Exception {
+        TablePath tp = TablePath.of("test_db", "mt_w_explicit_bucket");
+        long tableId =
+                createTable(
+                        tp,
+                        TableDescriptor.builder().schema(LOG_SCHEMA).distributedBy(2).build(),
+                        false);
+        waitAllReplicasReady(tableId, 2);
+        int sid = currentSchemaId(tp);
+
+        try (MultiTableWriter writer = conn.getMultiTable().newMultiTableWrite().createWriter()) {
+            writer.write(MultiTableWriteRecord.forAppend(tp, row(1, "bucket-1"), sid, 1)).get();
+            writer.write(MultiTableWriteRecord.forAppend(tp, row(2, "bucket-0"), sid, 0)).get();
+            CompletableFuture<WriteResult> rejected =
+                    writer.write(
+                            MultiTableWriteRecord.forAppend(tp, row(3, "out-of-range"), sid, 2));
+            assertThatThrownBy(rejected::get)
+                    .isInstanceOf(ExecutionException.class)
+                    .rootCause()
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("bucket");
+        }
+
+        Map<Integer, List<GenericRow>> rowsByBucket = pollAppendRowsByBucket(tp, 2);
+        assertThat(rowsByBucket.get(1)).containsExactly(row(1, "bucket-1"));
+        assertThat(rowsByBucket.get(0)).containsExactly(row(2, "bucket-0"));
+    }
+
+    @Test
+    void testCopyLogTableToMatchingBuckets() throws Exception {
+        TablePath source = TablePath.of("test_db", "mt_w_bucket_copy_source");
+        TablePath target = TablePath.of("test_db", "mt_w_bucket_copy_target");
+        TableDescriptor descriptor =
+                TableDescriptor.builder().schema(LOG_SCHEMA).distributedBy(3).build();
+        waitAllReplicasReady(createTable(source, descriptor, false), 3);
+        waitAllReplicasReady(createTable(target, descriptor, true), 3);
+        int sourceSchemaId = currentSchemaId(source);
+        int targetSchemaId = currentSchemaId(target);
+        Map<Integer, List<GenericRow>> expected = new HashMap<>();
+
+        try (MultiTableWriter writer = conn.getMultiTable().newMultiTableWrite().createWriter();
+                Table table = conn.getTable(source);
+                LogScanner scanner = table.newScan().createLogScanner()) {
+            for (int bucket = 0; bucket < 3; bucket++) {
+                List<GenericRow> rows = new ArrayList<>();
+                for (int i = 0; i < 2; i++) {
+                    GenericRow record = row(bucket * 2 + i, "source-" + bucket + "-" + i);
+                    rows.add(record);
+                    writer.write(
+                                    MultiTableWriteRecord.forAppend(
+                                            source, record, sourceSchemaId, bucket))
+                            .get();
+                }
+                expected.put(bucket, rows);
+            }
+
+            subscribeFromBeginning(scanner, table);
+            long deadline = System.currentTimeMillis() + 30_000;
+            int copied = 0;
+            while (copied < 6 && System.currentTimeMillis() < deadline) {
+                ScanRecords records = scanner.poll(Duration.ofSeconds(1));
+                for (TableBucket bucket : records.buckets()) {
+                    for (ScanRecord record : records.records(bucket)) {
+                        writer.write(
+                                        MultiTableWriteRecord.forAppend(
+                                                target,
+                                                copyRow(record.getRow(), 2),
+                                                targetSchemaId,
+                                                bucket.getBucket()))
+                                .get();
+                        copied++;
+                    }
+                }
+            }
+            assertThat(copied).isEqualTo(6);
+        }
+        assertThat(pollAppendRowsByBucket(target, 6)).isEqualTo(expected);
     }
 
     @Test
@@ -188,6 +276,70 @@ class MultiTableWriterITCase extends ClientToServerITCaseBase {
         try (Table table = conn.getTable(tp)) {
             Lookuper lookuper = table.newLookup().createLookuper();
             assertThat(lookupRow(lookuper, row(1))).isNull();
+        }
+    }
+
+    @Test
+    void testExplicitBucketMustMatchBucketKeyRouting() throws Exception {
+        TablePath tp = TablePath.of("test_db", "mt_w_log_bucket_mismatch");
+        long tableId =
+                createTable(
+                        tp,
+                        TableDescriptor.builder().schema(LOG_SCHEMA).distributedBy(2, "id").build(),
+                        false);
+        waitAllReplicasReady(tableId, 2);
+        int sid = currentSchemaId(tp);
+
+        try (MultiTableWriter writer = conn.getMultiTable().newMultiTableWrite().createWriter()) {
+            CompletableFuture<WriteResult> bucket0 =
+                    writer.write(MultiTableWriteRecord.forAppend(tp, row(1, "value"), sid, 0));
+            CompletableFuture<WriteResult> bucket1 =
+                    writer.write(MultiTableWriteRecord.forAppend(tp, row(1, "value"), sid, 1));
+
+            assertThat(bucket0.isCompletedExceptionally())
+                    .isNotEqualTo(bucket1.isCompletedExceptionally());
+            CompletableFuture<WriteResult> rejected =
+                    bucket0.isCompletedExceptionally() ? bucket0 : bucket1;
+            CompletableFuture<WriteResult> accepted =
+                    bucket0.isCompletedExceptionally() ? bucket1 : bucket0;
+            assertThatThrownBy(rejected::get)
+                    .isInstanceOf(ExecutionException.class)
+                    .rootCause()
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("bucket");
+            accepted.get();
+            int bucketId = accepted == bucket0 ? 0 : 1;
+            assertThat(pollAppendRowsByBucket(tp, 1))
+                    .containsOnlyKeys(bucketId)
+                    .containsEntry(bucketId, Collections.singletonList(row(1, "value")));
+        }
+    }
+
+    @Test
+    void testSynchronousSendFailureCompletesWriteFutureExceptionally() throws Exception {
+        TablePath tp = TablePath.of("test_db", "mt_w_send_timeout");
+        long tableId =
+                createTable(
+                        tp,
+                        TableDescriptor.builder().schema(LOG_SCHEMA).distributedBy(1).build(),
+                        false);
+        waitAllReplicasReady(tableId, 1);
+        int sid = currentSchemaId(tp);
+
+        WriterClient writerClient = mock(WriterClient.class);
+        doThrow(new FlussRuntimeException("send failed", new TimeoutException("send timed out")))
+                .when(writerClient)
+                .send(any(WriteRecord.class), any(WriteCallback.class));
+        try (MultiTableWriter writer =
+                new MultiTableWriterImpl(
+                        ((FlussConnection) conn).getMetadataUpdater(), admin, writerClient)) {
+            CompletableFuture<WriteResult> result =
+                    writer.write(MultiTableWriteRecord.forAppend(tp, row(1, "value"), sid));
+            assertThatThrownBy(result::get)
+                    .isInstanceOf(ExecutionException.class)
+                    .rootCause()
+                    .isInstanceOf(TimeoutException.class)
+                    .hasMessageContaining("timed out");
         }
     }
 
@@ -929,6 +1081,30 @@ class MultiTableWriterITCase extends ClientToServerITCaseBase {
                     }
                 }
             }
+        }
+        return result;
+    }
+
+    private Map<Integer, List<GenericRow>> pollAppendRowsByBucket(TablePath tp, int expected)
+            throws Exception {
+        Map<Integer, List<GenericRow>> result = new HashMap<>();
+        try (Table table = conn.getTable(tp);
+                LogScanner scanner = table.newScan().createLogScanner()) {
+            subscribeFromBeginning(scanner, table);
+            int fieldCount = table.getTableInfo().getRowType().getFieldCount();
+            long deadline = System.currentTimeMillis() + 30_000;
+            int count = 0;
+            while (count < expected && System.currentTimeMillis() < deadline) {
+                ScanRecords records = scanner.poll(Duration.ofSeconds(1));
+                for (TableBucket bucket : records.buckets()) {
+                    for (ScanRecord record : records.records(bucket)) {
+                        result.computeIfAbsent(bucket.getBucket(), ignored -> new ArrayList<>())
+                                .add(copyRow(record.getRow(), fieldCount));
+                        count++;
+                    }
+                }
+            }
+            assertThat(count).isEqualTo(expected);
         }
         return result;
     }

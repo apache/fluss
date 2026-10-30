@@ -25,10 +25,12 @@ import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.StaleMetadataException;
+import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableOrPartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
+import org.apache.fluss.rpc.messages.ApiMessage;
 import org.apache.fluss.rpc.messages.MetadataRequest;
 import org.apache.fluss.rpc.messages.MetadataResponse;
 import org.apache.fluss.rpc.messages.PbPartitionMetadata;
@@ -45,10 +47,16 @@ import org.junit.jupiter.params.provider.ValueSource;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeoutException;
 
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.buildMetadataResponse;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /** UT Test for update metadata of {@link MetadataUpdater}. */
 public class MetadataUpdaterTest {
@@ -57,6 +65,98 @@ public class MetadataUpdaterTest {
             new ServerNode(1, "localhost", 8080, ServerType.COORDINATOR);
     private static final ServerNode TS_NODE =
             new ServerNode(1, "localhost", 8080, ServerType.TABLET_SERVER);
+    private static final TablePath TABLE_PATH = TablePath.of("db", "table");
+    private static final PhysicalTablePath PARTITION_PATH = PhysicalTablePath.of(TABLE_PATH, "p");
+
+    @Test
+    void testTargetMetadataRefreshReturnsItsSuccessfulSnapshot() {
+        Cluster cached = clusterWithPartition(2);
+        RpcClient rpcClient = mock(RpcClient.class);
+        when(rpcClient.sendRequest(
+                        eq(TS_NODE), eq(ApiKeys.GET_METADATA), any(MetadataRequest.class)))
+                .thenReturn(CompletableFuture.completedFuture(partitionMetadata(4)));
+        MetadataUpdater updater = new MetadataUpdater(rpcClient, new Configuration(), cached);
+
+        Cluster refreshed = updater.updatePhysicalTableMetadata(PARTITION_PATH);
+
+        assertThat(refreshed).isNotNull().isSameAs(updater.getCluster()).isNotSameAs(cached);
+        assertThat(refreshed.getBucketCount(TableOrPartition.ofPartition(2L))).hasValue(4);
+        verify(rpcClient)
+                .sendRequest(eq(TS_NODE), eq(ApiKeys.GET_METADATA), any(MetadataRequest.class));
+    }
+
+    @Test
+    void testTargetMetadataRefreshReturnsNullOnRetriableFailure() {
+        assertFailedTargetRefreshKeepsCachedSnapshot(
+                new StaleMetadataException("tablet server metadata is stale"));
+    }
+
+    @Test
+    void testTargetMetadataRefreshReturnsNullOnTimeout() {
+        assertFailedTargetRefreshKeepsCachedSnapshot(new TimeoutException("metadata timed out"));
+    }
+
+    @Test
+    void testBootstrapOnlyRefreshDoesNotReportTargetSuccess() {
+        RpcClient rpcClient = mock(RpcClient.class);
+        when(rpcClient.sendRequest(
+                        any(ServerNode.class),
+                        eq(ApiKeys.GET_METADATA),
+                        any(MetadataRequest.class)))
+                .thenReturn(
+                        CompletableFuture.completedFuture(
+                                buildMetadataResponse(
+                                        CS_NODE,
+                                        Collections.singleton(TS_NODE),
+                                        Collections.emptyList(),
+                                        Collections.emptyList())));
+        Configuration configuration = new Configuration();
+        configuration.set(
+                ConfigOptions.BOOTSTRAP_SERVERS, Collections.singletonList("localhost:8080"));
+        MetadataUpdater updater = new MetadataUpdater(rpcClient, configuration, Cluster.empty());
+
+        assertThat(updater.updatePhysicalTableMetadata(PARTITION_PATH)).isNull();
+        assertThat(updater.getCluster().getAliveTabletServerList()).containsExactly(TS_NODE);
+        assertThat(updater.getCluster().getPartitionId(PARTITION_PATH)).isEmpty();
+    }
+
+    private static void assertFailedTargetRefreshKeepsCachedSnapshot(Exception failure) {
+        Cluster cached = clusterWithPartition(2);
+        RpcClient rpcClient = mock(RpcClient.class);
+        CompletableFuture<ApiMessage> failed = new CompletableFuture<>();
+        failed.completeExceptionally(failure);
+        when(rpcClient.sendRequest(
+                        eq(TS_NODE), eq(ApiKeys.GET_METADATA), any(MetadataRequest.class)))
+                .thenReturn(failed);
+        MetadataUpdater updater = new MetadataUpdater(rpcClient, new Configuration(), cached);
+
+        assertThat(updater.updatePhysicalTableMetadata(PARTITION_PATH)).isNull();
+        assertThat(updater.getCluster()).isSameAs(cached);
+    }
+
+    private static Cluster clusterWithPartition(int bucketCount) {
+        return new Cluster(
+                Collections.singletonMap(TS_NODE.id(), TS_NODE),
+                CS_NODE,
+                Collections.emptyMap(),
+                Collections.singletonMap(TABLE_PATH, 1L),
+                Collections.singletonMap(PARTITION_PATH, 2L),
+                Collections.singletonMap(TableOrPartition.ofPartition(2L), bucketCount));
+    }
+
+    private static MetadataResponse partitionMetadata(int bucketCount) {
+        MetadataResponse response = new MetadataResponse();
+        response.addTabletServer()
+                .setNodeId(TS_NODE.id())
+                .setHost(TS_NODE.host())
+                .setPort(TS_NODE.port());
+        response.addPartitionMetadata()
+                .setTableId(1L)
+                .setPartitionId(2L)
+                .setPartitionName(PARTITION_PATH.getPartitionName())
+                .setBucketCount(bucketCount);
+        return response;
+    }
 
     @Test
     void testInitializeClusterWithRetries() throws Exception {

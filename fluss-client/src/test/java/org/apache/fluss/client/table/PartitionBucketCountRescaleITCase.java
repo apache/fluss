@@ -282,6 +282,76 @@ class PartitionBucketCountRescaleITCase extends ClientToServerITCaseBase {
         assertRowsPerPartition(schema.getRowType(), actualByPartitionId, expectedByPartitionId);
     }
 
+    @Test
+    void testExplicitBucketWaitsForDynamicallyCreatedPartitionLayout() throws Exception {
+        clientConf.set(ConfigOptions.CLIENT_WRITER_DYNAMIC_CREATE_PARTITION_ENABLED, true);
+        conn.close();
+        conn = ConnectionFactory.createConnection(clientConf);
+        admin = conn.getAdmin();
+
+        TablePath tablePath = TablePath.of("test_db_1", "test_explicit_bucket_dynamic_rescale");
+        createPartitionedTable(tablePath, logSchema());
+        admin.createPartition(tablePath, newPartitionSpec("c", "old"), false).get();
+        Table staleTable = conn.getTable(tablePath);
+        AppendWriter writer = staleTable.newAppend().createWriter();
+        alterBucketNum(tablePath, NEW_BUCKET_NUM);
+
+        // The old handle still knows two buckets. The first write creates "auto" with four,
+        // then resolves bucket 3 against that partition's layout.
+        writer.append(row(1, "new", "auto"), 3).get();
+        writer.append(row(2, "old", "old"), 1).get();
+        assertThatThrownBy(() -> writer.append(row(3, "invalid", "old"), 3).get())
+                .rootCause()
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("out of range");
+
+        List<PartitionInfo> partitions = admin.listPartitionInfos(tablePath).get();
+        assertThat(bucketCountByName(partitions))
+                .containsEntry("old", OLD_BUCKET_NUM)
+                .containsEntry("auto", NEW_BUCKET_NUM);
+        Map<String, Long> partitionIds = partitionIdByName(partitions);
+        Map<TableBucket, Integer> counts = pollRecordCountPerBucket(staleTable, partitions, 2);
+        long tableId = admin.getTableInfo(tablePath).get().getTableId();
+        assertThat(counts)
+                .containsEntry(new TableBucket(tableId, partitionIds.get("old"), 1), 1)
+                .containsEntry(new TableBucket(tableId, partitionIds.get("auto"), 3), 1);
+    }
+
+    @Test
+    void testExplicitBucketUsesShrunkDynamicPartitionLayout() throws Exception {
+        clientConf.set(ConfigOptions.CLIENT_WRITER_DYNAMIC_CREATE_PARTITION_ENABLED, true);
+        conn.close();
+        conn = ConnectionFactory.createConnection(clientConf);
+        admin = conn.getAdmin();
+
+        TablePath tablePath = TablePath.of("test_db_1", "test_explicit_bucket_dynamic_shrink");
+        createTable(
+                tablePath,
+                TableDescriptor.builder()
+                        .schema(logSchema())
+                        .distributedBy(NEW_BUCKET_NUM)
+                        .partitionedBy("c")
+                        .build(),
+                true);
+        Table staleTable = conn.getTable(tablePath);
+        AppendWriter writer = staleTable.newAppend().createWriter();
+        alterBucketNum(tablePath, 1);
+
+        writer.append(row(1, "valid", "auto"), 0).get();
+        assertThatThrownBy(() -> writer.append(row(2, "invalid", "auto"), 1).get())
+                .rootCause()
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("out of range");
+
+        List<PartitionInfo> partitions = admin.listPartitionInfos(tablePath).get();
+        assertThat(bucketCountByName(partitions)).containsEntry("auto", 1);
+        Map<TableBucket, Integer> counts = pollRecordCountPerBucket(staleTable, partitions, 1);
+        long tableId = admin.getTableInfo(tablePath).get().getTableId();
+        assertThat(counts)
+                .containsEntry(
+                        new TableBucket(tableId, partitionIdByName(partitions).get("auto"), 0), 1);
+    }
+
     @ParameterizedTest
     @ValueSource(ints = {1, NEW_BUCKET_NUM})
     void testStaleTableHandleWritesToDynamicallyCreatedPartitionAfterAlter(int newBucketCount)
