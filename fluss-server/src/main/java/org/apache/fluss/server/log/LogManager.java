@@ -49,6 +49,7 @@ import org.apache.fluss.utils.types.Tuple2;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 
 import java.io.File;
@@ -70,7 +71,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.stream.Collectors;
+import java.util.function.Consumer;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -108,6 +109,8 @@ public final class LogManager extends TabletManagerBase implements ServerReconfi
     private final Map<TableBucket, Object> logLocks = new ConcurrentHashMap<>();
 
     private volatile Map<File, OffsetCheckpointFile> recoveryPointCheckpoints;
+    private final Map<File, Object> recoveryCheckpointLocks = new HashMap<>();
+    @VisibleForTesting @Nullable Consumer<Map<TableBucket, Long>> beforeRecoveryCheckpointWrite;
     private volatile ScheduledFuture<?> recoveryPointCheckpointTask;
     private volatile ScheduledFuture<?> localLogRetentionTask;
     private final AtomicBoolean rollExpiredActiveSegmentEnabled;
@@ -182,6 +185,7 @@ public final class LogManager extends TabletManagerBase implements ServerReconfi
     private void initializeCheckpointMaps() throws IOException {
         recoveryPointCheckpoints = new HashMap<>();
         for (File dataDir : dataDirs) {
+            recoveryCheckpointLocks.put(dataDir, new Object());
             recoveryPointCheckpoints.put(
                     dataDir,
                     new OffsetCheckpointFile(new File(dataDir, RECOVERY_POINT_CHECKPOINT_FILE)));
@@ -570,8 +574,7 @@ public final class LogManager extends TabletManagerBase implements ServerReconfi
         }
 
         for (Map.Entry<File, List<LogTablet>> entry : logsByDataDir.entrySet()) {
-            waitForShutdownLogsInDir(
-                    entry.getKey(), entry.getValue(), closingFuturesByDataDir.get(entry.getKey()));
+            waitForShutdownLogsInDir(entry.getKey(), closingFuturesByDataDir.get(entry.getKey()));
         }
 
         LOG.info("Shut down LogManager complete.");
@@ -632,8 +635,7 @@ public final class LogManager extends TabletManagerBase implements ServerReconfi
                 newRollExpiredActiveSegmentEnabled);
     }
 
-    private void waitForShutdownLogsInDir(
-            File dataDir, List<LogTablet> logs, CompletableFuture<Void> closingFuture) {
+    private void waitForShutdownLogsInDir(File dataDir, CompletableFuture<Void> closingFuture) {
         boolean closeSucceeded;
         try {
             closingFuture.join();
@@ -645,7 +647,7 @@ public final class LogManager extends TabletManagerBase implements ServerReconfi
                     dataDir);
         }
 
-        checkpointRecoveryOffsets(dataDir, logs);
+        checkpointRecoveryOffsets(dataDir);
 
         // mark that the shutdown was clean by creating marker file for log dirs that all logs have
         // been recovered at startup time.
@@ -748,30 +750,31 @@ public final class LogManager extends TabletManagerBase implements ServerReconfi
 
     @VisibleForTesting
     void checkpointRecoveryOffsets(File dataDir) {
-        checkpointRecoveryOffsets(
-                dataDir,
-                currentLogs.values().stream()
-                        .filter(log -> log.getDataDir().equals(dataDir))
-                        .collect(Collectors.toList()));
+        try {
+            // Serialize snapshot capture with publication so an older snapshot cannot win last.
+            synchronized (recoveryCheckpointLocks.get(dataDir)) {
+                Map<TableBucket, Long> recoveryOffsets = new HashMap<>();
+                for (LogTablet logTablet : currentLogs.values()) {
+                    if (logTablet.getDataDir().equals(dataDir)) {
+                        recoveryOffsets.put(
+                                logTablet.getTableBucket(), logTablet.getRecoveryPoint());
+                    }
+                }
+                if (beforeRecoveryCheckpointWrite != null) {
+                    beforeRecoveryCheckpointWrite.accept(recoveryOffsets);
+                }
+                LOG.debug("Writing recovery offsets checkpoint for directory {}.", dataDir);
+                recoveryPointCheckpoints.get(dataDir).write(recoveryOffsets);
+            }
+        } catch (Exception e) {
+            throw new LogStorageException(
+                    "Disk error while writing recovery offsets checkpoint", e);
+        }
     }
 
     void checkpointRecoveryOffsets() {
         for (File dataDir : dataDirs) {
             checkpointRecoveryOffsets(dataDir);
-        }
-    }
-
-    private void checkpointRecoveryOffsets(File dataDir, List<LogTablet> logs) {
-        try {
-            Map<TableBucket, Long> recoveryOffsets = new HashMap<>();
-            for (LogTablet logTablet : logs) {
-                recoveryOffsets.put(logTablet.getTableBucket(), logTablet.getRecoveryPoint());
-            }
-            LOG.debug("Writing recovery offsets checkpoint for directory {}.", dataDir);
-            recoveryPointCheckpoints.get(dataDir).write(recoveryOffsets);
-        } catch (Exception e) {
-            throw new LogStorageException(
-                    "Disk error while writing recovery offsets checkpoint", e);
         }
     }
 

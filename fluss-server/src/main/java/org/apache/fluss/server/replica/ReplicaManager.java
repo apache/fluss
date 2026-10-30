@@ -206,6 +206,7 @@ public class ReplicaManager implements ServerReconfigurable {
 
     private final TabletServerMetadataCache metadataCache;
     private final ExecutorService ioExecutor;
+    private final FollowerRecoveryExecutor followerRecoveryExecutor;
     private final ProjectionPushdownCache projectionsCache = new ProjectionPushdownCache();
     private final Lock replicaStateChangeLock = new ReentrantLock();
 
@@ -385,6 +386,10 @@ public class ReplicaManager implements ServerReconfigurable {
                         dataDirVolumeBytes,
                         scheduler);
 
+        this.followerRecoveryExecutor =
+                new FollowerRecoveryExecutor(
+                        conf.get(ConfigOptions.LOG_REPLICA_FOLLOWER_RECOVERY_ENABLED),
+                        conf.get(ConfigOptions.LOG_REPLICA_FOLLOWER_RECOVERY_THREADS_PER_DATA_DIR));
         registerMetrics();
     }
 
@@ -1593,7 +1598,7 @@ public class ReplicaManager implements ServerReconfigurable {
         // TODO this logic need to be removed after we introduce leader epoch cache, and fetcher
         // manager support truncating while fetching. Trace by
         // https://github.com/apache/fluss/issues/673
-        truncateToHighWatermark(replicasBecomeFollower);
+        followerRecoveryExecutor.recover(replicasBecomeFollower, this::truncateToHighWatermark);
 
         // add fetcher for those follower replicas.
         addFetcherForReplicas(replicasBecomeFollower, result);
@@ -2469,17 +2474,16 @@ public class ReplicaManager implements ServerReconfigurable {
         LOG.info("Swept orphan tablet directories for bucket {}", tb);
     }
 
-    private void truncateToHighWatermark(List<Replica> replicas) {
-        for (Replica replica : replicas) {
-            long highWatermark = replica.getLogTablet().getHighWatermark();
-            LOG.info(
-                    "Truncating the logEndOffset for replica id {} of table bucket {} to local "
-                            + "highWatermark {} as it becomes the follower",
-                    serverId,
-                    replica.getTableBucket(),
-                    highWatermark);
-            replica.truncateTo(highWatermark);
-        }
+    @VisibleForTesting
+    void truncateToHighWatermark(Replica replica) {
+        long highWatermark = replica.getLogTablet().getHighWatermark();
+        LOG.info(
+                "Truncating the logEndOffset for replica id {} of table bucket {} to local "
+                        + "highWatermark {} as it becomes the follower",
+                serverId,
+                replica.getTableBucket(),
+                highWatermark);
+        replica.truncateTo(highWatermark);
     }
 
     private void validateAndApplyCoordinatorEpoch(int requestCoordinatorEpoch, String requestName) {
