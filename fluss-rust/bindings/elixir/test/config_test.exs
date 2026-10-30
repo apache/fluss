@@ -254,6 +254,14 @@ defmodule Fluss.ConfigTest do
     assert config.writer_kv_backpressure_max_throttle_ms == 1_500
   end
 
+  test "set_writer_dynamic_create_partition_enabled/2 sets whether writes create partitions" do
+    config =
+      Fluss.Config.new("localhost:9123")
+      |> Fluss.Config.set_writer_dynamic_create_partition_enabled(false)
+
+    assert config.writer_dynamic_create_partition_enabled == false
+  end
+
   test "set_writer_enable_idempotence/2 sets the idempotence flag" do
     config =
       Fluss.Config.new("localhost:9123")

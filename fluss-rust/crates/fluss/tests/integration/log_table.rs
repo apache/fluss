@@ -23,7 +23,8 @@ mod table_test {
         create_table, dt_array_int, dt_map_string_int, dt_row_seq_label, extract_ids_from_batches,
         get_shared_cluster, make_int_array, make_string_array, map_dt_basics_columns,
         poll_until_count, poll_until_nonempty, row_dt_basics_columns, scalar_dt_columns,
-        wait_for_partitions_ready, wait_for_table_buckets_ready, wait_for_table_ready,
+        server_predates_1_0, wait_for_partitions_ready, wait_for_table_buckets_ready,
+        wait_for_table_ready,
     };
     use arrow::array::{
         Array, ArrayRef, Int32Array, Int64Array, ListArray, MapArray, RecordBatch, StringArray,
@@ -32,8 +33,10 @@ mod table_test {
     use arrow::buffer::{NullBuffer, OffsetBuffer};
     use arrow::datatypes::{DataType as ArrowDataType, Field, Schema as ArrowSchema};
     use fluss::client::{
-        EARLIEST_OFFSET, FlussAdmin, FlussTable, RecordBatchLogScanner, TableScan,
+        AppendWriter, EARLIEST_OFFSET, FlussAdmin, FlussConnection, FlussTable,
+        RecordBatchLogScanner, TableScan,
     };
+    use fluss::config::Config;
     use fluss::error::FlussError;
     use fluss::metadata::{
         AddColumn, AlterTableChanges, ColumnPositionType, DataField, DataTypes, JsonSerde,
@@ -4107,5 +4110,169 @@ mod table_test {
         );
 
         admin.drop_table(&table_path, false).await.expect("drop");
+    }
+
+    fn partition_row(id: i32, partition: &'static str) -> GenericRow<'static> {
+        let mut row = GenericRow::new(2);
+        row.set_field(0, id);
+        row.set_field(1, partition);
+        row
+    }
+
+    async fn append_writer(connection: &FlussConnection, table_path: &TablePath) -> AppendWriter {
+        connection
+            .get_table(table_path)
+            .await
+            .expect("table")
+            .new_append()
+            .expect("append")
+            .create_writer()
+            .expect("writer")
+    }
+
+    #[tokio::test]
+    async fn append_to_missing_partition_creates_it_unless_disabled() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("Failed to get admin");
+        let table_path = TablePath::new("fluss", "test_append_to_missing_partition");
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .column("region", DataTypes::string())
+                    .build()
+                    .expect("Failed to build schema"),
+            )
+            .partitioned_by(vec!["region"])
+            .build()
+            .expect("Failed to build table");
+        create_table(&admin, &table_path, &table_descriptor).await;
+        create_partitions(&admin, &table_path, "region", &["US"]).await;
+        wait_for_partitions_ready(&admin, &table_path, &["US"]).await;
+
+        let no_create_connection = FlussConnection::new(Config {
+            bootstrap_servers: cluster.plaintext_bootstrap_servers().to_string(),
+            writer_dynamic_create_partition_enabled: false,
+            ..Config::default()
+        })
+        .await
+        .expect("connection");
+        let writer = append_writer(&no_create_connection, &table_path).await;
+        let missing = writer.append(&partition_row(1, "APAC")).expect("append");
+        let other_missing = writer.append(&partition_row(2, "LATAM")).expect("append");
+        let existing = writer.append(&partition_row(3, "US")).expect("append");
+        tokio::time::timeout(Duration::from_secs(60), async {
+            for write in [missing, other_missing] {
+                assert_eq!(
+                    write.await.expect_err("missing partition").api_error(),
+                    Some(FlussError::PartitionNotExists)
+                );
+            }
+            existing.await.expect("write to the existing partition");
+        })
+        .await
+        .expect("writes must complete instead of retrying");
+        let partitions = admin
+            .list_partition_infos(&table_path)
+            .await
+            .expect("list partitions");
+        assert_eq!(
+            partitions.len(),
+            1,
+            "no partition is created: {partitions:?}"
+        );
+
+        let writer = append_writer(&connection, &table_path).await;
+        let missing = writer.append(&partition_row(4, "APAC")).expect("append");
+        let invalid = writer.append(&partition_row(5, "EU West")).expect("append");
+        let existing = writer.append(&partition_row(6, "US")).expect("append");
+        tokio::time::timeout(Duration::from_secs(60), async {
+            missing.await.expect("write to the created partition");
+            assert_eq!(
+                invalid.await.expect_err("invalid partition").api_error(),
+                Some(FlussError::PartitionSpecInvalidException)
+            );
+            existing.await.expect("write to the existing partition");
+        })
+        .await
+        .expect("writes must complete instead of retrying");
+        let offsets = admin
+            .list_partition_offsets(&table_path, "APAC", &[0], OffsetSpec::Latest)
+            .await
+            .expect("list offsets of the created partition");
+        assert_eq!(offsets.get(&0), Some(&1));
+
+        admin.drop_table(&table_path, false).await.expect("drop");
+    }
+
+    #[tokio::test]
+    async fn append_to_expired_auto_partition_is_rejected() {
+        if server_predates_1_0() {
+            return;
+        }
+        let (admin, table_path, written) =
+            append_to_expired_auto_partition("test_append_to_expired_auto_partition_rejected")
+                .await;
+
+        assert_eq!(
+            written.expect_err("expired partition").api_error(),
+            Some(FlussError::PartitionSpecInvalidException)
+        );
+        let partitions = admin
+            .list_partition_infos(&table_path)
+            .await
+            .expect("list partitions");
+        assert!(
+            partitions.is_empty(),
+            "no partition is created: {partitions:?}"
+        );
+
+        admin.drop_table(&table_path, false).await.expect("drop");
+    }
+
+    #[tokio::test]
+    async fn append_to_expired_auto_partition_is_created_by_older_servers() {
+        if !server_predates_1_0() {
+            return;
+        }
+        let (admin, table_path, written) =
+            append_to_expired_auto_partition("test_append_to_expired_auto_partition_created").await;
+
+        written.expect("an older server creates the expired partition");
+
+        admin.drop_table(&table_path, false).await.expect("drop");
+    }
+
+    async fn append_to_expired_auto_partition(
+        table_name: &str,
+    ) -> (Arc<FlussAdmin>, TablePath, fluss::error::Result<()>) {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("Failed to get admin");
+        let table_path = TablePath::new("fluss", table_name);
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .column("year", DataTypes::string())
+                    .build()
+                    .expect("Failed to build schema"),
+            )
+            .partitioned_by(vec!["year"])
+            .property("table.auto-partition.enabled", "true")
+            .property("table.auto-partition.key", "year")
+            .property("table.auto-partition.time-unit", "YEAR")
+            .property("table.auto-partition.num-precreate", "0")
+            .build()
+            .expect("Failed to build table");
+        create_table(&admin, &table_path, &table_descriptor).await;
+
+        let writer = append_writer(&connection, &table_path).await;
+        let expired = writer.append(&partition_row(1, "2001")).expect("append");
+        let written = tokio::time::timeout(Duration::from_secs(60), expired)
+            .await
+            .expect("the write must complete instead of retrying");
+        (admin, table_path, written)
     }
 }

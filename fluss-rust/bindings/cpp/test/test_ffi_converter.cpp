@@ -83,6 +83,15 @@ TEST(FfiConverterTest, WriterRetryBackoffConfiguration) {
     EXPECT_EQ(ffi_config.writer_retry_max_backoff_ms, 5000u);
 }
 
+TEST(FfiConverterTest, WriterDynamicCreatePartitionConfiguration) {
+    fluss::Configuration config;
+    EXPECT_TRUE(config.writer_dynamic_create_partition_enabled);
+    EXPECT_TRUE(fluss::utils::to_ffi_config(config).writer_dynamic_create_partition_enabled);
+
+    config.writer_dynamic_create_partition_enabled = false;
+    EXPECT_FALSE(fluss::utils::to_ffi_config(config).writer_dynamic_create_partition_enabled);
+}
+
 // --- DataType value semantics ---
 
 TEST(DataTypeTest, DefaultNullable) { EXPECT_TRUE(DataType::Int().nullable()); }

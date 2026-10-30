@@ -25,6 +25,7 @@ const DEFAULT_WRITER_BATCH_SIZE: i32 = 2 * 1024 * 1024;
 // Mirrors Java's `2 * pageSize` floor with default pageSize = 128 KB.
 const DEFAULT_WRITER_DYNAMIC_BATCH_SIZE_MIN: i32 = 256 * 1024;
 const DEFAULT_WRITER_DYNAMIC_BATCH_SIZE_ENABLED: bool = true;
+const DEFAULT_WRITER_DYNAMIC_CREATE_PARTITION_ENABLED: bool = true;
 const DEFAULT_RETRIES: i32 = i32::MAX;
 const DEFAULT_PREFETCH_NUM: usize = 4;
 const DEFAULT_DOWNLOAD_THREADS: usize = 3;
@@ -114,6 +115,19 @@ pub struct Config {
 
     #[arg(long, value_enum, default_value_t = NoKeyAssigner::Sticky)]
     pub writer_bucket_no_key_assigner: NoKeyAssigner,
+
+    /// Create a partition that a write targets but that does not exist yet.
+    /// The server still validates it, e.g. its values and, from Fluss 1.0 on, whether
+    /// it is within an auto-partitioned table's retention. When disabled, such writes fail
+    /// with `PartitionNotExists`. Either way, the missing partition doesn't hold up
+    /// writes to other partitions.
+    /// Default: true (matching Java `client.writer.dynamic-create-partition.enabled`).
+    #[arg(
+        long,
+        default_value_t = DEFAULT_WRITER_DYNAMIC_CREATE_PARTITION_ENABLED,
+        action = clap::ArgAction::Set
+    )]
+    pub writer_dynamic_create_partition_enabled: bool,
 
     /// Maximum number of remote log segments to prefetch
     /// Default: 4 (matching Java CLIENT_SCANNER_REMOTE_LOG_PREFETCH_NUM)
@@ -264,6 +278,10 @@ impl std::fmt::Debug for Config {
                 &self.writer_bucket_no_key_assigner,
             )
             .field(
+                "writer_dynamic_create_partition_enabled",
+                &self.writer_dynamic_create_partition_enabled,
+            )
+            .field(
                 "scanner_remote_log_prefetch_num",
                 &self.scanner_remote_log_prefetch_num,
             )
@@ -337,6 +355,8 @@ impl Default for Config {
             writer_dynamic_batch_size_enabled: DEFAULT_WRITER_DYNAMIC_BATCH_SIZE_ENABLED,
             writer_dynamic_batch_size_min: DEFAULT_WRITER_DYNAMIC_BATCH_SIZE_MIN,
             writer_bucket_no_key_assigner: NoKeyAssigner::Sticky,
+            writer_dynamic_create_partition_enabled:
+                DEFAULT_WRITER_DYNAMIC_CREATE_PARTITION_ENABLED,
             scanner_remote_log_prefetch_num: DEFAULT_PREFETCH_NUM,
             remote_file_download_thread_num: DEFAULT_DOWNLOAD_THREADS,
             scanner_remote_log_read_concurrency: DEFAULT_SCANNER_REMOTE_LOG_READ_CONCURRENCY,
@@ -613,6 +633,21 @@ mod tests {
             ..Config::default()
         };
         assert!(config.validate_scanner().is_err());
+    }
+
+    #[test]
+    fn test_writer_dynamic_create_partition_enabled_from_cli() {
+        let parse = |args: &[&str]| {
+            Config::try_parse_from(std::iter::once("fluss").chain(args.iter().copied()))
+                .expect("parse")
+                .writer_dynamic_create_partition_enabled
+        };
+        assert!(parse(&[]));
+        assert!(!parse(&[
+            "--writer-dynamic-create-partition-enabled",
+            "false"
+        ]));
+        assert!(parse(&["--writer-dynamic-create-partition-enabled=true"]));
     }
 
     #[test]

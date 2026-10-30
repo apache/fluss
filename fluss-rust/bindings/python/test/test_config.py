@@ -56,6 +56,18 @@ def test_writer_retry_backoff_configuration():
     assert config.writer_retry_max_backoff_ms == 1000
 
 
+def test_writer_dynamic_create_partition_configuration():
+    assert fluss.Config().writer_dynamic_create_partition_enabled is True
+
+    config = fluss.Config({"writer.dynamic-create-partition.enabled": "false"})
+    assert config.writer_dynamic_create_partition_enabled is False
+    config.writer_dynamic_create_partition_enabled = True
+    assert config.writer_dynamic_create_partition_enabled is True
+
+    with pytest.raises(fluss.FlussError, match="expected 'true' or 'false'"):
+        fluss.Config({"writer.dynamic-create-partition.enabled": "yes"})
+
+
 def test_lookup_configuration():
     config = fluss.Config(
         {

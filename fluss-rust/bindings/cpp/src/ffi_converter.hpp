@@ -220,6 +220,8 @@ inline ffi::FfiConfig to_ffi_config(const Configuration& config) {
     ffi_config.writer_dynamic_batch_size_enabled = config.writer_dynamic_batch_size_enabled;
     ffi_config.writer_dynamic_batch_size_min = config.writer_dynamic_batch_size_min;
     ffi_config.writer_bucket_no_key_assigner = rust::String(config.writer_bucket_no_key_assigner);
+    ffi_config.writer_dynamic_create_partition_enabled =
+        config.writer_dynamic_create_partition_enabled;
     ffi_config.scanner_remote_log_prefetch_num = config.scanner_remote_log_prefetch_num;
     ffi_config.remote_file_download_thread_num = config.remote_file_download_thread_num;
     ffi_config.scanner_remote_log_read_concurrency = config.scanner_remote_log_read_concurrency;

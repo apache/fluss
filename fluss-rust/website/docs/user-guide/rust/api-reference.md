@@ -19,6 +19,7 @@ Complete API reference for the Fluss Rust client.
 | `writer_batch_timeout_ms`             | `i64`           | `100`              | Maximum time in ms to wait for a writer batch to fill up before sending              |
 | `writer_kv_backpressure_max_throttle_ms` | `u64`         | `3000`             | Maximum per-bucket KV backpressure throttle in milliseconds                          |
 | `writer_bucket_no_key_assigner`       | `NoKeyAssigner` | `sticky`           | Bucket assignment strategy for tables without bucket keys: `sticky` or `round_robin` |
+| `writer_dynamic_create_partition_enabled` | `bool`     | `true`             | Create a partition that a write targets but that does not exist yet. When `false`, such writes fail with `PartitionNotExists` |
 | `scanner_remote_log_prefetch_num`     | `usize`         | `4`                | Number of remote log segments to prefetch                                            |
 | `remote_file_download_thread_num`     | `usize`         | `3`                | Number of threads for remote log downloads                                           |
 | `scanner_remote_log_read_concurrency` | `usize`         | `4`                | Streaming read concurrency within a remote log file                                  |

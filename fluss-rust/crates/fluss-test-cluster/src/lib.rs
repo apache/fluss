@@ -105,6 +105,10 @@ pub const FLUSS_VERSION: &str = env!("FLUSS_VERSION");
 pub const ZOOKEEPER_IMAGE: &str = env!("ZOOKEEPER_IMAGE");
 pub const ZOOKEEPER_VERSION: &str = env!("ZOOKEEPER_VERSION");
 
+pub fn fluss_version() -> String {
+    std::env::var("FLUSS_VERSION").unwrap_or_else(|_| FLUSS_VERSION.to_string())
+}
+
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
 pub struct ClusterInfo {
     pub bootstrap_servers: String,
@@ -184,7 +188,7 @@ impl FlussTestingClusterBuilder {
             plain_client_port: None,
             // runtime env overrides the compile-time default (server-compat CI lane)
             image: std::env::var("FLUSS_IMAGE").unwrap_or_else(|_| FLUSS_IMAGE.to_string()),
-            image_tag: std::env::var("FLUSS_VERSION").unwrap_or_else(|_| FLUSS_VERSION.to_string()),
+            image_tag: fluss_version(),
         }
     }
 

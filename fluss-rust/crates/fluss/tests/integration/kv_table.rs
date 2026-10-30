@@ -22,8 +22,11 @@ mod kv_table_test {
         ColumnPlan, array_dt_basics_columns, as_row_type, create_partitions, create_table,
         dt_array_int, dt_map_string_int, dt_row_seq_label, get_shared_cluster, make_int_array,
         make_string_array, map_dt_basics_columns, row_dt_basics_columns, scalar_dt_columns,
+        wait_for_partitions_ready,
     };
-    use fluss::client::TableUpsert;
+    use fluss::client::{FlussConnection, TableUpsert, UpsertWriter};
+    use fluss::config::Config;
+    use fluss::error::FlussError;
     use fluss::metadata::{DataField, DataTypes, Schema, TableDescriptor, TablePath};
     use fluss::row::binary_array::FlussArrayWriter;
     use fluss::row::binary_map::FlussMapWriter;
@@ -32,6 +35,7 @@ mod kv_table_test {
         TimestampLtz, TimestampNtz,
     };
     use futures::stream::{FuturesUnordered, StreamExt};
+    use std::time::Duration;
 
     fn make_key(id: i32) -> GenericRow<'static> {
         make_key_with_field_count(id, 3)
@@ -2222,6 +2226,94 @@ mod kv_table_test {
         for i in 1..column_count {
             assert!(r3.is_null_at(i).unwrap(), "field {i} should be null");
         }
+
+        admin.drop_table(&table_path, false).await.expect("drop");
+    }
+
+    fn region_row(region: &'static str, id: i32) -> GenericRow<'static> {
+        let mut row = GenericRow::new(2);
+        row.set_field(0, region);
+        row.set_field(1, id);
+        row
+    }
+
+    async fn upsert_writer(connection: &FlussConnection, table_path: &TablePath) -> UpsertWriter {
+        connection
+            .get_table(table_path)
+            .await
+            .expect("table")
+            .new_upsert()
+            .expect("upsert")
+            .create_writer()
+            .expect("writer")
+    }
+
+    #[tokio::test]
+    async fn upsert_to_missing_partition_creates_it_unless_disabled() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("Failed to get admin");
+        let table_path = TablePath::new("fluss", "test_upsert_to_missing_partition");
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("region", DataTypes::string())
+                    .column("id", DataTypes::int())
+                    .primary_key(vec!["region", "id"])
+                    .unwrap()
+                    .build()
+                    .expect("schema"),
+            )
+            .partitioned_by(vec!["region"])
+            .build()
+            .expect("table descriptor");
+        create_table(&admin, &table_path, &table_descriptor).await;
+        create_partitions(&admin, &table_path, "region", &["US"]).await;
+        wait_for_partitions_ready(&admin, &table_path, &["US"]).await;
+
+        let no_create_connection = FlussConnection::new(Config {
+            bootstrap_servers: cluster.plaintext_bootstrap_servers().to_string(),
+            writer_dynamic_create_partition_enabled: false,
+            ..Config::default()
+        })
+        .await
+        .expect("connection");
+        let writer = upsert_writer(&no_create_connection, &table_path).await;
+        let missing = writer.upsert(&region_row("APAC", 1)).expect("upsert");
+        let existing = writer.upsert(&region_row("US", 2)).expect("upsert");
+        tokio::time::timeout(Duration::from_secs(60), async {
+            assert_eq!(
+                missing.await.expect_err("missing partition").api_error(),
+                Some(FlussError::PartitionNotExists)
+            );
+            existing.await.expect("upsert to the existing partition");
+        })
+        .await
+        .expect("upserts must complete instead of retrying");
+
+        let writer = upsert_writer(&connection, &table_path).await;
+        let missing = writer.upsert(&region_row("APAC", 3)).expect("upsert");
+        let invalid = writer.upsert(&region_row("EU West", 4)).expect("upsert");
+        let existing = writer.upsert(&region_row("US", 5)).expect("upsert");
+        tokio::time::timeout(Duration::from_secs(60), async {
+            missing.await.expect("upsert to the created partition");
+            assert_eq!(
+                invalid.await.expect_err("invalid partition").api_error(),
+                Some(FlussError::PartitionSpecInvalidException)
+            );
+            existing.await.expect("upsert to the existing partition");
+        })
+        .await
+        .expect("upserts must complete instead of retrying");
+        let mut partitions: Vec<String> = admin
+            .list_partition_infos(&table_path)
+            .await
+            .expect("list partitions")
+            .iter()
+            .map(|partition| partition.get_partition_name())
+            .collect();
+        partitions.sort();
+        assert_eq!(partitions, ["APAC", "US"]);
 
         admin.drop_table(&table_path, false).await.expect("drop");
     }

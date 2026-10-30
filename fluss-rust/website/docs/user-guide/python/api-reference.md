@@ -20,6 +20,7 @@ Complete API reference for the Fluss Python client.
 | `writer_batch_timeout_ms`             | `writer.batch-timeout-ms`             | Get/set max time in ms to wait for a writer batch to fill up before sending             |
 | `writer_kv_backpressure_max_throttle_ms` | `writer.kv-backpressure.max-throttle-ms` | Get/set maximum per-bucket KV backpressure throttle in milliseconds (default `3000`) |
 | `writer_bucket_no_key_assigner`       | `writer.bucket.no-key-assigner`       | Get/set bucket assignment strategy (`"sticky"` or `"round_robin"`)                      |
+| `writer_dynamic_create_partition_enabled` | `writer.dynamic-create-partition.enabled` | Get/set whether a write creates a partition that doesn't exist yet (default `true`); when `false`, such writes fail with `ErrorCode.PARTITION_NOT_EXISTS` |
 | `scanner_remote_log_prefetch_num`     | `scanner.remote-log.prefetch-num`     | Get/set number of remote log segments to prefetch                                       |
 | `remote_file_download_thread_num`     | `remote-file.download-thread-num`     | Get/set number of threads for remote log downloads                                      |
 | `scanner_remote_log_read_concurrency` | `scanner.remote-log.read-concurrency` | Get/set streaming read concurrency within a remote log file                             |
