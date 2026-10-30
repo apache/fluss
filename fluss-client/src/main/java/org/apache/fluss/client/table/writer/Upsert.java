@@ -73,6 +73,9 @@ public interface Upsert {
      *         <li>For first-row merge engine: retains the first observed row.
      *         <li>For versioned merge engine: keeps the row with the highest version.
      *       </ul>
+     *   <li>{@link MergeMode#IGNORE_NULLS}: For the default merge engine, incoming NULL target
+     *       values preserve existing values. Applies to full and partial upserts without changing
+     *       the table definition or delete behavior.
      *   <li>{@link MergeMode#OVERWRITE}: Data directly overwrites values, bypassing the merge
      *       engine. This is useful for undo/recovery operations to restore exact historical values.
      * </ul>

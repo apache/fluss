@@ -139,3 +139,25 @@ Primary key columns cannot be updated. For partitioned primary-key tables this i
 :::caution
 `UPDATE` and `DELETE FROM` are not atomic. Each statement reads the table once and then writes matching rows independently: rows written after the read starts are not affected, concurrent writes to a matching row may be overwritten (`UPDATE` writes back the entire row), and a failed job leaves already-written rows modified. Avoid running these statements concurrently with other writers to the same keys.
 :::
+
+## Ignoring NULL Values
+
+For primary key tables using the default merge engine, set the connector option `sink.ignore-nulls` to `true` to preserve existing values for incoming NULL target-column values. It defaults to `false`. It applies to both full-row and partial-column upserts, including INSERT and streaming UPDATE_AFTER records.
+
+```sql
+INSERT INTO user_profile /*+ OPTIONS('sink.ignore-nulls'='true') */
+SELECT user_id, name, city FROM profile_updates;
+```
+
+The option belongs to the sink writer, not the Fluss table definition. A writer without this option can still overwrite values with NULL on the same table. It is not supported for log tables or tables using first_row, versioned, or aggregation merge engines.
+
+- Non-NULL input values replace existing values in the target columns. NULL input values preserve existing target values. Columns outside the partial-update target remain unchanged.
+- For a new primary key, nullable columns without a value remain NULL; an input containing only valid primary keys still inserts a row.
+- ROW, ARRAY, and MAP values are selected as whole columns; nested NULLs are not merged recursively. Empty strings, empty collections, zero, and false are non-NULL values.
+- Existing primary-key, NOT NULL, generated-column, and partial-update constraints still apply.
+- SQL UPDATE retains explicit assignment semantics, including assignments of NULL. Delete operations retain their existing full/partial deletion semantics and `table.delete.behavior` policy.
+- KV and FULL/WAL changelogs contain the complete merged row. NULL skipping does not by itself suppress unchanged writes or changelog events.
+
+The Java client exposes the same policy through `table.newUpsert().mergeMode(MergeMode.IGNORE_NULLS).createWriter()`. Use `MergeMode.DEFAULT` for ordinary upserts, including explicit NULL values. OVERWRITE retains its existing recovery behavior and eligibility rules.
+
+NULL skipping requires servers supporting PUT_KV protocol version 4 or newer. The client rejects the mode when a server negotiates an older version. Merge modes are kept separate when batching and retrying writes. Existing ordering, TTL, and recovery guarantees remain unchanged; this feature does not introduce aggregation undo recovery.

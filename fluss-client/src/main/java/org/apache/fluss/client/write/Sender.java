@@ -50,6 +50,7 @@ import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -478,19 +479,37 @@ public class Sender implements Runnable {
             short acks,
             List<ReadyWriteBatch> writeBatches) {
         boolean logBatches = isLogBatches(writeBatches);
-        List<ReadyWriteBatch> normalBatches = new ArrayList<>();
-        List<ReadyWriteBatch> historicalBatches = new ArrayList<>();
-
-        for (ReadyWriteBatch readyWriteBatch : writeBatches) {
-            if (readyWriteBatch.writeBatch().isHistoricalPartition()) {
-                historicalBatches.add(readyWriteBatch);
-            } else {
-                normalBatches.add(readyWriteBatch);
+        List<List<ReadyWriteBatch>> requestGroups = new ArrayList<>();
+        for (ReadyWriteBatch batch : writeBatches) {
+            List<ReadyWriteBatch> group = null;
+            for (List<ReadyWriteBatch> candidate : requestGroups) {
+                if (canShareRequest(candidate.get(0).writeBatch(), batch.writeBatch())) {
+                    group = candidate;
+                    break;
+                }
             }
+            if (group == null) {
+                group = new ArrayList<>();
+                requestGroups.add(group);
+            }
+            group.add(batch);
         }
+        for (List<ReadyWriteBatch> group : requestGroups) {
+            sendBatchesInRequest(gateway, tableId, acks, logBatches, group);
+        }
+    }
 
-        sendBatchesInRequest(gateway, tableId, acks, logBatches, normalBatches);
-        sendBatchesInRequest(gateway, tableId, acks, logBatches, historicalBatches);
+    private static boolean canShareRequest(WriteBatch first, WriteBatch next) {
+        if (first.isHistoricalPartition() != next.isHistoricalPartition()) {
+            return false;
+        }
+        if (first.isLogBatch()) {
+            return true;
+        }
+        KvWriteBatch firstKv = (KvWriteBatch) first;
+        KvWriteBatch nextKv = (KvWriteBatch) next;
+        return firstKv.getMergeMode() == nextKv.getMergeMode()
+                && Arrays.equals(firstKv.getTargetColumns(), nextKv.getTargetColumns());
     }
 
     private void sendBatchesInRequest(

@@ -275,12 +275,7 @@ class KvWriteBatchTest {
 
         // Append record with OVERWRITE mode should fail
         WriteRecord overwriteRecord = createWriteRecordWithMergeMode(MergeMode.OVERWRITE);
-        assertThatThrownBy(() -> defaultBatch.tryAppend(overwriteRecord, newWriteCallback()))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining(
-                        "Cannot mix records with different mergeMode in the same batch")
-                .hasMessageContaining("Batch mergeMode: DEFAULT")
-                .hasMessageContaining("Record mergeMode: OVERWRITE");
+        assertThat(defaultBatch.tryAppend(overwriteRecord, newWriteCallback())).isFalse();
     }
 
     @Test
@@ -299,12 +294,49 @@ class KvWriteBatchTest {
 
         // Append record with DEFAULT mode should fail
         WriteRecord defaultRecord = createWriteRecordWithMergeMode(MergeMode.DEFAULT);
-        assertThatThrownBy(() -> overwriteBatch.tryAppend(defaultRecord, newWriteCallback()))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining(
-                        "Cannot mix records with different mergeMode in the same batch")
-                .hasMessageContaining("Batch mergeMode: OVERWRITE")
-                .hasMessageContaining("Record mergeMode: DEFAULT");
+        assertThat(overwriteBatch.tryAppend(defaultRecord, newWriteCallback())).isFalse();
+    }
+
+    @Test
+    void testIgnoreNullsDoesNotMixWithDefaultWrites() throws Exception {
+        KvWriteBatch batch =
+                createKvWriteBatchWithMergeMode(
+                        new TableBucket(DATA1_TABLE_ID_PK, 0), MergeMode.IGNORE_NULLS);
+        assertThat(
+                        batch.tryAppend(
+                                createWriteRecordWithMergeMode(MergeMode.IGNORE_NULLS),
+                                newWriteCallback()))
+                .isTrue();
+        assertThat(
+                        batch.tryAppend(
+                                createWriteRecordWithMergeMode(MergeMode.DEFAULT),
+                                newWriteCallback()))
+                .isFalse();
+        assertThat(batch.getRecordCount()).isEqualTo(1);
+    }
+
+    @Test
+    void testDifferentTargetsAndModesRequireSeparateBatches() throws Exception {
+        for (MergeMode mode : new MergeMode[] {MergeMode.DEFAULT, MergeMode.IGNORE_NULLS}) {
+            KvWriteBatch batch =
+                    createKvWriteBatchWithMergeMode(new TableBucket(DATA1_TABLE_ID_PK, 0), mode);
+            assertThat(batch.tryAppend(createWriteRecordWithMergeMode(mode), newWriteCallback()))
+                    .isTrue();
+            MergeMode other =
+                    mode == MergeMode.DEFAULT ? MergeMode.IGNORE_NULLS : MergeMode.DEFAULT;
+            WriteRecord partial =
+                    WriteRecord.forUpsert(
+                            DATA1_TABLE_INFO_PK,
+                            PhysicalTablePath.of(DATA1_TABLE_PATH_PK),
+                            row,
+                            key,
+                            key,
+                            WriteFormat.COMPACTED_KV,
+                            new int[] {0},
+                            other);
+            assertThat(batch.tryAppend(partial, newWriteCallback())).isFalse();
+            assertThat(batch.getRecordCount()).isEqualTo(1);
+        }
     }
 
     @Test

@@ -80,6 +80,7 @@ public class FlinkTableSink
     private final boolean streaming;
     @Nullable private final MergeEngineType mergeEngineType;
     private final boolean sinkIgnoreDelete;
+    private final boolean sinkIgnoreNulls;
     private final DeleteBehavior tableDeleteBehavior;
     private final int numBucket;
     private final List<String> bucketKeys;
@@ -105,6 +106,40 @@ public class FlinkTableSink
             List<String> bucketKeys,
             DistributionMode distributionMode,
             @Nullable String producerId) {
+        this(
+                tablePath,
+                flussConfig,
+                tableRowType,
+                primaryKeyIndexes,
+                partitionKeys,
+                streaming,
+                mergeEngineType,
+                lakeFormat,
+                sinkIgnoreDelete,
+                tableDeleteBehavior,
+                numBucket,
+                bucketKeys,
+                distributionMode,
+                producerId,
+                false);
+    }
+
+    public FlinkTableSink(
+            TablePath tablePath,
+            Configuration flussConfig,
+            RowType tableRowType,
+            int[] primaryKeyIndexes,
+            List<String> partitionKeys,
+            boolean streaming,
+            @Nullable MergeEngineType mergeEngineType,
+            @Nullable DataLakeFormat lakeFormat,
+            boolean sinkIgnoreDelete,
+            DeleteBehavior tableDeleteBehavior,
+            int numBucket,
+            List<String> bucketKeys,
+            DistributionMode distributionMode,
+            @Nullable String producerId,
+            boolean sinkIgnoreNulls) {
         this.tablePath = tablePath;
         this.flussConfig = flussConfig;
         this.tableRowType = tableRowType;
@@ -112,7 +147,12 @@ public class FlinkTableSink
         this.partitionKeys = partitionKeys;
         this.streaming = streaming;
         this.mergeEngineType = mergeEngineType;
+        if (sinkIgnoreNulls && (primaryKeyIndexes.length == 0 || mergeEngineType != null)) {
+            throw new ValidationException(
+                    "sink.ignore-nulls is only supported for default-engine primary key tables.");
+        }
         this.sinkIgnoreDelete = sinkIgnoreDelete;
+        this.sinkIgnoreNulls = sinkIgnoreNulls;
         this.tableDeleteBehavior = tableDeleteBehavior;
         this.numBucket = numBucket;
         this.bucketKeys = bucketKeys;
@@ -209,18 +249,19 @@ public class FlinkTableSink
         FlinkSink.SinkWriterBuilder<? extends FlinkSinkWriter, RowData> flinkSinkWriterBuilder =
                 (primaryKeyIndexes.length > 0)
                         ? new FlinkSink.UpsertSinkWriterBuilder<>(
-                                tablePath,
-                                flussConfig,
-                                tableRowType,
-                                targetColumnIndexes,
-                                numBucket,
-                                bucketKeys,
-                                partitionKeys,
-                                lakeFormat,
-                                distributionMode,
-                                new RowDataSerializationSchema(false, sinkIgnoreDelete),
-                                enableUndoRecovery,
-                                producerId)
+                                        tablePath,
+                                        flussConfig,
+                                        tableRowType,
+                                        targetColumnIndexes,
+                                        numBucket,
+                                        bucketKeys,
+                                        partitionKeys,
+                                        lakeFormat,
+                                        distributionMode,
+                                        new RowDataSerializationSchema(false, sinkIgnoreDelete),
+                                        enableUndoRecovery,
+                                        producerId)
+                                .withIgnoreNulls(sinkIgnoreNulls && !appliedUpdates)
                         : new FlinkSink.AppendSinkWriterBuilder<>(
                                 tablePath,
                                 flussConfig,
@@ -260,7 +301,8 @@ public class FlinkTableSink
                         numBucket,
                         bucketKeys,
                         distributionMode,
-                        producerId);
+                        producerId,
+                        sinkIgnoreNulls);
         sink.appliedUpdates = appliedUpdates;
         sink.deleteRow = deleteRow;
         return sink;
