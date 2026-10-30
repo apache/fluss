@@ -208,7 +208,7 @@ public class RebalanceManagerTest {
                 .isEqualTo(TIMEOUT);
         assertThat(eventManager.events.get(1)).isInstanceOf(ReconcileRebalanceTaskEvent.class);
 
-        RebalancePlanForBucket retryPlan = rebalanceManager.getPlanForReconciliation(firstAttempt);
+        RebalancePlanForBucket retryPlan = rebalanceManager.prepareReconciliation(firstAttempt);
         assertThat(retryPlan).isNotNull();
         assertThat(retryPlan.getTableBucket()).isEqualTo(tb1);
         // the dispatched reconciliation backs off, so no event is enqueued right away.
@@ -308,9 +308,9 @@ public class RebalanceManagerTest {
         assertThat(rebalanceManager.timeoutRebalanceTask(attempt)).isTrue();
 
         rebalanceManager.cancelRebalance("cancel-drain-failure");
-        assertThat(rebalanceManager.getPlanForReconciliation(attempt)).isNotNull();
+        assertThat(rebalanceManager.prepareReconciliation(attempt)).isNotNull();
         clock.advanceTime(Duration.ofMillis(2));
-        assertThat(rebalanceManager.getPlanForReconciliation(attempt)).isNull();
+        assertThat(rebalanceManager.prepareReconciliation(attempt)).isNull();
 
         assertThat(rebalanceManager.getRebalanceStatus()).isEqualTo(FAILED);
         assertThat(zookeeperClient.getRebalanceTask().get().getRebalanceStatus()).isEqualTo(FAILED);
@@ -373,7 +373,7 @@ public class RebalanceManagerTest {
             assertThat(activeBuckets).hasSize(1);
             TableBucket activeBucket = activeBuckets.get(0);
             RebalanceExecutionKey attempt = rebalanceManager.getExecutionKey(activeBucket);
-            assertThat(rebalanceManager.getPlanForReconciliation(attempt))
+            assertThat(rebalanceManager.prepareReconciliation(attempt))
                     .isEqualTo(recoveredTask.getExecutePlan().get(activeBucket));
             assertThat(rebalanceManager.finishRebalanceTask(attempt, COMPLETED)).isTrue();
             remainingIntermediateBuckets.remove(activeBucket);
@@ -400,12 +400,12 @@ public class RebalanceManagerTest {
         assertThat(reconciliationsFor(eventManager, attempt)).isEqualTo(1);
 
         // first retry is dispatched at the base interval, the next one only after twice that.
-        assertThat(rebalanceManager.getPlanForReconciliation(attempt)).isNotNull();
+        assertThat(rebalanceManager.prepareReconciliation(attempt)).isNotNull();
         clock.advanceTime(Duration.ofMillis(30_000));
         rebalanceManager.checkTimeout();
         assertThat(reconciliationsFor(eventManager, attempt)).isEqualTo(2);
 
-        assertThat(rebalanceManager.getPlanForReconciliation(attempt)).isNotNull();
+        assertThat(rebalanceManager.prepareReconciliation(attempt)).isNotNull();
         clock.advanceTime(Duration.ofMillis(30_000));
         rebalanceManager.checkTimeout();
         assertThat(reconciliationsFor(eventManager, attempt)).isEqualTo(2);
@@ -453,12 +453,12 @@ public class RebalanceManagerTest {
         rebalanceManager.registerRebalance("give-up-test", plans(tableBucket));
         RebalanceExecutionKey attempt = rebalanceManager.getExecutionKey(tableBucket);
         assertThat(rebalanceManager.timeoutRebalanceTask(attempt)).isTrue();
-        assertThat(rebalanceManager.getPlanForReconciliation(attempt)).isNotNull();
+        assertThat(rebalanceManager.prepareReconciliation(attempt)).isNotNull();
 
         clock.advanceTime(timeout);
-        assertThat(rebalanceManager.getPlanForReconciliation(attempt)).isNotNull();
+        assertThat(rebalanceManager.prepareReconciliation(attempt)).isNotNull();
         clock.advanceTime(Duration.ofMillis(1));
-        assertThat(rebalanceManager.getPlanForReconciliation(attempt)).isNull();
+        assertThat(rebalanceManager.prepareReconciliation(attempt)).isNull();
 
         // the rebalance reaches a final status, so later rebalance requests are not blocked.
         assertThat(rebalanceManager.getRebalanceStatus()).isEqualTo(FAILED);
@@ -472,12 +472,12 @@ public class RebalanceManagerTest {
         rebalanceManager.registerRebalance("deleted-reconciliation-test", plans(tableBucket));
         RebalanceExecutionKey attempt = rebalanceManager.getExecutionKey(tableBucket);
         assertThat(rebalanceManager.timeoutRebalanceTask(attempt)).isTrue();
-        assertThat(rebalanceManager.getPlanForReconciliation(attempt)).isNotNull();
+        assertThat(rebalanceManager.prepareReconciliation(attempt)).isNotNull();
 
         clock.advanceTime(Duration.ofMinutes(30).plusMillis(1));
         rebalanceExecutor.deletedBuckets.add(tableBucket);
 
-        assertThat(rebalanceManager.getPlanForReconciliation(attempt)).isNull();
+        assertThat(rebalanceManager.prepareReconciliation(attempt)).isNull();
         assertThat(statuses(rebalanceManager).get(tableBucket)).isEqualTo(COMPLETED);
         assertThat(rebalanceManager.getRebalanceStatus()).isEqualTo(COMPLETED);
     }
@@ -497,13 +497,13 @@ public class RebalanceManagerTest {
         assertThat(rebalanceManager.timeoutRebalanceTask(attempt)).isTrue();
 
         clock.advanceTime(timeout.minusMillis(1));
-        assertThat(rebalanceManager.getPlanForReconciliation(attempt)).isNotNull();
+        assertThat(rebalanceManager.prepareReconciliation(attempt)).isNotNull();
         assertThat(rebalanceManager.getRebalanceStatus()).isEqualTo(REBALANCING);
         assertThat(rebalanceManager.hasInProgressRebalance()).isTrue();
         clock.advanceTime(Duration.ofMillis(1));
-        assertThat(rebalanceManager.getPlanForReconciliation(attempt)).isNotNull();
+        assertThat(rebalanceManager.prepareReconciliation(attempt)).isNotNull();
         clock.advanceTime(Duration.ofMillis(1));
-        assertThat(rebalanceManager.getPlanForReconciliation(attempt)).isNull();
+        assertThat(rebalanceManager.prepareReconciliation(attempt)).isNull();
         assertThat(rebalanceManager.getRebalanceStatus()).isEqualTo(FAILED);
         assertThat(rebalanceManager.hasInProgressRebalance()).isFalse();
         assertThat(zookeeperClient.getRebalanceTask().get().getRebalanceStatus()).isEqualTo(FAILED);
@@ -518,6 +518,60 @@ public class RebalanceManagerTest {
                 .hasSize(2)
                 .last()
                 .isEqualTo(nextPlan.get(nextBucket));
+    }
+
+    @Test
+    void testNonTargetIsrChangesDoNotResetReconciliationTimeouts() throws Exception {
+        Duration timeout = Duration.ofMillis(10);
+        configureManager(
+                new Configuration()
+                        .set(COORDINATOR_REBALANCE_TARGET_UNAVAILABLE_TIMEOUT, timeout)
+                        .set(COORDINATOR_REBALANCE_NO_PROGRESS_TIMEOUT, timeout));
+        CoordinatorContext context = rebalanceExecutor.getCoordinatorContext();
+        for (int serverId : new int[] {0, 1, 2}) {
+            context.addLiveTabletServer(tabletServer(serverId));
+        }
+        TableBucket tableBucket = new TableBucket(1L, 0);
+        context.updateBucketReplicaAssignment(tableBucket, Arrays.asList(0, 1, 2));
+        context.putBucketLeaderAndIsr(
+                tableBucket,
+                new LeaderAndIsr(
+                        0,
+                        1,
+                        Arrays.asList(0, 1, 2),
+                        Collections.emptyList(),
+                        context.getCoordinatorEpoch(),
+                        1));
+
+        rebalanceManager.registerRebalance("non-target-isr-change", plans(tableBucket));
+        RebalanceExecutionKey attempt = rebalanceManager.getExecutionKey(tableBucket);
+        assertThat(rebalanceManager.timeoutRebalanceTask(attempt)).isTrue();
+        assertThat(rebalanceManager.prepareReconciliation(attempt)).isNotNull();
+
+        clock.advanceTime(Duration.ofMillis(5));
+        context.putBucketLeaderAndIsr(
+                tableBucket,
+                new LeaderAndIsr(
+                        0,
+                        1,
+                        Arrays.asList(1, 2),
+                        Collections.emptyList(),
+                        context.getCoordinatorEpoch(),
+                        1));
+        assertThat(rebalanceManager.prepareReconciliation(attempt)).isNotNull();
+
+        clock.advanceTime(Duration.ofMillis(6));
+        context.putBucketLeaderAndIsr(
+                tableBucket,
+                new LeaderAndIsr(
+                        0,
+                        1,
+                        Arrays.asList(0, 1, 2),
+                        Collections.emptyList(),
+                        context.getCoordinatorEpoch(),
+                        1));
+        assertThat(rebalanceManager.prepareReconciliation(attempt)).isNull();
+        assertThat(rebalanceManager.getRebalanceStatus()).isEqualTo(FAILED);
     }
 
     @ParameterizedTest
