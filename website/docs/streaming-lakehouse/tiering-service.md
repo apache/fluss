@@ -15,6 +15,8 @@ The Tiering Service is implemented as an Apache Flink job that:
 - Maintains exactly-once semantics between Fluss and the data lake
 - Operates incrementally, syncing only missing data segments
 
+A Spark implementation is also available. See [Spark Execution Model](#spark-execution-model) and [Spark deployment](../install-deploy/deploying-streaming-lakehouse.md#spark).
+
 :::warning
 Never change the schema of a lake table managed by the Tiering Service through an external engine. The Tiering Service requires the lake table schema to stay in sync with the Fluss table schema, and a diverging schema makes the tiering job fail and restart in a loop until the schemas match again. For lake formats that support schema evolution through Fluss (Paimon and Iceberg), add columns with `ALTER TABLE` on the Fluss table instead. See [Schema Evolution](datalake-formats/paimon.md#schema-evolution) for the symptoms and the recovery steps with Paimon.
 :::
@@ -29,6 +31,8 @@ For deployment instructions, see [Deploying Lakestream](../install-deploy/deploy
 
 ## Architecture
 
+### Flink Execution Model
+
 The Tiering Service consists of three Flink operators:
 
 | Operator | Description |
@@ -37,7 +41,7 @@ The Tiering Service consists of three Flink operators:
 | **TieringCommitter** | Commits batches and advances offsets in both Fluss and lake |
 | **No-Op Sink** | Dummy sink required by Flink's topology |
 
-### How It Works
+#### How It Works
 
 1. **Enumerator** sends heartbeat to Fluss CoordinatorService, receives table metadata
 2. **SplitGenerator** calculates data delta between Fluss offsets and lake snapshot offsets
@@ -46,16 +50,24 @@ The Tiering Service consists of three Flink operators:
 5. **Committer** performs two-phase commit: first to lake, then updates Fluss coordinator
 6. Cycle repeats based on `table.datalake.freshness` interval
 
-### Split Types
+#### Split Types
 
 | Table Type | Split Type | Description |
 |------------|------------|-------------|
 | Log Table (append-only) | TieringLogSplit | Defines starting and stopping offsets for a contiguous range |
 | Primary Key Table | TieringSnapshotSplit | References snapshot ID and log offset for CDC replay |
 
+### Spark Execution Model
+
+The Spark application runs a long-lived driver loop that processes one table tiering round at a time. For each round, the driver generates splits and submits an RDD with one partition per split. Executor tasks read the assigned data ranges and write through the lake connector. The driver collects their write results, commits to the lake and Fluss, and then requests the next table.
+
+Background heartbeats keep the assignment alive while splits are generated, tasks run, and results are committed. This uses Spark batch jobs, with no Structured Streaming query or streaming checkpoint directory.
+
+A round completes all its splits before committing. A large initial snapshot or log backlog can therefore delay other tables assigned to the same application. `table.datalake.freshness` is a scheduling target, not a time limit on a Spark round or a guarantee of maximum end-to-end lag.
+
 ## Configuration Options
 
-### Tiering Service Options
+### Flink Options {#tiering-service-options}
 
 The tiering job is a standalone Flink job, and its arguments fall into three groups:
 
@@ -83,6 +95,21 @@ The following `--lake.tiering.*` options are set when starting the tiering job:
 | `lake.tiering.auto-expire-snapshot` | Boolean | false | Auto-trigger snapshot expiration on commit |
 | `lake.tiering.partition.mark-done.enabled` | Boolean | false | Enable [partition mark-done](#partition-mark-done) using the actual lake table's options |
 | `lake.tiering.io.tmp.dirs` | String | Flink temporary directories | Local directories used for temporary I/O files. If not configured, a `fluss` child directory under each Flink temporary directory is used. Separate multiple directories with commas or the system path separator |
+
+### Spark Options
+
+The Spark tiering job uses the same `--fluss.*`, `--datalake.*`, and `--lake.tiering.*` argument groups as Flink. For required JARs and a `spark-submit` example, see [Spark deployment](../install-deploy/deploying-streaming-lakehouse.md#spark).
+
+The following `--fluss.tiering.*` options are set when starting the Spark tiering job:
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `fluss.tiering.poll.table.interval` | Duration | 30 s | Interval between table requests when no table is available or a request fails |
+| `fluss.tiering.heartbeat.interval` | Duration | 10 s | Background heartbeat interval during a tiering round |
+| `fluss.tiering.poll.timeout` | Duration | 10 s | Timeout for polling Fluss records on executors |
+| `fluss.tiering.heartbeat.max.failures` | Integer | 10 | Maximum consecutive heartbeat failures before the application fails |
+
+For Spark, `lake.tiering.io.tmp.dirs` is unset by default; the Paimon writer uses the executor JVM's `java.io.tmpdir`. Other `lake.tiering.*` defaults are the same as for Flink.
 
 ### Table-Level Options
 
@@ -116,6 +143,8 @@ ALTER TABLE events SET (
 
 ## Scaling
 
+### Flink
+
 The Tiering Service is stateless and can be scaled by adjusting Flink parallelism:
 
 ```shell
@@ -128,6 +157,20 @@ ${FLINK_HOME}/bin/flink run \
 
 Multiple tiering service jobs can run simultaneously. They are coordinated by the Fluss cluster to ensure exactly-once semantics and automatic load balancing.
 
+### Spark
+
+Each Spark application currently runs a single tiering job and processes one table at a time. To run multiple tiering jobs concurrently, start multiple Spark applications. The Fluss coordinator assigns tables to these applications.
+
+Within a tiering job, splits can run in parallel. Increase executor resources to run more split tasks concurrently, up to the number of generated splits.
+
 ## Monitoring
 
+### Flink
+
 Key metrics for monitoring the Tiering Service are available through Flink's metrics system. See [Monitoring Metrics](../maintenance/observability/monitor-metrics.md#tiering-service-metrics) for details on lakehouse tiering metrics.
+
+### Spark
+
+Use the Spark Web UI for jobs, stages, task failures, and executor resource usage. Driver logs report assignments, heartbeats, and round failures; executor logs report completed splits. Spark does not expose the Flink source-reader `fluss.tieringService` metrics.
+
+Monitor Fluss [Coordinator Server metrics](../maintenance/observability/monitor-metrics.md#coordinator-server), including pending/running tables, `tierLag`, `tierDuration`, and `failuresTotal`, for tiering progress.
