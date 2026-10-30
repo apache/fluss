@@ -99,6 +99,8 @@ Both modes fetch and validate the current main-table row, so an obsolete index e
 
 A synchronous write timeout does not roll back a committed main-table write. The index may become visible after the request times out; handle retries using the normal writer guarantees.
 
+For tables with synchronous indexes, client log scans expose records only below both the main-table high watermark and the synchronous index replication progress. A stalled synchronous index therefore delays client log consumption as well as write acknowledgement. Remote log files are exposed only once all records in the file satisfy this visibility bound. Server-side log replication and index WAL consumption continue independently of this client read bound.
+
 ## Table and Partition Lifecycle
 
 Each index appears in the same database as its main table under the name `__idx__<main-table-name>__<index-name>`. Its read permissions follow the main table. Use the main-table secondary-index API for queries; direct writes and changelog subscriptions to an internal index table are rejected.

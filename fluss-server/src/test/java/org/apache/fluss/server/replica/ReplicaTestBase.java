@@ -658,6 +658,7 @@ public class ReplicaTestBase {
                 manualClock,
                 remoteLogManager,
                 scannerManager,
+                ioExecutor,
                 replicaManager.getIndexReplicatorPool(),
                 replicaManager.getIndexSendBuffer(),
                 replicaManager.getServerMetricGroup());
