@@ -87,6 +87,7 @@ import java.util.Set;
 import java.util.TreeMap;
 import java.util.stream.Collectors;
 
+import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.Preconditions.checkState;
@@ -846,9 +847,11 @@ public class FlinkSourceEnumerator
             return Collections.emptySet();
         }
         try {
-            List<PartitionInfo> partitionInfos = flussAdmin.listPartitionInfos(tablePath).get();
-            partitionInfos = applyPartitionFilter(partitionInfos);
-            return new LinkedHashSet<>(partitionInfos);
+            boolean includeHistoricalPartition =
+                    streaming && tableInfo.getTableConfig().isHistoricalPartitionEnabled();
+            List<PartitionInfo> partitionInfos =
+                    flussAdmin.listPartitionInfos(tablePath, includeHistoricalPartition).get();
+            return new LinkedHashSet<>(applyPartitionFilter(partitionInfos));
         } catch (Exception e) {
             throw new FlinkRuntimeException(
                     String.format("Failed to list partitions for %s", tablePath),
@@ -856,30 +859,34 @@ public class FlinkSourceEnumerator
         }
     }
 
-    /** Apply partition filter. */
+    /** Apply partition filter to ordinary partitions, retaining the shared historical partition. */
     private List<PartitionInfo> applyPartitionFilter(List<PartitionInfo> partitionInfos) {
         if (partitionFilters == null) {
             return partitionInfos;
         } else {
             int originalSize = partitionInfos.size();
             RowType partitionRowType = PartitionUtils.partitionRowType(tableInfo);
+            // Historical logs contain multiple business partitions. Keep their subscription and
+            // let Flink filter each record using its original business partition values.
             List<PartitionInfo> filteredPartitionInfos =
                     partitionInfos.stream()
                             .filter(
                                     partition ->
-                                            partitionFilters.test(
-                                                    PartitionUtils.toPartitionRow(
-                                                            partition
-                                                                    .getResolvedPartitionSpec()
-                                                                    .getPartitionValues(),
-                                                            partitionRowType)))
+                                            HISTORICAL_PARTITION_VALUE.equals(
+                                                            partition.getPartitionName())
+                                                    || partitionFilters.test(
+                                                            PartitionUtils.toPartitionRow(
+                                                                    partition
+                                                                            .getResolvedPartitionSpec()
+                                                                            .getPartitionValues(),
+                                                                    partitionRowType)))
                             .collect(Collectors.toList());
 
             int filteredSize = filteredPartitionInfos.size();
             if (originalSize != filteredSize) {
                 LOG.debug(
                         "Applied partition filter for table {}: {} partitions filtered down to {} "
-                                + "matching partitions with predicate: {}. Matching partitions after filtering: {}",
+                                + "retained partitions with predicate: {}. Partitions after filtering: {}",
                         tablePath,
                         originalSize,
                         filteredSize,
@@ -887,7 +894,7 @@ public class FlinkSourceEnumerator
                         filteredPartitionInfos);
             } else {
                 LOG.debug(
-                        "Partition filter applied for table {}, but all {} partitions matched the predicate",
+                        "Partition filter applied for table {}, but all {} partitions were retained",
                         tablePath,
                         originalSize);
             }
@@ -1077,6 +1084,17 @@ public class FlinkSourceEnumerator
         List<SourceSplitBase> splits = new ArrayList<>();
         for (Partition partition : newPartitions) {
             String partitionName = partition.getPartitionName();
+            if (HISTORICAL_PARTITION_VALUE.equals(partitionName)) {
+                // Historical partitions have no KV snapshot. Without a lake snapshot, consume
+                // their retained changelog using the existing full-mode fallback.
+                splits.addAll(
+                        getLogSplit(
+                                partition.getPartitionId(),
+                                partitionName,
+                                OffsetsInitializer.earliest(),
+                                partition.getBucketCount()));
+                continue;
+            }
             splits.addAll(
                     getSnapshotAndLogSplits(
                             getLatestKvSnapshotsAndRegister(partitionName), partitionName));
