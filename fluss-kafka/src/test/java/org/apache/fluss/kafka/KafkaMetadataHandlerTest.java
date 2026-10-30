@@ -26,7 +26,6 @@ import org.apache.fluss.kafka.backend.metadata.GatewayKafkaMetadataBackend;
 import org.apache.fluss.kafka.backend.metadata.KafkaClusterMetadata;
 import org.apache.fluss.kafka.backend.metadata.KafkaMetadataQuery;
 import org.apache.fluss.kafka.backend.metadata.KafkaMetadataQuery.TopicReference;
-import org.apache.fluss.kafka.backend.produce.KafkaProduceResult;
 import org.apache.fluss.kafka.mapping.KafkaTopicMapper;
 import org.apache.fluss.kafka.security.KafkaSaslConnection;
 import org.apache.fluss.metadata.LogFormat;
@@ -815,9 +814,7 @@ public class KafkaMetadataHandlerTest {
                 new KafkaRequestHandler(
                         mapper,
                         new GatewayKafkaMetadataBackend(service, mapper),
-                        command ->
-                                CompletableFuture.completedFuture(
-                                        new KafkaProduceResult(Collections.emptyList())));
+                        command -> CompletableFuture.completedFuture(Collections.emptyList()));
         ByteBuf requestBuffer = ByteBufAllocator.DEFAULT.buffer();
         KafkaRequest request;
         try {

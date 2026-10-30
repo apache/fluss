@@ -20,9 +20,6 @@ package org.apache.fluss.kafka;
 import org.apache.fluss.kafka.api.produce.ProduceHandler;
 import org.apache.fluss.kafka.backend.produce.KafkaProduceBackend;
 import org.apache.fluss.kafka.backend.produce.KafkaProduceCommand;
-import org.apache.fluss.kafka.backend.produce.KafkaProduceResult;
-import org.apache.fluss.kafka.backend.produce.KafkaProduceResult.PartitionResult;
-import org.apache.fluss.kafka.backend.produce.KafkaProduceResult.TopicResult;
 import org.apache.fluss.kafka.dispatcher.KafkaApiRegistry;
 import org.apache.fluss.kafka.dispatcher.KafkaRequestDispatcher;
 import org.apache.fluss.kafka.error.KafkaErrorMapper;
@@ -43,6 +40,8 @@ import org.apache.kafka.common.errors.TimeoutException;
 import org.apache.kafka.common.message.ProduceRequestData;
 import org.apache.kafka.common.message.ProduceRequestData.PartitionProduceData;
 import org.apache.kafka.common.message.ProduceRequestData.TopicProduceData;
+import org.apache.kafka.common.message.ProduceResponseData.PartitionProduceResponse;
+import org.apache.kafka.common.message.ProduceResponseData.TopicProduceResponse;
 import org.apache.kafka.common.protocol.ApiKeys;
 import org.apache.kafka.common.protocol.Errors;
 import org.apache.kafka.common.record.MemoryRecords;
@@ -61,6 +60,7 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -85,7 +85,7 @@ class KafkaProduceBufferLifecycleTest {
         RequestChannel requests = new RequestChannel(100);
         EmbeddedChannel channel = new EmbeddedChannel(new KafkaCommandDecoder(requests, "KAFKA"));
         ByteBuf buffer = requestBuffer(version, acks, direct, "{\"value\":2,\"text\":\"中文\"}");
-        CompletableFuture<KafkaProduceResult> pending = new CompletableFuture<>();
+        CompletableFuture<List<TopicProduceResponse>> pending = new CompletableFuture<>();
         AtomicReference<JsonNode> decodedKey = new AtomicReference<>();
         AtomicReference<JsonNode> decodedValue = new AtomicReference<>();
         KafkaRequest parsed = null;
@@ -131,13 +131,15 @@ class KafkaProduceBufferLifecycleTest {
                 pending.completeExceptionally(new TimeoutException("write failed"));
             } else {
                 pending.complete(
-                        new KafkaProduceResult(
-                                Collections.singletonList(
-                                        new TopicResult(
-                                                "topic",
+                        Collections.singletonList(
+                                new TopicProduceResponse()
+                                        .setName("topic")
+                                        .setPartitionResponses(
                                                 Collections.singletonList(
-                                                        new PartitionResult(
-                                                                0, Errors.NONE, 42L, null))))));
+                                                        new PartitionProduceResponse()
+                                                                .setIndex(0)
+                                                                .setErrorCode(Errors.NONE.code())
+                                                                .setBaseOffset(42L)))));
             }
             channel.runPendingTasks();
             assertResponse(channel, parsed, failWrite ? Errors.REQUEST_TIMED_OUT : Errors.NONE);

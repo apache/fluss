@@ -21,8 +21,6 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.kafka.backend.produce.KafkaProduceCommand.PartitionWrite;
 import org.apache.fluss.kafka.backend.produce.KafkaProduceCommand.TopicWrite;
-import org.apache.fluss.kafka.backend.produce.KafkaProduceResult.PartitionResult;
-import org.apache.fluss.kafka.backend.produce.KafkaProduceResult.TopicResult;
 import org.apache.fluss.kafka.error.KafkaErrorMapper;
 import org.apache.fluss.kafka.mapping.KafkaTopicMapper;
 import org.apache.fluss.kafka.schema.KafkaTopicSchemaException;
@@ -45,6 +43,8 @@ import org.apache.fluss.server.tablet.TabletService;
 import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import org.apache.kafka.common.errors.InvalidTopicException;
+import org.apache.kafka.common.message.ProduceResponseData.PartitionProduceResponse;
+import org.apache.kafka.common.message.ProduceResponseData.TopicProduceResponse;
 import org.apache.kafka.common.protocol.Errors;
 
 import java.util.ArrayList;
@@ -83,15 +83,15 @@ public final class GatewayKafkaProduceBackend implements KafkaProduceBackend {
     }
 
     @Override
-    public CompletableFuture<KafkaProduceResult> write(KafkaProduceCommand command) {
+    public CompletableFuture<List<TopicProduceResponse>> write(KafkaProduceCommand command) {
         setCurrentSession(command);
-        List<CompletableFuture<TopicResult>> topics = new ArrayList<>();
+        List<CompletableFuture<TopicProduceResponse>> topics = new ArrayList<>();
         try (AppendBatch batch =
                 new AppendBatch(command.timeoutMs(), command.acks(), command.principal())) {
             for (TopicWrite topic : command.topics()) {
-                List<CompletableFuture<PartitionResult>> partitions = new ArrayList<>();
+                List<CompletableFuture<PartitionProduceResponse>> partitions = new ArrayList<>();
                 for (PartitionWrite partition : topic.partitions()) {
-                    CompletableFuture<PartitionResult> result = new CompletableFuture<>();
+                    CompletableFuture<PartitionProduceResponse> result = new CompletableFuture<>();
                     partitions.add(result);
                     TablePath path;
                     TableBucket bucket;
@@ -113,7 +113,7 @@ public final class GatewayKafkaProduceBackend implements KafkaProduceBackend {
                         }
                     } catch (Exception failure) {
                         result.complete(
-                                new PartitionResult(
+                                partitionResponse(
                                         partition.partitionId(),
                                         Errors.UNKNOWN_TOPIC_OR_PARTITION,
                                         -1L,
@@ -137,13 +137,14 @@ public final class GatewayKafkaProduceBackend implements KafkaProduceBackend {
                         FutureUtils.combineAll(partitions)
                                 .thenApply(
                                         results ->
-                                                new TopicResult(
-                                                        topicName, new ArrayList<>(results))));
+                                                new TopicProduceResponse()
+                                                        .setName(topicName)
+                                                        .setPartitionResponses(
+                                                                new ArrayList<>(results))));
             }
             batch.appendLogs();
         }
-        return FutureUtils.combineAll(topics)
-                .thenApply(results -> new KafkaProduceResult(new ArrayList<>(results)));
+        return FutureUtils.combineAll(topics).thenApply(ArrayList::new);
     }
 
     private void setCurrentSession(KafkaProduceCommand command) {
@@ -167,7 +168,7 @@ public final class GatewayKafkaProduceBackend implements KafkaProduceBackend {
         private final short acks;
         private final FlussPrincipal principal;
         private final Map<TableBucket, MemoryLogRecords> entriesPerBucket = new HashMap<>();
-        private final Map<TableBucket, CompletableFuture<PartitionResult>> results =
+        private final Map<TableBucket, CompletableFuture<PartitionProduceResponse>> results =
                 new HashMap<>();
         private final List<EncodedRecords> convertedRecords = new ArrayList<>();
 
@@ -183,7 +184,8 @@ public final class GatewayKafkaProduceBackend implements KafkaProduceBackend {
             }
             // The callback retains only bucket identities and result futures, never the input
             // payloads or converted records. Local append consumes all records synchronously.
-            Map<TableBucket, CompletableFuture<PartitionResult>> pending = new HashMap<>(results);
+            Map<TableBucket, CompletableFuture<PartitionProduceResponse>> pending =
+                    new HashMap<>(results);
             try {
                 replicaManager.appendRecordsToLog(
                         timeoutMs,
@@ -209,13 +211,14 @@ public final class GatewayKafkaProduceBackend implements KafkaProduceBackend {
     }
 
     private static void completeResults(
-            Map<TableBucket, CompletableFuture<PartitionResult>> pending,
+            Map<TableBucket, CompletableFuture<PartitionProduceResponse>> pending,
             List<ProduceLogResultForBucket> responses) {
         for (ProduceLogResultForBucket response : responses) {
-            CompletableFuture<PartitionResult> result = pending.remove(response.getTableBucket());
+            CompletableFuture<PartitionProduceResponse> result =
+                    pending.remove(response.getTableBucket());
             if (result != null) {
                 result.complete(
-                        new PartitionResult(
+                        partitionResponse(
                                 response.getTableBucket().getBucket(),
                                 KafkaErrorMapper.toKafkaError(response.getError().error()),
                                 response.failed() ? -1L : response.getBaseOffset(),
@@ -225,14 +228,14 @@ public final class GatewayKafkaProduceBackend implements KafkaProduceBackend {
         pending.forEach(
                 (bucket, result) ->
                         result.complete(
-                                new PartitionResult(
+                                partitionResponse(
                                         bucket.getBucket(),
                                         Errors.UNKNOWN_SERVER_ERROR,
                                         -1L,
                                         "Fluss Produce response omitted this bucket.")));
     }
 
-    private static PartitionResult failedPartition(int partitionId, Throwable failure) {
+    private static PartitionProduceResponse failedPartition(int partitionId, Throwable failure) {
         Throwable cause = unwrap(failure);
         Errors kafkaError;
         if (cause instanceof RejectedExecutionException
@@ -252,6 +255,15 @@ public final class GatewayKafkaProduceBackend implements KafkaProduceBackend {
                     KafkaErrorMapper.toKafkaError(
                             org.apache.fluss.rpc.protocol.Errors.forException(cause));
         }
-        return new PartitionResult(partitionId, kafkaError, -1L, cause.getMessage());
+        return partitionResponse(partitionId, kafkaError, -1L, cause.getMessage());
+    }
+
+    private static PartitionProduceResponse partitionResponse(
+            int partitionId, Errors error, long baseOffset, String errorMessage) {
+        return new PartitionProduceResponse()
+                .setIndex(partitionId)
+                .setErrorCode(error.code())
+                .setBaseOffset(baseOffset)
+                .setErrorMessage(errorMessage);
     }
 }

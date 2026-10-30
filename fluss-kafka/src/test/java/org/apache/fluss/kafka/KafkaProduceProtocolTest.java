@@ -21,9 +21,6 @@ import org.apache.fluss.kafka.api.produce.ProduceHandler;
 import org.apache.fluss.kafka.backend.produce.KafkaProduceBackend;
 import org.apache.fluss.kafka.backend.produce.KafkaProduceCommand;
 import org.apache.fluss.kafka.backend.produce.KafkaProduceCommand.TimestampType;
-import org.apache.fluss.kafka.backend.produce.KafkaProduceResult;
-import org.apache.fluss.kafka.backend.produce.KafkaProduceResult.PartitionResult;
-import org.apache.fluss.kafka.backend.produce.KafkaProduceResult.TopicResult;
 import org.apache.fluss.kafka.dispatcher.KafkaApiRegistry;
 import org.apache.fluss.kafka.dispatcher.KafkaRequestDispatcher;
 import org.apache.fluss.kafka.error.KafkaErrorMapper;
@@ -115,12 +112,12 @@ class KafkaProduceProtocolTest {
                                 .responses()
                                 .find("topic")
                                 .partitionResponses()
-                                .get(0)
+                                .get(1)
                                 .errorCode())
                 .isIn(Errors.CORRUPT_MESSAGE.code(), Errors.INVALID_RECORD.code());
         if (codec == CompressionType.GZIP) {
             PartitionProduceResponse failed =
-                    response.data().responses().find("topic").partitionResponses().get(0);
+                    response.data().responses().find("topic").partitionResponses().get(1);
             assertThat(failed.errorCode()).isEqualTo(Errors.INVALID_RECORD.code());
             assertThat(failed.errorMessage())
                     .contains("java.util.zip.ZipException", "Not in GZIP format");
@@ -130,7 +127,7 @@ class KafkaProduceProtocolTest {
                                 .responses()
                                 .find("topic")
                                 .partitionResponses()
-                                .get(1)
+                                .get(0)
                                 .errorCode())
                 .isEqualTo(Errors.NONE.code());
         assertErrors(
@@ -201,7 +198,7 @@ class KafkaProduceProtocolTest {
                                                 });
                                 return successful(command);
                             });
-            assertErrors(response, Errors.INVALID_RECORD, Errors.NONE);
+            assertErrors(response, Errors.NONE, Errors.INVALID_RECORD);
         }
     }
 
@@ -284,16 +281,17 @@ class KafkaProduceProtocolTest {
                             assertThat(recordViews.get(0).value()).isNull();
                             assertThat(recordViews.get(1).value())
                                     .isEqualTo(ByteBuffer.allocate(0));
-                            List<TopicResult> results =
-                                    new ArrayList<>(successful(command).join().topics());
+                            List<TopicProduceResponse> results = successful(command).join();
                             Collections.reverse(results);
-                            return CompletableFuture.completedFuture(
-                                    new KafkaProduceResult(results));
+                            // Backends own the response order; the handler passes it through.
+                            return CompletableFuture.completedFuture(results);
                         });
 
+        // The handler passes the backend's ordering through; command order is a backend
+        // contract, pinned by GatewayKafkaProduceBackendTest.
         assertThat(response.data().responses())
                 .extracting(TopicProduceResponse::name)
-                .containsExactly("orders", "fluss.orders", "sales.orders");
+                .containsExactly("sales.orders", "fluss.orders", "orders");
         for (TopicProduceResponse topic : response.data().responses()) {
             assertThat(topic.partitionResponses())
                     .extracting(
@@ -321,30 +319,18 @@ class KafkaProduceProtocolTest {
                                     .extracting(KafkaProduceCommand.TopicWrite::topicName)
                                     .containsExactly(validTopic, "sales.orders");
                             return CompletableFuture.completedFuture(
-                                    new KafkaProduceResult(
-                                            Arrays.asList(
-                                                    new TopicResult(
-                                                            "sales.orders",
-                                                            Collections.singletonList(
-                                                                    new PartitionResult(
-                                                                            0,
-                                                                            Errors
-                                                                                    .TOPIC_AUTHORIZATION_FAILED,
-                                                                            -1L,
-                                                                            null))),
-                                                    new TopicResult(
-                                                            validTopic,
-                                                            Collections.singletonList(
-                                                                    new PartitionResult(
-                                                                            0,
-                                                                            Errors.NONE,
-                                                                            42L,
-                                                                            null))))));
+                                    Arrays.asList(
+                                            topicResponse(
+                                                    "sales.orders",
+                                                    Errors.TOPIC_AUTHORIZATION_FAILED,
+                                                    -1L),
+                                            topicResponse(validTopic, Errors.NONE, 42L)));
                         });
 
+        // Written topics keep backend order; the all-failed topic follows.
         assertThat(response.data().responses())
                 .extracting(TopicProduceResponse::name)
-                .containsExactly(invalidTopic, validTopic, "sales.orders");
+                .containsExactly("sales.orders", validTopic, invalidTopic);
         assertTopicError(response, invalidTopic, Errors.INVALID_RECORD);
         assertTopicError(response, validTopic, Errors.NONE);
         assertTopicError(response, "sales.orders", Errors.TOPIC_AUTHORIZATION_FAILED);
@@ -364,7 +350,7 @@ class KafkaProduceProtocolTest {
                                     topic("sales.orders", partition(0, records()))),
                             command -> {
                                 assertThat(invalidAcks).isFalse();
-                                CompletableFuture<KafkaProduceResult> failed =
+                                CompletableFuture<List<TopicProduceResponse>> failed =
                                         new CompletableFuture<>();
                                 failed.completeExceptionally(new TimeoutException("append failed"));
                                 return failed;
@@ -484,7 +470,7 @@ class KafkaProduceProtocolTest {
                                     .containsExactly(1);
                             return successful(command);
                         });
-        assertErrors(response, Errors.INVALID_RECORD, Errors.NONE);
+        assertErrors(response, Errors.NONE, Errors.INVALID_RECORD);
     }
 
     @ParameterizedTest
@@ -565,7 +551,7 @@ class KafkaProduceProtocolTest {
                                     .containsExactly(1);
                             return successful(command);
                         });
-        assertErrors(response, Errors.INVALID_RECORD, Errors.NONE);
+        assertErrors(response, Errors.NONE, Errors.INVALID_RECORD);
     }
 
     @ParameterizedTest
@@ -598,7 +584,7 @@ class KafkaProduceProtocolTest {
                                         .containsExactly(1);
                                 return successful(command);
                             });
-            assertErrors(response, Errors.INVALID_RECORD, Errors.NONE);
+            assertErrors(response, Errors.NONE, Errors.INVALID_RECORD);
         }
     }
 
@@ -621,16 +607,9 @@ class KafkaProduceProtocolTest {
                             assertThat(command.topics().get(0).partitions().get(0).records())
                                     .hasSize(3);
                             return CompletableFuture.completedFuture(
-                                    new KafkaProduceResult(
-                                            Collections.singletonList(
-                                                    new TopicResult(
-                                                            "topic",
-                                                            Collections.singletonList(
-                                                                    new PartitionResult(
-                                                                            0,
-                                                                            Errors.NONE,
-                                                                            backendBaseOffset,
-                                                                            null))))));
+                                    Collections.singletonList(
+                                            topicResponse(
+                                                    "topic", Errors.NONE, backendBaseOffset)));
                         });
         assertErrors(response, Errors.NONE);
         assertThat(
@@ -660,7 +639,7 @@ class KafkaProduceProtocolTest {
                                     .isEqualTo(1);
                             return successful(command);
                         });
-        assertErrors(response, Errors.CORRUPT_MESSAGE, Errors.NONE);
+        assertErrors(response, Errors.NONE, Errors.CORRUPT_MESSAGE);
     }
 
     @Test
@@ -705,10 +684,10 @@ class KafkaProduceProtocolTest {
                         });
         assertErrors(
                 response,
+                Errors.NONE,
                 Errors.INVALID_RECORD,
                 Errors.INVALID_REQUEST,
-                Errors.INVALID_REQUEST,
-                Errors.NONE);
+                Errors.INVALID_REQUEST);
     }
 
     @Test
@@ -753,21 +732,21 @@ class KafkaProduceProtocolTest {
                                 if (synchronous) {
                                     throw new TimeoutException("append timed out");
                                 }
-                                CompletableFuture<KafkaProduceResult> failed =
+                                CompletableFuture<List<TopicProduceResponse>> failed =
                                         new CompletableFuture<>();
                                 failed.completeExceptionally(
                                         new TimeoutException("append timed out"));
                                 return failed;
                             });
-            assertErrors(response, Errors.INVALID_RECORD, Errors.REQUEST_TIMED_OUT);
+            assertErrors(response, Errors.REQUEST_TIMED_OUT, Errors.INVALID_RECORD);
         }
-        assertErrors(
+        // The handler trusts the backend's coverage contract: an empty backend result yields an
+        // empty response, so backends must answer every written partition themselves.
+        ProduceResponse empty =
                 dispatch(
                         request((short) 11, (short) 1, partition(0, records())),
-                        command ->
-                                CompletableFuture.completedFuture(
-                                        new KafkaProduceResult(Collections.emptyList()))),
-                Errors.UNKNOWN_SERVER_ERROR);
+                        command -> CompletableFuture.completedFuture(Collections.emptyList()));
+        assertThat(empty.data().responses()).isEmpty();
     }
 
     @Test
@@ -785,7 +764,7 @@ class KafkaProduceProtocolTest {
                                     header.headerVersion(),
                                     body.data(),
                                     body.version()));
-            CompletableFuture<KafkaProduceResult> pending = new CompletableFuture<>();
+            CompletableFuture<List<TopicProduceResponse>> pending = new CompletableFuture<>();
             try {
                 channel.writeInbound(buffer);
                 KafkaRequest parsed = (KafkaRequest) requests.pollRequest(1000);
@@ -818,13 +797,7 @@ class KafkaProduceProtocolTest {
                     pending.completeExceptionally(new TimeoutException("failure"));
                 } else {
                     pending.complete(
-                            new KafkaProduceResult(
-                                    Collections.singletonList(
-                                            new TopicResult(
-                                                    "topic",
-                                                    Collections.singletonList(
-                                                            new PartitionResult(
-                                                                    0, Errors.NONE, 42L, null))))));
+                            Collections.singletonList(topicResponse("topic", Errors.NONE, 42L)));
                 }
                 channel.runPendingTasks();
                 assertThat(parsed.future()).isDone();
@@ -869,17 +842,35 @@ class KafkaProduceProtocolTest {
         return new KafkaRequestDispatcher(registry, new KafkaErrorMapper());
     }
 
-    private static CompletableFuture<KafkaProduceResult> successful(KafkaProduceCommand command) {
-        List<TopicResult> topics = new ArrayList<>();
+    private static CompletableFuture<List<TopicProduceResponse>> successful(
+            KafkaProduceCommand command) {
+        List<TopicProduceResponse> topics = new ArrayList<>();
         for (KafkaProduceCommand.TopicWrite topic : command.topics()) {
-            List<PartitionResult> partitions = new ArrayList<>();
+            List<PartitionProduceResponse> partitions = new ArrayList<>();
             for (KafkaProduceCommand.PartitionWrite partition : topic.partitions()) {
                 partitions.add(
-                        new PartitionResult(partition.partitionId(), Errors.NONE, 42L, null));
+                        new PartitionProduceResponse()
+                                .setIndex(partition.partitionId())
+                                .setErrorCode(Errors.NONE.code())
+                                .setBaseOffset(42L));
             }
-            topics.add(new TopicResult(topic.topicName(), partitions));
+            topics.add(
+                    new TopicProduceResponse()
+                            .setName(topic.topicName())
+                            .setPartitionResponses(partitions));
         }
-        return CompletableFuture.completedFuture(new KafkaProduceResult(topics));
+        return CompletableFuture.completedFuture(topics);
+    }
+
+    private static TopicProduceResponse topicResponse(String name, Errors error, long baseOffset) {
+        return new TopicProduceResponse()
+                .setName(name)
+                .setPartitionResponses(
+                        Collections.singletonList(
+                                new PartitionProduceResponse()
+                                        .setIndex(0)
+                                        .setErrorCode(error.code())
+                                        .setBaseOffset(baseOffset)));
     }
 
     private static ProduceRequest request(
