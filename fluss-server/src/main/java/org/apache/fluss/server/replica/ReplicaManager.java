@@ -40,7 +40,6 @@ import org.apache.fluss.exception.StorageBackpressureException;
 import org.apache.fluss.exception.StorageException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.exception.UnsupportedVersionException;
-import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.memory.LazyMemorySegmentPool;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -58,7 +57,6 @@ import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.record.ProjectionPushdownCache;
 import org.apache.fluss.remote.RemoteLogFetchInfo;
-import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.rpc.GatewayClientProxy;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
@@ -2027,7 +2025,7 @@ public class ReplicaManager implements ServerReconfigurable {
 
                 FetchLogResultForBucket result;
                 if (replica != null && e instanceof LogOffsetOutOfRangeException) {
-                    result = handleFetchOutOfRangeException(replica, fetchOffset, e);
+                    result = handleFetchOutOfRangeException(replica, fetchParams, fetchOffset, e);
                 } else {
                     result = FetchLogResultForBucket.error(tb, ApiError.fromThrowable(e));
                 }
@@ -2057,11 +2055,12 @@ public class ReplicaManager implements ServerReconfigurable {
         }
 
         try {
+            long highWatermark = replica.getClientLogHighWatermark();
             RemoteLogFetchInfo remoteLogFetchInfo =
-                    fetchLogFromRemote(replica, normalizedFetchOffset);
+                    remoteLogManager.fetchLogFromRemote(
+                            replica, normalizedFetchOffset, highWatermark);
             if (remoteLogFetchInfo != null) {
-                return FetchLogResultForBucket.remote(
-                        tb, remoteLogFetchInfo, replica.getLogHighWatermark());
+                return FetchLogResultForBucket.remote(tb, remoteLogFetchInfo, highWatermark);
             }
             // Remote log is expected to cover the offset, but segments/manifest may not be ready
             // yet.
@@ -2079,8 +2078,12 @@ public class ReplicaManager implements ServerReconfigurable {
     }
 
     private FetchLogResultForBucket handleFetchOutOfRangeException(
-            Replica replica, long fetchOffset, Exception e) {
+            Replica replica, FetchParams params, long fetchOffset, Exception e) {
         TableBucket tb = replica.getTableBucket();
+        long highWatermark =
+                params.isFromFollower()
+                        ? replica.getLogHighWatermark()
+                        : replica.getClientLogHighWatermark();
         if (fetchOffset == FetchParams.FETCH_FROM_EARLIEST_OFFSET) {
             fetchOffset = replica.getLogStartOffset();
         }
@@ -2090,7 +2093,7 @@ public class ReplicaManager implements ServerReconfigurable {
             // need to return the info of datalake to make client can fetch
             // from datalake directly
             return FetchLogResultForBucket.records(
-                    tb, MemoryLogRecords.EMPTY, replica.getLogHighWatermark(), -1L, -1L);
+                    tb, MemoryLogRecords.EMPTY, highWatermark, -1L, -1L);
         }
         // Once we get a fetch out of range exception from local storage, we need to check whether
         // the log segment already upload to the remote storage. If uploaded, we will return a list
@@ -2098,10 +2101,17 @@ public class ReplicaManager implements ServerReconfigurable {
         // For follower, it can update its local metadata to adjust the next fetch offset.
         else if (canFetchFromRemoteLog(replica, fetchOffset)) {
             try {
-                RemoteLogFetchInfo remoteLogFetchInfo = fetchLogFromRemote(replica, fetchOffset);
+                RemoteLogFetchInfo remoteLogFetchInfo =
+                        remoteLogManager.fetchLogFromRemote(
+                                replica,
+                                fetchOffset,
+                                params.isFromFollower() ? Long.MAX_VALUE : highWatermark);
                 if (remoteLogFetchInfo != null) {
-                    return FetchLogResultForBucket.remote(
-                            tb, remoteLogFetchInfo, replica.getLogHighWatermark());
+                    return FetchLogResultForBucket.remote(tb, remoteLogFetchInfo, highWatermark);
+                }
+                if (!params.isFromFollower() && highWatermark < replica.getLogHighWatermark()) {
+                    return FetchLogResultForBucket.records(
+                            tb, MemoryLogRecords.EMPTY, highWatermark, -1L, -1L);
                 }
             } catch (Exception ex) {
                 return FetchLogResultForBucket.error(tb, ApiError.fromThrowable(ex));
@@ -2124,29 +2134,6 @@ public class ReplicaManager implements ServerReconfigurable {
 
     private boolean canFetchFromRemoteLog(Replica replica, long fetchOffset) {
         return replica.getLogTablet().canFetchFromRemoteLog(fetchOffset);
-    }
-
-    private @Nullable RemoteLogFetchInfo fetchLogFromRemote(Replica replica, long fetchOffset) {
-        List<RemoteLogSegment> remoteLogSegmentList =
-                remoteLogManager.relevantRemoteLogSegmentsForFetchV0(
-                        replica.getTableBucket(), fetchOffset);
-        if (!remoteLogSegmentList.isEmpty()) {
-            int firstStartPos =
-                    remoteLogManager.lookupPositionForOffset(
-                            remoteLogSegmentList.get(0), fetchOffset);
-            PhysicalTablePath physicalTablePath = replica.getPhysicalTablePath();
-            FsPath remoteLogDir = FlussPaths.remoteLogDir(replica.getRemoteDataDir());
-            FsPath remoteLogTabletDir =
-                    FlussPaths.remoteLogTabletDir(
-                            remoteLogDir, physicalTablePath, replica.getTableBucket());
-            return new RemoteLogFetchInfo(
-                    remoteLogTabletDir.toString(),
-                    physicalTablePath.getPartitionName(),
-                    remoteLogSegmentList,
-                    firstStartPos);
-        } else {
-            return null;
-        }
     }
 
     /**
@@ -2737,6 +2724,7 @@ public class ReplicaManager implements ServerReconfigurable {
                                 clock,
                                 remoteLogManager,
                                 scannerManager,
+                                ioExecutor,
                                 indexReplicatorPool,
                                 indexSendBuffer,
                                 serverMetricGroup);
