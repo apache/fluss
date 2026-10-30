@@ -29,10 +29,13 @@ import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Executes undo recovery for multiple buckets using streaming execution.
@@ -102,21 +105,27 @@ public class UndoRecoveryExecutor {
      * Executes undo recovery for the given bucket contexts.
      *
      * @param contexts the bucket recovery contexts (must have target offsets set)
+     * @return safe bucket baselines after all recovery writes have completed
      * @throws Exception if recovery fails
      */
-    public void execute(List<BucketRecoveryContext> contexts) throws Exception {
+    public Map<TableBucket, Long> execute(List<BucketRecoveryContext> contexts) throws Exception {
+        Map<TableBucket, Long> recoveredOffsets = new ConcurrentHashMap<>();
+        for (BucketRecoveryContext ctx : contexts) {
+            recoveredOffsets.put(ctx.getBucket(), ctx.getLogEndOffset());
+        }
         // Filter contexts that need recovery
         List<BucketRecoveryContext> toRecover = filterContextsNeedingRecovery(contexts);
         if (toRecover.isEmpty()) {
             LOG.debug("No buckets need recovery after filtering");
-            return;
+            return recoveredOffsets;
         }
 
         LOG.debug("Executing undo recovery for {} bucket(s)", toRecover.size());
 
         // Subscribe and read changelog with streaming execution
         subscribeAll(toRecover);
-        List<CompletableFuture<?>> allFutures = readChangelogAndExecute(toRecover);
+        List<CompletableFuture<?>> allFutures =
+                readChangelogAndExecute(toRecover, recoveredOffsets);
 
         // Flush first, then wait for all async writes to complete
         writer.flush();
@@ -134,6 +143,7 @@ public class UndoRecoveryExecutor {
                 "Undo recovery execution completed: {} bucket(s), {} total undo operation(s)",
                 toRecover.size(),
                 totalUndoOps);
+        return new HashMap<>(recoveredOffsets);
     }
 
     private List<BucketRecoveryContext> filterContextsNeedingRecovery(
@@ -166,7 +176,8 @@ public class UndoRecoveryExecutor {
         }
     }
 
-    private List<CompletableFuture<?>> readChangelogAndExecute(List<BucketRecoveryContext> contexts)
+    private List<CompletableFuture<?>> readChangelogAndExecute(
+            List<BucketRecoveryContext> contexts, Map<TableBucket, Long> recoveredOffsets)
             throws Exception {
         List<CompletableFuture<?>> allFutures = new ArrayList<>();
 
@@ -206,7 +217,7 @@ public class UndoRecoveryExecutor {
                 }
                 List<ScanRecord> bucketRecords = records.records(ctx.getBucket());
                 if (!bucketRecords.isEmpty()) {
-                    processRecords(ctx, bucketRecords, allFutures);
+                    processRecords(ctx, bucketRecords, allFutures, recoveredOffsets);
                 }
                 Long consumedUpToOffset = records.consumedUpToOffset(ctx.getBucket());
                 if (consumedUpToOffset != null) {
@@ -256,15 +267,20 @@ public class UndoRecoveryExecutor {
     private void processRecords(
             BucketRecoveryContext ctx,
             List<ScanRecord> records,
-            List<CompletableFuture<?>> futures) {
+            List<CompletableFuture<?>> futures,
+            Map<TableBucket, Long> recoveredOffsets) {
         Set<ByteArrayWrapper> processedKeys = ctx.getProcessedKeys();
         for (ScanRecord record : records) {
             if (record.logOffset() >= ctx.getLogEndOffset()) {
                 continue;
             }
-            CompletableFuture<?> future = undoComputer.processRecord(record, processedKeys);
+            CompletableFuture<Long> future = undoComputer.processRecord(record, processedKeys);
             if (future != null) {
-                futures.add(future);
+                futures.add(
+                        future.thenAccept(
+                                offset ->
+                                        recoveredOffsets.merge(
+                                                ctx.getBucket(), offset, Math::max)));
             }
             ctx.recordProcessed();
         }

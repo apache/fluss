@@ -34,6 +34,7 @@ import javax.annotation.Nullable;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
@@ -109,15 +110,16 @@ public class UndoRecoveryManager {
      * @param bucketUndoOffsets map of bucket to its undo offsets (checkpointOffset, logEndOffset)
      * @param subtaskIndex the Flink subtask index (for logging)
      * @param parallelism the total parallelism (for logging)
+     * @return safe bucket baselines after successful recovery
      * @throws Exception if recovery fails
      */
-    public void performUndoRecovery(
+    public Map<TableBucket, Long> performUndoRecovery(
             Map<TableBucket, UndoOffsets> bucketUndoOffsets, int subtaskIndex, int parallelism)
             throws Exception {
 
         if (bucketUndoOffsets.isEmpty()) {
             LOG.debug("No buckets to recover on subtask {}/{}", subtaskIndex, parallelism);
-            return;
+            return Collections.emptyMap();
         }
 
         LOG.info(
@@ -128,6 +130,7 @@ public class UndoRecoveryManager {
 
         List<BucketRecoveryContext> contexts = buildRecoveryContexts(bucketUndoOffsets);
 
+        Map<TableBucket, Long> recoveredOffsets;
         try (LogScanner scanner = createLogScanner()) {
             Upsert recoveryUpsert = table.newUpsert().mergeMode(MergeMode.OVERWRITE);
             if (targetColumnIndexes != null) {
@@ -148,7 +151,7 @@ public class UndoRecoveryManager {
             // This is a blocking operation that reads changelog and executes undo operations.
             // It may take a significant amount of time depending on the volume of records to
             // process.
-            executor.execute(contexts);
+            recoveredOffsets = executor.execute(contexts);
         }
 
         // Calculate total undo operations for summary
@@ -163,6 +166,7 @@ public class UndoRecoveryManager {
                 totalUndoOps,
                 subtaskIndex,
                 parallelism);
+        return recoveredOffsets;
     }
 
     /**

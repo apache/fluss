@@ -18,6 +18,8 @@
 package org.apache.fluss.flink.sink.undo;
 
 import org.apache.fluss.client.table.scanner.ScanRecord;
+import org.apache.fluss.client.table.writer.DeleteResult;
+import org.apache.fluss.client.table.writer.UpsertResult;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.row.InternalRow;
@@ -75,10 +77,10 @@ public class UndoComputer {
      *
      * @param record the changelog record
      * @param processedKeys set of already processed primary keys for deduplication
-     * @return CompletableFuture for the async write, or null if skipped
+     * @return future containing the acknowledged log end offset, or null if skipped
      */
     @Nullable
-    public CompletableFuture<?> processRecord(
+    public CompletableFuture<Long> processRecord(
             ScanRecord record, Set<ByteArrayWrapper> processedKeys) {
         // Skip UPDATE_AFTER before key encoding — UPDATE_BEFORE already handled the undo
         if (record.getChangeType() == ChangeType.UPDATE_AFTER) {
@@ -93,7 +95,7 @@ public class UndoComputer {
             return null;
         }
 
-        CompletableFuture<?> future = computeAndExecuteUndo(record);
+        CompletableFuture<Long> future = computeAndExecuteUndo(record);
         if (future != null) {
             processedKeys.add(keyWrapper);
         }
@@ -117,22 +119,22 @@ public class UndoComputer {
      * </ul>
      *
      * @param record the changelog record
-     * @return CompletableFuture for the async write, or null if no action needed (e.g.,
+     * @return future containing the acknowledged log end offset, or null if no action needed (e.g.,
      *     UPDATE_AFTER)
      */
     @Nullable
-    private CompletableFuture<?> computeAndExecuteUndo(ScanRecord record) {
+    private CompletableFuture<Long> computeAndExecuteUndo(ScanRecord record) {
         ChangeType changeType = record.getChangeType();
         InternalRow row = record.getRow();
 
         switch (changeType) {
             case INSERT:
                 // Row was inserted after checkpoint → delete it
-                return writer.delete(row);
+                return writer.delete(row).thenApply(DeleteResult::getLogEndOffset);
 
             case UPDATE_BEFORE:
                 // Row was updated after checkpoint → restore old value
-                return writer.upsert(row);
+                return writer.upsert(row).thenApply(UpsertResult::getLogEndOffset);
 
             case UPDATE_AFTER:
                 // Ignored: UPDATE_BEFORE already handled the undo logic for this key.
@@ -140,7 +142,7 @@ public class UndoComputer {
 
             case DELETE:
                 // Row was deleted after checkpoint → re-insert it
-                return writer.upsert(row);
+                return writer.upsert(row).thenApply(UpsertResult::getLogEndOffset);
 
             default:
                 LOG.warn("Unexpected change type for undo: {}", changeType);
