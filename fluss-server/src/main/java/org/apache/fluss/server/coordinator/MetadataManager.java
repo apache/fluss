@@ -77,6 +77,7 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Callable;
@@ -953,6 +954,11 @@ public class MetadataManager {
             List<TableChange> tableChanges,
             FlussPrincipal flussPrincipal) {
         TableDescriptor tableDescriptor = tableInfo.toTableDescriptor();
+        List<TableChange> lakeTableChanges =
+                getLakeTablePropertyChanges(tableDescriptor, newDescriptor, tableChanges);
+        if (lakeTableChanges.isEmpty()) {
+            return;
+        }
         TablePath currentLakeTablePath =
                 LakeTableUtil.resolveLakeTablePath(
                         tablePath, Configuration.fromMap(tableDescriptor.getProperties()));
@@ -970,7 +976,6 @@ public class MetadataManager {
                         tableDescriptor,
                         newDescriptor);
         TablePath lakeTablePath = currentLakeTablePath;
-        List<TableChange> lakeTableChanges = tableChanges;
 
         if (isDataLakeEnabled(newDescriptor)) {
             if (lakeCatalog == null) {
@@ -994,20 +999,14 @@ public class MetadataManager {
 
                 // The target path is already applied by createTable. Do not replay its mapping
                 // options through alterTable, where they are intentionally immutable.
-                lakeTableChanges = new ArrayList<>(tableChanges);
                 lakeTableChanges.removeIf(LakeTableUtil::isLakeTablePathChange);
             }
         }
 
-        // We should always alter lake table even though datalake is disabled.
-        // Otherwise, if user alter the fluss table when datalake is disabled, then enable datalake
-        // again, the lake table will mismatch.
-        // Sync to lake if this table has ever opted into datalake (key present regardless of
-        // value), or if this change is enabling datalake now. The latter is needed because
-        // resetting table.datalake.enabled removes the key entirely (see
-        // #getUpdatedTableDescriptor), so a later re-enable would otherwise see an old descriptor
-        // without the key and skip the alterTable call that re-applies lakestream.enabled.
-        if (lakeCatalog != null
+        // Preserve native lake updates and acceleration state transitions. Fluss-only properties
+        // do not need their metadata copies in the lake to stay synchronized.
+        if (!lakeTableChanges.isEmpty()
+                && lakeCatalog != null
                 && (enablingDataLake
                         || tableDescriptor
                                 .getProperties()
@@ -1025,6 +1024,57 @@ public class MetadataManager {
                 }
             }
         }
+    }
+
+    private List<TableChange> getLakeTablePropertyChanges(
+            TableDescriptor currentTable,
+            TableDescriptor updatedTable,
+            List<TableChange> tableChanges) {
+        DataLakeFormat lakeFormat =
+                Configuration.fromMap(updatedTable.getProperties())
+                        .getOptional(ConfigOptions.TABLE_DATALAKE_FORMAT)
+                        .orElse(
+                                lakeCatalogDynamicLoader
+                                        .getLakeCatalogContainer()
+                                        .getDataLakeFormat());
+        String lakeOptionPrefix = lakeFormat == null ? null : lakeFormat + ".";
+        List<TableChange> lakeChanges = new ArrayList<>();
+        for (TableChange change : tableChanges) {
+            String key;
+            if (change instanceof TableChange.SetOption) {
+                key = ((TableChange.SetOption) change).getKey();
+            } else if (change instanceof TableChange.ResetOption) {
+                key = ((TableChange.ResetOption) change).getKey();
+            } else {
+                continue;
+            }
+
+            // Hudi tiering still reads auto-compaction from the lake's Fluss option copy.
+            // Keep it on the catalog path so unsupported ALTERs fail instead of silently
+            // succeeding.
+            boolean hudiAutoCompaction =
+                    lakeFormat == DataLakeFormat.HUDI
+                            && ConfigOptions.TABLE_DATALAKE_AUTO_COMPACTION.key().equals(key);
+            if (ConfigOptions.TABLE_DATALAKE_ENABLED.key().equals(key)) {
+                if (isDataLakeEnabled(currentTable) != isDataLakeEnabled(updatedTable)) {
+                    lakeChanges.add(change);
+                }
+            } else if ((LakeTableUtil.isLakeTablePathChange(change)
+                            || hudiAutoCompaction
+                            || (lakeOptionPrefix != null && key.startsWith(lakeOptionPrefix)))
+                    && !Objects.equals(
+                            getTableOption(currentTable, key), getTableOption(updatedTable, key))) {
+                lakeChanges.add(change);
+            }
+        }
+        return lakeChanges;
+    }
+
+    @Nullable
+    private static String getTableOption(TableDescriptor table, String key) {
+        return table.getProperties().containsKey(key)
+                ? table.getProperties().get(key)
+                : table.getCustomProperties().get(key);
     }
 
     @Nullable
