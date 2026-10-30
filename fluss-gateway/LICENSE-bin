@@ -339,6 +339,7 @@ ring@0.17.14
 rustc-hash@2.1.3
 rustix@1.1.4
 rustls@0.23.43
+rustls-pemfile@2.2.0
 rustls-pki-types@1.15.1
 ryu@1.0.23
 scopeguard@1.2.0
