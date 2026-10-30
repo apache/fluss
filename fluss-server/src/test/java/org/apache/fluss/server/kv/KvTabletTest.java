@@ -90,6 +90,8 @@ import org.apache.fluss.utils.concurrent.FlussScheduler;
 
 import io.github.fluss_contrib.rocksdb.FlushOptions;
 import io.github.fluss_contrib.rocksdb.RocksDBException;
+import io.github.fluss_contrib.rocksdb.Statistics;
+import io.github.fluss_contrib.rocksdb.TickerType;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -701,6 +703,8 @@ class KvTabletTest {
         LogRecords actualLogRecords = readLogRecords();
 
         checkEqual(actualLogRecords, expectedLogs, rowType);
+
+        flushAndWait(kvTablet, Long.MAX_VALUE);
 
         // create one kv batch with only writing second one column
         KvRecordBatch kvRecordBatch2 =
@@ -1719,6 +1723,10 @@ class KvTabletTest {
         kvTablet.putAsLeader(kvRecordBatch1, null);
         long endOffset = logTablet.localLogEndOffset();
 
+        Statistics nativeStatistics = kvTablet.getRocksDBKv().getStatistics();
+        assertThat(nativeStatistics.getTickerCount(TickerType.NUMBER_MULTIGET_CALLS)).isZero();
+        assertThat(nativeStatistics.getTickerCount(TickerType.NUMBER_KEYS_READ)).isZero();
+
         // Verify inserts produce +U (optimization in WAL mode with default merge engine and full
         // row update)
         LogRecords actualLogRecords = readLogRecords();
@@ -2439,8 +2447,9 @@ class KvTabletTest {
         }
         List<ByteArraySlice> readValues = kvTablet.multiGet(keysToRead);
         assertThat(readValues).hasSize(100);
+        assertThat(kvTablet.getRocksDBKv().get("key".getBytes())).isEqualTo("value".getBytes());
 
-        // After reads: get latency must be tracked
+        // After point reads: get latency must be tracked
         long getLatency = statistics.getGetLatencyMicros();
         assertThat(getLatency)
                 .as("Get latency must be tracked after read operations")

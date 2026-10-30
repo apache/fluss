@@ -30,6 +30,11 @@ import org.apache.fluss.server.kv.rocksdb.RocksDBKv;
 import javax.annotation.Nullable;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.function.Supplier;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
@@ -107,6 +112,35 @@ public final class KvStateAccessor {
             localResult = lookupRocksDB(key);
         }
         return localResult.isPresent() ? valueDecoder.decodeValue(localResult.value()) : null;
+    }
+
+    /** Returns whether a buffered value or delete already determines the local state. */
+    boolean containsBufferedKey(Key key) {
+        return preWriteBuffer.get(key) != null;
+    }
+
+    /**
+     * Loads distinct RocksDB misses for a write batch. Buffered values and deletes are excluded.
+     * Callers must hold the KV write lock through prefetch and application, and recheck the buffer
+     * before using a saved result so earlier mutations in the batch remain visible.
+     */
+    Map<Key, byte[]> prefetchRocksDBValues(Set<Key> keys) throws IOException {
+        List<Key> missingKeys = new ArrayList<>();
+        List<byte[]> encodedKeys = new ArrayList<>();
+        for (Key key : keys) {
+            if (preWriteBuffer.get(key) == null) {
+                missingKeys.add(key);
+                encodedKeys.add(key.get());
+            }
+        }
+        Map<Key, byte[]> values = new HashMap<>();
+        if (!missingKeys.isEmpty()) {
+            List<byte[]> results = rocksDBKv.multiGet(encodedKeys);
+            for (int i = 0; i < missingKeys.size(); i++) {
+                values.put(missingKeys.get(i), results.get(i));
+            }
+        }
+        return values;
     }
 
     /** Adds an insert mutation to the prewrite buffer. */

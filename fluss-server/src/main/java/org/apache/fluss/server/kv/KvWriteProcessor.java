@@ -68,7 +68,13 @@ import javax.annotation.Nullable;
 import javax.annotation.concurrent.NotThreadSafe;
 
 import java.util.HashSet;
+import java.util.LinkedHashSet;
+import java.util.Map;
 import java.util.Set;
+import java.util.function.BooleanSupplier;
+import java.util.function.Function;
+
+import static org.apache.fluss.utils.Preconditions.checkState;
 
 /**
  * Processes a KV record batch into local state mutations and the corresponding WAL records.
@@ -90,6 +96,12 @@ import java.util.Set;
 public final class KvWriteProcessor {
 
     private static final Logger LOG = LoggerFactory.getLogger(KvWriteProcessor.class);
+
+    // Hot-cache JMH of complete putAsLeader calls found benefits at eight records for batches
+    // with hits, with missing-only batches near parity. Smaller batches avoid the extra scan and
+    // collections. Record count is a cheap upper bound on the required RocksDB lookups; duplicates
+    // and buffered values can reduce the actual count.
+    private static final int MIN_BATCH_SIZE_FOR_PREFETCH = 8;
 
     private final TableBucket tableBucket;
     private final LogTablet logTablet;
@@ -113,6 +125,7 @@ public final class KvWriteProcessor {
     @Nullable private final RowTtlTimestampProvider rowTtlTimestampProvider;
     private final Clock clock;
     private final boolean skipUnchangedUpsert;
+    private final BooleanSupplier batchOldValueLookupEnabled;
 
     /** Creates a KV write processor. */
     public KvWriteProcessor(
@@ -130,7 +143,8 @@ public final class KvWriteProcessor {
             ValueDecoder valueDecoder,
             @Nullable RowTtlTimestampProvider rowTtlTimestampProvider,
             Clock clock,
-            boolean skipUnchangedUpsert) {
+            boolean skipUnchangedUpsert,
+            BooleanSupplier batchOldValueLookupEnabled) {
         this.tableBucket = tableBucket;
         this.logTablet = logTablet;
         this.arrowWriterProvider = arrowWriterProvider;
@@ -151,6 +165,7 @@ public final class KvWriteProcessor {
         this.rowTtlTimestampProvider = rowTtlTimestampProvider;
         this.clock = clock;
         this.skipUnchangedUpsert = skipUnchangedUpsert;
+        this.batchOldValueLookupEnabled = batchOldValueLookupEnabled;
     }
 
     /** Processes a KV batch against the supplied state and appends its WAL. */
@@ -324,11 +339,42 @@ public final class KvWriteProcessor {
         KvRecordBatch.ReadContext readContext =
                 KvRecordReadContext.createReadContext(kvFormat, schemaGetter);
 
+        boolean prefetchEnabled =
+                batchOldValueLookupEnabled.getAsBoolean()
+                        && originalPartitionName == null
+                        && kvRecords.getRecordCount() >= MIN_BATCH_SIZE_FOR_PREFETCH;
+        Function<byte[], BinaryValue> previousValueLookup =
+                historicalValueLookup == null ? null : historicalValueLookup::lookup;
         for (KvRecord kvRecord : kvRecords.records(readContext)) {
             byte[] keyBytes = BytesUtils.toArray(kvRecord.getKey());
             KvPreWriteBuffer.Key key = stateAccessor.encodeKey(keyBytes, originalPartitionName);
             BinaryRow row = kvRecord.getRow();
             BinaryValue currentValue = row == null ? null : new BinaryValue(schemaIdOfNewData, row);
+
+            if (prefetchEnabled
+                    && previousValueLookup == null
+                    && requiresPreviousValue(row, currentMerger, autoIncrementUpdater)
+                    && !stateAccessor.containsBufferedKey(key)) {
+                // Start prefetch only on a required buffer miss. Full-row WAL batches and batches
+                // served entirely by the buffer retain their single-pass processing.
+                Map<KvPreWriteBuffer.Key, byte[]> savedValues =
+                        prefetchPreviousValues(
+                                kvRecords, currentMerger, autoIncrementUpdater, stateAccessor);
+                previousValueLookup =
+                        primaryKey -> {
+                            KvPreWriteBuffer.Key savedKey =
+                                    stateAccessor.encodeKey(primaryKey, null);
+                            // Buffered keys are excluded from prefetch and stay buffered while the
+                            // write lock is held, so every later buffer miss must have been
+                            // prefetched. Fail instead of treating an absent entry as a missing
+                            // row, which would turn an update into an insert.
+                            checkState(
+                                    savedValues.containsKey(savedKey),
+                                    "The previous value of a buffer miss was not prefetched.");
+                            byte[] value = savedValues.get(savedKey);
+                            return value == null ? null : valueDecoder.decodeValue(value);
+                        };
+            }
 
             if (currentValue == null) {
                 logOffset =
@@ -340,7 +386,7 @@ public final class KvWriteProcessor {
                                 logOffset,
                                 stateAccessor,
                                 keyBytes,
-                                historicalValueLookup);
+                                previousValueLookup);
             } else {
                 logOffset =
                         processUpsert(
@@ -353,9 +399,36 @@ public final class KvWriteProcessor {
                                 logOffset,
                                 stateAccessor,
                                 keyBytes,
-                                historicalValueLookup);
+                                previousValueLookup);
             }
         }
+    }
+
+    private Map<KvPreWriteBuffer.Key, byte[]> prefetchPreviousValues(
+            KvRecordBatch kvRecords,
+            RowMerger currentMerger,
+            AutoIncrementUpdater autoIncrementUpdater,
+            KvStateAccessor stateAccessor)
+            throws Exception {
+        Set<KvPreWriteBuffer.Key> keys = new LinkedHashSet<>();
+        KvRecordBatch.ReadContext readContext =
+                KvRecordReadContext.createReadContext(kvFormat, schemaGetter);
+        for (KvRecord record : kvRecords.records(readContext)) {
+            if (requiresPreviousValue(record.getRow(), currentMerger, autoIncrementUpdater)) {
+                keys.add(stateAccessor.encodeKey(BytesUtils.toArray(record.getKey()), null));
+            }
+        }
+        return stateAccessor.prefetchRocksDBValues(keys);
+    }
+
+    /** Returns whether applying a record with the given row (null for a delete) reads its key. */
+    private boolean requiresPreviousValue(
+            @Nullable BinaryRow row,
+            RowMerger currentMerger,
+            AutoIncrementUpdater autoIncrementUpdater) {
+        return row == null
+                ? !shouldIgnoreDeletion(currentMerger)
+                : !canSkipOldValueLookup(currentMerger, autoIncrementUpdater);
     }
 
     private long processDeletion(
@@ -366,14 +439,14 @@ public final class KvWriteProcessor {
             long logOffset,
             KvStateAccessor stateAccessor,
             byte[] primaryKey,
-            @Nullable HistoricalValueLookup historicalValueLookup)
+            @Nullable Function<byte[], BinaryValue> previousValueLookup)
             throws Exception {
         if (shouldIgnoreDeletion(currentMerger)) {
             return logOffset;
         }
 
         BinaryValue oldValue =
-                getPreviousValue(key, primaryKey, stateAccessor, historicalValueLookup);
+                getPreviousValue(key, primaryKey, stateAccessor, previousValueLookup);
         if (oldValue == null) {
             LOG.debug(
                     "The specific key can't be found in kv tablet although the kv record is for deletion, "
@@ -411,7 +484,7 @@ public final class KvWriteProcessor {
             long logOffset,
             KvStateAccessor stateAccessor,
             byte[] primaryKey,
-            @Nullable HistoricalValueLookup historicalValueLookup)
+            @Nullable Function<byte[], BinaryValue> previousValueLookup)
             throws Exception {
         if (canSkipOldValueLookup(currentMerger, autoIncrementUpdater)) {
             return applyUpdate(
@@ -419,7 +492,7 @@ public final class KvWriteProcessor {
         }
 
         BinaryValue oldValue =
-                getPreviousValue(key, primaryKey, stateAccessor, historicalValueLookup);
+                getPreviousValue(key, primaryKey, stateAccessor, previousValueLookup);
         if (oldValue == null) {
             BinaryValue valueToInsert = currentMerger.merge(null, currentValue);
             return applyInsert(
@@ -502,8 +575,8 @@ public final class KvWriteProcessor {
     }
 
     /**
-     * Returns the previous value through the state accessor, using saved results as the fallback
-     * for historical writes.
+     * Returns the previous value through the state accessor, using prefetched RocksDB values or
+     * saved historical values as the fallback.
      *
      * @param localStateKey the key used by the local prewrite buffer and RocksDB; it wraps {@code
      *     primaryKey} for a normal partition and adds the original partition namespace for a
@@ -516,14 +589,12 @@ public final class KvWriteProcessor {
             KvPreWriteBuffer.Key localStateKey,
             byte[] primaryKey,
             KvStateAccessor stateAccessor,
-            @Nullable HistoricalValueLookup historicalValueLookup)
+            @Nullable Function<byte[], BinaryValue> previousValueLookup)
             throws Exception {
         return stateAccessor.lookup(
                 localStateKey,
                 valueDecoder,
-                historicalValueLookup == null
-                        ? null
-                        : () -> historicalValueLookup.lookup(primaryKey));
+                previousValueLookup == null ? null : () -> previousValueLookup.apply(primaryKey));
     }
 
     private boolean canSkipOldValueLookup(

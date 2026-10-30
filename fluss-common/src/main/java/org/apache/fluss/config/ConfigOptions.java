@@ -2412,6 +2412,17 @@ public class ConfigOptions {
     // ------------------------------------------------------------------------
     //  ConfigOptions for Kv
     // ------------------------------------------------------------------------
+    public static final ConfigOption<Boolean> KV_WRITE_BATCH_OLD_VALUE_LOOKUP_ENABLED =
+            key("kv.write.batch-old-value-lookup.enabled")
+                    .booleanType()
+                    .defaultValue(true)
+                    .withDescription(
+                            "Whether to read existing row values in batches when processing normal KV writes. "
+                                    + "These values are used to merge updates and generate changelog records. "
+                                    + "When disabled, writes use individual RocksDB Get calls on prewrite buffer misses. "
+                                    + "This does not affect read requests or historical writes. "
+                                    + "This configuration can be updated dynamically without a server restart.");
+
     public static final ConfigOption<Duration> KV_SNAPSHOT_INTERVAL =
             key("kv.snapshot.interval")
                     .durationType()

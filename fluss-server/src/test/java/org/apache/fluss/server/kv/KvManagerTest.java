@@ -21,6 +21,8 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.config.TableConfig;
+import org.apache.fluss.config.cluster.AlterConfig;
+import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
@@ -39,6 +41,7 @@ import org.apache.fluss.record.KvRecordTestUtils;
 import org.apache.fluss.record.TestData;
 import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.row.encode.ValueEncoder;
+import org.apache.fluss.server.DynamicConfigManager;
 import org.apache.fluss.server.log.LogManager;
 import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
@@ -56,6 +59,8 @@ import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.fluss.utils.concurrent.FlussScheduler;
 
+import io.github.fluss_contrib.rocksdb.Statistics;
+import io.github.fluss_contrib.rocksdb.TickerType;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -181,6 +186,62 @@ final class KvManagerTest {
 
     static List<String> partitionProvider() {
         return Arrays.asList(null, "2024");
+    }
+
+    @Test
+    void testDynamicBatchOldValueLookupSwitch() throws Exception {
+        initTableBuckets(null);
+        KvTablet firstKv = getOrCreateKv(tablePath1, null, tableBucket1);
+        assertBatchOldValueLookup(firstKv, true);
+        DynamicConfigManager configManager = new DynamicConfigManager(zkClient, conf);
+        configManager.register(kvManager);
+        configManager.pauseListening();
+        try {
+            configManager.startup();
+            configManager.alterConfigs(
+                    Collections.singletonList(
+                            new AlterConfig(
+                                    ConfigOptions.KV_WRITE_BATCH_OLD_VALUE_LOOKUP_ENABLED.key(),
+                                    "false",
+                                    AlterConfigOpType.SET)));
+            assertBatchOldValueLookup(firstKv, false);
+            KvTablet secondKv = getOrCreateKv(tablePath2, null, tableBucket2);
+            assertBatchOldValueLookup(secondKv, false);
+
+            configManager.alterConfigs(
+                    Collections.singletonList(
+                            new AlterConfig(
+                                    ConfigOptions.KV_WRITE_BATCH_OLD_VALUE_LOOKUP_ENABLED.key(),
+                                    null,
+                                    AlterConfigOpType.DELETE)));
+            assertBatchOldValueLookup(firstKv, true);
+            assertBatchOldValueLookup(secondKv, true);
+        } finally {
+            configManager.close();
+            zkClient.upsertServerEntityConfig(Collections.emptyMap());
+        }
+    }
+
+    private void assertBatchOldValueLookup(KvTablet kvTablet, boolean enabled) throws Exception {
+        KvRecord[] records = new KvRecord[8];
+        for (int i = 0; i < records.length; i++) {
+            records[i] = kvRecordFactory.ofRecord("k" + i, new Object[] {i, "value"});
+        }
+        Statistics statistics = kvTablet.getRocksDBKv().getStatistics();
+        long calls = statistics.getTickerCount(TickerType.NUMBER_MULTIGET_CALLS);
+        long multiGetKeys = statistics.getTickerCount(TickerType.NUMBER_MULTIGET_KEYS_READ);
+        long gets = statistics.getTickerCount(TickerType.NUMBER_KEYS_READ);
+        put(kvTablet, records);
+        assertThat(statistics.getTickerCount(TickerType.NUMBER_MULTIGET_CALLS) - calls)
+                .isEqualTo(enabled ? 1 : 0);
+        assertThat(statistics.getTickerCount(TickerType.NUMBER_MULTIGET_KEYS_READ) - multiGetKeys)
+                .isEqualTo(enabled ? records.length : 0);
+        if (!enabled) {
+            // Without batching, every buffer miss uses its own point read. With batching, the
+            // point reads depend on how many keys MultiGet misses, as each miss is re-read.
+            assertThat(statistics.getTickerCount(TickerType.NUMBER_KEYS_READ) - gets)
+                    .isEqualTo(records.length);
+        }
     }
 
     @Test

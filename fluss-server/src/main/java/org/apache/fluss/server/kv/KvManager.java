@@ -84,6 +84,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Predicate;
 
 import static org.apache.fluss.utils.Preconditions.checkState;
@@ -163,6 +164,8 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
     /** Current shared rate limiter configuration in bytes per second. */
     private volatile long currentSharedRateLimitBytesPerSec;
 
+    private final AtomicBoolean batchOldValueLookupEnabled;
+
     /** The optional write buffer manager shared by all RocksDB instances. */
     @Nullable private final WriteBufferManager sharedWriteBufferManager;
 
@@ -201,6 +204,8 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
         this.sharedBlockCache = createSharedBlockCache(conf);
         this.currentSharedRateLimitBytesPerSec =
                 conf.get(ConfigOptions.KV_SHARED_RATE_LIMITER_BYTES_PER_SEC).getBytes();
+        this.batchOldValueLookupEnabled =
+                new AtomicBoolean(conf.get(ConfigOptions.KV_WRITE_BATCH_OLD_VALUE_LOOKUP_ENABLED));
         KvFlushScheduler createdFlushScheduler =
                 kvFlushScheduler != null ? kvFlushScheduler : new KvFlushScheduler(conf);
         @Nullable Cache createdWriteBufferAccountingCache = null;
@@ -587,7 +592,8 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
                                     flushCompleteListener,
                                     autoIncrementManager,
                                     clock,
-                                    tableConfig);
+                                    tableConfig,
+                                    batchOldValueLookupEnabled::get);
                     currentKvs.put(tableBucket, tablet);
 
                     LOG.info(
@@ -760,7 +766,8 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
                         flushCompleteListener,
                         autoIncrementManager,
                         clock,
-                        tableConfig);
+                        tableConfig,
+                        batchOldValueLookupEnabled::get);
         currentKvs.put(tableBucket, kvTablet);
 
         return kvTablet;
@@ -804,9 +811,12 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
     public void reconfigure(Configuration newConfig) throws ConfigException {
         long newSharedRateLimitBytes =
                 newConfig.get(ConfigOptions.KV_SHARED_RATE_LIMITER_BYTES_PER_SEC).getBytes();
+        boolean newBatchOldValueLookupEnabled =
+                newConfig.get(ConfigOptions.KV_WRITE_BATCH_OLD_VALUE_LOOKUP_ENABLED);
 
         // If value hasn't changed, skip
         if (newSharedRateLimitBytes == currentSharedRateLimitBytesPerSec) {
+            batchOldValueLookupEnabled.set(newBatchOldValueLookupEnabled);
             LOG.debug(
                     "Shared RocksDB rate limiter config unchanged: {} bytes/sec",
                     newSharedRateLimitBytes);
@@ -820,6 +830,7 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
             // The rate limiter is always enabled, so we can safely reconfigure it
             sharedRocksDBRateLimiter.setBytesPerSecond(newSharedRateLimitBytes);
             currentSharedRateLimitBytesPerSec = newSharedRateLimitBytes;
+            batchOldValueLookupEnabled.set(newBatchOldValueLookupEnabled);
 
             LOG.info(
                     "Shared RocksDB rate limiter reconfigured: {} bytes/sec ({}) -> {} bytes/sec ({})",
