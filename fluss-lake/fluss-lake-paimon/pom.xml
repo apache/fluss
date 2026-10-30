@@ -162,7 +162,6 @@
             <artifactId>fluss-server</artifactId>
             <version>${project.version}</version>
             <type>test-jar</type>
-            <classifier>tests-without-lake-spi</classifier>
             <scope>test</scope>
         </dependency>
 

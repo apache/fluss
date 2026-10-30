@@ -138,10 +138,18 @@ class LakeStoragePluginSetUpTest {
                         "Multiple LakeStoragePlugins for datalake format '"
                                 + format
                                 + "' found: "
-                                + first.getName()
+                                + withLocation(first)
                                 + ", "
-                                + second.getName()
-                                + ".");
+                                + withLocation(second)
+                                + ". Remove one of them from the plugins directory"
+                                + " or the classpath.");
+    }
+
+    private static String withLocation(Class<?> pluginClass) {
+        return pluginClass.getName()
+                + " ("
+                + pluginClass.getProtectionDomain().getCodeSource().getLocation()
+                + ")";
     }
 
     private static PluginManager manager(LakeStoragePlugin... plugins) {

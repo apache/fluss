@@ -170,20 +170,6 @@
                             <goal>test-jar</goal>
                         </goals>
                     </execution>
-                    <execution>
-                        <id>test-jar-without-lake-spi</id>
-                        <phase>package</phase>
-                        <goals>
-                            <goal>jar</goal>
-                        </goals>
-                        <configuration>
-                            <classesDirectory>${project.build.testOutputDirectory}</classesDirectory>
-                            <classifier>tests-without-lake-spi</classifier>
-                            <excludes>
-                                <exclude>META-INF/services/org.apache.fluss.lake.lakestorage.LakeStoragePlugin</exclude>
-                            </excludes>
-                        </configuration>
-                    </execution>
                 </executions>
             </plugin>
         </plugins>
