@@ -185,28 +185,18 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
         int bucketLeaderEpoch = bucketLeaderEpochSupplier.get();
         int coordinatorEpoch = coordinatorEpochSupplier.get();
         SnapshotLocation snapshotLocation = initSnapshotLocation(currentSnapshotId);
-        try {
-            PeriodicSnapshotManager.SnapshotRunnable snapshotRunnable =
-                    new PeriodicSnapshotManager.SnapshotRunnable(
-                            snapshotRunner.snapshot(
-                                    currentSnapshotId, tabletState, snapshotLocation),
-                            currentSnapshotId,
-                            coordinatorEpoch,
-                            bucketLeaderEpoch,
-                            snapshotLocation);
-            return Optional.of(snapshotRunnable);
-        } catch (Exception t) {
-            // dispose the snapshot location
-            snapshotLocation.disposeOnFailure();
-            throw t;
-        }
+        return Optional.of(
+                new PeriodicSnapshotManager.SnapshotRunnable(
+                        snapshotRunner.snapshot(currentSnapshotId, tabletState, snapshotLocation),
+                        currentSnapshotId,
+                        coordinatorEpoch,
+                        bucketLeaderEpoch,
+                        snapshotLocation));
     }
 
-    private SnapshotLocation initSnapshotLocation(long snapshotId) throws IOException {
+    private SnapshotLocation initSnapshotLocation(long snapshotId) {
         final FsPath currentSnapshotDir =
                 FlussPaths.remoteKvSnapshotDir(remoteKvTabletDir, snapshotId);
-        // create the snapshot exclusive directory
-        remoteFileSystem.mkdirs(currentSnapshotDir);
         return new SnapshotLocation(
                 remoteFileSystem,
                 currentSnapshotDir,

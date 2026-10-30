@@ -24,6 +24,7 @@ import org.apache.fluss.metrics.ThreadSafeSimpleCounter;
 import org.apache.fluss.server.kv.rocksdb.RocksDBExtension;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKv;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKvBuilder;
+import org.apache.fluss.server.kv.snapshot.RocksIncrementalSnapshot.NativeRocksDBSnapshotResources;
 import org.apache.fluss.server.testutils.KvTestUtils;
 import org.apache.fluss.server.utils.ResourceGuard;
 import org.apache.fluss.server.utils.TestProcessBuilder;
@@ -70,6 +71,24 @@ class RocksIncrementalSnapshotTest {
     static void afterAll() {
         if (dataTransferThreadPool != null) {
             dataTransferThreadPool.shutdownNow();
+        }
+    }
+
+    @Test
+    void testReleaseResourcesWithInterruptedThread() throws Exception {
+        try (RocksIncrementalSnapshot incrementalSnapshot = createIncrementalSnapshot()) {
+            rocksDBExtension.getRocksDb().put("key".getBytes(), "value".getBytes());
+            NativeRocksDBSnapshotResources resources = incrementalSnapshot.syncPrepareResources(1);
+            assertThat(resources.snapshotDirectory).exists();
+            try {
+                Thread.currentThread().interrupt();
+                resources.release();
+                assertThat(Thread.currentThread().isInterrupted()).isTrue();
+                assertThat(resources.snapshotDirectory).doesNotExist();
+            } finally {
+                Thread.interrupted();
+                resources.release();
+            }
         }
     }
 
@@ -292,7 +311,7 @@ class RocksIncrementalSnapshotTest {
             SnapshotLocation snapshotLocation,
             CloseableRegistry closeableRegistry)
             throws Exception {
-        RocksIncrementalSnapshot.NativeRocksDBSnapshotResources nativeRocksDBSnapshotResources =
+        NativeRocksDBSnapshotResources nativeRocksDBSnapshotResources =
                 incrementalSnapshot.syncPrepareResources(snapshotId);
 
         long bytesBefore = remoteKvCopyBytes.getCount();

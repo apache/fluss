@@ -21,7 +21,9 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussException;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.fs.local.LocalFileSystem;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metrics.Counter;
 import org.apache.fluss.metrics.ThreadSafeSimpleCounter;
@@ -54,6 +56,7 @@ import javax.annotation.Nonnull;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Collection;
@@ -66,6 +69,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
 
@@ -201,7 +205,29 @@ class KvTabletSnapshotTargetTest {
     void testSnapshotFailure(@TempDir Path kvTabletDir) throws Exception {
         CompletedSnapshotHandleStore completedSnapshotHandleStore =
                 TestCompletedSnapshotHandleStore.newBuilder().build();
-        FsPath remoteKvTabletDir = FsPath.fromLocalFile(kvTabletDir.toFile());
+        AtomicInteger mkdirsCalls = new AtomicInteger();
+        AtomicInteger deleteCalls = new AtomicInteger();
+        FileSystem remoteFileSystem =
+                new LocalFileSystem() {
+                    @Override
+                    public boolean mkdirs(FsPath path) throws IOException {
+                        mkdirsCalls.incrementAndGet();
+                        return super.mkdirs(path);
+                    }
+
+                    @Override
+                    public boolean delete(FsPath path, boolean recursive) throws IOException {
+                        deleteCalls.incrementAndGet();
+                        return super.delete(path, recursive);
+                    }
+                };
+        FsPath remoteKvTabletDir =
+                new FsPath(kvTabletDir.toUri()) {
+                    @Override
+                    public FileSystem getFileSystem() {
+                        return remoteFileSystem;
+                    }
+                };
         // test fail in the sync phase of snapshot
         KvTabletSnapshotTarget kvTabletSnapshotTarget =
                 createSnapshotTarget(
@@ -214,9 +240,17 @@ class KvTabletSnapshotTargetTest {
         periodicSnapshotManager.start();
         periodicSnapshotManager.triggerSnapshot();
 
-        // the snapshot dir should be discarded
-        FsPath snapshotPath1 = FlussPaths.remoteKvSnapshotDir(remoteKvTabletDir, snapshotId1);
-        assertThat(snapshotPath1.getFileSystem().exists(snapshotPath1)).isFalse();
+        // Native checkpoint failure must clean local files without creating or deleting remote
+        // directories. An absent remote directory alone would also pass after synchronous I/O.
+        assertThat(mkdirsCalls).hasValue(0);
+        assertThat(deleteCalls).hasValue(0);
+        assertThat(new File(rocksDBExtension.getRockDbDir(), "snap-" + snapshotId1)).doesNotExist();
+        assertThat(
+                        ((TestRocksIncrementalSnapshot)
+                                        kvTabletSnapshotTarget.getRocksIncrementalSnapshot())
+                                .abortedSnapshots)
+                .isEmpty();
+        periodicSnapshotManager.close();
 
         // test fail in the async phase of snapshot
         kvTabletSnapshotTarget =
@@ -628,6 +662,7 @@ class KvTabletSnapshotTargetTest {
         private final Set<Long> abortedSnapshots = ConcurrentHashMap.newKeySet();
         private final Set<Long> completedSnapshots = ConcurrentHashMap.newKeySet();
         private final SnapshotFailType snapshotFailType;
+        private final File instanceBasePath;
 
         public TestRocksIncrementalSnapshot(
                 Map<Long, Collection<KvFileHandleAndLocalPath>> uploadedSstFiles,
@@ -647,6 +682,18 @@ class KvTabletSnapshotTargetTest {
                     lastCompletedSnapshotId,
                     remoteKvCopyBytes);
             this.snapshotFailType = snapshotFailType;
+            this.instanceBasePath = instanceBasePath;
+        }
+
+        @Override
+        public NativeRocksDBSnapshotResources syncPrepareResources(long snapshotId)
+                throws Exception {
+            if (snapshotFailType == SnapshotFailType.SYNC_PHASE) {
+                // RocksDB rejects an existing checkpoint directory. Exercise native preparation
+                // and its local cleanup, before the asynchronous supplier is constructed.
+                Files.createDirectory(new File(instanceBasePath, "snap-" + snapshotId).toPath());
+            }
+            return super.syncPrepareResources(snapshotId);
         }
 
         @Override
@@ -655,9 +702,7 @@ class KvTabletSnapshotTargetTest {
                 long snapshotId,
                 TabletState tabletState,
                 @Nonnull SnapshotLocation snapshotLocation) {
-            if (snapshotFailType == SnapshotFailType.SYNC_PHASE) {
-                throw new FlussRuntimeException("Fail in snapshot sync phase.");
-            } else if (snapshotFailType == SnapshotFailType.ASYNC_PHASE) {
+            if (snapshotFailType == SnapshotFailType.ASYNC_PHASE) {
                 return snapshotCloseableRegistry -> {
                     throw new FlussRuntimeException("Fail in snapshot async phase.");
                 };
