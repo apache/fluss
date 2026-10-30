@@ -17,9 +17,11 @@
 
 package org.apache.fluss.server.coordinator;
 
+import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
+import org.apache.fluss.server.zk.data.CoordinatorAddress;
 import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 
@@ -28,6 +30,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
 import java.time.Duration;
+import java.util.Collections;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -124,6 +127,84 @@ class CoordinatorLeaderElectionTest {
     }
 
     @Test
+    void testIsLeaderElectedReflectsElectionState() throws Exception {
+        CoordinatorLeaderElection leaderElection =
+                new CoordinatorLeaderElection(zooKeeperClient, "coordinator-elected-leader");
+        CoordinatorLeaderElection standbyElection =
+                new CoordinatorLeaderElection(zooKeeperClient, "coordinator-elected-standby");
+        try {
+            // before the election starts there is nothing to report
+            assertThat(leaderElection.isLeaderElected().join()).isFalse();
+
+            // the leader registers its address during initialization, as CoordinatorServer does
+            CoordinatorAddress leaderAddress =
+                    new CoordinatorAddress(
+                            "coordinator-elected-leader",
+                            Collections.singletonList(new Endpoint("localhost", 9124, "CLIENT")));
+            leaderElection.startElectLeaderAsync(
+                    () -> registerLeader(leaderAddress),
+                    ignored -> unregisterLeader(leaderAddress));
+            waitUntil(
+                    leaderElection::isLeader,
+                    Duration.ofSeconds(30),
+                    "Coordinator did not become leader");
+            assertThat(leaderElection.isLeaderElected().join()).isTrue();
+
+            // a standby participant sees the leader elected by another server
+            standbyElection.startElectLeaderAsync(() -> {}, ignored -> {});
+            waitUntil(
+                    () -> standbyElection.isLeaderElected().join(),
+                    Duration.ofSeconds(30),
+                    "Standby did not observe the elected leader");
+            assertThat(standbyElection.isLeader()).isFalse();
+        } finally {
+            standbyElection.close();
+            leaderElection.close();
+        }
+
+        // after close, no leader is reported regardless of group state
+        assertThat(standbyElection.isLeaderElected().join()).isFalse();
+        assertThat(leaderElection.isLeaderElected().join()).isFalse();
+    }
+
+    @Test
+    void testIsLeaderElectedIgnoresOwnRegistrationUntilInitialized() throws Exception {
+        CoordinatorLeaderElection election =
+                new CoordinatorLeaderElection(zooKeeperClient, "coordinator-initializing");
+        CoordinatorAddress ownAddress =
+                new CoordinatorAddress(
+                        "coordinator-initializing",
+                        Collections.singletonList(new Endpoint("localhost", 9124, "CLIENT")));
+        CountDownLatch registered = new CountDownLatch(1);
+        CountDownLatch allowInitialization = new CountDownLatch(1);
+        try {
+            // CoordinatorServer registers the leader address first and starts the leader services
+            // after it: in that window the node names this server, but nothing is serving yet.
+            election.startElectLeaderAsync(
+                    () -> {
+                        registerLeader(ownAddress);
+                        registered.countDown();
+                        waitUntilReleased(allowInitialization);
+                    },
+                    ignored -> unregisterLeader(ownAddress));
+            assertThat(registered.await(30, TimeUnit.SECONDS)).isTrue();
+            assertThat(zooKeeperClient.getCoordinatorLeaderAddress()).contains(ownAddress);
+            assertThat(election.isLeader()).isFalse();
+            assertThat(election.isLeaderElected().join()).isFalse();
+
+            allowInitialization.countDown();
+            waitUntil(
+                    election::isLeader,
+                    Duration.ofSeconds(30),
+                    "Coordinator did not become leader");
+            assertThat(election.isLeaderElected().join()).isTrue();
+        } finally {
+            allowInitialization.countDown();
+            election.close();
+        }
+    }
+
+    @Test
     void testInitializationFailureKeepsLeaderLatchAndBlocksReElection() throws Exception {
         CoordinatorLeaderElection failedElection =
                 new CoordinatorLeaderElection(zooKeeperClient, "coordinator-init-failure");
@@ -148,6 +229,8 @@ class CoordinatorLeaderElectionTest {
             assertThat(cleanupFinished.await(30, TimeUnit.SECONDS)).isTrue();
             assertThat(cleanupCause.get()).isSameAs(initializationFailure);
             assertThat(failedElection.isLeader()).isFalse();
+            // the latch is still held, but no leader is registered: not an elected leader
+            assertThat(failedElection.isLeaderElected().join()).isFalse();
             assertThat(getElectionNodeCount()).isEqualTo(initialElectionNodes + 1);
 
             followerElection.startElectLeaderAsync(followerBecameLeader::countDown, ignored -> {});
@@ -208,6 +291,22 @@ class CoordinatorLeaderElectionTest {
 
     private static int getElectionNodeCount() throws Exception {
         return zooKeeperClient.getChildren(ZkData.CoordinatorElectionZNode.path()).size();
+    }
+
+    private static void registerLeader(CoordinatorAddress address) {
+        try {
+            zooKeeperClient.registerCoordinatorLeader(address);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private static void unregisterLeader(CoordinatorAddress address) {
+        try {
+            zooKeeperClient.unregisterCoordinatorLeader(address);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
     }
 
     private static void waitUntilReleased(CountDownLatch latch) {
