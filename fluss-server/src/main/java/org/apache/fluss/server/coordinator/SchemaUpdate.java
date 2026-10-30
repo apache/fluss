@@ -52,6 +52,8 @@ public class SchemaUpdate {
     private SchemaUpdate applySchemaChange(TableChange columnChange) {
         if (columnChange instanceof TableChange.AddColumn) {
             return addColumn((TableChange.AddColumn) columnChange);
+        } else if (columnChange instanceof TableChange.AddNestedField) {
+            return addNestedField((TableChange.AddNestedField) columnChange);
         } else if (columnChange instanceof TableChange.ModifyColumn) {
             return modifiedColumn((TableChange.ModifyColumn) columnChange);
         } else if (columnChange instanceof TableChange.RenameColumn) {
@@ -96,6 +98,17 @@ public class SchemaUpdate {
         }
 
         return this;
+    }
+
+    private SchemaUpdate addNestedField(TableChange.AddNestedField addNestedField) {
+        Schema schema =
+                NestedSchemaUpdater.addField(
+                        getSchema(),
+                        addNestedField.getParentPath(),
+                        addNestedField.getFieldName(),
+                        addNestedField.getDataType(),
+                        addNestedField.getComment());
+        return new SchemaUpdate(schema);
     }
 
     private SchemaUpdate dropColumn(TableChange.DropColumn dropColumn) {

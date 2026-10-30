@@ -18,6 +18,8 @@
 package org.apache.fluss.server.utils;
 
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.metadata.AggFunctions;
+import org.apache.fluss.metadata.ColumnPath;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
@@ -34,7 +36,10 @@ import org.apache.fluss.rpc.entity.PutKvResultForBucket;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
 import org.apache.fluss.rpc.messages.LookupResponse;
+import org.apache.fluss.rpc.messages.PbAddColumn;
+import org.apache.fluss.rpc.messages.PbAddNestedField;
 import org.apache.fluss.rpc.messages.PbBucketMetadata;
+import org.apache.fluss.rpc.messages.PbColumnPathSegment;
 import org.apache.fluss.rpc.messages.PbFetchLogRespForBucket;
 import org.apache.fluss.rpc.messages.PbPartitionMetadata;
 import org.apache.fluss.rpc.messages.PbProduceLogReqForBucket;
@@ -54,7 +59,12 @@ import org.apache.fluss.server.metadata.BucketMetadata;
 import org.apache.fluss.server.metadata.ClusterMetadata;
 import org.apache.fluss.server.metadata.PartitionMetadata;
 import org.apache.fluss.server.metadata.TableMetadata;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.Unpooled;
+import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.FlussPaths;
+import org.apache.fluss.utils.json.DataTypeJsonSerde;
+import org.apache.fluss.utils.json.JsonSerdeUtils;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -126,6 +136,107 @@ class ServerRpcMessageUtilsTest {
             assertThat(decoded.remoteLogTabletDir()).isEqualTo(tabletDir.toString());
             assertThat(decoded.remoteLogSegmentList()).containsExactly(segment);
         }
+    }
+
+    @Test
+    void testNestedFieldChangesRoundTripPreservesAggregationAndBucketCount() {
+        PbAddNestedField field = nestedFieldMessage();
+        field.setComment("field comment");
+        field.addAllParentPaths(
+                Arrays.asList(
+                        new PbColumnPathSegment().setSegmentType(0).setName("profile"),
+                        new PbColumnPathSegment().setSegmentType(0).setName("address")));
+        PbAddColumn column =
+                new PbAddColumn()
+                        .setColumnName("total")
+                        .setDataTypeJson(
+                                JsonSerdeUtils.writeValueAsBytes(
+                                        DataTypes.INT(), DataTypeJsonSerde.INSTANCE))
+                        .setColumnPositionType(0)
+                        .setAggFunctionType("sum");
+        AlterTableRequest request = new AlterTableRequest().setIgnoreIfNotExists(false);
+        request.setTablePath().setDatabaseName("db").setTableName("table");
+        request.setModifyBucketCount().setNewBucketCount(8);
+        request.addAllAddColumns(Collections.singletonList(column));
+        request.addAllAddNestedFields(Collections.singletonList(field));
+        ByteBuf buffer = Unpooled.buffer();
+        try {
+            request.writeTo(buffer);
+            AlterTableRequest decoded = new AlterTableRequest();
+            decoded.parseFrom(buffer, buffer.readableBytes());
+            List<TableChange> changes = ServerRpcMessageUtils.toAlterTableSchemaChanges(decoded);
+            assertThat(changes).hasSize(2);
+            TableChange.AddColumn addColumn = (TableChange.AddColumn) changes.get(0);
+            assertThat(addColumn.getAggFunction()).hasValue(AggFunctions.SUM());
+            TableChange.AddNestedField nested = (TableChange.AddNestedField) changes.get(1);
+            assertThat(nested.getParentPath()).isEqualTo(ColumnPath.of("profile", "address"));
+            assertThat(nested.getFieldName()).isEqualTo("country");
+            assertThat(nested.getDataType()).isEqualTo(DataTypes.STRING());
+            assertThat(nested.getComment()).isEqualTo("field comment");
+            assertThat(ServerRpcMessageUtils.toAlterTableDistributionChanges(decoded))
+                    .containsExactly(TableChange.modifyBucketCount(8));
+        } finally {
+            buffer.release();
+        }
+    }
+
+    @Test
+    void testNestedFieldSpecialSegmentsAndMissingComment() {
+        PbAddNestedField field = nestedFieldMessage();
+        field.addAllParentPaths(
+                Arrays.asList(
+                        new PbColumnPathSegment().setSegmentType(0).setName("items"),
+                        new PbColumnPathSegment().setSegmentType(1),
+                        new PbColumnPathSegment().setSegmentType(2)));
+        List<TableChange> changes =
+                ServerRpcMessageUtils.toAddNestedFields(Arrays.asList(null, field));
+        assertThat(changes).hasSize(1);
+        TableChange.AddNestedField nested = (TableChange.AddNestedField) changes.get(0);
+        assertThat(nested.getParentPath())
+                .isEqualTo(
+                        ColumnPath.of(
+                                ColumnPath.Segment.field("items"),
+                                ColumnPath.Segment.arrayElement(),
+                                ColumnPath.Segment.mapValue()));
+        assertThat(nested.getComment()).isNull();
+        assertThat(ServerRpcMessageUtils.toAlterTableSchemaChanges(new AlterTableRequest()))
+                .isEmpty();
+    }
+
+    @Test
+    void testRejectMalformedNestedFieldPaths() {
+        assertThatThrownBy(
+                        () ->
+                                ServerRpcMessageUtils.toAddNestedFields(
+                                        Collections.singletonList(nestedFieldMessage())))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("at least one segment");
+        PbAddNestedField missingName = nestedFieldMessage();
+        missingName.addAllParentPaths(
+                Collections.singletonList(new PbColumnPathSegment().setSegmentType(0)));
+        assertThatThrownBy(
+                        () ->
+                                ServerRpcMessageUtils.toAddNestedFields(
+                                        Collections.singletonList(missingName)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("FIELD segment must have name");
+        PbAddNestedField unknownType = nestedFieldMessage();
+        unknownType.addAllParentPaths(
+                Collections.singletonList(new PbColumnPathSegment().setSegmentType(99)));
+        assertThatThrownBy(
+                        () ->
+                                ServerRpcMessageUtils.toAddNestedFields(
+                                        Collections.singletonList(unknownType)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Unsupported column path segment type: 99");
+    }
+
+    private static PbAddNestedField nestedFieldMessage() {
+        return new PbAddNestedField()
+                .setFieldName("country")
+                .setDataTypeJson(
+                        JsonSerdeUtils.writeValueAsBytes(
+                                DataTypes.STRING(), DataTypeJsonSerde.INSTANCE));
     }
 
     @Test
