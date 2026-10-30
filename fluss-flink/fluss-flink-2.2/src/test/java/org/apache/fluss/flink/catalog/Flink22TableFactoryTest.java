@@ -26,4 +26,15 @@ public class Flink22TableFactoryTest extends FlinkTableFactoryTest {
     protected LookupTableSource.LookupContext createLookupContext(int[][] lookupKeys) {
         return new LookupRuntimeProviderContext(lookupKeys, false);
     }
+
+    @Override
+    protected LookupTableSource.LookupContext createLookupContext(
+            int[][] lookupKeys, boolean preferCustomShuffle) {
+        return new LookupRuntimeProviderContext(lookupKeys, preferCustomShuffle);
+    }
+
+    @Override
+    protected boolean supportsLookupCustomShuffle() {
+        return true;
+    }
 }

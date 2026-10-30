@@ -151,11 +151,6 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
         LookupOptions.LookupCacheType lookupCacheType = tableOptions.get(LookupOptions.CACHE_TYPE);
         if (lookupCacheType.equals(LookupOptions.LookupCacheType.PARTIAL)) {
             cache = DefaultLookupCache.fromConfig(tableOptions);
-        } else if (lookupCacheType.equals(LookupOptions.LookupCacheType.FULL)) {
-            // currently, flink framework only support InputFormatProvider
-            // as ScanRuntimeProviders for Full caching lookup join, so in here, we just throw
-            // unsupported exception
-            throw new UnsupportedOperationException("Full lookup caching is not supported yet.");
         }
 
         // other option values
@@ -182,6 +177,7 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                 tableOptions.get(FlinkConnectorOptions.LOOKUP_ASYNC),
                 tableOptions.get(FlinkConnectorOptions.LOOKUP_INSERT_IF_NOT_EXISTS),
                 cache,
+                lookupCacheType,
                 partitionDiscoveryIntervalMs,
                 splitAssignmentBatchSize,
                 tableOptions.get(toFlinkOption(ConfigOptions.TABLE_DATALAKE_ENABLED)),
@@ -267,6 +263,11 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                                 FlinkConnectorOptions.SCAN_KV_SNAPSHOT_LEASE_DURATION,
                                 FlinkConnectorOptions.LOOKUP_ASYNC,
                                 FlinkConnectorOptions.LOOKUP_INSERT_IF_NOT_EXISTS,
+                                FlinkConnectorOptions.LOOKUP_FULL_CACHE_WRITE_BUFFER_SIZE,
+                                FlinkConnectorOptions.LOOKUP_FULL_CACHE_WRITE_BUFFER_COUNT,
+                                FlinkConnectorOptions.LOOKUP_FULL_CACHE_BLOCK_CACHE_SIZE,
+                                FlinkConnectorOptions.LOOKUP_FULL_CACHE_MAX_BACKGROUND_JOBS,
+                                FlinkConnectorOptions.LOOKUP_FULL_CACHE_MAX_OPEN_FILES,
                                 FlinkConnectorOptions.SINK_IGNORE_DELETE,
                                 FlinkConnectorOptions.SINK_BUCKET_SHUFFLE,
                                 FlinkConnectorOptions.SINK_DISTRIBUTION_MODE,

@@ -271,7 +271,7 @@ For more details about Fluss partitioned table, see [Partitioned Tables](table-d
 
 ## Lookup Shuffle
 
-For Flink 2.2, lookup custom shuffle can be enabled with the standard Flink lookup hint:
+For Flink 2.2 and later, lookup custom shuffle can be enabled with the standard Flink lookup hint:
 
 ```sql title="Flink SQL"
 SELECT /*+ LOOKUP('table' = 'c', 'shuffle' = 'true') */ *
@@ -297,6 +297,88 @@ of Fluss tablets.
 Bucket custom shuffle applies to hash-distributed tables with bucket keys. Tables without bucket
 keys use Flink's default lookup distribution. Fluss Catalog tables expose the resolved `bucket.num`
 automatically, including when `bucket.num` is omitted from the table DDL.
+
+## Bucket-Sharded Full Lookup Cache
+
+Set `'lookup.cache' = 'FULL'` to use a distributed, bucket-sharded full cache backed by local RocksDB instances. FULL means that all rows of each assigned bucket are cached; a subtask does not normally hold the entire table and cannot answer arbitrary keys. This differs from a replicated full cache in which every subtask loads the whole table. Each lookup subtask loads the buckets assigned to it from a snapshot, catches up with the changelog, and then continuously applies inserts, updates, and deletes. Lookups wait until this initial load and catch-up finish. Subsequent lookups read the local cache, so results may lag behind recent writes while changelog updates are being applied.
+
+FULL caching requires Flink 2.2 or later and custom lookup shuffle. Enable shuffle with the standard Flink `LOOKUP` hint so each probe row reaches a subtask that caches its bucket:
+
+```sql title="Flink SQL"
+INSERT INTO lookup_join_sink
+SELECT /*+ LOOKUP('table' = 'c', 'shuffle' = 'true') */
+       o.o_orderkey, o.o_totalprice, c.c_name, c.c_address
+FROM (SELECT orders.*, PROCTIME() AS ptime FROM orders) AS o
+LEFT JOIN customer /*+ OPTIONS('lookup.cache' = 'FULL') */
+FOR SYSTEM_TIME AS OF o.ptime AS c
+ON o.o_custkey = c.c_custkey;
+```
+
+The `table` value in the `LOOKUP` hint must match the dimension table alias (`c` in this example). FULL caching fails validation if custom shuffle is not enabled. FULL mode uses synchronous local lookups regardless of the `lookup.async` setting.
+
+The following restrictions apply:
+
+- The job must run in streaming mode, and the dimension table must be a non-partitioned primary key table with bucket keys.
+- Non-partitioned tables with data lake integration are supported: the cache reads Fluss KV snapshots and changelog records using the table's key encoding and bucketing. It does not scan the lake.
+- Row-level TTL and `lookup.insert-if-not-exists` are not supported.
+- Point lookups and prefix lookups follow the join-key requirements described above. Prefix lookups must include the bucket keys.
+- `lookup.partial-cache.*` options do not apply to FULL caching. The cache retains all rows in its assigned buckets.
+
+Partitioned tables are **not yet implemented**, rather than a permanent limitation of full caching.
+Supporting them requires partition discovery, per-partition snapshot/changelog offsets, readiness
+handling for newly created partitions, and cache cleanup and subscription cancellation when partitions
+are removed. Partition routing must also account for the bucket count of each partition. With
+[historical partition access](../table-design/data-distribution/partitioning.md#historical-partition-access),
+a partition expiring in Fluss may still be queryable in the lake. Future support must define whether
+FULL covers those historical rows and how lake-side retention, deletion and subsequent updates affect
+the cache; removing a Fluss partition alone cannot determine when to discard its cached history.
+
+### Changelog Recovery and Failures
+
+Transient fetch failures, such as network interruptions and leader changes, are handled internally
+by the Fluss log scanner. FULL lookup keeps consuming from the same scanner and does not add a
+separate retry or scanner-recreation policy. During client recovery, lookups continue reading the
+local cache, so results can become increasingly stale until changelog consumption catches up.
+FULL caching does not enforce a maximum staleness bound.
+
+Lookups wait for the initial snapshot and changelog catch-up to complete. If bootstrap fails, an
+exception escapes the changelog scanner, or a cache write fails, the worker marks the cache unreadable.
+A partially applied batch is never served. The next lookup propagates the failure to Flink's restart
+strategy. With no lookup traffic, the task may remain running with a failed worker; monitor the
+`workerFailed` and `ready` gauges under `fluss.fullCache` as well as the worker error logs. These gauges
+report worker status, not data freshness or client-internal recovery.
+
+Size changelog retention to cover the initial snapshot load, client recovery and catch-up lag.
+Expired logs cannot be recovered by retrying the same offsets.
+
+### Memory and Disk Sizing
+
+Each lookup subtask creates one RocksDB instance per FULL dimension-table lookup, shared by all its
+assigned buckets. Splitting the cache by bucket would multiply per-instance buffers and file handles
+without reducing the total cached data. Its native memory
+is outside Flink managed memory and must fit in the TaskManager/container memory budget. Configure
+`lookup.full-cache.rocksdb.*` options for write-buffer size/count, block-cache size, background jobs,
+and open files; see [Connector Options](options.md#lookup-options). Index and filter blocks use the
+block cache with high priority, L0 index/filter blocks are pinned, and Bloom filters are enabled.
+Pinned blocks can exceed the configured cache capacity, and write buffers, table readers and other
+native allocations consume additional memory. These settings are per instance, not a shared quota
+or a hard process-memory limit. The `rocksdbEstimatedMemoryBytes` gauge estimates memtable,
+table-reader and block-cache memory; it excludes other native overhead and the OS page cache.
+
+Provide sufficient TaskManager disk space under `client.scanner.io.tmpdir` for the cached buckets.
+When lookup parallelism exceeds the bucket count, a bucket may be cached by more than one subtask;
+increasing parallelism beyond the bucket count does not keep reducing each instance's data size.
+The cache is rebuilt on task restart and removed when the task closes. INFO logs report the absolute
+cache path on open and close.
+
+A hard TaskManager termination, such as an OOM kill, can leave `lookup-full-*` directories behind.
+New attempts use fresh directories and do not reclaim them automatically, because another attempt
+may still be using a directory. After confirming that the owning TaskManager process has stopped,
+operators can remove its abandoned cache directories using the paths recorded in the logs. Do not
+remove directories belonging to live stores or the scanner's other temporary files. Monitor free
+space on the volume: `rocksdbDiskBytes` reports only SST files of the live instance and does not
+include abandoned directories or other RocksDB files.
+
 
 ## Insert If Not Exists
 

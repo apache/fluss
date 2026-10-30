@@ -27,6 +27,7 @@ import org.apache.fluss.flink.source.BucketsFlinkTableSource;
 import org.apache.fluss.flink.source.ChangelogFlinkTableSource;
 import org.apache.fluss.flink.source.FlinkTableSource;
 import org.apache.fluss.flink.source.lookup.FlinkAsyncLookupFunction;
+import org.apache.fluss.flink.source.lookup.FlinkFullCacheLookupFunction;
 import org.apache.fluss.flink.source.lookup.FlinkLookupFunction;
 import org.apache.fluss.testutils.common.MultiVersionTest;
 
@@ -35,6 +36,7 @@ import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.ExecutionOptions;
 import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.api.Schema;
+import org.apache.flink.table.api.TableException;
 import org.apache.flink.table.api.ValidationException;
 import org.apache.flink.table.catalog.Column;
 import org.apache.flink.table.catalog.CommonCatalogOptions;
@@ -45,6 +47,7 @@ import org.apache.flink.table.catalog.UniqueConstraint;
 import org.apache.flink.table.connector.sink.DynamicTableSink;
 import org.apache.flink.table.connector.source.DynamicTableSource;
 import org.apache.flink.table.connector.source.LookupTableSource;
+import org.apache.flink.table.connector.source.ScanTableSource;
 import org.apache.flink.table.connector.source.lookup.AsyncLookupFunctionProvider;
 import org.apache.flink.table.connector.source.lookup.LookupFunctionProvider;
 import org.apache.flink.table.connector.source.lookup.cache.DefaultLookupCache;
@@ -72,6 +75,7 @@ import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_KEY;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_NUMBER;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
 
 /** Test for {@link FlinkTableFactory}. */
 @MultiVersionTest
@@ -241,13 +245,237 @@ abstract class FlinkTableFactoryTest {
         LookupFunction lookupFunction =
                 ((LookupFunctionProvider) lookupProvider).createLookupFunction();
         assertThat(lookupFunction instanceof FlinkLookupFunction).isTrue();
+    }
 
-        // test lookup full cache
-        Map<String, String> fullCacheProperties = getBasicOptions();
-        fullCacheProperties.put("lookup.cache", "full");
-        assertThatThrownBy(() -> createTableSource(schema, fullCacheProperties))
+    @Test
+    void testLookupFullCacheProviders() {
+        ResolvedSchema schema = createBasicSchema();
+        Map<String, String> properties = getBasicOptionsWithBucketKey();
+        properties.put("lookup.cache", "FULL");
+        int[][] fullPrimaryKey = {{0}, {2}};
+
+        properties.put(FlinkConnectorOptions.LOOKUP_ASYNC.key(), "false");
+        FlinkTableSource source = createFullCacheTableSource(schema, properties);
+        if (supportsLookupCustomShuffle()) {
+            LookupTableSource.LookupRuntimeProvider provider =
+                    source.getLookupRuntimeProvider(createLookupContext(fullPrimaryKey, true));
+            assertThat(provider).isInstanceOf(LookupFunctionProvider.class);
+            assertThat(((LookupFunctionProvider) provider).createLookupFunction())
+                    .isInstanceOf(FlinkFullCacheLookupFunction.class);
+            assertThat(source.getPartitionerAdapter()).isPresent();
+        } else {
+            FlinkTableSource unsupportedSource = source;
+            assertThatThrownBy(
+                            () ->
+                                    unsupportedSource.getLookupRuntimeProvider(
+                                            createLookupContext(fullPrimaryKey, true)))
+                    .isInstanceOf(UnsupportedOperationException.class)
+                    .hasMessageContaining("shuffle");
+        }
+
+        // the full cache always serves lookups from the local cache with the sync lookup
+        // function, so 'lookup.async' doesn't change the full cache provider
+        properties.put(FlinkConnectorOptions.LOOKUP_ASYNC.key(), "true");
+        source = createFullCacheTableSource(schema, properties);
+        if (supportsLookupCustomShuffle()) {
+            LookupTableSource.LookupRuntimeProvider provider =
+                    source.getLookupRuntimeProvider(createLookupContext(fullPrimaryKey, true));
+            assertThat(provider).isInstanceOf(LookupFunctionProvider.class);
+            assertThat(((LookupFunctionProvider) provider).createLookupFunction())
+                    .isInstanceOf(FlinkFullCacheLookupFunction.class);
+        } else {
+            FlinkTableSource unsupportedSource = source;
+            assertThatThrownBy(
+                            () ->
+                                    unsupportedSource.getLookupRuntimeProvider(
+                                            createLookupContext(fullPrimaryKey, true)))
+                    .isInstanceOf(UnsupportedOperationException.class)
+                    .hasMessageContaining("shuffle");
+        }
+    }
+
+    @Test
+    void testLookupFullCachePrefixLookupProviders() {
+        ResolvedSchema schema = createBasicSchema();
+        Map<String, String> properties = getBasicOptionsWithBucketKey();
+        properties.put("lookup.cache", "FULL");
+        // lookup by the bucket-key prefix (first) only; the primary key is (first, third)
+        int[][] prefixKeys = {{0}};
+
+        properties.put(FlinkConnectorOptions.LOOKUP_ASYNC.key(), "false");
+        FlinkTableSource source = createFullCacheTableSource(schema, properties);
+        if (supportsLookupCustomShuffle()) {
+            LookupTableSource.LookupRuntimeProvider provider =
+                    source.getLookupRuntimeProvider(createLookupContext(prefixKeys, true));
+            assertThat(provider).isInstanceOf(LookupFunctionProvider.class);
+            assertThat(((LookupFunctionProvider) provider).createLookupFunction())
+                    .isInstanceOf(FlinkFullCacheLookupFunction.class);
+            assertThat(source.getPartitionerAdapter()).isPresent();
+        } else {
+            FlinkTableSource unsupportedSource = source;
+            assertThatThrownBy(
+                            () ->
+                                    unsupportedSource.getLookupRuntimeProvider(
+                                            createLookupContext(prefixKeys, true)))
+                    .isInstanceOf(UnsupportedOperationException.class)
+                    .hasMessageContaining("shuffle");
+        }
+
+        // the full cache always serves lookups from the local cache with the sync lookup
+        // function, so 'lookup.async' doesn't change the full cache provider
+        properties.put(FlinkConnectorOptions.LOOKUP_ASYNC.key(), "true");
+        source = createFullCacheTableSource(schema, properties);
+        if (supportsLookupCustomShuffle()) {
+            LookupTableSource.LookupRuntimeProvider provider =
+                    source.getLookupRuntimeProvider(createLookupContext(prefixKeys, true));
+            assertThat(provider).isInstanceOf(LookupFunctionProvider.class);
+            assertThat(((LookupFunctionProvider) provider).createLookupFunction())
+                    .isInstanceOf(FlinkFullCacheLookupFunction.class);
+        } else {
+            FlinkTableSource unsupportedSource = source;
+            assertThatThrownBy(
+                            () ->
+                                    unsupportedSource.getLookupRuntimeProvider(
+                                            createLookupContext(prefixKeys, true)))
+                    .isInstanceOf(UnsupportedOperationException.class)
+                    .hasMessageContaining("shuffle");
+        }
+    }
+
+    @Test
+    void testLookupFullCacheAcceptsNonPartitionedLakeTable() {
+        Map<String, String> properties = getBasicOptionsWithBucketKey();
+        properties.put("lookup.cache", "FULL");
+        properties.put("table.datalake.enabled", "true");
+        properties.put("table.datalake.format", "paimon");
+        properties.put("lookup.full-cache.rocksdb.block-cache-size", "16 mb");
+        FlinkTableSource original = createFullCacheTableSource(createBasicSchema(), properties);
+        original.applyProjection(
+                new int[][] {{0}, {2}},
+                DataTypes.ROW(
+                        DataTypes.FIELD("first", DataTypes.STRING().notNull()),
+                        DataTypes.FIELD("third", DataTypes.STRING().notNull())));
+        original.applyFilters(Collections.emptyList());
+        FlinkTableSource source = (FlinkTableSource) original.copy();
+        if (supportsLookupCustomShuffle()) {
+            assertThat(
+                            source.getLookupRuntimeProvider(
+                                    createLookupContext(new int[][] {{0}, {1}}, true)))
+                    .isInstanceOf(LookupFunctionProvider.class);
+        } else {
+            assertThatThrownBy(
+                            () ->
+                                    source.getLookupRuntimeProvider(
+                                            createLookupContext(new int[][] {{0}, {1}}, true)))
+                    .hasMessageContaining("shuffle");
+        }
+        // A full scan must still create the lake reader. The test plugin does not implement it.
+        assertThatThrownBy(
+                        () ->
+                                source.getScanRuntimeProvider(
+                                        mock(ScanTableSource.ScanContext.class)))
                 .isInstanceOf(UnsupportedOperationException.class)
-                .hasMessageContaining("Full lookup caching is not supported yet.");
+                .hasMessageContaining("paimon");
+    }
+
+    @Test
+    void testLookupFullCacheRejectsMissingCustomShuffle() {
+        Map<String, String> properties = getBasicOptionsWithBucketKey();
+        properties.put("lookup.cache", "FULL");
+        FlinkTableSource source = createFullCacheTableSource(createBasicSchema(), properties);
+
+        assertThatThrownBy(
+                        () ->
+                                source.getLookupRuntimeProvider(
+                                        createLookupContext(new int[][] {{0}, {2}}, false)))
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessageContaining("shuffle");
+    }
+
+    @Test
+    void testLookupFullCacheRejectsUnsupportedTableAndLookupOptions() {
+        ResolvedSchema schema = createBasicSchema();
+        Map<String, String> properties = getBasicOptionsWithBucketKey();
+        properties.put("lookup.cache", "FULL");
+
+        if (supportsLookupCustomShuffle()) {
+            // a prefix lookup must at least carry all bucket keys; "third" alone cannot be
+            // normalized into a routable prefix key
+            FlinkTableSource source = createFullCacheTableSource(schema, properties);
+            assertThatThrownBy(
+                            () ->
+                                    source.getLookupRuntimeProvider(
+                                            createLookupContext(new int[][] {{2}}, true)))
+                    .isInstanceOf(TableException.class)
+                    .hasMessageContaining("primary key");
+        }
+
+        Map<String, String> noBucketKey = new HashMap<>(properties);
+        noBucketKey.remove(BUCKET_KEY.key());
+        assertFullCacheRejected(schema, noBucketKey, new int[][] {{0}, {2}}, "bucket keys");
+
+        Map<String, String> insertIfNotExists = new HashMap<>(properties);
+        insertIfNotExists.put(FlinkConnectorOptions.LOOKUP_INSERT_IF_NOT_EXISTS.key(), "true");
+        assertFullCacheRejected(
+                schema, insertIfNotExists, new int[][] {{0}, {2}}, "insert-if-not-exists");
+
+        Map<String, String> rowTtl = new HashMap<>(properties);
+        rowTtl.put(ConfigOptions.TABLE_KV_TTL.key(), "1d");
+        assertFullCacheRejected(schema, rowTtl, new int[][] {{0}, {2}}, "row TTL");
+
+        assertFullCacheRejected(
+                schema,
+                properties,
+                Collections.singletonList("third"),
+                new int[][] {{0}, {2}},
+                "non-partitioned");
+
+        ResolvedSchema logSchema =
+                new ResolvedSchema(schema.getColumns(), Collections.emptyList(), null);
+        assertFullCacheRejected(logSchema, properties, new int[][] {{0}, {2}}, "primary key table");
+    }
+
+    private void assertFullCacheRejected(
+            ResolvedSchema schema,
+            Map<String, String> options,
+            int[][] lookupKeys,
+            String message) {
+        assertFullCacheRejected(schema, options, Collections.emptyList(), lookupKeys, message);
+    }
+
+    private FlinkTableSource createFullCacheTableSource(
+            ResolvedSchema schema, Map<String, String> options) {
+        return (FlinkTableSource)
+                createTableSource(
+                        OBJECT_IDENTIFIER,
+                        schema,
+                        options,
+                        Collections.emptyMap(),
+                        new Configuration(),
+                        Collections.emptyList());
+    }
+
+    private void assertFullCacheRejected(
+            ResolvedSchema schema,
+            Map<String, String> options,
+            List<String> partitionKeys,
+            int[][] lookupKeys,
+            String message) {
+        FlinkTableSource source =
+                (FlinkTableSource)
+                        createTableSource(
+                                OBJECT_IDENTIFIER,
+                                schema,
+                                options,
+                                Collections.emptyMap(),
+                                new Configuration(),
+                                partitionKeys);
+        assertThatThrownBy(
+                        () ->
+                                source.getLookupRuntimeProvider(
+                                        createLookupContext(lookupKeys, true)))
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessageContaining(message);
     }
 
     @Test
@@ -509,6 +737,24 @@ abstract class FlinkTableFactoryTest {
             Map<String, String> options,
             Map<String, String> enrichmentOptions,
             Configuration configuration) {
+        return createTableSource(
+                objectIdentifier,
+                schema,
+                options,
+                enrichmentOptions,
+                configuration,
+                schema.getPrimaryKey()
+                        .map(UniqueConstraint::getColumns)
+                        .orElse(Collections.emptyList()));
+    }
+
+    private DynamicTableSource createTableSource(
+            ObjectIdentifier objectIdentifier,
+            ResolvedSchema schema,
+            Map<String, String> options,
+            Map<String, String> enrichmentOptions,
+            Configuration configuration,
+            List<String> partitionKeys) {
         FlinkTableFactory tableFactory = createFlinkTableFactory();
         FactoryUtil.DefaultDynamicTableContext context =
                 new FactoryUtil.DefaultDynamicTableContext(
@@ -517,9 +763,7 @@ abstract class FlinkTableFactoryTest {
                                 CatalogTableAdapter.toCatalogTable(
                                         Schema.newBuilder().fromResolvedSchema(schema).build(),
                                         "mock source",
-                                        schema.getPrimaryKey()
-                                                .map(UniqueConstraint::getColumns)
-                                                .orElse(Collections.emptyList()),
+                                        partitionKeys,
                                         options),
                                 schema),
                         enrichmentOptions,
@@ -557,6 +801,17 @@ abstract class FlinkTableFactoryTest {
     /** Creates a lookup context using the API available in the tested Flink version. */
     protected LookupTableSource.LookupContext createLookupContext(int[][] lookupKeys) {
         return new LookupRuntimeProviderContext(lookupKeys);
+    }
+
+    /** Creates a lookup context with the planner's custom-shuffle preference. */
+    protected LookupTableSource.LookupContext createLookupContext(
+            int[][] lookupKeys, boolean preferCustomShuffle) {
+        return createLookupContext(lookupKeys);
+    }
+
+    /** Whether this Flink version can report and apply lookup custom shuffle. */
+    protected boolean supportsLookupCustomShuffle() {
+        return false;
     }
 
     public static FlinkTableFactory createFlinkTableFactory() {
