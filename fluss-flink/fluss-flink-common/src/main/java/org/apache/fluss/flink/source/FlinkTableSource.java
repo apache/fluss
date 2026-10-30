@@ -18,6 +18,7 @@
 package org.apache.fluss.flink.source;
 
 import org.apache.fluss.client.initializer.OffsetsInitializer;
+import org.apache.fluss.client.lookup.LookupType;
 import org.apache.fluss.client.table.getter.PartitionGetter;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
@@ -173,6 +174,8 @@ public class FlinkTableSource
 
     private final Map<String, String> tableOptions;
 
+    @Nullable private final int[][] secondaryIndexes;
+
     @Nullable private LakeSource<LakeSplit> lakeSource;
     @Nullable private Predicate logRecordBatchFilter;
 
@@ -199,7 +202,8 @@ public class FlinkTableSource
             boolean isDataLakeEnabled,
             @Nullable MergeEngineType mergeEngineType,
             Map<String, String> tableOptions,
-            LeaseContext leaseContext) {
+            LeaseContext leaseContext,
+            @Nullable int[][] secondaryIndexes) {
         this(
                 tablePath,
                 flussConfig,
@@ -219,7 +223,8 @@ public class FlinkTableSource
                 isDataLakeEnabled,
                 mergeEngineType,
                 tableOptions,
-                leaseContext);
+                leaseContext,
+                secondaryIndexes);
     }
 
     /**
@@ -266,7 +271,8 @@ public class FlinkTableSource
                 isDataLakeEnabled,
                 mergeEngineType,
                 tableOptions,
-                leaseContext);
+                leaseContext,
+                null);
     }
 
     public FlinkTableSource(
@@ -288,7 +294,8 @@ public class FlinkTableSource
             boolean isDataLakeEnabled,
             @Nullable MergeEngineType mergeEngineType,
             Map<String, String> tableOptions,
-            LeaseContext leaseContext) {
+            LeaseContext leaseContext,
+            @Nullable int[][] secondaryIndexes) {
         this.tablePath = tablePath;
         this.flussConfig = flussConfig;
         this.tableOutputType = tableOutputType;
@@ -310,6 +317,7 @@ public class FlinkTableSource
         this.leaseContext = leaseContext;
         this.mergeEngineType = mergeEngineType;
         this.tableOptions = tableOptions;
+        this.secondaryIndexes = secondaryIndexes;
         if (isDataLakeEnabled) {
             this.lakeSource =
                     checkNotNull(
@@ -353,6 +361,7 @@ public class FlinkTableSource
         this.limit = source.limit;
         this.partitionFilters = source.partitionFilters;
         this.tableOptions = new HashMap<>(source.tableOptions);
+        this.secondaryIndexes = source.secondaryIndexes;
         this.lakeSource = source.lakeSource == null ? null : source.lakeSource.copy();
         this.logRecordBatchFilter = source.logRecordBatchFilter;
         this.watermarkStrategy = source.watermarkStrategy;
@@ -605,7 +614,8 @@ public class FlinkTableSource
                         bucketKeyIndexes,
                         partitionKeyIndexes,
                         tableOutputType,
-                        projectedFields);
+                        projectedFields,
+                        secondaryIndexes);
         this.lookupInputPartitioner = createLookupInputPartitioner(lookupNormalizer);
         if (lookupAsync) {
             AsyncLookupFunction asyncLookupFunction =
@@ -641,7 +651,8 @@ public class FlinkTableSource
     @Nullable
     private InputDataPartitionerAdapter createLookupInputPartitioner(
             LookupNormalizer lookupNormalizer) {
-        if (bucketKeyIndexes.length == 0) {
+        if (lookupNormalizer.getLookupType() == LookupType.SECONDARY_INDEX_LOOKUP
+                || bucketKeyIndexes.length == 0) {
             return null;
         }
 

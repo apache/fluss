@@ -74,6 +74,10 @@ class PaimonBinaryRowWriter {
         return bytes;
     }
 
+    int capacity() {
+        return buffer.length;
+    }
+
     public void setNullAt(int pos) {
         setNullBit(pos);
         segment.putLong(getFieldOffset(pos), 0L);

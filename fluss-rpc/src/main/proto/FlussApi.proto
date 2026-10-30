@@ -248,6 +248,9 @@ message UpdateMetadataRequest {
   repeated PbTableMetadata table_metadata = 3;
   repeated PbPartitionMetadata partition_metadata = 4;
   optional int32 coordinator_epoch = 5;
+  // Per-main-table partition tombstones propagated from the Coordinator (P3T6).
+  // Each entry replaces the cached tombstone for the given table_id on the receiver.
+  repeated PbPartitionTombstone partition_tombstones = 6;
 }
 
 message UpdateMetadataResponse {
@@ -312,6 +315,19 @@ message PutKvRequest {
 
 message PutKvResponse {
   repeated PbPutKvRespForBucket buckets_resp = 1;
+}
+
+// Internal application-level write for Global Secondary Index Tables.
+message PutIndexRequest {
+  required int32 acks = 1;
+  required int64 table_id = 2;
+  required int32 timeout_ms = 3;
+  required int64 source_table_id = 4;
+  repeated PbPutIndexReqForBucket buckets_req = 5;
+}
+
+message PutIndexResponse {
+  repeated PbPutIndexRespForBucket buckets_resp = 1;
 }
 
 // lookup request and response
@@ -1064,6 +1080,17 @@ message PbBucketInfo {
   repeated int32 isr = 8 [packed = true];
 }
 
+// Per-main-table partition tombstone snapshot propagated via UpdateMetadataRequest.
+// Encodes the blacklist of dropped partitions for a partitioned source table:
+// a partitionId is tombstoned iff partitionId <= floor || explicit_set contains it.
+// The version is monotonic per table_id; receivers may use it to avoid stale overwrites.
+message PbPartitionTombstone {
+  required int64 table_id = 1;
+  required int64 floor = 2;
+  repeated int64 explicit_set = 3 [packed = true];
+  required int64 version = 4;
+}
+
 message PbProduceLogReqForBucket {
   optional int64 partition_id = 1;
   required int32 bucket_id = 2;
@@ -1151,6 +1178,22 @@ message PbPutKvRespForBucket {
   optional float pressure = 6;
   // The original partition name for historical PK writes. It is unset for normal writes.
   optional string original_partition_name = 7;
+}
+
+message PbPutIndexReqForBucket {
+  required int32 bucket_id = 1;
+  optional int64 source_partition_id = 2;
+  required int32 source_bucket_id = 3;
+  required int64 source_end_offset = 4;
+  required bytes progress_key = 5;
+  required bytes records = 6;
+}
+
+message PbPutIndexRespForBucket {
+  required int32 bucket_id = 1;
+  optional int32 error_code = 2;
+  optional string error_message = 3;
+  optional int64 log_end_offset = 4;
 }
 
 message PbLookupReqForBucket {

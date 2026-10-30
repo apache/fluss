@@ -338,7 +338,14 @@ public class MultiTableLogScannerImpl extends AbstractLogScanner<MultiTableRecor
 
     private TableInfo resolveTableInfo(TablePath tablePath) {
         try {
-            return admin.getTableInfo(tablePath).get();
+            TableInfo tableInfo = admin.getTableInfo(tablePath).get();
+            if (tableInfo.isIndexTable()) {
+                throw new UnsupportedOperationException(
+                        "Changelog subscription is not supported for internal secondary index table "
+                                + tablePath
+                                + ".");
+            }
+            return tableInfo;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new RuntimeException("Interrupted while resolving table info: " + tablePath, e);

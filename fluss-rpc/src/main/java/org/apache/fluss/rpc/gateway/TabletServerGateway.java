@@ -54,6 +54,8 @@ import org.apache.fluss.rpc.messages.PrefixLookupRequest;
 import org.apache.fluss.rpc.messages.PrefixLookupResponse;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.ProduceLogResponse;
+import org.apache.fluss.rpc.messages.PutIndexRequest;
+import org.apache.fluss.rpc.messages.PutIndexResponse;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.messages.PutKvResponse;
 import org.apache.fluss.rpc.messages.ScanKvRequest;
@@ -120,6 +122,10 @@ public interface TabletServerGateway extends RpcGateway, AdminReadOnlyGateway {
      */
     @RPC(api = ApiKeys.PUT_KV)
     CompletableFuture<PutKvResponse> putKv(PutKvRequest request);
+
+    /** Applies a secondary-index mutation batch with application-level source progress. */
+    @RPC(api = ApiKeys.PUT_INDEX)
+    CompletableFuture<PutIndexResponse> putIndex(PutIndexRequest request);
 
     /**
      * Lookup value from the specified table bucket by key.

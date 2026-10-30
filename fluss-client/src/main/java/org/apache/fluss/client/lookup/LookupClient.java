@@ -57,15 +57,18 @@ public class LookupClient {
     private static final Logger LOG = LoggerFactory.getLogger(LookupClient.class);
 
     public static final String LOOKUP_THREAD_PREFIX = "fluss-lookup-sender";
+    public static final String LOOKUP_CONTINUATION_THREAD_PREFIX = "fluss-lookup-continuation";
 
     private final LookupQueue lookupQueue;
 
     private final ExecutorService lookupSenderThreadPool;
     private final LookupSender lookupSender;
+    private final ExecutorService lookupContinuationExecutor;
 
     public LookupClient(Configuration conf, MetadataUpdater metadataUpdater) {
         this.lookupQueue = new LookupQueue(conf);
         this.lookupSenderThreadPool = createThreadPool();
+        this.lookupContinuationExecutor = createLookupContinuationThreadPool(conf);
         short acks = configureAcks(conf);
         this.lookupSender =
                 new LookupSender(
@@ -94,6 +97,16 @@ public class LookupClient {
         // according to benchmark, increase the thread pool size improve not so much
         // performance, so we always use 1 thread for simplicity.
         return Executors.newFixedThreadPool(1, new ExecutorThreadFactory(LOOKUP_THREAD_PREFIX));
+    }
+
+    private ExecutorService createLookupContinuationThreadPool(Configuration conf) {
+        return Executors.newFixedThreadPool(
+                conf.getInt(ConfigOptions.CLIENT_LOOKUP_CONTINUATION_THREADS),
+                new ExecutorThreadFactory(LOOKUP_CONTINUATION_THREAD_PREFIX));
+    }
+
+    public ExecutorService getLookupContinuationExecutor() {
+        return lookupContinuationExecutor;
     }
 
     /**
@@ -158,6 +171,17 @@ public class LookupClient {
                 lookupSenderThreadPool.shutdownNow();
                 Thread.currentThread().interrupt();
             }
+        }
+
+        lookupContinuationExecutor.shutdown();
+        try {
+            if (!lookupContinuationExecutor.awaitTermination(
+                    timeout.toMillis(), TimeUnit.MILLISECONDS)) {
+                lookupContinuationExecutor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            lookupContinuationExecutor.shutdownNow();
+            Thread.currentThread().interrupt();
         }
 
         if (lookupSender != null) {

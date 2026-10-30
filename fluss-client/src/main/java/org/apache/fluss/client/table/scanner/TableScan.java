@@ -121,6 +121,12 @@ public class TableScan implements Scan {
 
     @Override
     public LogScanner createLogScanner() {
+        if (tableInfo.isIndexTable()) {
+            throw new UnsupportedOperationException(
+                    "Changelog subscription is not supported for internal secondary index table "
+                            + tableInfo.getTablePath()
+                            + ".");
+        }
         if (limit != null) {
             throw new UnsupportedOperationException(
                     String.format(

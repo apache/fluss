@@ -207,7 +207,8 @@ public class FlinkTableSourceFilterPushDownTest {
                             false, // is data lake enabled
                             null, // merge engine type
                             Maps.newHashMap(),
-                            null); // lease context
+                            null, // lease context
+                            null); // secondaryIndexes
         }
 
         @Test
@@ -404,7 +405,8 @@ public class FlinkTableSourceFilterPushDownTest {
                             false, // is data lake enabled
                             null, // merge engine type
                             Maps.newHashMap(),
-                            null); // lease context
+                            null, // lease context
+                            null); // secondaryIndexes
         }
 
         @Test
@@ -502,7 +504,8 @@ public class FlinkTableSourceFilterPushDownTest {
                             false, // is data lake enabled
                             null, // merge engine type
                             Maps.newHashMap(),
-                            null); // lease context
+                            null, // lease context
+                            null); // secondaryIndexes
         }
 
         @Test
@@ -700,7 +703,8 @@ public class FlinkTableSourceFilterPushDownTest {
                             false, // is data lake enabled
                             null, // merge engine type
                             Maps.newHashMap(),
-                            null); // lease context
+                            null, // lease context
+                            null); // secondaryIndexes
         }
 
         @Test
@@ -877,7 +881,8 @@ public class FlinkTableSourceFilterPushDownTest {
                             false, // is data lake enabled
                             null, // merge engine type
                             Maps.newHashMap(),
-                            null); // lease context
+                            null, // lease context
+                            null); // secondaryIndexes
 
             FieldReferenceExpression fieldRef =
                     new FieldReferenceExpression("id", DataTypes.INT(), 0, 0);
@@ -945,7 +950,8 @@ public class FlinkTableSourceFilterPushDownTest {
                             false, // is data lake enabled
                             null, // merge engine type
                             Maps.newHashMap(),
-                            null); // lease context
+                            null, // lease context
+                            null); // secondaryIndexes
         }
 
         @Test
@@ -1039,7 +1045,8 @@ public class FlinkTableSourceFilterPushDownTest {
                             false, // is data lake enabled
                             null, // merge engine type
                             Maps.newHashMap(),
-                            null); // lease context
+                            null, // lease context
+                            null); // secondaryIndexes
 
             FieldReferenceExpression fieldRef =
                     new FieldReferenceExpression("id", DataTypes.INT(), 0, 0);

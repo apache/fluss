@@ -380,3 +380,32 @@ After the job runs, the `uid_mapping` dictionary table contains:
 ## Lookup Options
 
 Fluss lookup join supports various configuration options. For more details, please refer to the [Connector Options](engine-flink/options.md#lookup-options) page.
+
+## Secondary Index Lookup
+
+A [global secondary index](../table-design/secondary-indexes.md) supports equality joins on non-primary-key columns without requiring the main-table bucket or partition keys. Declare the index when creating the dimension table:
+
+```sql
+CREATE TABLE customer_by_email (
+    customer_id BIGINT,
+    email STRING,
+    customer_name STRING,
+    PRIMARY KEY (customer_id) NOT ENFORCED
+) WITH (
+    'secondary-index.idx_email.columns' = 'email',
+    'secondary-index.idx_email.visibility' = 'sync'
+);
+```
+
+For an input table `requests` with an `email` field and a processing-time attribute `proc_time`, join using the indexed column:
+
+```sql
+SELECT r.email, c.customer_id, c.customer_name
+FROM requests AS r
+LEFT JOIN customer_by_email FOR SYSTEM_TIME AS OF r.proc_time AS c
+ON r.email = c.email;
+```
+
+Flink prefers a complete primary-key lookup when available. Otherwise, it selects a secondary index whose full column set appears in the equality conditions, preferring the index with more columns. Additional conditions filter the lookup results. For composite indexes, every indexed column must be supplied; a leading-column subset is insufficient.
+
+Lookup execution is asynchronous by default. Add `/*+ OPTIONS('lookup.async' = 'false') */` after the dimension table name to use synchronous execution. This option does not change index visibility: `secondary-index.<name>.visibility` controls whether main-table write acknowledgement waits for index propagation. An `async` index may temporarily omit recent rows regardless of the Flink execution mode.

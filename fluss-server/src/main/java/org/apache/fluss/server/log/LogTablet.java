@@ -543,11 +543,31 @@ public final class LogTablet {
             @Nullable FileLogProjection projection,
             @Nullable FilterContext filterContext)
             throws IOException {
+        return read(
+                readOffset,
+                maxLength,
+                fetchIsolation,
+                minOneMessage,
+                projection,
+                filterContext,
+                Long.MAX_VALUE);
+    }
+
+    /** Reads local records, capping HIGH_WATERMARK isolation by an exclusive offset bound. */
+    public FetchDataInfo read(
+            long readOffset,
+            int maxLength,
+            FetchIsolation fetchIsolation,
+            boolean minOneMessage,
+            @Nullable FileLogProjection projection,
+            @Nullable FilterContext filterContext,
+            long maxOffset)
+            throws IOException {
         LogOffsetMetadata maxOffsetMetadata = null;
         if (fetchIsolation == FetchIsolation.LOG_END) {
             maxOffsetMetadata = localLog.getLocalLogEndOffsetMetadata();
         } else if (fetchIsolation == FetchIsolation.HIGH_WATERMARK) {
-            maxOffsetMetadata = fetchHighWatermarkMetadata();
+            maxOffsetMetadata = fetchHighWatermarkMetadata(maxOffset);
         }
 
         return localLog.read(
@@ -848,7 +868,12 @@ public final class LogTablet {
      * offset out of range error if the segment info cannot be loaded.
      */
     public LogOffsetSnapshot fetchOffsetSnapshot() throws IOException {
-        LogOffsetMetadata highWatermark = fetchHighWatermarkMetadata();
+        return fetchOffsetSnapshot(Long.MAX_VALUE);
+    }
+
+    /** Returns an offset snapshot with the high watermark capped by an exclusive read bound. */
+    public LogOffsetSnapshot fetchOffsetSnapshot(long maxHighWatermark) throws IOException {
+        LogOffsetMetadata highWatermark = fetchHighWatermarkMetadata(maxHighWatermark);
         return new LogOffsetSnapshot(
                 logStartOffset(),
                 localLogStartOffset(),
@@ -902,6 +927,18 @@ public final class LogTablet {
         } else {
             return offsetMetadata;
         }
+    }
+
+    private LogOffsetMetadata fetchHighWatermarkMetadata(long maxOffset) throws IOException {
+        LogOffsetMetadata highWatermark = fetchHighWatermarkMetadata();
+        if (maxOffset >= highWatermark.getMessageOffset()) {
+            return highWatermark;
+        }
+        // Recovery may leave the index behind the local tail. Such a bound has no local file
+        // position; local reads are empty or fall back to remote storage until it advances.
+        return maxOffset < localLogStartOffset()
+                ? new LogOffsetMetadata(maxOffset)
+                : convertToOffsetMetadataOrThrow(maxOffset);
     }
 
     /**

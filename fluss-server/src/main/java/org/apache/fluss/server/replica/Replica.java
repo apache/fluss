@@ -36,6 +36,7 @@ import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.exception.TooManyScannersException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.ChangelogImage;
+import org.apache.fluss.metadata.IndexVisibility;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
@@ -59,6 +60,9 @@ import org.apache.fluss.rpc.util.PredicateMessageUtils;
 import org.apache.fluss.server.SequenceIDCounter;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
+import org.apache.fluss.server.entity.PutIndexDataForBucket;
+import org.apache.fluss.server.index.IndexReplicationSupervisor;
+import org.apache.fluss.server.index.IndexTableStorage;
 import org.apache.fluss.server.kv.KvManager;
 import org.apache.fluss.server.kv.KvRecoverHelper;
 import org.apache.fluss.server.kv.KvStateLookupResult;
@@ -81,6 +85,7 @@ import org.apache.fluss.server.kv.snapshot.KvTabletSnapshotTarget;
 import org.apache.fluss.server.kv.snapshot.PeriodicSnapshotManager;
 import org.apache.fluss.server.kv.snapshot.RocksIncrementalSnapshot;
 import org.apache.fluss.server.kv.snapshot.SnapshotContext;
+import org.apache.fluss.server.kv.snapshot.TabletState;
 import org.apache.fluss.server.log.FetchDataInfo;
 import org.apache.fluss.server.log.FetchIsolation;
 import org.apache.fluss.server.log.FetchParams;
@@ -95,7 +100,7 @@ import org.apache.fluss.server.log.LogReadInfo;
 import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.log.checkpoint.OffsetCheckpointFile;
 import org.apache.fluss.server.log.remote.RemoteLogManager;
-import org.apache.fluss.server.metadata.ServerMetadataCache;
+import org.apache.fluss.server.metadata.MetadataProvider;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.metrics.group.BucketMetricGroup;
 import org.apache.fluss.server.metrics.group.TableMetricGroup;
@@ -141,6 +146,8 @@ import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
@@ -180,7 +187,7 @@ public final class Replica {
     private final CloseableRegistry closeableRegistry;
 
     private final IntSupplier minInSyncReplicasSupplier;
-    private final ServerMetadataCache metadataCache;
+    private final TabletServerMetadataCache metadataCache;
     private final FatalErrorHandler fatalErrorHandler;
     private final BucketMetricGroup bucketMetricGroup;
 
@@ -191,6 +198,8 @@ public final class Replica {
     private final int localTabletServerId;
     private final DelayedOperationManager<DelayedWrite<?>> delayedWriteManager;
     private final DelayedOperationManager<DelayedFetchLog> delayedFetchLogManager;
+    private final Executor ioExecutor;
+    private final AtomicBoolean delayedFetchCompletionScheduled = new AtomicBoolean();
     /** The manger to manger the isr expand and shrink. */
     private final AdjustIsrManager adjustIsrManager;
 
@@ -239,6 +248,27 @@ public final class Replica {
      */
     private final ScannerManager scannerManager;
 
+    // ------- index management
+    private final IndexReplicationSupervisor indexManager;
+    private final IndexTableStorage indexTableStorage;
+
+    /** Whether this main-table schema declares at least one secondary index. */
+    private final boolean hasSecondaryIndexes;
+
+    /**
+     * Whether PutKv acks on this replica must block until the SYNC secondary-index mutations they
+     * generate are applied. False for ASYNC-only tables, index tables and tables without indexes.
+     */
+    private final boolean hasSyncIndexes;
+
+    /** Monotonically advancing SYNC index-pushed-offset used by PutKv acknowledgements. */
+    private volatile long syncIndexPushedOffset;
+
+    /**
+     * Conservative all-index replay floor, persisted in snapshots and restored on leader startup.
+     */
+    private volatile long allIndexPushedOffset;
+
     // ------- metrics
     private Counter isrShrinks;
     private Counter isrExpands;
@@ -261,13 +291,18 @@ public final class Replica {
             AdjustIsrManager adjustIsrManager,
             SnapshotContext snapshotContext,
             TabletServerMetadataCache metadataCache,
+            @Nullable MetadataProvider metadataProvider,
             FatalErrorHandler fatalErrorHandler,
             BucketMetricGroup bucketMetricGroup,
             TableInfo tableInfo,
             String remoteDataDir,
             Clock clock,
             RemoteLogManager remoteLogManager,
-            ScannerManager scannerManager)
+            ScannerManager scannerManager,
+            Executor ioExecutor,
+            org.apache.fluss.server.index.IndexReplicatorPool indexReplicatorPool,
+            org.apache.fluss.server.index.IndexSendBuffer indexSendBuffer,
+            TabletServerMetricGroup serverMetricGroup)
             throws Exception {
         this.physicalPath = physicalPath;
         this.tableBucket = tableBucket;
@@ -279,6 +314,7 @@ public final class Replica {
         this.localTabletServerId = localTabletServerId;
         this.delayedWriteManager = delayedWriteManager;
         this.delayedFetchLogManager = delayedFetchLogManager;
+        this.ioExecutor = checkNotNull(ioExecutor, "ioExecutor");
         this.adjustIsrManager = adjustIsrManager;
         this.fatalErrorHandler = fatalErrorHandler;
         this.bucketMetricGroup = bucketMetricGroup;
@@ -303,6 +339,25 @@ public final class Replica {
         this.clock = clock;
         this.remoteLogManager = remoteLogManager;
         this.scannerManager = checkNotNull(scannerManager, "scannerManager");
+        this.indexManager =
+                new IndexReplicationSupervisor(
+                        tableInfo,
+                        tableBucket,
+                        metadataCache,
+                        metadataProvider,
+                        indexReplicatorPool,
+                        indexSendBuffer,
+                        remoteLogManager,
+                        serverMetricGroup);
+        this.indexTableStorage =
+                new IndexTableStorage(tableInfo, tableBucket, metadataCache, schemaGetter);
+        List<Schema.Index> secondaryIndexes = tableInfo.getSchema().getIndexes();
+        this.hasSecondaryIndexes = !secondaryIndexes.isEmpty();
+        this.hasSyncIndexes =
+                secondaryIndexes.stream()
+                        .anyMatch(index -> index.getVisibility() == IndexVisibility.SYNC);
+        this.syncIndexPushedOffset = hasSyncIndexes ? 0L : -1L;
+        this.allIndexPushedOffset = hasSecondaryIndexes ? 0L : -1L;
         registerMetrics();
     }
 
@@ -405,6 +460,12 @@ public final class Replica {
 
     public long getLogHighWatermark() {
         return logTablet.getHighWatermark();
+    }
+
+    /** Returns the exclusive log offset visible to clients after synchronous index replication. */
+    public long getClientLogHighWatermark() {
+        long highWatermark = logTablet.getHighWatermark();
+        return hasSyncIndexes ? Math.min(highWatermark, syncIndexPushedOffset) : highWatermark;
     }
 
     public TableBucket getTableBucket() {
@@ -626,6 +687,8 @@ public final class Replica {
 
     /** Delete the replica including drop the kv and log. */
     public void delete() {
+        indexManager.close();
+        indexTableStorage.clearLeaderState();
         // need to hold the lock to prevent appendLog, putKv from hitting I/O exceptions due
         // to log/kv being deleted
         inWriteLock(
@@ -651,6 +714,17 @@ public final class Replica {
                 });
     }
 
+    /** Returns fetch completion offsets, restricting only client reads by sync index progress. */
+    public LogOffsetSnapshot fetchOffsetSnapshot(FetchParams params) throws IOException {
+        return inReadLock(
+                leaderIsrUpdateLock,
+                () -> {
+                    LogTablet logTablet = localLogOrThrow(params.fetchOnlyLeader());
+                    return logTablet.fetchOffsetSnapshot(
+                            params.isFromFollower() ? Long.MAX_VALUE : getClientLogHighWatermark());
+                });
+    }
+
     // -------------------------------------------------------------------------------------------
 
     private void onBecomeNewLeader(@Nullable KvRecovery recovery) {
@@ -662,12 +736,20 @@ public final class Replica {
         }
 
         if (isKvTable()) {
+            // Prepare index-table tombstone state before opening RocksDB. Compaction filters are
+            // attached during KvTablet creation and cannot be installed afterward.
+            indexManager.prepareForLeader();
+            indexTableStorage.prepareForLeader();
+            resetIndexProgressForLeader();
             // if it's become new leader, we must
             // first destroy the old kv tablet
             // if exist. Otherwise, it'll use still the old kv tablet which will cause data loss
             dropKv();
             // now, we can create a new kv tablet
             createKv(checkNotNull(recovery));
+            indexManager.onBecomeLeader(
+                    logTablet, schemaGetter, this::advanceIndexProgress, allIndexPushedOffset);
+            indexTableStorage.installValueFilter(kvTablet);
         }
 
         updateLeaderEndOffsetSnapshot();
@@ -698,6 +780,9 @@ public final class Replica {
     }
 
     private void onBecomeNewFollower(int standbyReplica) {
+        indexManager.onBecomeFollower();
+        indexTableStorage.clearLeaderState();
+
         if (isKvTable()) {
             boolean isNowStandby = (standbyReplica == localTabletServerId);
             boolean wasLeader = isLeader();
@@ -771,11 +856,33 @@ public final class Replica {
         }
     }
 
+    /**
+     * Wraps the base {@link TabletState} from {@link KvTablet} with the conservative all-index
+     * replay floor, so it is captured in the snapshot alongside flushed log offset and row count.
+     */
+    private TabletState augmentTabletState(TabletState base) {
+        Long indexPushedOffset = null;
+        if (hasSecondaryIndexes) {
+            long currentOffset = allIndexPushedOffset;
+            if (currentOffset < 0) {
+                throw new IllegalStateException(
+                        "Indexed main table "
+                                + tableBucket
+                                + " has invalid allIndexPushedOffset "
+                                + currentOffset);
+            }
+            indexPushedOffset = currentOffset;
+        }
+        return new TabletState(
+                base.getFlushedLogOffset(),
+                base.getRowCount(),
+                indexPushedOffset,
+                base.getAutoIncIDRanges());
+    }
+
     private void createKv(KvRecovery recovery) {
         try {
-            // create a closeable registry for the closable related to kv
             closeableRegistryForKv = new CloseableRegistry();
-            // resister the closeable registry for kv
             closeableRegistry.registerCloseable(closeableRegistryForKv);
         } catch (IOException e) {
             LOG.warn(
@@ -784,7 +891,6 @@ public final class Replica {
                     e);
         }
 
-        // init kv tablet and get the snapshot it uses to init if have any
         Optional<CompletedSnapshot> snapshotUsed = Optional.empty();
         Exception lastError = null;
         for (int i = 1; i <= INIT_KV_TABLET_MAX_RETRY_TIMES; i++) {
@@ -875,6 +981,67 @@ public final class Replica {
         }
     }
 
+    // ---- Index management delegation ----
+
+    IndexReplicationSupervisor getIndexManager() {
+        return indexManager;
+    }
+
+    public void advanceIndexProgress(long syncIndexOffset, long allIndexOffset) {
+        boolean syncAdvanced = false;
+        if (hasSyncIndexes && syncIndexOffset > syncIndexPushedOffset) {
+            syncIndexPushedOffset = syncIndexOffset;
+            syncAdvanced = true;
+        }
+        if (allIndexOffset > allIndexPushedOffset) {
+            allIndexPushedOffset = allIndexOffset;
+        }
+        if (syncAdvanced) {
+            delayedWriteManager.checkAndComplete(new DelayedTableBucketKey(tableBucket));
+            // The replicator can hold its lifecycle lock while publishing progress. Fetch
+            // completion acquires the replica lock, which demotion holds while closing the
+            // replicator, so it must run on another thread.
+            if (delayedFetchCompletionScheduled.compareAndSet(false, true)) {
+                try {
+                    ioExecutor.execute(
+                            () -> {
+                                // Allow another wakeup before checking, so progress arriving
+                                // during the check cannot be lost.
+                                delayedFetchCompletionScheduled.set(false);
+                                delayedFetchLogManager.checkAndComplete(
+                                        new DelayedTableBucketKey(tableBucket));
+                            });
+                } catch (RejectedExecutionException e) {
+                    delayedFetchCompletionScheduled.set(false);
+                    LOG.debug("Unable to schedule delayed fetch completion for {}", tableBucket, e);
+                }
+            }
+        }
+    }
+
+    /**
+     * Returns {@code true} when PutKv acks on this replica must wait for secondary-index mutations
+     * to be applied before returning ({@link Schema.Index#getVisibility()} is SYNC).
+     */
+    public boolean requiresSyncIndexVisibility() {
+        return hasSyncIndexes;
+    }
+
+    public long getSyncIndexPushedOffset() {
+        return syncIndexPushedOffset;
+    }
+
+    public long getAllIndexPushedOffset() {
+        return allIndexPushedOffset;
+    }
+
+    private void resetIndexProgressForLeader() {
+        if (hasSecondaryIndexes) {
+            syncIndexPushedOffset = hasSyncIndexes ? 0L : -1L;
+            allIndexPushedOffset = 0L;
+        }
+    }
+
     /**
      * Init kv tablet from snapshot if any or just from log.
      *
@@ -915,6 +1082,7 @@ public final class Replica {
                         tableBucket,
                         physicalPath);
                 CompletedSnapshot completedSnapshot = optCompletedSnapshot.get();
+                validateSnapshotIndexPushedOffset(completedSnapshot);
                 // always create a new dir for the kv tablet
                 File tabletDir =
                         kvManager.createTabletDir(
@@ -923,13 +1091,20 @@ public final class Replica {
                 downloadKvSnapshots(completedSnapshot, tabletDir.toPath());
 
                 // as we have downloaded kv files into the tablet dir, now, we can load it
-                kvTablet = kvManager.loadKv(tabletDir, schemaGetter, this::onKvFlushComplete);
+                kvTablet =
+                        kvManager.loadKv(
+                                tabletDir,
+                                schemaGetter,
+                                this::onKvFlushComplete,
+                                indexTableStorage.createCompactionFilterFactory(),
+                                indexTableStorage.createTagExtractor());
 
                 checkNotNull(kvTablet, "kv tablet should not be null.");
                 restoreStartOffset = completedSnapshot.getLogOffset();
                 if (recovery.initializeLocalLog) {
                     logManager.initializeEmptyLocalTail(tableBucket, restoreStartOffset);
                 }
+                restoreIndexProgress(completedSnapshot.getIndexPushedOffset());
                 rowCount =
                         supportsExactRowCount(tableConfig) ? completedSnapshot.getRowCount() : null;
                 // currently, we only support one auto-increment column.
@@ -954,7 +1129,9 @@ public final class Replica {
                                 schemaGetter,
                                 tableConfig,
                                 arrowCompressionInfo,
-                                this::onKvFlushComplete);
+                                this::onKvFlushComplete,
+                                indexTableStorage.createCompactionFilterFactory(),
+                                indexTableStorage.createTagExtractor());
 
                 rowCount =
                         isHistoricalPartition()
@@ -970,7 +1147,10 @@ public final class Replica {
                 autoIncIDRange = null;
             }
 
-            logTablet.updateMinRetainOffset(restoreStartOffset);
+            logTablet.updateMinRetainOffset(
+                    optCompletedSnapshot
+                            .map(CompletedSnapshot::getMinRetainLogOffset)
+                            .orElse(restoreStartOffset));
             if (isHistoricalPartition()) {
                 checkNotNull(kvTablet, "kv tablet should not be null.")
                         .advanceHistoricalCleanupOffset(restoreStartOffset);
@@ -998,6 +1178,35 @@ public final class Replica {
         }
 
         return optCompletedSnapshot;
+    }
+
+    private void validateSnapshotIndexPushedOffset(CompletedSnapshot snapshot) {
+        if (!hasSecondaryIndexes) {
+            return;
+        }
+        Long indexPushedOffset = snapshot.getIndexPushedOffset();
+        if (indexPushedOffset == null || indexPushedOffset < 0) {
+            throw new KvStorageException(
+                    "KV Snapshot "
+                            + snapshot.getSnapshotID()
+                            + " for main table bucket "
+                            + tableBucket
+                            + " with secondary indexes must contain a non-negative "
+                            + "indexPushedOffset, but was "
+                            + indexPushedOffset);
+        }
+    }
+
+    private void restoreIndexProgress(Long indexPushedOffset) {
+        if (indexPushedOffset == null) {
+            return;
+        }
+        if (hasSyncIndexes) {
+            syncIndexPushedOffset = indexPushedOffset;
+        }
+        if (hasSecondaryIndexes) {
+            allIndexPushedOffset = indexPushedOffset;
+        }
     }
 
     private void downloadKvSnapshots(CompletedSnapshot completedSnapshot, Path kvTabletDir)
@@ -1175,7 +1384,6 @@ public final class Replica {
 
     private void startPeriodicKvSnapshot(@Nullable CompletedSnapshot completedSnapshot) {
         checkNotNull(kvTablet);
-        KvTabletSnapshotTarget kvTabletSnapshotTarget;
         try {
             // get the snapshot reporter to report the completed snapshot
             CompletedKvSnapshotCommitter completedKvSnapshotCommitter =
@@ -1186,11 +1394,13 @@ public final class Replica {
             RocksIncrementalSnapshot rocksIncrementalSnapshot;
             long lastCompletedSnapshotId = -1;
             long lastCompletedSnapshotLogOffset = 0;
+            Long lastCompletedSnapshotIndexPushedOffset = null;
             long snapshotSize = 0L;
             Map<Long, Collection<KvFileHandleAndLocalPath>> uploadedSstFiles = new HashMap<>();
             if (completedSnapshot != null) {
                 lastCompletedSnapshotId = completedSnapshot.getSnapshotID();
                 lastCompletedSnapshotLogOffset = completedSnapshot.getLogOffset();
+                lastCompletedSnapshotIndexPushedOffset = completedSnapshot.getIndexPushedOffset();
                 snapshotSize = completedSnapshot.getSnapshotSize();
                 uploadedSstFiles.put(
                         completedSnapshot.getSnapshotID(),
@@ -1228,7 +1438,7 @@ public final class Replica {
             FsPath remoteKvTabletDir =
                     FlussPaths.remoteKvTabletDir(remoteKvDir, physicalPath, tableBucket);
 
-            kvTabletSnapshotTarget =
+            KvTabletSnapshotTarget kvTabletSnapshotTarget =
                     new KvTabletSnapshotTarget(
                             tableBucket,
                             completedKvSnapshotCommitter,
@@ -1239,11 +1449,12 @@ public final class Replica {
                             snapshotContext.getAsyncOperationsThreadPool(),
                             closeableRegistryForKv,
                             snapshotIDCounter,
-                            kvTablet::getTabletState,
+                            () -> augmentTabletState(kvTablet.getTabletState()),
                             logTablet::updateMinRetainOffset,
                             bucketLeaderEpochSupplier,
                             coordinatorEpochSupplier,
                             lastCompletedSnapshotLogOffset,
+                            lastCompletedSnapshotIndexPushedOffset,
                             snapshotSize);
             this.kvSnapshotManager =
                     PeriodicSnapshotManager.create(
@@ -1352,10 +1563,10 @@ public final class Replica {
                                 "Normal write request must not target a historical partition.");
                     }
 
-                    validateInSyncReplicaSize(requiredAcks);
                     KvTablet kv = this.kvTablet;
                     checkNotNull(
                             kv, "KvTablet for the replica to put kv records shouldn't be null.");
+                    validateInSyncReplicaSize(requiredAcks);
                     LogAppendInfo logAppendInfo;
                     try {
                         logAppendInfo = kv.putAsLeader(kvRecords, targetColumns, mergeMode);
@@ -1368,6 +1579,46 @@ public final class Replica {
                     // we may need to increment high watermark.
                     maybeIncrementLeaderHW(logTablet, clock.milliseconds());
                     return logAppendInfo;
+                });
+    }
+
+    /** Applies one internal secondary-index window using application-level progress. */
+    public long putIndexRecordsToLeader(PutIndexDataForBucket data, int requiredAcks)
+            throws Exception {
+        return inReadLock(
+                leaderIsrUpdateLock,
+                () -> {
+                    if (!isLeader()) {
+                        throw new NotLeaderOrFollowerException(
+                                String.format(
+                                        "Leader not local for bucket %s on tabletServer %d",
+                                        tableBucket, localTabletServerId));
+                    }
+                    if (!tableInfo.isIndexTable()) {
+                        throw new InvalidTableException(
+                                tableBucket + " is not a system-managed Index Table");
+                    }
+                    validateInSyncReplicaSize(requiredAcks);
+                    KvTablet kv =
+                            checkNotNull(
+                                    kvTablet,
+                                    "KvTablet for the Index Table replica must not be null.");
+                    @Nullable
+                    LogAppendInfo appendInfo =
+                            indexTableStorage.putIndex(
+                                    kv,
+                                    data.sourceBucket(),
+                                    data.sourceEndOffset(),
+                                    data.progressKey(),
+                                    data.records(),
+                                    () ->
+                                            kv.putAsLeader(
+                                                    data.records(), null, MergeMode.OVERWRITE));
+                    if (appendInfo == null) {
+                        return -1L;
+                    }
+                    maybeIncrementLeaderHW(logTablet, clock.milliseconds());
+                    return appendInfo.lastOffset() + 1;
                 });
     }
 
@@ -1613,6 +1864,7 @@ public final class Replica {
                     oldWatermark.get(),
                     newHighWatermark,
                     tableBucket);
+            indexManager.onHighWatermarkAdvanced();
             return true;
         } else {
             return false;
@@ -2052,7 +2304,7 @@ public final class Replica {
     private long getLatestOffset(int followerServerId) {
         // the request is come from client.
         if (followerServerId < 0) {
-            return logTablet.getHighWatermark();
+            return getClientLogHighWatermark();
         } else {
             return logTablet.localLogEndOffset();
         }
@@ -2079,7 +2331,10 @@ public final class Replica {
             throws IOException {
         // Note we use the log end offset prior to the read. This ensures that any appends following
         // the fetch do not prevent a follower from coming into sync.
-        long initialHighWatermark = logTablet.getHighWatermark();
+        long initialHighWatermark =
+                fetchParams.isFromFollower()
+                        ? logTablet.getHighWatermark()
+                        : getClientLogHighWatermark();
         long initialLogEndOffset = logTablet.localLogEndOffset();
         long initialMinRetainOffset =
                 fetchParams.isFromFollower() && isKvTable() ? logTablet.getMinRetainOffset() : -1L;
@@ -2101,7 +2356,8 @@ public final class Replica {
                             fetchParams.isolation(),
                             fetchParams.minOneMessage(),
                             fetchParams.projection(),
-                            filterContext);
+                            filterContext,
+                            fetchParams.isFromFollower() ? Long.MAX_VALUE : initialHighWatermark);
         } finally {
             // Close readContext eagerly — it is only used for statistics extraction during
             // batch filtering and is NOT referenced by the returned FetchDataInfo records.

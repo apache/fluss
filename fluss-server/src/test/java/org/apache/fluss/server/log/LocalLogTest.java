@@ -830,6 +830,43 @@ final class LocalLogTest extends LogTestBase {
     }
 
     @Test
+    void testFilteredReadDoesNotCrossExclusiveOffsetBound() throws Exception {
+        MemoryLogRecords first =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        Collections.singletonList(new Object[] {1, "a"}),
+                        DATA1_ROW_TYPE,
+                        0L,
+                        DEFAULT_SCHEMA_ID);
+        localLog.append(0L, -1L, 0L, first);
+        localLog.roll(Optional.of(1L));
+        MemoryLogRecords second =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        Collections.singletonList(new Object[] {100, "b"}),
+                        DATA1_ROW_TYPE,
+                        1L,
+                        DEFAULT_SCHEMA_ID);
+        localLog.append(1L, -1L, 0L, second);
+        try (LogRecordReadContext readContext =
+                LogRecordReadContext.createArrowReadContext(
+                        DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER)) {
+            FetchDataInfo result =
+                    localLog.read(
+                            0L,
+                            Integer.MAX_VALUE,
+                            true,
+                            localLog.convertToOffsetMetadataOrThrow(1L),
+                            null,
+                            new FilterContext(
+                                    new PredicateBuilder(DATA1_ROW_TYPE).greaterThan(0, 50),
+                                    readContext,
+                                    DEFAULT_SCHEMA_ID,
+                                    TEST_SCHEMA_GETTER));
+            assertThat(result.getRecords().sizeInBytes()).isZero();
+            assertThat(result.getFilteredEndOffset()).isEqualTo(1L);
+        }
+    }
+
+    @Test
     void testReadWithFilterFilteredEndOffsetAcrossSegments() throws Exception {
         // Segment 1: batch1 passes, batch2 filtered — filteredEndOffset set within segment
         // Segment 2: all filtered — LocalLog should continue scanning

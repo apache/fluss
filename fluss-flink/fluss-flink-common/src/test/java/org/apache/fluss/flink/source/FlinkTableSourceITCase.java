@@ -86,6 +86,7 @@ import java.util.stream.Stream;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertQueryResultExactOrder;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertResultsIgnoreOrder;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.collectBatchRows;
+import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.collectRowsUntilEndWithTimeout;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.collectRowsWithTimeout;
 import static org.apache.fluss.flink.utils.FlinkTestBase.waitUntilPartitions;
 import static org.apache.fluss.flink.utils.FlinkTestBase.writeRows;
@@ -836,6 +837,57 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
     // Fluss look source tests
     // -------------------------------------------------------------------------------------
 
+    private static Stream<Arguments> secondaryIndexLookupArgs() {
+        return Stream.of(
+                Arguments.of(false, "user_id"),
+                Arguments.of(true, "user_id"),
+                Arguments.of(false, "[\"user_id\"]"));
+    }
+
+    @ParameterizedTest
+    @MethodSource("secondaryIndexLookupArgs")
+    @MultiVersionTest
+    void testSecondaryIndexLookupJoin(boolean async, String indexColumns) throws Exception {
+        tEnv.executeSql(
+                String.format(
+                        "CREATE TABLE orders (order_id BIGINT NOT NULL, user_id BIGINT,"
+                                + " amount DECIMAL(10, 2), PRIMARY KEY (order_id) NOT ENFORCED)"
+                                + " WITH ('bucket.num' = '3', 'lookup.async' = '%s',"
+                                + " 'secondary-index.idx_user.columns' = '%s',"
+                                + " 'secondary-index.idx_user.visibility' = 'sync',"
+                                + " 'secondary-index.idx_user.bucket.num' = '3')",
+                        async, indexColumns));
+        tEnv.executeSql(
+                        "INSERT INTO orders VALUES (1001, 1, 10.00),"
+                                + " (1002, 2, 20.00), (1003, 1, 30.00)")
+                .await();
+
+        DataStream<Row> source =
+                execEnv.fromCollection(Arrays.asList(Row.of(1L), Row.of(2L), Row.of(3L)))
+                        .returns(
+                                new RowTypeInfo(
+                                        new TypeInformation[] {Types.LONG}, new String[] {"k"}));
+        tEnv.createTemporaryView(
+                "src",
+                tEnv.fromDataStream(
+                        source,
+                        Schema.newBuilder()
+                                .column("k", DataTypes.BIGINT())
+                                .columnByExpression("proc", "PROCTIME()")
+                                .build()));
+
+        try (CloseableIterator<Row> results =
+                tEnv.executeSql(
+                                "SELECT src.k, h.order_id, h.amount FROM src"
+                                        + " JOIN orders FOR SYSTEM_TIME AS OF src.proc AS h"
+                                        + " ON src.k = h.user_id")
+                        .collect()) {
+            assertThat(collectRowsUntilEndWithTimeout(results))
+                    .containsExactlyInAnyOrder(
+                            "+I[1, 1001, 10.00]", "+I[1, 1003, 30.00]", "+I[2, 1002, 20.00]");
+        }
+    }
+
     private static Stream<Arguments> lookupArgs() {
         return Stream.of(
                 Arguments.of(Caching.ENABLE_CACHE, false),
@@ -1139,7 +1191,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
         assertThatThrownBy(() -> tEnv.executeSql(dimJoinQuery))
                 .hasStackTraceContaining(
                         "The Fluss lookup function supports lookup tables where"
-                                + " the lookup keys include all primary keys or all bucket keys."
+                                + " the lookup keys include all primary keys, all bucket keys, or match a secondary index."
                                 + " Can't find expected key 'name' in lookup keys [id]");
     }
 

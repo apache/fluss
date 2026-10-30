@@ -310,6 +310,10 @@ pub struct UpdateMetadataRequest {
     pub partition_metadata: ::prost::alloc::vec::Vec<PbPartitionMetadata>,
     #[prost(int32, optional, tag = "5")]
     pub coordinator_epoch: ::core::option::Option<i32>,
+    /// Per-main-table partition tombstones propagated from the Coordinator (P3T6).
+    /// Each entry replaces the cached tombstone for the given table_id on the receiver.
+    #[prost(message, repeated, tag = "6")]
+    pub partition_tombstones: ::prost::alloc::vec::Vec<PbPartitionTombstone>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct UpdateMetadataResponse {}
@@ -390,6 +394,25 @@ pub struct PutKvRequest {
 pub struct PutKvResponse {
     #[prost(message, repeated, tag = "1")]
     pub buckets_resp: ::prost::alloc::vec::Vec<PbPutKvRespForBucket>,
+}
+/// Internal application-level write for Global Secondary Index Tables.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PutIndexRequest {
+    #[prost(int32, required, tag = "1")]
+    pub acks: i32,
+    #[prost(int64, required, tag = "2")]
+    pub table_id: i64,
+    #[prost(int32, required, tag = "3")]
+    pub timeout_ms: i32,
+    #[prost(int64, required, tag = "4")]
+    pub source_table_id: i64,
+    #[prost(message, repeated, tag = "5")]
+    pub buckets_req: ::prost::alloc::vec::Vec<PbPutIndexReqForBucket>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PutIndexResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub buckets_resp: ::prost::alloc::vec::Vec<PbPutIndexRespForBucket>,
 }
 /// lookup request and response
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1400,6 +1423,21 @@ pub struct PbBucketInfo {
     #[prost(int32, repeated, tag = "8")]
     pub isr: ::prost::alloc::vec::Vec<i32>,
 }
+/// Per-main-table partition tombstone snapshot propagated via UpdateMetadataRequest.
+/// Encodes the blacklist of dropped partitions for a partitioned source table:
+/// a partitionId is tombstoned iff partitionId <= floor || explicit_set contains it.
+/// The version is monotonic per table_id; receivers may use it to avoid stale overwrites.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PbPartitionTombstone {
+    #[prost(int64, required, tag = "1")]
+    pub table_id: i64,
+    #[prost(int64, required, tag = "2")]
+    pub floor: i64,
+    #[prost(int64, repeated, tag = "3")]
+    pub explicit_set: ::prost::alloc::vec::Vec<i64>,
+    #[prost(int64, required, tag = "4")]
+    pub version: i64,
+}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PbProduceLogReqForBucket {
     #[prost(int64, optional, tag = "1")]
@@ -1536,6 +1574,32 @@ pub struct PbPutKvRespForBucket {
     /// The original partition name for historical PK writes. It is unset for normal writes.
     #[prost(string, optional, tag = "7")]
     pub original_partition_name: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PbPutIndexReqForBucket {
+    #[prost(int32, required, tag = "1")]
+    pub bucket_id: i32,
+    #[prost(int64, optional, tag = "2")]
+    pub source_partition_id: ::core::option::Option<i64>,
+    #[prost(int32, required, tag = "3")]
+    pub source_bucket_id: i32,
+    #[prost(int64, required, tag = "4")]
+    pub source_end_offset: i64,
+    #[prost(bytes = "vec", required, tag = "5")]
+    pub progress_key: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", required, tag = "6")]
+    pub records: ::prost::alloc::vec::Vec<u8>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PbPutIndexRespForBucket {
+    #[prost(int32, required, tag = "1")]
+    pub bucket_id: i32,
+    #[prost(int32, optional, tag = "2")]
+    pub error_code: ::core::option::Option<i32>,
+    #[prost(string, optional, tag = "3")]
+    pub error_message: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(int64, optional, tag = "4")]
+    pub log_end_offset: ::core::option::Option<i64>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PbLookupReqForBucket {
