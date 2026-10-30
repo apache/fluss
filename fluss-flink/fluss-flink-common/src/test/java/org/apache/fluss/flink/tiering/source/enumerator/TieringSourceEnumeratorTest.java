@@ -861,7 +861,12 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             enumerator.start();
             registerSingleReaderAndHandleSplitRequests(context, enumerator, 0, 0);
 
-            assertThat(validatedTable.get()).isNotNull();
+            retry(
+                    Duration.ofSeconds(30),
+                    () -> {
+                        enumerator.handleSplitRequest(0, "localhost-0");
+                        assertThat(validatedTable.get()).isNotNull();
+                    });
             assertThat(validatedTable.get().getTablePath()).isEqualTo(tablePath);
             assertThat(context.getSplitsAssignmentSequence()).isEmpty();
         }

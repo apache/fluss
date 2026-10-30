@@ -1094,6 +1094,9 @@ pub struct LakeTieringHeartbeatRequest {
     /// distinguish between normally finished tables and force finished tables.
     #[prost(int64, repeated, packed = "false", tag = "5")]
     pub force_finished_tables: ::prost::alloc::vec::Vec<i64>,
+    /// The tiering group of the service. If absent, the default group is used.
+    #[prost(string, optional, tag = "6")]
+    pub tiering_group: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct LakeTieringHeartbeatResponse {

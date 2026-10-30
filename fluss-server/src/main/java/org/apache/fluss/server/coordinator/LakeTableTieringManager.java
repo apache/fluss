@@ -18,6 +18,7 @@
 package org.apache.fluss.server.coordinator;
 
 import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.exception.FencedTieringEpochException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.TableNotExistException;
@@ -44,13 +45,13 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
 
-import java.util.ArrayDeque;
 import java.util.Collections;
 import java.util.EnumSet;
 import java.util.HashMap;
+import java.util.Iterator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -116,7 +117,8 @@ public class LakeTableTieringManager implements AutoCloseable {
     private final Timer lakeTieringScheduleTimer;
     private final ScheduledExecutorService lakeTieringServiceTimeoutChecker;
     private final Clock clock;
-    private final Queue<Long> pendingTieringTables;
+    private final Map<String, LinkedHashSet<Long>> pendingTieringTablesByGroup;
+    private int pendingTieringTableCount;
     private final LakeTieringExpiredOperationReaper expirationReaper;
 
     // the tiering state of the table to be tiered,
@@ -125,6 +127,9 @@ public class LakeTableTieringManager implements AutoCloseable {
 
     // table_id -> table path
     private final Map<Long, TablePath> tablePaths;
+
+    // table_id -> configured tiering group
+    private final Map<Long, String> tableTieringGroups;
 
     // table_id -> freshness (tiering interval)
     private final Map<Long, Long> tableLakeFreshness;
@@ -175,10 +180,11 @@ public class LakeTableTieringManager implements AutoCloseable {
         this.lakeTieringScheduleTimer = lakeTieringScheduleTimer;
         this.lakeTieringServiceTimeoutChecker = lakeTieringServiceTimeoutChecker;
         this.clock = clock;
-        this.pendingTieringTables = new ArrayDeque<>();
+        this.pendingTieringTablesByGroup = new HashMap<>();
         this.tieringStates = new HashMap<>();
         this.liveTieringTableIds = new HashMap<>();
         this.tablePaths = new HashMap<>();
+        this.tableTieringGroups = new HashMap<>();
         this.tableLakeFreshness = new HashMap<>();
         this.expirationReaper = new LakeTieringExpiredOperationReaper();
         expirationReaper.start();
@@ -197,7 +203,7 @@ public class LakeTableTieringManager implements AutoCloseable {
     private void registerMetrics() {
         tieringMetricGroup.gauge(
                 MetricNames.LAKE_TIERING_PENDING_TABLES_COUNT,
-                () -> inReadLock(lock, pendingTieringTables::size));
+                () -> inReadLock(lock, () -> pendingTieringTableCount));
         tieringMetricGroup.gauge(
                 MetricNames.LAKE_TIERING_RUNNING_TABLES_COUNT,
                 () -> inReadLock(lock, liveTieringTableIds::size));
@@ -234,6 +240,7 @@ public class LakeTableTieringManager implements AutoCloseable {
     private void registerLakeTable(TableInfo tableInfo, long lastTieredTime) {
         long tableId = tableInfo.getTableId();
         tablePaths.put(tableId, tableInfo.getTablePath());
+        tableTieringGroups.put(tableId, tableInfo.getTableConfig().getDataLakeTieringGroup());
         tableLakeFreshness.put(
                 tableId, tableInfo.getTableConfig().getDataLakeFreshness().toMillis());
         lastTieringResult.put(tableId, LastTieringResult.initial(lastTieredTime));
@@ -332,7 +339,11 @@ public class LakeTableTieringManager implements AutoCloseable {
         inWriteLock(
                 lock,
                 () -> {
+                    if (tieringStates.get(tableId) == TieringState.Pending) {
+                        removePendingTieringTable(tableId, tableTieringGroups.get(tableId));
+                    }
                     tablePaths.remove(tableId);
+                    tableTieringGroups.remove(tableId);
                     tableLakeFreshness.remove(tableId);
                     lastTieringResult.remove(tableId);
                     currentTieringStartTime.remove(tableId);
@@ -348,6 +359,31 @@ public class LakeTableTieringManager implements AutoCloseable {
                     if (delayedTiering != null) {
                         delayedTiering.cancel();
                     }
+                });
+    }
+
+    /** Updates the group used for subsequent assignments without interrupting a running round. */
+    public void updateTableTieringGroup(long tableId, String group) {
+        inWriteLock(
+                lock,
+                () -> {
+                    String previousGroup = tableTieringGroups.get(tableId);
+                    if (previousGroup == null || previousGroup.equals(group)) {
+                        return;
+                    }
+                    boolean isPending = tieringStates.get(tableId) == TieringState.Pending;
+                    if (isPending) {
+                        removePendingTieringTable(tableId, previousGroup);
+                    }
+                    tableTieringGroups.put(tableId, group);
+                    if (isPending) {
+                        addPendingTieringTable(tableId);
+                    }
+                    LOG.info(
+                            "Updated tiering group for table {} from {} to {}.",
+                            tableId,
+                            previousGroup,
+                            group);
                 });
     }
 
@@ -422,22 +458,46 @@ public class LakeTableTieringManager implements AutoCloseable {
 
     @Nullable
     public LakeTieringTableInfo requestTable() {
+        return requestTable(ConfigOptions.TABLE_DATALAKE_TIERING_GROUP.defaultValue());
+    }
+
+    /** Returns the next pending table in the requested group, or {@code null} if none exists. */
+    @Nullable
+    public LakeTieringTableInfo requestTable(String group) {
         return inWriteLock(
                 lock,
                 () -> {
-                    Long tableId = pendingTieringTables.poll();
-                    // now no any pending table, return directly
-                    if (tableId == null) {
+                    LinkedHashSet<Long> pendingTables = pendingTieringTablesByGroup.get(group);
+                    if (pendingTables == null) {
                         return null;
                     }
-                    TablePath tablePath = tablePaths.get(tableId);
-                    // the table has been dropped, request again
-                    if (tablePath == null) {
-                        return requestTable();
+                    Iterator<Long> iterator = pendingTables.iterator();
+                    while (iterator.hasNext()) {
+                        long tableId = iterator.next();
+                        iterator.remove();
+                        pendingTieringTableCount--;
+                        TablePath tablePath = tablePaths.get(tableId);
+                        if (tablePath == null) {
+                            continue;
+                        }
+                        if (tieringStates.get(tableId) != TieringState.Pending) {
+                            continue;
+                        }
+                        String tableGroup = tableTieringGroups.get(tableId);
+                        if (tableGroup == null) {
+                            tableGroup = ConfigOptions.TABLE_DATALAKE_TIERING_GROUP.defaultValue();
+                        }
+                        if (!group.equals(tableGroup)) {
+                            addPendingTieringTable(tableId);
+                            continue;
+                        }
+                        removeEmptyPendingTieringGroup(group, pendingTables);
+                        doHandleStateChange(tableId, TieringState.Tiering);
+                        long tieringEpoch = tableTierEpoch.get(tableId);
+                        return new LakeTieringTableInfo(tableId, tablePath, tieringEpoch);
                     }
-                    doHandleStateChange(tableId, TieringState.Tiering);
-                    long tieringEpoch = tableTierEpoch.get(tableId);
-                    return new LakeTieringTableInfo(tableId, tablePath, tieringEpoch);
+                    removeEmptyPendingTieringGroup(group, pendingTables);
+                    return null;
                 });
     }
 
@@ -612,7 +672,7 @@ public class LakeTableTieringManager implements AutoCloseable {
             case Pending:
                 // increase tiering epoch and initialize the heartbeat of the tiering table
                 tableTierEpoch.computeIfPresent(tableId, (t, v) -> v + 1);
-                pendingTieringTables.add(tableId);
+                addPendingTieringTable(tableId);
                 pendingEnterTime.put(tableId, clock.milliseconds());
                 break;
             case Tiering:
@@ -824,7 +884,39 @@ public class LakeTableTieringManager implements AutoCloseable {
 
     @VisibleForTesting
     int getPendingTablesCount() {
-        return inReadLock(lock, pendingTieringTables::size);
+        return inReadLock(lock, () -> pendingTieringTableCount);
+    }
+
+    @GuardedBy("lock")
+    private void addPendingTieringTable(long tableId) {
+        String group =
+                tableTieringGroups.getOrDefault(
+                        tableId, ConfigOptions.TABLE_DATALAKE_TIERING_GROUP.defaultValue());
+        LinkedHashSet<Long> pendingTables =
+                pendingTieringTablesByGroup.computeIfAbsent(
+                        group, ignored -> new LinkedHashSet<>());
+        if (pendingTables.add(tableId)) {
+            pendingTieringTableCount++;
+        }
+    }
+
+    @GuardedBy("lock")
+    private void removePendingTieringTable(long tableId, @Nullable String group) {
+        if (group == null) {
+            return;
+        }
+        LinkedHashSet<Long> pendingTables = pendingTieringTablesByGroup.get(group);
+        if (pendingTables != null && pendingTables.remove(tableId)) {
+            pendingTieringTableCount--;
+            removeEmptyPendingTieringGroup(group, pendingTables);
+        }
+    }
+
+    @GuardedBy("lock")
+    private void removeEmptyPendingTieringGroup(String group, LinkedHashSet<Long> pendingTables) {
+        if (pendingTables.isEmpty()) {
+            pendingTieringTablesByGroup.remove(group);
+        }
     }
 
     @VisibleForTesting

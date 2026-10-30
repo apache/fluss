@@ -19,7 +19,11 @@ package org.apache.fluss.config;
 
 import org.apache.fluss.exception.IllegalConfigurationException;
 
+import org.apache.commons.lang3.StringUtils;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
 import java.util.Arrays;
@@ -31,11 +35,47 @@ import static org.apache.fluss.config.FlussConfigUtils.TABLE_OPTIONS;
 import static org.apache.fluss.config.FlussConfigUtils.extractConfigOptions;
 import static org.apache.fluss.config.FlussConfigUtils.validateCoordinatorConfigs;
 import static org.apache.fluss.config.FlussConfigUtils.validateTabletConfigs;
+import static org.apache.fluss.config.FlussConfigUtils.validateTieringGroup;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link FlussConfigUtils}. */
 class FlussConfigUtilsTest {
+
+    @Test
+    void testTieringGroupNameBoundaries() {
+        validateTieringGroup("default");
+        validateTieringGroup("Large_1-small");
+        validateTieringGroup(StringUtils.repeat("a", 200));
+        assertThatThrownBy(() -> validateTieringGroup(StringUtils.repeat("a", 201)))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining("tiering group");
+    }
+
+    @ParameterizedTest
+    @NullSource
+    @ValueSource(
+            strings = {
+                "",
+                " ",
+                " large",
+                "large ",
+                "a b",
+                "a\nb",
+                "a\rb",
+                "a\tb",
+                "a\0b",
+                "a\u007fb",
+                "a\u00a0b",
+                "__reserved",
+                "中文"
+            })
+    void testInvalidTieringGroupNames(String group) {
+        assertThatThrownBy(() -> validateTieringGroup(group))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining("tiering group")
+                .hasMessageNotContaining("\n");
+    }
 
     @Test
     void testExtractOptions() {

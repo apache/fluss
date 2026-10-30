@@ -20,6 +20,7 @@ package org.apache.fluss.rpc.netty.client;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.exception.DisconnectException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidServerTypeException;
@@ -32,6 +33,7 @@ import org.apache.fluss.rpc.messages.ApiVersionsRequest;
 import org.apache.fluss.rpc.messages.ApiVersionsResponse;
 import org.apache.fluss.rpc.messages.AuthenticateRequest;
 import org.apache.fluss.rpc.messages.AuthenticateResponse;
+import org.apache.fluss.rpc.messages.LakeTieringHeartbeatRequest;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
@@ -77,6 +79,7 @@ final class ServerConnection {
     private static final short HISTORICAL_PRODUCE_LOG_MIN_VERSION = 1;
     private static final short HISTORICAL_PUT_KV_MIN_VERSION = 3;
     private static final short ALTER_BUCKET_COUNT_MIN_VERSION = 1;
+    private static final short TIERING_GROUP_MIN_VERSION = 1;
 
     private final ServerNode node;
 
@@ -421,6 +424,23 @@ final class ServerConnection {
                 throw new UnsupportedVersionException(
                         "Modifying the bucket count requires ALTER_TABLE version "
                                 + ALTER_BUCKET_COUNT_MIN_VERSION
+                                + " or newer, but server "
+                                + node
+                                + " negotiated version "
+                                + version
+                                + '.');
+            }
+        }
+
+        if (apiKey == ApiKeys.LAKE_TIERING_HEARTBEAT && version < TIERING_GROUP_MIN_VERSION) {
+            LakeTieringHeartbeatRequest heartbeatRequest = (LakeTieringHeartbeatRequest) rawRequest;
+            if (heartbeatRequest.hasTieringGroup()
+                    && !ConfigOptions.TABLE_DATALAKE_TIERING_GROUP
+                            .defaultValue()
+                            .equals(heartbeatRequest.getTieringGroup())) {
+                throw new UnsupportedVersionException(
+                        "Non-default tiering groups require LAKE_TIERING_HEARTBEAT version "
+                                + TIERING_GROUP_MIN_VERSION
                                 + " or newer, but server "
                                 + node
                                 + " negotiated version "

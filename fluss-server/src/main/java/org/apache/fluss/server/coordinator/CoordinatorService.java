@@ -1520,6 +1520,11 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     @Override
     public CompletableFuture<LakeTieringHeartbeatResponse> lakeTieringHeartbeat(
             LakeTieringHeartbeatRequest request) {
+        String group =
+                request.hasTieringGroup()
+                        ? request.getTieringGroup()
+                        : ConfigOptions.TABLE_DATALAKE_TIERING_GROUP.defaultValue();
+        FlussConfigUtils.validateTieringGroup(group);
         LakeTieringHeartbeatResponse heartbeatResponse = new LakeTieringHeartbeatResponse();
         int currentCoordinatorEpoch = coordinatorEpochSupplier.get();
         heartbeatResponse.setCoordinatorEpoch(currentCoordinatorEpoch);
@@ -1581,7 +1586,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         }
 
         if (request.hasRequestTable() && request.isRequestTable()) {
-            LakeTieringTableInfo lakeTieringTableInfo = lakeTableTieringManager.requestTable();
+            LakeTieringTableInfo lakeTieringTableInfo = lakeTableTieringManager.requestTable(group);
             if (lakeTieringTableInfo != null) {
                 heartbeatResponse
                         .setTieringTable()
