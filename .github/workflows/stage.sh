@@ -61,7 +61,8 @@ fluss-lake/fluss-lake-iceberg-common,\
 fluss-lake/fluss-lake-iceberg,\
 fluss-lake/fluss-lake-iceberg-1.12,\
 fluss-lake/fluss-lake-lance,\
-fluss-lake/fluss-lake-hudi
+fluss-lake/fluss-lake-hudi, \
+fluss-lake/fluss-lake-delta
 "
 
 function get_test_modules_for_stage() {

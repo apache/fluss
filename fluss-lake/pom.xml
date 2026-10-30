@@ -86,6 +86,7 @@
         <module>fluss-lake-iceberg</module>
         <module>fluss-lake-lance</module>
         <module>fluss-lake-hudi</module>
+        <module>fluss-lake-delta</module>
     </modules>
     <packaging>pom</packaging>
 
