@@ -567,10 +567,7 @@ public class LogFetcher implements Closeable {
 
     @VisibleForTesting
     Map<Integer, FetchLogRequest> prepareFetchLogRequests(List<TableBucket> fetchableBuckets) {
-        // Outer key: leaderId, inner key: tableId -> list of bucket requests
-        Map<Integer, Map<Long, List<PbFetchLogReqForBucket>>> fetchReqsByLeaderAndTable =
-                new HashMap<>();
-        int readyForFetchCount = 0;
+        Map<Integer, List<PbFetchLogReqForTable>> fetchReqsByLeader = new HashMap<>();
         for (TableBucket tb : fetchableBuckets) {
             Long offset = logScannerStatus.getBucketOffset(tb);
             if (offset == null) {
@@ -595,60 +592,24 @@ public class LogFetcher implements Closeable {
                         tb,
                         leader);
             } else {
-                PbFetchLogReqForBucket fetchLogReqForBucket =
-                        new PbFetchLogReqForBucket()
-                                .setBucketId(tb.getBucket())
-                                .setFetchOffset(offset)
-                                .setMaxFetchBytes(maxBucketFetchBytes);
-                if (tb.getPartitionId() != null) {
-                    fetchLogReqForBucket.setPartitionId(tb.getPartitionId());
+                long tableId = tb.getTableId();
+                TableReadContext trc = tableReadContexts.get(tableId);
+                if (trc == null) {
+                    LOG.warn(
+                            "Skip fetch log request for table id {} because its read context "
+                                    + "is not registered. The table may have already been "
+                                    + "unregistered.",
+                            tableId);
+                    continue;
                 }
-                metadataUpdater
-                        .getCluster()
-                        .getBucketCount(TableOrPartition.of(tb.getTableId(), tb.getPartitionId()))
-                        .ifPresent(fetchLogReqForBucket::setRoutingBucketCount);
-                fetchReqsByLeaderAndTable
-                        .computeIfAbsent(leader, k -> new HashMap<>())
-                        .computeIfAbsent(tb.getTableId(), k -> new ArrayList<>())
-                        .add(fetchLogReqForBucket);
-                readyForFetchCount++;
-            }
-        }
 
-        if (readyForFetchCount == 0) {
-            return Collections.emptyMap();
-        } else {
-            Map<Integer, FetchLogRequest> fetchLogRequests = new HashMap<>();
-            for (Map.Entry<Integer, Map<Long, List<PbFetchLogReqForBucket>>> leaderEntry :
-                    fetchReqsByLeaderAndTable.entrySet()) {
-                int leaderId = leaderEntry.getKey();
-                Map<Long, List<PbFetchLogReqForBucket>> tableReqs = leaderEntry.getValue();
-
-                FetchLogRequest fetchLogRequest =
-                        new FetchLogRequest()
-                                .setFollowerServerId(-1)
-                                .setMaxBytes(maxFetchBytes)
-                                .setMinBytes(minFetchBytes)
-                                .setMaxWaitMs(maxFetchWaitMs)
-                                .setReadPreference(readPreference.value());
-
-                List<PbFetchLogReqForTable> tablesReqs = new ArrayList<>();
-                for (Map.Entry<Long, List<PbFetchLogReqForBucket>> tableEntry :
-                        tableReqs.entrySet()) {
-                    long tableId = tableEntry.getKey();
-                    List<PbFetchLogReqForBucket> bucketReqs = tableEntry.getValue();
-                    TableReadContext trc = tableReadContexts.get(tableId);
-                    if (trc == null) {
-                        LOG.warn(
-                                "Skip fetch log request for table id {} because its read context "
-                                        + "is not registered. The table may have already been "
-                                        + "unregistered.",
-                                tableId);
-                        continue;
-                    }
-
-                    PbFetchLogReqForTable reqForTable =
-                            new PbFetchLogReqForTable().setTableId(tableId);
+                List<PbFetchLogReqForTable> tablesReqs =
+                        fetchReqsByLeader.computeIfAbsent(leader, k -> new ArrayList<>());
+                PbFetchLogReqForTable reqForTable =
+                        tablesReqs.isEmpty() ? null : tablesReqs.get(tablesReqs.size() - 1);
+                // Only group consecutive buckets of the same table to preserve the fetch rotation.
+                if (reqForTable == null || reqForTable.getTableId() != tableId) {
+                    reqForTable = new PbFetchLogReqForTable().setTableId(tableId);
                     if (trc.readContext.isProjectionPushDowned()) {
                         assert trc.projection != null;
                         reqForTable
@@ -661,17 +622,39 @@ public class LogFetcher implements Closeable {
                         reqForTable.setFilterPredicate(trc.cachedPbPredicate);
                         reqForTable.setFilterSchemaId(trc.filterSchemaId);
                     }
-                    reqForTable.addAllBucketsReqs(bucketReqs);
                     tablesReqs.add(reqForTable);
                 }
-                if (tablesReqs.isEmpty()) {
-                    continue;
+
+                PbFetchLogReqForBucket fetchLogReqForBucket =
+                        reqForTable
+                                .addBucketsReq()
+                                .setBucketId(tb.getBucket())
+                                .setFetchOffset(offset)
+                                .setMaxFetchBytes(maxBucketFetchBytes);
+                if (tb.getPartitionId() != null) {
+                    fetchLogReqForBucket.setPartitionId(tb.getPartitionId());
                 }
-                fetchLogRequest.addAllTablesReqs(tablesReqs);
-                fetchLogRequests.put(leaderId, fetchLogRequest);
+                metadataUpdater
+                        .getCluster()
+                        .getBucketCount(TableOrPartition.of(tb.getTableId(), tb.getPartitionId()))
+                        .ifPresent(fetchLogReqForBucket::setRoutingBucketCount);
             }
-            return fetchLogRequests;
         }
+
+        Map<Integer, FetchLogRequest> fetchLogRequests = new HashMap<>();
+        fetchReqsByLeader.forEach(
+                (leader, tablesReqs) -> {
+                    FetchLogRequest request =
+                            new FetchLogRequest()
+                                    .setFollowerServerId(-1)
+                                    .setMaxBytes(maxFetchBytes)
+                                    .setMinBytes(minFetchBytes)
+                                    .setMaxWaitMs(maxFetchWaitMs)
+                                    .setReadPreference(readPreference.value());
+                    request.addAllTablesReqs(tablesReqs);
+                    fetchLogRequests.put(leader, request);
+                });
+        return fetchLogRequests;
     }
 
     private List<TableBucket> fetchableBuckets() {
