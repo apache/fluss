@@ -82,7 +82,7 @@ public final class IndexSendBuffer {
     /** Pending retained bytes grouped by the source main-table bucket that produced them. */
     private final ConcurrentMap<TableBucket, Long> pendingBytesBySource = new ConcurrentHashMap<>();
 
-    /** Optional callback fired on each append to promptly wake the owning sender worker. */
+    /** Optional callback fired when a target bucket may have work ready for sending. */
     @Nullable private volatile Consumer<TableBucket> appendListener;
 
     /** Creates an sendBuffer with no back-pressure bound (primarily for tests). */
@@ -98,7 +98,7 @@ public final class IndexSendBuffer {
         this.maxTotalPendingBytes = maxTotalPendingBytes;
     }
 
-    /** Registers a listener invoked for every admitted batch to wake consumers. */
+    /** Registers a listener invoked when append or source cleanup may make a bucket ready. */
     public void setAppendListener(Consumer<TableBucket> appendListener) {
         this.appendListener = appendListener;
     }
@@ -155,7 +155,7 @@ public final class IndexSendBuffer {
         }
 
         for (IndexBatch batch : windowBatches) {
-            notifyAppend(batch);
+            notifyReadyBucket(batch.targetBucket());
         }
         return true;
     }
@@ -251,10 +251,10 @@ public final class IndexSendBuffer {
         }
     }
 
-    private void notifyAppend(IndexBatch batch) {
+    private void notifyReadyBucket(TableBucket bucket) {
         Consumer<TableBucket> listener = this.appendListener;
         if (listener != null) {
-            listener.accept(batch.targetBucket());
+            listener.accept(bucket);
         }
     }
 
@@ -481,6 +481,7 @@ public final class IndexSendBuffer {
      */
     public int dropForSource(TableBucket source) {
         Set<IndexBatch> droppedBatches = new HashSet<>();
+        Set<TableBucket> affectedBuckets = new HashSet<>();
         for (TableBucket bucket : new ArrayList<>(batches.keySet())) {
             batches.computeIfPresent(
                     bucket,
@@ -494,6 +495,7 @@ public final class IndexSendBuffer {
                                     it.remove();
                                     claimedBatches.remove(bucket, batch);
                                     droppedBatches.add(batch);
+                                    affectedBuckets.add(bucket);
                                 }
                             }
                             return deque.isEmpty() ? null : deque;
@@ -501,6 +503,11 @@ public final class IndexSendBuffer {
                     });
         }
         releaseDroppedBatches(droppedBatches);
+        // Removing a claimed head can expose another source's batch after its ready notification
+        // was consumed. Notify outside the queue locks even if the queue has since changed.
+        for (TableBucket bucket : affectedBuckets) {
+            notifyReadyBucket(bucket);
+        }
         return droppedBatches.size();
     }
 
