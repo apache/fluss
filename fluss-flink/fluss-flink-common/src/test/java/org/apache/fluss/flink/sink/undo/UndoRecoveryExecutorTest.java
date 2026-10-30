@@ -20,11 +20,13 @@ package org.apache.fluss.flink.sink.undo;
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.scanner.log.LogScannerImpl;
 import org.apache.fluss.client.table.scanner.log.ScanRecords;
+import org.apache.fluss.client.table.writer.UpsertResult;
 import org.apache.fluss.flink.utils.TestLogScanner;
 import org.apache.fluss.flink.utils.TestUpsertWriter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.LogRecord;
+import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.KeyEncoder;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
@@ -38,6 +40,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.function.BiPredicate;
 
 import static org.apache.fluss.testutils.DataTestUtils.row;
@@ -147,6 +150,39 @@ class UndoRecoveryExecutorTest {
         verify(scanner, times(2)).pollFiltered(any(Duration.class), any());
         verify(scanner).unsubscribe(0);
         verify(scanner).unsubscribe(1);
+    }
+
+    @Test
+    void testRecoveredOffsetWaitsForOutOfOrderAcknowledgements() throws Exception {
+        TableBucket bucket = new TableBucket(TABLE_ID, 0);
+        CompletableFuture<UpsertResult> first = new CompletableFuture<>();
+        CompletableFuture<UpsertResult> second = new CompletableFuture<>();
+        TestUpsertWriter writer =
+                new TestUpsertWriter() {
+                    @Override
+                    public CompletableFuture<UpsertResult> upsert(InternalRow record) {
+                        return record.getInt(0) == 1 ? first : second;
+                    }
+
+                    @Override
+                    public void flush() {
+                        second.complete(new UpsertResult(bucket, 20L));
+                        first.complete(new UpsertResult(bucket, 10L));
+                    }
+                };
+        mockScanner.setRecordsForBucket(
+                bucket,
+                Arrays.asList(
+                        new ScanRecord(0L, 0L, ChangeType.DELETE, row(1, "a", 100)),
+                        new ScanRecord(1L, 0L, ChangeType.DELETE, row(2, "b", 200))));
+        UndoRecoveryExecutor recovery =
+                new UndoRecoveryExecutor(mockScanner, writer, new UndoComputer(keyEncoder, writer));
+
+        Map<TableBucket, Long> recovered =
+                recovery.execute(
+                        Collections.singletonList(new BucketRecoveryContext(bucket, 0L, 2L)));
+
+        assertThat(recovered).containsOnlyKeys(bucket).containsEntry(bucket, 20L);
     }
 
     /**
@@ -362,7 +398,7 @@ class UndoRecoveryExecutorTest {
         BucketRecoveryContext ctx = new BucketRecoveryContext(bucket, 0L, 3L);
         mockScanner.setConsumedUpToOffset(bucket, 3L);
 
-        executor.execute(Collections.singletonList(ctx));
+        assertThat(executor.execute(Collections.singletonList(ctx))).containsEntry(bucket, 3L);
 
         assertThat(ctx.isComplete()).isTrue();
         assertThat(ctx.getTotalRecordsProcessed()).isEqualTo(0);
