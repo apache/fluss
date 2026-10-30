@@ -240,6 +240,14 @@ table.newAppend().createWriter().append(row);
 ### Scanner
 In order to read data from Fluss tables, first you need to create a Scanner instance. Then users can subscribe to the table buckets and 
 start polling for records.
+
+Fluss provides `LogScanner` to read log records from tables. Applications can subscribe to individual buckets and poll for records using either unbounded or bounded scanning.
+
+#### Unbounded Log Scanning
+Unbounded scanning continuously reads log records from subscribed buckets, including newly appended records. It does not complete automatically, so applications can keep polling for new data.
+
+Use `subscribeFromBeginning()` to start reading from the earliest available offset of each bucket:
+
 ```java
 LogScanner logScanner = table.newScan()
         .createLogScanner();
@@ -267,6 +275,67 @@ while (true) {
     scanned += scanRecords.count();
 }
 ```
+
+#### Bounded Log Scanning
+
+Bounded scanning allows applications to read a finite range of log records by specifying a stopping offset.
+
+Use `subscribeBounded()` to subscribe to a bucket within the offset range `[startingOffset, stoppingOffset)`, where the starting offset is inclusive and the stopping offset is exclusive. Each subscribed bucket can have its own offset range.
+
+The following example reads offsets from `100` (inclusive) to `200` (exclusive) for each bucket of a non-partitioned table:
+
+```java
+try (LogScanner logScanner = table.newScan().createLogScanner()) {
+    int numBuckets = table.getTableInfo().getNumBuckets();
+
+    for (int bucketId = 0; bucketId < numBuckets; bucketId++) {
+        logScanner.subscribeBounded(bucketId, 100L, 200L);
+    }
+
+    Set<TableBucket> finishedBuckets = new HashSet<>();
+
+    while (finishedBuckets.size() < numBuckets) {
+        ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
+
+        for (TableBucket bucket : scanRecords.buckets()) {
+            for (ScanRecord record : scanRecords.records(bucket)) {
+                InternalRow row = record.getRow();
+                // Process the row
+            }
+        }
+
+        finishedBuckets.addAll(scanRecords.finishedBuckets());
+    }
+}
+```
+
+A bounded subscription reports completion through `ScanRecords.finishedBuckets()` when its stopping offset is reached. Completion is reported only once per subscription.
+
+A poll result may contain both the final records and the completion notification for a bucket. Applications should process the returned records before handling completion. When scanning multiple buckets, all subscribed buckets must finish before the scan is considered complete.
+
+If the stopping offset is beyond the current end of the log, the scanner continues waiting for new records until the stopping offset is reached. Reaching the current log end does not complete a bounded subscription.
+
+For partitioned tables, use the overload that accepts a physical partition ID:
+
+```java
+logScanner.subscribeBounded(partitionId, bucketId, 100L, 200L);
+```
+
+You can also use `LogScanner.EARLIEST_OFFSET` to start from the earliest available offset:
+
+```java
+logScanner.subscribeBounded(0, LogScanner.EARLIEST_OFFSET, 200L);
+```
+
+:::note
+
+- An empty range completes without returning records. This includes explicit starting offsets at or beyond the stopping offset, a stopping offset of `0`, or a resolved `EARLIEST_OFFSET` at or beyond the stopping offset.
+- The stopping offset is enforced by the client. Records at or beyond this offset are not returned.
+- The stopping offset takes precedence over preserving `UPDATE_BEFORE`/`UPDATE_AFTER` pairs, so a bounded scan may end between the two records of an update.
+- Bounded scans with an explicit starting offset do not require the new server-side earliest-offset resolution metadata.
+- Bounded scans starting from `EARLIEST_OFFSET` require the server to report the resolved physical starting offset, unless the range can be completed locally. If the required metadata is unavailable, polling fails with `UnsupportedBoundedEarliestException`.
+
+:::
 
 #### Filter Pushdown
 
