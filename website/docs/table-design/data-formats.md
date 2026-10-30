@@ -115,6 +115,28 @@ CREATE TABLE kv_table (
   'table.changelog.image' = 'WAL'
 );
 ```
+### COMPACTED with Compression
+
+COMPACTED log batches are not compressed by default. Set `table.log.compacted.compression.type` to `LZ4_FRAME` or `ZSTD` to compress each log batch as a whole. For `ZSTD`, the level is set with `table.log.compacted.compression.zstd.level` (1 to 22, default 3).
+Compression is applied by the writer on the client side, and by the server for the changelog of primary key tables.
+
+```sql
+CREATE TABLE compressed_table (
+  id BIGINT,
+  data STRING,
+  PRIMARY KEY (id) NOT ENFORCED
+) WITH (
+  'table.log.format' = 'COMPACTED',
+  'table.log.compacted.compression.type' = 'ZSTD'
+);
+```
+
+`ZSTD` with the default level 3 gives a good balance of compression ratio and CPU cost. `LZ4_FRAME` compresses less but is cheaper to compress and decompress.
+
+:::warning
+All clients reading a compressed table (e.g., Flink jobs) must be running Fluss v1.1 or later. Older clients can't detect the compression and may return a corrupted record before failing, so upgrade all consumers before creating tables with compression. The compression options can only be set when the table is created.
+:::
+
 ### COMPACTED Trade-offs
 
 COMPACTED is not recommended when:
@@ -132,6 +154,7 @@ COMPACTED is not recommended when:
 | Column pruning         | ✅ Yes                             | ❌ No                              |
 | Predicate pushdown     | ✅ Yes                              | ❌ No                             |
 | Storage efficiency     | Good                                | Excellent                          |
+| Log compression        | Per column, `ZSTD` by default       | Per batch, off by default          |
 | CPU efficiency         | Better for selective reads          | Better for full-row reads          |
 | Log format             | ✅ Yes                              | ✅ Yes                            |
 | KV format              | ❌ No                               | ✅ Yes                            |
