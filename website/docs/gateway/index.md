@@ -33,8 +33,8 @@ To run the Gateway as a binary distribution or container, see
 | Partition DDL | Add and drop partitions |
 | Records | Batch append, upsert, partial update, and delete |
 
-The 1.0 preview does not support HTTP caller authentication, end-user identity
-propagation, primary-key or prefix lookup, log scans, or other record reads.
+End-user identity propagation, primary-key or prefix lookup, log scans, and other
+record reads are not supported yet.
 
 ## Before you start
 
@@ -54,18 +54,90 @@ for all settings and defaults.
 
 ### Security
 
-The 1.0 preview implements only `trust` mode: the REST listener does not
-authenticate callers or terminate TLS. `password`, `token`, and
-`trusted-header` are reserved values and do not protect requests.
+Choose one caller authentication mode with `gateway.security.authentication`:
 
-Deploy the Gateway behind an authenticated ingress that terminates TLS. The
-container listens on `0.0.0.0`; restrict access to both the REST and Prometheus
-ports with network controls.
+| Mode | Credential | Behavior |
+| --- | --- | --- |
+| `trust` (default) | Optional HTTP Basic username | No password verification; a missing or empty username uses the anonymous principal |
+| `password` | HTTP Basic | Verifies the configured plaintext or bcrypt password |
+| `token` | HTTP Bearer | Verifies a static token against its configured value or SHA-256 digest |
+| `trusted-header` | Proxy identity header | Accepts an identity only from an explicitly allowed TCP peer |
+
+Trust mode preserves anonymous access for the examples below. The name
+`anonymous` is reserved and cannot be supplied as a caller identity in any mode.
+Malformed credentials are rejected instead of becoming anonymous requests.
+
+For password authentication on loopback:
+
+```yaml
+gateway.rest.listen: 127.0.0.1:8080
+gateway.security.authentication: password
+gateway.security.users: "alice:bcrypt:<hash>"
+```
+
+Generate a bcrypt record with a compatible tool such as `htpasswd -nB alice`,
+and configure the hash after `alice:bcrypt:`. Plaintext entries such as
+`alice:example-password` are also supported. Separate entries with commas;
+commas in configured passwords are not supported. Keep credential files private.
+Passwords verified with bcrypt must not exceed 72 bytes. The maximum accepted
+cost is limited to 14, and at most four bcrypt verifications run at once.
+Capacity exhaustion returns 429 with `Retry-After`. Request cancellation stops
+waiting for a result; an already running bcrypt computation retains its capacity
+until it finishes.
+
+```bash
+# curl prompts for the password instead of storing it in the shell command.
+curl --user alice http://127.0.0.1:8080/v1/clusters
+```
+
+For token authentication, configure
+`gateway.security.tokens: "sha256:<64-hex-digest>:alice"` and send
+`Authorization: Bearer <token>`. Plaintext `<token>:alice` entries are supported;
+prefer SHA-256 digests of high-entropy tokens. Bearer values use letters, digits,
+`-._~+/`, and optional trailing `=` padding. Unknown or invalid credentials
+return 401 with a challenge for the selected Basic or Bearer scheme. No provider
+falls back to another mode. Static stores support up to 1,024 entries, principal
+names up to 256 UTF-8 bytes, and authentication header values up to 8 KiB.
+Invalid bcrypt records, invalid token syntax, and ambiguous mappings fail startup,
+including entries that were only superficially checked before authentication was
+implemented.
+
+For a proxy that authenticates users and overwrites their identity header:
+
+```yaml
+gateway.security.authentication: trusted-header
+gateway.security.trusted-header.name: x-forwarded-user
+gateway.security.trusted-header.proxy-addresses: ["127.0.0.1", "::1"]
+```
+
+The allowlist accepts explicit IPv4/IPv6 addresses (also comma-separated for
+environment overrides). It checks the actual TCP peer, never `X-Forwarded-For`
+or `Forwarded`. The proxy must overwrite client-supplied identity headers and
+its link to the Gateway must be trusted. Missing, ambiguous, or untrusted
+identity assertions return 403; client Basic credentials cannot override that
+policy. An IP allowlist does not authenticate the proxy cryptographically.
+
+Native TLS termination is tracked in
+[#4470](https://github.com/apache/fluss/issues/4470). Deploy network-facing
+Gateway access behind a TLS ingress or load balancer. Password/token modes on
+a non-loopback plaintext listener require
+`gateway.security.allow-insecure-transport: true` for the trusted internal hop;
+this is an explicit deployment choice, not validation of the proxy's TLS.
+Loopback HTTP remains available for local development. The container listens on
+`0.0.0.0`; restrict access to both REST and Prometheus ports with network controls.
+
+All `/v1` business endpoints, cluster discovery, and `/v1/openapi.json` use the
+selected mode. Health and readiness probes do not require credentials; the
+separate metrics listener retains its existing management-network policy. The
+served OpenAPI document describes the selected scheme; default trust declares
+anonymous access or optional Basic credentials.
 
 The Gateway uses one shared service connection per Fluss cluster. With
 SASL/PLAIN, Fluss authorizes every request as the configured service account;
-the HTTP caller identity is not forwarded. Grant the service account only the
-required permissions and keep its credentials out of images and source control.
+the HTTP caller principal is carried through Gateway request contexts but is
+not forwarded as a Fluss login identity. Grant the service account only the
+required permissions. User impersonation and user-specific connection pools
+remain separate work.
 
 ### Health checks
 
