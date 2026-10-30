@@ -236,6 +236,22 @@ public class MetricNames {
     public static final String ROCKSDB_COMPACTION_BYTES_WRITTEN_TOTAL =
             "rocksdbCompactionBytesWrittenTotal";
 
+    /** Cumulative shared block cache hits, labeled by block_type. */
+    public static final String ROCKSDB_SHARED_BLOCK_CACHE_HITS_TOTAL =
+            "rocksdbSharedBlockCacheHitsTotal";
+
+    /** Cumulative shared block cache misses, labeled by block_type. */
+    public static final String ROCKSDB_SHARED_BLOCK_CACHE_MISSES_TOTAL =
+            "rocksdbSharedBlockCacheMissesTotal";
+
+    /** Completed read execution attempts, labeled by operation. */
+    public static final String ROCKSDB_READ_EXECUTION_COUNT_TOTAL =
+            "rocksdbReadExecutionCountTotal";
+
+    /** Cumulative read execution wall time in microseconds, labeled by operation. */
+    public static final String ROCKSDB_READ_EXECUTION_TIME_US_TOTAL =
+            "rocksdbReadExecutionTimeUsTotal";
+
     // Server-level RocksDB metrics (aggregated from all tables, Sum aggregation)
     /** Total memory usage across all RocksDB instances in this server (Sum aggregation). */
     public static final String ROCKSDB_MEMORY_USAGE_TOTAL = "rocksdbMemoryUsageTotal";

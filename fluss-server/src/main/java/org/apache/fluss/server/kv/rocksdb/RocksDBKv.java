@@ -119,6 +119,9 @@ public class RocksDBKv implements AutoCloseable {
      */
     private final int flussL0SlowdownTrigger;
 
+    @Nullable private RocksDBMetrics metrics;
+    @Nullable private Runnable collectFinalCacheStatistics;
+
     private volatile boolean writeRejected;
 
     private final AtomicLong nextL0RefreshNanos = new AtomicLong(Long.MIN_VALUE);
@@ -168,6 +171,14 @@ public class RocksDBKv implements AutoCloseable {
         }
     }
 
+    /** Attaches server-scoped counters before this DB is published to callers. */
+    public void initializeMetrics(RocksDBMetrics metrics, boolean usesSharedBlockCache) {
+        this.metrics = metrics;
+        if (usesSharedBlockCache && statistics != null) {
+            collectFinalCacheStatistics = metrics.registerSharedCache(statistics);
+        }
+    }
+
     public ResourceGuard getResourceGuard() {
         return rocksDBResourceGuard;
     }
@@ -196,10 +207,13 @@ public class RocksDBKv implements AutoCloseable {
     }
 
     public @Nullable byte[] get(byte[] key) throws IOException {
+        long startNanos = System.nanoTime();
         try {
             return db.get(key);
         } catch (RocksDBException e) {
             throw new IOException("Fail to get key.", e);
+        } finally {
+            recordRead(RocksDBMetrics.ReadOperation.GET, startNanos);
         }
     }
 
@@ -208,25 +222,32 @@ public class RocksDBKv implements AutoCloseable {
      *
      * <p>{@link RocksDB#multiGetAsList(List)} returns {@code null} both for a missing key and for a
      * key whose read failed (for example, a block checksum mismatch). Each {@code null} is
-     * therefore re-read with {@link #get(byte[])}, which throws on read errors, so a missing key
-     * costs one extra point lookup.
+     * therefore re-read with {@link RocksDB#get(byte[])}, which throws on read errors, so a missing
+     * key costs one extra point lookup.
      *
      * @throws IOException if any key failed to be read from RocksDB
      */
     public List<byte[]> multiGet(List<byte[]> keys) throws IOException {
-        List<byte[]> values;
+        long startNanos = System.nanoTime();
         try {
-            values = db.multiGetAsList(keys);
+            List<byte[]> values = db.multiGetAsList(keys);
+            for (int i = 0; i < values.size(); i++) {
+                if (values.get(i) == null) {
+                    values.set(i, db.get(keys.get(i)));
+                }
+            }
+            return values;
         } catch (RocksDBException e) {
             throw new IOException("Fail to get keys.", e);
+        } finally {
+            recordRead(RocksDBMetrics.ReadOperation.MULTI_GET, startNanos);
         }
+    }
 
-        for (int i = 0; i < values.size(); i++) {
-            if (values.get(i) == null) {
-                values.set(i, get(keys.get(i)));
-            }
+    private void recordRead(RocksDBMetrics.ReadOperation operation, long startNanos) {
+        if (metrics != null) {
+            metrics.recordRead(operation, System.nanoTime() - startNanos);
         }
-        return values;
     }
 
     /**
@@ -249,7 +270,7 @@ public class RocksDBKv implements AutoCloseable {
             }
             iterator = db.newIterator(defaultColumnFamilyHandle, readOptions);
             return new PrefixLookup(
-                    prefixKey.clone(), iterator, readOptions, upperBoundSlice, lease);
+                    prefixKey.clone(), iterator, readOptions, upperBoundSlice, lease, metrics);
         } catch (Throwable t) {
             IOUtils.closeQuietly(iterator);
             IOUtils.closeQuietly(readOptions);
@@ -269,6 +290,7 @@ public class RocksDBKv implements AutoCloseable {
         // The upper bound must outlive the iterator and read options that reference it.
         @Nullable private final Slice upperBoundSlice;
         private final ResourceGuard.Lease lease;
+        @Nullable private final RocksDBMetrics metrics;
         private boolean closed;
 
         private PrefixLookup(
@@ -276,16 +298,31 @@ public class RocksDBKv implements AutoCloseable {
                 RocksIterator iterator,
                 ReadOptions readOptions,
                 @Nullable Slice upperBoundSlice,
-                ResourceGuard.Lease lease) {
+                ResourceGuard.Lease lease,
+                @Nullable RocksDBMetrics metrics) {
             this.prefixKey = prefixKey;
             this.iterator = new RocksIteratorWrapper(iterator);
             this.readOptions = readOptions;
             this.upperBoundSlice = upperBoundSlice;
             this.lease = lease;
+            this.metrics = metrics;
         }
 
         /** Seeks and collects values from the view fixed when this lookup was opened. */
         public List<byte[]> readAll() throws IOException {
+            long startNanos = System.nanoTime();
+            try {
+                return readValues();
+            } finally {
+                if (metrics != null) {
+                    metrics.recordRead(
+                            RocksDBMetrics.ReadOperation.PREFIX_SCAN,
+                            System.nanoTime() - startNanos);
+                }
+            }
+        }
+
+        private List<byte[]> readValues() throws IOException {
             if (closed) {
                 throw new IOException("Prefix lookup is closed.");
             }
@@ -421,6 +458,9 @@ public class RocksDBKv implements AutoCloseable {
 
                 columnFamilyOptions.forEach(IOUtils::closeQuietly);
 
+                if (collectFinalCacheStatistics != null) {
+                    collectFinalCacheStatistics.run();
+                }
                 IOUtils.closeQuietly(optionsContainer);
             }
             this.closed = true;

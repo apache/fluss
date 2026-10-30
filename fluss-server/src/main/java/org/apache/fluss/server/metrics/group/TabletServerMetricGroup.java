@@ -30,6 +30,7 @@ import org.apache.fluss.metrics.SimpleCounter;
 import org.apache.fluss.metrics.ThreadSafeSimpleCounter;
 import org.apache.fluss.metrics.groups.AbstractMetricGroup;
 import org.apache.fluss.metrics.registry.MetricRegistry;
+import org.apache.fluss.server.kv.rocksdb.RocksDBMetrics;
 import org.apache.fluss.server.kv.rocksdb.RocksDBStatistics;
 
 import java.util.Map;
@@ -77,6 +78,8 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
     private final Counter isrShrinks;
     private final Counter isrExpands;
     private final Counter failedIsrUpdates;
+
+    private final RocksDBMetrics rocksDBMetrics;
 
     /** Suppliers for shared block cache usage, set by KvManager when shared cache is enabled. */
     private volatile LongSupplier sharedBlockCacheUsageSupplier = () -> 0L;
@@ -155,6 +158,12 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
 
         // Register server-level RocksDB aggregated metrics
         registerServerRocksDBMetrics();
+        rocksDBMetrics = new RocksDBMetrics(this);
+    }
+
+    /** Returns the server-scoped RocksDB counters shared by all KV tablets. */
+    public RocksDBMetrics getRocksDBMetrics() {
+        return rocksDBMetrics;
     }
 
     /**
