@@ -50,8 +50,8 @@ import static org.apache.fluss.utils.PropertiesUtils.extractPrefix;
  */
 public class FlussLakeTiering {
 
-    private static final String FLUSS_CONF_PREFIX = "fluss.";
-    private static final String LAKE_TIERING_CONFIG_PREFIX = "lake.tiering.";
+    static final String FLUSS_CONF_PREFIX = "fluss.";
+    static final String LAKE_TIERING_CONFIG_PREFIX = "lake.tiering.";
 
     protected final StreamExecutionEnvironment execEnv;
     protected final String dataLake;
@@ -60,12 +60,38 @@ public class FlussLakeTiering {
     protected final Configuration lakeTieringConfig;
 
     public FlussLakeTiering(String[] args) {
+        this(
+                MultipleParameterToolAdapter.fromArgs(args).toMap(),
+                new org.apache.flink.configuration.Configuration());
+    }
+
+    /**
+     * Creates the tiering service logic from pre-parsed parameters and a Flink configuration.
+     *
+     * <p>The parameters use the same keys as the command line of {@link
+     * #FlussLakeTiering(String[])}: {@code fluss.*} for the Fluss client configuration, {@code
+     * datalake.format} to select the lake format, {@code datalake.<format>.*} for the lake
+     * configuration, and {@code lake.tiering.*} for the tiering service configuration. Config
+     * provider markers are resolved on the given parameters, so callers pass the raw merged
+     * parameters without resolving them.
+     *
+     * <p>The Flink configuration is applied to the execution environment that runs the tiering job,
+     * on top of the full-restart failover and the exponential-delay restart strategy configured by
+     * this class. Embedding hosts use it to tune the Flink runtime, e.g. the parallelism via {@code
+     * parallelism.default} or the job name via {@code pipeline.name}.
+     *
+     * @param paramsMap the raw tiering service parameters, merged from all configuration sources
+     * @param flinkConfig the configuration for the Flink runtime executing the tiering job
+     */
+    public FlussLakeTiering(
+            Map<String, String> paramsMap,
+            org.apache.flink.configuration.Configuration flinkConfig) {
         // parse params
-        final MultipleParameterToolAdapter params = MultipleParameterToolAdapter.fromArgs(args);
-        Map<String, String> paramsMap = resolveConfigProviders(params.toMap());
+        Map<String, String> resolvedParams = resolveConfigProviders(paramsMap);
 
         // extract fluss config
-        Map<String, String> flussConfigMap = extractAndRemovePrefix(paramsMap, FLUSS_CONF_PREFIX);
+        Map<String, String> flussConfigMap =
+                extractAndRemovePrefix(resolvedParams, FLUSS_CONF_PREFIX);
         // we need to get bootstrap.servers
         String bootstrapServers = flussConfigMap.get(ConfigOptions.BOOTSTRAP_SERVERS.key());
         if (bootstrapServers == null) {
@@ -76,7 +102,7 @@ public class FlussLakeTiering {
         }
         this.flussConfig = Configuration.fromMap(flussConfigMap);
 
-        dataLake = paramsMap.get(ConfigOptions.DATALAKE_FORMAT.key());
+        dataLake = resolvedParams.get(ConfigOptions.DATALAKE_FORMAT.key());
         if (dataLake == null) {
             throw new IllegalArgumentException(
                     ConfigOptions.DATALAKE_FORMAT.key() + " is not configured");
@@ -85,20 +111,18 @@ public class FlussLakeTiering {
         // extract lake config
         Map<String, String> lakeConfigMap =
                 extractAndRemovePrefix(
-                        paramsMap, String.format("%s%s.", DATA_LAKE_CONFIG_PREFIX, dataLake));
+                        resolvedParams, String.format("%s%s.", DATA_LAKE_CONFIG_PREFIX, dataLake));
         this.lakeConfig = Configuration.fromMap(lakeConfigMap);
 
         // extract tiering service config
         Map<String, String> lakeTieringConfigMap =
-                extractPrefix(paramsMap, LAKE_TIERING_CONFIG_PREFIX);
+                extractPrefix(resolvedParams, LAKE_TIERING_CONFIG_PREFIX);
         this.lakeTieringConfig = Configuration.fromMap(lakeTieringConfigMap);
 
         // now, we must use full restart strategy if any task is failed,
         // since committer is stateless, if tiering committer is failover, committer
         // will lost the collected committable, and will never collect all committable to do commit
         // todo: support region failover
-        org.apache.flink.configuration.Configuration flinkConfig =
-                new org.apache.flink.configuration.Configuration();
         flinkConfig.set(JobManagerOptions.EXECUTION_FAILOVER_STRATEGY, FULL_RESTART_STRATEGY_NAME);
         // Configure restart strategy: the tiering job is completely stateless (offsets are
         // persisted in Fluss Server's LakeSnapshot, not in Flink checkpoint state), so it is
@@ -116,7 +140,13 @@ public class FlussLakeTiering {
         return new HashMap<>(params.toMap());
     }
 
-    protected void run() throws Exception {
+    /**
+     * Loads and applies all available decorator plugins, builds the tiering job, and submits it to
+     * the execution environment without waiting for its completion.
+     *
+     * @return the {@link JobClient} of the submitted tiering job
+     */
+    protected JobClient run() throws Exception {
         // Load and apply all available decorator plugins
         loadAndApplyDecoratorPlugins();
 
@@ -129,6 +159,7 @@ public class FlussLakeTiering {
         System.out.printf(
                 "Starting data tiering service from Fluss to %s, jobId is %s.....%n",
                 dataLake, jobClient.getJobID());
+        return jobClient;
     }
 
     /**

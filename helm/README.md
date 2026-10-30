@@ -67,6 +67,18 @@ For example, for the `security` checks, include and update these methods in the 
 {{- end -}}
 ```
 
+## Tiering Service
+
+The chart can deploy the lake tiering service alongside the Fluss cluster. The service is stateless
+and runs the tiering job on an embedded Flink runtime in a single JVM process, so it is deployed as
+a Deployment (`templates/deploy-tiering.yaml`) instead of a StatefulSet. It is disabled by default
+and enabled with `tiering.enabled=true`. See the `tiering` values block for the configuration
+surface: the tiering and embedded Flink parameters are rendered into a `tiering.yaml` ConfigMap,
+and `fluss.bootstrap.servers` defaults to this release's coordinator client listener.
+
+The service uses its own image (`tiering.image`), built from `docker/fluss-tiering` in the Fluss
+repository, because it bundles a Flink distribution rather than the Fluss server.
+
 ## Contributing
 
 Follow the [development section](#development) for local development.

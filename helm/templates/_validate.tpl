@@ -44,9 +44,23 @@ Usage:
 {{- $messages = append $messages (include "fluss.secrets.validateError" .) -}}
 {{- $messages = append $messages (include "fluss.names.validateError" .) -}}
 {{- $messages = append $messages (include "fluss.listeners.validateError" .) -}}
+{{- $messages = append $messages (include "fluss.tiering.validateError" .) -}}
 
 {{- $messages = without $messages "" -}}
 {{- join "\n" $messages -}}
+{{- end -}}
+
+{{/*
+Validates the tiering service values.
+Usage:
+  include "fluss.tiering.validateError" .
+*/}}
+{{- define "fluss.tiering.validateError" -}}
+{{- if .Values.tiering.enabled -}}
+  {{- if not (hasKey .Values.tiering.configurationOverrides "datalake.format") -}}
+    {{- printf "tiering.configurationOverrides must set datalake.format when tiering.enabled is true" -}}
+  {{- end -}}
+{{- end -}}
 {{- end -}}
 
 {{/*

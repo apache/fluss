@@ -1,0 +1,113 @@
+#
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+{{- if .Values.tiering.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "fluss.tiering.name" . }}
+  labels:
+  {{- include "fluss.labels" . | nindent 4 }}
+  {{- with .Values.tiering.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  replicas: {{ .Values.tiering.replicas }}
+  selector:
+    matchLabels:
+      {{- include "fluss.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: tiering
+  template:
+    metadata:
+      labels:
+        {{- with .Values.tiering.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- include "fluss.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: tiering
+      {{- with .Values.tiering.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- if .Values.serviceAccount.create }}
+      serviceAccountName: {{ .Values.serviceAccount.name | default (include "fluss.fullname" .) }}
+      {{- end }}
+      {{- include "fluss.imagePullSecrets" . | nindent 6 }}
+      {{- with .Values.tiering.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tiering.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tiering.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tiering.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      # The tiering job is stateless (progress persists in Fluss lake snapshots), so this only
+      # needs to cover a clean shutdown of the embedded Flink runtime on SIGTERM.
+      terminationGracePeriodSeconds: {{ .Values.tiering.terminationGracePeriodSeconds }}
+      containers:
+        - name: {{ .Chart.Name }}-tiering
+          image: {{ include "fluss.tiering.image" . }}
+          imagePullPolicy: {{ .Values.tiering.image.pullPolicy }}
+          {{- if or (include "fluss.secrets.enabled" .) .Values.tiering.extraEnv }}
+          env:
+            {{- if (include "fluss.secrets.enabled" .) }}
+            {{- include "fluss.secrets.env" . | trim | nindent 12 }}
+            {{- end }}
+            {{- with .Values.tiering.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- end }}
+          {{- with .Values.tiering.envFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          # No liveness or readiness probes: the embedded Flink runtime exposes no HTTP endpoint
+          # by default, and the stateless service is restarted by the container supervisor on
+          # non-zero exit instead.
+          resources:
+            {{- toYaml .Values.resources.tieringService | nindent 12 }}
+          volumeMounts:
+            - name: tiering-conf
+              mountPath: /opt/fluss/conf
+            {{- if (include "fluss.secrets.enabled" .) }}
+            {{- include "fluss.secrets.volumeMounts" . | trim | nindent 12 }}
+            {{- end }}
+            {{- with .Values.tiering.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        - name: tiering-conf
+          configMap:
+            name: {{ include "fluss.tiering.configMapName" . }}
+        {{- if (include "fluss.secrets.enabled" .) }}
+        {{- include "fluss.secrets.volumes" . | trim | nindent 8 }}
+        {{- end }}
+        {{- with .Values.tiering.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+{{- end }}

@@ -204,9 +204,53 @@ coordinator:
   tolerations: []
   topologySpreadConstraints: []
 
+# Embedded-Flink lake tiering service. The tiering service is stateless and
+# runs the tiering job on an embedded Flink runtime inside a single JVM
+# process, so no separate Flink cluster is needed. Progress is persisted
+# through lake snapshots tracked by Fluss, not through Flink checkpoint
+# state, so the service needs no checkpoint storage either.
+tiering:
+  enabled: false
+  replicas: 1
+  # Seconds to wait after SIGTERM before the tiering pod is force-killed. The tiering job is
+  # stateless (progress persists in Fluss lake snapshots), so this only needs to cover a clean
+  # shutdown of the embedded Flink runtime.
+  terminationGracePeriodSeconds: 30
+  image:
+    registry: ""
+    repository: apache/fluss-tiering
+    # Defaults to the chart appVersion when empty.
+    tag: ""
+    pullPolicy: IfNotPresent
+  # Rendered into /opt/fluss/conf/tiering.yaml in the tiering pod. Keys with
+  # the fluss., datalake., or lake.tiering. prefix configure the tiering
+  # service (Fluss bootstrap servers, lake catalog, tiering behavior); every
+  # other key configures the embedded Flink runtime, e.g.
+  # parallelism.default or taskmanager.numberOfTaskSlots. datalake.format
+  # must be set when the service is enabled.
+  configurationOverrides:
+    datalake.format: paimon
+    datalake.paimon.metastore: filesystem
+    datalake.paimon.warehouse: /tmp/paimon
+  # fluss.bootstrap.servers defaults to this release's coordinator client
+  # listener. Override it here to tier for a Fluss cluster outside this
+  # release, e.g. fluss.bootstrap.servers: fluss.example.com:9124.
+  extraVolumes: []
+  extraVolumeMounts: []
+  extraEnv: []
+  envFrom: []
+  annotations: {}
+  podAnnotations: {}
+  podLabels: {}
+  affinity: {}
+  nodeSelector: {}
+  tolerations: []
+  topologySpreadConstraints: []
+
 # Kubernetes cluster domain for chart-owned in-cluster DNS (CLIENT advertised FQDN).
 clusterDomain: cluster.local
 
+# Fluss listener configurations
 listeners:
   internal:
     port: 9123
@@ -310,11 +354,18 @@ metrics:
   jmx:
     port: 9250
 
-resources: {}
-  # We usually recommend not to specify default resources and to leave this as a conscious
-  # choice for the user. This also increases chances charts run on environments with little
-  # resources, such as Minikube. If you do want to specify resources, uncomment the following
-  # lines, adjust them as necessary, and remove the curly braces after 'resources:'.
+resources:
+  # Default resources for the tiering service, which runs a full Flink runtime in a single JVM.
+  tieringService:
+    requests:
+      cpu: 1
+      memory: 1Gi
+    limits:
+      cpu: 2
+      memory: 2Gi
+  # The Fluss server components default to no resources; this is a conscious choice to keep the
+  # chart runnable in environments with few resources, such as Minikube. If you do want to
+  # specify resources for them, add them here:
   # coordinatorServer:
   #   limits:
   #     cpu: 100m

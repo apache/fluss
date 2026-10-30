@@ -101,6 +101,25 @@ name carries the chart name, so it does not follow "fluss.resourceName".
 {{- end -}}
 
 {{/*
+Name of the tiering service Deployment.
+*/}}
+{{- define "fluss.tiering.name" -}}
+{{- include "fluss.resourceName" (dict "suffix" "tiering-service" "context" .) -}}
+{{- end -}}
+
+{{/*
+Name of the ConfigMap holding the tiering service configuration. Follows the
+"fluss.configMapName" scheme: the bare name carries the chart name.
+*/}}
+{{- define "fluss.tiering.configMapName" -}}
+{{- if .Values.uniqueResourceNames -}}
+{{- printf "%s-tiering-conf-file" (include "fluss.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- else -}}
+{{- "fluss-tiering-conf-file" -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Name of the coordinator metrics headless Service. Already unique per release,
 so the naming scheme leaves it alone.
 */}}

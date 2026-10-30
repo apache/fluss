@@ -58,6 +58,34 @@ Image name
 {{- end -}}
 
 {{/*
+Image of the tiering service. Separate from the server image because the
+tiering service bundles a Flink distribution with an embedded runtime.
+*/}}
+{{- define "fluss.tiering.image" -}}
+{{- $registry := .Values.tiering.image.registry | default "" -}}
+{{- $repo := required "tiering.image.repository is required" .Values.tiering.image.repository -}}
+{{- $tag := .Values.tiering.image.tag | default .Chart.AppVersion | toString -}}
+
+{{- $image := $repo -}}
+
+{{- if $registry -}}
+  {{- $image = printf "%s/%s" $registry $image -}}
+{{- end -}}
+
+{{- $image = printf "%s:%s" $image $tag -}}
+
+{{- $image -}}
+{{- end -}}
+
+{{/*
+Default Fluss bootstrap servers for the tiering service: the client listener
+of this release's coordinator.
+*/}}
+{{- define "fluss.tiering.defaultBootstrapServers" -}}
+{{- printf "%s.%s.svc.cluster.local:%v" (include "fluss.coordinator.serviceName" .) .Release.Namespace .Values.listeners.client.port -}}
+{{- end -}}
+
+{{/*
 Render pull secrets
 */}}
 {{- define "fluss.imagePullSecrets" -}}

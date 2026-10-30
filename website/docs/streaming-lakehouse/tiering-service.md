@@ -96,6 +96,93 @@ The following `table.datalake.*` options are configured per table when creating 
 | `table.datalake.auto-compaction` | Boolean | false | Auto-trigger compaction in the data lake |
 | `table.datalake.auto-expire-snapshot` | Boolean | false | Auto-expire snapshots in the data lake |
 
+## Embedded Flink Runtime Deployment
+
+Instead of submitting the tiering job to a Flink cluster with `flink run`, the same tiering job can
+run on Flink's embedded runtime inside a single JVM process, so no separate Flink cluster needs to
+be provisioned. The entrypoint for this mode is `EmbeddedFlussLakeTiering`:
+
+```shell
+java -cp "${FLINK_HOME}/lib/*" \
+    org.apache.fluss.flink.tiering.EmbeddedFlussLakeTiering \
+    --config.file /path/to/tiering.yaml
+```
+
+The tiering job is unbounded and completely stateless: progress is persisted through lake snapshots
+tracked by Fluss, so no Flink checkpoint storage is needed. On a terminal job failure the process
+exits with a non-zero code, and a container runtime or process supervisor simply starts it again.
+
+### Configuration File and Arguments
+
+Configuration is read from a YAML config file, using the same key-value syntax as Fluss's
+`server.yaml`, and from `--key value` command line arguments, which take precedence over file
+entries. Values are written verbatim into `tiering.yaml` and parsed like `server.yaml`: a value
+containing `#` is truncated at the comment marker (inherited `server.yaml` parser behavior), so
+avoid `#` in configuration values. The tiering service parameters are the same as the Flink job
+arguments above: `fluss.*`,
+`datalake.format`, `datalake.<format>.*`, and `lake.tiering.*` (without the `--` prefix in the
+file). All remaining keys configure the embedded Flink runtime:
+
+```yaml
+# tiering service parameters
+fluss.bootstrap.servers: localhost:9123
+datalake.format: paimon
+datalake.paimon.metastore: filesystem
+datalake.paimon.warehouse: /tmp/paimon
+fluss.tiering.poll.table.interval: 30 s
+
+# embedded Flink runtime parameters
+parallelism.default: 4
+taskmanager.numberOfTaskSlots: 4
+pipeline.name: fluss-lake-tiering
+```
+
+The parallelism must stay within the number of slots the embedded runtime offers, so configure
+`taskmanager.numberOfTaskSlots` alongside `parallelism.default`; startup fails fast when it does
+not. If `parallelism.default` is not set, the embedded runtime runs the job at the machine's CPU
+core count and the slot check cannot catch it, so set both `parallelism.default` and
+`taskmanager.numberOfTaskSlots` explicitly.
+
+### Docker Image and Helm Chart
+
+The `docker/fluss-tiering` directory packages this mode into a self-contained image: the official
+Flink distribution carries the runtime, and the Fluss tiering jars plus the Paimon, Iceberg, and
+Lance lake plugins live in its `lib` directory. The image bundles the Hadoop
+`flink-shaded-hadoop-2-uber` jar, which suits the Paimon default but not Iceberg with the Glue or
+Hadoop catalog, where it causes `NoSuchMethodError: LogicalTypes.timestampNanos()`. For those
+setups, swap it for the `hadoop-client-api` and `hadoop-client-runtime` jars as described in the
+[AWS Glue catalog documentation](./datalake-catalogs/glue.md).
+
+Build it from the repository root; the Fluss artifacts must already be in the local Maven
+repository (the version under development is not published to Maven Central), so build the
+required modules first:
+
+```shell
+# Build the Fluss jars first: the tiering module plus the Flink 1.20 connector and the
+# lake format artifacts that prepare_build.sh resolves from the local Maven repository.
+./mvnw clean install -DskipTests \
+    -pl fluss-flink/fluss-flink-tiering,fluss-flink/fluss-flink-1.20,fluss-lake/fluss-lake-paimon,fluss-lake/fluss-lake-iceberg,fluss-lake/fluss-lake-lance \
+    -am
+docker/fluss-tiering/build.sh
+```
+
+Configuration is provided by mounting a file at `/opt/fluss/conf/tiering.yaml` (or setting
+`TIERING_CONFIG_FILE`), or by passing `key: value` pairs through the `FLUSS_TIERING_PROPERTIES`
+environment variable; values may reference environment variables as `${VAR}`.
+
+The Helm chart can deploy the tiering service alongside the Fluss cluster as a stateless Deployment
+that defaults to tiering the release's own cluster:
+
+```shell
+helm install fluss helm/ \
+    --set tiering.enabled=true \
+    --set tiering.image.repository=<registry>/fluss-tiering \
+    --set tiering.image.tag=<tag>
+```
+
+See the [module README](https://github.com/apache/fluss/blob/main/fluss-flink/fluss-flink-tiering/src/README.md)
+and the chart's `tiering` values block for the full configuration surface.
+
 ## Partition Mark-Done
 
 The Tiering Service supports marking idle partitions of Paimon tables done. Enable the job-level option `--lake.tiering.partition.mark-done.enabled true` and configure `partition.idle-time-to-done` on the Paimon table. Runtime checks and actions use the **actual Paimon table options**. Fluss `paimon.*` properties can pass these options to Paimon when creating a table; retained Fluss properties do not override the lake table at runtime.

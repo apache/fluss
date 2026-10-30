@@ -1,0 +1,177 @@
+#
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+suite: tiering
+templates:
+  - templates/deploy-tiering.yaml
+  - templates/configmap-tiering.yaml
+  - templates/NOTES.txt
+
+tests:
+  - it: should not render tiering resources by default
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: templates/deploy-tiering.yaml
+      - hasDocuments:
+          count: 0
+        template: templates/configmap-tiering.yaml
+
+  - it: should render a stateless Deployment with one replica by default
+    set:
+      tiering.enabled: true
+    asserts:
+      - equal:
+          path: kind
+          value: Deployment
+        template: templates/deploy-tiering.yaml
+      - equal:
+          path: spec.replicas
+          value: 1
+        template: templates/deploy-tiering.yaml
+      - equal:
+          path: metadata.name
+          value: tiering-service
+        template: templates/deploy-tiering.yaml
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/component"]
+          value: tiering
+        template: templates/deploy-tiering.yaml
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: apache/fluss-tiering:1.1.0
+        template: templates/deploy-tiering.yaml
+
+  - it: should fail when enabled without a lake format
+    set:
+      tiering.enabled: true
+      tiering.configurationOverrides:
+        datalake.format: null
+    asserts:
+      - failedTemplate:
+          errorMessage: "VALUES VALIDATION:\ntiering.configurationOverrides must set datalake.format when tiering.enabled is true"
+        template: templates/NOTES.txt
+
+  - it: should default fluss.bootstrap.servers to the coordinator client listener
+    set:
+      tiering.enabled: true
+    asserts:
+      - matchRegex:
+          path: data["tiering.yaml"]
+          pattern: 'fluss\.bootstrap\.servers: coordinator-server-hs\.NAMESPACE\.svc\.cluster\.local:9124'
+        template: templates/configmap-tiering.yaml
+      - matchRegex:
+          path: data["tiering.yaml"]
+          pattern: 'datalake\.format: paimon'
+        template: templates/configmap-tiering.yaml
+
+  - it: should keep an explicit fluss.bootstrap.servers
+    set:
+      tiering.enabled: true
+      tiering.configurationOverrides:
+        "fluss.bootstrap.servers": fluss.example.com:9124
+    asserts:
+      - matchRegex:
+          path: data["tiering.yaml"]
+          pattern: 'fluss\.bootstrap\.servers: fluss\.example\.com:9124'
+        template: templates/configmap-tiering.yaml
+      - notMatchRegex:
+          path: data["tiering.yaml"]
+          pattern: 'coordinator-server-hs\.NAMESPACE\.svc\.cluster\.local'
+        template: templates/configmap-tiering.yaml
+
+  - it: should render the tiering and embedded Flink configuration
+    set:
+      tiering.enabled: true
+      tiering.configurationOverrides:
+        datalake.paimon.warehouse: s3://bucket/warehouse
+        parallelism.default: 4
+    asserts:
+      - matchRegex:
+          path: data["tiering.yaml"]
+          pattern: 'datalake\.paimon\.warehouse: s3://bucket/warehouse'
+        template: templates/configmap-tiering.yaml
+      - matchRegex:
+          path: data["tiering.yaml"]
+          pattern: 'parallelism\.default: 4'
+        template: templates/configmap-tiering.yaml
+
+  - it: should render configuration values raw without quoting
+    set:
+      tiering.enabled: true
+      tiering.configurationOverrides:
+        datalake.paimon.warehouse: "/tmp/paimon # with comment"
+    asserts:
+      # Values are rendered verbatim like the server configmap and parsed by
+      # GlobalConfiguration.loadYAMLResource with the same rules as server.yaml:
+      # the parser truncates at '#' before the key-value split regardless of any
+      # quoting, so chart-side quoting cannot protect '#' in values. This line
+      # parses as datalake.paimon.warehouse: /tmp/paimon.
+      - matchRegex:
+          path: data["tiering.yaml"]
+          pattern: 'datalake\.paimon\.warehouse: /tmp/paimon # with comment'
+        template: templates/configmap-tiering.yaml
+
+  - it: should mount the tiering configuration into the pod
+    set:
+      tiering.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: tiering-conf
+            mountPath: /opt/fluss/conf
+        template: templates/deploy-tiering.yaml
+      - equal:
+          path: spec.template.spec.volumes[0].configMap.name
+          value: fluss-tiering-conf-file
+        template: templates/deploy-tiering.yaml
+
+  - it: should apply resources for the tiering service
+    set:
+      tiering.enabled: true
+      resources:
+        tieringService:
+          requests:
+            cpu: 500m
+            memory: 2Gi
+          limits:
+            cpu: 2
+            memory: 4Gi
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources
+          value:
+            requests:
+              cpu: 500m
+              memory: 2Gi
+            limits:
+              cpu: 2
+              memory: 4Gi
+        template: templates/deploy-tiering.yaml
+
+  - it: should describe the tiering service in the notes
+    set:
+      tiering.enabled: true
+    asserts:
+      - matchRegexRaw:
+          pattern: 'Deployment tiering-service'
+        template: templates/NOTES.txt
+      - matchRegexRaw:
+          pattern: 'ConfigMap fluss-tiering-conf-file'
+        template: templates/NOTES.txt

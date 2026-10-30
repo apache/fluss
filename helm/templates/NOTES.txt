@@ -22,3 +22,22 @@ APP VERSION: {{ .Chart.AppVersion }}
 
 {{ include "fluss.pdb.validateValues" . }}
 {{ include "fluss.validate" . }}
+
+{{- if .Values.tiering.enabled }}
+
+### Lake tiering service
+
+The embedded-Flink lake tiering service runs as Deployment {{ include "fluss.tiering.name" . }}
+with {{ .Values.tiering.replicas }} replica(s), tiering Fluss tables to
+{{ index .Values.tiering.configurationOverrides "datalake.format" }}. It reads its configuration
+from ConfigMap {{ include "fluss.tiering.configMapName" . }} (key tiering.yaml).
+
+{{- if not (hasKey .Values.tiering.configurationOverrides "fluss.bootstrap.servers") }}
+It tiers this release's cluster via the coordinator client listener
+({{ include "fluss.tiering.defaultBootstrapServers" . }}); set
+tiering.configurationOverrides."fluss.bootstrap.servers" to target a different cluster.
+{{- end }}
+
+Scale the tiering parallelism via tiering.configurationOverrides.parallelism.default and
+match it with tiering.configurationOverrides.taskmanager.numberOfTaskSlots.
+{{- end }}
