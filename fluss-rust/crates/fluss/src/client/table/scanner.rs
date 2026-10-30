@@ -712,6 +712,7 @@ impl LogScannerInner {
             if !fetch_result.is_empty() {
                 // We have data, send next round of fetches and return
                 // This enables pipelining while user processes the data
+                self.log_fetcher.refresh_metadata_in_background();
                 self.log_fetcher.send_fetches_without_metadata_refresh();
                 return Ok(ScanRecords::new(fetch_result));
             }
@@ -1061,6 +1062,7 @@ impl LogScannerInner {
 
             if !batches.is_empty() {
                 // Pipeline known leaders without awaiting metadata after advancing offsets.
+                self.log_fetcher.refresh_metadata_in_background();
                 self.log_fetcher.send_fetches_without_metadata_refresh();
                 return Ok(batches);
             }
@@ -1377,6 +1379,7 @@ struct LogFetcher {
     security_token_manager: Arc<SecurityTokenManager>,
     log_fetch_buffer: Arc<LogFetchBuffer>,
     nodes_with_pending_fetch_requests: Arc<Mutex<HashSet<i32>>>,
+    metadata_refresh_task: Mutex<Option<JoinHandle<()>>>,
     /// Per-table scanner metric handles shared with the owning
     /// `LogScannerInner` and `RemoteLogDownloader`.
     metrics: Arc<ScannerMetrics>,
@@ -1401,6 +1404,14 @@ struct FetchResponseContext {
     /// `Instant` captured immediately before the FetchLog RPC; used to compute
     /// `scanner.fetch_latency_ms` on a successful response.
     request_start_time: Instant,
+}
+
+impl Drop for LogFetcher {
+    fn drop(&mut self) {
+        if let Some(task) = self.metadata_refresh_task.get_mut().take() {
+            task.abort();
+        }
+    }
 }
 
 impl LogFetcher {
@@ -1493,6 +1504,7 @@ impl LogFetcher {
             security_token_manager,
             log_fetch_buffer,
             nodes_with_pending_fetch_requests: Arc::new(Mutex::new(HashSet::new())),
+            metadata_refresh_task: Mutex::new(None),
             metrics,
             filter: filter.map(|predicate| (predicate, table_info.get_schema_id())),
             max_poll_records: config.scanner_log_max_poll_records,
@@ -1644,6 +1656,41 @@ impl LogFetcher {
             }
         })?;
         Ok(())
+    }
+
+    fn refresh_metadata_in_background(&self) {
+        let mut task = self.metadata_refresh_task.lock();
+        if task.as_ref().is_some_and(|task| !task.is_finished()) {
+            return;
+        }
+        let missing: Vec<_> = self
+            .fetchable_buckets()
+            .into_iter()
+            .filter(|bucket| self.get_table_bucket_leader(bucket).is_none())
+            .collect();
+        if missing.is_empty() {
+            return;
+        }
+        let partition_ids = missing
+            .iter()
+            .filter_map(TableBucket::partition_id)
+            .collect();
+        let metadata = self.metadata.clone();
+        let table_path = self.table_path.clone();
+        // Data delivery must not wait for a missing leader, but busy partitions must
+        // not prevent other partitions from discovering their new leaders.
+        *task = Some(tokio::spawn(async move {
+            if let Err(error) = metadata
+                .update_tables_metadata(
+                    &HashSet::from([&table_path]),
+                    &HashSet::new(),
+                    partition_ids,
+                )
+                .await
+            {
+                warn!("Failed to refresh scanner metadata in background: {error}");
+            }
+        }));
     }
 
     /// Send fetch requests asynchronously without waiting for responses
@@ -2716,16 +2763,25 @@ mod tests {
     use crate::client::metadata::Metadata;
     use crate::client::table::read_context_resolver::ReadContextResolver;
     use crate::client::table::remote_log::{RemoteLogDownloadFuture, RemoteLogSegment};
+    use crate::cluster::{Cluster, ServerType};
     use crate::metadata::{DataTypes, PhysicalTablePath, Schema, TableInfo, TablePath};
+    use crate::metadata::{JsonSerde, TableDescriptor};
+    use crate::proto::{
+        ApiVersionsResponse, MetadataRequest, MetadataResponse, PbApiVersion, PbBucketMetadata,
+        PbPartitionMetadata, PbServerNode, PbTableMetadata, PbTablePath,
+    };
     use crate::proto::{PbFetchLogRespForBucket, PbFetchLogRespForTable};
     use crate::record::MemoryLogRecordsArrowBuilder;
     use crate::record::{RECORDS_OFFSET, SCHEMA_ID_OFFSET};
     use crate::row::{Datum, GenericRow};
+    use crate::rpc::ApiKey;
     use crate::rpc::FlussError;
     use crate::test_utils::{
         assert_scanner_entries_labeled, build_cluster_arc, build_table_info, test_scanner_metrics,
         uncompressed_arrow_batch_config,
     };
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
 
     use futures::FutureExt;
 
@@ -3128,6 +3184,263 @@ mod tests {
         Ok(())
     }
 
+    async fn read_scanner_rpc(stream: &mut tokio::net::TcpStream, api: ApiKey) -> Vec<u8> {
+        let len = stream.read_u32().await.unwrap() as usize;
+        assert!((8..=1024 * 1024).contains(&len));
+        let mut request = vec![0; len];
+        stream.read_exact(&mut request).await.unwrap();
+        assert_eq!(i16::from_be_bytes([request[0], request[1]]), i16::from(api));
+        request
+    }
+
+    async fn reply_scanner_rpc(
+        stream: &mut tokio::net::TcpStream,
+        request: &[u8],
+        response: impl Message,
+        error: bool,
+    ) {
+        let mut reply = vec![u8::from(error)];
+        reply.extend_from_slice(&request[4..8]);
+        response.encode(&mut reply).unwrap();
+        stream.write_u32(reply.len() as u32).await.unwrap();
+        stream.write_all(&reply).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn public_polls_refresh_missing_leaders_while_other_partitions_stay_busy() -> Result<()> {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            for batch_mode in [false, true] {
+                for (fail_first, drop_while_refreshing) in [(false, false), (true, false), (false, true)] {
+                    let listener = TcpListener::bind("127.0.0.1:0").await?;
+                    let path = TablePath::new("db", "tbl");
+                    let descriptor = TableDescriptor::builder()
+                        .schema(build_table_info(path.clone(), 1, 1).schema.clone())
+                        .partitioned_by(vec!["id"])
+                        .distributed_by(Some(1), vec![])
+                        .build()?;
+                    let table_info = TableInfo::of(path.clone(), 1, 1, descriptor.clone(), 0, 0);
+                    let response = MetadataResponse {
+                        tablet_servers: vec![PbServerNode {
+                            node_id: 1,
+                            host: "127.0.0.1".to_string(),
+                            port: i32::from(listener.local_addr()?.port()),
+                            ..Default::default()
+                        }],
+                        table_metadata: vec![PbTableMetadata {
+                            table_path: PbTablePath {
+                                database_name: "db".into(),
+                                table_name: "tbl".into(),
+                            },
+                            table_id: 1,
+                            schema_id: 1,
+                            table_json: serde_json::to_vec(&descriptor.serialize_json()?).unwrap(),
+                            ..Default::default()
+                        }],
+                        partition_metadata: [10, 20]
+                            .into_iter()
+                            .map(|id| PbPartitionMetadata {
+                                table_id: 1,
+                                partition_name: id.to_string(),
+                                partition_id: id,
+                                bucket_count: Some(1),
+                                bucket_metadata: vec![PbBucketMetadata {
+                                    bucket_id: 0,
+                                    leader_id: Some(1),
+                                    ..Default::default()
+                                }],
+                            })
+                            .collect(),
+                        ..Default::default()
+                    };
+                    let metadata = Arc::new(Metadata::new_for_test(Arc::new(
+                        Cluster::from_metadata_response(response.clone(), None)?,
+                    )));
+                    metadata.invalidate_physical_table_meta(&HashSet::from([
+                        PhysicalTablePath::of_partitioned(
+                            Arc::new(path.clone()),
+                            Some("20".into()),
+                        ),
+                    ]));
+                    let inner = Arc::new(LogScannerInner::new(
+                        &table_info,
+                        metadata.clone(),
+                        Arc::new(RpcClient::new()),
+                        &Config::default(),
+                        None,
+                        false,
+                        None,
+                        test_admin(&metadata),
+                    )?);
+                    let fetcher = &inner.log_fetcher;
+                    let busy = TableBucket::new_with_partition(1, Some(10), 0);
+                    let missing = TableBucket::new_with_partition(1, Some(20), 0);
+                    for bucket in [&busy, &missing] {
+                        inner
+                            .log_scanner_status
+                            .assign_scan_bucket(bucket.clone(), 0);
+                    }
+                    assert!(fetcher.get_table_bucket_leader(&missing).is_none());
+                    // Keep the busy leader's fetch in flight while metadata is delayed.
+                    fetcher.nodes_with_pending_fetch_requests.lock().insert(1);
+                    let data = build_records(&table_info, Arc::new(path))?;
+                    let recovered_data = data.clone();
+                    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+                    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+                    let server = tokio::spawn(async move {
+                        let (mut stream, _) = listener.accept().await.unwrap();
+                        let request = read_scanner_rpc(&mut stream, ApiKey::ApiVersion).await;
+                        let versions = ApiVersionsResponse {
+                                api_versions: [ApiKey::MetaData, ApiKey::FetchLog]
+                                    .into_iter()
+                                    .map(|api| PbApiVersion {
+                                        api_key: i32::from(i16::from(api)),
+                                        min_version: 0,
+                                        max_version: 0,
+                                    })
+                                    .collect(),
+                                server_type: Some(ServerType::TabletServer.to_type_id()),
+                            };
+                        reply_scanner_rpc(&mut stream, &request, versions.clone(), false).await;
+                        // Token initialization may open the scanner connection first.
+                        let (mut other, _) = listener.accept().await.unwrap();
+                        let handshake = read_scanner_rpc(&mut other, ApiKey::ApiVersion).await;
+                        reply_scanner_rpc(&mut other, &handshake, versions, false).await;
+                        let (mut stream, mut scanner_stream, request) = tokio::select! {
+                            request = read_scanner_rpc(&mut stream, ApiKey::MetaData) => (stream, other, request),
+                            request = read_scanner_rpc(&mut other, ApiKey::MetaData) => (other, stream, request),
+                        };
+                        let decoded = MetadataRequest::decode(&request[8..]).unwrap();
+                        assert_eq!(decoded.partitions_id, vec![20]);
+                        started_tx.send(()).unwrap();
+                        if release_rx.await.is_err() {
+                            return;
+                        }
+                        if fail_first {
+                            reply_scanner_rpc(
+                                &mut stream,
+                                &request,
+                                ErrorResponse {
+                                    error_code: FlussError::AuthorizationException.code(),
+                                    error_message: Some("temporary metadata failure".into()),
+                                },
+                                true,
+                            )
+                            .await;
+                            let retry = read_scanner_rpc(&mut stream, ApiKey::MetaData).await;
+                            reply_scanner_rpc(&mut stream, &retry, response, false).await;
+                        } else {
+                            reply_scanner_rpc(&mut stream, &request, response, false).await;
+                        }
+                        let stream = &mut scanner_stream;
+                        let request = read_scanner_rpc(stream, ApiKey::FetchLog).await;
+                        let decoded = FetchLogRequest::decode(&request[8..]).unwrap();
+                        assert!(
+                            decoded
+                                .tables_req
+                                .iter()
+                                .flat_map(|t| &t.buckets_req)
+                                .any(|b| b.partition_id == Some(20) && b.fetch_offset == 0)
+                        );
+                        reply_scanner_rpc(
+                            stream,
+                            &request,
+                            FetchLogResponse {
+                                tables_resp: vec![PbFetchLogRespForTable {
+                                    table_id: 1,
+                                    buckets_resp: vec![PbFetchLogRespForBucket {
+                                        partition_id: Some(20),
+                                        bucket_id: 0,
+                                        high_watermark: Some(1),
+                                        records: Some(recovered_data),
+                                        ..Default::default()
+                                    }],
+                                }],
+                            },
+                            false,
+                        )
+                        .await;
+                    });
+                    let poll_busy = |offset: i64| {
+                        let mut bytes = data.clone();
+                        bytes[..8].copy_from_slice(&offset.to_le_bytes());
+                        fetcher.log_fetch_buffer.add(memory_fetch(
+                            fetcher,
+                            busy.clone(),
+                            bytes,
+                            offset,
+                        ));
+                        async {
+                            if batch_mode {
+                                let batches = RecordBatchLogScanner {
+                                    inner: inner.clone(),
+                                }
+                                .poll(Duration::ZERO)
+                                .now_or_never()
+                                .expect("data poll must not await metadata")?;
+                                assert!(batches.iter().any(|b| b.bucket() == &busy));
+                            } else {
+                                let records = LogScanner {
+                                    inner: inner.clone(),
+                                }
+                                .poll(Duration::ZERO)
+                                .now_or_never()
+                                .expect("data poll must not await metadata")?;
+                                assert!(!records.records(&busy).is_empty());
+                            }
+                            Ok::<_, Error>(())
+                        }
+                    };
+                    poll_busy(0).await?;
+                    assert!(fetcher.metadata_refresh_task.lock().is_some(), "missing leader must trigger background refresh");
+                    started_rx.await.unwrap();
+                    let task_id = fetcher.metadata_refresh_task.lock().as_ref().unwrap().id();
+                    for offset in 1..5 {
+                        poll_busy(offset).await?;
+                        assert_eq!(
+                            fetcher.metadata_refresh_task.lock().as_ref().unwrap().id(),
+                            task_id
+                        );
+                        tokio::task::yield_now().await;
+                    }
+                    if drop_while_refreshing {
+                        let refresh = fetcher.metadata_refresh_task.lock().as_ref().unwrap().abort_handle();
+                        drop(inner);
+                        // The server still withholds its response: completion must come from cancellation.
+                        while !refresh.is_finished() {
+                            tokio::task::yield_now().await;
+                        }
+                        drop(release_tx);
+                        server.await.unwrap();
+                        continue;
+                    }
+                    release_tx.send(()).unwrap();
+                    let mut offset = 5;
+                    // Every poll has busy-partition data; recovery cannot rely on an empty poll.
+                    while fetcher.get_table_bucket_leader(&missing).is_none() {
+                        poll_busy(offset).await?;
+                        offset += 1;
+                        tokio::task::yield_now().await;
+                    }
+                    fetcher.nodes_with_pending_fetch_requests.lock().remove(&1);
+                    poll_busy(offset).await?;
+                    server.await.unwrap();
+                    fetcher
+                        .log_fetch_buffer
+                        .await_not_empty(Duration::from_secs(2))
+                        .await?;
+                    poll_busy(offset + 1).await?;
+                    assert_eq!(
+                        inner.log_scanner_status.get_bucket_offset(&missing),
+                        Some(1)
+                    );
+                }
+            }
+            Ok::<_, Error>(())
+        })
+        .await
+        .expect("background metadata recovery timed out")
+    }
+
     #[tokio::test]
     async fn public_polls_pipeline_known_leaders_without_waiting_for_missing_metadata() -> Result<()>
     {
@@ -3150,6 +3463,10 @@ mod tests {
                     .now_or_never()
                     .expect("poll must be ready")?;
                 assert_eq!(offsets, vec![0]);
+                assert_eq!(
+                    fetcher.metadata_refresh_task.lock().is_some(),
+                    missing_leader
+                );
                 assert_eq!(status.get_bucket_offset(&bucket), Some(1));
                 assert!(
                     fetcher
