@@ -146,6 +146,8 @@ import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
@@ -196,6 +198,8 @@ public final class Replica {
     private final int localTabletServerId;
     private final DelayedOperationManager<DelayedWrite<?>> delayedWriteManager;
     private final DelayedOperationManager<DelayedFetchLog> delayedFetchLogManager;
+    private final Executor ioExecutor;
+    private final AtomicBoolean delayedFetchCompletionScheduled = new AtomicBoolean();
     /** The manger to manger the isr expand and shrink. */
     private final AdjustIsrManager adjustIsrManager;
 
@@ -295,6 +299,7 @@ public final class Replica {
             Clock clock,
             RemoteLogManager remoteLogManager,
             ScannerManager scannerManager,
+            Executor ioExecutor,
             org.apache.fluss.server.index.IndexReplicatorPool indexReplicatorPool,
             org.apache.fluss.server.index.IndexSendBuffer indexSendBuffer,
             TabletServerMetricGroup serverMetricGroup)
@@ -309,6 +314,7 @@ public final class Replica {
         this.localTabletServerId = localTabletServerId;
         this.delayedWriteManager = delayedWriteManager;
         this.delayedFetchLogManager = delayedFetchLogManager;
+        this.ioExecutor = checkNotNull(ioExecutor, "ioExecutor");
         this.adjustIsrManager = adjustIsrManager;
         this.fatalErrorHandler = fatalErrorHandler;
         this.bucketMetricGroup = bucketMetricGroup;
@@ -454,6 +460,12 @@ public final class Replica {
 
     public long getLogHighWatermark() {
         return logTablet.getHighWatermark();
+    }
+
+    /** Returns the exclusive log offset visible to clients after synchronous index replication. */
+    public long getClientLogHighWatermark() {
+        long highWatermark = logTablet.getHighWatermark();
+        return hasSyncIndexes ? Math.min(highWatermark, syncIndexPushedOffset) : highWatermark;
     }
 
     public TableBucket getTableBucket() {
@@ -699,6 +711,17 @@ public final class Replica {
                 () -> {
                     LogTablet logTablet = localLogOrThrow(fetchOnlyFromLeader);
                     return logTablet.fetchOffsetSnapshot();
+                });
+    }
+
+    /** Returns fetch completion offsets, restricting only client reads by sync index progress. */
+    public LogOffsetSnapshot fetchOffsetSnapshot(FetchParams params) throws IOException {
+        return inReadLock(
+                leaderIsrUpdateLock,
+                () -> {
+                    LogTablet logTablet = localLogOrThrow(params.fetchOnlyLeader());
+                    return logTablet.fetchOffsetSnapshot(
+                            params.isFromFollower() ? Long.MAX_VALUE : getClientLogHighWatermark());
                 });
     }
 
@@ -974,10 +997,25 @@ public final class Replica {
             allIndexPushedOffset = allIndexOffset;
         }
         if (syncAdvanced) {
-            // Wake any PutKv acks parked on this bucket waiting for the sync index-pushed-offset to
-            // reach their write offset. Fired only on a real sync advance, on the IndexReplicator
-            // read-pool worker thread; checkAndComplete is thread-safe.
             delayedWriteManager.checkAndComplete(new DelayedTableBucketKey(tableBucket));
+            // The replicator can hold its lifecycle lock while publishing progress. Fetch
+            // completion acquires the replica lock, which demotion holds while closing the
+            // replicator, so it must run on another thread.
+            if (delayedFetchCompletionScheduled.compareAndSet(false, true)) {
+                try {
+                    ioExecutor.execute(
+                            () -> {
+                                // Allow another wakeup before checking, so progress arriving
+                                // during the check cannot be lost.
+                                delayedFetchCompletionScheduled.set(false);
+                                delayedFetchLogManager.checkAndComplete(
+                                        new DelayedTableBucketKey(tableBucket));
+                            });
+                } catch (RejectedExecutionException e) {
+                    delayedFetchCompletionScheduled.set(false);
+                    LOG.debug("Unable to schedule delayed fetch completion for {}", tableBucket, e);
+                }
+            }
         }
     }
 
@@ -2266,7 +2304,7 @@ public final class Replica {
     private long getLatestOffset(int followerServerId) {
         // the request is come from client.
         if (followerServerId < 0) {
-            return logTablet.getHighWatermark();
+            return getClientLogHighWatermark();
         } else {
             return logTablet.localLogEndOffset();
         }
@@ -2293,7 +2331,10 @@ public final class Replica {
             throws IOException {
         // Note we use the log end offset prior to the read. This ensures that any appends following
         // the fetch do not prevent a follower from coming into sync.
-        long initialHighWatermark = logTablet.getHighWatermark();
+        long initialHighWatermark =
+                fetchParams.isFromFollower()
+                        ? logTablet.getHighWatermark()
+                        : getClientLogHighWatermark();
         long initialLogEndOffset = logTablet.localLogEndOffset();
         long initialMinRetainOffset =
                 fetchParams.isFromFollower() && isKvTable() ? logTablet.getMinRetainOffset() : -1L;
@@ -2315,7 +2356,8 @@ public final class Replica {
                             fetchParams.isolation(),
                             fetchParams.minOneMessage(),
                             fetchParams.projection(),
-                            filterContext);
+                            filterContext,
+                            fetchParams.isFromFollower() ? Long.MAX_VALUE : initialHighWatermark);
         } finally {
             // Close readContext eagerly — it is only used for statistics extraction during
             // batch filtering and is NOT referenced by the returned FetchDataInfo records.
