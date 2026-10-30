@@ -57,7 +57,13 @@ public enum GoalType {
      * window, subject to replica placement and higher-priority goals. This does not guarantee equal
      * counts per server or per rack.
      */
-    TABLE_LEADER_DISTRIBUTION(4);
+    TABLE_LEADER_DISTRIBUTION(4),
+
+    /**
+     * Goal to move leadership to the first replica in each persisted bucket assignment without
+     * changing replica assignments.
+     */
+    PREFERRED_LEADER_ELECTION(5);
 
     public final int value;
 
@@ -76,6 +82,8 @@ public enum GoalType {
             return TABLE_REPLICA_DISTRIBUTION;
         } else if (value == TABLE_LEADER_DISTRIBUTION.value) {
             return TABLE_LEADER_DISTRIBUTION;
+        } else if (value == PREFERRED_LEADER_ELECTION.value) {
+            return PREFERRED_LEADER_ELECTION;
         } else {
             throw new IllegalArgumentException(
                     String.format(

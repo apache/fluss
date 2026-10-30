@@ -31,6 +31,7 @@ public class GoalTypeTest {
         assertThat(GoalType.valueOf(2)).isEqualTo(GoalType.RACK_AWARE);
         assertThat(GoalType.valueOf(3)).isEqualTo(GoalType.TABLE_REPLICA_DISTRIBUTION);
         assertThat(GoalType.valueOf(4)).isEqualTo(GoalType.TABLE_LEADER_DISTRIBUTION);
+        assertThat(GoalType.valueOf(5)).isEqualTo(GoalType.PREFERRED_LEADER_ELECTION);
 
         for (GoalType goalType : GoalType.values()) {
             assertThat(GoalType.valueOf(goalType.value)).isEqualTo(goalType);

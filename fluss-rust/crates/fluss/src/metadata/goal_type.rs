@@ -23,6 +23,7 @@ pub enum GoalType {
     ReplicaDistribution,
     LeaderDistribution,
     RackAware,
+    PreferredLeaderElection,
 }
 
 impl GoalType {
@@ -31,6 +32,7 @@ impl GoalType {
             Self::ReplicaDistribution => 0,
             Self::LeaderDistribution => 1,
             Self::RackAware => 2,
+            Self::PreferredLeaderElection => 5,
         }
     }
 
@@ -39,6 +41,7 @@ impl GoalType {
             0 => Ok(Self::ReplicaDistribution),
             1 => Ok(Self::LeaderDistribution),
             2 => Ok(Self::RackAware),
+            5 => Ok(Self::PreferredLeaderElection),
             _ => Err(Error::IllegalArgument {
                 message: format!("Unsupported GoalType: {value}"),
             }),
@@ -56,9 +59,20 @@ mod tests {
             GoalType::ReplicaDistribution,
             GoalType::LeaderDistribution,
             GoalType::RackAware,
+            GoalType::PreferredLeaderElection,
         ] {
             assert_eq!(GoalType::try_from_i32(goal.to_i32()).unwrap(), goal);
         }
+    }
+
+    #[test]
+    fn test_preferred_leader_election_wire_value() {
+        // Java GoalType reserves 3 and 4 for the table-level distribution goals.
+        assert_eq!(GoalType::PreferredLeaderElection.to_i32(), 5);
+        assert_eq!(
+            GoalType::try_from_i32(5).unwrap(),
+            GoalType::PreferredLeaderElection
+        );
     }
 
     #[test]
