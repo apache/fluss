@@ -1154,6 +1154,118 @@ TableDescriptor.builder()
 </TabItem>
 </Tabs>
 
+### collect
+
+Collects array elements into a single array.
+
+- **Supported Data Types**: `ARRAY<T>`
+- **Behavior**: Concatenates array elements; with `distinct=true`, duplicates are removed
+- **Ordering**: Elements follow the order writes reach the server. With `distinct=true`, the first occurrence of each element is retained
+- **Null Handling**: Null elements are retained; null inputs are ignored
+- **Parameters**: `distinct` (`true` or `false`, default is `false`)
+
+:::note
+The collected array has no size limit. Every update rewrites the whole stored array. With the default `'table.changelog.image' = 'full'`, both the old and the new array are also written to the changelog on every update. As the array grows, so do memory usage, write costs, and changelog volume. Use `last_n` when only a bounded number of recent elements is needed.
+:::
+
+**Example:**
+<Tabs>
+<TabItem value="flink-sql" label="Flink SQL" default>
+
+```sql
+CREATE TABLE test_collect  (
+    id BIGINT,
+    tags ARRAY<INT>,
+    PRIMARY KEY (id) NOT ENFORCED
+) WITH (
+    'table.merge-engine' = 'aggregation',
+    'fields.tags.agg' = 'collect',
+    'fields.tags.collect.distinct' = 'true'
+);
+
+INSERT INTO test_collect VALUES
+    (1, ARRAY[1, 2, 2]),
+    (1, ARRAY[2, 3, NULL]);
+
+SELECT * FROM test_collect;
+-- Result:
+-- (1, [1, 2, 3, NULL])
+```
+
+</TabItem>
+<TabItem value="java-client" label="Java Client">
+
+```java
+Schema schema = Schema.newBuilder()
+    .column("id", DataTypes.BIGINT())
+    .column("tags", DataTypes.ARRAY(DataTypes.INT()), AggFunctions.COLLECT(true))
+    .primaryKey("id")
+    .build();
+
+TableDescriptor.builder()
+    .schema(schema)
+    .property("table.merge-engine", "aggregation")
+    .build();
+
+// Input: (1, [1, 2, 2]), (1, [2, 3, null])
+// Result: (1, [1, 2, 3, null])
+```
+
+</TabItem>
+</Tabs>
+
+### merge_map
+
+Merges map values by combining key-value pairs. For duplicate keys, the latest value wins.
+
+- **Supported Data Types**: `MAP<K, V>`
+- **Behavior**: Merges maps, overriding earlier values for duplicate keys
+- **Null Handling**: Null keys are not allowed; null values are allowed
+
+**Example:**
+<Tabs>
+<TabItem value="flink-sql" label="Flink SQL" default>
+
+```sql
+CREATE TABLE test_merge_map  (
+    id BIGINT,
+    attributes MAP<INT, STRING>,
+    PRIMARY KEY (id) NOT ENFORCED
+) WITH (
+    'table.merge-engine' = 'aggregation',
+    'fields.attributes.agg' = 'merge_map'
+);
+
+INSERT INTO test_merge_map VALUES
+    (1, MAP[1, 'a', 2, 'b']),
+    (1, MAP[2, 'c', 3, NULL]);
+
+SELECT * FROM test_merge_map;
+-- Result: (1, {1='a', 2='c', 3=NULL})
+```
+
+</TabItem>
+<TabItem value="java-client" label="Java Client">
+
+```java
+Schema schema = Schema.newBuilder()
+    .column("id", DataTypes.BIGINT())
+    .column("attributes", DataTypes.MAP(DataTypes.INT(), DataTypes.STRING()), AggFunctions.MERGE_MAP())
+    .primaryKey("id")
+    .build();
+
+TableDescriptor.builder()
+    .schema(schema)
+    .property("table.merge-engine", "aggregation")
+    .build();
+
+// Input: (1, {1='a', 2='b'}), (1, {2='c', 3=null})
+// Result: (1, {1='a', 2='c', 3=null})
+```
+
+</TabItem>
+</Tabs>
+
 ## Delete Behavior
 
 The aggregation merge engine provides limited support for delete operations. You can configure the behavior using the `'table.delete.behavior'` option:

@@ -168,4 +168,18 @@ class FlinkAggFunctionParserTest {
         assertThat(col2Func).isPresent();
         assertThat(col2Func.get()).isEqualTo(AggFunctions.LISTAGG(";"));
     }
+
+    @Test
+    void testRejectInvalidCollectDistinctParameter() {
+        Configuration options = new Configuration();
+        options.setString("fields.tags.agg", "collect");
+        options.setString("fields.tags.collect.distinct", "yes");
+        assertThatThrownBy(
+                        () ->
+                                FlinkAggFunctionParser.parseAggFunction(
+                                        "tags", DataTypes.ARRAY(DataTypes.INT()), options))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("distinct")
+                .hasMessageContaining("must be 'true' or 'false'");
+    }
 }

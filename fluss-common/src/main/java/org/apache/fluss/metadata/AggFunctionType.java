@@ -58,6 +58,10 @@ public enum AggFunctionType {
     BOOL_AND,
     BOOL_OR,
 
+    // Collection aggregation
+    COLLECT,
+    MERGE_MAP,
+
     // Roaring bitmap aggregation
     RBM32,
     RBM64,
@@ -95,6 +99,9 @@ public enum AggFunctionType {
                 DataTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE
             };
 
+    /** Parameter name for distinct flag used in COLLECT function. */
+    public static final String PARAM_DISTINCT = "distinct";
+
     /**
      * Returns the set of supported parameter names for this aggregation function.
      *
@@ -106,6 +113,8 @@ public enum AggFunctionType {
             case STRING_AGG:
                 // LISTAGG and STRING_AGG support optional "delimiter" parameter
                 return Collections.singleton(PARAM_DELIMITER);
+            case COLLECT:
+                return Collections.singleton(PARAM_DISTINCT);
             case LAST_N:
                 return Collections.singleton(PARAM_SIZE);
             default:
@@ -143,7 +152,10 @@ public enum AggFunctionType {
             case RBM64:
                 return new DataTypeRoot[] {DataTypeRoot.BYTES};
             case LAST_N:
+            case COLLECT:
                 return new DataTypeRoot[] {DataTypeRoot.ARRAY};
+            case MERGE_MAP:
+                return new DataTypeRoot[] {DataTypeRoot.MAP};
             case LISTAGG:
             case STRING_AGG:
                 return new DataTypeRoot[] {DataTypeRoot.STRING, DataTypeRoot.CHAR};
@@ -196,6 +208,18 @@ public enum AggFunctionType {
                         throw new IllegalArgumentException(
                                 String.format(
                                         "Parameter '%s' for aggregation function '%s' must be a non-empty string",
+                                        parameterName, this));
+                    }
+                }
+                break;
+            case COLLECT:
+                if (PARAM_DISTINCT.equals(parameterName)) {
+                    if (parameterValue == null
+                            || (!parameterValue.equalsIgnoreCase("true")
+                                    && !parameterValue.equalsIgnoreCase("false"))) {
+                        throw new IllegalArgumentException(
+                                String.format(
+                                        "Parameter '%s' for aggregation function '%s' must be 'true' or 'false'",
                                         parameterName, this));
                     }
                 }
