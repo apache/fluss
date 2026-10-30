@@ -20,8 +20,6 @@ package org.apache.fluss.record;
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.row.ProjectedRow;
-import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
-import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableIterator;
 
@@ -199,27 +197,22 @@ public interface LogRecordBatch {
         RowType getRowType(int schemaId);
 
         /**
-         * Gets the Arrow {@link VectorSchemaRoot} for the given schema id. The returned schema root
-         * is projected if the record batch is a projected {@link LogRecordBatch}.
+         * Gets the plan to read {@link LogFormat#ARROW} record batches of the given schema id. The
+         * plan decides which fields are loaded (projected if the record batch is a projected {@link
+         * LogRecordBatch}, or if the reader only selects some fields) and how loaded rows map to
+         * output rows. Client-side field selection does not change the serialized batch or its
+         * checksum.
          *
-         * <p>The schema root is used to read the Arrow records in the batch, if this is a {@link
-         * LogFormat#ARROW} record batch.
-         *
-         * <p><b>Lifecycle:</b> DO NOT close the returned {@link VectorSchemaRoot} because it is
-         * shared across multiple batches. Each new batch load replaces the old buffers inside the
-         * same root. To avoid temporary buffer duplication (old and new buffers coexisting during
-         * the load), callers should call {@link VectorSchemaRoot#clear()} after finishing each
-         * batch to release old buffers immediately before the next batch is loaded. If you need to
-         * retain the data beyond the current batch, use {@link VectorSchemaRoot#slice(int)} to
-         * create an independent copy and close it after use.
+         * <p><b>Lifecycle:</b> DO NOT close the returned plan because it is shared across multiple
+         * batches. Each new batch load replaces the old buffers inside the same plan. To avoid
+         * temporary buffer duplication (old and new buffers coexisting during the load), callers
+         * should call {@link ArrowReadPlan#clear()} after finishing each batch to release old
+         * buffers immediately before the next batch is loaded.
          *
          * @param schemaId The schema id of the record batch.
-         * @return The (maybe projected) schema root of the record batch.
+         * @return The read plan of the record batch.
          */
-        VectorSchemaRoot getVectorSchemaRoot(int schemaId);
-
-        /** Gets the buffer allocator. */
-        BufferAllocator getBufferAllocator();
+        ArrowReadPlan getArrowReadPlan(int schemaId);
 
         /**
          * If the read context defines an output projection (for example, log records may add new
@@ -227,6 +220,9 @@ public interface LogRecordBatch {
          * a {@link ProjectedRow} that describes the projected output row for the given schemaId.
          * The returned object is used by readers to transform or materialize rows according to the
          * output projection. Returns {@code null} if no output projection is configured.
+         *
+         * <p>For {@link LogFormat#ARROW}, this is the output row of {@link #getArrowReadPlan(int)},
+         * on which only the selected fields may be read.
          *
          * @param schemaId the current row schema id
          * @return a {@link ProjectedRow} describing the output projection, or {@code null} if none
