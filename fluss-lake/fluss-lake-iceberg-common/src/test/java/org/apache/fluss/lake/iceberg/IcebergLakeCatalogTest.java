@@ -667,27 +667,35 @@ class IcebergLakeCatalogTest {
         flussIcebergCatalog.createTable(tablePath, tableDescriptor, context);
 
         for (String property : IcebergLakeCatalog.RESERVED_PROPERTIES) {
-            assertThatThrownBy(
-                            () ->
-                                    flussIcebergCatalog.alterTable(
-                                            tablePath,
-                                            List.of(
-                                                    TableChange.set(
-                                                            property,
-                                                            RowLevelOperationMode.COPY_ON_WRITE
-                                                                    .modeName())),
-                                            context))
-                    .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessage("Cannot set table property '%s'", property);
+            // A Fluss option reaches an Iceberg property through the "iceberg." prefix, so the
+            // prefixed key must be refused as well as the bare one.
+            String prefixedKey = "iceberg." + property;
+            String reservedSuffix =
+                    String.format(": it maps to the reserved Iceberg property '%s'", property);
+            for (String key : List.of(property, prefixedKey)) {
+                String expectedSuffix = key.equals(prefixedKey) ? reservedSuffix : "";
+                assertThatThrownBy(
+                                () ->
+                                        flussIcebergCatalog.alterTable(
+                                                tablePath,
+                                                List.of(
+                                                        TableChange.set(
+                                                                key,
+                                                                RowLevelOperationMode.COPY_ON_WRITE
+                                                                        .modeName())),
+                                                context))
+                        .isInstanceOf(IllegalArgumentException.class)
+                        .hasMessage("Cannot set table property '%s'%s", key, expectedSuffix);
 
-            assertThatThrownBy(
-                            () ->
-                                    flussIcebergCatalog.alterTable(
-                                            tablePath,
-                                            List.of(TableChange.reset(property)),
-                                            context))
-                    .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessage("Cannot reset table property '%s'", property);
+                assertThatThrownBy(
+                                () ->
+                                        flussIcebergCatalog.alterTable(
+                                                tablePath,
+                                                List.of(TableChange.reset(key)),
+                                                context))
+                        .isInstanceOf(IllegalArgumentException.class)
+                        .hasMessage("Cannot reset table property '%s'%s", key, expectedSuffix);
+            }
         }
     }
 
