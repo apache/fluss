@@ -60,6 +60,7 @@ import org.apache.fluss.server.coordinator.event.CommitKvSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitRemoteLogManifestEvent;
 import org.apache.fluss.server.coordinator.event.CoordinatorEventManager;
 import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrResponseReceivedEvent;
+import org.apache.fluss.server.coordinator.event.RebalanceTaskTimeoutEvent;
 import org.apache.fluss.server.coordinator.event.RetryOfflineLeaderEvent;
 import org.apache.fluss.server.coordinator.remote.RemoteDirDynamicLoader;
 import org.apache.fluss.server.coordinator.statemachine.BucketState;
@@ -83,6 +84,7 @@ import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
+import org.apache.fluss.server.zk.data.RebalanceTask;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
 import org.apache.fluss.server.zk.data.ZkData;
@@ -95,6 +97,8 @@ import org.apache.fluss.utils.types.Tuple2;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 import java.nio.file.Path;
 import java.time.Duration;
@@ -1403,7 +1407,8 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                                                 new ApiError(
                                                         Errors.DISK_WRITE_LOCKED,
                                                         "disk write locked"))),
-                                leader));
+                                leader,
+                                Collections.emptyMap()));
 
         fromCtx(
                 ctx -> {
@@ -1449,7 +1454,8 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                                                 new ApiError(
                                                         Errors.DISK_WRITE_LOCKED,
                                                         "disk write locked"))),
-                                leader));
+                                leader,
+                                Collections.emptyMap()));
 
         retryVerifyContext(
                 ctx -> {
@@ -1507,7 +1513,8 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                                                 new ApiError(
                                                         Errors.DISK_WRITE_LOCKED,
                                                         "disk write locked"))),
-                                leader));
+                                leader,
+                                Collections.emptyMap()));
 
         retryVerifyContext(
                 ctx -> {
@@ -1568,7 +1575,8 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                                                 new ApiError(
                                                         Errors.DISK_WRITE_LOCKED,
                                                         "disk write locked"))),
-                                leader));
+                                leader,
+                                Collections.emptyMap()));
 
         retryVerifyContext(
                 ctx -> {
@@ -2089,6 +2097,352 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
     }
 
     @Test
+    void testBucketReassignmentMovesLeaderWhenOldLeaderStaysInReplicas() throws Exception {
+        registerTabletServer3();
+        try {
+            ConcurrentLinkedDeque<ControlledNotifyTrigger> pendingTriggers =
+                    new ConcurrentLinkedDeque<>();
+            TableBucket tb0 =
+                    reassignWithLeaderChangeUntilFinalLeaderAck(
+                            "test_reassignment_with_leader_change", pendingTriggers);
+            ControlledNotifyTrigger finalLeaderAck = holdFinalLeaderAck(pendingTriggers);
+            assertRebalancing(tb0);
+
+            // An ISR change while the task waits for the ACK must not run phase B again, which
+            // would send new NotifyLeaderAndIsr requests.
+            LeaderAndIsr currentLeaderAndIsr = fromCtx(ctx -> ctx.getBucketLeaderAndIsr(tb0)).get();
+            CompletableFuture<AdjustIsrResponse> respCallback = new CompletableFuture<>();
+            eventProcessor
+                    .getCoordinatorEventManager()
+                    .put(
+                            new AdjustIsrReceivedEvent(
+                                    Collections.singletonMap(tb0, currentLeaderAndIsr),
+                                    respCallback));
+            respCallback.get();
+            assertThat(fromCtx(ctx -> ctx.getBucketLeaderAndIsr(tb0)).get().bucketEpoch())
+                    .isEqualTo(currentLeaderAndIsr.bucketEpoch() + 1);
+            assertThat(pendingTriggers).isEmpty();
+            assertRebalancing(tb0);
+
+            finalLeaderAck.complete(null);
+            retry(
+                    Duration.ofMinutes(1),
+                    () -> assertRebalanceStatus(tb0, RebalanceStatus.COMPLETED));
+            verifyIsr(tb0, 1, Arrays.asList(1, 0, 2));
+            assertThat(
+                            zookeeperClient
+                                    .getTableAssignment(tb0.getTableId())
+                                    .get()
+                                    .getBucketAssignment(0)
+                                    .getReplicas())
+                    .containsExactly(1, 0, 2);
+        } finally {
+            cleanupTabletServer3();
+        }
+    }
+
+    @Test
+    void testBucketReassignmentWaitsForTimeoutWhenPlannedLeaderAckFails() throws Exception {
+        registerTabletServer3();
+        try {
+            ConcurrentLinkedDeque<ControlledNotifyTrigger> pendingTriggers =
+                    new ConcurrentLinkedDeque<>();
+            TableBucket tb0 =
+                    reassignWithLeaderChangeUntilFinalLeaderAck(
+                            "test_reassignment_leader_ack_fails", pendingTriggers);
+            ControlledNotifyTrigger finalLeaderAck = holdFinalLeaderAck(pendingTriggers);
+
+            // A failed ACK must not record a false success.
+            finalLeaderAck.fail();
+            fromCtx(ctx -> null);
+            assertRebalancing(tb0);
+
+            // The task timeout releases the bucket, so it does not block the rebalance forever.
+            eventProcessor.getCoordinatorEventManager().put(new RebalanceTaskTimeoutEvent(tb0));
+            retry(Duration.ofMinutes(1), () -> assertRebalanceStatus(tb0, RebalanceStatus.TIMEOUT));
+            assertThat(eventProcessor.getRebalanceManager().getAwaitedLeaderAckBucketEpoch(tb0))
+                    .isNull();
+        } finally {
+            cleanupTabletServer3();
+        }
+    }
+
+    @Test
+    void testBucketReassignmentFailsWhenPlannedLeaderIsNotElected() throws Exception {
+        registerTabletServer3();
+        try {
+            TableBucket tb0 = createBucketWithReplicas("test_reassignment_planned_leader_offline");
+            eventProcessor
+                    .getRebalanceManager()
+                    .registerRebalance(
+                            "rebalance-planned-leader-offline",
+                            reassignmentWithLeaderChangePlan(tb0),
+                            RebalanceStatus.NOT_STARTED);
+            // The planned leader 1 goes offline, so phase B elects 0 instead.
+            fromCtx(
+                    ctx -> {
+                        ctx.addOfflineBucketInServer(tb0, 1);
+                        return null;
+                    });
+
+            // The adding replica 2 catches up with the leader, which runs phase B.
+            CompletableFuture<AdjustIsrResponse> respCallback = new CompletableFuture<>();
+            eventProcessor
+                    .getCoordinatorEventManager()
+                    .put(
+                            new AdjustIsrReceivedEvent(
+                                    Collections.singletonMap(
+                                            tb0,
+                                            new LeaderAndIsr(
+                                                    0,
+                                                    0,
+                                                    Arrays.asList(0, 1, 2, 3),
+                                                    Collections.emptyList(),
+                                                    0,
+                                                    1)),
+                                    respCallback));
+            respCallback.get();
+
+            retry(Duration.ofMinutes(1), () -> assertRebalanceStatus(tb0, RebalanceStatus.FAILED));
+            assertThat(eventProcessor.getRebalanceManager().getAwaitedLeaderAckBucketEpoch(tb0))
+                    .isNull();
+        } finally {
+            cleanupTabletServer3();
+        }
+    }
+
+    /**
+     * The ZooKeeper state a coordinator leaves behind when it crashes during phase B of reassigning
+     * [0, 1, 3] with leader 0 to [1, 0, 2] with leader 1.
+     */
+    private enum PhaseBBoundary {
+        // Phase A finished and all target replicas caught up.
+        BEFORE_LEADER_ELECTION(0, Arrays.asList(1, 0, 2, 3), Arrays.asList(0, 1, 2, 3)),
+        // B2 elected the planned leader.
+        AFTER_LEADER_ELECTION(1, Arrays.asList(1, 0, 2, 3), Arrays.asList(0, 1, 2, 3)),
+        // B5 removed the old replica from the ISR.
+        AFTER_ISR_SHRINK(1, Arrays.asList(1, 0, 2, 3), Arrays.asList(1, 0, 2)),
+        // B7 stored the target replicas, only the planned leader's ACK is missing.
+        AFTER_ASSIGNMENT_UPDATE(1, Arrays.asList(1, 0, 2), Arrays.asList(1, 0, 2));
+
+        private final int leader;
+        private final List<Integer> replicas;
+        private final List<Integer> isr;
+
+        PhaseBBoundary(int leader, List<Integer> replicas, List<Integer> isr) {
+            this.leader = leader;
+            this.replicas = replicas;
+            this.isr = isr;
+        }
+    }
+
+    @ParameterizedTest
+    @EnumSource(PhaseBBoundary.class)
+    void testBucketReassignmentWithLeaderChangeResumesAfterCoordinatorRestart(
+            PhaseBBoundary boundary) throws Exception {
+        registerTabletServer3();
+        try {
+            ConcurrentLinkedDeque<ControlledNotifyTrigger> pendingTriggers =
+                    new ConcurrentLinkedDeque<>();
+            List<ControlledNotifyGateway> controlledGateways =
+                    setControlledNotifyGateways(pendingTriggers);
+            TableBucket tb0 =
+                    createBucketWithReplicas(
+                            "test_reassignment_restart_" + boundary.name().toLowerCase());
+
+            eventProcessor.shutdown();
+            LeaderAndIsr leaderAndIsr = zookeeperClient.getLeaderAndIsr(tb0).get();
+            zookeeperClient.updateTableAssignment(
+                    tb0.getTableId(),
+                    new TableAssignment(
+                            Collections.singletonMap(0, new BucketAssignment(boundary.replicas))),
+                    ZkVersion.MATCH_ANY_VERSION.getVersion());
+            zookeeperClient.updateLeaderAndIsr(
+                    tb0,
+                    new LeaderAndIsr(
+                            boundary.leader,
+                            leaderAndIsr.leaderEpoch() + 1,
+                            boundary.isr,
+                            Collections.emptyList(),
+                            leaderAndIsr.coordinatorEpoch(),
+                            leaderAndIsr.bucketEpoch() + 1),
+                    ZkVersion.MATCH_ANY_VERSION.getVersion());
+            zookeeperClient.registerRebalanceTask(
+                    new RebalanceTask(
+                            "rebalance-reassign-restart",
+                            RebalanceStatus.REBALANCING,
+                            reassignmentWithLeaderChangePlan(tb0)));
+
+            controlledGateways.forEach(ControlledNotifyGateway::enableControlMode);
+            eventProcessor = buildCoordinatorEventProcessor();
+            eventProcessor.startup();
+
+            // Responses from the other servers drive the recovered task to its final state, but
+            // only the planned leader's ACK completes it.
+            retry(
+                    Duration.ofMinutes(1),
+                    () -> {
+                        completePendingNotifyTriggersExcept(pendingTriggers, 1);
+                        assertThat(
+                                        eventProcessor
+                                                .getRebalanceManager()
+                                                .getAwaitedLeaderAckBucketEpoch(tb0))
+                                .isNotNull();
+                    });
+            assertRebalancing(tb0);
+            verifyIsr(tb0, 1, Arrays.asList(1, 0, 2));
+
+            drainPendingNotifyTriggers(pendingTriggers);
+            retry(
+                    Duration.ofMinutes(1),
+                    () -> assertRebalanceStatus(tb0, RebalanceStatus.COMPLETED));
+            verifyIsr(tb0, 1, Arrays.asList(1, 0, 2));
+            assertThat(
+                            zookeeperClient
+                                    .getTableAssignment(tb0.getTableId())
+                                    .get()
+                                    .getBucketAssignment(0)
+                                    .getReplicas())
+                    .containsExactly(1, 0, 2);
+        } finally {
+            zookeeperClient.deleteRebalanceTask();
+            cleanupTabletServer3();
+        }
+    }
+
+    private void registerTabletServer3() throws Exception {
+        zookeeperClient.registerTabletServer(
+                3,
+                new TabletServerRegistration(
+                        "rack3",
+                        Collections.singletonList(
+                                new Endpoint("host3", 1001, DEFAULT_LISTENER_NAME)),
+                        System.currentTimeMillis()));
+    }
+
+    private static void cleanupTabletServer3() {
+        ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupPath(ZkData.ServerIdZNode.path(3));
+    }
+
+    /** Sets gateways that hold NotifyLeaderAndIsr responses once in control mode. */
+    private List<ControlledNotifyGateway> setControlledNotifyGateways(
+            ConcurrentLinkedDeque<ControlledNotifyTrigger> pendingTriggers) throws Exception {
+        Map<Integer, TabletServerGateway> gateways = new HashMap<>();
+        List<ControlledNotifyGateway> controlledGateways = new ArrayList<>();
+        for (int server : zookeeperClient.getSortedTabletServerList()) {
+            ControlledNotifyGateway gateway = new ControlledNotifyGateway(server, pendingTriggers);
+            gateways.put(server, gateway);
+            controlledGateways.add(gateway);
+        }
+        testCoordinatorChannelManager.setGateways(gateways);
+        return controlledGateways;
+    }
+
+    /** Creates a table with one bucket on replicas [0, 1, 3] and waits for leader 0. */
+    private TableBucket createBucketWithReplicas(String tableName) throws Exception {
+        long tableId =
+                metadataManager.createTable(
+                        TablePath.of(defaultDatabase, tableName),
+                        remoteDataDir,
+                        TEST_TABLE,
+                        new TableAssignment(
+                                Collections.singletonMap(0, BucketAssignment.of(0, 1, 3))),
+                        false);
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+        verifyIsr(tableBucket, 0, Arrays.asList(0, 1, 3));
+        return tableBucket;
+    }
+
+    /**
+     * Replica 3 moves to 2 and the leader moves from 0 to 1, while the old leader 0 stays in the
+     * target replicas. The plan puts the target leader first.
+     */
+    private static Map<TableBucket, RebalancePlanForBucket> reassignmentWithLeaderChangePlan(
+            TableBucket tableBucket) {
+        return Collections.singletonMap(
+                tableBucket,
+                new RebalancePlanForBucket(
+                        tableBucket, 0, 1, Arrays.asList(0, 1, 3), Arrays.asList(1, 0, 2)));
+    }
+
+    /**
+     * Runs the plan of {@link #reassignmentWithLeaderChangePlan} until the coordinator applied the
+     * final state, while holding every NotifyLeaderAndIsr response.
+     */
+    private TableBucket reassignWithLeaderChangeUntilFinalLeaderAck(
+            String tableName, ConcurrentLinkedDeque<ControlledNotifyTrigger> pendingTriggers)
+            throws Exception {
+        List<ControlledNotifyGateway> controlledGateways =
+                setControlledNotifyGateways(pendingTriggers);
+        TableBucket tb0 = createBucketWithReplicas(tableName);
+
+        controlledGateways.forEach(ControlledNotifyGateway::enableControlMode);
+        pendingTriggers.clear();
+        eventProcessor
+                .getRebalanceManager()
+                .registerRebalance(
+                        "rebalance-reassign-with-leader-change",
+                        reassignmentWithLeaderChangePlan(tb0),
+                        RebalanceStatus.NOT_STARTED);
+
+        // The adding replica 2 catches up with the leader, which runs phase B.
+        CompletableFuture<AdjustIsrResponse> respCallback = new CompletableFuture<>();
+        eventProcessor
+                .getCoordinatorEventManager()
+                .put(
+                        new AdjustIsrReceivedEvent(
+                                Collections.singletonMap(
+                                        tb0,
+                                        new LeaderAndIsr(
+                                                0,
+                                                0,
+                                                Arrays.asList(0, 1, 2, 3),
+                                                Collections.emptyList(),
+                                                0,
+                                                1)),
+                                respCallback));
+        respCallback.get();
+        verifyIsr(tb0, 1, Arrays.asList(0, 1, 2));
+        return tb0;
+    }
+
+    /**
+     * Holds the planned leader's ACK of the final state (its latest request) and releases all other
+     * responses, including server 1's responses to the earlier requests.
+     */
+    private ControlledNotifyTrigger holdFinalLeaderAck(
+            ConcurrentLinkedDeque<ControlledNotifyTrigger> pendingTriggers) throws Exception {
+        ControlledNotifyTrigger finalLeaderAck = null;
+        for (ControlledNotifyTrigger trigger : pendingTriggers) {
+            if (trigger.getResponseServerId() == 1) {
+                finalLeaderAck = trigger;
+            }
+        }
+        assertThat(finalLeaderAck).isNotNull();
+        assertThat(pendingTriggers.remove(finalLeaderAck)).isTrue();
+        drainPendingNotifyTriggers(pendingTriggers);
+        fromCtx(ctx -> null);
+        return finalLeaderAck;
+    }
+
+    private void assertRebalancing(TableBucket tableBucket) {
+        assertThat(countInProgressRebalanceTasks(tableBucket)).isEqualTo(1);
+        assertThat(eventProcessor.getRebalanceManager().listRebalanceProgress(null).status())
+                .isEqualTo(RebalanceStatus.REBALANCING);
+    }
+
+    private void assertRebalanceStatus(TableBucket tableBucket, RebalanceStatus expectedStatus) {
+        assertThat(
+                        eventProcessor
+                                .getRebalanceManager()
+                                .listRebalanceProgress(null)
+                                .progressForBucketMap()
+                                .get(tableBucket)
+                                .status())
+                .isEqualTo(expectedStatus);
+    }
+
+    @Test
     void testLeaderOnlyRebalanceExecutesSequentially() throws Exception {
         // Set up controlled gateways that capture NotifyLeaderAndIsr calls.
         // Gateways start in pass-through mode for table creation, then switch
@@ -2208,19 +2562,16 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                         tableBucket, new ApiError(Errors.UNKNOWN_SERVER_ERROR, "failed"));
 
         assertThat(
-                        CoordinatorEventProcessor
-                                .isSuccessfulLeaderOnlyRebalanceResponseFromNewLeader(
-                                        successResult, 1, planForBucket))
+                        CoordinatorEventProcessor.isSuccessfulRebalanceResponseFromNewLeader(
+                                successResult, 1, planForBucket))
                 .isTrue();
         assertThat(
-                        CoordinatorEventProcessor
-                                .isSuccessfulLeaderOnlyRebalanceResponseFromNewLeader(
-                                        successResult, 0, planForBucket))
+                        CoordinatorEventProcessor.isSuccessfulRebalanceResponseFromNewLeader(
+                                successResult, 0, planForBucket))
                 .isFalse();
         assertThat(
-                        CoordinatorEventProcessor
-                                .isSuccessfulLeaderOnlyRebalanceResponseFromNewLeader(
-                                        failedResult, 1, planForBucket))
+                        CoordinatorEventProcessor.isSuccessfulRebalanceResponseFromNewLeader(
+                                failedResult, 1, planForBucket))
                 .isFalse();
     }
 
@@ -2799,6 +3150,15 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
         }
     }
 
+    private static void completePendingNotifyTriggersExcept(
+            ConcurrentLinkedDeque<ControlledNotifyTrigger> pendingTriggers, int heldServerId) {
+        for (ControlledNotifyTrigger trigger : pendingTriggers) {
+            if (trigger.getResponseServerId() != heldServerId && pendingTriggers.remove(trigger)) {
+                trigger.complete(null);
+            }
+        }
+    }
+
     private static boolean hasPendingNotifyTrigger(
             ConcurrentLinkedDeque<ControlledNotifyTrigger> pendingTriggers, int responseServerId) {
         for (ControlledNotifyTrigger trigger : pendingTriggers) {
@@ -2885,13 +3245,29 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
             // Return a future that completes only when the test releases the trigger.
             ControlledNotifyTrigger trigger = new ControlledNotifyTrigger(responseServerId);
             pendingTriggers.add(trigger);
-            return trigger.getFuture().thenApply(v -> response);
+            return trigger.getFuture()
+                    .thenApply(
+                            v -> {
+                                if (trigger.isFailed()) {
+                                    response.getNotifyBucketsLeaderRespsList()
+                                            .forEach(
+                                                    resp ->
+                                                            resp.setErrorCode(
+                                                                            Errors
+                                                                                    .UNKNOWN_SERVER_ERROR
+                                                                                    .code())
+                                                                    .setErrorMessage(
+                                                                            "mock failure"));
+                                }
+                                return response;
+                            });
         }
     }
 
     private static class ControlledNotifyTrigger {
         private final int responseServerId;
         private final CompletableFuture<Void> future = new CompletableFuture<>();
+        private volatile boolean failed;
 
         ControlledNotifyTrigger(int responseServerId) {
             this.responseServerId = responseServerId;
@@ -2907,6 +3283,16 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
 
         void complete(Void value) {
             future.complete(value);
+        }
+
+        /** Releases the response with an error for every bucket. */
+        void fail() {
+            failed = true;
+            future.complete(null);
+        }
+
+        boolean isFailed() {
+            return failed;
         }
     }
 
