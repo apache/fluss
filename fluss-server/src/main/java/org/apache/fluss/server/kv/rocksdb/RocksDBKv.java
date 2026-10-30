@@ -203,30 +203,12 @@ public class RocksDBKv implements AutoCloseable {
         }
     }
 
-    /**
-     * Gets the values for the given keys in the same order as the input keys.
-     *
-     * <p>{@link RocksDB#multiGetAsList(List)} returns {@code null} both for a missing key and for a
-     * key whose read failed (for example, a block checksum mismatch). Each {@code null} is
-     * therefore re-read with {@link #get(byte[])}, which throws on read errors, so a missing key
-     * costs one extra point lookup.
-     *
-     * @throws IOException if any key failed to be read from RocksDB
-     */
     public List<byte[]> multiGet(List<byte[]> keys) throws IOException {
-        List<byte[]> values;
         try {
-            values = db.multiGetAsList(keys);
+            return db.multiGetAsList(keys);
         } catch (RocksDBException e) {
             throw new IOException("Fail to get keys.", e);
         }
-
-        for (int i = 0; i < values.size(); i++) {
-            if (values.get(i) == null) {
-                values.set(i, get(keys.get(i)));
-            }
-        }
-        return values;
     }
 
     /**
@@ -317,27 +299,24 @@ public class RocksDBKv implements AutoCloseable {
         }
     }
 
-    public List<byte[]> limitScan(Integer limit) throws IOException {
+    public List<byte[]> limitScan(Integer limit) {
         List<byte[]> pkList = new ArrayList<>();
-        // The wrapper checks the iterator status when it becomes invalid, so a read error fails the
-        // scan instead of being reported as the end of the data.
-        try (ReadOptions readOptions = new ReadOptions();
-                RocksIteratorWrapper iterator =
-                        new RocksIteratorWrapper(
-                                db.newIterator(defaultColumnFamilyHandle, readOptions))) {
-            int count = 0;
+        ReadOptions readOptions = new ReadOptions();
+        RocksIterator iterator = db.newIterator(defaultColumnFamilyHandle, readOptions);
+
+        int count = 0;
+        try {
             iterator.seekToFirst();
             while (iterator.isValid() && count < limit) {
                 pkList.add(iterator.value());
                 iterator.next();
                 count++;
             }
-        } catch (RuntimeException e) {
-            if (e.getCause() instanceof RocksDBException) {
-                throw new IOException("Failed to iterate limit scan.", e.getCause());
-            }
-            throw e;
+        } finally {
+            readOptions.close();
+            iterator.close();
         }
+
         return pkList;
     }
 

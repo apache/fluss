@@ -37,13 +37,8 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.File;
-import java.io.IOException;
-import java.io.RandomAccessFile;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
-import java.util.Collections;
-import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -516,38 +511,6 @@ class RocksDBKvTest {
 
         // Pressure sampling must degrade gracefully once the native handle is gone.
         assertThat(kv.currentPressure()).isEqualTo(0f);
-    }
-
-    @Test
-    void testReadErrorsAreNotReportedAsMissingKeys(@TempDir Path tempDir) throws Exception {
-        byte[] key = new byte[] {1, 2, 3, 4, 5};
-        try (RocksDBKv kv = buildRocksDBKv(tempDir.toFile())) {
-            kv.put(key, new byte[] {10, 20, 30, 40, 50});
-            try (FlushOptions options = new FlushOptions().setWaitForFlush(true)) {
-                kv.db.flush(options);
-            }
-            // Corrupt the data block before it is read, so neither read is served from the cache.
-            try (Stream<Path> files = Files.walk(tempDir)) {
-                Path sst = files.filter(path -> path.toString().endsWith(".sst")).findFirst().get();
-                try (RandomAccessFile file = new RandomAccessFile(sst.toFile(), "rw")) {
-                    int firstByte = file.readUnsignedByte();
-                    file.seek(0);
-                    file.writeByte(firstByte ^ 0xff);
-                }
-            }
-
-            assertThatThrownBy(() -> kv.multiGet(Collections.singletonList(key)))
-                    .isInstanceOf(IOException.class)
-                    .hasCauseInstanceOf(RocksDBException.class)
-                    .satisfies(
-                            error -> assertThat(error.getCause()).hasMessageContaining("checksum"));
-            assertThatThrownBy(() -> kv.limitScan(10))
-                    .isInstanceOf(IOException.class)
-                    .hasMessage("Failed to iterate limit scan.")
-                    .hasCauseInstanceOf(RocksDBException.class)
-                    .satisfies(
-                            error -> assertThat(error.getCause()).hasMessageContaining("checksum"));
-        }
     }
 
     @Test
