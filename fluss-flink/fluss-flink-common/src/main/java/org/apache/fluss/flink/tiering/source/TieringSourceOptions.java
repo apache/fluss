@@ -20,6 +20,7 @@ package org.apache.fluss.flink.tiering.source;
 import org.apache.fluss.config.ConfigOption;
 
 import java.time.Duration;
+import java.util.List;
 
 import static org.apache.fluss.config.ConfigBuilder.key;
 
@@ -27,6 +28,15 @@ import static org.apache.fluss.config.ConfigBuilder.key;
 public class TieringSourceOptions {
 
     public static final String DATA_LAKE_CONFIG_PREFIX = "datalake.";
+
+    public static final ConfigOption<List<String>> EXCLUDED_TABLES =
+            key("lake.tiering.excluded-tables")
+                    .stringType()
+                    .asList()
+                    .defaultValues()
+                    .withDescription(
+                            "Comma-separated Fluss database.table names to exclude from this tiering job. "
+                                    + "Matches are exact and case-sensitive. Restart the job to apply changes.");
 
     public static final ConfigOption<Duration> POLL_TIERING_TABLE_INTERVAL =
             key("tiering.poll.table.interval")

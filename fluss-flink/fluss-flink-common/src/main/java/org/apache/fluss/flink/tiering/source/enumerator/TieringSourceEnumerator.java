@@ -82,10 +82,12 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
+import static org.apache.fluss.flink.tiering.source.TieringSourceOptions.EXCLUDED_TABLES;
 import static org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper.basicHeartBeat;
 import static org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper.heartBeatWithRequestNewTieringTable;
 import static org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper.tieringTableHeartBeat;
 import static org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper.waitHeartbeatResponse;
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /**
  * An implementation of {@link SplitEnumerator} used to request {@link TieringSplit} from Fluss
@@ -106,8 +108,8 @@ public class TieringSourceEnumerator
 
     private static final Logger LOG = LoggerFactory.getLogger(TieringSourceEnumerator.class);
 
-    /** Delay between claims when draining consecutive empty tables, to pace the claim RPC rate. */
-    private static final long EMPTY_TABLE_POLL_DELAY_MS = 1000L;
+    // Avoid immediate retry loops for empty or excluded tables.
+    private static final long TABLE_POLL_DELAY_MS = 1000L;
 
     private final Configuration flussConf;
     private final Configuration lakeTieringConfig;
@@ -117,6 +119,7 @@ public class TieringSourceEnumerator
     private final SplitEnumeratorMetricGroup enumeratorMetricGroup;
     private final AutoCloseable tieringMetrics;
     private final long pollTieringTableIntervalMs;
+    private final Set<TablePath> excludedTables;
     // Also inspected by asynchronous heartbeat requests.
     private final Deque<TieringSplit> pendingSplits;
     private final Set<Integer> readersAwaitingSplit;
@@ -185,6 +188,22 @@ public class TieringSourceEnumerator
         this.timerService = timerService;
         this.enumeratorMetricGroup = context.metricGroup();
         this.pollTieringTableIntervalMs = pollTieringTableIntervalMs;
+        this.excludedTables = new HashSet<>();
+        for (String excludedTable : lakeTieringConfig.get(EXCLUDED_TABLES)) {
+            String[] names = excludedTable.split("\\.", -1);
+            checkArgument(
+                    names.length == 2,
+                    "Invalid table '%s' in %s: expected database.table.",
+                    excludedTable,
+                    EXCLUDED_TABLES.key());
+            TablePath tablePath = TablePath.of(names[0], names[1]);
+            checkArgument(
+                    tablePath.isValid(),
+                    "Invalid table '%s' in %s: expected a valid database.table name.",
+                    excludedTable,
+                    EXCLUDED_TABLES.key());
+            excludedTables.add(tablePath);
+        }
         this.pendingSplits = new ConcurrentLinkedDeque<>();
         this.readersAwaitingSplit = Collections.synchronizedSet(new TreeSet<>());
         this.tieringTableEpochs = new ConcurrentHashMap<>();
@@ -509,6 +528,18 @@ public class TieringSourceEnumerator
         if (tieringTable == null) {
             return;
         }
+        if (excludedTables.contains(tieringTable.f2)) {
+            LOG.info(
+                    "Skip tiering table {} at epoch {} because it is configured in {}.",
+                    tieringTable.f2,
+                    tieringTable.f1,
+                    EXCLUDED_TABLES.key());
+            // Report failure to release the claim without advancing lake offsets.
+            failedTableEpochs.put(tieringTable.f0, tieringTable.f1);
+            tieringTableEpochs.remove(tieringTable.f0);
+            requestTableAndAssign(TABLE_POLL_DELAY_MS);
+            return;
+        }
         long start = System.currentTimeMillis();
         LOG.info("Generate Tiering splits for table {}.", tieringTable.f2);
         try {
@@ -550,7 +581,7 @@ public class TieringSourceEnumerator
                 tieringTableEpochs.remove(tieringTable.f0);
                 finishedTables.put(tieringTable.f0, TieringFinishInfo.from(tieringTable.f1));
                 // An empty round has no split or completion event to drive the next table.
-                requestTableAndAssign(EMPTY_TABLE_POLL_DELAY_MS);
+                requestTableAndAssign(TABLE_POLL_DELAY_MS);
             } else {
                 pendingSplits.addAll(splitsWithMetadata);
 
