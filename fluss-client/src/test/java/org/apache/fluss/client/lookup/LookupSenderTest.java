@@ -360,11 +360,12 @@ public class LookupSenderTest {
         // Without jitter, the retries are delayed by exactly 100ms, 200ms and 400ms.
         long initialBackoffMs = 100;
         restartLookupSender(new ExponentialBackoff(initialBackoffMs, 2, 10_000, 0));
-        List<Long> attemptNanos = Collections.synchronizedList(new ArrayList<>());
+        // Use the same clock as the retry deadlines, so each gap is at least the backoff.
+        List<Long> attemptMs = Collections.synchronizedList(new ArrayList<>());
         gateway.setLookupHandler(
                 request -> {
-                    attemptNanos.add(System.nanoTime());
-                    if (attemptNanos.size() <= MAX_RETRIES) {
+                    attemptMs.add(System.currentTimeMillis());
+                    if (attemptMs.size() <= MAX_RETRIES) {
                         return createFailedResponse(
                                 request, new TimeoutException("simulated timeout"));
                     }
@@ -375,12 +376,10 @@ public class LookupSenderTest {
         lookupQueue.appendLookup(query);
 
         assertThat(query.future().get(10, TimeUnit.SECONDS)).isEqualTo(bytes("value"));
-        assertThat(attemptNanos).hasSize(1 + MAX_RETRIES);
-        for (int i = 1; i < attemptNanos.size(); i++) {
-            long gapMs =
-                    TimeUnit.NANOSECONDS.toMillis(attemptNanos.get(i) - attemptNanos.get(i - 1));
-            // Allow a few ms of slack: retry deadlines use millisecond wall-clock time.
-            assertThat(gapMs).isGreaterThanOrEqualTo((initialBackoffMs << (i - 1)) - 5);
+        assertThat(attemptMs).hasSize(1 + MAX_RETRIES);
+        for (int i = 1; i < attemptMs.size(); i++) {
+            assertThat(attemptMs.get(i) - attemptMs.get(i - 1))
+                    .isGreaterThanOrEqualTo(initialBackoffMs << (i - 1));
         }
     }
 

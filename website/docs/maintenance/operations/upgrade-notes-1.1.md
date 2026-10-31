@@ -20,6 +20,19 @@ is unchanged.
 Explicit settings remain effective. To retain the previous behavior, set
 `log.retention.roll-active-segment.enabled: false` before upgrading.
 
+## Client Configuration Changes
+
+### Lookup Retries Back Off by Default
+
+In v1.1, a lookup or prefix lookup that fails with a retriable error, such as
+`NOT_LEADER_OR_FOLLOWER`, is retried after an exponential backoff instead of immediately. The
+delay starts at `client.lookup.retry-backoff` (default `100ms`) and doubles up to
+`client.lookup.retry-backoff-max` (default `1s`). This stops clients from flooding TabletServers
+and logs while a bucket has no ready leader, for example during a rolling restart.
+
+The first retry after a leader change now waits about 100ms. To retain the previous behavior,
+set `client.lookup.retry-backoff: 0`.
+
 ## Lake Storage Changes
 
 ### Duplicate Lake Format Plugins Are Rejected
