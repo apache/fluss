@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<!--
+ Licensed to the Apache Software Foundation (ASF) under one
+ or more contributor license agreements.  See the NOTICE file
+ distributed with this work for additional information
+ regarding copyright ownership.  The ASF licenses this file
+ to you under the Apache License, Version 2.0 (the
+ "License"); you may not use this file except in compliance
+ with the License.  You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Fluss DV Layer for Iceberg PK reads</title>
+<style>
+:root{
+  --bg:#fbfcfd; --ink:#0f1419; --mut:#737b87; --line:#e6e9ef; --soft:#f3f5f8;
+  --hot:#d97706; --cold:#0d9488; --mask:#7c3aed; --bad:#dc2626; --good:#16a34a; --blue:#2563eb;
+  --sh:0 1px 2px rgba(16,24,40,.04),0 10px 26px rgba(16,24,40,.06);
+  --slotw:112px; --sloth:34px; --gap:8px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{background:var(--bg);color:var(--ink);overflow:hidden;
+  font:15px/1.45 ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  -webkit-font-smoothing:antialiased}
+.pg{height:100vh;max-width:1420px;margin:0 auto;padding:14px 24px 12px;
+  display:flex;flex-direction:column;gap:10px}
+
+/* ---------- header ---------- */
+header{display:flex;align-items:center;gap:14px;flex:none}
+header h1{font-size:19px;font-weight:700;letter-spacing:-.025em;white-space:nowrap}
+header .sub{font-size:12.5px;color:var(--mut)}
+header .ctrl{margin-left:auto;display:flex;align-items:center;gap:7px}
+button{font:inherit;font-size:12.5px;border:1px solid var(--line);background:#fff;color:var(--mut);
+  border-radius:999px;padding:6px 14px;cursor:pointer;transition:.15s}
+button:hover{background:var(--soft);color:var(--ink)}
+button.pri{background:var(--ink);color:#fff;border-color:var(--ink)}
+button.pri:hover{opacity:.85;color:#fff}
+
+/* ---------- stage ---------- */
+/* stage + narration sit as one block near the top; leftover space goes below */
+.stage{flex:none;margin-top:min(5vh,48px);padding-top:56px;position:relative;display:flex;flex-direction:column;gap:16px}
+.lane{display:flex;align-items:center}
+
+/* DV state panel: RowPos index + Pending deletes, sits under hot log + Iceberg */
+.state{position:relative;z-index:2;align-self:flex-start;background:#fff;border:1px solid var(--line);
+  border-radius:14px;box-shadow:var(--sh);padding:10px 14px;display:flex;gap:22px;
+  transition:border-color .3s,box-shadow .3s}
+.state.act{border-color:#c9b6f5;box-shadow:0 0 0 3px rgba(124,58,237,.09),var(--sh)}
+.state .sh{flex:none;width:118px;display:flex;flex-direction:column;gap:2px}
+.state .sh b{font-size:12.5px;font-weight:700}
+.state .sh span{font-size:10.5px;color:var(--mut)}
+.tbl{flex:1;min-width:0}
+.tbl h4{font-size:11.5px;font-weight:700;display:flex;gap:6px;align-items:baseline;white-space:nowrap}
+.tbl h4 small{font-weight:500;color:var(--mut);font-size:10px;overflow:hidden;text-overflow:ellipsis}
+#rpi,#pdq{min-height:78px}
+#rpi:empty::before{content:"filled at the readable switch"}
+#pdq:empty::before{content:"none"}
+#rpi:empty::before,#pdq:empty::before{display:block;margin-top:7px;font-size:10.5px;color:#b9c0cb;font-style:italic}
+.ent{display:flex;align-items:center;gap:6px;height:21px;padding:0 8px;border-radius:6px;margin-top:5px;
+  font:600 10.5px ui-monospace,Menlo,monospace;background:var(--soft);color:#5a626e;transition:.3s}
+.ent .ar{color:#a3abb7}
+.ent.pend{background:#fff7ed;color:#9a3412}
+.ent.hit{background:#ede9fe;color:#5b21b6;box-shadow:0 0 0 2px rgba(124,58,237,.2)}
+.ent.done{opacity:.35;text-decoration:line-through}
+.tok{position:absolute;left:0;top:0;width:12px;height:12px;border-radius:50%;background:var(--mask);
+  box-shadow:0 0 0 4px rgba(124,58,237,.22);transition:transform .75s cubic-bezier(.4,0,.2,1);z-index:10}
+.zone{background:#fff;border:1px solid var(--line);border-radius:14px;box-shadow:var(--sh);
+  padding:11px 12px;display:flex;flex-direction:column;min-width:0;position:relative;
+  transition:border-color .3s,box-shadow .3s}
+.zone.act{border-color:#c9b6f5;box-shadow:0 0 0 3px rgba(124,58,237,.09),var(--sh)}
+.zone .zh{display:flex;align-items:center;gap:7px;flex:none;margin-bottom:3px}
+.zone .zh .dot{width:8px;height:8px;border-radius:50%;flex:none}
+.zone .zh h2{font-size:12.5px;font-weight:700;letter-spacing:.01em;white-space:nowrap}
+.zone .zs{font-size:10.5px;color:var(--mut);margin-bottom:9px;flex:none;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+/* every rack is the same height so the four cards line up without stretching to the viewport */
+.zone .rack{display:flex;flex-direction:column;justify-content:flex-start;gap:var(--gap);
+  min-height:calc(4*var(--sloth) + 3*var(--gap) + 15px)}
+.zone .foot{flex:none;margin-top:9px;font-size:10.5px;color:var(--mut);display:flex;gap:10px;
+  align-items:center;min-height:17px}
+.zone .foot b{font-weight:650;color:var(--ink)}
+.pill{font-size:9px;font-weight:700;letter-spacing:.04em;padding:2px 7px;border-radius:999px;
+  background:var(--soft);color:var(--mut);opacity:0;transition:.4s}
+.pill.on{opacity:1;background:#ede9fe;color:#5b21b6}
+/* Puffin is written at the next tiering commit, not instantly */
+.pill.soon{background:#fff;color:#7c3aed;box-shadow:inset 0 0 0 1px #c9b6f5}
+
+.z-write{flex:0 0 150px}
+.z-hot{flex:1.08} .z-cold{flex:1.25} .z-out{flex:1}
+
+/* rack rows: [pos] [slot] [dv bit] */
+.rw{display:flex;align-items:center;gap:7px;height:var(--sloth)}
+.pos{font:600 9.5px ui-monospace,Menlo,monospace;color:#b9c0cb;width:26px;text-align:right;flex:none}
+.slot{width:var(--slotw);height:var(--sloth);border-radius:8px;border:1px dashed #e9ecf1;flex:none}
+.bit{width:22px;height:22px;border-radius:6px;background:#eff1f5;flex:none;display:grid;
+  place-items:center;font:700 11px ui-monospace,Menlo,monospace;color:#bcc3cd;transition:.56s}
+.bit.set{background:var(--mask);color:#fff;box-shadow:0 0 0 4px rgba(124,58,237,.16);transform:scale(1.1)}
+.bit.hide{opacity:0}
+.hdr{display:flex;align-items:center;gap:7px;font-size:9px;font-weight:700;letter-spacing:.05em;
+  color:#b9c0cb;text-transform:uppercase;margin-bottom:1px}
+.hdr .a{width:26px;flex:none} .hdr .b{width:var(--slotw);flex:none}
+.hdr .c{width:22px;flex:none;text-align:center;letter-spacing:0}
+/* the statement that caused the current frame */
+.sql{font:600 10.5px ui-monospace,Menlo,monospace;color:#5a626e;background:var(--soft);
+  border-radius:8px;padding:8px 9px;line-height:1.5;margin-bottom:10px;min-height:52px;
+  display:grid;align-content:center;transition:.3s}
+.sql.live{background:#eef4ff;color:#1d4ed8}
+
+/* ---------- chips (the records) ---------- */
+.chips{position:absolute;inset:0;pointer-events:none;z-index:5}
+.chip{position:absolute;left:0;top:0;width:var(--slotw);height:var(--sloth);border-radius:8px;
+  display:flex;align-items:center;gap:6px;padding:0 9px;background:#fff;
+  border:1px solid #d7dde7;box-shadow:0 1px 3px rgba(16,24,40,.09);
+  transition:transform .78s cubic-bezier(.4,0,.2,1),opacity .35s,background .35s,border-color .35s,filter .35s}
+.nofx{transition:none!important}
+.chip b{font-size:11.5px;font-weight:700;letter-spacing:-.01em}
+.chip span{font:600 11px ui-monospace,Menlo,monospace;color:#5a626e;margin-left:auto}
+.chip.fresh{border-color:#9dbcf8;background:#f3f7ff;box-shadow:0 0 0 3px rgba(37,99,235,.12)}
+.chip.cold{border-color:#bfe4df;background:#f5fcfb}
+.chip.warn{border-color:#f0a9a9;background:#fff5f5;
+  animation:shake .5s cubic-bezier(.36,.07,.19,.97) 2}
+.chip.dead{background:#f5f6f8;border-color:#e6e9ef;color:#b4bac4;filter:grayscale(1);opacity:.62}
+.chip.dead b{text-decoration:line-through} .chip.dead span{text-decoration:line-through;color:#b4bac4}
+.chip.ghost{box-shadow:0 6px 18px rgba(16,24,40,.16);z-index:9}
+.chip.pop{animation:pop .45s cubic-bezier(.3,1.4,.5,1)}
+@keyframes pop{from{transform-origin:center;filter:brightness(1.25)}}
+@keyframes shake{10%,90%{margin-left:-2px}30%,70%{margin-left:3px}50%{margin-left:-3px}}
+.tag{position:absolute;right:-6px;top:-9px;font:700 8.5px ui-sans-serif;letter-spacing:.03em;
+  padding:2px 6px;border-radius:999px;color:#fff;background:var(--mask);opacity:0;transition:.3s}
+.tag.on{opacity:1}
+.tag.skip{background:#94a3b8}
+
+/* ---------- wires ---------- */
+.link{flex:0 0 46px;position:relative;align-self:center;height:100%}
+.wires{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:1;overflow:visible}
+.wires path{fill:none;stroke:#d5dae2;stroke-width:1.75;stroke-linecap:round}
+.wires path.flow{stroke:var(--blue);stroke-dasharray:7 7;opacity:0;transition:opacity .25s}
+.wires path.flow.on{opacity:1;animation:dash .6s linear infinite}
+@keyframes dash{to{stroke-dashoffset:-14}}
+.wlbl{position:absolute;font-size:9.5px;font-weight:650;color:#b9c0cb;white-space:nowrap;
+  transition:color .3s} .wlbl.on{color:var(--blue)}
+
+/* ---------- narration ---------- */
+.narr{flex:none;margin:26px 0 auto;display:flex;align-items:center;gap:16px;background:#fff;border:1px solid var(--line);
+  border-radius:13px;box-shadow:var(--sh);padding:16px 22px;min-height:84px}
+.narr .num{width:32px;height:32px;border-radius:50%;background:var(--ink);color:#fff;flex:none;
+  display:grid;place-items:center;font-size:14px;font-weight:700}
+.narr .tx{min-width:0;flex:1}
+.narr h3{font-size:16.5px;font-weight:700;letter-spacing:-.01em;margin-bottom:2px}
+.narr p{font-size:14px;color:var(--mut);line-height:1.45}
+.narr p em{font-style:normal;color:var(--ink);font-weight:600}
+.dots{display:flex;gap:6px;flex:none}
+.dots i{width:25px;height:4px;border-radius:999px;background:#e4e8ee;cursor:pointer;transition:.3s}
+.dots i.done{background:#c3cad5} .dots i.now{background:var(--ink);width:34px}
+.win{display:flex;gap:14px;flex:none;opacity:0;transition:.5s;pointer-events:none}
+.win.on{opacity:1}
+.win div{text-align:center}
+.win .n{font-size:19px;font-weight:700;color:var(--good);letter-spacing:-.02em;line-height:1.1}
+.win .l{font-size:11px;color:var(--mut)}
+@media(max-height:740px){:root{--sloth:28px;--gap:6px}.narr{min-height:58px}}
+/* ?still=1 : freeze every transition so a screenshot shows the true end state of a step */
+body.still *{transition:none!important;animation:none!important}
+</style>
+</head>
+<body><div class="pg">
+
+<header>
+  <h1>Fluss DV Layer for Iceberg PK reads</h1>
+  <span class="sub">watch one key get updated twice, and never rewrite a file</span>
+  <div class="ctrl">
+    <button id="pp" class="pri">&#10073;&#10073; Pause</button>
+    <button id="rp">&#8635; Replay</button>
+  </div>
+</header>
+
+<div class="stage" id="stage">
+  <svg class="wires" id="wires"><defs>
+    <marker id="ar" markerWidth="7" markerHeight="7" refX="3.6" refY="3.5" orient="auto">
+      <path d="M0,0 L7,3.5 L0,7 z" fill="#d5dae2" stroke="none"/></marker>
+    <marker id="arb" markerWidth="7" markerHeight="7" refX="3.6" refY="3.5" orient="auto">
+      <path d="M0,0 L7,3.5 L0,7 z" fill="#2563eb" stroke="none"/></marker>
+  </defs>
+    <path id="w1" marker-end="url(#ar)"/><path id="w1f" class="flow" marker-end="url(#arb)"/>
+    <path id="w2" marker-end="url(#ar)"/><path id="w2f" class="flow" marker-end="url(#arb)"/>
+    <path id="w3" marker-end="url(#ar)"/><path id="w3f" class="flow" marker-end="url(#arb)"/>
+    <path id="w4" marker-end="url(#ar)"/><path id="w4f" class="flow" marker-end="url(#arb)"/>
+  </svg>
+
+  <div class="lane">
+  <!-- 1. writer -->
+  <section class="zone z-write" id="zw">
+    <div class="zh"><span class="dot" style="background:var(--blue)"></span><h2>Your app</h2></div>
+    <div class="zs">upserts &amp; deletes</div>
+    <div class="rack" style="justify-content:center">
+      <div class="sql" id="sql">&mdash;</div>
+      <div class="rw"><div class="slot" id="src" style="border:none"></div></div>
+    </div>
+    <div class="foot"><span id="fw">idle</span></div>
+  </section>
+
+  <div class="link"><div class="wlbl" id="l1" style="left:2px;top:calc(50% - 24px)">write</div></div>
+
+  <!-- 2. hot -->
+  <section class="zone z-hot" id="zh">
+    <div class="zh"><span class="dot" style="background:var(--hot)"></span><h2>Fluss &middot; hot log</h2></div>
+    <div class="zs">last few seconds, in memory</div>
+    <div class="rack" id="rh"></div>
+    <div class="foot"><span id="fh">empty</span><span class="pill" id="ph">LOG DV</span></div>
+  </section>
+
+  <div class="link"><div class="wlbl" id="l2" style="left:-6px;top:calc(50% - 24px)">tiering</div></div>
+
+  <!-- 3. cold -->
+  <section class="zone z-cold" id="zc">
+    <div class="zh"><span class="dot" style="background:var(--cold)"></span><h2>Iceberg &middot; file_A</h2></div>
+    <div class="zs">immutable parquet, fixed row positions</div>
+    <div class="rack" id="rc"></div>
+    <div class="foot"><span id="fc">no file yet</span><span class="pill" id="pc">LAKE DV</span>
+      <span class="pill soon" id="pp2">PUFFIN &middot; next commit</span></div>
+  </section>
+
+  <div class="link"><div class="wlbl" id="l3" style="left:-4px;top:calc(50% - 24px)">scan</div></div>
+
+  <!-- 4. result -->
+  <section class="zone z-out" id="zo">
+    <div class="zh"><span class="dot" style="background:var(--good)"></span><h2>Union read</h2></div>
+    <div class="zs">cold rows then hot rows, concatenated</div>
+    <div class="rack" id="ro"></div>
+    <div class="foot"><span id="fo">waiting</span></div>
+  </section>
+
+  </div>
+
+  <!-- 5. DV state behind the scenes -->
+  <div class="state" id="st">
+    <div class="sh"><b>Fluss DV state</b><span>per bucket, in RocksDB</span></div>
+    <div class="tbl"><h4>RowPos index <small>row id &rarr; where it sits in Iceberg</small></h4><div id="rpi"></div></div>
+    <div class="tbl"><h4>Pending deletes <small>stale rows waiting for a position</small></h4><div id="pdq"></div></div>
+  </div>
+
+  <div class="chips" id="chips"></div>
+</div>
+
+<div class="narr">
+  <span class="num" id="nnum">1</span>
+  <div class="tx"><h3 id="ntit">&nbsp;</h3><p id="ndes">&nbsp;</p></div>
+  <div class="win" id="win">
+    <div><div class="n">0</div><div class="l">files rewritten</div></div>
+    <div><div class="n">instant</div><div class="l">correct on write</div></div>
+    <div><div class="n">O(deletes)</div><div class="l">read cost</div></div>
+  </div>
+  <div class="dots" id="dots"></div>
+</div>
+
+</div>
+<script>
+const $=id=>document.getElementById(id);
+const stage=$("stage"), chips=$("chips");
+const ROWS=4;
+
+/* ---- build the racks: [pos] [slot] [dv bit] on one line, so the bit visibly owns the row ---- */
+function rack(el,label,withPos){
+  el.innerHTML="";
+  const h=document.createElement("div"); h.className="hdr";
+  h.innerHTML=`<span class="a">${withPos?"pos":""}</span><span class="b"></span><span class="c">${label}</span>`;
+  el.appendChild(h);
+  for(let i=0;i<ROWS;i++){
+    const r=document.createElement("div"); r.className="rw";
+    r.innerHTML=`<span class="pos">${withPos?i:""}</span><div class="slot"></div>`+
+                (label?`<div class="bit hide">0</div>`:`<div class="bit hide" style="visibility:hidden">0</div>`);
+    el.appendChild(r);
+  }
+}
+rack($("rh"),"dv",false); rack($("rc"),"dv",true); rack($("ro"),"",false);
+const slots=p=>[...document.querySelectorAll(`#${p} .slot`)];
+const bits =p=>[...document.querySelectorAll(`#${p} .bit`)];
+const HS=slots("rh"), CS=slots("rc"), OS=slots("ro"), HB=bits("rh"), CB=bits("rc");
+
+/* ---- geometry: every position is read from the live DOM, so nothing can drift ---- */
+function at(el){const a=el.getBoundingClientRect(),b=stage.getBoundingClientRect();
+  return{x:a.left-b.left,y:a.top-b.top,w:a.width,h:a.height,cx:a.left-b.left+a.width/2,cy:a.top-b.top+a.height/2};}
+
+function wires(){
+  const z=["zw","zh","zc","zo"].map(i=>at($(i)));
+  // DV state panel spans exactly under hot log + Iceberg
+  $("st").style.marginLeft=z[1].x+"px"; $("st").style.width=(z[2].x+z[2].w-z[1].x)+"px";
+  const y=z[0].y+z[0].h*.5;
+  const seg=(a,b)=>`M${a},${y} L${b},${y}`;
+  const pairs=[[0,1],[1,2],[2,3]];
+  ["w1","w2","w3"].forEach((id,k)=>{
+    const d=seg(z[pairs[k][0]].x+z[pairs[k][0]].w+6, z[pairs[k][1]].x-8);
+    $(id).setAttribute("d",d); $(id+"f").setAttribute("d",d);
+  });
+  // hot tail arcs OVER iceberg into the result: the hot rows never touch the lake
+  const top=z[1].y-9, hx=z[1].cx, ox=z[3].cx;
+  const d=`M${hx},${z[1].y} C${hx},${top-26} ${ox},${top-26} ${ox},${z[3].y-2}`;
+  $("w4").setAttribute("d",d); $("w4f").setAttribute("d",d);
+  const L=$("l4")||Object.assign(document.createElement("div"),{id:"l4",className:"wlbl"});
+  if(!L.parentNode){L.textContent="hot tail";stage.appendChild(L);}
+  L.style.left=((hx+ox)/2-20)+"px"; L.style.top=(top-40)+"px";
+}
+addEventListener("resize",()=>{wires();snap();});
+
+/* ---- chips = the actual records ---- */
+let hot=[],cold=[],out=[];
+function mk(key,val,cls){
+  const d=document.createElement("div"); d.className="chip "+(cls||"");
+  d.innerHTML=`<b>${key}</b><span>${val}</span><i class="tag"></i>`;
+  chips.appendChild(d); return {el:d,key,val,dead:false};
+}
+function put(c,slot,anim){
+  const r=at(slot);
+  if(!anim)c.el.classList.add("nofx");
+  c.el.style.transform=`translate(${r.x}px,${r.y}px)`;
+  c.slot=slot;
+  if(!anim){void c.el.offsetWidth;c.el.classList.remove("nofx");}
+}
+function snap(){[...hot,...cold,...out].forEach(c=>c.slot&&put(c,c.slot,false));}
+function tag(c,txt,kind){const t=c.el.querySelector(".tag");t.textContent=txt;
+  t.className="tag on "+(kind||"");}
+function kill(c){c.dead=true;c.el.classList.remove("fresh","warn");c.el.classList.add("dead");}
+
+/* fly a chip over the top lane instead of straight through the Iceberg card */
+async function arc(c,slot,tok){
+  const a=at(c.slot||c.el), b=at(slot), top=at($("zh")).y-34;
+  c.el.classList.add("ghost");
+  c.el.style.transform=`translate(${a.x}px,${top}px)`; await sleep(300,tok);
+  c.el.style.transform=`translate(${b.x}px,${top}px)`; await sleep(330,tok);
+  c.el.style.transform=`translate(${b.x}px,${b.y}px)`; await sleep(380,tok);
+  c.el.classList.remove("ghost"); c.slot=slot;
+}
+
+/* ---- runner: pause / replay / jump all go through one token ---- */
+const SLOW=1.25;
+let TOK=0, paused=false, fast=false, cur=-1;
+function sleep(ms,tok){return new Promise((ok,no)=>{
+  if(fast)return ok();
+  let left=ms*SLOW;            // 1.25x slower pacing for presenting
+  const iv=setInterval(()=>{
+    if(tok!==TOK){clearInterval(iv);return no("abort");}
+    if(paused)return; left-=50;
+    if(left<=0){clearInterval(iv);ok();}
+  },50);});}
+function flow(id,on){const p=$(id+"f");p.classList.toggle("on",on);
+  const l=$(id.replace("w","l"));if(l)l.classList.toggle("on",on);}
+/* exactly one place to look per beat */
+function act(...on){["zw","zh","zc","zo","st"].forEach(z=>$(z).classList.toggle("act",on.includes(z)));}
+/* DV state rows + a token that travels between state and the bit it sets */
+let pend=null;
+function ent(box,html,cls){const d=document.createElement("div");d.className="ent "+(cls||"");
+  d.innerHTML=html;$(box).appendChild(d);return d;}
+async function tokFly(from,to,tok){
+  const t=document.createElement("div");t.className="tok nofx";chips.appendChild(t);
+  const p=e=>{const r=at(e);return`translate(${r.cx-6}px,${r.cy-6}px)`;};
+  t.style.transform=p(from);void t.offsetWidth;t.classList.remove("nofx");
+  t.style.transform=p(to);
+  try{await sleep(650,tok);}finally{t.remove();}
+}
+function sql(txt,live){$("sql").innerHTML="<span>"+txt+"</span>";$("sql").classList.toggle("live",!!live);}
+function count(){
+  $("fh").textContent=hot.length?`${hot.filter(c=>!c.dead).length} live, ${hot.filter(c=>c.dead).length} masked`:"empty";
+  $("fc").textContent=cold.length?`${cold.length} rows, ${cold.filter(c=>c.dead).length} masked`:"no file yet";
+  $("fo").textContent=out.length?`${out.length} rows returned`:"waiting";
+}
+
+/* ---- the six beats ---- */
+const STEPS=[
+{t:"Three rows are written",d:"Fluss acks in <em>milliseconds</em>. Nothing has touched Iceberg yet, so the data is fresh but it only lives in the hot log.",
+ run:async tok=>{
+  act("zw","zh");flow("w1",1);$("fw").textContent="upserting";
+  sql("INSERT key1 &rarr; v1<br>INSERT key2 &rarr; v2<br>INSERT key3 &rarr; v3",1);
+  for(const[k,v]of[["key1","v1"],["key2","v2"],["key3","v3"]]){
+    const c=mk(k,v,"fresh");put(c,$("src"),false);await sleep(90,tok);
+    put(c,HS[hot.length],true);hot.push(c);count();await sleep(300,tok);
+  }
+  await sleep(250,tok);flow("w1",0);$("fw").textContent="idle";act("zh");
+}},
+{t:"Tiering flushes them to Iceberg",d:"The hot tail becomes one immutable Parquet file and every row gets a <em>fixed position</em>. Fluss does not know those positions yet: the <em>RowPos index</em> is filled at the next readable switch.",
+ run:async tok=>{
+  act("zh","zc");flow("w2",1);sql("(tiering job &mdash; no client write)",0);
+  for(let i=0;i<hot.length;i++){
+    const c=hot[i];c.el.classList.remove("fresh");c.el.classList.add("cold");
+    put(c,CS[i],true);await sleep(260,tok);
+  }
+  cold=hot;hot=[];count();
+  CB.forEach((b,i)=>{if(i<cold.length){b.classList.remove("hide");b.textContent="0";}});
+  flow("w2",0);act("zc");
+  await sleep(500,tok);
+}},
+{t:"key1 is updated &rarr; now it answers twice",d:"v4 lands hot, but Iceberg still holds <em>v1</em> and a file cannot be edited. RowPos does not know where v1 sits yet, so its row id is parked in <em>Pending deletes</em>.",
+ run:async tok=>{
+  act("zw","zh");flow("w1",1);$("fw").textContent="key1 = v4";
+  sql("UPDATE t SET v = <b>v4</b><br>WHERE key = key1",1);
+  const c=mk("key1","v4","fresh");put(c,$("src"),false);await sleep(120,tok);
+  put(c,HS[0],true);hot.push(c);count();await sleep(560,tok);
+  flow("w1",0);$("fw").textContent="idle";act("zh","zc");
+  cold[0].el.classList.add("warn");c.el.classList.add("warn");
+  await sleep(700,tok);act("zh","st");
+  await tokFly(c.el,$("pdq"),tok);
+  pend=ent("pdq",`off 0 &middot; key1 <span class="ar">stale v1</span>`,"pend");
+  await sleep(500,tok);
+}},
+{t:"Readable switch: RowPos fills, the pending delete becomes a bit",d:"Fluss loads file_A's positions into the <em>RowPos index</em>, finds <em>off 0</em> &rarr; file_A, pos 0, and sets that bit in the <em>Lake DV</em>. No file is rewritten, and Fluss queries see it <em>instantly</em>. At the next tiering commit the same bitmap goes to <em>Puffin</em> for Spark and Trino.",
+ run:async tok=>{
+  act("st","zc");sql("(readable switch &mdash; no client write)",0);
+  cold[0].el.classList.remove("warn");hot[0].el.classList.remove("warn");
+  // switch step a: positions of the committed file arrive in RowPos
+  for(let i=0;i<cold.length;i++){
+    ent("rpi",`off ${i} &middot; ${cold[i].key} <span class="ar">&rarr;</span> file_A &middot; pos ${i}`);
+    await sleep(220,tok);
+  }
+  await sleep(250,tok);
+  // switch step b: pending delete resolves through RowPos into a Lake DV bit
+  const rp0=$("rpi").children[0];
+  pend.classList.add("hit");await sleep(380,tok);rp0.classList.add("hit");await sleep(420,tok);
+  await tokFly(rp0,CB[0],tok);
+  CB[0].classList.add("set");CB[0].textContent="1";
+  pend.classList.add("done");rp0.classList.remove("hit");await sleep(420,tok);
+  pend.remove();pend=null;
+  kill(cold[0]);tag(cold[0],"masked");count();
+  $("pc").classList.add("on");await sleep(380,tok);$("pp2").classList.add("on");
+  await sleep(500,tok);
+}},
+{t:"Updated again &rarr; Log DV masks the hot copy",d:"key1 goes to v5. The stale <em>v4</em> never reached Iceberg, so it needs no position and no pending entry: <em>Log DV</em> masks it by row id, right in the hot log.",
+ run:async tok=>{
+  act("zw","zh");flow("w1",1);$("fw").textContent="key1 = v5";
+  sql("UPDATE t SET v = <b>v5</b><br>WHERE key = key1",1);
+  const c=mk("key1","v5","fresh");put(c,$("src"),false);await sleep(120,tok);
+  put(c,HS[1],true);hot.push(c);count();await sleep(420,tok);
+  flow("w1",0);$("fw").textContent="idle";act("zh");
+  await tokFly(c.el,HB[0],tok);
+  HB[0].classList.remove("hide");HB[0].classList.add("set");HB[0].textContent="1";
+  await sleep(360,tok);kill(hot[0]);tag(hot[0],"masked");$("ph").classList.add("on");count();
+  await sleep(500,tok);
+}},
+{t:"The union read: skip, then concatenate",d:"Masked rows are <em>skipped by position</em>, never read. What survives on each side is simply stacked &mdash; no sort, no merge, no equality-delete join.",
+ run:async tok=>{
+  act("zc","zo");flow("w3",1);sql("SELECT * FROM t",1);
+  for(const c of cold){
+    if(c.dead){tag(c,"skip","skip");c.el.classList.add("pop");await sleep(260,tok);continue;}
+    const g=mk(c.key,c.val,"cold ghost");put(g,c.slot,false);await sleep(60,tok);
+    put(g,OS[out.length],true);out.push(g);count();await sleep(300,tok);
+    g.el.classList.remove("ghost");
+  }
+  flow("w3",0);act("zh","zo");await sleep(200,tok);flow("w4",1);
+  for(const c of hot){
+    if(c.dead){tag(c,"skip","skip");c.el.classList.add("pop");await sleep(260,tok);continue;}
+    const g=mk(c.key,c.val,"fresh");put(g,c.slot,false);await sleep(60,tok);
+    await arc(g,OS[out.length],tok);out.push(g);count();
+  }
+  flow("w4",0);act("zo");$("win").classList.add("on");
+  await sleep(400,tok);
+}}];
+
+/* ---- wiring ---- */
+const dots=$("dots");
+STEPS.forEach((s,i)=>{const d=document.createElement("i");d.onclick=()=>jump(i);dots.appendChild(d);});
+function paint(i){
+  $("nnum").textContent=i+1;$("ntit").innerHTML=STEPS[i].t;$("ndes").innerHTML=STEPS[i].d;
+  [...dots.children].forEach((d,k)=>{d.className=k<i?"done":k===i?"now":"";});
+}
+function reset(){
+  chips.innerHTML="";hot=[];cold=[];out=[];
+  $("rpi").innerHTML="";$("pdq").innerHTML="";pend=null;
+  [...HB,...CB].forEach(b=>{b.className="bit hide";b.textContent="0";});
+  ["ph","pc","pp2"].forEach(i=>$(i).classList.remove("on"));
+  act(); ["w1","w2","w3","w4"].forEach(w=>flow(w,0));
+  $("win").classList.remove("on");$("fw").textContent="idle";sql("&mdash;",0);count();
+}
+const Q=new URLSearchParams(location.search);
+const STILL=Q.has("still")?(+Q.get("step")||0):-1;   // render step N frozen, then stop
+if(STILL>=0)document.body.classList.add("still");
+
+async function play(from){
+  const tok=++TOK; reset(); wires();
+  const last=STILL>=0?STILL:STEPS.length-1;
+  try{
+    for(let i=0;i<=last;i++){
+      fast = i<from || STILL>=0;        // jumping / still: replay earlier beats with no delay
+      cur=i; paint(i);
+      await STEPS[i].run(tok);
+      if(!fast)await sleep(900,tok);
+    }
+    if(STILL>=0)return;
+    fast=false; paint(STEPS.length-1);
+    await sleep(2200,tok); if(tok===TOK) play(0);   // loop
+  }catch(e){/* superseded */}
+}
+function jump(i){paused=false;$("pp").innerHTML="&#10073;&#10073; Pause";paint(i);play(i);}
+$("pp").onclick=()=>{paused=!paused;$("pp").innerHTML=paused?"&#9654; Play":"&#10073;&#10073; Pause";};
+$("rp").onclick=()=>jump(0);
+addEventListener("keydown",e=>{if(e.key===" "){e.preventDefault();$("pp").click();}});
+wires(); play(0);
+</script>
+</body></html>
