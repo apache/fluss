@@ -268,7 +268,7 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
                                 .schema(schema)
                                 .distributedBy(DEFAULT_BUCKET_NUM)
                                 .build());
-        // Keep each row in a separate log batch so each fetch leaves observable lag behind.
+        // Keep each row in a separate log batch so each poll returns at most one record.
         appendRowsInSeparateBatches(tablePath, recordsPerBucket * DEFAULT_BUCKET_NUM);
 
         Configuration sourceConf = new Configuration(clientConf);
@@ -280,7 +280,8 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
                 new FlinkSourceReaderMetrics(
                         InternalSourceReaderMetricGroup.mock(metricListener.getMetricGroup()));
 
-        FlinkSourceSplitReader splitReader =
+        // Both split readers share the same Flink metrics aggregator.
+        FlinkSourceSplitReader firstReader =
                 new FlinkSourceSplitReader(
                         sourceConf,
                         tablePath,
@@ -289,92 +290,128 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
                         null,
                         null,
                         sourceReaderMetrics);
-        boolean splitReaderClosed = false;
+        FlinkSourceSplitReader secondReader = null;
+        boolean firstReaderClosed = false;
+        boolean secondReaderClosed = false;
         try {
-            // the metric is registered when the split reader creates the log scanner, and reports
-            // 0 before anything is fetched
+            secondReader =
+                    new FlinkSourceSplitReader(
+                            sourceConf,
+                            tablePath,
+                            schema.getRowType(),
+                            null,
+                            null,
+                            null,
+                            sourceReaderMetrics);
+
             Optional<Gauge<Long>> pendingRecords =
                     metricListener.getGauge(MetricNames.PENDING_RECORDS);
             assertThat(pendingRecords).isPresent();
-            assertThat((long) pendingRecords.get().getValue()).isEqualTo(0L);
+            assertThat((long) pendingRecords.get().getValue()).isZero();
 
             LogSplit firstStreamingSplit = new LogSplit(new TableBucket(tableId, 0), null, 0L);
             LogSplit secondStreamingSplit = new LogSplit(new TableBucket(tableId, 1), null, 0L);
             LogSplit boundedSplit = new LogSplit(new TableBucket(tableId, 2), null, 0L, 1L);
-            List<SourceSplitBase> logSplits =
-                    Arrays.asList(firstStreamingSplit, secondStreamingSplit, boundedSplit);
-            splitReader.handleSplitsChanges(new SplitsAddition<>(logSplits));
-            // Assigned buckets have no known high watermark until their first fetch completes.
-            assertThat((long) pendingRecords.get().getValue()).isEqualTo(0L);
 
-            Map<String, Integer> fetchedRowsBySplit = new HashMap<>();
-            Set<String> finishedSplits = new HashSet<>();
-            boolean aggregationVerified = false;
-            while (fetchedRowsBySplit.getOrDefault(firstStreamingSplit.splitId(), 0)
-                            < recordsPerBucket
-                    || fetchedRowsBySplit.getOrDefault(secondStreamingSplit.splitId(), 0)
-                            < recordsPerBucket
-                    || !finishedSplits.contains(boundedSplit.splitId())) {
-                RecordsWithSplitIds<RecordAndPos> records = splitReader.fetch();
-                int rowsInFetch = 0;
-                String splitId = records.nextSplit();
-                while (splitId != null) {
-                    while (records.nextRecordFromSplit() != null) {
-                        rowsInFetch++;
-                        fetchedRowsBySplit.put(
-                                splitId, fetchedRowsBySplit.getOrDefault(splitId, 0) + 1);
-                    }
-                    splitId = records.nextSplit();
-                }
-                finishedSplits.addAll(records.finishedSplits());
-                records.recycle();
+            // First reader consumes one record, leaving four pending records.
+            firstReader.handleSplitsChanges(
+                    new SplitsAddition<>(Collections.singletonList(firstStreamingSplit)));
 
-                if (rowsInFetch > 0) {
-                    int firstStreamingFetched =
-                            fetchedRowsBySplit.getOrDefault(firstStreamingSplit.splitId(), 0);
-                    int secondStreamingFetched =
-                            fetchedRowsBySplit.getOrDefault(secondStreamingSplit.splitId(), 0);
+            assertThat((long) pendingRecords.get().getValue()).isZero();
 
-                    if (firstStreamingFetched > 0 && secondStreamingFetched > 0) {
-                        assertThat(firstStreamingFetched).isLessThanOrEqualTo(recordsPerBucket);
-                        assertThat(secondStreamingFetched).isLessThanOrEqualTo(recordsPerBucket);
-                        assertThat((long) pendingRecords.get().getValue())
-                                .isEqualTo(
-                                        2L * recordsPerBucket
-                                                - firstStreamingFetched
-                                                - secondStreamingFetched);
-                        if (firstStreamingFetched < recordsPerBucket
-                                && secondStreamingFetched < recordsPerBucket) {
-                            aggregationVerified = true;
+            int firstStreamingFetched = 0;
+            while (firstStreamingFetched == 0) {
+                firstStreamingFetched +=
+                        fetchSplitRecords(firstReader, firstStreamingSplit.splitId());
+            }
+            assertThat(firstStreamingFetched).isEqualTo(1);
+            assertThat((long) pendingRecords.get().getValue()).isEqualTo(recordsPerBucket - 1L);
+
+            // Second reader also consumes one record. Both scanners now have backlog.
+            secondReader.handleSplitsChanges(
+                    new SplitsAddition<>(Collections.singletonList(secondStreamingSplit)));
+
+            int secondStreamingFetched = 0;
+            while (secondStreamingFetched == 0) {
+                secondStreamingFetched +=
+                        fetchSplitRecords(secondReader, secondStreamingSplit.splitId());
+            }
+            assertThat(secondStreamingFetched).isEqualTo(1);
+
+            // Verify aggregation of two non-zero scanner lags.
+            assertThat((long) pendingRecords.get().getValue())
+                    .isEqualTo(2L * (recordsPerBucket - 1));
+
+            // Add a bounded bucket to the first reader.
+            firstReader.handleSplitsChanges(
+                    new SplitsAddition<>(Collections.singletonList(boundedSplit)));
+
+            int boundedFetched = 0;
+            boolean boundedFinished = false;
+
+            while (firstStreamingFetched < recordsPerBucket || !boundedFinished) {
+                RecordsWithSplitIds<RecordAndPos> records = firstReader.fetch();
+                try {
+                    String splitId = records.nextSplit();
+                    while (splitId != null) {
+                        while (records.nextRecordFromSplit() != null) {
+                            if (splitId.equals(firstStreamingSplit.splitId())) {
+                                firstStreamingFetched++;
+                            } else {
+                                assertThat(splitId).isEqualTo(boundedSplit.splitId());
+                                boundedFetched++;
+                            }
                         }
+                        splitId = records.nextSplit();
                     }
+                    boundedFinished |= records.finishedSplits().contains(boundedSplit.splitId());
+                } finally {
+                    records.recycle();
                 }
             }
 
-            assertThat(aggregationVerified).isTrue();
-            assertThat(fetchedRowsBySplit.get(boundedSplit.splitId())).isEqualTo(1);
-            assertThat(recordsPerBucket - fetchedRowsBySplit.get(boundedSplit.splitId()))
-                    .isPositive();
-            // The bounded bucket was unassigned with records still unread, so only the two fully
-            // consumed streaming buckets contribute to the final value.
-            assertThat((long) pendingRecords.get().getValue()).isEqualTo(0L);
+            assertThat(firstStreamingFetched).isEqualTo(recordsPerBucket);
+            assertThat(boundedFetched).isEqualTo(1);
+            assertThat(recordsPerBucket - boundedFetched).isPositive();
 
-            // Closing a scanner with unread records must remove its gauge from the aggregate.
+            // The bounded bucket has been unassigned. Only the second streaming
+            // bucket, which still has four unread records, contributes to the metric.
+            assertThat((long) pendingRecords.get().getValue())
+                    .isEqualTo(recordsPerBucket - secondStreamingFetched);
+
+            // Consume the remaining records from the second streaming bucket.
+            while (secondStreamingFetched < recordsPerBucket) {
+                secondStreamingFetched +=
+                        fetchSplitRecords(secondReader, secondStreamingSplit.splitId());
+            }
+
+            assertThat(secondStreamingFetched).isEqualTo(recordsPerBucket);
+            assertThat((long) pendingRecords.get().getValue()).isZero();
+
+            // Closing a scanner with unread records must remove its gauge.
             appendRowsInSeparateBatches(tablePath, recordsPerBucket * DEFAULT_BUCKET_NUM);
             retry(
                     Duration.ofMinutes(1),
                     () -> {
-                        RecordsWithSplitIds<RecordAndPos> records = splitReader.fetch();
-                        records.recycle();
+                        fetchSplitRecords(firstReader, firstStreamingSplit.splitId());
                         assertThat((long) pendingRecords.get().getValue()).isPositive();
                     });
 
-            splitReaderClosed = true;
-            splitReader.close();
+            firstReader.close();
+            firstReaderClosed = true;
+
+            // The closed reader must no longer contribute to the aggregate.
+            assertThat((long) pendingRecords.get().getValue()).isZero();
+
+            secondReader.close();
+            secondReaderClosed = true;
             assertThat((long) pendingRecords.get().getValue()).isZero();
         } finally {
-            if (!splitReaderClosed) {
-                splitReader.close();
+            if (!firstReaderClosed) {
+                firstReader.close();
+            }
+            if (secondReader != null && !secondReaderClosed) {
+                secondReader.close();
             }
         }
     }
@@ -626,6 +663,25 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
     private FlinkSourceSplitReader createSplitReader(TablePath tablePath, RowType rowType) {
         return new FlinkSourceSplitReader(
                 clientConf, tablePath, rowType, null, null, null, createMockSourceReaderMetrics());
+    }
+
+    private int fetchSplitRecords(FlinkSourceSplitReader splitReader, String expectedSplitId)
+            throws IOException {
+        RecordsWithSplitIds<RecordAndPos> records = splitReader.fetch();
+        try {
+            int fetchedRecords = 0;
+            String splitId = records.nextSplit();
+            while (splitId != null) {
+                assertThat(splitId).isEqualTo(expectedSplitId);
+                while (records.nextRecordFromSplit() != null) {
+                    fetchedRecords++;
+                }
+                splitId = records.nextSplit();
+            }
+            return fetchedRecords;
+        } finally {
+            records.recycle();
+        }
     }
 
     private FlinkSourceReaderMetrics createMockSourceReaderMetrics() {
