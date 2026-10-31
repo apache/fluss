@@ -27,6 +27,7 @@ import javax.annotation.Nullable;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -47,6 +48,8 @@ public class ScanRecords implements Iterable<ScanRecord> {
     /** The exclusive upper bound of consumed offsets per polled bucket in this round. */
     private final Map<TableBucket, Long> consumedUpToOffsets;
 
+    private final Set<TableBucket> finishedBuckets;
+
     public ScanRecords(Map<TableBucket, List<ScanRecord>> records) {
         this(records, Collections.emptyMap());
     }
@@ -54,8 +57,22 @@ public class ScanRecords implements Iterable<ScanRecord> {
     public ScanRecords(
             Map<TableBucket, List<ScanRecord>> records,
             Map<TableBucket, Long> consumedUpToOffsets) {
+        this(records, consumedUpToOffsets, Collections.emptySet());
+    }
+
+    /** Creates a poll result with consumed offsets and one-shot completion events. */
+    public ScanRecords(
+            Map<TableBucket, List<ScanRecord>> records,
+            Map<TableBucket, Long> consumedUpToOffsets,
+            Set<TableBucket> finishedBuckets) {
         this.records = withProgressOnlyBuckets(records, consumedUpToOffsets);
         this.consumedUpToOffsets = consumedUpToOffsets;
+        this.finishedBuckets = Collections.unmodifiableSet(new LinkedHashSet<>(finishedBuckets));
+    }
+
+    /** Returns buckets that reached their exclusive stopping offset in this poll only. */
+    public Set<TableBucket> finishedBuckets() {
+        return finishedBuckets;
     }
 
     /**
@@ -130,7 +147,7 @@ public class ScanRecords implements Iterable<ScanRecord> {
      * a bucket returns no materialized records but advances its consumed offset.
      */
     public boolean hasProgress() {
-        return count() > 0 || !consumedUpToOffsets.isEmpty();
+        return count() > 0 || !consumedUpToOffsets.isEmpty() || !finishedBuckets.isEmpty();
     }
 
     @Override
