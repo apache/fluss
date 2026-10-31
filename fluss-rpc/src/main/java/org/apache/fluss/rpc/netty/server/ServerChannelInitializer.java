@@ -79,6 +79,9 @@ final class ServerChannelInitializer extends NettyChannelInitializer {
     @Override
     protected void initChannel(SocketChannel ch) throws Exception {
         super.initChannel(ch);
+        // Reads start disabled and are enabled by RequestChannel.registerChannel, so a channel
+        // can never read before its backpressure state has been decided.
+        ch.config().setAutoRead(false);
         if (sslContext != null) {
             // First in the pipeline, so framing and authentication run inside the encrypted
             // channel.
