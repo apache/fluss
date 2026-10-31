@@ -2409,6 +2409,7 @@ impl LogFetcher {
                             partition_id: bucket.partition_id(),
                             bucket_id: bucket.bucket_id(),
                             fetch_offset: offset,
+                            stopping_offset: None,
                             max_fetch_bytes: self.fetch_max_bytes_for_bucket,
                             routing_bucket_count: self
                                 .metadata

@@ -30,6 +30,7 @@ public final class FetchReqInfo {
     private final long tableId;
     private final long fetchOffset;
     @Nullable private final int[] projectFields;
+    @Nullable private final Long stoppingOffset;
 
     private int maxBytes;
 
@@ -39,10 +40,27 @@ public final class FetchReqInfo {
 
     public FetchReqInfo(
             long tableId, long fetchOffset, int maxBytes, @Nullable int[] projectFields) {
+        this(tableId, fetchOffset, maxBytes, projectFields, null);
+    }
+
+    /** Creates a bucket fetch request with an optional exclusive stopping offset. */
+    public FetchReqInfo(
+            long tableId,
+            long fetchOffset,
+            int maxBytes,
+            @Nullable int[] projectFields,
+            @Nullable Long stoppingOffset) {
+        this.stoppingOffset = stoppingOffset;
         this.tableId = tableId;
         this.fetchOffset = fetchOffset;
         this.maxBytes = maxBytes;
         this.projectFields = projectFields;
+    }
+
+    /** Returns the exclusive stopping offset, or null for an unbounded fetch. */
+    @Nullable
+    public Long getStoppingOffset() {
+        return stoppingOffset;
     }
 
     public long getTableId() {
@@ -77,6 +95,8 @@ public final class FetchReqInfo {
                 + maxBytes
                 + ", projectionFields="
                 + Arrays.toString(projectFields)
+                + ", stoppingOffset="
+                + stoppingOffset
                 + '}';
     }
 
@@ -97,11 +117,14 @@ public final class FetchReqInfo {
             return false;
         }
 
-        return fetchOffset == fetchReqInfo.fetchOffset && maxBytes == fetchReqInfo.maxBytes;
+        return fetchOffset == fetchReqInfo.fetchOffset
+                && maxBytes == fetchReqInfo.maxBytes
+                && Objects.equals(stoppingOffset, fetchReqInfo.stoppingOffset);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(tableId, fetchOffset, maxBytes, Arrays.hashCode(projectFields));
+        return Objects.hash(
+                tableId, fetchOffset, maxBytes, Arrays.hashCode(projectFields), stoppingOffset);
     }
 }

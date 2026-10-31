@@ -66,6 +66,9 @@ class RemoteCompletedFetch extends CompletedFetch {
 
     @Override
     void drain() {
+        if (isConsumed()) {
+            return;
+        }
         super.drain();
         // close file channel only, don't need to flush the file which is very heavy
         try {

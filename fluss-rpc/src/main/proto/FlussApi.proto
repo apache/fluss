@@ -1102,6 +1102,8 @@ message PbFetchLogReqForBucket {
   required int64 fetch_offset = 3;
   required int32 max_fetch_bytes = 4;
   optional int32 routing_bucket_count = 5;
+  // Exclusive logical offset for bounded client scans; requires FETCH_LOG v1.
+  optional int64 stopping_offset = 6;
 }
 
 message PbFetchLogRespForTable {
@@ -1114,7 +1116,9 @@ message PbFetchLogRespForBucket {
   optional int32 error_code = 3;
   optional string error_message = 4;
   optional int64 high_watermark = 5;
-  optional int64 log_start_offset = 6; // TODO now we don't introduce log start offset, but remain it in protobuf
+  // Requests without stopping_offset retain the legacy response value.
+  // FETCH_LOG v1 bounded requests return the existing log start offset, including lake storage.
+  optional int64 log_start_offset = 6;
   optional PbRemoteLogFetchInfo remote_log_fetch_info = 7;
   optional bytes records = 8;
   // The offset the server scanned up to while filtering out batches, which may accompany a

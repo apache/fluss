@@ -22,14 +22,22 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.FileLogRecords;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.remote.RemoteLogSegment;
+import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.io.IOException;
 
 /**
  * {@link RemotePendingFetch} is a {@link PendingFetch} that represents a pending fetch that waiting
  * for the remote log file fetched to local disk.
  */
 class RemotePendingFetch implements PendingFetch {
+    private static final Logger LOG = LoggerFactory.getLogger(RemotePendingFetch.class);
 
     final RemoteLogSegment remoteLogSegment;
+
     private final RemoteLogDownloadFuture downloadFuture;
     private final TablePath tablePath;
 
@@ -40,6 +48,11 @@ class RemotePendingFetch implements PendingFetch {
     private final LogScannerStatus logScannerStatus;
     private final boolean isCheckCrc;
 
+    private final LogScannerStatus.SubscriptionSnapshot subscription;
+
+    private Throwable failure;
+    private volatile boolean callbackCompleted;
+
     RemotePendingFetch(
             RemoteLogSegment remoteLogSegment,
             RemoteLogDownloadFuture downloadFuture,
@@ -49,7 +62,8 @@ class RemotePendingFetch implements PendingFetch {
             long highWatermark,
             LogRecordReadContext readContext,
             LogScannerStatus logScannerStatus,
-            boolean isCheckCrc) {
+            boolean isCheckCrc,
+            LogScannerStatus.SubscriptionSnapshot subscription) {
         this.remoteLogSegment = remoteLogSegment;
         this.downloadFuture = downloadFuture;
         this.tablePath = tablePath;
@@ -59,6 +73,16 @@ class RemotePendingFetch implements PendingFetch {
         this.readContext = readContext;
         this.logScannerStatus = logScannerStatus;
         this.isCheckCrc = isCheckCrc;
+        this.subscription = subscription;
+    }
+
+    void complete(Throwable error) {
+        this.failure = error;
+        this.callbackCompleted = true;
+    }
+
+    boolean isBounded() {
+        return subscription != null && subscription.isBounded();
     }
 
     @Override
@@ -67,23 +91,82 @@ class RemotePendingFetch implements PendingFetch {
     }
 
     @Override
+    public boolean isObsolete() {
+        if (subscription == null) {
+            return false;
+        }
+        LogScannerStatus.SubscriptionSnapshot current =
+                logScannerStatus.subscriptionSnapshot(tableBucket());
+
+        return current == null
+                || current.stoppingOffset != subscription.stoppingOffset
+                || (current.isBounded()
+                        && (current.stoppingOffset == 0
+                                || current.offset >= current.stoppingOffset));
+    }
+
+    @Override
     public boolean isCompleted() {
-        return downloadFuture.isDone();
+        return callbackCompleted;
     }
 
     @Override
     public CompletedFetch toCompletedFetch() {
-        FileLogRecords fileLogRecords = downloadFuture.getFileLogRecords(posInLogSegment);
-        return new RemoteCompletedFetch(
-                remoteLogSegment.tableBucket(),
-                tablePath,
-                fileLogRecords,
-                highWatermark,
-                readContext,
-                logScannerStatus,
-                isCheckCrc,
-                fetchOffset,
-                downloadFuture.getRecycleCallback());
+        if (failure != null) {
+            discard();
+            return failedFetch(failure);
+        }
+        FileLogRecords records;
+        try {
+            records = downloadFuture.getFileLogRecords(posInLogSegment);
+        } catch (RuntimeException e) {
+            discard();
+            return failedFetch(e);
+        }
+        try {
+            CompletedFetch completed =
+                    new RemoteCompletedFetch(
+                            tableBucket(),
+                            tablePath,
+                            records,
+                            highWatermark,
+                            readContext,
+                            logScannerStatus,
+                            isCheckCrc,
+                            fetchOffset,
+                            downloadFuture.getRecycleCallback());
+            if (subscription != null) {
+                completed.bindSubscription(subscription, -1L);
+            }
+            return completed;
+        } catch (RuntimeException e) {
+            try {
+                records.closeHandlers();
+            } catch (IOException closeError) {
+                LOG.warn("Failed to close remote log records for {}.", tableBucket(), closeError);
+            }
+            discard();
+            return failedFetch(e);
+        }
+    }
+
+    private CompletedFetch failedFetch(Throwable cause) {
+        CompletedFetch completed =
+                new DefaultCompletedFetch(
+                        tableBucket(),
+                        tablePath,
+                        FetchLogResultForBucket.empty(tableBucket(), highWatermark, -1L),
+                        readContext,
+                        logScannerStatus,
+                        isCheckCrc,
+                        fetchOffset,
+                        null);
+
+        if (subscription != null) {
+            completed.bindSubscription(subscription, -1L);
+        }
+        completed.setFailure(cause);
+        return completed;
     }
 
     @Override

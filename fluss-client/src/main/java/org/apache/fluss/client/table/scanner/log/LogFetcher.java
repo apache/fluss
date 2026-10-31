@@ -19,6 +19,7 @@ package org.apache.fluss.client.table.scanner.log;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.client.admin.OffsetSpec;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.metrics.ScannerMetricGroup;
 import org.apache.fluss.client.table.scanner.RemoteFileDownloader;
@@ -26,10 +27,13 @@ import org.apache.fluss.cluster.BucketLocation;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.ApiException;
+import org.apache.fluss.exception.FetchException;
 import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.InvalidMetadataException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.exception.PartitionNotExistException;
+import org.apache.fluss.exception.RequiredApiVersionNotSupportedException;
+import org.apache.fluss.exception.RetriableException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.SchemaGetter;
@@ -48,16 +52,19 @@ import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.FetchLogRequest;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
+import org.apache.fluss.rpc.messages.ListOffsetsResponse;
 import org.apache.fluss.rpc.messages.PbFetchLogReqForBucket;
 import org.apache.fluss.rpc.messages.PbFetchLogReqForTable;
 import org.apache.fluss.rpc.messages.PbFetchLogRespForBucket;
 import org.apache.fluss.rpc.messages.PbFetchLogRespForTable;
+import org.apache.fluss.rpc.messages.PbListOffsetsRespForBucket;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.protocol.FetchLogReadPreference;
 import org.apache.fluss.rpc.util.PredicateMessageUtils;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ChunkedAllocationManager;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
+import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.Projection;
 
@@ -77,7 +84,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.TimeoutException;
 
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
+import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeListOffsetsRequest;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.getFetchLogResultForBucket;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
@@ -116,6 +126,9 @@ public class LogFetcher implements Closeable {
     private final MetadataUpdater metadataUpdater;
     private final ScannerMetricGroup scannerMetricGroup;
     private final LogRecordReadContext.SchemaResolution schemaResolution;
+
+    @GuardedBy("this")
+    private final Map<TableBucket, LegacyFetchState> legacySubscriptions = new HashMap<>();
 
     /** Create a multi-table LogFetcher without an initial table. */
     public LogFetcher(
@@ -178,6 +191,13 @@ public class LogFetcher implements Closeable {
         }
     }
 
+    synchronized void onSubscriptionChanged(TableBucket bucket, boolean discardBuffered) {
+        legacySubscriptions.remove(bucket);
+        if (discardBuffered) {
+            logFetchBuffer.discardBucket(bucket);
+        }
+    }
+
     synchronized void unregisterTable(long tableId) {
         TableReadContext tableReadContext = tableReadContexts.remove(tableId);
         if (tableReadContext == null) {
@@ -199,10 +219,12 @@ public class LogFetcher implements Closeable {
     }
 
     public ScanRecords collectFetch() {
+        logFetchBuffer.discardObsolete();
         return logFetchCollector.collectFetch(logFetchBuffer);
     }
 
     public ArrowScanRecords collectArrowFetch() {
+        logFetchBuffer.discardObsolete();
         return arrowLogFetchCollector.collectFetch(logFetchBuffer);
     }
 
@@ -211,6 +233,7 @@ public class LogFetcher implements Closeable {
      * have an in-flight fetch or pending fetch data.
      */
     public void sendFetches() {
+        logFetchBuffer.discardObsolete();
         checkAndUpdateMetadata(fetchableBuckets());
         synchronized (this) {
             // Recompute after metadata update because response callbacks can populate the buffer.
@@ -231,8 +254,25 @@ public class LogFetcher implements Closeable {
      * @return false if the waiting time detectably elapsed before return from the method, else true
      */
     public boolean awaitNotEmpty(long deadlineNanos) {
+        long retryDeadlineNanos = Long.MAX_VALUE;
+        synchronized (this) {
+            for (Map.Entry<TableBucket, LegacyFetchState> entry : legacySubscriptions.entrySet()) {
+                LegacyFetchState legacy = entry.getValue();
+                if (legacy.resolving || legacy.failed || legacy.retryAfterNanos == 0L) {
+                    continue;
+                }
+                if (logScannerStatus.matchesRequestedRange(
+                        entry.getKey(), LogScanner.EARLIEST_OFFSET, legacy.stoppingOffset)) {
+                    retryDeadlineNanos = Math.min(retryDeadlineNanos, legacy.retryAfterNanos);
+                }
+            }
+        }
+        long actualDeadlineNanos = Math.min(deadlineNanos, retryDeadlineNanos);
         try {
-            return logFetchBuffer.awaitNotEmpty(deadlineNanos);
+            boolean available = logFetchBuffer.awaitNotEmpty(actualDeadlineNanos);
+            return available
+                    || (retryDeadlineNanos < deadlineNanos
+                            && System.nanoTime() >= retryDeadlineNanos);
         } catch (InterruptedException e) {
             LOG.trace("Interrupted during fetching", e);
             // true for interrupted
@@ -318,6 +358,17 @@ public class LogFetcher implements Closeable {
                                                 fetchLogResponse,
                                                 fetchRequestContext);
                                     }
+                                })
+                        .whenComplete(
+                                (ignored, callbackError) -> {
+                                    if (callbackError != null) {
+                                        LOG.error(
+                                                "Unexpected error while handling FETCH_LOG "
+                                                        + "response from node {}.",
+                                                destination,
+                                                ExceptionUtils.stripCompletionException(
+                                                        callbackError));
+                                    }
                                 });
             } catch (Throwable t) {
                 handleFetchLogException(destination, fetchRequestContext, t);
@@ -329,6 +380,7 @@ public class LogFetcher implements Closeable {
         Map<Long, TableReadContext> requestedTableContexts = new HashMap<>();
         Set<Long> tableIdsInFetchRequest = new HashSet<>();
         Set<TablePartition> tablePartitionsInFetchRequest = new HashSet<>();
+        Map<TableBucket, LogScannerStatus.SubscriptionSnapshot> subscriptions = new HashMap<>();
         for (PbFetchLogReqForTable fetchTableRequest : fetchLogRequest.getTablesReqsList()) {
             long tableId = fetchTableRequest.getTableId();
             TableReadContext tableReadContext = tableReadContexts.get(tableId);
@@ -342,12 +394,43 @@ public class LogFetcher implements Closeable {
             requestedTableContexts.put(tableId, tableReadContext);
             if (!tableReadContext.isPartitioned) {
                 tableIdsInFetchRequest.add(tableId);
-            } else {
-                for (PbFetchLogReqForBucket fetchLogReqForBucket :
-                        fetchTableRequest.getBucketsReqsList()) {
+            }
+            for (PbFetchLogReqForBucket fetchLogReqForBucket :
+                    fetchTableRequest.getBucketsReqsList()) {
+                Long partitionId =
+                        fetchLogReqForBucket.hasPartitionId()
+                                ? fetchLogReqForBucket.getPartitionId()
+                                : null;
+                TableBucket bucket =
+                        new TableBucket(tableId, partitionId, fetchLogReqForBucket.getBucketId());
+                if (tableReadContext.isPartitioned) {
                     tablePartitionsInFetchRequest.add(
                             new TablePartition(tableId, fetchLogReqForBucket.getPartitionId()));
                 }
+                LogScannerStatus.SubscriptionSnapshot snapshot =
+                        logScannerStatus.subscriptionSnapshot(bucket);
+                if (snapshot == null || snapshot.offset != fetchLogReqForBucket.getFetchOffset()) {
+                    LOG.warn(
+                            "FETCH_LOG request context mismatch: bucket={}, "
+                                    + "requestOffset={}, subscriptionOffset={}",
+                            bucket,
+                            fetchLogReqForBucket.getFetchOffset(),
+                            snapshot == null ? null : snapshot.offset);
+                    continue;
+                }
+                if (fetchLogReqForBucket.hasStoppingOffset()) {
+                    if (!snapshot.isBounded()
+                            || snapshot.stoppingOffset
+                                    != fetchLogReqForBucket.getStoppingOffset()) {
+                        continue;
+                    }
+                } else if (snapshot.isBounded()) {
+                    LegacyFetchState legacy = legacySubscriptions.get(bucket);
+                    if (legacy == null || legacy.stoppingOffset != snapshot.stoppingOffset) {
+                        continue;
+                    }
+                }
+                subscriptions.put(bucket, snapshot);
             }
         }
         return new FetchRequestContext(
@@ -356,7 +439,8 @@ public class LogFetcher implements Closeable {
                         tableIdsInFetchRequest.isEmpty() ? null : tableIdsInFetchRequest,
                         tablePartitionsInFetchRequest.isEmpty()
                                 ? null
-                                : tablePartitionsInFetchRequest));
+                                : tablePartitionsInFetchRequest),
+                subscriptions);
     }
 
     /** A helper class to hold table ids or table partitions. */
@@ -386,15 +470,41 @@ public class LogFetcher implements Closeable {
             if (isClosed) {
                 return;
             }
+            Throwable cause = ExceptionUtils.stripCompletionException(e);
+            if (cause instanceof RequiredApiVersionNotSupportedException) {
+                boolean fallbackRequired = false;
 
-            LOG.error("Failed to fetch log from node {}", destination, e);
+                for (Map.Entry<TableBucket, LogScannerStatus.SubscriptionSnapshot> entry :
+                        fetchRequestContext.subscriptions.entrySet()) {
+                    TableBucket bucket = entry.getKey();
+                    LogScannerStatus.SubscriptionSnapshot snapshot = entry.getValue();
+
+                    if (!snapshot.isBounded()
+                            || !logScannerStatus.matchesRequestedRange(
+                                    bucket, snapshot.offset, snapshot.stoppingOffset)) {
+                        continue;
+                    }
+
+                    LegacyFetchState legacy = legacySubscriptions.get(bucket);
+                    if (legacy == null || legacy.stoppingOffset != snapshot.stoppingOffset) {
+                        legacySubscriptions.put(
+                                bucket, new LegacyFetchState(snapshot.stoppingOffset));
+                    }
+                    fallbackRequired = true;
+                }
+                if (fallbackRequired) {
+                    logFetchBuffer.requestFetchRetry();
+                    return;
+                }
+            }
             // if is invalid metadata exception, we need to clear table bucket meta
             // to enable another round of log fetch to request new medata
-            if (e instanceof InvalidMetadataException) {
+            LOG.error("Failed to fetch log from node {}", destination, cause);
+            if (cause instanceof InvalidMetadataException) {
                 LOG.warn(
                         "Invalid metadata error in fetch log request. "
                                 + "Going to request metadata update.",
-                        e);
+                        cause);
                 invalidTableOrPartitions(fetchRequestContext.tableOrPartitions);
             }
         } finally {
@@ -441,6 +551,16 @@ public class LogFetcher implements Closeable {
                                             ? respForBucket.getPartitionId()
                                             : null,
                                     respForBucket.getBucketId());
+
+                    LogScannerStatus.SubscriptionSnapshot snapshot =
+                            fetchRequestContext.subscriptions.get(tb);
+                    if (snapshot == null) {
+                        continue;
+                    }
+                    if (!logScannerStatus.matchesRequestedRange(
+                            tb, snapshot.offset, snapshot.stoppingOffset)) {
+                        continue;
+                    }
                     FetchLogResultForBucket fetchResultForBucket =
                             getFetchLogResultForBucket(tb, tablePathForResp, respForBucket);
 
@@ -451,33 +571,54 @@ public class LogFetcher implements Closeable {
                         handleFetchLogExceptionForBucket(tb, destination, error);
                     }
 
-                    Long fetchOffset = logScannerStatus.getBucketOffset(tb);
-                    // if the offset is null, it means the bucket has been unsubscribed,
-                    // we just set a Long.MAX_VALUE as the next fetch offset
-                    if (fetchOffset == null) {
-                        LOG.debug(
-                                "Ignoring fetch log response for bucket {} because the bucket has been "
-                                        + "unsubscribed.",
-                                tb);
-                    } else {
-                        if (fetchResultForBucket.fetchFromRemote()) {
+                    boolean resolveStart =
+                            snapshot.isBounded()
+                                    && snapshot.offset == LogScanner.EARLIEST_OFFSET
+                                    && fetchResultForBucket.succeeded();
+                    long logStartOffset = fetchResultForBucket.getLogStartOffset();
+
+                    if (resolveStart && logStartOffset < 0) {
+                        enqueueFailure(
+                                tb,
+                                snapshot,
+                                new FetchException(
+                                        "Missing or invalid bounded log start offset for " + tb));
+                        continue;
+                    }
+                    if (fetchResultForBucket.fetchFromRemote()) {
+                        long start = snapshot.offset;
+                        if (resolveStart) {
+                            enqueueStartResolution(
+                                    tb,
+                                    trc,
+                                    snapshot,
+                                    logStartOffset,
+                                    fetchResultForBucket.getHighWatermark());
+                            start = logStartOffset;
+                        }
+                        if (!snapshot.isBounded() || start < snapshot.stoppingOffset) {
                             pendRemoteFetches(
                                     trc,
                                     fetchResultForBucket.remoteLogFetchInfo(),
-                                    fetchOffset,
-                                    fetchResultForBucket.getHighWatermark());
-                        } else {
-                            LogRecords logRecords = fetchResultForBucket.recordsOrEmpty();
-                            boolean hasRecords = !MemoryLogRecords.EMPTY.equals(logRecords);
-                            if (hasRecords
-                                    || fetchResultForBucket.getErrorCode() != Errors.NONE.code()
-                                    || fetchResultForBucket.hasFilteredEndOffset()) {
-                                // Retain the parsed buffer so it stays alive while
-                                // this CompletedFetch's records are being consumed.
-                                if (hasRecords && parsedByteBuf != null) {
-                                    parsedByteBuf.retain();
-                                }
-                                logFetchBuffer.add(
+                                    start,
+                                    fetchResultForBucket.getHighWatermark(),
+                                    snapshot);
+                        }
+                    } else {
+                        LogRecords logRecords = fetchResultForBucket.recordsOrEmpty();
+                        boolean hasRecords = !MemoryLogRecords.EMPTY.equals(logRecords);
+                        if (hasRecords
+                                || fetchResultForBucket.getErrorCode() != Errors.NONE.code()
+                                || fetchResultForBucket.hasFilteredEndOffset()
+                                || resolveStart) {
+                            // Retain the parsed buffer so it stays alive while
+                            // this CompletedFetch's records are being consumed.
+                            if (hasRecords && parsedByteBuf != null) {
+                                parsedByteBuf.retain();
+                            }
+                            CompletedFetch completed;
+                            try {
+                                completed =
                                         new DefaultCompletedFetch(
                                                 tb,
                                                 tablePathForResp,
@@ -487,9 +628,16 @@ public class LogFetcher implements Closeable {
                                                 // skipping CRC check if projection push downed as
                                                 // the data is pruned
                                                 isCheckCrcs,
-                                                fetchOffset,
-                                                hasRecords ? parsedByteBuf : null));
+                                                snapshot.offset,
+                                                hasRecords ? parsedByteBuf : null);
+                            } catch (Throwable failure) {
+                                if (hasRecords && parsedByteBuf != null) {
+                                    parsedByteBuf.release();
+                                }
+                                throw failure;
                             }
+                            completed.bindSubscription(snapshot, logStartOffset);
+                            logFetchBuffer.add(completed);
                         }
                     }
                 }
@@ -534,7 +682,8 @@ public class LogFetcher implements Closeable {
             TableReadContext tableReadContext,
             RemoteLogFetchInfo remoteLogFetchInfo,
             long firstFetchOffset,
-            long highWatermark) {
+            long highWatermark,
+            LogScannerStatus.SubscriptionSnapshot subscription) {
         checkNotNull(remoteLogFetchInfo);
         FsPath remoteLogTabletDir = new FsPath(remoteLogFetchInfo.remoteLogTabletDir());
         List<RemoteLogSegment> remoteLogSegments = remoteLogFetchInfo.remoteLogSegmentList();
@@ -542,6 +691,10 @@ public class LogFetcher implements Closeable {
         long fetchOffset = firstFetchOffset;
         for (int i = 0; i < remoteLogSegments.size(); i++) {
             RemoteLogSegment segment = remoteLogSegments.get(i);
+            if (subscription.isBounded()
+                    && segment.remoteLogStartOffset() >= subscription.stoppingOffset) {
+                break;
+            }
             if (i > 0) {
                 posInLogSegment = 0;
                 fetchOffset = segment.remoteLogStartOffset();
@@ -558,10 +711,11 @@ public class LogFetcher implements Closeable {
                             highWatermark,
                             tableReadContext.remoteReadContext,
                             logScannerStatus,
-                            isCheckCrcs);
+                            isCheckCrcs,
+                            subscription);
             logFetchBuffer.pend(pendingFetch);
             downloadFuture.whenComplete(
-                    (throwable) -> logFetchBuffer.tryComplete(segment.tableBucket(), throwable));
+                    throwable -> logFetchBuffer.tryComplete(pendingFetch, throwable));
         }
     }
 
@@ -572,13 +726,35 @@ public class LogFetcher implements Closeable {
                 new HashMap<>();
         int readyForFetchCount = 0;
         for (TableBucket tb : fetchableBuckets) {
-            Long offset = logScannerStatus.getBucketOffset(tb);
-            if (offset == null) {
+            LogScannerStatus.SubscriptionSnapshot snapshot =
+                    logScannerStatus.subscriptionSnapshot(tb);
+            if (snapshot == null) {
                 LOG.debug(
                         "Skipping fetch request for bucket {} because the bucket has been "
                                 + "unsubscribed.",
                         tb);
                 continue;
+            }
+            long offset = snapshot.offset;
+            if (snapshot.isBounded()
+                    && (snapshot.stoppingOffset == 0 || offset >= snapshot.stoppingOffset)) {
+                continue;
+            }
+            LegacyFetchState legacy = legacySubscriptions.get(tb);
+            if (legacy != null
+                    && (!snapshot.isBounded()
+                            || legacy.stoppingOffset != snapshot.stoppingOffset)) {
+                legacySubscriptions.remove(tb);
+                legacy = null;
+            }
+            if (legacy != null) {
+                if (legacy.failed) {
+                    continue;
+                }
+                if (offset == LogScanner.EARLIEST_OFFSET) {
+                    resolveLegacyStart(tb, snapshot, legacy);
+                    continue;
+                }
             }
 
             // TODO add select preferred read replica, currently we can only read from leader.
@@ -600,6 +776,11 @@ public class LogFetcher implements Closeable {
                                 .setBucketId(tb.getBucket())
                                 .setFetchOffset(offset)
                                 .setMaxFetchBytes(maxBucketFetchBytes);
+
+                if (snapshot.isBounded() && legacy == null) {
+                    fetchLogReqForBucket.setStoppingOffset(snapshot.stoppingOffset);
+                }
+
                 if (tb.getPartitionId() != null) {
                     fetchLogReqForBucket.setPartitionId(tb.getPartitionId());
                 }
@@ -674,6 +855,149 @@ public class LogFetcher implements Closeable {
         }
     }
 
+    private void enqueueStartResolution(
+            TableBucket tb,
+            TableReadContext context,
+            LogScannerStatus.SubscriptionSnapshot snapshot,
+            long start,
+            long highWatermark) {
+        CompletedFetch completed =
+                new DefaultCompletedFetch(
+                        tb,
+                        context.tablePath,
+                        FetchLogResultForBucket.empty(tb, highWatermark, -1L),
+                        context.readContext,
+                        logScannerStatus,
+                        isCheckCrcs,
+                        snapshot.offset,
+                        null);
+        completed.bindSubscription(snapshot, start);
+        logFetchBuffer.add(completed);
+    }
+
+    private void enqueueFailure(
+            TableBucket tb, LogScannerStatus.SubscriptionSnapshot snapshot, Throwable failure) {
+        TableReadContext context = tableReadContexts.get(tb.getTableId());
+        if (context == null
+                || !logScannerStatus.matchesRequestedRange(
+                        tb, snapshot.offset, snapshot.stoppingOffset)) {
+            return;
+        }
+        CompletedFetch completed =
+                new DefaultCompletedFetch(
+                        tb,
+                        context.tablePath,
+                        FetchLogResultForBucket.empty(tb, -1L, -1L),
+                        context.readContext,
+                        logScannerStatus,
+                        isCheckCrcs,
+                        snapshot.offset,
+                        null);
+        completed.bindSubscription(snapshot, -1L);
+        completed.setFailure(failure);
+        logFetchBuffer.add(completed);
+    }
+
+    private void resolveLegacyStart(
+            TableBucket tb,
+            LogScannerStatus.SubscriptionSnapshot snapshot,
+            LegacyFetchState legacy) {
+        long now = System.nanoTime();
+        if (legacy.resolving || legacy.failed || now < legacy.retryAfterNanos) {
+            return;
+        }
+        Integer leader = getTableBucketLeader(tb);
+        if (leader == null) {
+            legacy.retryAfterNanos = System.nanoTime() + MILLISECONDS.toNanos(100);
+            return;
+        }
+        TabletServerGateway gateway = metadataUpdater.newTabletServerClientForNode(leader);
+        if (gateway == null) {
+            legacy.retryAfterNanos = System.nanoTime() + MILLISECONDS.toNanos(100);
+            return;
+        }
+        legacy.resolving = true;
+        legacy.retryAfterNanos = 0L;
+        try {
+            gateway.listOffsets(
+                            makeListOffsetsRequest(
+                                    tb.getTableId(),
+                                    tb.getPartitionId(),
+                                    Collections.singletonList(tb.getBucket()),
+                                    new OffsetSpec.EarliestSpec(),
+                                    metadataUpdater.getCluster()))
+                    .whenComplete(
+                            (response, error) ->
+                                    handleLegacyStart(tb, snapshot, legacy, response, error));
+        } catch (Throwable error) {
+            handleLegacyStart(tb, snapshot, legacy, null, error);
+        }
+    }
+
+    private synchronized void handleLegacyStart(
+            TableBucket tb,
+            LogScannerStatus.SubscriptionSnapshot snapshot,
+            LegacyFetchState legacy,
+            ListOffsetsResponse response,
+            Throwable error) {
+        if (isClosed
+                || legacySubscriptions.get(tb) != legacy
+                || !logScannerStatus.matchesRequestedRange(
+                        tb, snapshot.offset, snapshot.stoppingOffset)) {
+            return;
+        }
+        legacy.resolving = false;
+        try {
+            if (error == null) {
+                if (response == null || response.getBucketsRespsCount() != 1) {
+                    throw new FetchException("Missing or duplicate ListOffsets result for " + tb);
+                }
+                PbListOffsetsRespForBucket bucketResponse = response.getBucketsRespAt(0);
+                if (bucketResponse.getBucketId() != tb.getBucket()) {
+                    throw new FetchException("Unexpected ListOffsets bucket for " + tb);
+                }
+                ApiError apiError = ApiError.fromErrorMessage(bucketResponse);
+                if (apiError.isFailure()) {
+                    throw apiError.exception();
+                }
+                if (!bucketResponse.hasOffset() || bucketResponse.getOffset() < 0) {
+                    throw new FetchException("Invalid earliest offset for " + tb);
+                }
+                TableReadContext context = tableReadContexts.get(tb.getTableId());
+                if (context != null) {
+                    enqueueStartResolution(tb, context, snapshot, bucketResponse.getOffset(), -1L);
+                }
+                return;
+            }
+        } catch (RuntimeException failure) {
+            error = failure;
+        }
+        Throwable cause = ExceptionUtils.stripCompletionException(error);
+        if (cause instanceof InvalidMetadataException
+                || cause instanceof InvalidBucketRoutingException) {
+            handleFetchLogExceptionForBucket(tb, -1, ApiError.fromThrowable(cause));
+        } else if (!(cause instanceof RetriableException)
+                && !(cause instanceof IOException)
+                && !(cause instanceof TimeoutException)) {
+            legacy.failed = true;
+            enqueueFailure(tb, snapshot, cause);
+            return;
+        }
+        legacy.retryAfterNanos = System.nanoTime() + MILLISECONDS.toNanos(100);
+        logFetchBuffer.requestFetchRetry();
+    }
+
+    private static final class LegacyFetchState {
+        private final long stoppingOffset;
+        private boolean resolving;
+        private boolean failed;
+        private long retryAfterNanos;
+
+        private LegacyFetchState(long stoppingOffset) {
+            this.stoppingOffset = stoppingOffset;
+        }
+    }
+
     private List<TableBucket> fetchableBuckets() {
         // This is the set of buckets we have in our buffer
         Set<TableBucket> exclude = logFetchBuffer.bufferedBuckets();
@@ -726,16 +1050,24 @@ public class LogFetcher implements Closeable {
         return tableReadContexts.size();
     }
 
+    @VisibleForTesting
+    int getQueuedRemoteSegmentCount() {
+        return remoteLogDownloader.getSizeOfSegmentsToFetch();
+    }
+
     /** Request-scoped context snapshot. */
     private static class FetchRequestContext {
         private final Map<Long, TableReadContext> requestedTableContexts;
         private final TableOrPartitions tableOrPartitions;
+        private final Map<TableBucket, LogScannerStatus.SubscriptionSnapshot> subscriptions;
 
         private FetchRequestContext(
                 Map<Long, TableReadContext> requestedTableContexts,
-                TableOrPartitions tableOrPartitions) {
+                TableOrPartitions tableOrPartitions,
+                Map<TableBucket, LogScannerStatus.SubscriptionSnapshot> subscriptions) {
             this.requestedTableContexts = requestedTableContexts;
             this.tableOrPartitions = tableOrPartitions;
+            this.subscriptions = subscriptions;
         }
     }
 

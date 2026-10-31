@@ -23,15 +23,25 @@ import org.apache.fluss.annotation.Internal;
 @Internal
 class BucketScanStatus {
     private long offset; // last consumed position
+    private final long stoppingOffset; // the stopping offset for bounded scan
     private long highWatermark = -1L; // the high watermark from last fetch, -1 if never fetched
     // TODO add resetStrategy and nextAllowedRetryTimeMs.
 
-    public BucketScanStatus() {
-        this.offset = 0L;
+    BucketScanStatus(long position, long stoppingOffset) {
+        this.offset = position;
+        this.stoppingOffset = stoppingOffset;
     }
 
-    public BucketScanStatus(Long position) {
-        this.offset = position;
+    long getStoppingOffset() {
+        return stoppingOffset;
+    }
+
+    boolean isBounded() {
+        return stoppingOffset != LogScanner.NO_STOPPING_OFFSET;
+    }
+
+    boolean isFinished() {
+        return isBounded() && (stoppingOffset == 0 || offset >= stoppingOffset);
     }
 
     public long getOffset() {
@@ -61,6 +71,8 @@ class BucketScanStatus {
         if (offset < 0 || highWatermark < 0) {
             return 0L;
         }
-        return Math.max(highWatermark - offset, 0L);
+        return Math.max(
+                (isBounded() ? Math.min(highWatermark, stoppingOffset) : highWatermark) - offset,
+                0L);
     }
 }

@@ -391,9 +391,11 @@ public class DelayedFetchLogTest extends ReplicaTestBase {
                 fetchParams,
                 replicaManager,
                 Collections.singletonMap(tb, prevFetchBucketStatus),
+                Collections.emptyMap(),
                 responseCallback,
                 TestingMetricGroups.TABLET_SERVER_METRICS,
-                null);
+                null,
+                0L);
     }
 
     private CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> watchDelayedFetch(

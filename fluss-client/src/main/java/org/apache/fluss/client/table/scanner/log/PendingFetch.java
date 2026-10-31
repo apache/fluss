@@ -31,6 +31,11 @@ interface PendingFetch {
 
     CompletedFetch toCompletedFetch();
 
+    /** Whether this pending fetch belongs to an obsolete or completed subscription. */
+    default boolean isObsolete() {
+        return false;
+    }
+
     /** Release resources when this pending fetch is removed before completion. */
     default void discard() {}
 }

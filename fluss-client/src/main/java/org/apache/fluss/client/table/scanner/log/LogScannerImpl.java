@@ -42,6 +42,8 @@ import java.time.Duration;
 import java.util.Collections;
 import java.util.ConcurrentModificationException;
 
+import static org.apache.fluss.utils.Preconditions.checkArgument;
+
 /**
  * The default impl of {@link LogScanner}.
  *
@@ -195,7 +197,10 @@ public class LogScannerImpl extends AbstractLogScanner<ScanRecords> implements L
             long startNanos = System.nanoTime();
             do {
                 ArrowScanRecords scanRecords = pollForRecordBatches();
-                if (scanRecords.isEmpty()) {
+                if (!scanRecords.hasProgress()) {
+                    if (logScannerStatus.allSubscribedBucketsFinished()) {
+                        return scanRecords;
+                    }
                     try {
                         if (!logFetcher.awaitNotEmpty(startNanos + timeoutNanos)) {
                             return scanRecords;
@@ -218,7 +223,7 @@ public class LogScannerImpl extends AbstractLogScanner<ScanRecords> implements L
 
     private ArrowScanRecords pollForRecordBatches() {
         ArrowScanRecords scanRecords = logFetcher.collectArrowFetch();
-        if (!scanRecords.isEmpty()) {
+        if (scanRecords.hasProgress()) {
             return scanRecords;
         }
 
@@ -241,7 +246,10 @@ public class LogScannerImpl extends AbstractLogScanner<ScanRecords> implements L
             this.logFetcher.registerTable(
                     new TableScanSpec(tableInfo, projection, recordBatchFilter), schemaGetter);
             this.metadataUpdater.checkAndUpdateTableMetadata(Collections.singleton(tablePath));
+            LogScannerStatus.SubscriptionSnapshot previous =
+                    logScannerStatus.subscriptionSnapshot(tableBucket);
             this.logScannerStatus.assignScanBuckets(Collections.singletonMap(tableBucket, offset));
+            logFetcher.onSubscriptionChanged(tableBucket, previous != null && previous.isBounded());
         } finally {
             release();
         }
@@ -265,7 +273,52 @@ public class LogScannerImpl extends AbstractLogScanner<ScanRecords> implements L
             // is not exist
             metadataUpdater.checkAndUpdatePartitionMetadata(
                     tablePath, Collections.singleton(partitionId));
+            LogScannerStatus.SubscriptionSnapshot previous =
+                    logScannerStatus.subscriptionSnapshot(tableBucket);
             logScannerStatus.assignScanBuckets(Collections.singletonMap(tableBucket, offset));
+            logFetcher.onSubscriptionChanged(tableBucket, previous != null && previous.isBounded());
+        } finally {
+            release();
+        }
+    }
+
+    @Override
+    public void subscribeBounded(int bucket, long startingOffset, long stoppingOffset) {
+        subscribeBoundedBucket(null, bucket, startingOffset, stoppingOffset);
+    }
+
+    @Override
+    public void subscribeBounded(
+            long partitionId, int bucket, long startingOffset, long stoppingOffset) {
+        subscribeBoundedBucket(partitionId, bucket, startingOffset, stoppingOffset);
+    }
+
+    private void subscribeBoundedBucket(
+            @Nullable Long partitionId, int bucket, long startingOffset, long stoppingOffset) {
+        if (isPartitionedTable != (partitionId != null)) {
+            throw new IllegalStateException(
+                    "Use the bounded subscribe method matching the table partitioning.");
+        }
+        checkArgument(
+                startingOffset >= 0 || startingOffset == EARLIEST_OFFSET,
+                "Starting offset must be nonnegative or EARLIEST_OFFSET.");
+        checkArgument(stoppingOffset >= 0, "Stopping offset must be nonnegative.");
+        acquireAndEnsureOpen();
+        try {
+            logFetcher.registerTable(
+                    new TableScanSpec(tableInfo, projection, recordBatchFilter), schemaGetter);
+            if (partitionId == null) {
+                metadataUpdater.checkAndUpdateTableMetadata(Collections.singleton(tablePath));
+            } else {
+                metadataUpdater.checkAndUpdatePartitionMetadata(
+                        tablePath, Collections.singleton(partitionId));
+            }
+            TableBucket tableBucket =
+                    partitionId == null
+                            ? new TableBucket(tableId, bucket)
+                            : new TableBucket(tableId, partitionId, bucket);
+            logScannerStatus.assignBoundedScanBucket(tableBucket, startingOffset, stoppingOffset);
+            logFetcher.onSubscriptionChanged(tableBucket, true);
         } finally {
             release();
         }
@@ -280,7 +333,10 @@ public class LogScannerImpl extends AbstractLogScanner<ScanRecords> implements L
         acquireAndEnsureOpen();
         try {
             TableBucket tableBucket = new TableBucket(tableId, partitionId, bucket);
+            LogScannerStatus.SubscriptionSnapshot previous =
+                    logScannerStatus.subscriptionSnapshot(tableBucket);
             logScannerStatus.unassignScanBuckets(Collections.singletonList(tableBucket));
+            logFetcher.onSubscriptionChanged(tableBucket, previous != null && previous.isBounded());
         } finally {
             release();
         }
@@ -297,7 +353,10 @@ public class LogScannerImpl extends AbstractLogScanner<ScanRecords> implements L
         acquireAndEnsureOpen();
         try {
             TableBucket tableBucket = new TableBucket(tableId, bucket);
+            LogScannerStatus.SubscriptionSnapshot previous =
+                    logScannerStatus.subscriptionSnapshot(tableBucket);
             logScannerStatus.unassignScanBuckets(Collections.singletonList(tableBucket));
+            logFetcher.onSubscriptionChanged(tableBucket, previous != null && previous.isBounded());
         } finally {
             release();
         }

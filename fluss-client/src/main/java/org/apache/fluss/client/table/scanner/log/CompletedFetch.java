@@ -63,6 +63,9 @@ public abstract class CompletedFetch {
     final long highWatermark;
     private final long fetchOffset;
     private final long filteredEndOffset;
+    private long stoppingOffset = LogScanner.NO_STOPPING_OFFSET;
+    private long logStartOffset = -1L;
+    private RuntimeException failure;
 
     private final boolean isCheckCrcs;
     private final Iterator<LogRecordBatch> batches;
@@ -111,6 +114,75 @@ public abstract class CompletedFetch {
                 tableBucket);
         this.filteredEndOffset = filteredEndOffset;
         this.nextFetchOffset = fetchOffset;
+        LogScannerStatus.SubscriptionSnapshot snapshot =
+                logScannerStatus.subscriptionSnapshot(tableBucket);
+        if (snapshot != null) {
+            bindSubscription(snapshot, -1L);
+        }
+    }
+
+    void bindSubscription(LogScannerStatus.SubscriptionSnapshot snapshot, long logStartOffset) {
+        this.stoppingOffset = snapshot.stoppingOffset;
+        this.logStartOffset = logStartOffset;
+    }
+
+    long stoppingOffset() {
+        return stoppingOffset;
+    }
+
+    boolean isCurrentSubscription() {
+        return logScannerStatus.matchesStoppingOffset(tableBucket, stoppingOffset);
+    }
+
+    boolean isBounded() {
+        return stoppingOffset != LogScanner.NO_STOPPING_OFFSET;
+    }
+
+    boolean isObsolete() {
+        LogScannerStatus.SubscriptionSnapshot current =
+                logScannerStatus.subscriptionSnapshot(tableBucket);
+        return current == null
+                || current.stoppingOffset != stoppingOffset
+                || (current.isBounded()
+                        && (current.stoppingOffset == 0
+                                || current.offset >= current.stoppingOffset));
+    }
+
+    void setFailure(Throwable cause) {
+        failure =
+                cause instanceof org.apache.fluss.exception.AuthorizationException
+                        ? (org.apache.fluss.exception.AuthorizationException) cause
+                        : new FetchException(cause);
+    }
+
+    void checkFailure() {
+        if (failure != null) {
+            throw failure;
+        }
+    }
+
+    boolean resolveStartingOffset() {
+        if (!isBounded() || fetchOffset != LogScanner.EARLIEST_OFFSET) {
+            return true;
+        }
+        if (logStartOffset < 0) {
+            throw new FetchException(
+                    "Missing or invalid bounded log start offset for " + tableBucket);
+        }
+        if (!logScannerStatus.resolveBoundedStartingOffset(
+                tableBucket, stoppingOffset, logStartOffset)) {
+            return false;
+        }
+        nextFetchOffset = Math.min(logStartOffset, stoppingOffset);
+        return true;
+    }
+
+    private long capOffset(long offset) {
+        return isBounded() ? Math.min(offset, stoppingOffset) : offset;
+    }
+
+    private boolean reachedStop() {
+        return isBounded() && nextFetchOffset >= stoppingOffset;
     }
 
     // TODO: optimize this to avoid deep copying the record.
@@ -236,7 +308,11 @@ public abstract class CompletedFetch {
             // included in the same batch. This prevents downstream converters (e.g.,
             // BinlogRowConverter) from seeing an orphaned -U when records from multiple
             // buckets are interleaved across polls.
-            if (lastRecord != null && lastRecord.getChangeType() == ChangeType.UPDATE_BEFORE) {
+            // For Bounded scans, the Pair (-U, +U) may be split if the +U is beyond the stopping
+            // offset
+            if (!isConsumed
+                    && lastRecord != null
+                    && lastRecord.getChangeType() == ChangeType.UPDATE_BEFORE) {
                 fetchRecord(scanRecords);
             }
         } catch (Exception e) {
@@ -254,6 +330,11 @@ public abstract class CompletedFetch {
     }
 
     private void fetchRecord(List<ScanRecord> scanRecords) throws Exception {
+        if (isConsumed || reachedStop()) {
+            lastRecord = null;
+            drain();
+            return;
+        }
         // Only move to next record if there was no exception in the last fetch.
         if (cachedRecordException == null) {
             corruptLastRecord = true;
@@ -265,6 +346,13 @@ public abstract class CompletedFetch {
             return;
         }
 
+        if (isBounded() && lastRecord.logOffset() >= stoppingOffset) {
+            nextFetchOffset = stoppingOffset;
+            lastRecord = null;
+            drain();
+            return;
+        }
+
         ScanRecord record = toScanRecord(lastRecord);
         scanRecords.add(record);
         recordsRead++;
@@ -272,6 +360,9 @@ public abstract class CompletedFetch {
         // comes from the batch's nextLogOffset once the batch is fully consumed.
         nextFetchOffset = lastRecord.logOffset() + 1;
         cachedRecordException = null;
+        if (reachedStop()) {
+            drain();
+        }
     }
 
     /**
@@ -322,11 +413,30 @@ public abstract class CompletedFetch {
                     }
                     arrowBatchData = arrowBatchData.sliceAndTransferOwnership(skipRows);
                 }
+                if (isBounded()) {
+                    long remaining = stoppingOffset - arrowBatchData.getBaseLogOffset();
+                    if (remaining <= 0) {
+                        arrowBatchData.close();
+                        nextFetchOffset = stoppingOffset;
+                        drain();
+                        break;
+                    }
+                    if (remaining < arrowBatchData.getRecordCount()) {
+                        arrowBatchData =
+                                arrowBatchData.truncateAndTransferOwnership((int) remaining);
+                    }
+                }
 
                 arrowBatches.add(arrowBatchData);
                 recordsRead += arrowBatchData.getRecordCount();
                 recordsFetched += arrowBatchData.getRecordCount();
-                nextFetchOffset = batch.nextLogOffset();
+
+                nextFetchOffset = capOffset(batch.nextLogOffset());
+
+                if (reachedStop()) {
+                    drain();
+                    break;
+                }
             }
         } catch (Exception e) {
             // Deliver partial results when possible, mirroring fetchRecords() semantics.
@@ -370,12 +480,22 @@ public abstract class CompletedFetch {
 
     private LogRecordBatch nextFetchedBatch() {
         maybeCloseRecordStream();
+        if (reachedStop()) {
+            drain();
+            return null;
+        }
         if (!batches.hasNext()) {
             finishFetchedBatches();
             return null;
         }
 
         currentBatch = batches.next();
+
+        if (isBounded() && currentBatch.baseLogOffset() >= stoppingOffset) {
+            nextFetchOffset = stoppingOffset;
+            drain();
+            return null;
+        }
         // TODO get last epoch.
         maybeEnsureValid(currentBatch);
         return currentBatch;
@@ -394,6 +514,7 @@ public abstract class CompletedFetch {
         } else if (filteredEndOffset != NO_FILTERED_END_OFFSET) {
             nextFetchOffset = filteredEndOffset;
         }
+        nextFetchOffset = capOffset(nextFetchOffset);
         drain();
     }
 

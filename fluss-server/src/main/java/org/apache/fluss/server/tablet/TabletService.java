@@ -380,6 +380,7 @@ public final class TabletService extends RpcServiceBase
 
         CompletableFuture<FetchLogResponse> response = new CompletableFuture<>();
         FetchParams fetchParams = getFetchParams(request);
+        fetchParams.setApiVersion(currentSession().getApiVersion());
         replicaManager.fetchLogRecords(
                 fetchParams,
                 interesting,

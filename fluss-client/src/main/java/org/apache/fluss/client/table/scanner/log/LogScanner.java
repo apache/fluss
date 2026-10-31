@@ -98,6 +98,49 @@ public interface LogScanner extends AutoCloseable {
     void subscribe(long partitionId, int bucket, long offset);
 
     /**
+     * Subscribes to a bounded log range {@code [startingOffset, stoppingOffset)}.
+     *
+     * <p>The starting offset must be nonnegative or {@link #EARLIEST_OFFSET}. The stopping offset
+     * must be nonnegative.
+     *
+     * <p>{@link #EARLIEST_OFFSET} retains the existing Fluss log start offset semantics.
+     *
+     * <p>An explicit starting offset at or beyond the stopping offset represents an empty range.
+     * Completion is reported once through {@link ScanRecords#finishedBuckets()} without
+     * automatically unsubscribing the bucket.
+     *
+     * <p>The exclusive stopping offset may split a CDC update pair.
+     *
+     * <p>Please use {@link #subscribeBounded(long, int, long, long)} to subscribe a partitioned
+     * table.
+     *
+     * @param bucket the bucket of a non-partitioned table
+     * @param startingOffset the inclusive starting offset
+     * @param stoppingOffset the exclusive stopping offset
+     */
+    default void subscribeBounded(int bucket, long startingOffset, long stoppingOffset) {
+        throw new UnsupportedOperationException("Bounded scans are not supported by this scanner.");
+    }
+
+    /**
+     * Subscribes to a partitioned bucket's bounded log range.
+     *
+     * <p>See {@link #subscribeBounded(int, long, long)} for the range and completion semantics.
+     *
+     * <p>Please use {@link #subscribeBounded(int, long, long)} to subscribe a non-partitioned
+     * table.
+     *
+     * @param partitionId the physical partition ID
+     * @param bucket the bucket of the partition
+     * @param startingOffset the inclusive starting offset
+     * @param stoppingOffset the exclusive stopping offset
+     */
+    default void subscribeBounded(
+            long partitionId, int bucket, long startingOffset, long stoppingOffset) {
+        throw new UnsupportedOperationException("Bounded scans are not supported by this scanner.");
+    }
+
+    /**
      * Unsubscribe from the given bucket of given partition dynamically.
      *
      * @param partitionId the partition id of the table partition to unsubscribe.
