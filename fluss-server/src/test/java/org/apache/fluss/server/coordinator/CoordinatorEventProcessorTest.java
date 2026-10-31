@@ -27,7 +27,9 @@ import org.apache.fluss.exception.FencedLeaderEpochException;
 import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PartitionSpec;
+import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
@@ -90,12 +92,14 @@ import org.apache.fluss.server.zk.data.ZkVersion;
 import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.ExceptionUtils;
+import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -886,6 +890,79 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
         initCoordinatorChannel();
         eventProcessor.startup();
         verifyPartitionDropped(tableId, partition2Id);
+    }
+
+    @Test
+    void testRestartRestoresDefaultPartitionRemoteDirectory() throws Exception {
+        TablePath tablePath =
+                TablePath.of(defaultDatabase, "test_default_partition_remote_directory");
+        // make sure all request to gateway should be successful
+        initCoordinatorChannel();
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("a", DataTypes.INT())
+                                        .column("p", DataTypes.STRING())
+                                        .build())
+                        .distributedBy(1)
+                        .partitionedBy("p")
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, false)
+                        .build()
+                        .withReplicationFactor(1);
+        long tableId =
+                metadataManager.createTable(tablePath, remoteDataDir, descriptor, null, false);
+        retryVerifyContext(ctx -> assertThat(ctx.containsTableId(tableId)).isTrue());
+
+        long partitionId = zookeeperClient.getPartitionIdAndIncrement();
+        String partitionName = "legacy";
+        TablePartition partition = new TablePartition(tableId, partitionId);
+        PartitionAssignment assignment =
+                new PartitionAssignment(
+                        tableId, Collections.singletonMap(0, BucketAssignment.of(0)));
+        zookeeperClient.registerPartitionAssignmentAndMetadata(
+                partitionId, partitionName, assignment, remoteDataDir, tablePath, tableId, 1);
+        verifyPartitionCreated(partition, assignment, 1, 1);
+
+        eventProcessor.shutdown();
+        // Old registrations have neither a remote directory nor a per-partition bucket count.
+        String legacyRegistration =
+                String.format(
+                        "{\"version\":1,\"table_id\":%d,\"partition_id\":%d}",
+                        tableId, partitionId);
+        zookeeperClient
+                .getCuratorClient()
+                .setData()
+                .forPath(
+                        ZkData.PartitionZNode.path(tablePath, partitionName),
+                        legacyRegistration.getBytes(StandardCharsets.UTF_8));
+        eventProcessor = buildCoordinatorEventProcessor();
+        eventProcessor.startup();
+
+        PartitionInfo restored = fromCtx(ctx -> ctx.getPartitionInfoById(partitionId));
+        assertThat(restored).isNotNull();
+        assertThat(restored.getRemoteDataDir()).isEqualTo(remoteDataDir);
+        assertThat(restored.getBucketCount()).isEqualTo(1);
+
+        FsPath remotePartitionDir =
+                FlussPaths.remotePartitionDir(
+                        FlussPaths.remoteLogDir(remoteDataDir),
+                        PhysicalTablePath.of(tablePath, partitionName),
+                        partition);
+        remotePartitionDir.getFileSystem().mkdirs(remotePartitionDir);
+        assertThat(remotePartitionDir.getFileSystem().exists(remotePartitionDir)).isTrue();
+
+        zookeeperClient.deletePartition(tablePath, partitionName);
+        retry(
+                Duration.ofSeconds(30),
+                () -> {
+                    assertThat(zookeeperClient.getPartitionAssignment(partitionId)).isEmpty();
+                    assertThat(remotePartitionDir.getFileSystem().exists(remotePartitionDir))
+                            .isFalse();
+                    boolean deletionQueued =
+                            fromCtx(ctx -> ctx.isPartitionQueuedForDeletion(partition));
+                    assertThat(deletionQueued).isFalse();
+                });
     }
 
     @Test
