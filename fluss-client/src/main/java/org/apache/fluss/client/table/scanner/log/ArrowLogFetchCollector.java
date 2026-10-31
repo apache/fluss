@@ -63,7 +63,8 @@ public class ArrowLogFetchCollector
     protected ArrowScanRecords toResult(
             Map<TableBucket, List<ArrowBatchData>> fetchedRecords,
             Map<TableBucket, Long> consumedUpToOffsets) {
-        return new ArrowScanRecords(fetchedRecords, consumedUpToOffsets);
+        return new ArrowScanRecords(
+                fetchedRecords, consumedUpToOffsets, logScannerStatus.drainFinishedBuckets());
     }
 
     @Override

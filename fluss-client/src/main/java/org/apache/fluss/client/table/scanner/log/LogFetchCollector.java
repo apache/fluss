@@ -68,6 +68,7 @@ public class LogFetchCollector extends AbstractLogFetchCollector<ScanRecord, Sca
     protected ScanRecords toResult(
             Map<TableBucket, List<ScanRecord>> fetchedRecords,
             Map<TableBucket, Long> consumedUpToOffsets) {
-        return new ScanRecords(fetchedRecords, consumedUpToOffsets);
+        return new ScanRecords(
+                fetchedRecords, consumedUpToOffsets, logScannerStatus.drainFinishedBuckets());
     }
 }

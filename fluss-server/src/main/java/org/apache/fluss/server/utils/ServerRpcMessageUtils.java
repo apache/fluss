@@ -1098,7 +1098,10 @@ public class ServerRpcMessageUtils {
                                 tableId,
                                 fetchLogReqForBucket.getFetchOffset(),
                                 fetchLogReqForBucket.getMaxFetchBytes(),
-                                projectionFields));
+                                projectionFields,
+                                fetchLogReqForBucket.hasStoppingOffset()
+                                        ? fetchLogReqForBucket.getStoppingOffset()
+                                        : null));
             }
         }
 
@@ -1134,8 +1137,10 @@ public class ServerRpcMessageUtils {
             } else {
                 fetchLogRespForBucket
                         .setHighWatermark(bucketResult.getHighWatermark())
-                        // TODO: set log start offset here if we support log clean.
-                        .setLogStartOffset(0L);
+                        .setLogStartOffset(
+                                bucketResult.getLogStartOffset() >= 0
+                                        ? bucketResult.getLogStartOffset()
+                                        : 0L);
 
                 if (bucketResult.fetchFromRemote()) {
                     // set remote log fetch info.

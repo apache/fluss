@@ -2101,7 +2101,8 @@ public final class Replica {
                             fetchParams.isolation(),
                             fetchParams.minOneMessage(),
                             fetchParams.projection(),
-                            filterContext);
+                            filterContext,
+                            fetchParams.stoppingOffset());
         } finally {
             // Close readContext eagerly — it is only used for statistics extraction during
             // batch filtering and is NOT referenced by the returned FetchDataInfo records.

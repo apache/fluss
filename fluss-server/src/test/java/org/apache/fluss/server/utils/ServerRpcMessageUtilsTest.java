@@ -139,6 +139,34 @@ class ServerRpcMessageUtilsTest {
     }
 
     @Test
+    void testFetchLogResponseContainsLogStartOffset() {
+        TableBucket bucket = new TableBucket(1L, 0);
+        FetchLogResultForBucket result =
+                FetchLogResultForBucket.empty(bucket, 20L, 15L).withLogStartOffset(10L);
+        PbFetchLogRespForBucket response =
+                ServerRpcMessageUtils.makeFetchLogResponse(Collections.singletonMap(bucket, result))
+                        .getTablesRespsList()
+                        .get(0)
+                        .getBucketsRespsList()
+                        .get(0);
+        assertThat(response.getLogStartOffset()).isEqualTo(10L);
+        assertThat(
+                        CommonRpcMessageUtils.getFetchLogResultForBucket(
+                                        bucket, TablePath.of("db", "table"), response)
+                                .getLogStartOffset())
+                .isEqualTo(10L);
+        PbFetchLogRespForBucket legacy =
+                ServerRpcMessageUtils.makeFetchLogResponse(
+                                Collections.singletonMap(
+                                        bucket, FetchLogResultForBucket.empty(bucket, 20L, -1L)))
+                        .getTablesRespsList()
+                        .get(0)
+                        .getBucketsRespsList()
+                        .get(0);
+        assertThat(legacy.getLogStartOffset()).isZero();
+    }
+
+    @Test
     void testFetchLogResponseContainsMinRetainOffset() {
         TableBucket tableBucket = new TableBucket(1L, 0);
         FetchLogResultForBucket result =

@@ -896,6 +896,92 @@ final class LocalLogTest extends LogTestBase {
         }
     }
 
+    @Test
+    void testBoundedFilterStopsBeforeReadingNextSegment() throws Exception {
+        // Segment 1: offsets [0, 3), all rejected by the filter.
+        MemoryLogRecords firstSegment =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        Arrays.asList(
+                                new Object[] {1, "a"},
+                                new Object[] {2, "b"},
+                                new Object[] {3, "c"}),
+                        DATA1_ROW_TYPE,
+                        0L,
+                        DEFAULT_SCHEMA_ID);
+
+        localLog.append(2L, -1L, 0L, firstSegment);
+        localLog.roll(Optional.empty());
+
+        // Segment 2: offsets [3, 6), all matching the filter.
+        // These records must not be read when stop is inside Segment 1.
+        MemoryLogRecords secondSegment =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        Arrays.asList(
+                                new Object[] {7, "d"},
+                                new Object[] {8, "e"},
+                                new Object[] {9, "f"}),
+                        DATA1_ROW_TYPE,
+                        3L,
+                        DEFAULT_SCHEMA_ID);
+
+        localLog.append(5L, -1L, 0L, secondSegment);
+
+        assertThat(localLog.getSegments().numberOfSegments()).isEqualTo(2);
+
+        Predicate filter = new PredicateBuilder(DATA1_ROW_TYPE).greaterThan(0, 5);
+
+        try (LogRecordReadContext readContext =
+                LogRecordReadContext.createArrowReadContext(
+                        DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER)) {
+            FilterContext filterContext =
+                    new FilterContext(filter, readContext, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER);
+            // Stop=2 falls inside the first filtered batch.
+            // The matching records in Segment 2 are outside the bounded range.
+            FetchDataInfo boundedResult =
+                    localLog.read(
+                            0L,
+                            Integer.MAX_VALUE,
+                            false,
+                            localLog.getLocalLogEndOffsetMetadata(),
+                            null,
+                            filterContext,
+                            2L);
+
+            assertThat(boundedResult).isNotNull();
+            assertThat(boundedResult.getRecords().sizeInBytes()).isZero();
+            assertThat(boundedResult.hasFilteredEndOffset()).isTrue();
+            assertThat(boundedResult.getFilteredEndOffset()).isEqualTo(2L);
+
+            // With stop=6, scanning must continue into Segment 2 and
+            // return the matching records.
+            FetchDataInfo acrossSegments =
+                    localLog.read(
+                            0L,
+                            Integer.MAX_VALUE,
+                            false,
+                            localLog.getLocalLogEndOffsetMetadata(),
+                            null,
+                            filterContext,
+                            6L);
+
+            assertThat(acrossSegments).isNotNull();
+            assertThat(acrossSegments.getRecords().sizeInBytes()).isGreaterThan(0);
+
+            int recordCount = 0;
+            for (LogRecordBatch batch : acrossSegments.getRecords().batches()) {
+                try (CloseableIterator<LogRecord> iterator = batch.records(readContext)) {
+                    while (iterator.hasNext()) {
+                        LogRecord record = iterator.next();
+                        assertThat(record.getRow().getInt(0)).isGreaterThan(5);
+                        recordCount++;
+                    }
+                }
+            }
+
+            assertThat(recordCount).isEqualTo(3);
+        }
+    }
+
     private FetchDataInfo readLog(LocalLog log, long startOffset, int maxLength) throws Exception {
         return log.read(
                 startOffset, maxLength, false, localLog.getLocalLogEndOffsetMetadata(), null, null);

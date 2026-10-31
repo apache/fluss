@@ -17,11 +17,14 @@
 
 package org.apache.fluss.client.table.scanner.log;
 
+import org.apache.fluss.client.Connection;
+import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.ClientToServerITCaseBase;
 import org.apache.fluss.client.admin.FlussAdmin;
 import org.apache.fluss.client.metadata.ClientSchemaGetter;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.metrics.TestingScannerMetricGroup;
+import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.scanner.RemoteFileDownloader;
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.cluster.Cluster;
@@ -30,6 +33,7 @@ import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.record.ArrowBatchData;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.row.GenericRow;
@@ -37,6 +41,8 @@ import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.PbProduceLogRespForBucket;
 import org.apache.fluss.rpc.messages.ProduceLogResponse;
+import org.apache.fluss.server.replica.Replica;
+import org.apache.fluss.server.replica.ReplicaManager;
 import org.apache.fluss.testutils.DataTestUtils;
 import org.apache.fluss.types.DataTypes;
 
@@ -44,6 +50,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -54,8 +61,10 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
+import static org.apache.fluss.metadata.LogFormat.ARROW;
 import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
 import static org.apache.fluss.record.TestData.DATA1;
+import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO;
@@ -64,10 +73,12 @@ import static org.apache.fluss.record.TestData.DATA2;
 import static org.apache.fluss.record.TestData.DATA2_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DATA2_SCHEMA;
 import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
+import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newProduceLogRequest;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** IT test for {@link LogFetcher}. */
 public class LogFetcherITCase extends ClientToServerITCaseBase {
@@ -361,6 +372,245 @@ public class LogFetcherITCase extends ClientToServerITCaseBase {
         future.get(30, TimeUnit.SECONDS);
         assertThat(future.isDone()).isTrue();
         executor.shutdownNow();
+    }
+
+    @Test
+    void testBoundedRowScanStopsInsideBatch() throws Exception {
+        TableBucket bucket = new TableBucket(tableId, 0);
+        addRecordsToBucket(bucket, genMemoryLogRecordsByObject(DATA1), 0L);
+        try (Connection connection = ConnectionFactory.createConnection(clientConf);
+                Table table = connection.getTable(DATA1_TABLE_PATH);
+                LogScanner scanner = table.newScan().createLogScanner()) {
+            scanner.subscribeBounded(0, 2L, 6L);
+            List<Long> offsets = new ArrayList<>();
+            int completionCount = 0;
+
+            for (int i = 0; i < 10 && completionCount == 0; i++) {
+                ScanRecords polled = scanner.poll(Duration.ofSeconds(2));
+                for (ScanRecord record : polled.records(bucket)) {
+                    offsets.add(record.logOffset());
+                }
+                if (polled.finishedBuckets().contains(bucket)) {
+                    completionCount++;
+                    assertThat(polled.consumedUpToOffset(bucket)).isEqualTo(6L);
+                }
+            }
+
+            assertThat(offsets).containsExactly(2L, 3L, 4L, 5L);
+            assertThat(completionCount).isEqualTo(1);
+
+            ScanRecords afterCompletion = scanner.poll(Duration.ZERO);
+            assertThat(afterCompletion.records(bucket)).isEmpty();
+            assertThat(afterCompletion.finishedBuckets()).isEmpty();
+        }
+    }
+
+    @Test
+    void testBoundedArrowScanStopsInsideBatch() throws Exception {
+        TableBucket bucket = new TableBucket(tableId, 0);
+        MemoryLogRecords records =
+                DataTestUtils.createRecordsWithoutBaseLogOffset(
+                        DATA1_ROW_TYPE,
+                        DEFAULT_SCHEMA_ID,
+                        0,
+                        0,
+                        CURRENT_LOG_MAGIC_VALUE,
+                        DATA1,
+                        ARROW,
+                        true);
+        addRecordsToBucket(bucket, records, 0L);
+        try (Connection connection = ConnectionFactory.createConnection(clientConf);
+                Table table = connection.getTable(DATA1_TABLE_PATH);
+                LogScannerImpl scanner = (LogScannerImpl) table.newScan().createLogScanner()) {
+            scanner.subscribeBounded(0, 2L, 6L);
+            List<Long> offsets = new ArrayList<>();
+
+            int completionCount = 0;
+            for (int i = 0; i < 10 && completionCount == 0; i++) {
+                try (ArrowScanRecords polled = scanner.pollRecordBatch(Duration.ofSeconds(2))) {
+                    for (ArrowBatchData batch : polled.records(bucket)) {
+                        long baseOffset = batch.getBaseLogOffset();
+                        for (int row = 0; row < batch.getRecordCount(); row++) {
+                            offsets.add(baseOffset + row);
+                        }
+                    }
+                    if (polled.finishedBuckets().contains(bucket)) {
+                        completionCount++;
+                        assertThat(polled.consumedUpToOffset(bucket)).isEqualTo(6L);
+                    }
+                }
+            }
+
+            assertThat(offsets).containsExactly(2L, 3L, 4L, 5L);
+            assertThat(completionCount).isEqualTo(1);
+
+            try (ArrowScanRecords afterCompletion = scanner.pollRecordBatch(Duration.ZERO)) {
+                assertThat(afterCompletion.count()).isZero();
+                assertThat(afterCompletion.finishedBuckets()).isEmpty();
+            }
+        }
+    }
+
+    @Test
+    void testBoundedResubscribeAfterCompletion() throws Exception {
+        TableBucket bucket = new TableBucket(tableId, 0);
+        addRecordsToBucket(bucket, genMemoryLogRecordsByObject(DATA1), 0L);
+        try (Connection connection = ConnectionFactory.createConnection(clientConf);
+                Table table = connection.getTable(DATA1_TABLE_PATH);
+                LogScanner scanner = table.newScan().createLogScanner()) {
+            // An empty bounded range completes immediately.
+            scanner.subscribeBounded(0, 10L, 10L);
+            ScanRecords first = scanner.poll(Duration.ofSeconds(1));
+            assertThat(first.count()).isZero();
+            assertThat(first.records(bucket)).isEmpty();
+            assertThat(first.finishedBuckets()).containsExactly(bucket);
+            assertThat(first.hasProgress()).isTrue();
+            // Completion must be reported only once.
+            ScanRecords afterCompletion = scanner.poll(Duration.ZERO);
+            assertThat(afterCompletion.count()).isZero();
+            assertThat(afterCompletion.finishedBuckets()).isEmpty();
+            assertThat(afterCompletion.hasProgress()).isFalse();
+            // Replace the completed subscription with a new bounded range.
+            scanner.subscribeBounded(0, 0L, 3L);
+            List<Long> offsets = new ArrayList<>();
+            int completionCount = 0;
+            for (int i = 0; i < 5 && completionCount == 0; i++) {
+                ScanRecords polled = scanner.poll(Duration.ofSeconds(1));
+                for (ScanRecord record : polled.records(bucket)) {
+                    offsets.add(record.logOffset());
+                }
+                if (polled.finishedBuckets().contains(bucket)) {
+                    completionCount++;
+                    assertThat(polled.consumedUpToOffset(bucket)).isEqualTo(3L);
+                }
+            }
+            assertThat(offsets).containsExactly(0L, 1L, 2L);
+            assertThat(completionCount).isEqualTo(1);
+            // The new subscription must also report completion only once.
+            ScanRecords afterResubscription = scanner.poll(Duration.ZERO);
+            assertThat(afterResubscription.count()).isZero();
+            assertThat(afterResubscription.records(bucket)).isEmpty();
+            assertThat(afterResubscription.finishedBuckets()).isEmpty();
+            assertThat(afterResubscription.hasProgress()).isFalse();
+        }
+    }
+
+    @Test
+    void testBoundedSubscribeRejectsInvalidArguments() throws Exception {
+        try (Connection connection = ConnectionFactory.createConnection(clientConf);
+                Table table = connection.getTable(DATA1_TABLE_PATH);
+                LogScanner scanner = table.newScan().createLogScanner()) {
+            // Negative starting offsets other than EARLIEST_OFFSET are invalid.
+            assertThatThrownBy(() -> scanner.subscribeBounded(0, -1L, 10L))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> scanner.subscribeBounded(0, -3L, 10L))
+                    .isInstanceOf(IllegalArgumentException.class);
+            // Stopping offsets must be nonnegative.
+            assertThatThrownBy(() -> scanner.subscribeBounded(0, 0L, -1L))
+                    .isInstanceOf(IllegalArgumentException.class);
+            // EARLIEST_OFFSET is a valid starting offset.
+            scanner.subscribeBounded(0, LogScanner.EARLIEST_OFFSET, 0L);
+        }
+    }
+
+    @Test
+    void testBoundedSubscribeRejectsWrongPartitionOverload() throws Exception {
+        try (Connection connection = ConnectionFactory.createConnection(clientConf);
+                Table table = connection.getTable(DATA1_TABLE_PATH);
+                LogScanner scanner = table.newScan().createLogScanner()) {
+
+            assertThatThrownBy(() -> scanner.subscribeBounded(1L, 0, 0L, 10L))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("table partitioning");
+        }
+    }
+
+    @Test
+    void testBoundedEarliestCompatibilityWithZeroStartOffset() throws Exception {
+        TableBucket bucket = new TableBucket(tableId, bucketId0);
+        addRecordsToBucket(bucket, genMemoryLogRecordsByObject(DATA1), 0L);
+        try (Connection connection = ConnectionFactory.createConnection(clientConf);
+                Table table = connection.getTable(DATA1_TABLE_PATH);
+                LogScanner scanner = table.newScan().createLogScanner()) {
+            assertBoundedEarliestScan(scanner, bucket, 0L);
+        }
+    }
+
+    @Test
+    void testBoundedEarliestCompatibilityWithNonZeroStartOffset() throws Exception {
+        TableBucket bucket = new TableBucket(tableId, bucketId0);
+        long logStartOffset = 100L;
+        resetLogStartOffset(bucket, logStartOffset);
+        addRecordsToBucket(bucket, genMemoryLogRecordsByObject(DATA1), logStartOffset);
+        try (Connection connection = ConnectionFactory.createConnection(clientConf);
+                Table table = connection.getTable(DATA1_TABLE_PATH);
+                LogScanner scanner = table.newScan().createLogScanner()) {
+            assertBoundedEarliestScan(scanner, bucket, logStartOffset);
+        }
+    }
+
+    @Test
+    void testBoundedEarliestCompatibilityCompletesWhenStartExceedsStop() throws Exception {
+        TableBucket bucket = new TableBucket(tableId, bucketId0);
+        resetLogStartOffset(bucket, 100L);
+        try (Connection connection = ConnectionFactory.createConnection(clientConf);
+                Table table = connection.getTable(DATA1_TABLE_PATH);
+                LogScanner scanner = table.newScan().createLogScanner()) {
+            scanner.subscribeBounded(bucketId0, LogScanner.EARLIEST_OFFSET, 90L);
+            ScanRecords first = scanner.poll(Duration.ofSeconds(2));
+            assertThat(first.records(bucket)).isEmpty();
+            assertThat(first.count()).isZero();
+            assertThat(first.consumedUpToOffset(bucket)).isEqualTo(90L);
+            assertThat(first.finishedBuckets()).containsExactly(bucket);
+            ScanRecords second = scanner.poll(Duration.ZERO);
+            assertThat(second.count()).isZero();
+            assertThat(second.finishedBuckets()).isEmpty();
+            assertThat(second.hasProgress()).isFalse();
+        }
+    }
+
+    private void assertBoundedEarliestScan(
+            LogScanner scanner, TableBucket bucket, long expectedStartOffset) {
+        long stoppingOffset = expectedStartOffset + 3L;
+        scanner.subscribeBounded(bucketId0, LogScanner.EARLIEST_OFFSET, stoppingOffset);
+        List<Long> offsets = new ArrayList<>();
+        int completionCount = 0;
+        for (int i = 0; i < 10 && completionCount == 0; i++) {
+            ScanRecords polled = scanner.poll(Duration.ofSeconds(2));
+            for (ScanRecord record : polled.records(bucket)) {
+                offsets.add(record.logOffset());
+            }
+            if (polled.finishedBuckets().contains(bucket)) {
+                completionCount++;
+                assertThat(polled.consumedUpToOffset(bucket)).isEqualTo(stoppingOffset);
+            }
+        }
+        assertThat(offsets)
+                .containsExactly(
+                        expectedStartOffset, expectedStartOffset + 1L, expectedStartOffset + 2L);
+        assertThat(completionCount).isEqualTo(1);
+        // Completion must be delivered only once.
+        ScanRecords afterCompletion = scanner.poll(Duration.ZERO);
+        assertThat(afterCompletion.count()).isZero();
+        assertThat(afterCompletion.records(bucket)).isEmpty();
+        assertThat(afterCompletion.finishedBuckets()).isEmpty();
+        assertThat(afterCompletion.hasProgress()).isFalse();
+    }
+
+    private void resetLogStartOffset(TableBucket bucket, long newStartOffset) {
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(bucket);
+        for (org.apache.fluss.server.tablet.TabletServer tabletServer :
+                FLUSS_CLUSTER_EXTENSION.getTabletServers()) {
+            ReplicaManager replicaManager = tabletServer.getReplicaManager();
+            ReplicaManager.HostedReplica hostedReplica = replicaManager.getReplica(bucket);
+            if (hostedReplica instanceof ReplicaManager.OnlineReplica) {
+                Replica replica = ((ReplicaManager.OnlineReplica) hostedReplica).getReplica();
+                replica.truncateFullyAndStartAt(newStartOffset);
+
+                assertThat(replica.getLogStartOffset()).isEqualTo(newStartOffset);
+                assertThat(replica.getLocalLogEndOffset()).isEqualTo(newStartOffset);
+            }
+        }
     }
 
     private void addRecordsToBucket(
