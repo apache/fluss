@@ -82,6 +82,7 @@ import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.as
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.groups.Tuple.tuple;
 
 /** IT case for {@link org.apache.fluss.flink.catalog.FlinkCatalog}. */
 abstract class FlinkCatalogITCase {
@@ -1449,6 +1450,88 @@ abstract class FlinkCatalogITCase {
         assertThatThrownBy(() -> catalog.dropTable(bucketsPath, false))
                 .isInstanceOf(UnsupportedOperationException.class)
                 .hasMessageContaining("read-only virtual table");
+    }
+
+    @Test
+    @MultiVersionTest
+    void testPartitionsVirtualTable() throws Exception {
+        String tableName = "table_for_partitions";
+        ObjectPath partitionsPath =
+                new ObjectPath(DEFAULT_DB, tableName + FlinkCatalog.PARTITIONS_TABLE_SUFFIX);
+        tEnv.executeSql(
+                "CREATE TABLE "
+                        + tableName
+                        + " (id INT, region STRING) PARTITIONED BY (region) "
+                        + "WITH ('bucket.num' = '2')");
+        tEnv.executeSql("ALTER TABLE " + tableName + " ADD PARTITION (region = 'old')");
+        tEnv.executeSql("ALTER TABLE " + tableName + " SET ('bucket.num' = '4')");
+        tEnv.executeSql("ALTER TABLE " + tableName + " ADD PARTITION (region = 'new')");
+
+        CatalogTable partitionsTable = (CatalogTable) catalog.getTable(partitionsPath);
+        Schema expectedSchema =
+                Schema.newBuilder()
+                        .column("partition_id", DataTypes.BIGINT().notNull())
+                        .column("partition_name", DataTypes.STRING().notNull())
+                        .column("bucket_count", DataTypes.INT().notNull())
+                        .build();
+        assertThat(partitionsTable.getUnresolvedSchema()).isEqualTo(expectedSchema);
+        assertThat(partitionsTable.getPartitionKeys()).isEmpty();
+        assertThat(catalog.tableExists(partitionsPath)).isTrue();
+        assertThat(collectRows("DESCRIBE " + tableName + FlinkCatalog.PARTITIONS_TABLE_SUFFIX))
+                .extracting(row -> row.getField(0))
+                .containsExactly("partition_id", "partition_name", "bucket_count");
+
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    List<Row> rows =
+                            collectRows(
+                                    "SELECT partition_id, partition_name, bucket_count FROM "
+                                            + tableName
+                                            + FlinkCatalog.PARTITIONS_TABLE_SUFFIX);
+                    assertThat(rows).hasSize(2);
+                    assertThat(rows).allSatisfy(row -> assertThat(row.getField(0)).isNotNull());
+                    assertThat(rows)
+                            .extracting(row -> row.getField(1), row -> row.getField(2))
+                            .containsExactlyInAnyOrder(tuple("old", 2), tuple("new", 4));
+
+                    assertThat(
+                                    collectRows(
+                                            "SELECT partition_name FROM "
+                                                    + tableName
+                                                    + FlinkCatalog.PARTITIONS_TABLE_SUFFIX
+                                                    + " WHERE bucket_count = 4"))
+                            .extracting(row -> row.getField(0))
+                            .containsExactly("new");
+
+                    assertThat(
+                                    collectRows(
+                                            "SELECT bucket_count, COUNT(*) FROM "
+                                                    + tableName
+                                                    + FlinkCatalog.PARTITIONS_TABLE_SUFFIX
+                                                    + " GROUP BY bucket_count"))
+                            .extracting(row -> row.getField(0), row -> row.getField(1))
+                            .containsExactlyInAnyOrder(tuple(2, 1L), tuple(4, 1L));
+                });
+
+        assertThatThrownBy(
+                        () ->
+                                catalog.getTable(
+                                        new ObjectPath(DEFAULT_DB, "missing_table$partitions")))
+                .isInstanceOf(TableNotExistException.class);
+        assertThatThrownBy(() -> catalog.dropTable(partitionsPath, false))
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessageContaining("read-only virtual table");
+
+        tEnv.executeSql("CREATE TABLE non_partitioned_for_partitions (id INT)");
+        assertThatThrownBy(
+                        () ->
+                                catalog.getTable(
+                                        new ObjectPath(
+                                                DEFAULT_DB,
+                                                "non_partitioned_for_partitions$partitions")))
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessageContaining("only supported for partitioned tables");
     }
 
     private List<Row> collectRows(String sql) throws Exception {

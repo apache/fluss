@@ -29,6 +29,7 @@ import org.apache.fluss.flink.source.BinlogFlinkTableSource;
 import org.apache.fluss.flink.source.BucketsFlinkTableSource;
 import org.apache.fluss.flink.source.ChangelogFlinkTableSource;
 import org.apache.fluss.flink.source.FlinkTableSource;
+import org.apache.fluss.flink.source.PartitionsFlinkTableSource;
 import org.apache.fluss.flink.source.reader.LeaseContext;
 import org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils;
 import org.apache.fluss.metadata.MergeEngineType;
@@ -117,6 +118,10 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
 
         if (tableName.endsWith(FlinkCatalog.BUCKETS_TABLE_SUFFIX)) {
             return createBucketsTableSource(context, tableIdentifier, tableName);
+        }
+
+        if (tableName.endsWith(FlinkCatalog.PARTITIONS_TABLE_SUFFIX)) {
+            return createPartitionsTableSource(context, tableIdentifier, tableName);
         }
 
         FactoryUtil.TableFactoryHelper helper = FactoryUtil.createTableFactoryHelper(this, context);
@@ -487,6 +492,20 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                         0, tableName.length() - FlinkCatalog.BUCKETS_TABLE_SUFFIX.length());
         RowType tableOutputType = (RowType) context.getPhysicalRowDataType().getLogicalType();
         return new BucketsFlinkTableSource(
+                TablePath.of(tableIdentifier.getDatabaseName(), baseTableName),
+                toFlussClientConfig(
+                        context.getCatalogTable().getOptions(), context.getConfiguration()),
+                tableOutputType);
+    }
+
+    /** Creates a bounded source for a {@code $partitions} virtual table. */
+    private DynamicTableSource createPartitionsTableSource(
+            Context context, ObjectIdentifier tableIdentifier, String tableName) {
+        String baseTableName =
+                tableName.substring(
+                        0, tableName.length() - FlinkCatalog.PARTITIONS_TABLE_SUFFIX.length());
+        RowType tableOutputType = (RowType) context.getPhysicalRowDataType().getLogicalType();
+        return new PartitionsFlinkTableSource(
                 TablePath.of(tableIdentifier.getDatabaseName(), baseTableName),
                 toFlussClientConfig(
                         context.getCatalogTable().getOptions(), context.getConfiguration()),

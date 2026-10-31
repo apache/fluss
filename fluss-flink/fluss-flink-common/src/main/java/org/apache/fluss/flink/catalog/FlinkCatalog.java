@@ -142,6 +142,7 @@ public class FlinkCatalog extends AbstractCatalog {
     public static final String CHANGELOG_TABLE_SUFFIX = "$changelog";
     public static final String BINLOG_TABLE_SUFFIX = "$binlog";
     public static final String BUCKETS_TABLE_SUFFIX = "$buckets";
+    public static final String PARTITIONS_TABLE_SUFFIX = "$partitions";
 
     protected final ClassLoader classLoader;
 
@@ -446,6 +447,9 @@ public class FlinkCatalog extends AbstractCatalog {
         } else if (tableName.endsWith(BUCKETS_TABLE_SUFFIX)
                 && !tableName.contains(LAKE_TABLE_SPLITTER)) {
             return getVirtualBucketsTable(objectPath);
+        } else if (tableName.endsWith(PARTITIONS_TABLE_SUFFIX)
+                && !tableName.contains(LAKE_TABLE_SPLITTER)) {
+            return getVirtualPartitionsTable(objectPath);
         }
 
         TablePath tablePath = toTablePath(objectPath);
@@ -979,8 +983,8 @@ public class FlinkCatalog extends AbstractCatalog {
 
     /**
      * Converts an {@link ObjectPath} to a physical {@link TablePath}, stripping any virtual table
-     * suffix ({@code $changelog}, {@code $binlog}, or {@code $buckets}) if present. This is needed
-     * because virtual tables are resolved from their base table.
+     * suffix ({@code $changelog}, {@code $binlog}, {@code $buckets}, or {@code $partitions}) if
+     * present. This is needed because virtual tables are resolved from their base table.
      */
     private TablePath toPhysicalTablePath(ObjectPath objectPath) {
         String tableName = objectPath.getObjectName();
@@ -994,6 +998,9 @@ public class FlinkCatalog extends AbstractCatalog {
             tableName = tableName.substring(0, tableName.length() - BINLOG_TABLE_SUFFIX.length());
         } else if (tableName.endsWith(BUCKETS_TABLE_SUFFIX)) {
             tableName = tableName.substring(0, tableName.length() - BUCKETS_TABLE_SUFFIX.length());
+        } else if (tableName.endsWith(PARTITIONS_TABLE_SUFFIX)) {
+            tableName =
+                    tableName.substring(0, tableName.length() - PARTITIONS_TABLE_SUFFIX.length());
         }
         return TablePath.of(objectPath.getDatabaseName(), tableName);
     }
@@ -1007,7 +1014,8 @@ public class FlinkCatalog extends AbstractCatalog {
         return !tableName.contains(LAKE_TABLE_SPLITTER)
                 && (tableName.endsWith(CHANGELOG_TABLE_SUFFIX)
                         || tableName.endsWith(BINLOG_TABLE_SUFFIX)
-                        || tableName.endsWith(BUCKETS_TABLE_SUFFIX));
+                        || tableName.endsWith(BUCKETS_TABLE_SUFFIX)
+                        || tableName.endsWith(PARTITIONS_TABLE_SUFFIX));
     }
 
     private void rejectVirtualTableMutation(ObjectPath objectPath, String operation) {
@@ -1347,6 +1355,56 @@ public class FlinkCatalog extends AbstractCatalog {
             throw new CatalogException(
                     String.format(
                             "Failed to get virtual buckets table %s in %s", objectPath, getName()),
+                    t);
+        }
+    }
+
+    /** Creates a read-only virtual table exposing the current partition metadata snapshot. */
+    private CatalogBaseTable getVirtualPartitionsTable(ObjectPath objectPath)
+            throws TableNotExistException, CatalogException {
+        String virtualTableName = objectPath.getObjectName();
+        String baseTableName =
+                virtualTableName.substring(
+                        0, virtualTableName.length() - PARTITIONS_TABLE_SUFFIX.length());
+        ObjectPath baseObjectPath = new ObjectPath(objectPath.getDatabaseName(), baseTableName);
+
+        try {
+            // Only validate immutable table metadata here. Partition rows are loaded by the source
+            // reader at execution time so cached SQL plans observe the latest partitions.
+            TableInfo tableInfo = admin.getTableInfo(toTablePath(baseObjectPath)).get();
+            if (!tableInfo.isPartitioned()) {
+                throw new UnsupportedOperationException(
+                        String.format(
+                                "The $partitions virtual table is only supported for partitioned "
+                                        + "tables, but %s is not partitioned.",
+                                baseObjectPath));
+            }
+
+            Schema partitionsSchema =
+                    Schema.newBuilder()
+                            .column("partition_id", BIGINT().notNull())
+                            .column("partition_name", STRING().notNull())
+                            .column("bucket_count", INT().notNull())
+                            .build();
+            Map<String, String> options = new HashMap<>();
+            options.put(BOOTSTRAP_SERVERS.key(), bootstrapServers);
+            options.putAll(securityConfigs);
+            return CatalogTableAdapter.toCatalogTable(
+                    partitionsSchema,
+                    "Current partition IDs, names, and bucket counts",
+                    Collections.emptyList(),
+                    options);
+        } catch (UnsupportedOperationException e) {
+            throw e;
+        } catch (Exception e) {
+            Throwable t = ExceptionUtils.stripExecutionException(e);
+            if (isTableNotExist(t)) {
+                throw new TableNotExistException(getName(), baseObjectPath);
+            }
+            throw new CatalogException(
+                    String.format(
+                            "Failed to get virtual partitions table %s in %s",
+                            objectPath, getName()),
                     t);
         }
     }
