@@ -163,7 +163,7 @@ public interface KeyEncoder {
             return CompactedKeyEncoder.createKeyEncoder(rowType, keyFields);
         } else if (lakeFormat == DataLakeFormat.PAIMON) {
             return new PaimonKeyEncoder(rowType, keyFields);
-        } else if (lakeFormat == DataLakeFormat.LANCE) {
+        } else if (lakeFormat == DataLakeFormat.LANCE || lakeFormat == DataLakeFormat.DELTA) {
             // use default compacted key encoder
             return CompactedKeyEncoder.createKeyEncoder(rowType, keyFields);
         } else if (lakeFormat == DataLakeFormat.ICEBERG) {

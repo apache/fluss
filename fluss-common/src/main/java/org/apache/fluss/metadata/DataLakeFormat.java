@@ -22,7 +22,8 @@ public enum DataLakeFormat {
     PAIMON("paimon"),
     LANCE("lance"),
     ICEBERG("iceberg"),
-    HUDI("hudi");
+    HUDI("hudi"),
+    DELTA("delta");
 
     private final String value;
 
