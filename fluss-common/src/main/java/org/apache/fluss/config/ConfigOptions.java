@@ -1839,6 +1839,24 @@ public class ConfigOptions {
                             "Setting a value greater than zero will cause the client to resend any lookup request "
                                     + "that fails with a potentially transient error.");
 
+    public static final ConfigOption<Duration> CLIENT_LOOKUP_RETRY_BACKOFF =
+            key("client.lookup.retry-backoff")
+                    .durationType()
+                    .defaultValue(Duration.ofMillis(100))
+                    .withDescription(
+                            "The initial delay before retrying a lookup that failed with a retriable error, "
+                                    + "such as NOT_LEADER_OR_FOLLOWER. The delay doubles with the lookup retry "
+                                    + "count and uses 20% jitter, up to client.lookup.retry-backoff-max. "
+                                    + "Set to 0 to disable this backoff.");
+
+    public static final ConfigOption<Duration> CLIENT_LOOKUP_RETRY_BACKOFF_MAX =
+            key("client.lookup.retry-backoff-max")
+                    .durationType()
+                    .defaultValue(Duration.ofSeconds(1))
+                    .withDescription(
+                            "The maximum delay before retrying a lookup that failed with a retriable error. "
+                                    + "Must be between the initial backoff and 2147483647ms.");
+
     public static final ConfigOption<Integer> CLIENT_SCANNER_REMOTE_LOG_PREFETCH_NUM =
             key("client.scanner.remote-log.prefetch-num")
                     .intType()
