@@ -60,6 +60,14 @@
                     <groupId>org.apache.logging.log4j</groupId>
                     <artifactId>log4j-slf4j2-impl</artifactId>
                 </exclusion>
+                <exclusion>
+                    <groupId>org.apache.hadoop</groupId>
+                    <artifactId>hadoop-client-api</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>javax.annotation</groupId>
+                    <artifactId>javax.annotation-api</artifactId>
+                </exclusion>
             </exclusions>
         </dependency>
 
@@ -101,6 +109,13 @@
                     <groupId>commons-io</groupId>
                 </exclusion>
             </exclusions>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.hadoop</groupId>
+            <artifactId>hadoop-mapreduce-client-core</artifactId>
+            <version>${fluss.hadoop.version}</version>
+            <scope>provided</scope>
         </dependency>
 
         <dependency>
@@ -272,6 +287,12 @@
                                 </includes>
                             </artifactSet>
                             <filters>
+                                <filter>
+                                    <artifact>org.apache.hadoop:hadoop-client-runtime</artifact>
+                                    <includes>
+                                        <include>org/apache/hadoop/shaded/com/google/**</include>
+                                    </includes>
+                                </filter>
                                 <filter>
                                     <artifact>*</artifact>
                                     <excludes>
