@@ -69,7 +69,7 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
             List<String> lookupColumnNames) {
         super(tableInfo, metadataUpdater, lookupClient, schemaGetter);
         // sanity check
-        validatePrefixLookup(tableInfo, lookupColumnNames);
+        List<String> prefixKeys = validatePrefixLookup(tableInfo, lookupColumnNames);
         this.numBuckets = tableInfo.getNumBuckets();
         // the row type of the input lookup row
         RowType lookupRowType = tableInfo.getRowType().project(lookupColumnNames);
@@ -79,16 +79,13 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
         this.prefixKeyEncoder =
                 KeyEncoder.ofPrimaryKeyEncoder(
                         lookupRowType,
-                        // bucket keys are prefix keys
-                        tableInfo.getBucketKeys(),
+                        prefixKeys,
                         tableInfo.getTableConfig(),
                         tableInfo.isDefaultBucketKey());
 
+        // the prefix key bytes can be reused for bucketing only if they encode just the bucket key
         this.bucketKeyEncoder =
-                lakeFormat == null
-                        // if lake format is null, don't need need to use lake format bucket
-                        // encoder,
-                        // we can just use the prefixKeyEncoder
+                lakeFormat == null && prefixKeys.equals(tableInfo.getBucketKeys())
                         ? this.prefixKeyEncoder
                         : KeyEncoder.ofBucketKeyEncoder(
                                 lookupRowType, tableInfo.getBucketKeys(), lakeFormat);
@@ -100,7 +97,8 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
                         : null;
     }
 
-    private void validatePrefixLookup(TableInfo tableInfo, List<String> lookupColumns) {
+    /** Validates the lookup columns and returns them without the partition fields. */
+    private List<String> validatePrefixLookup(TableInfo tableInfo, List<String> lookupColumns) {
         // verify is primary key table
         if (!tableInfo.hasPrimaryKey()) {
             throw new IllegalArgumentException(
@@ -136,18 +134,36 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
             }
         }
 
-        // verify the lookup columns must contain all bucket keys **in order**
+        // verify the lookup columns are the bucket keys, optionally followed by the next primary
+        // keys
         List<String> physicalLookupColumns = new ArrayList<>(lookupColumns);
         physicalLookupColumns.removeAll(tableInfo.getPartitionKeys());
-        if (!physicalLookupColumns.equals(bucketKeys)) {
+        if (physicalLookupColumns.size() < bucketKeys.size()
+                || physicalLookupColumns.size() > physicalPrimaryKeys.size()
+                || !physicalPrimaryKeys
+                        .subList(0, physicalLookupColumns.size())
+                        .equals(physicalLookupColumns)) {
+            // all primary keys would be a primary key lookup
+            List<String> extensionKeys =
+                    bucketKeys.size() < physicalPrimaryKeys.size() - 1
+                            ? physicalPrimaryKeys.subList(
+                                    bucketKeys.size(), physicalPrimaryKeys.size() - 1)
+                            : Collections.emptyList();
             throw new IllegalArgumentException(
                     String.format(
                             "Can not perform prefix lookup on table '%s', "
-                                    + "because the lookup columns %s must contain all bucket keys %s in order.",
-                            tableInfo.getTablePath(), lookupColumns, bucketKeys));
+                                    + "because the lookup columns %s must contain all bucket keys %s in order%s.",
+                            tableInfo.getTablePath(),
+                            lookupColumns,
+                            bucketKeys,
+                            extensionKeys.isEmpty()
+                                    ? ""
+                                    : String.format(
+                                            ", optionally followed by the next physical primary keys %s in order",
+                                            extensionKeys)));
         }
 
-        if (bucketKeys.equals(physicalPrimaryKeys)) {
+        if (physicalLookupColumns.size() == physicalPrimaryKeys.size()) {
             throw new IllegalArgumentException(
                     String.format(
                             "Can not perform prefix lookup on table '%s', "
@@ -155,6 +171,7 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
                                     + "Please use primary key lookup (Lookuper without lookupBy) instead.",
                             tableInfo.getTablePath(), lookupColumns, physicalPrimaryKeys));
         }
+        return physicalLookupColumns;
     }
 
     @Override

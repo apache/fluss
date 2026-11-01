@@ -54,7 +54,7 @@ public class FlussLookupInputPartitioner implements InputDataPartitionerAdapter 
 
     private final LookupNormalizer normalizer;
     // Flink row type of the normalized lookup key row (the expected lookup keys in Fluss key order,
-    // i.e. the full primary key for a primary-key lookup, or the bucket keys + partition keys for a
+    // i.e. the full primary key for a primary-key lookup, or the prefix keys + partition keys for a
     // prefix lookup).
     private final RowType keyFlinkRowType;
     private final List<String> bucketKeyNames;
