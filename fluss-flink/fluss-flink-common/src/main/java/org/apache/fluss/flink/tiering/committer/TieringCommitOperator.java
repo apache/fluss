@@ -338,8 +338,25 @@ public class TieringCommitOperator<WriteResult, Committable>
             // 2. Partial compaction: dvReport has entries for only some partitions
             //    (those with RowPos results), but ALL buckets must be switched
             //    because the readable snapshot is table-level.
-            if (lakeCommitResult.getReadableSnapshot() != null) {
-                LakeCommitResult.ReadableSnapshot readable = lakeCommitResult.getReadableSnapshot();
+            // 3. Iceberg (readable unknown): readers pin one table-level id, so every tiered
+            //    bucket switches, not just those with RowPos results (-1 = Iceberg readable).
+            LakeCommitResult.ReadableSnapshot readable = lakeCommitResult.getReadableSnapshot();
+            Map<TableBucket, Long> switchBuckets = null;
+            if (readable != null) {
+                switchBuckets = readable.getReadableLogEndOffsets();
+            } else if (dvReport != null) {
+                switchBuckets = new HashMap<>();
+                if (flussCurrentLakeSnapshot != null) {
+                    for (TableBucket tb :
+                            flussCurrentLakeSnapshot.getTableBucketsOffset().keySet()) {
+                        switchBuckets.put(tb, -1L);
+                    }
+                }
+                for (TableBucket tb : logEndOffsets.keySet()) {
+                    switchBuckets.put(tb, -1L);
+                }
+            }
+            if (switchBuckets != null) {
                 if (dvReport == null) {
                     dvReport = new HashMap<>();
                 }
@@ -354,8 +371,7 @@ public class TieringCommitOperator<WriteResult, Committable>
                 }
 
                 Set<Long> emptyIndexPartitions = new HashSet<>();
-                for (Map.Entry<TableBucket, Long> entry :
-                        readable.getReadableLogEndOffsets().entrySet()) {
+                for (Map.Entry<TableBucket, Long> entry : switchBuckets.entrySet()) {
                     dvReport.putIfAbsent(
                             entry.getKey(),
                             new FlussTableLakeSnapshotCommitter.DvBucketData(
@@ -384,7 +400,9 @@ public class TieringCommitOperator<WriteResult, Committable>
                     long emptyIndexSnapshotId =
                             indexSnapshotId > 0
                                     ? indexSnapshotId
-                                    : readable.getReadableSnapshotId();
+                                    : readable != null
+                                            ? readable.getReadableSnapshotId()
+                                            : lakeCommitResult.getCommittedSnapshotId();
                     for (Long partKey : emptyIndexPartitions) {
                         Long partitionId = partKey == -1L ? null : partKey;
                         uploader.writeIndex(emptyIndexSnapshotId, partitionId, emptyIndex);

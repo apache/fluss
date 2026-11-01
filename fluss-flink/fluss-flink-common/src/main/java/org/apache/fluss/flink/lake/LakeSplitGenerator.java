@@ -197,13 +197,13 @@ public class LakeSplitGenerator {
                     try {
                         bucketDvSnapshots = fetchDvForAllBuckets(snapshotId, bucketsNeedingDv);
                     } catch (Exception e) {
-                        // DV not ready for some bucket: a Readable-Switch is in progress, or a bucket
-                        // just went empty->data during ingestion and hasn't completed its first
-                        // switch (readableSnapshotId == -1). The error arrives wrapped
+                        // DV not ready for some bucket: a Readable-Switch is in progress, or a
+                        // bucket just went empty->data during ingestion and hasn't completed its
+                        // first switch (readableSnapshotId == -1). The error arrives wrapped
                         // (StaleSnapshotException inside a FlussRuntimeException surfaced as an
-                        // UnknownServerException), so detect it by message. Re-fetch the coordinator's
-                        // readable snapshot and retry; this converges once the bucket's switch
-                        // completes. Bounded by MAX_OUTER_RETRIES (the "hold").
+                        // UnknownServerException), so detect it by message. Re-fetch the
+                        // coordinator's readable snapshot and retry; this converges once the
+                        // bucket's switch completes. Bounded by MAX_OUTER_RETRIES (the "hold").
                         if (!isDvTransientlyUnavailable(e)) {
                             throw e;
                         }
@@ -434,8 +434,8 @@ public class LakeSplitGenerator {
             @Nullable DvSnapshotInfo dvSnapshot) {
         // DV-enabled tables (Paimon or Iceberg) must never use the sort-merge
         // LakeSnapshotAndFlussLogSplit path: Iceberg's reader is not a SortedRecordReader and would
-        // NPE. Always emit DV-style splits (LakeSnapshotSplit + LogSplit); use empty DV maps when DV
-        // data is unavailable so the read still works.
+        // NPE. Always emit DV-style splits (LakeSnapshotSplit + LogSplit); use empty DV maps when
+        // DV data is unavailable so the read still works.
         if (dvEnabled) {
             return generateDvSplitForBucket(
                     lakeSplits,
@@ -519,10 +519,10 @@ public class LakeSplitGenerator {
 
     /**
      * Builds DV-style splits for one PK-table bucket: a {@link LakeSnapshotSplit} per tiered file
-     * (masked by lakeDv) plus a {@link LogSplit} for the hot tail (DV batch read mode). Used for all
-     * DV-enabled tables so we never take the sort-merge path. When {@code dvSnapshot} is null (DV
-     * momentarily unavailable / bucket not requiring DV), empty DV maps are used so the read still
-     * returns rows instead of failing.
+     * (masked by lakeDv) plus a {@link LogSplit} for the hot tail (DV batch read mode). Used for
+     * all DV-enabled tables so we never take the sort-merge path. When {@code dvSnapshot} is null
+     * (DV momentarily unavailable / bucket not requiring DV), empty DV maps are used so the read
+     * still returns rows instead of failing.
      */
     private List<SourceSplitBase> generateDvSplitForBucket(
             @Nullable List<LakeSplit> lakeSplits,
@@ -547,23 +547,24 @@ public class LakeSplitGenerator {
             }
         }
 
-        // Log side: read the hot tail from the tiered offset, or EARLIEST when nothing is tiered for
-        // this bucket yet. Truncate to the DV coverage end when known. An (empty) logDvBitmap enables
-        // DV batch read mode (filters DELETE/UPDATE_BEFORE).
+        // Log side: read the hot tail from the tiered offset, or EARLIEST when nothing is tiered
+        // for this bucket yet. Truncate to the DV coverage end when known. An (empty) logDvBitmap
+        // enables DV batch read mode (filters DELETE/UPDATE_BEFORE).
         long logStart = hasTieredData ? snapshotLogOffset : EARLIEST_OFFSET;
         long logStop = stoppingOffset;
         if (dvSnapshot != null && logStop > 0) {
             logStop = Math.min(logStop, dvSnapshot.getLogEndOffset());
         }
         // An empty bucket (no tiered data, no lake files, and no bounded log to read) contributes
-        // nothing to a batch union read. Emitting a log split for it would subscribe the reader to a
-        // bucket with no records, and an empty bounded log split never reaches its record-driven stop
-        // condition, so the query would hang. Skip it.
+        // nothing to a batch union read. Emitting a log split for it would subscribe the reader to
+        // a bucket with no records, and an empty bounded log split never reaches its record-driven
+        // stop condition, so the query would hang. Skip it.
         boolean bucketIsEmpty =
                 !hasTieredData
                         && (lakeSplits == null || lakeSplits.isEmpty())
                         && (logStop == NO_STOPPING_OFFSET || logStop <= 0);
-        if (!bucketIsEmpty && (logStop == NO_STOPPING_OFFSET || !hasTieredData || logStart < logStop)) {
+        if (!bucketIsEmpty
+                && (logStop == NO_STOPPING_OFFSET || !hasTieredData || logStart < logStop)) {
             byte[] logDvBitmap = dvSnapshot != null ? dvSnapshot.getLogDvBitmap() : null;
             if (logDvBitmap == null) {
                 logDvBitmap = new byte[0];
@@ -660,8 +661,8 @@ public class LakeSplitGenerator {
                 }
                 if (isDvNotEstablished(e)) {
                     // current == -1: this bucket has no readable DV snapshot yet (newly populated /
-                    // bootstrapping). Its lake data has no server-side DV. Rather than hold or fail,
-                    // read it WITHOUT DV (empty maps) via the DV split path -- Iceberg cannot
+                    // bootstrapping). Its lake data has no server-side DV. Rather than hold or
+                    // fail, read it WITHOUT DV (empty maps) via the DV split path -- Iceberg cannot
                     // sort-merge, but generateDvSplitForBucket emits plain lake + log splits with
                     // -D/-U filtered. Correct for the normal insert case; a key updated within the
                     // bucket's very first tiered batch may show twice for ~one round until its DV
@@ -672,9 +673,9 @@ public class LakeSplitGenerator {
                             tableBucket);
                     return null;
                 }
-                // current > 0: the server's readable is a different valid snapshot (a Readable-Switch
-                // just moved it). Brief backoff; the outer loop re-fetches the readable snapshot and
-                // re-plans against it.
+                // current > 0: the server's readable is a different valid snapshot (a
+                // Readable-Switch just moved it). Brief backoff; the outer loop re-fetches the
+                // readable snapshot and re-plans against it.
                 LOG.info(
                         "DV snapshot not ready for bucket {} (snapshot {}), retry {}/{}.",
                         tableBucket,
@@ -688,8 +689,10 @@ public class LakeSplitGenerator {
         throw last;
     }
 
-    /** Whether the DV-unavailable error is specifically the "no readable snapshot yet" (current -1)
-     * case, as opposed to a moved-but-valid readable snapshot (current > 0). */
+    /**
+     * Whether the DV-unavailable error is specifically the "no readable snapshot yet" (current -1)
+     * case, as opposed to a moved-but-valid readable snapshot (current > 0).
+     */
     private static boolean isDvNotEstablished(Throwable e) {
         Throwable t = e;
         while (t != null) {
