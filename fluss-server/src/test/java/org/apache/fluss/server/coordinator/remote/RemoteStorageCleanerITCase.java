@@ -20,7 +20,9 @@ package org.apache.fluss.server.coordinator.remote;
 import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
@@ -29,12 +31,20 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
+import org.apache.fluss.server.coordinator.CoordinatorContext;
+import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
+import org.apache.fluss.server.coordinator.MetadataManager;
+import org.apache.fluss.server.coordinator.event.AccessContextEvent;
+import org.apache.fluss.server.coordinator.statemachine.ReplicaState;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.testutils.RpcMessageTestUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.data.BucketAssignment;
+import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.FlussPaths;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -42,13 +52,15 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
-import java.io.File;
+import java.io.OutputStream;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 
 import static org.apache.fluss.record.TestData.DATA1_PARTITIONED_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
@@ -177,71 +189,60 @@ class RemoteStorageCleanerITCase {
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testDeletePartitionedTable(boolean isPkTable) throws Exception {
-        // Create partitioned table
         String tableName = isPkTable ? "pk_partitioned_cleaner" : "partitioned_cleaner";
         TablePath tablePath = TablePath.of("test_db", tableName);
         TableDescriptor tableDescriptor =
-                isPkTable
-                        ? DATA1_PARTITIONED_TABLE_DESCRIPTOR_PK
-                        : DATA1_PARTITIONED_TABLE_DESCRIPTOR;
-
+                TableDescriptor.builder(
+                                isPkTable
+                                        ? DATA1_PARTITIONED_TABLE_DESCRIPTOR_PK
+                                        : DATA1_PARTITIONED_TABLE_DESCRIPTOR)
+                        .distributedBy(1)
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, false)
+                        .build()
+                        .withReplicationFactor(1);
+        String tableRemoteDir = FLUSS_CLUSTER_EXTENSION.getRemoteDataDir("dir1");
+        String firstPartitionRemoteDir = FLUSS_CLUSTER_EXTENSION.getRemoteDataDir("dir2");
+        String lastPartitionRemoteDir = FLUSS_CLUSTER_EXTENSION.getRemoteDataDir("dir3");
+        Configuration conf = new Configuration();
+        MetadataManager metadataManager =
+                new MetadataManager(zkClient, conf, new LakeCatalogDynamicLoader(conf, null, true));
+        metadataManager.createDatabase(
+                tablePath.getDatabaseName(), DatabaseDescriptor.builder().build(), true);
         long tableId =
-                RpcMessageTestUtils.createTable(
-                        FLUSS_CLUSTER_EXTENSION, tablePath, tableDescriptor);
+                metadataManager.createTable(
+                        tablePath, tableRemoteDir, tableDescriptor, null, false);
+        retryVerifyContext(ctx -> assertThat(ctx.getTableInfoById(tableId)).isNotNull());
 
-        // Get remote data dir for table
-        Optional<TableRegistration> tableOpt = zkClient.getTable(tablePath);
-        assertThat(tableOpt).isPresent();
-        String remoteTableDataDir = tableOpt.get().remoteDataDir;
-        assertThat(remoteTableDataDir).isNotNull();
-
-        // Wait for auto partitions to be created
-        Map<String, Long> partitions =
-                FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath);
-        assertThat(partitions).isNotEmpty();
-
-        // Get one partition's remote dir for verification
-        String firstPartitionName = partitions.keySet().iterator().next();
-        Long firstPartitionId = partitions.get(firstPartitionName);
-        Optional<PartitionRegistration> partitionOpt =
-                zkClient.getPartition(tablePath, firstPartitionName);
-        assertThat(partitionOpt).isPresent();
-        String partitionRemoteDataDir = partitionOpt.get().getRemoteDataDir();
-        assertThat(partitionRemoteDataDir).isNotNull();
-
-        PhysicalTablePath physicalTablePath = PhysicalTablePath.of(tablePath, firstPartitionName);
-        TablePartition tablePartition = new TablePartition(tableId, firstPartitionId);
-
-        // Mock remote log dirs
-        FsPath remoteLogPartitionDir =
-                FlussPaths.remotePartitionDir(
-                        FlussPaths.remoteLogDir(partitionRemoteDataDir),
-                        physicalTablePath,
-                        tablePartition);
-        remoteLogPartitionDir.getFileSystem().mkdirs(remoteLogPartitionDir);
-        assertThat(remoteLogPartitionDir.getFileSystem().exists(remoteLogPartitionDir)).isTrue();
-
-        // Mock remote kv dirs
-        FsPath remoteKvPartitionDir;
+        // Explicit roots and assignments keep table cleanup from hiding missed partition cleanup.
+        TablePartition firstPartition =
+                createPartition(tablePath, tableId, "first", firstPartitionRemoteDir, 0);
+        TablePartition lastPartition =
+                createPartition(tablePath, tableId, "last", lastPartitionRemoteDir, 1);
+        List<FsPath> remoteDirs = new ArrayList<>();
+        remoteDirs.addAll(
+                createPartitionRemoteData(
+                        tablePath, firstPartition, "first", firstPartitionRemoteDir, isPkTable));
+        remoteDirs.addAll(
+                createPartitionRemoteData(
+                        tablePath, lastPartition, "last", lastPartitionRemoteDir, isPkTable));
+        FsPath remoteLogTableDir =
+                FlussPaths.remoteTableDir(
+                        FlussPaths.remoteLogDir(tableRemoteDir), tablePath, tableId);
+        FsPath remoteLakeDir =
+                FlussPaths.remoteLakeTableSnapshotDir(tableRemoteDir, tablePath, tableId);
+        remoteDirs.add(remoteLogTableDir);
+        remoteDirs.add(remoteLakeDir);
+        createRemoteData(remoteLogTableDir);
+        createRemoteData(remoteLakeDir);
         if (isPkTable) {
-            remoteKvPartitionDir =
-                    FlussPaths.remotePartitionDir(
-                            FlussPaths.remoteKvDir(partitionRemoteDataDir),
-                            physicalTablePath,
-                            tablePartition);
-            remoteKvPartitionDir.getFileSystem().mkdirs(remoteKvPartitionDir);
-            assertThat(remoteKvPartitionDir.getFileSystem().exists(remoteKvPartitionDir)).isTrue();
-        } else {
-            remoteKvPartitionDir = null;
+            FsPath remoteKvTableDir =
+                    FlussPaths.remoteTableDir(
+                            FlussPaths.remoteKvDir(tableRemoteDir), tablePath, tableId);
+            createRemoteData(remoteKvTableDir);
+            remoteDirs.add(remoteKvTableDir);
         }
 
-        // Mock remote lake dirs
-        FsPath remoteLakeDir =
-                FlussPaths.remoteLakeTableSnapshotDir(remoteTableDataDir, tablePath, tableId);
-        remoteLakeDir.getFileSystem().mkdirs(remoteLakeDir);
-        assertThat(remoteLakeDir.getFileSystem().exists(remoteLakeDir)).isTrue();
-
-        // Drop table
+        // Controlled deletion-response ordering is covered by ReplicaDeletionInterleavingTest.
         coordinatorGateway
                 .dropTable(
                         newDropTableRequest(
@@ -249,32 +250,25 @@ class RemoteStorageCleanerITCase {
                 .get();
         assertThat(zkClient.tableExist(tablePath)).isFalse();
 
-        // Verify remote log partition dir is deleted
+        retryVerifyContext(
+                ctx -> {
+                    for (TablePartition partition : Arrays.asList(firstPartition, lastPartition)) {
+                        assertThat(ctx.getPartitionInfoById(partition.getPartitionId())).isNull();
+                        assertThat(ctx.containsPartitionId(partition.getPartitionId())).isFalse();
+                        assertThat(ctx.isPartitionQueuedForDeletion(partition)).isFalse();
+                    }
+                    assertThat(ctx.getTableInfoById(tableId)).isNull();
+                    assertThat(ctx.getTablePathById(tableId)).isNull();
+                    assertThat(ctx.allTables()).doesNotContainKey(tableId);
+                    assertThat(ctx.getTablesToBeDeleted()).doesNotContain(tableId);
+                });
         retry(
                 Duration.ofMinutes(2),
-                () ->
-                        assertThat(
-                                        remoteLogPartitionDir
-                                                .getFileSystem()
-                                                .exists(remoteLogPartitionDir))
-                                .isFalse());
-
-        // Verify remote kv partition dir is deleted for PK table
-        if (isPkTable) {
-            retry(
-                    Duration.ofMinutes(2),
-                    () ->
-                            assertThat(
-                                            remoteKvPartitionDir
-                                                    .getFileSystem()
-                                                    .exists(remoteKvPartitionDir))
-                                    .isFalse());
-        }
-
-        // Verify remote lake dir is deleted
-        retry(
-                Duration.ofMinutes(2),
-                () -> assertThat(remoteLakeDir.getFileSystem().exists(remoteLakeDir)).isFalse());
+                () -> {
+                    for (FsPath dir : remoteDirs) {
+                        assertThat(dir.getFileSystem().exists(dir)).isFalse();
+                    }
+                });
     }
 
     @ParameterizedTest
@@ -322,38 +316,19 @@ class RemoteStorageCleanerITCase {
         String partitionRemoteDataDir = partitionOpt.get().getRemoteDataDir();
         assertThat(partitionRemoteDataDir).isNotNull();
 
-        PhysicalTablePath physicalTablePath = PhysicalTablePath.of(tablePath, partitionName);
         TablePartition tablePartition = new TablePartition(tableId, partitionId);
+        List<FsPath> remotePartitionDirs =
+                createPartitionRemoteData(
+                        tablePath,
+                        tablePartition,
+                        partitionName,
+                        partitionRemoteDataDir,
+                        isPkTable);
 
-        // Mock remote log dirs
-        FsPath remoteLogPartitionDir =
-                FlussPaths.remotePartitionDir(
-                        FlussPaths.remoteLogDir(partitionRemoteDataDir),
-                        physicalTablePath,
-                        tablePartition);
-        remoteLogPartitionDir.getFileSystem().mkdirs(remoteLogPartitionDir);
-        assertThat(remoteLogPartitionDir.getFileSystem().exists(remoteLogPartitionDir)).isTrue();
-
-        // Mock remote kv dirs
-        FsPath remoteKvPartitionDir;
-        if (isPkTable) {
-            remoteKvPartitionDir =
-                    FlussPaths.remotePartitionDir(
-                            FlussPaths.remoteKvDir(partitionRemoteDataDir),
-                            physicalTablePath,
-                            tablePartition);
-            remoteKvPartitionDir.getFileSystem().mkdirs(remoteKvPartitionDir);
-            assertThat(remoteKvPartitionDir.getFileSystem().exists(remoteKvPartitionDir)).isTrue();
-        } else {
-            remoteKvPartitionDir = null;
-        }
-
-        // Mock remote lake dirs
+        // Create remote lake data that must survive partition deletion.
         FsPath remoteLakeDir =
                 FlussPaths.remoteLakeTableSnapshotDir(remoteTableDataDir, tablePath, tableId);
-        remoteLakeDir.getFileSystem().mkdirs(remoteLakeDir);
-        File remoteLakeDirFile = new File(remoteLakeDir.getPath());
-        assertThat(remoteLakeDirFile.exists()).isTrue();
+        createRemoteData(remoteLakeDir);
 
         // Drop partition
         coordinatorGateway
@@ -364,32 +339,98 @@ class RemoteStorageCleanerITCase {
         FLUSS_CLUSTER_EXTENSION.waitUntilPartitionsDropped(
                 tablePath, Collections.singletonList(partitionName));
 
-        // Verify remote log partition dir is deleted
+        // Verify remote partition dirs are deleted.
         retry(
                 Duration.ofMinutes(1),
-                () ->
-                        assertThat(
-                                        remoteLogPartitionDir
-                                                .getFileSystem()
-                                                .exists(remoteLogPartitionDir))
-                                .isFalse());
-
-        // Verify remote kv partition dir is deleted for PK table
-        if (isPkTable) {
-            retry(
-                    Duration.ofMinutes(1),
-                    () ->
-                            assertThat(
-                                            remoteKvPartitionDir
-                                                    .getFileSystem()
-                                                    .exists(remoteKvPartitionDir))
-                                    .isFalse());
-        }
+                () -> {
+                    for (FsPath dir : remotePartitionDirs) {
+                        assertThat(dir.getFileSystem().exists(dir)).isFalse();
+                    }
+                });
 
         // Verify remote lake dir still exists (only partition is deleted, not table)
-        assertThat(remoteLakeDirFile.exists()).isTrue();
+        assertThat(remoteLakeDir.getFileSystem().exists(remoteLakeDir)).isTrue();
 
         // Verify table still exists
         assertThat(zkClient.tableExist(tablePath)).isTrue();
+    }
+
+    private TablePartition createPartition(
+            TablePath tablePath,
+            long tableId,
+            String partitionName,
+            String remoteDataDir,
+            int serverId)
+            throws Exception {
+        long partitionId = zkClient.getPartitionIdAndIncrement();
+        TablePartition partition = new TablePartition(tableId, partitionId);
+        PartitionAssignment assignment =
+                new PartitionAssignment(
+                        tableId, Collections.singletonMap(0, BucketAssignment.of(serverId)));
+        zkClient.registerPartitionAssignmentAndMetadata(
+                partitionId, partitionName, assignment, remoteDataDir, tablePath, tableId, 1);
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(new TableBucket(tableId, partitionId, 0));
+        retryVerifyContext(
+                ctx -> {
+                    assertThat(ctx.getAllReplicasForPartition(tableId, partitionId)).hasSize(1);
+                    assertThat(ctx.areAllReplicasInState(partition, ReplicaState.OnlineReplica))
+                            .isTrue();
+                });
+        return partition;
+    }
+
+    private List<FsPath> createPartitionRemoteData(
+            TablePath tablePath,
+            TablePartition partition,
+            String partitionName,
+            String remoteDataDir,
+            boolean isPkTable)
+            throws Exception {
+        PhysicalTablePath physicalTablePath = PhysicalTablePath.of(tablePath, partitionName);
+        List<FsPath> dirs = new ArrayList<>();
+        dirs.add(
+                FlussPaths.remotePartitionDir(
+                        FlussPaths.remoteLogDir(remoteDataDir), physicalTablePath, partition));
+        if (isPkTable) {
+            dirs.add(
+                    FlussPaths.remotePartitionDir(
+                            FlussPaths.remoteKvDir(remoteDataDir), physicalTablePath, partition));
+        }
+        for (FsPath dir : dirs) {
+            createRemoteData(dir);
+        }
+        return dirs;
+    }
+
+    private void createRemoteData(FsPath dir) throws Exception {
+        dir.getFileSystem().mkdirs(dir);
+        try (OutputStream out =
+                dir.getFileSystem()
+                        .create(new FsPath(dir, "test-data"), FileSystem.WriteMode.NO_OVERWRITE)) {
+            out.write(1);
+        }
+    }
+
+    private void retryVerifyContext(Consumer<CoordinatorContext> verifyFunction) {
+        retry(
+                Duration.ofSeconds(30),
+                () -> {
+                    AccessContextEvent<Void> event =
+                            new AccessContextEvent<>(
+                                    ctx -> {
+                                        verifyFunction.accept(ctx);
+                                        return null;
+                                    });
+                    FLUSS_CLUSTER_EXTENSION
+                            .getCoordinatorServer()
+                            .getCoordinatorEventProcessor()
+                            .getCoordinatorEventManager()
+                            .put(event);
+                    try {
+                        event.getResultFuture().get(30, TimeUnit.SECONDS);
+                    } catch (Throwable t) {
+                        throw ExceptionUtils.stripExecutionException(t);
+                    }
+                });
     }
 }
