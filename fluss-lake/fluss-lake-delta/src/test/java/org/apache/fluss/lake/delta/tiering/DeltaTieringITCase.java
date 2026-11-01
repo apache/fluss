@@ -17,11 +17,16 @@
 
 package org.apache.fluss.lake.delta.tiering;
 
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.lake.delta.DeltaConfig;
 import org.apache.fluss.lake.delta.testutils.DeltaTestUtils;
 import org.apache.fluss.lake.delta.testutils.FlinkDeltaTieringTestBase;
+import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableChange;
+import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericArray;
@@ -32,6 +37,7 @@ import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.server.zk.data.lake.LakeTable;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.type.TypeReference;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
+import org.apache.fluss.types.DataTypes;
 
 import io.delta.kernel.Snapshot;
 import io.delta.kernel.TableManager;
@@ -43,6 +49,7 @@ import org.junit.jupiter.api.Test;
 
 import javax.annotation.Nullable;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -51,6 +58,7 @@ import java.util.Map;
 
 import static org.apache.fluss.lake.committer.LakeCommitter.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** IT case for tiering Fluss log tables to Delta Lake. */
 class DeltaTieringITCase extends FlinkDeltaTieringTestBase {
@@ -123,6 +131,84 @@ class DeltaTieringITCase extends FlinkDeltaTieringTestBase {
         } finally {
             jobClient.cancel().get();
         }
+    }
+
+    @Test
+    void testAlterTable() throws Exception {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "alter_log_table");
+        createLogTable(tablePath, 1, false);
+
+        admin.alterTable(
+                        tablePath,
+                        Collections.singletonList(
+                                TableChange.set(
+                                        ConfigOptions.TABLE_DATALAKE_FRESHNESS.key(), "1min")),
+                        false)
+                .get();
+        assertThat(
+                        admin.getTableInfo(tablePath)
+                                .get()
+                                .getProperties()
+                                .get(ConfigOptions.TABLE_DATALAKE_FRESHNESS))
+                .isEqualTo(Duration.ofMinutes(1));
+
+        // schema changes are rejected with an API error
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                tablePath,
+                                                Collections.singletonList(
+                                                        TableChange.addColumn(
+                                                                "n",
+                                                                DataTypes.INT(),
+                                                                null,
+                                                                TableChange.ColumnPosition.last())),
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(InvalidAlterTableException.class);
+
+        setDataLakeEnabled(tablePath, false);
+        assertThat(admin.getTableInfo(tablePath).get().getTableConfig().isDataLakeEnabled())
+                .isFalse();
+        setDataLakeEnabled(tablePath, true);
+        assertThat(admin.getTableInfo(tablePath).get().getTableConfig().isDataLakeEnabled())
+                .isTrue();
+    }
+
+    @Test
+    void testEnableDataLakeOnExistingTable() throws Exception {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "enable_later_table");
+        admin.createTable(
+                        tablePath,
+                        TableDescriptor.builder()
+                                .schema(Schema.newBuilder().column("a", DataTypes.INT()).build())
+                                .distributedBy(1)
+                                .build(),
+                        false)
+                .get();
+
+        setDataLakeEnabled(tablePath, true);
+
+        assertThat(admin.getTableInfo(tablePath).get().getTableConfig().isDataLakeEnabled())
+                .isTrue();
+        assertThat(
+                        TableManager.loadSnapshot(deltaTablePath(tablePath))
+                                .build(engine)
+                                .getSchema()
+                                .fieldNames())
+                .containsExactly("a");
+    }
+
+    private static void setDataLakeEnabled(TablePath tablePath, boolean enabled) throws Exception {
+        admin.alterTable(
+                        tablePath,
+                        Collections.singletonList(
+                                TableChange.set(
+                                        ConfigOptions.TABLE_DATALAKE_ENABLED.key(),
+                                        String.valueOf(enabled))),
+                        false)
+                .get();
     }
 
     private static List<InternalRow> genRows(

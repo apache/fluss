@@ -19,8 +19,10 @@ package org.apache.fluss.lake.delta.tiering;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.TableAlreadyExistException;
+import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
 import org.apache.fluss.lake.committer.CommitterInitContext;
 import org.apache.fluss.lake.committer.LakeCommitter;
@@ -28,12 +30,14 @@ import org.apache.fluss.lake.committer.LakeCommitter.CommitContext;
 import org.apache.fluss.lake.delta.DeltaConfig;
 import org.apache.fluss.lake.delta.DeltaLakeCatalog;
 import org.apache.fluss.lake.delta.testutils.DeltaTestUtils;
+import org.apache.fluss.lake.delta.utils.FlussDataTypeToDeltaDataType;
 import org.apache.fluss.lake.lakestorage.TestingLakeCatalogContext;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 import org.apache.fluss.lake.writer.LakeWriter;
 import org.apache.fluss.lake.writer.WriterInitContext;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -54,6 +58,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.annotation.Nullable;
@@ -332,6 +337,159 @@ class DeltaTieringTest {
                                         new TestingLakeCatalogContext()))
                 .isInstanceOf(InvalidTableException.class)
                 .hasMessageContaining("TIME");
+    }
+
+    @Test
+    void testCreateTableOnExistingTableWithoutDomainMetadata() {
+        DeltaLakeCatalog catalog = new DeltaLakeCatalog(configuration);
+        TablePath tablePath = TablePath.of("fluss", "no_domain_metadata");
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(Schema.newBuilder().column("a", DataTypes.INT()).build())
+                        .distributedBy(1)
+                        .build();
+        TableManager.buildCreateTableTransaction(
+                        DeltaConfig.tablePath(configuration, tablePath),
+                        FlussDataTypeToDeltaDataType.toDeltaSchema(
+                                descriptor.getSchema().getRowType()),
+                        "external")
+                .build(engine)
+                .commit(engine, CloseableIterable.emptyIterable());
+
+        assertThatThrownBy(
+                        () ->
+                                catalog.createTable(
+                                        tablePath, descriptor, new TestingLakeCatalogContext()))
+                .isInstanceOf(TableAlreadyExistException.class)
+                .hasMessageContaining("domainMetadata");
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+        "delta.columnMapping.mode, name",
+        "delta.columnMapping.mode, id",
+        "delta.enableIcebergCompatV2, true"
+    })
+    void testCreateTableRejectsColumnMapping(String key, String value) {
+        DeltaLakeCatalog catalog = new DeltaLakeCatalog(configuration);
+        TablePath tablePath = TablePath.of("fluss", "column_mapping");
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(Schema.newBuilder().column("a", DataTypes.INT()).build())
+                        .distributedBy(1)
+                        .customProperty(key, value)
+                        .build();
+
+        assertThatThrownBy(
+                        () ->
+                                catalog.createTable(
+                                        tablePath, descriptor, new TestingLakeCatalogContext()))
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining("column mapping");
+        assertThat(new File(DeltaConfig.tablePath(configuration, tablePath))).doesNotExist();
+    }
+
+    @Test
+    void testAlterTableProperties() throws Exception {
+        DeltaLakeCatalog catalog = new DeltaLakeCatalog(configuration);
+        TablePath tablePath = TablePath.of("fluss", "alter_properties");
+        createTable(tablePath, false);
+
+        // Fluss-side options don't touch the Delta table
+        catalog.alterTable(
+                tablePath,
+                Arrays.asList(
+                        TableChange.set(ConfigOptions.TABLE_DATALAKE_FRESHNESS.key(), "1min"),
+                        TableChange.reset(ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()),
+                        TableChange.set(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "false")),
+                new TestingLakeCatalogContext());
+        assertThat(
+                        TableManager.loadSnapshot(DeltaConfig.tablePath(configuration, tablePath))
+                                .build(engine)
+                                .getVersion())
+                .isEqualTo(0L);
+
+        assertThatThrownBy(
+                        () ->
+                                catalog.alterTable(
+                                        TablePath.of("fluss", "missing"),
+                                        Collections.singletonList(
+                                                TableChange.set(
+                                                        ConfigOptions.TABLE_DATALAKE_FRESHNESS
+                                                                .key(),
+                                                        "1min")),
+                                        new TestingLakeCatalogContext()))
+                .isInstanceOf(TableNotExistException.class);
+    }
+
+    @Test
+    void testAlterTableDeltaProperties() throws Exception {
+        DeltaLakeCatalog catalog = new DeltaLakeCatalog(configuration);
+        TablePath tablePath = TablePath.of("fluss", "alter_delta_properties");
+        String retentionKey = "delta.logRetentionDuration";
+        String retention = "interval 7 days";
+        catalog.createTable(
+                tablePath,
+                TableDescriptor.builder()
+                        .schema(Schema.newBuilder().column("a", DataTypes.INT()).build())
+                        .distributedBy(1)
+                        .customProperty(retentionKey, retention)
+                        .build(),
+                new TestingLakeCatalogContext());
+
+        // replayed when datalake is enabled together with a property createTable already applied
+        catalog.alterTable(
+                tablePath,
+                Arrays.asList(
+                        TableChange.set(retentionKey, retention),
+                        TableChange.reset("delta.checkpointInterval")),
+                new TestingLakeCatalogContext());
+
+        for (TableChange change :
+                Arrays.asList(
+                        TableChange.set(retentionKey, "interval 8 days"),
+                        TableChange.reset(retentionKey),
+                        TableChange.set("delta.checkpointInterval", "5"))) {
+            assertThatThrownBy(
+                            () ->
+                                    catalog.alterTable(
+                                            tablePath,
+                                            Collections.singletonList(change),
+                                            new TestingLakeCatalogContext()))
+                    .isInstanceOf(InvalidAlterTableException.class)
+                    .hasMessageContaining("delta.");
+        }
+    }
+
+    @Test
+    void testAlterTableRejectsUnsupportedChanges() throws Exception {
+        DeltaLakeCatalog catalog = new DeltaLakeCatalog(configuration);
+        TablePath tablePath = TablePath.of("fluss", "alter_unsupported");
+        createTable(tablePath, false);
+
+        for (TableChange change :
+                Arrays.asList(
+                        TableChange.addColumn(
+                                "d", DataTypes.INT(), null, TableChange.ColumnPosition.last()),
+                        TableChange.dropColumn("a"),
+                        TableChange.set(ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key(), "other"),
+                        TableChange.reset(ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key()))) {
+            assertThatThrownBy(
+                            () ->
+                                    catalog.alterTable(
+                                            tablePath,
+                                            Collections.singletonList(change),
+                                            new TestingLakeCatalogContext()))
+                    .isInstanceOf(InvalidAlterTableException.class);
+        }
+        assertThatThrownBy(
+                        () ->
+                                catalog.alterTable(
+                                        tablePath,
+                                        Collections.singletonList(
+                                                TableChange.modifyBucketCount(BUCKET_NUM + 1)),
+                                        new TestingLakeCatalogContext()))
+                .isInstanceOf(UnsupportedOperationException.class);
     }
 
     private long commit(
