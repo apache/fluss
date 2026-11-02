@@ -18,6 +18,8 @@
 
 package org.apache.fluss.lake.iceberg.flink;
 
+import org.apache.fluss.client.table.Table;
+import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -32,9 +34,12 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import javax.annotation.Nullable;
+
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertResultsIgnoreOrder;
@@ -83,6 +88,106 @@ class FlinkUnionReadDvTableITCase extends FlinkUnionReadTestBase {
         } finally {
             jobClient.cancel().get();
         }
+    }
+
+    /** Update and delete rows already in Iceberg, then union read; 3 buckets, +/- partitions. */
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testUnionReadCrossRound(boolean partitioned) throws Exception {
+        JobClient jobClient = buildTieringJob(execEnv);
+        try {
+            String tableName = partitioned ? "dv_cross_round_part" : "dv_cross_round";
+            TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
+            createCrossRoundTable(tablePath, partitioned);
+            List<String> parts =
+                    partitioned ? Arrays.asList("p0", "p1") : Collections.singletonList(null);
+
+            // round 1: keys 0..9 tiered to Iceberg
+            List<InternalRow> rows = new ArrayList<>();
+            for (String p : parts) {
+                for (int i = 0; i < 10; i++) {
+                    rows.add(rowOf(i, "v_" + i, p));
+                }
+            }
+            writeRows(tablePath, rows, false);
+            long readable = tickUntilReadableAdvances(tablePath, Long.MIN_VALUE, parts.get(0));
+
+            // round 2: update 0..2, delete 3..4
+            try (Table table = conn.getTable(tablePath)) {
+                UpsertWriter writer = table.newUpsert().createWriter();
+                for (String p : parts) {
+                    for (int i = 0; i < 3; i++) {
+                        writer.upsert(rowOf(i, "updated_" + i, p));
+                    }
+                    writer.delete(rowOf(3, "v_3", p));
+                    writer.delete(rowOf(4, "v_4", p));
+                }
+                writer.flush();
+            }
+            // two readable advances: round-2 positions are indexed one commit late
+            readable = tickUntilReadableAdvances(tablePath, readable, parts.get(0));
+            tickUntilReadableAdvances(tablePath, readable, parts.get(0));
+
+            List<String> expected = new ArrayList<>();
+            for (String p : parts) {
+                for (int i : new int[] {0, 1, 2, 5, 6, 7, 8, 9}) {
+                    expected.add(rowString(i, i < 3 ? "updated_" + i : "v_" + i, p));
+                }
+            }
+            expected.add(rowString(-1, "tick", parts.get(0)));
+            CloseableIterator<Row> rowIter =
+                    batchTEnv.executeSql("select * from " + tableName).collect();
+            assertResultsIgnoreOrder(rowIter, expected, true);
+        } finally {
+            jobClient.cancel().get();
+        }
+    }
+
+    private void createCrossRoundTable(TablePath tablePath, boolean partitioned) throws Exception {
+        Schema.Builder schema =
+                Schema.newBuilder().column("c1", DataTypes.INT()).column("c2", DataTypes.STRING());
+        TableDescriptor.Builder builder =
+                TableDescriptor.builder()
+                        .distributedBy(3)
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")
+                        .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500))
+                        .property(ConfigOptions.TABLE_DELETION_VECTORS_ENABLED.key(), "true");
+        if (partitioned) {
+            schema.column("c3", DataTypes.STRING()).primaryKey("c1", "c3");
+            builder.partitionedBy("c3");
+        } else {
+            schema.primaryKey("c1");
+        }
+        createTable(tablePath, builder.schema(schema.build()).build());
+    }
+
+    /** Upserts a tick row (DV tables need fresh commits) until the readable snapshot advances. */
+    private long tickUntilReadableAdvances(
+            TablePath tablePath, long previous, @Nullable String partition) throws Exception {
+        long deadline = System.currentTimeMillis() + Duration.ofMinutes(3).toMillis();
+        while (System.currentTimeMillis() < deadline) {
+            try {
+                long id = admin.getReadableLakeSnapshot(tablePath).get().getSnapshotId();
+                if (id != previous) {
+                    return id;
+                }
+            } catch (Exception e) {
+                // no readable snapshot yet
+            }
+            writeRows(tablePath, Collections.singletonList(rowOf(-1, "tick", partition)), false);
+            Thread.sleep(1000);
+        }
+        throw new AssertionError("readable snapshot of " + tablePath + " stuck at " + previous);
+    }
+
+    private static InternalRow rowOf(int key, String value, @Nullable String partition) {
+        return partition == null ? row(key, value) : row(key, value, partition);
+    }
+
+    private static String rowString(int key, String value, @Nullable String partition) {
+        return partition == null
+                ? String.format("+I[%d, %s]", key, value)
+                : String.format("+I[%d, %s, %s]", key, value, partition);
     }
 
     private long createPkTable(TablePath tablePath, boolean deletionVectorsEnabled)
