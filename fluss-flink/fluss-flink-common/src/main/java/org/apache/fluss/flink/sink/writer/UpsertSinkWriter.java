@@ -60,6 +60,7 @@ public class UpsertSinkWriter<InputT> extends FlinkSinkWriter<InputT> {
      * @param tablePath the path of the table to write to
      * @param flussConfig the Fluss configuration
      * @param tableRowType the row type of the table
+     * @param consumedRowType the row type of the consumed data (may include computed columns)
      * @param targetColumnIndexes optional column indexes for partial updates
      * @param mailboxExecutor the mailbox executor for async operations
      * @param flussSerializationSchema the serialization schema for input records
@@ -69,6 +70,7 @@ public class UpsertSinkWriter<InputT> extends FlinkSinkWriter<InputT> {
             TablePath tablePath,
             Configuration flussConfig,
             RowType tableRowType,
+            RowType consumedRowType,
             @Nullable int[] targetColumnIndexes,
             MailboxExecutor mailboxExecutor,
             FlussSerializationSchema<InputT> flussSerializationSchema,
@@ -77,6 +79,7 @@ public class UpsertSinkWriter<InputT> extends FlinkSinkWriter<InputT> {
                 tablePath,
                 flussConfig,
                 tableRowType,
+                consumedRowType,
                 targetColumnIndexes,
                 mailboxExecutor,
                 flussSerializationSchema);
