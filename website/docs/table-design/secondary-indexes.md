@@ -123,6 +123,7 @@ The following limitations apply:
 
 - Indexes can only be declared when creating a primary key table. Online index creation, backfill, and removal are not supported.
 - Tables with `table.datalake.historical-partition.enabled` set to `true` do not support secondary indexes yet. Enabling historical partition access on an indexed table is also rejected.
+- Tables with `table.kv.ttl` do not support secondary indexes yet. Row TTL cleanup does not emit changelog deletes to remove index entries.
 - Index queries require equality on all index columns. Range predicates and partial composite-index keys are not supported.
 - Index queries have no pagination or candidate-count limit. Low-selectivity values may cause many primary-key lookups.
 - Schema evolution must preserve the names, types, and ordinal positions of primary-key and indexed columns. Appending columns is supported; internal index tables cannot evolve independently.

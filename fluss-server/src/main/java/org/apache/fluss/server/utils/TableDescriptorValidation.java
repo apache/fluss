@@ -455,6 +455,14 @@ public class TableDescriptorValidation {
 
         validateKvTTLDuration(rowTTL.get());
 
+        if (!schema.getIndexes().isEmpty()) {
+            throw new InvalidConfigException(
+                    String.format(
+                            "Tables with secondary indexes do not support '%s' yet "
+                                    + "because TTL cleanup does not emit changelog deletes.",
+                            ConfigOptions.TABLE_KV_TTL.key()));
+        }
+
         if (timeColumn.isPresent()) {
             Schema.Column column = getKvTTLTimeColumn(schema, timeColumn.get());
             validateKvTTLTimeColumnType(column.getDataType());
