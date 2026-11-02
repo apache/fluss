@@ -20,7 +20,7 @@ limitations under the License.
 
 This draft provides real Table / Scan / Plan / Split / Reader APIs, boundary transport, and the LakeSource extension. The supporting planner/executor are included so these APIs compile and run; they remain separate implementation review units. The Paimon backend and its dependencies are deferred to the backend PR. See [the API review guide](../../docs/union-read-api.md) for entry points and ownership contracts.
 
-Ordinary queries use `scan.with_filter(...).plan()`. It extracts safe STRING partition equalities, including AND conjuncts, before offset queries; other conditions retain a wider scope and still undergo later pruning and exact filtering. `table.prepare()` captures the full table for sharing, while `prepare_with_partition_scope()` restricts the input. A query-specific context records its scope and cannot be reused as a table-wide boundary. `plan_with_context()` preserves supplied boundaries rather than recapturing them. There is no public `scan.prepare()`.
+Ordinary queries use `scan.with_filter(...).plan()`. It extracts safe STRING partition equalities, including AND conjuncts, before offset queries; other conditions retain a wider scope and still undergo later pruning and exact filtering. `table.capture_read_context()` captures the full table for sharing, while `capture_read_context_with_partition_scope()` restricts the input. A query-specific context records its scope and cannot be reused as a table-wide boundary. `plan_with_context()` preserves supplied boundaries rather than recapturing them. There is no public `scan.capture_read_context()`.
 
 ### Complete default reader
 
@@ -44,12 +44,10 @@ async fn query(connection: Arc<FlussConnection>, path: &TablePath) -> Result<()>
         .with_batch_size(4096);
     let plan = scan.plan().await?;
     let reader = scan.new_reader();
-    for split in plan.splits() {
-        let mut stream = reader.read_split(split).await?;
-        while let Some(batch) = stream.try_next().await? {
-            // Feed batches into a query attempt that can be discarded on error.
-            assert_eq!(batch.schema(), plan.schema());
-        }
+    let mut stream = reader.read_splits(plan.splits()).await?;
+    while let Some(batch) = stream.try_next().await? {
+        // Feed batches into a query attempt that can be discarded on error.
+        assert_eq!(batch.schema(), plan.schema());
     }
     Ok(())
 }
@@ -63,7 +61,10 @@ IDs within one `read_splits` call. `read_splits(plan.splits())` reads an unorder
 stream with at most eight active logical tasks. Use
 `read_splits_with_concurrency(..., n)` to set a positive limit, or schedule
 `read_split` in the host engine. Dropping the stream cancels active reads; the
-first error is terminal and drops sibling streams.
+first error is terminal and drops sibling streams. Each `read_splits` call lazily shares
+one Fluss table metadata load across its tasks. Separate calls, including
+`read_split`, start fresh metadata sessions; frozen schemas and boundaries are
+unchanged, and core routing refresh remains active.
 
 `with_projection(vec![])` returns zero-column batches with correct row counts.
 The reader retains hidden key/filter columns until reconciliation and filtering
@@ -106,7 +107,7 @@ async fn worker(
 
 `scan.new_reader()` performs no planning or I/O and captures immutable settings.
 It reads the snapshot and log bounds already in the split, without calling
-`prepare()`, `plan()` or `plan_with_context()`. The worker needs neither the
+`capture_read_context()`, `plan()` or `plan_with_context()`. The worker needs neither the
 coordinator's plan object nor its complete task list.
 
 Configuration consistency and task delivery are the engine's responsibility.
@@ -128,7 +129,7 @@ use fluss::predicate::col;
 use fluss_lake::{FlussLakeReadContext, FlussLakeTable, Result};
 
 async fn plan_references(table: &FlussLakeTable) -> Result<()> {
-    let context = table.prepare().await?;
+    let context = table.capture_read_context().await?;
     let received = FlussLakeReadContext::from_json(&context.to_json()?)?;
 
     let left = table.new_scan().with_filter(col("id").eq(1_i32));
@@ -158,7 +159,7 @@ async fn plan_in_scope(table: &FlussLakeTable) -> Result<()> {
     let scope = PartitionSpec::new(HashMap::from([
         ("region".to_string(), "US".to_string()),
     ]));
-    let context = table.prepare_with_partition_scope(&scope).await?;
+    let context = table.capture_read_context_with_partition_scope(&scope).await?;
     let scan = table.new_scan().with_filter(col("id").eq(42_i32));
     let plan = scan.plan_with_context(&context).await?;
     assert_eq!(plan.read_context().partition_filter(), context.partition_filter());
@@ -189,8 +190,8 @@ async fn query_with_source(table: &FlussLakeTable, source: Arc<dyn LakeSource>) 
 ### Java and engine-native execution
 
 ```java
-byte[] context = UnionReadBoundaryPlanner.prepare(admin, tablePath).get();
-byte[] scoped = UnionReadBoundaryPlanner.prepare(admin, tablePath, scope).get();
+byte[] context = UnionReadBoundaryPlanner.captureReadContext(admin, tablePath).get();
+byte[] scoped = UnionReadBoundaryPlanner.captureReadContext(admin, tablePath, scope).get();
 ```
 
 The Java planner captures the schema, readable snapshot and offsets, applies scope before offset lookup and rechecks table/partition identities. It performs no lake file I/O and does not close the caller's Admin. The encoder is internal. Both Java and Rust return the same v1 JSON format; engines distribute it without recapturing boundaries. A native engine may plan its own scan ranges/morsels and use its own readers and reconciliation. It must honor all input boundaries and the selected partition scope, including lake-only expired partitions. It must not interpret the default split payload as a public file-list protocol.
@@ -199,7 +200,7 @@ The Java planner captures the schema, readable snapshot and offsets, applies sco
 
 Reads are bounded, unordered and fixed to per-bucket ranges, not a global transactional snapshot or retention lease. Missing required inputs fail execution. Engines own retry and result publication; they must not mix partial results with a newly captured boundary. Streaming discovery and checkpointing are separate future work.
 
-A bucket with a lake seam reads the pinned baseline and `[seam, stop)`. Without a baseline, it starts at the concrete earliest retained offset captured by prepare. PK reads in this case reconstruct only keys represented in retained logs. Rust has snapshot metadata/lease APIs but no KV snapshot reader fallback here. Java's Fluss-only PK path can use KV state; this draft does not claim that parity.
+A bucket with a lake seam reads the pinned baseline and `[seam, stop)`. Without a baseline, it starts at the concrete earliest retained offset captured during boundary capture. PK reads in this case reconstruct only keys represented in retained logs. Rust has snapshot metadata/lease APIs but no KV snapshot reader fallback here. Java's Fluss-only PK path can use KV state; this draft does not claim that parity.
 
 The context carries frozen schema and stable identities. Readers map by column ID; later added columns do not replace the captured schema. Context v1 accepts unknown optional metadata, and rejects unknown versions or required semantics. Log partition kinds currently support only Ordinary. Shared historical logs require their own seam alignment and business-partition filtering; lake-only expired partitions do not cover historical writes. See the historical-read follow-up in the API guide.
 
@@ -214,6 +215,6 @@ cargo clippy --locked -p fluss-lake --all-features --all-targets -- -D warnings
 cargo test --locked -p fluss-lake --features integration_tests --test test_prepare --test test_union_read
 ```
 
-The last command requires the existing Fluss Docker test image. Java `UnionReadBoundaryPlannerTest`, `UnionReadContextEncoderTest` and `UnionReadBoundaryPlannerITCase` use the normal client test entry. This draft does not include a new CI job or the Paimon tiering fixture. The existing boundary PR wires its prepare IT into `rust-integration`; the execution PRs will add their corresponding CI coverage.
+The last command requires the existing Fluss Docker test image. Java `UnionReadBoundaryPlannerTest`, `UnionReadContextEncoderTest` and `UnionReadBoundaryPlannerITCase` use the normal client test entry. This draft does not include a new CI job or the Paimon tiering fixture. The existing boundary PR wires its boundary-capture IT into `rust-integration`; the execution PRs will add their corresponding CI coverage.
 
 Shared historical-log support is tracked in [#5001](https://github.com/apache/fluss/issues/5001); it is separate from reading expired partitions already present in the lake snapshot.

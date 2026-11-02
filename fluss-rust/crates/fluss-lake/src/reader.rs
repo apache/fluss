@@ -22,6 +22,7 @@ use crate::{FlussLakeError, FlussLakeReadSplit, FlussLakeScan, RecordBatchStream
 use futures::StreamExt;
 use std::collections::HashSet;
 use std::sync::Arc;
+use tokio::sync::OnceCell;
 
 /// Reusable reader with immutable scan configuration.
 ///
@@ -41,15 +42,18 @@ impl FlussLakeReader {
     }
 
     /// Read a frozen task, including a serialized round-trip from a coordinator.
-    /// Opening is lazy; the first stream error is terminal. Drop cancels the read.
+    /// Each call opens a fresh metadata session. Opening is lazy; the first stream
+    /// error is terminal. Drop cancels the read.
     pub async fn read_split(&self, split: &FlussLakeReadSplit) -> Result<RecordBatchStream> {
         self.scan.validate_configuration()?;
-        execute_split(split, &self.scan).map(stop_after_first_error)
+        execute_split(split, &self.scan, Arc::new(OnceCell::new())).map(stop_after_first_error)
     }
 
     /// Read a task collection as an unordered stream with at most eight
     /// active logical tasks. Duplicate tasks are rejected. Engines may instead
-    /// schedule `read_split` themselves. An error drops all sibling streams;
+    /// schedule `read_split` themselves. Nonempty tasks share one lazy table
+    /// metadata load within this call; later calls load it again. Routing refresh
+    /// remains managed by the core client. An error drops all sibling streams;
     /// discard this attempt's output before replanning with fresh boundaries.
     pub async fn read_splits(&self, splits: &[FlussLakeReadSplit]) -> Result<RecordBatchStream> {
         self.read_splits_with_concurrency(splits, 8).await
@@ -75,9 +79,10 @@ impl FlussLakeReader {
                 ));
             }
         }
+        let metadata = Arc::new(OnceCell::new());
         let streams = splits
             .iter()
-            .map(|split| execute_split(split, &self.scan))
+            .map(|split| execute_split(split, &self.scan, metadata.clone()))
             .collect::<Result<Vec<_>>>()?;
         Ok(merge_split_streams(streams, concurrency))
     }

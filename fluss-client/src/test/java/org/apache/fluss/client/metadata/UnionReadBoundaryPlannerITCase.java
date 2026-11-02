@@ -71,11 +71,12 @@ class UnionReadBoundaryPlannerITCase extends ClientToServerITCaseBase {
             }
             JsonNode all =
                     new ObjectMapper()
-                            .readTree(UnionReadBoundaryPlanner.prepare(admin, path).get());
+                            .readTree(
+                                    UnionReadBoundaryPlanner.captureReadContext(admin, path).get());
             JsonNode scoped =
                     new ObjectMapper()
                             .readTree(
-                                    UnionReadBoundaryPlanner.prepare(
+                                    UnionReadBoundaryPlanner.captureReadContext(
                                                     admin,
                                                     path,
                                                     new PartitionSpec(

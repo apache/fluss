@@ -75,8 +75,8 @@ public final class UnionReadBoundaryPlanner {
      * @return a future containing credential-free UTF-8 context v1 JSON; metadata and lookup
      *     failures complete it exceptionally
      */
-    public static CompletableFuture<byte[]> prepare(Admin admin, TablePath tablePath) {
-        return prepare(admin, tablePath, new PartitionSpec(Collections.emptyMap()));
+    public static CompletableFuture<byte[]> captureReadContext(Admin admin, TablePath tablePath) {
+        return captureReadContext(admin, tablePath, new PartitionSpec(Collections.emptyMap()));
     }
 
     /**
@@ -94,7 +94,7 @@ public final class UnionReadBoundaryPlanner {
      *     unavailable metadata or inconsistent offsets complete it exceptionally
      * @throws NullPointerException if a required argument is null
      */
-    public static CompletableFuture<byte[]> prepare(
+    public static CompletableFuture<byte[]> captureReadContext(
             Admin admin, TablePath tablePath, PartitionSpec scope) {
         checkNotNull(admin, "admin");
         checkNotNull(tablePath, "tablePath");

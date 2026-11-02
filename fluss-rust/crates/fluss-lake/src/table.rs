@@ -112,15 +112,17 @@ impl FlussLakeTable {
     /// The result may be shared by scans with different projections and
     /// predicates, including separate references to the table in one query.
     /// This does not require a lake reader or acquire a retention lease.
-    pub async fn prepare(&self) -> Result<FlussLakeReadContext> {
-        self.prepare_with_partition_scope(&PartitionSpec::new(HashMap::<String, String>::new()))
-            .await
+    pub async fn capture_read_context(&self) -> Result<FlussLakeReadContext> {
+        self.capture_read_context_with_partition_scope(&PartitionSpec::new(
+            HashMap::<String, String>::new(),
+        ))
+        .await
     }
 
     /// Captures boundaries within an exact, possibly partial partition spec.
     /// The scope constrains both lake and log planning, including lake-only partitions.
     /// It is an input restriction, not an optional pruning hint.
-    pub async fn prepare_with_partition_scope(
+    pub async fn capture_read_context_with_partition_scope(
         &self,
         scope: &PartitionSpec,
     ) -> Result<FlussLakeReadContext> {
@@ -208,7 +210,7 @@ impl FlussLakeScan {
     ///
     /// Safe string partition equalities restrict offset capture before lake planning.
     /// Other predicates still participate in planning and exact result filtering.
-    /// Use `FlussLakeTable::prepare` for a table-wide boundary shared by scans.
+    /// Use `FlussLakeTable::capture_read_context` for a table-wide boundary shared by scans.
     ///
     /// Create the reader using this scan's `new_reader()`. Lake planning and reading
     /// use the injected LakeSource.

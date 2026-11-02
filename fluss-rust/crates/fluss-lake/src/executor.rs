@@ -32,6 +32,7 @@ use futures::{StreamExt, TryStreamExt};
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
+use tokio::sync::OnceCell;
 
 /// Poll interval used while folding a bounded changelog tail.
 ///
@@ -43,6 +44,7 @@ const TAIL_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis
 pub(crate) fn execute_split(
     split: &FlussLakeReadSplit,
     scan: &Arc<FlussLakeScan>,
+    metadata: Arc<OnceCell<TableInfo>>,
 ) -> Result<RecordBatchStream> {
     // Validation borrows the payload; ownership is needed only for the lazy stream.
     let descriptor = split.validated_execution_descriptor()?.clone();
@@ -58,6 +60,7 @@ pub(crate) fn execute_split(
         descriptor,
         split.partition.clone(),
         scan.clone(),
+        metadata,
     )))
 }
 
@@ -65,13 +68,20 @@ async fn open_logical_stream(
     descriptor: SplitDescriptor,
     partition: crate::FlussLakePartitionIdentity,
     scan: Arc<FlussLakeScan>,
+    metadata: Arc<OnceCell<TableInfo>>,
 ) -> Result<RecordBatchStream> {
-    let table = scan
-        .connection()
-        .get_table(descriptor.table_path())
-        .await
-        .map_err(|error| execution_client_error("open Fluss table", error))?;
-    let frozen = descriptor.table_info(table.get_table_info())?;
+    // Share the live identity check within one read attempt, not across queries.
+    // Each split still reconstructs its own frozen schema and read boundaries.
+    let live = metadata
+        .get_or_try_init(|| async {
+            scan.connection()
+                .get_table(scan.table_path())
+                .await
+                .map(|table| table.get_table_info().clone())
+                .map_err(|error| execution_client_error("open Fluss table", error))
+        })
+        .await?;
+    let frozen = descriptor.table_info(live)?;
     validate_frozen_identity(&frozen, &descriptor, &partition)?;
     let table = FlussTable::new(scan.connection(), scan.connection().get_metadata(), frozen);
     let table_info = table.get_table_info();

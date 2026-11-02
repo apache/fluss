@@ -83,7 +83,7 @@ class UnionReadBoundaryPlannerTest {
                 .thenReturn(offsets(1, 20));
 
         CompletableFuture<byte[]> result =
-                UnionReadBoundaryPlanner.prepare(admin, table.getTablePath(), scope);
+                UnionReadBoundaryPlanner.captureReadContext(admin, table.getTablePath(), scope);
         verify(admin, never()).listPartitionInfos(any(), any(PartitionSpec.class));
         snapshot.complete(
                 new LakeSnapshot(42, Collections.singletonMap(new TableBucket(7, 9L, 0), 12L)));
@@ -135,7 +135,8 @@ class UnionReadBoundaryPlannerTest {
             JsonNode context =
                     new ObjectMapper()
                             .readTree(
-                                    UnionReadBoundaryPlanner.prepare(admin, table.getTablePath())
+                                    UnionReadBoundaryPlanner.captureReadContext(
+                                                    admin, table.getTablePath())
                                             .get());
             assertThat(context.at("/log_ranges/0/start_offset").longValue()).isEqualTo(8);
             assertThat(context.at("/log_ranges/0/baseline/kind").asText()).isEqualTo("none");
@@ -149,7 +150,8 @@ class UnionReadBoundaryPlannerTest {
                             CompletableFuture.completedFuture(recreated));
             assertThatThrownBy(
                             () ->
-                                    UnionReadBoundaryPlanner.prepare(admin, table.getTablePath())
+                                    UnionReadBoundaryPlanner.captureReadContext(
+                                                    admin, table.getTablePath())
                                             .join())
                     .hasRootCauseMessage("Table identity changed during boundary capture.");
         }
@@ -196,7 +198,7 @@ class UnionReadBoundaryPlannerTest {
                                 isA(OffsetSpec.LatestSpec.class)))
                         .thenReturn(offsets(1, 20));
                 CompletableFuture<byte[]> result =
-                        UnionReadBoundaryPlanner.prepare(admin, table.getTablePath());
+                        UnionReadBoundaryPlanner.captureReadContext(admin, table.getTablePath());
                 if (recheck == 0 || (!lookupFails && recheck == 1)) {
                     JsonNode context = new ObjectMapper().readTree(result.get());
                     assertThat(context.get("log_ranges")).hasSize(recheck == 0 ? 0 : 1);

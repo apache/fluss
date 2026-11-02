@@ -36,7 +36,7 @@ Related: [FIP-48](https://cwiki.apache.org/confluence/spaces/FLUSS/pages/4443346
 
 ## Entry points
 
-Ordinary Rust callers configure a scan and ask it to plan a bounded read. Coordinators that need shared boundaries prepare a ReadContext explicitly. Both paths use the same scan-created reader.
+Ordinary Rust callers configure a scan and ask it to plan a bounded read. Coordinators that need shared boundaries capture a ReadContext explicitly. Both paths use the same scan-created reader.
 
 ```text
 FlussLakeTable
@@ -44,7 +44,7 @@ FlussLakeTable
   │                ├─ plan() → ReadPlan → ReadSplits
   │                ├─ plan_with_context(context) ──┘
   │                └─ new_reader() → bounded Arrow batches
-  └─ prepare() / prepare_with_partition_scope(spec) → ReadContext
+  └─ capture_read_context() / capture_read_context_with_partition_scope(spec) → ReadContext
                      ├─ default planner
                      └─ engine-native planning and execution
 ```
@@ -52,15 +52,15 @@ FlussLakeTable
 | Entry | Contract |
 | --- | --- |
 | `scan.with_filter(predicate).plan()` | Capture boundaries, plan tasks and retain the predicate for exact result filtering. Unsupported predicates fail binding. |
-| `table.prepare()` | Capture table-wide boundaries without opening a lake catalog or reading lake files. |
-| `table.prepare_with_partition_scope(spec)` | Capture boundaries restricted to an exact, possibly partial partition spec. The scope applies to lake and log inputs. |
+| `table.capture_read_context()` | Capture table-wide boundaries without opening a lake catalog or reading lake files. |
+| `table.capture_read_context_with_partition_scope(spec)` | Capture boundaries restricted to an exact, possibly partial partition spec. The scope applies to lake and log inputs. |
 | `scan.plan_with_context(context)` | Use the supplied schema and boundaries without recapturing or narrowing the context. Apply scan filters during planning and execution. |
 | `scan.new_reader()` | Create a reader without planning or I/O. Read transported splits using the coordinator's scan configuration. |
 | `scan.with_lake_source(source)` | Replace lake planning and baseline reading; retain default Fluss log reading and PK reconciliation. |
 
-The boundary PR provides explicit scoped capture; predicate-to-scope extraction belongs to the subsequent scan/planning implementation, included here for review. The ordinary planning path currently extracts implied STRING partition equalities, including AND conjuncts, before querying offsets. Other predicates retain a wider capture scope and participate in later pruning and exact filtering. The generated context records its scope. Callers sharing boundaries across different partition selections should use `table.prepare()` rather than reuse a query-specific context as a table-wide snapshot.
+The boundary PR provides explicit scoped capture; predicate-to-scope extraction belongs to the subsequent scan/planning implementation, included here for review. The ordinary planning path currently extracts implied STRING partition equalities, including AND conjuncts, before querying offsets. Other predicates retain a wider capture scope and participate in later pruning and exact filtering. The generated context records its scope. Callers sharing boundaries across different partition selections should use `table.capture_read_context()` rather than reuse a query-specific context as a table-wide snapshot.
 
-An explicit PartitionSpec uses Fluss metadata values and constrains the input, rather than supplying a query-filter hint. An empty spec selects the whole table. There is no public `scan.prepare()` method.
+An explicit PartitionSpec uses Fluss metadata values and constrains the input, rather than supplying a query-filter hint. An empty spec selects the whole table. There is no public `scan.capture_read_context()` method.
 
 ## Rust usage
 
@@ -82,7 +82,7 @@ while let Some(batch) = batches.try_next().await? {
 For two scans sharing table-wide boundaries:
 
 ```rust
-let context = table.prepare().await?;
+let context = table.capture_read_context().await?;
 let plan_a = scan_a.plan_with_context(&context).await?;
 let plan_b = scan_b.plan_with_context(&context).await?;
 ```
@@ -93,7 +93,7 @@ For scans restricted to a common partition scope:
 let scope = PartitionSpec::new(HashMap::from([
     ("region".to_string(), "US".to_string()),
 ]));
-let context = table.prepare_with_partition_scope(&scope).await?;
+let context = table.capture_read_context_with_partition_scope(&scope).await?;
 let plan = scan.plan_with_context(&context).await?;
 ```
 
@@ -123,8 +123,8 @@ The extension replaces both lake planning and reading. There is no stable reader
 Java coordinators obtain the boundary in one asynchronous call, without assembling snapshot and offset maps:
 
 ```java
-byte[] bytes = UnionReadBoundaryPlanner.prepare(admin, tablePath).get();
-byte[] scoped = UnionReadBoundaryPlanner.prepare(admin, tablePath, scope).get();
+byte[] bytes = UnionReadBoundaryPlanner.captureReadContext(admin, tablePath).get();
+byte[] scoped = UnionReadBoundaryPlanner.captureReadContext(admin, tablePath, scope).get();
 ```
 
 The planner captures the table schema and readable snapshot, applies the partition scope before querying earliest/stop offsets, and rechecks partition IDs and table identity. Snapshot seams remain paired with their snapshot; only confirmed removed partitions are skipped. Other lookup failures propagate. Later schema additions leave the frozen schema unchanged. The result uses the same v1 format as Rust's `FlussLakeReadContext::from_json(&bytes)`.
@@ -137,7 +137,7 @@ An engine such as StarRocks can consume the boundary contract, plan its own lake
 | --- | --- |
 | Rust client | This draft provides Fluss-only execution, transported splits and the LakeSource extension. A lake backend is supplied by the caller; built-in Paimon reading is separate. |
 | DataFusion | Can use default splits/readers through an adapter. Predicate negotiation and runtime scheduling belong to that adapter. This draft does not deliver the adapter. |
-| Java | One-call prepare implemented, including metadata capture, identity rechecks and transport encoding. |
+| Java | One-call boundary capture implemented, including metadata capture, identity rechecks and transport encoding. |
 | StarRocks / C++ | Native integration contract only here; no UnionRead C ABI or completed SR MPP integration. |
 | Python / Elixir | No UnionRead bindings in this change; SDK examples must follow actual binding APIs when implemented. |
 
@@ -155,6 +155,6 @@ Context v1 is an unpublished Java/Rust transport draft. Unknown optional metadat
 
 Review the public types and ownership contracts above first. The concrete Scan/Plan/Reader methods are backed by the real planner and executor; the draft does not add `todo!()` or empty implementations. Boundary capture, default planning and Append/PK execution remain separate landing units after interface review. The Paimon backend is not included. Further split subdivision, accepted/remaining negotiation, KV snapshot fallback and historical-log support remain follow-ups.
 
-The boundary-only PR wires its prepare IT into the existing `rust-integration` job. Automatic scan predicate extraction and execution coverage belong to the later planning/execution PRs, even though their implementation is available in this draft for interface review.
+The boundary-only PR wires its boundary-capture IT into the existing `rust-integration` job. Automatic scan predicate extraction and execution coverage belong to the later planning/execution PRs, even though their implementation is available in this draft for interface review.
 
 The native execution path changes the responsibility split described in the published FIP. That clarification still needs community agreement; this draft does not present it as already accepted.

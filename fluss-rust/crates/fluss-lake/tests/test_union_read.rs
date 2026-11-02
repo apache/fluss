@@ -174,7 +174,7 @@ async fn append_log_plan_uses_frozen_stop_offset_after_transport() {
     }
     ids.sort_unstable();
     assert_eq!(ids, vec![1, 2, 3]);
-    let later_context = lake_table.prepare().await.unwrap();
+    let later_context = lake_table.capture_read_context().await.unwrap();
     assert!(
         later_context
             .log_ranges()
@@ -417,7 +417,7 @@ async fn frozen_schema_survives_alter_table_on_coordinator_and_worker() {
         )
         .unwrap();
     live_writer.flush().await.unwrap();
-    let later = worker_table.prepare().await.unwrap();
+    let later = worker_table.capture_read_context().await.unwrap();
     let mixed =
         FlussLakeReadContext::from_boundary(&frozen_info, None, later.log_ranges().to_vec())
             .unwrap();
@@ -457,4 +457,85 @@ async fn frozen_schema_survives_alter_table_on_coordinator_and_worker() {
         .drop_table(&table_path, false)
         .await
         .expect("Failed to drop UnionRead integration test table");
+}
+
+#[tokio::test]
+async fn shared_read_metadata_does_not_outlive_the_read_attempt() {
+    let cluster = support::get_shared_cluster();
+    let connection = Arc::new(cluster.get_fluss_connection().await);
+    let admin = connection.get_admin().unwrap();
+    let path = TablePath::new("fluss", "test_union_read_metadata_session");
+    let descriptor = TableDescriptor::builder()
+        .schema(
+            Schema::builder()
+                .column("id", DataTypes::int())
+                .column("name", DataTypes::string())
+                .build()
+                .unwrap(),
+        )
+        .distributed_by(Some(2), vec!["id".into()])
+        .build()
+        .unwrap();
+    support::create_table(&admin, &path, &descriptor).await;
+    let lake_table = FlussLakeTable::open(connection.clone(), &path)
+        .await
+        .unwrap();
+    let scan = lake_table.new_scan();
+    let reader = scan.new_reader();
+    let mut previous_splits = None;
+
+    for generation in 0..2 {
+        if generation > 0 {
+            admin.drop_table(&path, false).await.unwrap();
+            support::create_table(&admin, &path, &descriptor).await;
+            // Reusing the reader must still reject tasks for the dropped table.
+            let result = reader
+                .read_splits(previous_splits.as_deref().unwrap())
+                .await
+                .unwrap()
+                .try_collect::<Vec<_>>()
+                .await;
+            assert!(matches!(result, Err(FlussLakeError::SchemaIncompatible(_))));
+        }
+        let table = connection.get_table(&path).await.unwrap();
+        let writer = table.new_append().unwrap().create_writer().unwrap();
+        let expected: Vec<i32> = (generation * 100..generation * 100 + 16).collect();
+        writer
+            .append_arrow_batch(append_batch(expected.clone(), vec!["value"; 16]))
+            .unwrap();
+        writer.flush().await.unwrap();
+        drop(writer);
+        let plan = scan.plan().await.unwrap();
+        assert_eq!(plan.splits().len(), 2);
+        for concurrency in [1, 2] {
+            let batches = tokio::time::timeout(
+                Duration::from_secs(10),
+                reader
+                    .read_splits_with_concurrency(plan.splits(), concurrency)
+                    .await
+                    .unwrap()
+                    .try_collect::<Vec<_>>(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            let mut ids: Vec<i32> = batches
+                .iter()
+                .flat_map(|batch| {
+                    batch
+                        .column(0)
+                        .as_any()
+                        .downcast_ref::<Int32Array>()
+                        .unwrap()
+                        .values()
+                        .iter()
+                        .copied()
+                })
+                .collect();
+            ids.sort_unstable();
+            assert_eq!(ids, expected);
+        }
+        previous_splits = Some(plan.splits().to_vec());
+    }
+    admin.drop_table(&path, false).await.unwrap();
 }

@@ -26,7 +26,7 @@
 //!   execute transported splits without retaining or rebuilding the plan.
 //! - [`FlussLakeScan::with_lake_source`] replaces lake planning/reading while
 //!   retaining the default Fluss log reader and current-view reconciliation.
-//! - [`FlussLakeTable::prepare`] returns a portable [`FlussLakeReadContext`]
+//! - [`FlussLakeTable::capture_read_context`] returns a portable [`FlussLakeReadContext`]
 //!   without a lake backend. Engines can use their own lake planners, readers,
 //!   reconciliation operators, and schedulers against these frozen inputs.
 //!

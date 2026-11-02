@@ -61,7 +61,7 @@ async fn prepare_freezes_fluss_only_ranges_and_schema() {
     let table = FlussLakeTable::open(connection.clone(), &path)
         .await
         .unwrap();
-    let plain = table.prepare().await.unwrap();
+    let plain = table.capture_read_context().await.unwrap();
     assert_eq!(plain.lake_snapshot_id(), None);
     assert_eq!(plain.lake_format(), None);
     assert_eq!(plain.log_ranges()[0].baseline(), FlussLakeBaseline::None);
@@ -80,7 +80,7 @@ async fn prepare_freezes_fluss_only_ranges_and_schema() {
     assert_eq!(transported.to_json().unwrap(), bytes);
     assert_eq!(transported.log_ranges()[0].stop_offset(), 3);
     assert_eq!(
-        table.prepare().await.unwrap().log_ranges()[0].stop_offset(),
+        table.capture_read_context().await.unwrap().log_ranges()[0].stop_offset(),
         5
     );
     drop(writer);
@@ -196,10 +196,13 @@ async fn partition_filter_preserves_scope_and_resolved_bucket_counts() {
     let table = FlussLakeTable::open(connection.clone(), &path)
         .await
         .unwrap();
-    let all = table.prepare().await.unwrap();
+    let all = table.capture_read_context().await.unwrap();
     assert_eq!(all.log_ranges().len(), 3);
     let filter = PartitionSpec::new(HashMap::from([("region", "US")]));
-    let selected = table.prepare_with_partition_scope(&filter).await.unwrap();
+    let selected = table
+        .capture_read_context_with_partition_scope(&filter)
+        .await
+        .unwrap();
     assert_eq!(selected.log_ranges().len(), 1);
     assert_eq!(selected.log_ranges()[0].bucket_count(), 1);
     assert_eq!(selected.log_ranges()[0].stop_offset(), 1);
@@ -233,7 +236,10 @@ async fn partition_filter_preserves_scope_and_resolved_bucket_counts() {
     );
     assert_eq!(imported.log_ranges(), selected.log_ranges());
     admin.drop_partition(&path, &filter, false).await.unwrap();
-    let dropped = table.prepare_with_partition_scope(&filter).await.unwrap();
+    let dropped = table
+        .capture_read_context_with_partition_scope(&filter)
+        .await
+        .unwrap();
     assert!(dropped.log_ranges().is_empty());
     assert_eq!(dropped.partition_filter(), selected.partition_filter());
     admin.drop_table(&path, false).await.unwrap();
