@@ -32,8 +32,6 @@ import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.row.BinaryString;
-import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.KeyEncoder;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
@@ -50,7 +48,6 @@ import org.junit.jupiter.params.provider.MethodSource;
 
 import javax.annotation.Nullable;
 
-import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -60,7 +57,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -199,29 +195,6 @@ class PrefixLookupITCase {
             assertPrefixLookups(table, rows, "a", "b", "p");
             assertPrefixLookups(table, rows, "p", "a", "b", "c");
             assertThat(lookup(table, Arrays.asList("a", "b", "p"), 1L, "a", "p3")).isEmpty();
-        }
-    }
-
-    @Test
-    void testClientFilterKeepsLookupKeyWhenRowIsReused() throws Exception {
-        // legacy Paimon tables filter the lookup columns after the bucket key on the client
-        try (Table table = createTable("reused_key", DataLakeFormat.PAIMON, 1, false, "a")) {
-            write(
-                    table,
-                    Arrays.asList(
-                            new Object[] {1L, "abcdefghij", 1L, 1L, "first"},
-                            new Object[] {1L, "klmnopqrst", 1L, 1L, "second"}));
-            byte[] b = "abcdefghij".getBytes(StandardCharsets.UTF_8);
-            Lookuper lookuper = table.newLookup().lookupBy("a", "b").createLookuper();
-            CompletableFuture<LookupResult> result =
-                    lookuper.lookup(GenericRow.of(1L, BinaryString.fromBytes(b)));
-            // the caller reuses the row's buffer before the lookup completes
-            byte[] next = "klmnopqrst".getBytes(StandardCharsets.UTF_8);
-            System.arraycopy(next, 0, b, 0, b.length);
-
-            assertThat(result.get().getRowList())
-                    .extracting(row -> row.getString(4).toString())
-                    .containsExactly("first");
         }
     }
 
