@@ -31,6 +31,7 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.predicate.Predicate;
 
 import org.apache.iceberg.DataFile;
+import org.apache.iceberg.DataOperations;
 import org.apache.iceberg.FileScanTask;
 import org.apache.iceberg.IncrementalAppendScan;
 import org.apache.iceberg.Schema;
@@ -42,6 +43,7 @@ import org.apache.iceberg.expressions.Expression;
 import org.apache.iceberg.expressions.Expressions;
 import org.apache.iceberg.io.CloseableIterable;
 import org.apache.iceberg.io.FileIO;
+import org.apache.iceberg.util.SnapshotUtil;
 
 import javax.annotation.Nullable;
 
@@ -147,13 +149,20 @@ public class IcebergLakeSource implements LakeSource<IcebergSplit> {
             }
             long toSnapshotId = toAppend.snapshotId();
             boolean hasValidFrom = fromSnapshotId > 0 && table.snapshot(fromSnapshotId) != null;
+            // from past the last append (an index-only round committed a compaction id): its plan
+            // already indexed everything up to it
+            if (hasValidFrom
+                    && fromSnapshotId != toSnapshotId
+                    && SnapshotUtil.isAncestorOf(table, fromSnapshotId, toSnapshotId)) {
+                return null;
+            }
 
             // The RowPos scan runs BEFORE this round's data is committed, so `toAppend` is the last
             // committed append. Append-only Iceberg tiering thus sees from == to on the steady
             // state: index the files added in that snapshot itself (parent -> to). Only when a
             // strictly newer append exists do we scan the delta from -> to.
             Long fromExclusive;
-            if (hasValidFrom && fromSnapshotId < toSnapshotId) {
+            if (hasValidFrom && fromSnapshotId != toSnapshotId) {
                 fromExclusive = fromSnapshotId;
             } else {
                 fromExclusive = toAppend.parentId(); // null if toAppend is the first snapshot
@@ -222,8 +231,7 @@ public class IcebergLakeSource implements LakeSource<IcebergSplit> {
         Snapshot compactSnapshot = null;
         for (Snapshot s = current;
                 s != null && !(hasValidFrom && s.snapshotId() == fromSnapshotId); ) {
-            if (org.apache.iceberg.DataOperations.REPLACE.equals(s.operation())
-                    && s.removedDataFiles(io).iterator().hasNext()) {
+            if (isDataCompaction(s, io)) {
                 compactSnapshot = s;
                 break;
             }
@@ -239,6 +247,12 @@ public class IcebergLakeSource implements LakeSource<IcebergSplit> {
         Map<String, DataFile> netAdded = new LinkedHashMap<>();
         Map<String, DataFile> netRemoved = new LinkedHashMap<>();
         if (hasValidFrom) {
+            // `from` is the last committed append; its files are not indexed yet (append path
+            // indexes them when from == to), so this compaction round must index them too
+            Snapshot fromSnap = table.snapshot(fromSnapshotId);
+            if (DataOperations.APPEND.equals(fromSnap.operation())) {
+                fromSnap.addedDataFiles(io).forEach(df -> netAdded.put(df.location(), df));
+            }
             List<Snapshot> lineage = new ArrayList<>();
             for (Snapshot s = compactSnapshot; s != null && s.snapshotId() != fromSnapshotId; ) {
                 lineage.add(s);
@@ -269,6 +283,24 @@ public class IcebergLakeSource implements LakeSource<IcebergSplit> {
             }
         }
 
+        return toCompactionPlan(table, compactSnapshotId, netAdded, netRemoved);
+    }
+
+    /** A REPLACE that removes data files (compaction), not a DV-only Puffin rewrite. */
+    private static boolean isDataCompaction(Snapshot s, FileIO io) {
+        return DataOperations.REPLACE.equals(s.operation())
+                && s.removedDataFiles(io).iterator().hasNext();
+    }
+
+    /**
+     * Re-index {@code netAdded} at the compaction snapshot; group {@code netRemoved} for cleanup.
+     */
+    @Nullable
+    private DataDeltaPlan<IcebergSplit> toCompactionPlan(
+            Table table,
+            long compactSnapshotId,
+            Map<String, DataFile> netAdded,
+            Map<String, DataFile> netRemoved) {
         // Re-index the new files: fetch their FileScanTasks at the compaction snapshot.
         Function<FileScanTask, Integer> bucketExtractor =
                 IcebergSplitPlanner.createBucketExtractor(table);

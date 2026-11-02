@@ -47,7 +47,10 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.lake.iceberg.utils.IcebergConversions.toFilterExpression;
@@ -176,7 +179,7 @@ public class IcebergRewriteDataFiles {
         try (CloseableIterable<Record> records = readDataFile(combinedScanTask);
                 TaskWriter<Record> taskWriter =
                         TaskWriterFactory.createTaskWriter(table, partition, bucket.getBucket())) {
-            for (Record record : records) {
+            for (Record record : latestPerKey(records)) {
                 taskWriter.write(record);
             }
             WriteResult rewriteResult = taskWriter.complete();
@@ -186,6 +189,32 @@ public class IcebergRewriteDataFiles {
                             + Arrays.toString(rewriteResult.deleteFiles()));
             return DataFileSet.of(Arrays.asList(rewriteResult.dataFiles()));
         }
+    }
+
+    /**
+     * DV tables append stale versions (masked only by deletion vectors), so a file group can hold a
+     * key twice; keep the latest by __offset so the PK writer emits no delete files.
+     */
+    private Iterable<Record> latestPerKey(CloseableIterable<Record> records) {
+        Set<String> pkFields = table.schema().identifierFieldNames();
+        if (pkFields.isEmpty()) {
+            return records;
+        }
+        Map<List<Object>, Record> latest = new LinkedHashMap<>();
+        for (Record record : records) {
+            List<Object> key = new ArrayList<>(pkFields.size());
+            for (String field : pkFields) {
+                key.add(record.getField(field));
+            }
+            Record prev = latest.get(key);
+            long offset = (Long) record.getField(OFFSET_COLUMN_NAME);
+            if (prev == null || (Long) prev.getField(OFFSET_COLUMN_NAME) < offset) {
+                latest.put(key, record.copy()); // reader reuses containers
+            }
+        }
+        List<Record> result = new ArrayList<>(latest.values());
+        result.sort(Comparator.comparingLong(r -> (Long) r.getField(OFFSET_COLUMN_NAME)));
+        return result;
     }
 
     private CloseableIterable<Record> readDataFile(CombinedScanTask combinedScanTask) {

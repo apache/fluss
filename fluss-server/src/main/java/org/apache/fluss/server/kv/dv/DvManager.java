@@ -32,6 +32,7 @@ import javax.annotation.Nullable;
 import java.io.Closeable;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -229,13 +230,19 @@ public class DvManager implements Closeable {
                 dvRocksDB.rowPosIndex().ingestExternalFile(sstPaths);
             }
 
-            // Step 2: Batch resolve PendingDeletes
-            batchResolvePendingDeletes(readableOffset);
-
-            // Step 3: Cleanup oldFiles
+            // Step 2: Cleanup oldFiles (compaction) first: their masks are re-queued as pending
             List<Integer> oldFileIds = pendingOldFileIds.remove(bucketId);
-            if (oldFileIds != null) {
-                cleanupOldFiles(oldFileIds);
+            List<Long> requeued =
+                    oldFileIds != null ? cleanupOldFiles(oldFileIds) : Collections.emptyList();
+
+            // Step 3: Batch resolve PendingDeletes (re-queued masks land on compacted positions)
+            batchResolvePendingDeletes(readableOffset);
+            // a re-queued row absent from the compacted files was dropped by the rewrite
+            for (long rowId : requeued) {
+                PendingDeletes.PendingDeleteEntry e = dvRocksDB.pendingDeletes().get(rowId);
+                if (e != null && e.isPending()) {
+                    dvRocksDB.pendingDeletes().delete(rowId);
+                }
             }
 
             // Step 4: Cleanup expired LogDv
@@ -306,7 +313,7 @@ public class DvManager implements Closeable {
      *
      * @param oldFileIds file IDs of the old files to clean up
      */
-    private void cleanupOldFiles(List<Integer> oldFileIds) throws IOException {
+    private List<Long> cleanupOldFiles(List<Integer> oldFileIds) throws IOException {
         Set<Integer> oldFileIdSet = new HashSet<>(oldFileIds);
 
         // Remove LakeDv entries for old files
@@ -334,14 +341,16 @@ public class DvManager implements Closeable {
                 }
             }
         }
+        // the row may live on in a compacted file: re-queue its mask instead of dropping it
         for (long rowId : toDelete) {
-            dvRocksDB.pendingDeletes().delete(rowId);
+            dvRocksDB.pendingDeletes().putPending(rowId);
         }
 
         // Remove FileDict entries for old files
         for (int fileId : oldFileIds) {
             dvRocksDB.fileDict().delete(fileId);
         }
+        return toDelete;
     }
 
     /**

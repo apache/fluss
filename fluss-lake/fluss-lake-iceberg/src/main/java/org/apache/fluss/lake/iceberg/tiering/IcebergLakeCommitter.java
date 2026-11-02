@@ -163,12 +163,16 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
             long snapshotId = commit(snapshotUpdate, snapshotProperties);
 
             // There exists rewrite files, commit rewrite files
+            boolean dvTable =
+                    icebergTable.schema().findField(IcebergLakeCatalog.ROWID_COLUMN_NAME) != null;
             List<RewriteDataFileResult> rewriteDataFileResults =
                     committable.rewriteDataFileResults();
             if (!rewriteDataFileResults.isEmpty()) {
                 Long rewriteCommitSnapshotId =
                         commitRewrite(rewriteDataFileResults, snapshotProperties);
-                if (rewriteCommitSnapshotId != null) {
+                // DV tables report the append: readers must not move onto compacted files before
+                // the next round indexes them (planDelta then finds this rewrite in its window)
+                if (rewriteCommitSnapshotId != null && !dvTable) {
                     snapshotId = rewriteCommitSnapshotId;
                 }
             }
@@ -176,7 +180,7 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
             // DV tables: defer readability so the RowPos scan + coordinator readable-switch advance
             // the readable snapshot (the just-appended files must be indexed first). Non-DV tables
             // are readable immediately.
-            if (icebergTable.schema().findField(IcebergLakeCatalog.ROWID_COLUMN_NAME) != null) {
+            if (dvTable) {
                 return LakeCommitResult.unknownReadableSnapshot(snapshotId);
             }
             return LakeCommitResult.committedIsReadable(snapshotId);

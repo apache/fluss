@@ -301,9 +301,17 @@ class IcebergReadWithPosTest {
         assertThat(plan).isNotNull();
         // returns the compaction snapshot id (not "current"/append).
         assertThat(plan.getCompactSnapshotId()).isEqualTo(compactSnapshotId);
-        // removed old files reported as deletedFiles (basenames) under bucket 0.
+        // removed files reported as deletedFiles under bucket 0, except from's own append file:
+        // it was never indexed (indexed one round late), so there is nothing to clean up
+        String fromFile =
+                table.snapshot(appendSnapshotId)
+                        .addedDataFiles(table.io())
+                        .iterator()
+                        .next()
+                        .location();
+        oldBasenames.remove(fromFile.substring(fromFile.lastIndexOf('/') + 1));
         assertThat(plan.getDeletedFiles(null, 0))
-                .hasSize(3)
+                .hasSize(2)
                 .containsExactlyInAnyOrderElementsOf(oldBasenames);
         // compacted output files re-indexed as splits.
         assertThat(plan.getSplits()).hasSize(rr.addedDataFiles().size());
