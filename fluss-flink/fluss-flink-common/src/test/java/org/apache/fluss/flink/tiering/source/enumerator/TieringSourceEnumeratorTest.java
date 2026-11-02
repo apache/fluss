@@ -17,6 +17,9 @@
 
 package org.apache.fluss.flink.tiering.source.enumerator;
 
+import org.apache.fluss.client.Connection;
+import org.apache.fluss.client.ConnectionFactory;
+import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.tiering.TieringLogSplit;
 import org.apache.fluss.client.tiering.TieringSnapshotSplit;
 import org.apache.fluss.client.tiering.TieringSplit;
@@ -41,6 +44,8 @@ import org.apache.fluss.rpc.messages.LakeTieringHeartbeatRequest;
 import org.apache.fluss.rpc.messages.LakeTieringHeartbeatResponse;
 import org.apache.fluss.rpc.messages.PbLakeTableOffsetForBucket;
 import org.apache.fluss.rpc.messages.PbLakeTableSnapshotInfo;
+import org.apache.fluss.server.coordinator.TestCoordinatorGateway;
+import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
 
 import org.apache.flink.api.connector.source.SourceEvent;
 import org.apache.flink.api.connector.source.SplitsAssignment;
@@ -62,7 +67,10 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -70,9 +78,7 @@ import static org.apache.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFS
 import static org.apache.fluss.config.ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.assertj.core.api.Assertions.catchThrowableOfType;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
@@ -885,36 +891,200 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
         }
     }
 
-    @Test
-    void testCoordinatorEpochChangeTriggersFailover() throws Exception {
-        try (FlussMockSplitEnumeratorContext<FlinkTieringSplit> context =
+    @ParameterizedTest(name = "requestTable={0}")
+    @ValueSource(booleans = {false, true})
+    void testCoordinatorEpochChangeTriggersFailover(boolean requestTable) throws Throwable {
+        AtomicInteger coordinatorEpoch = new AtomicInteger(1);
+        TestingHeartbeatGateway gateway =
+                new TestingHeartbeatGateway(
+                        request ->
+                                CompletableFuture.completedFuture(
+                                        new LakeTieringHeartbeatResponse()
+                                                .setCoordinatorEpoch(coordinatorEpoch.get())));
+        try (Connection connection =
+                        ConnectionFactory.createConnection(
+                                FLUSS_CLUSTER_EXTENSION.getClientConfig());
+                FlussMockSplitEnumeratorContext<FlinkTieringSplit> context =
                         new FlussMockSplitEnumeratorContext<>(1);
                 TieringSourceEnumerator enumerator =
-                        createTieringSourceEnumerator(flussConf, context)) {
-            enumerator.start();
+                        startTieringSourceEnumerator(context, gateway, connection.getAdmin())) {
+            if (requestTable) {
+                registerSingleReaderAndHandleSplitRequests(context, enumerator, 0, 0);
+            } else {
+                context.runPeriodicCallable(0);
+            }
+            assertThat(
+                            gateway.lastRequest.hasRequestTable()
+                                    && gateway.lastRequest.isRequestTable())
+                    .isEqualTo(requestTable);
 
-            int coordinatorEpoch =
-                    coordinatorGateway
-                            .lakeTieringHeartbeat(new LakeTieringHeartbeatRequest())
-                            .get()
-                            .getCoordinatorEpoch();
-            LakeTieringHeartbeatResponse sameEpochResponse =
-                    new LakeTieringHeartbeatResponse().setCoordinatorEpoch(coordinatorEpoch);
-            assertThatCode(() -> enumerator.checkCoordinatorEpoch(sameEpochResponse))
-                    .doesNotThrowAnyException();
+            coordinatorEpoch.incrementAndGet();
+            assertThatThrownBy(
+                            () -> {
+                                if (requestTable) {
+                                    enumerator.handleSplitRequest(0, "localhost");
+                                } else {
+                                    context.runPeriodicCallable(0);
+                                }
+                            })
+                    .isInstanceOf(FlinkRuntimeException.class)
+                    .hasMessageContaining("epoch changed from 1 to 2");
+            assertThat(
+                            gateway.lastRequest.hasRequestTable()
+                                    && gateway.lastRequest.isRequestTable())
+                    .isEqualTo(requestTable);
+        }
+    }
 
-            int newCoordinatorEpoch = coordinatorEpoch + 1;
-            LakeTieringHeartbeatResponse newEpochResponse =
-                    new LakeTieringHeartbeatResponse().setCoordinatorEpoch(newCoordinatorEpoch);
-            FlinkRuntimeException epochChangeError =
-                    catchThrowableOfType(
-                            () -> enumerator.checkCoordinatorEpoch(newEpochResponse),
-                            FlinkRuntimeException.class);
-            assertThat(epochChangeError)
-                    .hasMessageContaining(String.valueOf(coordinatorEpoch))
-                    .hasMessageContaining(String.valueOf(newCoordinatorEpoch));
-            assertThatThrownBy(() -> enumerator.generateAndAssignSplits(null, epochChangeError))
-                    .isSameAs(epochChangeError);
+    @Test
+    void testDataAndEmptyRoundsFinishAfterCoordinatorRecovery() throws Throwable {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "tiering-coordinator-recovery");
+        long tableId = createTable(tablePath, DEFAULT_LOG_TABLE_DESCRIPTOR);
+        Map<Integer, Long> bucketOffsets = appendRow(tablePath, DEFAULT_LOG_TABLE_DESCRIPTOR, 0, 1);
+        for (int bucket = 0; bucket < DEFAULT_BUCKET_NUM; bucket++) {
+            bucketOffsets.putIfAbsent(bucket, 0L);
+        }
+        TestingHeartbeatGateway gateway =
+                new TestingHeartbeatGateway(coordinatorGateway::lakeTieringHeartbeat);
+        int recoveredCoordinatorEpoch;
+        try (Connection connection =
+                        ConnectionFactory.createConnection(
+                                FLUSS_CLUSTER_EXTENSION.getClientConfig());
+                FlussMockSplitEnumeratorContext<FlinkTieringSplit> context =
+                        new FlussMockSplitEnumeratorContext<>(1);
+                TieringSourceEnumerator enumerator =
+                        startTieringSourceEnumerator(context, gateway, connection.getAdmin())) {
+            int previousCoordinatorEpoch = gateway.lastResponse.getCoordinatorEpoch();
+            // Keep the shared clients' bootstrap address valid for the remaining tests.
+            String bindListeners = "FLUSS://" + FLUSS_CLUSTER_EXTENSION.getBootstrapServers();
+            FLUSS_CLUSTER_EXTENSION.stopCoordinatorServer();
+            FLUSS_CLUSTER_EXTENSION.startCoordinatorServer(bindListeners);
+            FLUSS_CLUSTER_EXTENSION.waitUntilAllGatewayHasSameMetadata();
+
+            assertThatThrownBy(() -> context.runPeriodicCallable(0))
+                    .isInstanceOf(FlinkRuntimeException.class)
+                    .hasMessageContaining("Fluss Coordinator epoch changed from");
+            recoveredCoordinatorEpoch = gateway.lastResponse.getCoordinatorEpoch();
+            assertThat(recoveredCoordinatorEpoch).isGreaterThan(previousCoordinatorEpoch);
+        }
+
+        try (Connection connection =
+                        ConnectionFactory.createConnection(
+                                FLUSS_CLUSTER_EXTENSION.getClientConfig());
+                FlussMockSplitEnumeratorContext<FlinkTieringSplit> context =
+                        new FlussMockSplitEnumeratorContext<>(1);
+                TieringSourceEnumerator enumerator =
+                        startTieringSourceEnumerator(context, gateway, connection.getAdmin())) {
+            assertThat(gateway.lastResponse.getCoordinatorEpoch())
+                    .isEqualTo(recoveredCoordinatorEpoch);
+            context.registerSourceReader(0, 0, "localhost");
+            enumerator.addReader(0);
+            retry(
+                    Duration.ofSeconds(30),
+                    () -> {
+                        context.runPeriodicCallable(0);
+                        assertThat(context.getSplitsAssignmentSequence()).hasSize(1);
+                    });
+            long dataTieringEpoch = gateway.lastResponse.getTieringTable().getTieringEpoch();
+            assertThat(context.getSplitsAssignmentSequence().get(0).assignment().get(0))
+                    .singleElement()
+                    .satisfies(
+                            split ->
+                                    assertThat(split.unwrap().getTableBucket().getTableId())
+                                            .isEqualTo(tableId));
+            coordinatorGateway
+                    .commitLakeTableSnapshot(
+                            genCommitLakeTableSnapshotRequest(tableId, null, 0, bucketOffsets))
+                    .get();
+            enumerator.handleSourceEvent(0, new FinishedTieringEvent(tableId));
+            context.runNextOneTimeCallable();
+            assertFinishedTieringRound(
+                    gateway, tableId, dataTieringEpoch, recoveredCoordinatorEpoch);
+
+            context.getSplitsAssignmentSequence().clear();
+            enumerator.handleSplitRequest(0, "localhost");
+            retry(
+                    Duration.ofSeconds(30),
+                    () -> {
+                        if (!gateway.lastResponse.hasTieringTable()) {
+                            context.runPeriodicCallable(0);
+                        }
+                        assertThat(gateway.lastResponse.hasTieringTable()).isTrue();
+                    });
+            long emptyTieringEpoch = gateway.lastResponse.getTieringTable().getTieringEpoch();
+            assertThat(emptyTieringEpoch).isGreaterThan(dataTieringEpoch);
+            assertThat(context.getSplitsAssignmentSequence()).isEmpty();
+            context.runPeriodicCallable(0);
+            assertFinishedTieringRound(
+                    gateway, tableId, emptyTieringEpoch, recoveredCoordinatorEpoch);
+        }
+    }
+
+    private TieringSourceEnumerator startTieringSourceEnumerator(
+            FlussMockSplitEnumeratorContext<FlinkTieringSplit> context,
+            TestingHeartbeatGateway gateway,
+            Admin admin) {
+        TieringSourceEnumerator enumerator =
+                new TieringSourceEnumerator(
+                        flussConf,
+                        new Configuration(),
+                        context,
+                        new TestingLakeTieringFactory(),
+                        500,
+                        new ManuallyTriggeredScheduledExecutorService());
+        enumerator.start(gateway, admin, new TieringSplitGenerator(admin));
+        return enumerator;
+    }
+
+    private static void assertFinishedTieringRound(
+            TestingHeartbeatGateway gateway,
+            long tableId,
+            long tieringEpoch,
+            int coordinatorEpoch) {
+        assertThat(gateway.lastRequest.getFinishedTablesList())
+                .singleElement()
+                .extracting(
+                        table -> table.getTableId(),
+                        table -> table.getTieringEpoch(),
+                        table -> table.getCoordinatorEpoch())
+                .containsExactly(tableId, tieringEpoch, coordinatorEpoch);
+        assertThat(gateway.lastResponse.getCoordinatorEpoch()).isEqualTo(coordinatorEpoch);
+        assertThat(gateway.lastResponse.getFinishedTableRespsList())
+                .singleElement()
+                .satisfies(
+                        table -> {
+                            assertThat(table.getTableId()).isEqualTo(tableId);
+                            assertThat(table.hasError()).isFalse();
+                        });
+    }
+
+    private static class TestingHeartbeatGateway extends TestCoordinatorGateway {
+        private final Function<
+                        LakeTieringHeartbeatRequest,
+                        CompletableFuture<LakeTieringHeartbeatResponse>>
+                heartbeatHandler;
+        private LakeTieringHeartbeatRequest lastRequest;
+        private LakeTieringHeartbeatResponse lastResponse;
+
+        private TestingHeartbeatGateway(
+                Function<
+                                LakeTieringHeartbeatRequest,
+                                CompletableFuture<LakeTieringHeartbeatResponse>>
+                        heartbeatHandler) {
+            this.heartbeatHandler = heartbeatHandler;
+        }
+
+        @Override
+        public CompletableFuture<LakeTieringHeartbeatResponse> lakeTieringHeartbeat(
+                LakeTieringHeartbeatRequest request) {
+            lastRequest = request;
+            return heartbeatHandler
+                    .apply(request)
+                    .thenApply(
+                            response -> {
+                                lastResponse = response;
+                                return response;
+                            });
         }
     }
 
