@@ -460,8 +460,12 @@ public class CoordinatorRequestBatch {
             // Track exactly which buckets THIS request marked as pending leader activation. Only
             // those entries (where leader == serverId) need to be cleared if the request fails
             Set<TableBucket> addedToPendingLeaderActivation = new HashSet<>();
+            // The response carries no epoch, so remember what this request sent to tell a stale
+            // response apart from the one for the latest leader state.
+            Map<TableBucket, Integer> requestBucketEpochs = new HashMap<>();
             for (Map.Entry<TableBucket, PbNotifyLeaderAndIsrReqForBucket> entry :
                     notifyRequestEntry.getValue().entrySet()) {
+                requestBucketEpochs.put(entry.getKey(), entry.getValue().getBucketEpoch());
                 int leader = entry.getValue().getLeader();
                 if (leader == serverId) {
                     coordinatorContext.addPendingLeaderActivation(entry.getKey());
@@ -504,7 +508,9 @@ public class CoordinatorRequestBatch {
                         // put the response receive event into the event manager
                         eventManager.put(
                                 new NotifyLeaderAndIsrResponseReceivedEvent(
-                                        getNotifyLeaderAndIsrResponseData(response), serverId));
+                                        getNotifyLeaderAndIsrResponseData(response),
+                                        serverId,
+                                        requestBucketEpochs));
                     });
         }
         notifyLeaderAndIsrRequestMap.clear();

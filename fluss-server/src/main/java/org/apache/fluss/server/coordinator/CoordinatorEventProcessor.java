@@ -1266,12 +1266,15 @@ public class CoordinatorEventProcessor implements EventProcessor {
             onReplicaBecomeOffline(offlineReplicas);
         }
 
-        // Try to complete rebalance tasks for the buckets in the response.
-        // This is essential for leader-only migrations to ensure they wait for the tablet
-        // server to acknowledge the leader change before proceeding to the next migration.
+        // Try to complete rebalance tasks for the buckets in the response. A task completes only
+        // after the planned leader acknowledges its final state, so migrations run one by one.
         for (NotifyLeaderAndIsrResultForBucket notifyLeaderAndIsrResultForBucket :
                 notifyLeaderAndIsrResultForBuckets) {
-            tryToCompleteRebalanceTask(notifyLeaderAndIsrResultForBucket, serverId);
+            tryToCompleteRebalanceTask(
+                    notifyLeaderAndIsrResultForBucket,
+                    serverId,
+                    notifyLeaderAndIsrResponseReceivedEvent.getRequestBucketEpoch(
+                            notifyLeaderAndIsrResultForBucket.getTableBucket()));
         }
     }
 
@@ -1699,6 +1702,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                     Collections.singleton(tableBucket),
                     OnlineBucket,
                     new ReassignmentLeaderElection(newReplicas));
+            awaitPlannedLeaderAck(tableBucket);
         } else {
             try {
                 LOG.info(
@@ -1716,7 +1720,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
     /** try to finish rebalance tasks after receive notify leader and isr response. */
     private void tryToCompleteRebalanceTask(
             NotifyLeaderAndIsrResultForBucket notifyLeaderAndIsrResultForBucket,
-            int responseServerId) {
+            int responseServerId,
+            int requestBucketEpoch) {
         TableBucket tableBucket = notifyLeaderAndIsrResultForBucket.getTableBucket();
         RebalancePlanForBucket planForBucket =
                 rebalanceManager.getRebalancePlanForBucket(tableBucket);
@@ -1725,9 +1730,16 @@ public class CoordinatorEventProcessor implements EventProcessor {
                     ReplicaReassignment.build(
                             planForBucket.getOriginReplicas(), planForBucket.getNewReplicas());
             try {
-                if (planForBucket.isLeaderChanged() && !reassignment.isBeingReassigned()) {
-                    if (!isSuccessfulLeaderOnlyRebalanceResponseFromNewLeader(
-                            notifyLeaderAndIsrResultForBucket, responseServerId, planForBucket)) {
+                Integer awaitedBucketEpoch =
+                        rebalanceManager.getAwaitedLeaderAckBucketEpoch(tableBucket);
+                if (awaitedBucketEpoch != null) {
+                    // A response to an earlier request (older bucket epoch) must not complete
+                    // the task.
+                    if (requestBucketEpoch < awaitedBucketEpoch
+                            || !isSuccessfulRebalanceResponseFromNewLeader(
+                                    notifyLeaderAndIsrResultForBucket,
+                                    responseServerId,
+                                    planForBucket)) {
                         return;
                     }
                     LeaderAndIsr leaderAndIsr = zooKeeperClient.getLeaderAndIsr(tableBucket).get();
@@ -1755,7 +1767,9 @@ public class CoordinatorEventProcessor implements EventProcessor {
             ReplicaReassignment reassignment =
                     ReplicaReassignment.build(
                             planForBucket.getOriginReplicas(), planForBucket.getNewReplicas());
-            if (planForBucket.isLeaderChanged() && !reassignment.isBeingReassigned()) {
+            // The task only waits for the planned leader to acknowledge its final state, running
+            // the reassignment again would repeat its last phase.
+            if (rebalanceManager.getAwaitedLeaderAckBucketEpoch(tableBucket) != null) {
                 return;
             }
             try {
@@ -1781,7 +1795,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
     }
 
     @VisibleForTesting
-    static boolean isSuccessfulLeaderOnlyRebalanceResponseFromNewLeader(
+    static boolean isSuccessfulRebalanceResponseFromNewLeader(
             NotifyLeaderAndIsrResultForBucket notifyLeaderAndIsrResultForBucket,
             int responseServerId,
             RebalancePlanForBucket planForBucket) {
@@ -1833,7 +1847,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
      *   <li>B7. Update ZK with RS=TRS, AR=[], RR=[].
      *   <li>B8. After electing leader, the replicas and isr information changes. So resend the
      *       update metadata request to every tabletServer.
-     *   <li>B8. Mark the ongoing rebalance task to finish.
+     *   <li>B9. Wait for the new leader to acknowledge the final state, then mark the ongoing
+     *       rebalance task to finish.
      * </ul>
      *
      * <p>In general, there are two goals we want to aim for:
@@ -1918,9 +1933,38 @@ public class CoordinatorEventProcessor implements EventProcessor {
                     null,
                     null,
                     Collections.singleton(tableBucket));
-            // B8. Mark the ongoing rebalance task to finish.
-            rebalanceManager.finishRebalanceTask(tableBucket, RebalanceStatus.COMPLETED);
+            // B9. Finish the task only after the planned leader acknowledges this final state.
+            awaitPlannedLeaderAck(tableBucket);
         }
+    }
+
+    private void awaitPlannedLeaderAck(TableBucket tableBucket) {
+        RebalancePlanForBucket planForBucket =
+                rebalanceManager.getRebalancePlanForBucket(tableBucket);
+        Optional<LeaderAndIsr> leaderAndIsr = coordinatorContext.getBucketLeaderAndIsr(tableBucket);
+        if (planForBucket == null) {
+            return;
+        }
+        // Without a leader the task can neither be acknowledged nor safely re-run, so fail it.
+        if (!leaderAndIsr.isPresent()) {
+            LOG.warn(
+                    "No leader for tableBucket {} after applying its rebalance task.", tableBucket);
+            rebalanceManager.finishRebalanceTask(tableBucket, RebalanceStatus.FAILED);
+            return;
+        }
+        // The election picks the first live in-sync target replica, which is not the planned
+        // leader when that one is offline. Its ACK can then never arrive, so fail the task now
+        // instead of blocking the next migrations until the task timeout.
+        if (leaderAndIsr.get().leader() != planForBucket.getNewLeader()) {
+            LOG.warn(
+                    "Planned leader {} for tableBucket {} was not elected, current leader is {}.",
+                    planForBucket.getNewLeader(),
+                    tableBucket,
+                    leaderAndIsr.get().leader());
+            rebalanceManager.finishRebalanceTask(tableBucket, RebalanceStatus.FAILED);
+            return;
+        }
+        rebalanceManager.awaitLeaderAck(tableBucket, leaderAndIsr.get().bucketEpoch());
     }
 
     private boolean isReassignmentComplete(
@@ -1935,7 +1979,9 @@ public class CoordinatorEventProcessor implements EventProcessor {
             TableBucket tableBucket, List<Integer> targetReplicas) throws Exception {
         LeaderAndIsr leaderAndIsr = coordinatorContext.getBucketLeaderAndIsr(tableBucket).get();
         int currentLeader = leaderAndIsr.leader();
-        if (!targetReplicas.contains(currentLeader)) {
+        // The first target replica is the planned leader (see GoalOptimizerUtils#getDiff), so
+        // re-elect also when the current leader stays in the target replicas but is not first.
+        if (currentLeader != targetReplicas.get(0)) {
             LOG.info(
                     "Leader {} for tableBucket {} being reassigned. Re-electing leader to {}",
                     currentLeader,
