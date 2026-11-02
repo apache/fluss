@@ -52,6 +52,7 @@ public class FlussLakeTiering {
 
     private static final String FLUSS_CONF_PREFIX = "fluss.";
     private static final String LAKE_TIERING_CONFIG_PREFIX = "lake.tiering.";
+    private static final String TIERING_CONFIG_PREFIX = "tiering.";
 
     protected final StreamExecutionEnvironment execEnv;
     protected final String dataLake;
@@ -91,6 +92,7 @@ public class FlussLakeTiering {
         // extract tiering service config
         Map<String, String> lakeTieringConfigMap =
                 extractPrefix(paramsMap, LAKE_TIERING_CONFIG_PREFIX);
+        lakeTieringConfigMap.putAll(extractPrefix(paramsMap, TIERING_CONFIG_PREFIX));
         this.lakeTieringConfig = Configuration.fromMap(lakeTieringConfigMap);
 
         // now, we must use full restart strategy if any task is failed,

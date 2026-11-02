@@ -57,10 +57,11 @@ The Tiering Service consists of three Flink operators:
 
 ### Tiering Service Options
 
-The tiering job is a standalone Flink job, and its arguments fall into three groups:
+The tiering job is a standalone Flink job, and its arguments fall into four groups:
 
 - `--fluss.*` — Fluss client configuration, e.g. `--fluss.bootstrap.servers localhost:9123`
 - `--datalake.<format>.*` — lake catalog/storage configuration; Fluss strips the `datalake.<format>.` prefix before passing the remaining keys to the lake connector
+- `--tiering.*` — tiering source configuration, e.g. `--tiering.excluded-tables db.problem_table`
 - `--lake.tiering.*` — tiering job-level configuration, e.g. `--lake.tiering.auto-expire-snapshot true`
 
 For example:
@@ -76,19 +77,19 @@ ${FLINK_HOME}/bin/flink run \
     --lake.tiering.auto-expire-snapshot true
 ```
 
-The following `--lake.tiering.*` options are set when starting the tiering job:
+The following options are set when starting the tiering job:
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
+| `tiering.excluded-tables` | List of strings | Empty | Comma-separated, exact, case-sensitive Fluss `database.table` names to exclude from this tiering job |
 | `lake.tiering.auto-expire-snapshot` | Boolean | false | Auto-trigger snapshot expiration on commit |
 | `lake.tiering.partition.mark-done.enabled` | Boolean | false | Enable [partition mark-done](#partition-mark-done) using the actual lake table's options |
 | `lake.tiering.io.tmp.dirs` | String | Flink temporary directories | Local directories used for temporary I/O files. If not configured, a `fluss` child directory under each Flink temporary directory is used. Separate multiple directories with commas or the system path separator |
-| `lake.tiering.excluded-tables` | List of strings | Empty | Comma-separated, exact, case-sensitive Fluss `database.table` names to exclude from this tiering job |
 
 To temporarily exclude a problem table while keeping its `table.datalake.enabled` setting, add the following job argument:
 
 ```shell
---lake.tiering.excluded-tables 'db.problem_table,other_db.other_table'
+--tiering.excluded-tables 'db.problem_table,other_db.other_table'
 ```
 
 Use the Fluss source table names, even when the lake tables have different names. Wildcards and regular expressions are not supported. Restart the tiering job after changing this list; remove an entry and restart to allow that table to be tiered again.

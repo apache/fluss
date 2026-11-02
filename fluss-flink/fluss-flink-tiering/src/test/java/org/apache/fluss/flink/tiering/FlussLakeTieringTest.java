@@ -34,7 +34,7 @@ class FlussLakeTieringTest {
                             "localhost:9123",
                             "--datalake.format",
                             "paimon",
-                            "--lake.tiering.excluded-tables",
+                            "--tiering.excluded-tables",
                             "db.problem_table, other_db.other_table"
                         });
 
