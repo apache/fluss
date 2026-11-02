@@ -26,6 +26,7 @@ import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.KeyEncoder;
 import org.apache.fluss.types.RowType;
@@ -197,9 +198,10 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
         if (clientFilterKeyGetters.length == 0) {
             return result;
         }
+        // copied: the caller may reuse the row's buffers before the lookup completes
         Object[] expected = new Object[clientFilterKeyGetters.length];
         for (int i = 0; i < expected.length; i++) {
-            expected[i] = clientFilterKeyGetters[i].getFieldOrNull(prefixKey);
+            expected[i] = copy(clientFilterKeyGetters[i].getFieldOrNull(prefixKey));
         }
         return result.thenApply(
                 lookupResult -> {
@@ -267,6 +269,16 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
                             }
                         });
         return lookupFuture;
+    }
+
+    /** Copies the key values that can be backed by mutable memory: strings and binaries. */
+    private static Object copy(@Nullable Object value) {
+        if (value instanceof BinaryString) {
+            return ((BinaryString) value).copy();
+        } else if (value instanceof byte[]) {
+            return ((byte[]) value).clone();
+        }
+        return value;
     }
 
     private static InternalRow.FieldGetter[] fieldGetters(RowType rowType, List<String> columns) {
