@@ -17,17 +17,22 @@
 
 #![cfg(feature = "integration_tests")]
 
-use arrow::array::{ArrayRef, Int32Array};
+use arrow::array::{ArrayRef, Int32Array, StringArray};
 use arrow::record_batch::RecordBatch;
-use fluss::metadata::{DataTypes, Schema, TableDescriptor, TablePath};
-use fluss_lake::{FlussLakeReadContext, FlussLakeTable};
+use fluss::metadata::{
+    AddColumn, AlterTableChanges, ColumnPositionType, DataTypes, JsonSerde, PartitionSpec, Schema,
+    TableDescriptor, TablePath,
+};
+use fluss_lake::{FlussLakeBaseline, FlussLakeReadContext, FlussLakeTable};
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 mod support;
 
 // Source preparation needs only Fluss: no lake reader, tiering job or S3 fixture.
 #[tokio::test]
-async fn prepare_freezes_table_wide_ranges_without_a_lake_backend() {
+async fn prepare_freezes_fluss_only_ranges_and_schema() {
     let cluster = support::get_shared_cluster();
     let connection = Arc::new(cluster.get_fluss_connection().await);
     let admin = connection.get_admin().unwrap();
@@ -39,8 +44,6 @@ async fn prepare_freezes_table_wide_ranges_without_a_lake_backend() {
                 .build()
                 .unwrap(),
         )
-        .property("table.datalake.enabled", "true")
-        .property("table.datalake.format", "paimon")
         .build()
         .unwrap();
     support::create_table(&admin, &path, &descriptor).await;
@@ -56,8 +59,10 @@ async fn prepare_freezes_table_wide_ranges_without_a_lake_backend() {
     let table = FlussLakeTable::open(connection.clone(), &path)
         .await
         .unwrap();
-    let plain = table.prepare().await.unwrap();
+    let plain = table.capture_read_context().await.unwrap();
     assert_eq!(plain.lake_snapshot_id(), None);
+    assert_eq!(plain.lake_format(), None);
+    assert_eq!(plain.log_ranges()[0].baseline(), FlussLakeBaseline::None);
     assert_eq!(plain.log_ranges().len(), 1);
     assert_eq!(plain.log_ranges()[0].start_offset(), 0);
     assert_eq!(plain.log_ranges()[0].stop_offset(), 3);
@@ -73,9 +78,147 @@ async fn prepare_freezes_table_wide_ranges_without_a_lake_backend() {
     assert_eq!(transported.to_json().unwrap(), bytes);
     assert_eq!(transported.log_ranges()[0].stop_offset(), 3);
     assert_eq!(
-        table.prepare().await.unwrap().log_ranges()[0].stop_offset(),
+        table.capture_read_context().await.unwrap().log_ranges()[0].stop_offset(),
         5
     );
     drop(writer);
+
+    admin
+        .alter_table(
+            &path,
+            false,
+            AlterTableChanges {
+                add_columns: vec![AddColumn {
+                    column_name: "added".into(),
+                    data_type_json: serde_json::to_vec(&DataTypes::int().serialize_json().unwrap())
+                        .unwrap(),
+                    comment: None,
+                    position: ColumnPositionType::Last,
+                }],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let evolved = connection.get_table(&path).await.unwrap();
+    transported
+        .validate_table(evolved.get_table_info())
+        .unwrap();
+    assert_eq!(transported.to_json().unwrap(), bytes);
+    admin.drop_table(&path, false).await.unwrap();
+}
+
+#[tokio::test]
+async fn partition_filter_preserves_scope_and_resolved_bucket_counts() {
+    let cluster = support::get_shared_cluster();
+    let connection = Arc::new(cluster.get_fluss_connection().await);
+    let admin = connection.get_admin().unwrap();
+    let path = TablePath::new("fluss", "prepare_partitions");
+    let descriptor = TableDescriptor::builder()
+        .schema(
+            Schema::builder()
+                .column("id", DataTypes::int())
+                .column("region", DataTypes::string())
+                .build()
+                .unwrap(),
+        )
+        .partitioned_by(vec!["region"])
+        .distributed_by(Some(1), vec![])
+        .property("table.datalake.enabled", "true")
+        .property("table.datalake.format", "paimon")
+        .build()
+        .unwrap();
+    support::create_table(&admin, &path, &descriptor).await;
+    for (region, count) in [("US", 1), ("EU", 2)] {
+        admin
+            .alter_table(
+                &path,
+                false,
+                AlterTableChanges {
+                    new_bucket_count: Some(count),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        admin
+            .create_partition(
+                &path,
+                &PartitionSpec::new(HashMap::from([("region", region)])),
+                false,
+            )
+            .await
+            .unwrap();
+        let started = Instant::now();
+        loop {
+            match admin
+                .list_partition_offsets(
+                    &path,
+                    region,
+                    &(0..count).collect::<Vec<_>>(),
+                    fluss::rpc::message::OffsetSpec::Latest,
+                )
+                .await
+            {
+                Ok(_) => break,
+                Err(error) => {
+                    assert!(
+                        started.elapsed() < Duration::from_secs(30),
+                        "partition not ready: {error}"
+                    );
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                }
+            }
+        }
+    }
+    let source = connection.get_table(&path).await.unwrap();
+    let writer = source.new_append().unwrap().create_writer().unwrap();
+    // append_arrow_batch routes a batch using its first row's partition.
+    for (region, ids) in [("US", vec![1]), ("EU", vec![2, 3])] {
+        let count = ids.len();
+        writer
+            .append_arrow_batch(
+                RecordBatch::try_from_iter(vec![
+                    ("id", Arc::new(Int32Array::from(ids)) as ArrayRef),
+                    (
+                        "region",
+                        Arc::new(StringArray::from(vec![region; count])) as ArrayRef,
+                    ),
+                ])
+                .unwrap(),
+            )
+            .unwrap();
+    }
+    writer.flush().await.unwrap();
+    drop(writer);
+    let table = FlussLakeTable::open(connection.clone(), &path)
+        .await
+        .unwrap();
+    let all = table.capture_read_context().await.unwrap();
+    assert_eq!(all.log_ranges().len(), 3);
+    let filter = PartitionSpec::new(HashMap::from([("region", "US")]));
+    let selected = table
+        .capture_read_context_with_partition_scope(&filter)
+        .await
+        .unwrap();
+    assert_eq!(selected.log_ranges().len(), 1);
+    assert_eq!(selected.log_ranges()[0].bucket_count(), 1);
+    assert_eq!(selected.log_ranges()[0].stop_offset(), 1);
+    let imported = FlussLakeReadContext::from_json(&selected.to_json().unwrap()).unwrap();
+    assert_eq!(
+        imported
+            .partition_filter()
+            .get("region")
+            .map(String::as_str),
+        Some("US")
+    );
+    assert_eq!(imported.log_ranges(), selected.log_ranges());
+    admin.drop_partition(&path, &filter, false).await.unwrap();
+    let dropped = table
+        .capture_read_context_with_partition_scope(&filter)
+        .await
+        .unwrap();
+    assert!(dropped.log_ranges().is_empty());
+    assert_eq!(dropped.partition_filter(), selected.partition_filter());
     admin.drop_table(&path, false).await.unwrap();
 }
