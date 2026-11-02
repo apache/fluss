@@ -137,6 +137,8 @@ Rebalance statuses:
 - **CANCELED**: The rebalance has been canceled
 - **TIMEOUT**: The normal execution slot was released after the timeout, but the task remains non-final. The coordinator retries the current migration phase idempotently, with a growing backoff, until the task reaches `COMPLETED` or `FAILED`. Only a bounded number of timed-out tasks is tracked at the same time, so a rebalance stops admitting new bucket migrations while too many tasks are still being reconciled
 
+When a bucket migration changes both its replicas and its leader, completion requires the planned leader to acknowledge the final state. This also applies after coordinator recovery. If the planned leader is temporarily offline or has not caught up, the migration waits for it and remains subject to the timeout and recovery limits below.
+
 #### Timeout and Recovery Settings
 
 Configure the following coordinator options in `server.yaml` to match your cluster's recovery objectives and resource capacity. The values below are the defaults. Restart the coordinator servers after changing these settings.
