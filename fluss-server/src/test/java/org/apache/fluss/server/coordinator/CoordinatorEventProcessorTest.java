@@ -2213,7 +2213,7 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
         verifyIsr(tb0, 0, Arrays.asList(0, 1, 2));
 
         // clean up the tablet server 3
-        ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupPath(ZkData.ServerIdZNode.path(3));
+        cleanupTabletServer3();
     }
 
     @Test
@@ -2440,8 +2440,17 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                         System.currentTimeMillis()));
     }
 
-    private static void cleanupTabletServer3() {
+    private void cleanupTabletServer3() throws Exception {
         ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupPath(ZkData.ServerIdZNode.path(3));
+        long sessionId =
+                zookeeperClient
+                        .getCuratorClient()
+                        .getZookeeperClient()
+                        .getZooKeeper()
+                        .getSessionId();
+        ZOO_KEEPER_EXTENSION_WRAPPER
+                .getCustomExtension()
+                .cleanupPath(ZkData.TabletServerSessionFenceZNode.path(3, sessionId));
     }
 
     /** Sets gateways that hold NotifyLeaderAndIsr responses once in control mode. */
