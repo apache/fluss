@@ -19,18 +19,21 @@ package org.apache.fluss.server.index;
 
 import org.apache.fluss.metadata.IndexVisibility;
 import org.apache.fluss.metadata.KvFormat;
+import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.ChangeType;
+import org.apache.fluss.record.DefaultLogRecordBatch;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.LogRecords;
-import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.row.compacted.CompactedRow;
 import org.apache.fluss.row.compacted.CompactedRowWriter;
 import org.apache.fluss.server.log.FetchDataInfo;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableIterator;
 
 import org.junit.jupiter.api.Test;
@@ -39,10 +42,12 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static org.apache.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
+import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
+import static org.apache.fluss.record.LogRecordBatchFormat.NO_BATCH_SEQUENCE;
+import static org.apache.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
+import static org.apache.fluss.testutils.DataTestUtils.createBasicMemoryLogRecords;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 class IndexReplicatorTest {
 
@@ -54,33 +59,34 @@ class IndexReplicatorTest {
         AtomicInteger firstIndexEncodes = new AtomicInteger();
         AtomicInteger secondIndexEncodes = new AtomicInteger();
 
-        InternalRow row = mock(InternalRow.class);
-        when(row.isNullAt(0)).thenReturn(false);
-        LogRecord record = mock(LogRecord.class);
-        when(record.logOffset()).thenReturn(0L);
-        when(record.getChangeType()).thenReturn(ChangeType.DELETE);
-        when(record.getRow()).thenReturn(row);
-        LogRecord secondRecord = mock(LogRecord.class);
-        when(secondRecord.logOffset()).thenReturn(1L);
-        when(secondRecord.getChangeType()).thenReturn(ChangeType.DELETE);
-        when(secondRecord.getRow()).thenReturn(row);
-
-        LogRecordBatch batch = mock(LogRecordBatch.class);
-        when(batch.baseLogOffset()).thenReturn(0L);
-        when(batch.nextLogOffset()).thenReturn(2L);
-        when(batch.sizeInBytes()).thenReturn(1);
-        when(batch.records(any()))
-                .thenAnswer(
-                        ignored -> {
-                            recordDecodes.incrementAndGet();
-                            return CloseableIterator.wrap(
-                                    Arrays.asList(record, secondRecord).iterator());
-                        });
+        RowType rowType = RowType.of(DataTypes.INT());
+        MemoryLogRecords sourceRecords =
+                createBasicMemoryLogRecords(
+                        rowType,
+                        1,
+                        0L,
+                        0L,
+                        CURRENT_LOG_MAGIC_VALUE,
+                        NO_WRITER_ID,
+                        NO_BATCH_SEQUENCE,
+                        Arrays.asList(ChangeType.DELETE, ChangeType.DELETE),
+                        Arrays.asList(new Object[] {1}, new Object[] {2}),
+                        LogFormat.COMPACTED,
+                        DEFAULT_COMPRESSION);
+        DefaultLogRecordBatch batch =
+                new DefaultLogRecordBatch() {
+                    @Override
+                    public CloseableIterator<LogRecord> records(ReadContext context) {
+                        recordDecodes.incrementAndGet();
+                        return super.records(context);
+                    }
+                };
+        batch.pointTo(sourceRecords.getMemorySegment(), sourceRecords.getPosition());
         LogRecords records =
                 new LogRecords() {
                     @Override
                     public int sizeInBytes() {
-                        return 1;
+                        return sourceRecords.sizeInBytes();
                     }
 
                     @Override
@@ -117,7 +123,8 @@ class IndexReplicatorTest {
                     }
                 };
 
-        LogRecordReadContext readContext = mock(LogRecordReadContext.class);
+        LogRecordReadContext readContext =
+                LogRecordReadContext.createCompactedRowReadContext(rowType, 1, null);
         IndexSourceReader sourceReader =
                 new IndexSourceReader(sourceLog, null, Runnable::run, readContext);
         IndexSpec first = indexSpec("idx_first", 2L, firstIndexEncodes);
