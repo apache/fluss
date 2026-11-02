@@ -23,6 +23,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.cluster.ServerReconfigurable;
 import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.exception.IllegalConfigurationException;
+import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.rpc.RpcGatewayService;
 import org.apache.fluss.rpc.netty.ssl.SslConfig;
 import org.apache.fluss.rpc.netty.ssl.SslContextFactory;
@@ -86,7 +87,7 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
 
     @Override
     public ChannelHandler createChannelHandler(
-            RequestChannel[] requestChannels, String listenerName) {
+            RequestChannel[] requestChannels, String listenerName, MetricGroup serverMetricGroup) {
         return new ServerChannelInitializer(
                 requestChannels,
                 apiManager,

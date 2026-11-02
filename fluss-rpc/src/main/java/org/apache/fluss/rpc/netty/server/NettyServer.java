@@ -230,9 +230,7 @@ public final class NettyServer implements RpcServer {
         final String protocolName = protocol.name();
         channelHandler =
                 protocol.createChannelHandler(
-                        resource.requestChannels(),
-                        endpoint.getListenerName(),
-                        serverMetricGroup);
+                        resource.requestChannels(), endpoint.getListenerName(), serverMetricGroup);
         bootstrap.childHandler(channelHandler);
 
         // --------------------------------------------------------------------

@@ -20,40 +20,33 @@ package org.apache.fluss.kafka;
 import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.metadata.PhysicalTablePath;
-import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.metrics.Gauge;
-import org.apache.fluss.metrics.Histogram;
+import org.apache.fluss.metrics.CharacterFilter;
 import org.apache.fluss.metrics.Meter;
 import org.apache.fluss.metrics.Metric;
 import org.apache.fluss.metrics.groups.AbstractMetricGroup;
+import org.apache.fluss.metrics.groups.GenericMetricGroup;
 import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.metrics.registry.NOPMetricRegistry;
 import org.apache.fluss.metrics.util.NOPMetricsGroup;
 import org.apache.fluss.rpc.netty.server.NettyServer;
 import org.apache.fluss.rpc.netty.server.RequestsMetrics;
-import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 
 import org.apache.kafka.common.message.ProduceRequestData;
 import org.apache.kafka.common.record.MemoryRecords;
-import org.apache.kafka.common.requests.AbstractRequest;
+import org.apache.kafka.common.requests.ApiVersionsRequest;
 import org.apache.kafka.common.requests.ProduceRequest;
-import org.apache.kafka.common.requests.RequestHeader;
-import org.apache.kafka.common.requests.RequestUtils;
 import org.junit.jupiter.api.Test;
 
-import java.io.DataInputStream;
-import java.io.DataOutputStream;
 import java.net.InetSocketAddress;
 import java.net.Socket;
-import java.nio.ByteBuffer;
 import java.time.Duration;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
+import static org.apache.fluss.kafka.KafkaSocketTestUtils.sendRequest;
+import static org.apache.fluss.rpc.netty.server.RequestsMetrics.KAFKA_DEFAULT_REQUEST_NAME;
+import static org.apache.fluss.rpc.netty.server.RequestsMetrics.KAFKA_PRODUCE_REQUEST_NAME;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -61,34 +54,32 @@ import static org.assertj.core.api.Assertions.assertThat;
 class KafkaProtocolPluginITCase extends KafkaServerTestBase {
 
     @Test
-    void testProduceMetricsIncludeCanonicalTableThroughNettyServer() throws Exception {
+    void testKafkaMetricsThroughNettyServer() throws Exception {
         Configuration conf = new Configuration();
         conf.set(ConfigOptions.KAFKA_ENABLED, true);
         conf.set(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS, 1);
         conf.set(ConfigOptions.NETTY_SERVER_NUM_NETWORK_THREADS, 1);
-        Map<String, Metric> tableMetrics = new ConcurrentHashMap<>();
-        Map<String, Metric> apiMetrics = new ConcurrentHashMap<>();
+        Map<String, Metric> produceMetrics = new ConcurrentHashMap<>();
+        Map<String, Metric> defaultMetrics = new ConcurrentHashMap<>();
         NOPMetricRegistry registry =
                 new NOPMetricRegistry() {
                     @Override
                     public void register(Metric metric, String name, AbstractMetricGroup group) {
                         Map<String, String> variables = group.getAllVariables();
-                        if ("KAFKA".equals(variables.get("listener"))
-                                && "PRODUCE".equals(variables.get("request"))) {
-                            if (!variables.containsKey("table")) {
-                                apiMetrics.put(name, metric);
-                            } else if ("fluss".equals(variables.get("database"))
-                                    && "orders".equals(variables.get("table"))) {
-                                tableMetrics.put(name, metric);
+                        if ("KAFKA".equals(variables.get("listener"))) {
+                            assertThat(group.getLogicalScope(CharacterFilter.NO_OP_FILTER, '_'))
+                                    .isEqualTo("tabletserver_kafka_listener_request");
+                            assertThat(variables).doesNotContainKeys("database", "table");
+                            if (KAFKA_PRODUCE_REQUEST_NAME.equals(variables.get("request"))) {
+                                produceMetrics.put(name, metric);
+                            } else if (KAFKA_DEFAULT_REQUEST_NAME.equals(
+                                    variables.get("request"))) {
+                                defaultMetrics.put(name, metric);
                             }
                         }
                     }
                 };
-        TabletServerMetricGroup metricGroup =
-                new TabletServerMetricGroup(registry, "cluster", "rack", "host", 0);
-        TablePath table = TablePath.of("fluss", "orders");
-        TableBucket bucket = new TableBucket(999L, 0);
-        metricGroup.addTableBucketMetricGroup(PhysicalTablePath.of(table), bucket, false);
+        MetricGroup metricGroup = new GenericMetricGroup(registry, null, "tabletserver");
         try (NettyServer server =
                         new NettyServer(
                                 conf,
@@ -113,33 +104,19 @@ class KafkaProtocolPluginITCase extends KafkaServerTestBase {
                                                     new ProduceRequestData.PartitionProduceData()
                                                             .setIndex(0)
                                                             .setRecords(MemoryRecords.EMPTY))));
-            // An empty batch is rejected before append; the failure must still be attributed to
-            // orders.
-            exchangeRequest(socket, new ProduceRequest(data, (short) 3));
+            sendRequest(socket, new ApiVersionsRequest.Builder().build((short) 0));
+            // An empty batch is rejected before append and counts as one failed request.
+            sendRequest(socket, new ProduceRequest(data, (short) 3));
             waitUntil(
                     () ->
-                            tableMetrics.get("totalTimeMs") != null
-                                    && apiMetrics.get("totalTimeMs") != null
-                                    && ((Histogram) tableMetrics.get("totalTimeMs")).getCount() == 1
-                                    && ((Histogram) apiMetrics.get("totalTimeMs")).getCount() == 1,
+                            ((Meter) produceMetrics.get("errorsPerSecond")).getCount() == 1
+                                    && ((Meter) defaultMetrics.get("requestsPerSecond")).getCount()
+                                            == 1,
                     Duration.ofSeconds(10),
-                    "Table request metrics were not updated");
-            for (Map<String, Metric> metrics : Arrays.asList(apiMetrics, tableMetrics)) {
-                assertThat(metrics).hasSize(7);
-                assertThat(((Meter) metrics.get("requestsPerSecond")).getCount()).isOne();
-                assertThat(((Meter) metrics.get("failedRequestsPerSecond")).getCount()).isOne();
-                assertThat(((Gauge<?>) metrics.get("inFlightRequests")).getValue()).isEqualTo(0L);
-                for (String name :
-                        Arrays.asList(
-                                "requestQueueTimeMs",
-                                "requestProcessTimeMs",
-                                "responseQueueTimeMs",
-                                "totalTimeMs")) {
-                    assertThat(((Histogram) metrics.get(name)).getCount()).isOne();
-                }
-            }
+                    "Kafka request metrics were not updated");
+            assertThat(((Meter) defaultMetrics.get("errorsPerSecond")).getCount()).isZero();
+            assertThat(((Meter) produceMetrics.get("requestsPerSecond")).getCount()).isZero();
         } finally {
-            metricGroup.removeTableBucketMetricGroup(table, bucket);
             metricGroup.close();
         }
     }
@@ -168,24 +145,5 @@ class KafkaProtocolPluginITCase extends KafkaServerTestBase {
 
             assertThat(socket.getInputStream().read()).isEqualTo(-1);
         }
-    }
-
-    private static void exchangeRequest(Socket socket, AbstractRequest request) throws Exception {
-        RequestHeader header =
-                new RequestHeader(request.apiKey(), request.version(), "metrics-test", 42);
-        ByteBuffer bytes =
-                RequestUtils.serialize(
-                        header.data(), header.headerVersion(), request.data(), request.version());
-        byte[] payload = new byte[bytes.remaining()];
-        bytes.get(payload);
-        DataOutputStream output = new DataOutputStream(socket.getOutputStream());
-        output.writeInt(payload.length);
-        output.write(payload);
-        output.flush();
-        DataInputStream input = new DataInputStream(socket.getInputStream());
-        int responseSize = input.readInt();
-        assertThat(responseSize).isGreaterThan(4);
-        assertThat(input.readInt()).isEqualTo(42);
-        input.readFully(new byte[responseSize - 4]);
     }
 }

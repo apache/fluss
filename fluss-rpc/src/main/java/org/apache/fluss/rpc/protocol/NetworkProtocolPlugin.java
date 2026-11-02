@@ -46,13 +46,8 @@ public interface NetworkProtocolPlugin extends Plugin {
      * Creates a Netty {@link ChannelHandler} for handling server side I/O events and operations of
      * the network protocol.
      */
-    ChannelHandler createChannelHandler(RequestChannel[] requestChannels, String listenerName);
-
-    /** Creates a channel handler with access to the server's metrics. */
-    default ChannelHandler createChannelHandler(
-            RequestChannel[] requestChannels, String listenerName, MetricGroup serverMetricGroup) {
-        return createChannelHandler(requestChannels, listenerName);
-    }
+    ChannelHandler createChannelHandler(
+            RequestChannel[] requestChannels, String listenerName, MetricGroup serverMetricGroup);
 
     /**
      * Creates a {@link RequestHandler} for processing the incoming requests of the network

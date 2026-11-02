@@ -19,6 +19,7 @@ package org.apache.fluss.kafka;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.metrics.util.NOPMetricsGroup;
 import org.apache.fluss.rpc.TestingTabletGatewayService;
 import org.apache.fluss.rpc.netty.server.RequestChannel;
 import org.apache.fluss.shaded.netty4.io.netty.channel.socket.nio.NioSocketChannel;
@@ -44,7 +45,9 @@ class KafkaProtocolPluginTest {
             KafkaChannelInitializer initializer =
                     (KafkaChannelInitializer)
                             plugin.createChannelHandler(
-                                    new RequestChannel[] {new RequestChannel(1)}, "KAFKA");
+                                    new RequestChannel[] {new RequestChannel(1)},
+                                    "KAFKA",
+                                    NOPMetricsGroup.newInstance());
             initializer.initChannel(channel);
             IdleStateHandler idleHandler = channel.pipeline().get(IdleStateHandler.class);
             assertThat(idleHandler.getAllIdleTimeInMillis()).isZero();

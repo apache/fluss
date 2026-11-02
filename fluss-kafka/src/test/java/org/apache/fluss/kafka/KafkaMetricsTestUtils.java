@@ -1,0 +1,39 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.apache.fluss.kafka;
+
+import org.apache.fluss.metrics.util.NOPMetricsGroup;
+import org.apache.fluss.rpc.netty.server.RequestsMetrics;
+
+import java.util.Arrays;
+import java.util.Collections;
+
+import static org.apache.fluss.rpc.netty.server.RequestsMetrics.KAFKA_DEFAULT_REQUEST_NAME;
+import static org.apache.fluss.rpc.netty.server.RequestsMetrics.KAFKA_PRODUCE_REQUEST_NAME;
+
+/** Metric setup shared by Kafka protocol tests. */
+final class KafkaMetricsTestUtils {
+    private KafkaMetricsTestUtils() {}
+
+    static RequestsMetrics createRequestMetrics() {
+        return new RequestsMetrics(
+                NOPMetricsGroup.newInstance(),
+                Collections.emptyList(),
+                Arrays.asList(KAFKA_PRODUCE_REQUEST_NAME, KAFKA_DEFAULT_REQUEST_NAME));
+    }
+}

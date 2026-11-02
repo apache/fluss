@@ -64,6 +64,7 @@ import java.util.Collections;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static org.apache.fluss.kafka.KafkaMetricsTestUtils.createRequestMetrics;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Tests borrowed Produce payloads across decoding, worker cleanup and response completion. */
@@ -83,7 +84,9 @@ class KafkaProduceBufferLifecycleTest {
     void testZeroCopyDecodeReleasesBufferBeforeAsyncWriteCompletes(
             short version, boolean direct, short acks, boolean failWrite) {
         RequestChannel requests = new RequestChannel(100);
-        EmbeddedChannel channel = new EmbeddedChannel(new KafkaCommandDecoder(requests, "KAFKA"));
+        EmbeddedChannel channel =
+                new EmbeddedChannel(
+                        new KafkaCommandDecoder(requests, "KAFKA", null, createRequestMetrics()));
         ByteBuf buffer = requestBuffer(version, acks, direct, "{\"value\":2,\"text\":\"中文\"}");
         CompletableFuture<KafkaProduceResult> pending = new CompletableFuture<>();
         AtomicReference<JsonNode> decodedKey = new AtomicReference<>();
@@ -157,7 +160,9 @@ class KafkaProduceBufferLifecycleTest {
     @ValueSource(shorts = {0, 1})
     void testSynchronousDecodeFailureReleasesBuffer(short acks) {
         RequestChannel requests = new RequestChannel(100);
-        EmbeddedChannel channel = new EmbeddedChannel(new KafkaCommandDecoder(requests, "KAFKA"));
+        EmbeddedChannel channel =
+                new EmbeddedChannel(
+                        new KafkaCommandDecoder(requests, "KAFKA", null, createRequestMetrics()));
         ByteBuf buffer = requestBuffer((short) 11, acks, true, "{\"value\":");
         KafkaRequest parsed = null;
         try {

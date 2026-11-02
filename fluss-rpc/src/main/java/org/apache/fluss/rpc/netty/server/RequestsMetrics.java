@@ -43,13 +43,23 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public class RequestsMetrics {
 
+    /** Request name used for Kafka Produce metrics. */
+    public static final String KAFKA_PRODUCE_REQUEST_NAME = "kafkaProduce";
+
+    /** Request name shared by Kafka APIs other than Produce. */
+    public static final String KAFKA_DEFAULT_REQUEST_NAME = "default";
+
     // a map from request name to the metrics registered for the request name
     private final Map<String, Metrics> metricsByRequest = new HashMap<>();
 
     // the request metric group
     private final MetricGroup requestMetricGroup;
 
-    private RequestsMetrics(MetricGroup serverMetricsGroup, Collection<ApiKeys> apiKeys) {
+    /** Registers metrics for native Fluss APIs and Kafka request names. */
+    public RequestsMetrics(
+            MetricGroup serverMetricsGroup,
+            Collection<ApiKeys> apiKeys,
+            Collection<String> kafkaRequestNames) {
         for (ApiKeys apiKey : apiKeys) {
             // we create a metrics group for each type of request, with the request type
             // as variable
@@ -65,6 +75,9 @@ public class RequestsMetrics {
                 addMetrics(serverMetricsGroup, toRequestName(apiKey, false, true));
             }
         }
+        for (String requestName : kafkaRequestNames) {
+            addMetrics(serverMetricsGroup, requestName);
+        }
         this.requestMetricGroup = serverMetricsGroup.addGroup("request");
     }
 
@@ -77,13 +90,14 @@ public class RequestsMetrics {
                         ApiKeys.FETCH_LOG,
                         ApiKeys.PREFIX_LOOKUP,
                         ApiKeys.GET_METADATA);
-        return new RequestsMetrics(serverMetricsGroup, apiKeys);
+        return new RequestsMetrics(serverMetricsGroup, apiKeys, Collections.emptyList());
     }
 
     public static RequestsMetrics createCoordinatorServerRequestMetrics(
             MetricGroup serverMetricsGroup) {
         // now, no need to register any metrics of request for coordinator server
-        return new RequestsMetrics(serverMetricsGroup, Collections.emptySet());
+        return new RequestsMetrics(
+                serverMetricsGroup, Collections.emptySet(), Collections.emptyList());
     }
 
     /** Create a gauge metric in the request metric group. */
@@ -125,6 +139,11 @@ public class RequestsMetrics {
     public Optional<Metrics> getMetrics(
             short apiKey, boolean isFromFollower, boolean isHistorical) {
         String requestName = toRequestName(ApiKeys.forId(apiKey), isFromFollower, isHistorical);
+        return getMetrics(requestName);
+    }
+
+    /** Returns the metrics registered for the request name. */
+    public Optional<Metrics> getMetrics(String requestName) {
         return Optional.ofNullable(metricsByRequest.get(requestName));
     }
 
@@ -183,6 +202,21 @@ public class RequestsMetrics {
 
         public Counter getErrorsCount() {
             return errorsCount;
+        }
+
+        /** Records a processed request when its response is submitted to Netty. */
+        public void recordRequest(
+                int bytes,
+                long startTimeMs,
+                long requestDequeTimeMs,
+                long requestCompletedTimeMs,
+                long requestEndTimeMs) {
+            requestsCount.inc();
+            requestBytes.update(bytes);
+            requestQueueTimeMs.update(requestDequeTimeMs - startTimeMs);
+            requestProcessTimeMs.update(requestCompletedTimeMs - requestDequeTimeMs);
+            responseSendTimeMs.update(requestEndTimeMs - requestCompletedTimeMs);
+            totalTimeMs.update(requestEndTimeMs - startTimeMs);
         }
 
         void markError(Errors error) {

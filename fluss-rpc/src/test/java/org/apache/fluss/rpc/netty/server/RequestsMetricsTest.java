@@ -25,20 +25,66 @@ import org.apache.fluss.metrics.groups.AbstractMetricGroup;
 import org.apache.fluss.metrics.groups.GenericMetricGroup;
 import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.metrics.registry.MetricRegistry;
+import org.apache.fluss.metrics.util.NOPMetricsGroup;
 import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.rpc.protocol.Errors;
 
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
+import static org.apache.fluss.rpc.netty.server.RequestsMetrics.KAFKA_DEFAULT_REQUEST_NAME;
+import static org.apache.fluss.rpc.netty.server.RequestsMetrics.KAFKA_PRODUCE_REQUEST_NAME;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Tests for {@link RequestsMetrics}. */
 class RequestsMetricsTest {
+
+    @Test
+    void testRegistersNativeVariantsAndKafkaNames() {
+        RecordingMetricRegistry registry = new RecordingMetricRegistry();
+        MetricGroup serverMetricGroup = new GenericMetricGroup(registry, null, "tabletserver");
+        RequestsMetrics metrics =
+                new RequestsMetrics(
+                        serverMetricGroup,
+                        Arrays.asList(ApiKeys.FETCH_LOG, ApiKeys.LOOKUP, ApiKeys.PUT_KV),
+                        Arrays.asList(KAFKA_PRODUCE_REQUEST_NAME, KAFKA_DEFAULT_REQUEST_NAME));
+
+        assertThat(metrics.getMetrics(ApiKeys.FETCH_LOG.id, false, false)).isPresent();
+        assertThat(metrics.getMetrics(ApiKeys.FETCH_LOG.id, true, false)).isPresent();
+        assertThat(metrics.getMetrics(ApiKeys.LOOKUP.id, false, false)).isPresent();
+        assertThat(metrics.getMetrics(ApiKeys.LOOKUP.id, false, true)).isPresent();
+        assertThat(metrics.getMetrics(ApiKeys.PUT_KV.id, false, false)).isPresent();
+        assertThat(metrics.getMetrics(ApiKeys.PUT_KV.id, false, true)).isPresent();
+        assertThat(metrics.getMetrics(KAFKA_PRODUCE_REQUEST_NAME)).isPresent();
+        assertThat(metrics.getMetrics(KAFKA_DEFAULT_REQUEST_NAME)).isPresent();
+        assertThat(registry.metrics(MetricNames.REQUESTS_RATE)).hasSize(8);
+    }
+
+    @Test
+    void testRequestMetricsCalculations() {
+        RequestsMetrics kafka =
+                new RequestsMetrics(
+                        NOPMetricsGroup.newInstance(),
+                        Collections.emptyList(),
+                        Collections.singletonList(KAFKA_PRODUCE_REQUEST_NAME));
+        RequestsMetrics.Metrics metrics = kafka.getMetrics(KAFKA_PRODUCE_REQUEST_NAME).get();
+        metrics.recordRequest(42, 100, 105, 116, 123);
+
+        assertThat(metrics.getRequestsCount().getCount()).isOne();
+        assertThat(metrics.getErrorsCount().getCount()).isZero();
+        assertThat(metrics.getRequestBytes().getStatistics().getValues()).containsExactly(42);
+        assertThat(metrics.getRequestQueueTimeMs().getStatistics().getValues()).containsExactly(5);
+        assertThat(metrics.getRequestProcessTimeMs().getStatistics().getValues())
+                .containsExactly(11);
+        assertThat(metrics.getResponseSendTimeMs().getStatistics().getValues()).containsExactly(7);
+        assertThat(metrics.getTotalTimeMs().getStatistics().getValues()).containsExactly(23);
+    }
 
     @Test
     void errorsKeepAggregateAndRegisterBreakdownByError() {

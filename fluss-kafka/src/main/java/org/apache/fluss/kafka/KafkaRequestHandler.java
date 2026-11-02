@@ -77,7 +77,7 @@ public class KafkaRequestHandler implements RequestHandler<KafkaRequest> {
 
     @Override
     public void processRequest(KafkaRequest request) {
-        request.processingStarted();
+        request.setRequestDequeTimeMs(System.currentTimeMillis());
         dispatcher
                 .dispatch(request)
                 .whenComplete(
