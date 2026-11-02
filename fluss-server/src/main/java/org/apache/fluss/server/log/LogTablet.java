@@ -1709,7 +1709,7 @@ public final class LogTablet {
         return localLog.getSegments().values();
     }
 
-    @VisibleForTesting
+    /** Returns the lowest WAL offset that must be retained for recovery. */
     public long getMinRetainOffset() {
         return minRetainOffset.get();
     }

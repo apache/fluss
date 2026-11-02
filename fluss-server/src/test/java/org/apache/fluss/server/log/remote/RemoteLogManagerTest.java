@@ -22,6 +22,9 @@ import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.fs.FSDataOutputStream;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.metadata.IndexType;
+import org.apache.fluss.metadata.IndexVisibility;
+import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metrics.Gauge;
 import org.apache.fluss.metrics.MetricNames;
@@ -61,6 +64,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -71,6 +75,7 @@ import java.util.stream.Stream;
 import static org.apache.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH_PA_2024;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
+import static org.apache.fluss.record.TestData.DATA1_SCHEMA_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH_PK;
@@ -227,6 +232,73 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
                         remoteLog.allRemoteLogSegments().stream()
                                 .map(s -> s.remoteLogSegmentId().toString())
                                 .collect(Collectors.toSet()));
+    }
+
+    @ParameterizedTest
+    @CsvSource({"false,false", "false,true", "true,false", "true,true"})
+    void testRemoteExpirationRespectsIndexRecoveryOffset(boolean indexed, boolean lakeEnabled)
+            throws Exception {
+        Schema.Builder schema = Schema.newBuilder().fromSchema(DATA1_SCHEMA_PK);
+        if (indexed) {
+            schema.index(
+                    "idx_b",
+                    IndexType.SECONDARY,
+                    Collections.singletonList("b"),
+                    IndexVisibility.ASYNC,
+                    null);
+        }
+        Map<String, String> properties = new HashMap<>();
+        properties.put(ConfigOptions.TABLE_CHANGELOG_IMAGE.key(), "FULL");
+        properties.put(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), String.valueOf(lakeEnabled));
+        long tableId =
+                registerTableInZkClient(
+                        DATA1_TABLE_PATH_PK,
+                        schema.build(),
+                        200L,
+                        Collections.emptyList(),
+                        properties);
+        TableBucket tb = new TableBucket(tableId, 0);
+        makeKvTableAsLeader(tableId, DATA1_TABLE_PATH_PK, 0);
+        LogTablet logTablet = replicaManager.getReplicaOrException(tb).getLogTablet();
+        addMultiSegmentsToLogTablet(logTablet, 5, false);
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+        RemoteLogTablet remoteLog = remoteLogManager.remoteLogTablet(tb);
+        assertThat(remoteLog.allRemoteLogSegments()).hasSize(4);
+        assertThat(logTablet.getMinRetainOffset()).isZero();
+
+        if (lakeEnabled) {
+            logTablet.updateLakeLogEndOffset(25L);
+        }
+        manualClock.advanceTime(Duration.ofDays(8));
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+        assertThat(remoteLog.allRemoteLogSegments()).hasSize(indexed ? 4 : lakeEnabled ? 2 : 0);
+
+        // A committed recovery boundary inside a segment must retain the complete segment.
+        logTablet.updateMinRetainOffset(25L);
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+        assertThat(remoteLog.allRemoteLogSegments())
+                .hasSize(indexed || lakeEnabled ? 2 : 0)
+                .allSatisfy(
+                        segment ->
+                                assertThat(segment.remoteLogStartOffset())
+                                        .isGreaterThanOrEqualTo(20L));
+
+        logTablet.updateMinRetainOffset(40L);
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+        assertThat(remoteLog.allRemoteLogSegments()).hasSize(lakeEnabled ? 2 : 0);
+
+        if (lakeEnabled) {
+            logTablet.updateLakeLogEndOffset(40L);
+            remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+        }
+        assertThat(remoteLog.allRemoteLogSegments()).isEmpty();
+        FsPath logDir =
+                remoteLogTabletDir(remoteLogDir(conf), logTablet.getPhysicalTablePath(), tb);
+        assertThat(
+                        Arrays.stream(logDir.getFileSystem().listStatus(logDir))
+                                .map(file -> file.getPath().getName())
+                                .filter(name -> !name.equals("metadata")))
+                .isEmpty();
     }
 
     @ParameterizedTest
