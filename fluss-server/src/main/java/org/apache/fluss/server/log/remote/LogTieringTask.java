@@ -32,12 +32,14 @@ import org.apache.fluss.server.log.LogSegment;
 import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.metrics.group.TableMetricGroup;
 import org.apache.fluss.server.replica.Replica;
+import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.utils.clock.Clock;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.File;
+import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -63,6 +65,7 @@ public class LogTieringTask implements Runnable {
     private final RemoteLogIndexCache remoteLogIndexCache;
     private final CoordinatorGateway coordinatorGateway;
     private final Clock clock;
+    private final ZooKeeperClient zkClient;
     private final int maxUploadSegmentsPerTask;
 
     // The copied offset is empty initially for a new leader LogTieringTask, and needs to
@@ -77,6 +80,7 @@ public class LogTieringTask implements Runnable {
             RemoteLogStorage remoteLogStorage,
             RemoteLogIndexCache remoteLogIndexCache,
             CoordinatorGateway coordinatorGateway,
+            ZooKeeperClient zkClient,
             Clock clock,
             int maxUploadSegmentsPerTask) {
         this.replica = replica;
@@ -87,6 +91,7 @@ public class LogTieringTask implements Runnable {
         this.remoteLogIndexCache = remoteLogIndexCache;
         this.coordinatorGateway = coordinatorGateway;
         this.clock = clock;
+        this.zkClient = zkClient;
         this.maxUploadSegmentsPerTask = maxUploadSegmentsPerTask;
     }
 
@@ -346,7 +351,8 @@ public class LogTieringTask implements Runnable {
             RemoteLogTablet remoteLogTablet,
             RemoteLogManifest newRemoteLogManifest,
             int coordinatorEpoch,
-            int leaderEpoch) {
+            int leaderEpoch)
+            throws Exception {
         // Cancellation may race with copying. Stop before the first commit attempt; once an
         // attempt has been sent, retries must confirm it before any uploaded files are deleted.
         if (isCancelled()) {
@@ -371,10 +377,11 @@ public class LogTieringTask implements Runnable {
         long newRemoteLogStartOffset = newRemoteLogManifest.getRemoteLogStartOffset();
         long newRemoteLogEndOffset = newRemoteLogManifest.getRemoteLogEndOffset();
         long newRemoteLogSize = newRemoteLogManifest.getRemoteLogSize();
-        int retrySendCommitTimes = 1;
-        while (retrySendCommitTimes <= 10) {
+        boolean success = false;
+        boolean outcomeUnknown = false;
+        for (int attempt = 1; attempt <= 10; attempt++) {
             try {
-                boolean success =
+                success =
                         commitRemoteLogManifest(
                                 new CommitRemoteLogManifestData(
                                         tableBucket,
@@ -384,48 +391,48 @@ public class LogTieringTask implements Runnable {
                                         newRemoteLogManifest.getHighestCopiedEndOffset(),
                                         coordinatorEpoch,
                                         leaderEpoch));
-                if (!success) {
-                    // the commit failed, it means the commit snapshot is invalid or register zk
-                    // failed, we will revert this commit and delete the remote log manifest
-                    // file.
-                    // TODO: add the fail reason in the future.
-                    LOG.error(
-                            "Commit remote log manifest failed for table bucket {}. We will delete the"
-                                    + " written remote log manifest file",
-                            tableBucket);
-                    remoteLogStorage.deleteRemoteLogManifestSnapshot(remoteLogManifestPath);
-                    return false;
-                } else {
-                    // commit succeed.
-                    // TODO: commit with version to avoid the manifest has been updated
-                    remoteLogTablet.loadRemoteLogManifest(newRemoteLogManifest);
-                    LogTablet logTablet = replica.getLogTablet();
-
-                    logTablet.updateRemoteLogOffsets(
-                            newRemoteLogStartOffset,
-                            newRemoteLogEndOffset,
-                            newRemoteLogManifest.getHighestCopiedEndOffset());
-                    logTablet.updateRemoteLogSize(newRemoteLogSize);
-                    return true;
-                }
+                break;
             } catch (Exception e) {
-                // the commit failed with unexpected exception, like network error, we will
-                // retry send.
-                LOG.error(
-                        "The {} time try to commit remote log manifest failed for bucket {}.",
-                        retrySendCommitTimes,
+                outcomeUnknown = true;
+                LOG.warn(
+                        "Commit attempt {} has an unknown outcome for bucket {}.",
+                        attempt,
                         tableBucket,
                         e);
-                retrySendCommitTimes++;
             }
         }
 
-        LOG.error(
-                "Commit remote log manifest failed after retry 10 times for table-bucket {}. "
-                        + "We will ignore this commit but don't delete the remote log "
-                        + "manifest file",
-                tableBucket);
-        return false;
+        if (!success && outcomeUnknown) {
+            // A later rejection does not undo a successful attempt whose response was lost.
+            // Failure to confirm must escape without deleting either the manifest or its segments.
+            success =
+                    zkClient.getRemoteLogManifestHandle(tableBucket)
+                            .map(
+                                    handle ->
+                                            remoteLogManifestPath.equals(
+                                                    handle.getRemoteLogManifestPath()))
+                            .orElse(false);
+            if (!success) {
+                throw new IOException(
+                        "Cannot confirm remote log manifest commit for "
+                                + tableBucket
+                                + "; retaining uploaded files at "
+                                + remoteLogManifestPath);
+            }
+        }
+        if (!success) {
+            remoteLogStorage.deleteRemoteLogManifestSnapshot(remoteLogManifestPath);
+            return false;
+        }
+
+        remoteLogTablet.loadRemoteLogManifest(newRemoteLogManifest);
+        LogTablet logTablet = replica.getLogTablet();
+        logTablet.updateRemoteLogOffsets(
+                newRemoteLogStartOffset,
+                newRemoteLogEndOffset,
+                newRemoteLogManifest.getHighestCopiedEndOffset());
+        logTablet.updateRemoteLogSize(newRemoteLogSize);
+        return true;
     }
 
     private List<RemoteLogSegment> segmentsToDeleteAfterCommit(
