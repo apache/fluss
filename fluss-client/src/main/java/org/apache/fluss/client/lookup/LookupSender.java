@@ -87,6 +87,8 @@ class LookupSender implements Runnable {
 
     private final short acks;
 
+    private final ExponentialBackoff retryBackoff;
+
     private final ExponentialBackoff historicalThrottleBackoff;
 
     LookupSender(
@@ -94,12 +96,14 @@ class LookupSender implements Runnable {
             LookupQueue lookupQueue,
             int maxFlightRequests,
             int maxRetries,
+            ExponentialBackoff retryBackoff,
             short acks,
             int maxRequestTimeoutMs) {
         this.metadataUpdater = metadataUpdater;
         this.lookupQueue = lookupQueue;
         this.maxInFlightReuqestsSemaphore = new Semaphore(maxFlightRequests);
         this.maxRetries = maxRetries;
+        this.retryBackoff = retryBackoff;
         this.running = true;
         this.acks = acks;
         this.maxRequestTimeoutMs = maxRequestTimeoutMs;
@@ -508,13 +512,14 @@ class LookupSender implements Runnable {
     // TODO: Retrying lookup queries can change their submission order. See
     // https://github.com/apache/fluss/issues/3765.
     private long prepareRetry(AbstractLookupQuery<?> lookup, Exception exception) {
-        long retryDelayMs = 0;
-        if (exception instanceof HistoricalPartitionThrottledException) {
-            retryDelayMs = historicalThrottleBackoff.backoff(lookup.retries());
-            lookup.setNextRetryTimeMs(System.currentTimeMillis() + retryDelayMs);
-        } else {
-            lookup.setNextRetryTimeMs(0);
-        }
+        // Retrying immediately does not help while the server keeps rejecting the lookup (e.g. no
+        // ready leader during a restart); it only floods the server and the logs.
+        ExponentialBackoff backoff =
+                exception instanceof HistoricalPartitionThrottledException
+                        ? historicalThrottleBackoff
+                        : retryBackoff;
+        long retryDelayMs = backoff.backoff(lookup.retries());
+        lookup.setNextRetryTimeMs(System.currentTimeMillis() + retryDelayMs);
         lookup.incrementRetries();
         return retryDelayMs;
     }
@@ -527,12 +532,12 @@ class LookupSender implements Runnable {
 
     /**
      * Handle lookup error with retry logic. For each lookup in the list, check if it can be
-     * retried. If yes, re-enqueue it; otherwise, complete it exceptionally.
+     * retried. If yes, re-enqueue it after a backoff; otherwise, complete it exceptionally.
      *
      * @param tableBucket the table bucket
      * @param error the error from server response
-     * @param lookups the list of lookups to handle
-     * @param lookupType the type of lookup ("" for regular lookup, "prefix " for prefix lookup)
+     * @param lookups the list of lookups to handle, all sharing the same original partition name
+     * @param lookupType the type of lookup ("lookup" or "prefix lookup")
      */
     private void handleLookupError(
             TableBucket tableBucket,
@@ -541,19 +546,13 @@ class LookupSender implements Runnable {
             List<? extends AbstractLookupQuery<?>> lookups,
             String lookupType) {
         ApiException exception = error.exception();
-        LOG.error(
-                "Failed to {} from node {} for bucket {}",
-                lookupType,
-                destination,
-                tableBucket,
-                exception);
         if (exception instanceof InvalidMetadataException
                 || exception instanceof InvalidBucketRoutingException) {
-            LOG.warn(
-                    "Metadata or bucket routing error in {} request. Going to request metadata "
-                            + "update.",
+            LOG.debug(
+                    "Metadata or bucket routing error in {} request for bucket {}. Going to "
+                            + "request metadata update.",
                     lookupType,
-                    exception);
+                    tableBucket);
             long tableId = tableBucket.getTableId();
             TableOrPartitions tableOrPartitions;
             if (tableBucket.getPartitionId() == null) {
@@ -568,31 +567,50 @@ class LookupSender implements Runnable {
             invalidTableOrPartitions(tableOrPartitions);
         }
 
+        int retrying = 0;
+        int failed = 0;
+        long maxRetryDelayMs = 0;
+        int minAttemptsLeft = Integer.MAX_VALUE;
         for (AbstractLookupQuery<?> lookup : lookups) {
-            String originalPartitionNameMsg =
-                    lookup.originalPartitionName() == null
-                            ? ""
-                            : " for historical partition " + lookup.originalPartitionName();
             if (canRetry(lookup, exception)) {
-                long retryDelayMs = prepareRetry(lookup, exception);
-                LOG.warn(
-                        "Get error {} response on table bucket {}{}, retrying after {} ms ({} attempts left). Error: {}",
-                        lookupType,
-                        tableBucket,
-                        originalPartitionNameMsg,
-                        retryDelayMs,
-                        maxRetries - lookup.retries(),
-                        error.formatErrMsg());
+                maxRetryDelayMs = Math.max(maxRetryDelayMs, prepareRetry(lookup, exception));
+                minAttemptsLeft = Math.min(minAttemptsLeft, maxRetries - lookup.retries());
+                retrying++;
                 reEnqueueLookup(lookup);
             } else {
-                LOG.warn(
-                        "Get error {} response on table bucket {}{}, fail. Error: {}",
-                        lookupType,
-                        tableBucket,
-                        originalPartitionNameMsg,
-                        error.formatErrMsg());
+                failed++;
                 lookup.future().completeExceptionally(exception);
             }
+        }
+
+        String originalPartitionName = lookups.get(0).originalPartitionName();
+        String originalPartitionNameMsg =
+                originalPartitionName == null
+                        ? ""
+                        : " for historical partition " + originalPartitionName;
+        if (retrying > 0) {
+            LOG.warn(
+                    "Get error {} response from node {} on table bucket {}{}, retrying {} "
+                            + "lookup(s) after up to {} ms (at least {} attempts left). Error: {}",
+                    lookupType,
+                    destination,
+                    tableBucket,
+                    originalPartitionNameMsg,
+                    retrying,
+                    maxRetryDelayMs,
+                    minAttemptsLeft,
+                    error.formatErrMsg());
+        }
+        if (failed > 0) {
+            LOG.warn(
+                    "Get error {} response from node {} on table bucket {}{}, failing {} "
+                            + "lookup(s). Error: {}",
+                    lookupType,
+                    destination,
+                    tableBucket,
+                    originalPartitionNameMsg,
+                    failed,
+                    error.formatErrMsg());
         }
     }
 

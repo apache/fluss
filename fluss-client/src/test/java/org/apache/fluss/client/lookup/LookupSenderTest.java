@@ -41,6 +41,7 @@ import org.apache.fluss.rpc.messages.PrefixLookupRequest;
 import org.apache.fluss.rpc.messages.PrefixLookupResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.server.tablet.TestTabletServerGateway;
+import org.apache.fluss.utils.ExponentialBackoff;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -96,6 +97,26 @@ public class LookupSenderTest {
                         .withTabletServerGateway(1, gateway)
                         .build();
 
+        // Keep the backoff short so retry tests that don't assert on timing stay fast.
+        startLookupSender(new ExponentialBackoff(10, 2, 100, 0.2));
+    }
+
+    @AfterEach
+    void teardown() throws InterruptedException {
+        if (lookupSender != null) {
+            lookupSender.forceClose();
+        }
+        if (senderThread != null) {
+            senderThread.join(5000);
+        }
+    }
+
+    private void restartLookupSender(ExponentialBackoff retryBackoff) throws InterruptedException {
+        teardown();
+        startLookupSender(retryBackoff);
+    }
+
+    private void startLookupSender(ExponentialBackoff retryBackoff) {
         Configuration conf = new Configuration();
         conf.set(ConfigOptions.CLIENT_LOOKUP_QUEUE_SIZE, 5);
         conf.set(ConfigOptions.CLIENT_LOOKUP_MAX_BATCH_SIZE, 10);
@@ -107,21 +128,12 @@ public class LookupSenderTest {
                         lookupQueue,
                         MAX_INFLIGHT_REQUESTS,
                         MAX_RETRIES,
+                        retryBackoff,
                         (short) -1,
                         1000);
 
         senderThread = new Thread(lookupSender);
         senderThread.start();
-    }
-
-    @AfterEach
-    void teardown() throws InterruptedException {
-        if (lookupSender != null) {
-            lookupSender.forceClose();
-        }
-        if (senderThread != null) {
-            senderThread.join(5000);
-        }
     }
 
     @Test
@@ -341,6 +353,49 @@ public class LookupSenderTest {
         assertThat(result).isEqualTo("value".getBytes());
         assertThat(attemptCount.get()).isEqualTo(3);
         assertThat(query.retries()).isEqualTo(2); // retried 2 times
+    }
+
+    @Test
+    void testRetriableErrorRetriesWithExponentialBackoff() throws Exception {
+        // Without jitter, the retries are delayed by exactly 100ms, 200ms and 400ms.
+        long initialBackoffMs = 100;
+        restartLookupSender(new ExponentialBackoff(initialBackoffMs, 2, 10_000, 0));
+        // Use the same clock as the retry deadlines, so each gap is at least the backoff.
+        List<Long> attemptMs = Collections.synchronizedList(new ArrayList<>());
+        gateway.setLookupHandler(
+                request -> {
+                    attemptMs.add(System.currentTimeMillis());
+                    if (attemptMs.size() <= MAX_RETRIES) {
+                        return createFailedResponse(
+                                request, new TimeoutException("simulated timeout"));
+                    }
+                    return createSuccessResponse(request, bytes("value"));
+                });
+
+        LookupQuery query = new LookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("key"));
+        lookupQueue.appendLookup(query);
+
+        assertThat(query.future().get(10, TimeUnit.SECONDS)).isEqualTo(bytes("value"));
+        assertThat(attemptMs).hasSize(1 + MAX_RETRIES);
+        for (int i = 1; i < attemptMs.size(); i++) {
+            assertThat(attemptMs.get(i) - attemptMs.get(i - 1))
+                    .isGreaterThanOrEqualTo(initialBackoffMs << (i - 1));
+        }
+    }
+
+    @Test
+    void testZeroRetryBackoffRetriesImmediately() throws Exception {
+        restartLookupSender(new ExponentialBackoff(0, 2, 0, 0.2));
+        gateway.setLookupHandler(
+                request ->
+                        createFailedResponse(
+                                request, new NotLeaderOrFollowerException("not leader")));
+
+        LookupQuery query = new LookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("key"));
+        lookupSender.sendLookups(1, LookupType.LOOKUP, Collections.singletonList(query));
+
+        assertThat(query.retries()).isEqualTo(1);
+        assertThat(query.nextRetryTimeMs()).isLessThanOrEqualTo(System.currentTimeMillis());
     }
 
     @Test
