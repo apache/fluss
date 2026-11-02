@@ -296,6 +296,7 @@ ON `o`.`o_custkey` = `s`.`cs_custkey` AND `o`.`o_orderstatus` = `s`.`cs_ordersta
 ```
 
 Fluss looks up by the bucket key and the primary key columns that directly follow it among the join keys. The other join keys are filtered after the lookup, so a join on `cs_custkey` and `cs_date` looks up by `cs_custkey` only.
+On legacy tables (`table.kv.format-version` 1) with Paimon as the lake format, Fluss looks up by the bucket key only, and the other join keys are filtered after the lookup.
 
 ## Lookup Shuffle
 
