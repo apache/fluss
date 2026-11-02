@@ -59,6 +59,7 @@ import org.apache.fluss.server.coordinator.event.AdjustIsrReceivedEvent;
 import org.apache.fluss.server.coordinator.event.CommitKvSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitRemoteLogManifestEvent;
 import org.apache.fluss.server.coordinator.event.CoordinatorEventManager;
+import org.apache.fluss.server.coordinator.event.DeleteReplicaResponseReceivedEvent;
 import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrResponseReceivedEvent;
 import org.apache.fluss.server.coordinator.event.RetryOfflineLeaderEvent;
 import org.apache.fluss.server.coordinator.remote.RemoteDirDynamicLoader;
@@ -67,6 +68,7 @@ import org.apache.fluss.server.coordinator.statemachine.ReplicaState;
 import org.apache.fluss.server.entity.AdjustIsrResultForBucket;
 import org.apache.fluss.server.entity.CommitKvSnapshotData;
 import org.apache.fluss.server.entity.CommitRemoteLogManifestData;
+import org.apache.fluss.server.entity.DeleteReplicaResultForBucket;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 import org.apache.fluss.server.entity.TablePropertyChanges;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
@@ -125,6 +127,8 @@ import static org.apache.fluss.server.coordinator.statemachine.BucketState.Offli
 import static org.apache.fluss.server.coordinator.statemachine.BucketState.OnlineBucket;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.OfflineReplica;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.OnlineReplica;
+import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.ReplicaDeletionStarted;
+import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.ReplicaDeletionSuccessful;
 import static org.apache.fluss.server.testutils.KvTestUtils.mockCompletedSnapshot;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getAdjustIsrResponseData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getUpdateMetadataRequestData;
@@ -152,6 +156,54 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                     .property(ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key(), "true")
                     .build()
                     .withReplicationFactor(REPLICATION_FACTOR);
+
+    @Test
+    void testFailedStopReplicaResponseRemainsDeletionStarted() throws Exception {
+        TableBucket succeededBucket = new TableBucket(10000L, 0);
+        TableBucket failedBucket = new TableBucket(10000L, 1);
+        TableBucketReplica succeededReplica = new TableBucketReplica(succeededBucket, 0);
+        TableBucketReplica failedReplica = new TableBucketReplica(failedBucket, 0);
+        fromCtx(
+                ctx -> {
+                    ctx.putReplicaState(succeededReplica, ReplicaDeletionStarted);
+                    ctx.putReplicaState(failedReplica, ReplicaDeletionStarted);
+                    return null;
+                });
+
+        eventProcessor
+                .getCoordinatorEventManager()
+                .put(
+                        new DeleteReplicaResponseReceivedEvent(
+                                Arrays.asList(
+                                        new DeleteReplicaResultForBucket(succeededBucket, 0),
+                                        new DeleteReplicaResultForBucket(
+                                                failedBucket,
+                                                0,
+                                                new ApiError(
+                                                        Errors.LOG_STORAGE_EXCEPTION,
+                                                        "simulated deletion failure")))));
+
+        ReplicaState succeededReplicaState = fromCtx(ctx -> ctx.getReplicaState(succeededReplica));
+        ReplicaState failedReplicaState = fromCtx(ctx -> ctx.getReplicaState(failedReplica));
+        assertThat(succeededReplicaState).isEqualTo(ReplicaDeletionSuccessful);
+        assertThat(failedReplicaState).isEqualTo(ReplicaDeletionStarted);
+
+        DeleteReplicaResponseReceivedEvent failedResponse =
+                new DeleteReplicaResponseReceivedEvent(
+                        Collections.singletonList(
+                                new DeleteReplicaResultForBucket(
+                                        failedBucket,
+                                        0,
+                                        new ApiError(
+                                                Errors.LOG_STORAGE_EXCEPTION,
+                                                "simulated deletion failure"))));
+        for (int i = 0; i < 10; i++) {
+            eventProcessor.getCoordinatorEventManager().put(failedResponse);
+        }
+
+        failedReplicaState = fromCtx(ctx -> ctx.getReplicaState(failedReplica));
+        assertThat(failedReplicaState).isEqualTo(ReplicaDeletionStarted);
+    }
 
     @Test
     void testLoadedAssignmentsTrackKnownKvAndUnknownTablesConservatively() throws Exception {
@@ -367,12 +419,9 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
     }
 
     @Test
-    void testDropTableWithRetry() throws Exception {
-        // make request to some server should fail, but delete will still be successful
-        // finally with retry logic
+    void testDropTableRemainsPendingWhenReplicaDeletionFails() throws Exception {
         int failedServer = 0;
         initCoordinatorChannel(failedServer);
-        // create a table,
         TablePath t1 = TablePath.of(defaultDatabase, "tdrop");
         final long t1Id =
                 createTable(
@@ -383,21 +432,24 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                             new TabletServerInfo(2, "rack2")
                         });
 
-        // retry until the create table t1 has been handled by coordinator
-        // otherwise, when receive create table event, it can't find the schema of the table
-        // since it has been deleted by the following code) which cause delete
-        // won't don anything
-        // todo: may need to fix this case;
+        // Wait until table creation has been handled before deleting its metadata.
         retryVerifyContext(ctx -> assertThat(ctx.getTablePathById(t1Id)).isNotNull());
 
-        // drop the table;
         metadataManager.dropTable(t1, false);
 
-        // retry until the assignment has been deleted from zk, then it means
-        // the table has been deleted successfully
-        retry(
-                Duration.ofMinutes(1),
-                () -> assertThat(zookeeperClient.getTableAssignment(t1Id)).isEmpty());
+        retryVerifyContext(
+                ctx -> {
+                    Set<TableBucketReplica> replicas = ctx.getAllReplicasForTable(t1Id);
+                    assertThat(replicas).isNotEmpty();
+                    for (TableBucketReplica replica : replicas) {
+                        ReplicaState expectedState =
+                                replica.getReplica() == failedServer
+                                        ? ReplicaDeletionStarted
+                                        : ReplicaDeletionSuccessful;
+                        assertThat(ctx.getReplicaState(replica)).isEqualTo(expectedState);
+                    }
+                });
+        assertThat(zookeeperClient.getTableAssignment(t1Id)).isPresent();
     }
 
     @Test

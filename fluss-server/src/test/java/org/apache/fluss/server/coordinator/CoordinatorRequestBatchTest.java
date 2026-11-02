@@ -25,8 +25,14 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
 import org.apache.fluss.rpc.messages.PbNotifyLeaderAndIsrReqForBucket;
+import org.apache.fluss.rpc.messages.PbStopReplicaRespForBucket;
+import org.apache.fluss.rpc.messages.StopReplicaRequest;
+import org.apache.fluss.rpc.messages.StopReplicaResponse;
+import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
+import org.apache.fluss.server.coordinator.event.DeleteReplicaResponseReceivedEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
+import org.apache.fluss.server.entity.DeleteReplicaResultForBucket;
 import org.apache.fluss.server.zk.ZkEpoch;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 
@@ -35,6 +41,8 @@ import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
 
@@ -190,6 +198,74 @@ class CoordinatorRequestBatchTest {
         assertThat(coordinatorContext.getPendingLeaderActivationBuckets()).isEmpty();
     }
 
+    @Test
+    void testStopReplicaResponseIsHandledPerBucket() {
+        int serverId = 1;
+        TableBucket succeededBucket = new TableBucket(400L, 0);
+        TableBucket failedBucket = new TableBucket(400L, 1);
+        TableBucket missingBucket = new TableBucket(400L, 2);
+        TableBucket stopOnlyBucket = new TableBucket(400L, 3);
+
+        AtomicReference<StopReplicaRequest> sentRequest = new AtomicReference<>();
+        TestCoordinatorChannelManager channelManager =
+                new TestCoordinatorChannelManager() {
+                    @Override
+                    public void sendStopBucketReplicaRequest(
+                            int receiveServerId,
+                            StopReplicaRequest request,
+                            BiConsumer<StopReplicaResponse, ? super Throwable> responseConsumer) {
+                        sentRequest.set(request);
+
+                        PbStopReplicaRespForBucket succeededResponse =
+                                stopReplicaResponseFor(succeededBucket);
+                        PbStopReplicaRespForBucket failedResponse =
+                                stopReplicaResponseFor(failedBucket);
+                        failedResponse.setError(
+                                Errors.LOG_STORAGE_EXCEPTION.code(), "simulated deletion failure");
+                        PbStopReplicaRespForBucket stopOnlyResponse =
+                                stopReplicaResponseFor(stopOnlyBucket);
+                        StopReplicaResponse response = new StopReplicaResponse();
+                        response.addAllStopReplicasResps(
+                                Arrays.asList(succeededResponse, failedResponse, stopOnlyResponse));
+                        responseConsumer.accept(response, null);
+                    }
+                };
+        AtomicReference<DeleteReplicaResponseReceivedEvent> receivedEvent = new AtomicReference<>();
+        EventManager eventManager =
+                event -> {
+                    if (event instanceof DeleteReplicaResponseReceivedEvent) {
+                        receivedEvent.set((DeleteReplicaResponseReceivedEvent) event);
+                    }
+                };
+        CoordinatorRequestBatch batch =
+                new CoordinatorRequestBatch(channelManager, eventManager, coordinatorContext);
+
+        batch.addStopReplicaRequestForTabletServers(
+                Collections.singleton(serverId), succeededBucket, true, true, 0);
+        batch.addStopReplicaRequestForTabletServers(
+                Collections.singleton(serverId), failedBucket, true, true, 0);
+        batch.addStopReplicaRequestForTabletServers(
+                Collections.singleton(serverId), missingBucket, true, true, 0);
+        batch.addStopReplicaRequestForTabletServers(
+                Collections.singleton(serverId), stopOnlyBucket, false, false, 0);
+        batch.sendRequestToTabletServers(0);
+
+        assertThat(sentRequest.get()).isNotNull();
+        assertThat(sentRequest.get().getStopReplicasReqsList()).hasSize(4);
+        assertThat(receivedEvent.get()).isNotNull();
+        Map<TableBucket, DeleteReplicaResultForBucket> resultsByBucket = new HashMap<>();
+        for (DeleteReplicaResultForBucket result : receivedEvent.get().getDeleteReplicaResults()) {
+            resultsByBucket.put(result.getTableBucket(), result);
+        }
+        assertThat(resultsByBucket).containsOnlyKeys(succeededBucket, failedBucket, missingBucket);
+        assertThat(resultsByBucket.get(succeededBucket).succeeded()).isTrue();
+        assertThat(resultsByBucket.get(failedBucket).getError().error())
+                .isEqualTo(Errors.LOG_STORAGE_EXCEPTION);
+        assertThat(resultsByBucket.get(missingBucket).getError().error())
+                .isEqualTo(Errors.UNKNOWN_SERVER_ERROR);
+        assertThat(resultsByBucket.get(missingBucket).getErrorMessage()).contains("missing");
+    }
+
     /** Registers table metadata so normal notifications carry the bucket layout epoch. */
     private void putTableInfo(long tableId, TablePath tablePath) {
         coordinatorContext.putTableInfo(
@@ -214,6 +290,14 @@ class CoordinatorRequestBatchTest {
                         null, new NetworkException("simulated send failure for test"));
             }
         };
+    }
+
+    private static PbStopReplicaRespForBucket stopReplicaResponseFor(TableBucket tableBucket) {
+        PbStopReplicaRespForBucket response = new PbStopReplicaRespForBucket();
+        response.setTableBucket()
+                .setTableId(tableBucket.getTableId())
+                .setBucketId(tableBucket.getBucket());
+        return response;
     }
 
     /**
