@@ -1757,9 +1757,12 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                 }
             } else if (planForBucket.isLeaderChanged()) {
                 LeaderAndIsr leaderAndIsr = zooKeeperClient.getLeaderAndIsr(tableBucket).get();
-                if (leaderAndIsr.leader() == planForBucket.getNewLeader()) {
+                if (leaderAndIsr.leader() == planForBucket.getNewLeader()
+                        || !isTargetLeaderReady(
+                                tableBucket, leaderAndIsr, planForBucket.getNewLeader())) {
                     // Recovery and retries must confirm the applied state without re-electing
-                    // the same leader. A leader-only move does not reorder the assignment.
+                    // the same leader or falling back while the target is unavailable.
+                    // A leader-only move does not reorder the assignment.
                     sendCurrentLeaderAndIsrRequest(
                             tableBucket, coordinatorContext.getAssignment(tableBucket));
                 } else {
@@ -1946,7 +1949,7 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
             throws Exception {
         List<Integer> targetReplicas = reassignment.getTargetReplicas();
         LeaderAndIsr leaderAndIsr = zooKeeperClient.getLeaderAndIsr(tableBucket).get();
-        boolean targetsCaughtUp = isReassignmentComplete(leaderAndIsr, targetReplicas);
+        boolean targetsCaughtUp = isReassignmentComplete(tableBucket, leaderAndIsr, targetReplicas);
         if (isReplicaAssignmentAtTarget(tableBucket, targetReplicas)) {
             if (targetsCaughtUp && isFinalReassignmentState(leaderAndIsr, targetReplicas)) {
                 return true;
@@ -2143,7 +2146,7 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
             TableBucket tableBucket, List<Integer> targetReplicas, LeaderAndIsr currentLeaderAndIsr)
             throws Exception {
         LeaderAndIsr leaderAndIsr = currentLeaderAndIsr;
-        if (!targetReplicas.contains(leaderAndIsr.leader())) {
+        if (leaderAndIsr.leader() != targetReplicas.get(0)) {
             tableBucketStateMachine.handleStateChange(
                     Collections.singleton(tableBucket),
                     OnlineBucket,
@@ -2166,15 +2169,25 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
     }
 
     private boolean isReassignmentComplete(
-            LeaderAndIsr leaderAndIsr, List<Integer> targetReplicas) {
-        return coordinatorContext.liveTabletServerSet().containsAll(targetReplicas)
-                && (targetReplicas.isEmpty()
-                        || new HashSet<>(leaderAndIsr.isr()).containsAll(targetReplicas));
+            TableBucket tableBucket, LeaderAndIsr leaderAndIsr, List<Integer> targetReplicas) {
+        return !targetReplicas.isEmpty()
+                && isTargetLeaderReady(tableBucket, leaderAndIsr, targetReplicas.get(0))
+                && coordinatorContext.liveTabletServerSet().containsAll(targetReplicas)
+                && new HashSet<>(leaderAndIsr.isr()).containsAll(targetReplicas);
+    }
+
+    private boolean isTargetLeaderReady(
+            TableBucket tableBucket, LeaderAndIsr leaderAndIsr, int targetLeader) {
+        // A live server may still have this bucket marked offline. Falling back to another
+        // replica would repeatedly bump epochs without applying the planned leader move.
+        return coordinatorContext.isReplicaOnline(targetLeader, tableBucket)
+                && leaderAndIsr.isr().contains(targetLeader);
     }
 
     private static boolean isFinalReassignmentState(
             LeaderAndIsr leaderAndIsr, List<Integer> targetReplicas) {
-        return targetReplicas.contains(leaderAndIsr.leader())
+        return !targetReplicas.isEmpty()
+                && leaderAndIsr.leader() == targetReplicas.get(0)
                 && new HashSet<>(leaderAndIsr.isr()).equals(new HashSet<>(targetReplicas));
     }
 
