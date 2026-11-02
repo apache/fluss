@@ -19,34 +19,54 @@
 package org.apache.fluss.flink.tiering;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.GlobalConfiguration;
 import org.apache.fluss.config.provider.ConfigProviders;
 import org.apache.fluss.exception.IllegalConfigurationException;
 import org.apache.fluss.flink.adapter.MultipleParameterToolAdapter;
 
+import org.apache.flink.client.deployment.executors.LocalExecutor;
+import org.apache.flink.client.deployment.executors.LocalExecutorFactory;
+import org.apache.flink.configuration.ClusterOptions;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.CoreOptions;
+import org.apache.flink.configuration.DeploymentOptions;
 import org.apache.flink.configuration.JobManagerOptions;
 import org.apache.flink.configuration.RestartStrategyOptions;
 import org.apache.flink.configuration.TaskManagerOptions;
 import org.apache.flink.core.execution.JobClient;
+import org.apache.flink.core.execution.PipelineExecutor;
+import org.apache.flink.core.execution.PipelineExecutorFactory;
+import org.apache.flink.core.execution.PipelineExecutorServiceLoader;
+import org.apache.flink.runtime.minicluster.MiniCluster;
+import org.apache.flink.runtime.minicluster.MiniClusterConfiguration;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.util.ShutdownHookUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
+import javax.annotation.concurrent.GuardedBy;
 
 import java.io.File;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.ServiceLoader;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.function.Function;
+import java.util.stream.Stream;
 
 import static org.apache.flink.configuration.RestartStrategyOptions.RestartStrategyType.EXPONENTIAL_DELAY;
 import static org.apache.flink.runtime.executiongraph.failover.FailoverStrategyFactoryLoader.FULL_RESTART_STRATEGY_NAME;
 import static org.apache.fluss.flink.tiering.source.TieringSourceOptions.DATA_LAKE_CONFIG_PREFIX;
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.utils.Preconditions.checkState;
 import static org.apache.fluss.utils.PropertiesUtils.extractAndRemovePrefix;
 import static org.apache.fluss.utils.PropertiesUtils.extractPrefix;
 
@@ -81,6 +101,9 @@ public class EmbeddedFlussLakeTiering {
     final org.apache.fluss.config.Configuration flussConfig;
     final org.apache.fluss.config.Configuration lakeConfig;
     final org.apache.fluss.config.Configuration lakeTieringConfig;
+
+    private final EmbeddedRuntime runtime;
+    @Nullable private Thread shutdownHook;
 
     public static void main(String[] args) {
         try {
@@ -123,6 +146,21 @@ public class EmbeddedFlussLakeTiering {
      *     an undeclared provider, or the job's parallelism exceeds the aggregate slot capacity
      */
     public EmbeddedFlussLakeTiering(Map<String, String> tieringParams, Configuration flinkConfig) {
+        this(tieringParams, flinkConfig, new EmbeddedRuntime(flinkConfig, MiniCluster::new));
+    }
+
+    /**
+     * Creates an embedded tiering service from the given parameters, Flink configuration, and
+     * runtime. Package-private so tests can supply a runtime with a controllable cluster factory.
+     *
+     * <p>The parameter and failure semantics are those of the public constructor.
+     *
+     * @param tieringParams the tiering service parameters
+     * @param flinkConfig the configuration for the embedded Flink runtime
+     * @param runtime the embedded runtime owning the MiniCluster lifecycle
+     */
+    EmbeddedFlussLakeTiering(
+            Map<String, String> tieringParams, Configuration flinkConfig, EmbeddedRuntime runtime) {
         checkNotNull(tieringParams, "%s must not be null", "tieringParams");
         checkNotNull(flinkConfig, "%s must not be null", "flinkConfig");
 
@@ -170,9 +208,10 @@ public class EmbeddedFlussLakeTiering {
         // when checkpoint is not enabled, causing the job to fail permanently on any exception.
         flinkConfig.set(RestartStrategyOptions.RESTART_STRATEGY, EXPONENTIAL_DELAY.getMainValue());
 
-        this.execEnv = StreamExecutionEnvironment.getExecutionEnvironment(flinkConfig);
+        this.execEnv = runtime.createEnvironment(flinkConfig);
 
         validateParallelismAgainstSlots(flinkConfig);
+        this.runtime = runtime;
     }
 
     /**
@@ -180,18 +219,170 @@ public class EmbeddedFlussLakeTiering {
      * reaches a terminal state.
      *
      * <p>The tiering job is unbounded, so this method only returns when the job finishes or fails
-     * terminally, is cancelled, or the JVM shuts down.
+     * terminally, is cancelled, or the JVM shuts down. Both normal completion and JVM shutdown
+     * await MiniCluster termination, including source and enumerator cleanup, for at most {@code
+     * cluster.services.shutdown-timeout} (default 30 seconds). A timeout fails the call; during JVM
+     * shutdown it is logged and the process exits without waiting further.
      *
      * @throws Exception if the tiering job fails terminally or cannot be started
      */
     public void runEmbedded() throws Exception {
-        JobClient jobClient = run();
-        LOG.info(
-                "Running the lake tiering job {} on the embedded Flink runtime. "
-                        + "The process keeps running until the job terminates.",
-                jobClient.getJobID());
-        jobClient.getJobExecutionResult().get();
-        LOG.info("The lake tiering job {} finished.", jobClient.getJobID());
+        shutdownHook = ShutdownHookUtil.addShutdownHook(runtime, "embedded lake tiering", LOG);
+        try (EmbeddedRuntime ignored = runtime) {
+            checkState(shutdownHook != null, "Cannot register embedded tiering shutdown hook.");
+            JobClient jobClient = run();
+            LOG.info(
+                    "Running the lake tiering job {} on the embedded Flink runtime. "
+                            + "The process keeps running until the job terminates.",
+                    jobClient.getJobID());
+            jobClient.getJobExecutionResult().get();
+            LOG.info("The lake tiering job {} finished.", jobClient.getJobID());
+        } finally {
+            ShutdownHookUtil.removeShutdownHook(shutdownHook, "embedded lake tiering", LOG);
+        }
+    }
+
+    @VisibleForTesting
+    @Nullable
+    Thread getShutdownHook() {
+        return shutdownHook;
+    }
+
+    /**
+     * Owns the local executor's cluster so shutdown awaits runtime cleanup, not just job results.
+     */
+    static final class EmbeddedRuntime implements PipelineExecutorServiceLoader, AutoCloseable {
+        private final Object executionLock = new Object();
+        private final Object shutdownLock = new Object();
+        private final Function<MiniClusterConfiguration, MiniCluster> clusterFactory;
+        private final CompletableFuture<Void> termination = new CompletableFuture<>();
+
+        @GuardedBy("shutdownLock")
+        private Duration shutdownTimeout;
+
+        @GuardedBy("shutdownLock")
+        private boolean closing;
+
+        @GuardedBy("executionLock")
+        @Nullable
+        private MiniCluster miniCluster;
+
+        EmbeddedRuntime(
+                Configuration configuration,
+                Function<MiniClusterConfiguration, MiniCluster> clusterFactory) {
+            this.clusterFactory = clusterFactory;
+            this.shutdownTimeout = getShutdownTimeout(configuration);
+        }
+
+        private static Duration getShutdownTimeout(Configuration configuration) {
+            Duration timeout = configuration.get(ClusterOptions.CLUSTER_SERVICES_SHUTDOWN_TIMEOUT);
+            checkArgument(
+                    timeout.toMillis() > 0,
+                    "cluster.services.shutdown-timeout must be at least 1 ms.");
+            return timeout;
+        }
+
+        StreamExecutionEnvironment createEnvironment(Configuration configuration) {
+            Configuration localConfiguration = new Configuration(configuration);
+            localConfiguration.set(DeploymentOptions.TARGET, LocalExecutor.NAME);
+            localConfiguration.set(DeploymentOptions.ATTACHED, true);
+            if (!localConfiguration.contains(CoreOptions.DEFAULT_PARALLELISM)) {
+                localConfiguration.set(
+                        CoreOptions.DEFAULT_PARALLELISM,
+                        StreamExecutionEnvironment.getDefaultLocalParallelism());
+            }
+            return new StreamExecutionEnvironment(this, localConfiguration, null);
+        }
+
+        @Override
+        public PipelineExecutorFactory getExecutorFactory(Configuration configuration) {
+            return new LocalExecutorFactory() {
+                @Override
+                public PipelineExecutor getExecutor(Configuration executorConfiguration) {
+                    checkArgument(
+                            isCompatibleWith(executorConfiguration), "Expected local execution.");
+                    return (pipeline, config, classLoader) -> {
+                        synchronized (executionLock) {
+                            synchronized (shutdownLock) {
+                                checkState(!closing, "Embedded runtime is shutting down.");
+                                checkState(
+                                        miniCluster == null, "Embedded runtime already has a job.");
+                                Configuration effectiveConfig =
+                                        new Configuration(executorConfiguration);
+                                effectiveConfig.addAll(config);
+                                shutdownTimeout = getShutdownTimeout(effectiveConfig);
+                            }
+                            return LocalExecutor.createWithFactory(
+                                            executorConfiguration,
+                                            clusterConfiguration -> {
+                                                miniCluster =
+                                                        clusterFactory.apply(clusterConfiguration);
+                                                return miniCluster;
+                                            })
+                                    .execute(pipeline, config, classLoader);
+                        }
+                    };
+                }
+            };
+        }
+
+        @Override
+        public Stream<String> getExecutorNames() {
+            return Stream.of(LocalExecutor.NAME);
+        }
+
+        @Override
+        public void close() throws Exception {
+            boolean startShutdown;
+            Duration timeout;
+            // Freeze the effective timeout without waiting for the cluster's startup lock.
+            synchronized (shutdownLock) {
+                startShutdown = !closing;
+                closing = true;
+                timeout = shutdownTimeout;
+            }
+            if (startShutdown) {
+                // MiniCluster.closeAsync can block on its startup lock. Keep that lock acquisition
+                // inside the bounded wait, and prevent shutdown before start from leaking a
+                // cluster.
+                Thread shutdown =
+                        new Thread(
+                                () -> {
+                                    try {
+                                        CompletableFuture<Void> clusterTermination;
+                                        synchronized (executionLock) {
+                                            clusterTermination =
+                                                    miniCluster == null
+                                                            ? CompletableFuture.completedFuture(
+                                                                    null)
+                                                            : miniCluster.closeAsync();
+                                        }
+                                        clusterTermination.whenComplete(
+                                                (ignored, failure) -> {
+                                                    if (failure == null) {
+                                                        termination.complete(null);
+                                                    } else {
+                                                        termination.completeExceptionally(failure);
+                                                    }
+                                                });
+                                    } catch (Throwable failure) {
+                                        termination.completeExceptionally(failure);
+                                    }
+                                },
+                                "embedded-tiering-shutdown");
+                shutdown.setDaemon(true);
+                shutdown.start();
+            }
+            try {
+                termination.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw e;
+            } catch (TimeoutException e) {
+                throw new TimeoutException(
+                        "Embedded Flink runtime did not terminate within " + timeout + '.');
+            }
+        }
     }
 
     /**
