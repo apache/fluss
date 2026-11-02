@@ -99,6 +99,8 @@ import org.apache.fluss.utils.types.Tuple2;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.NullSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.nio.charset.StandardCharsets;
@@ -1273,8 +1275,11 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
         assertThat(cleanupManager.getPendingDropCount()).isZero();
     }
 
-    @Test
-    void testNotifyOffsetsWithShrinkISR(@TempDir Path tempDir) throws Exception {
+    @ParameterizedTest
+    @NullSource
+    @ValueSource(longs = {600L})
+    void testNotifyOffsetsWithShrinkISR(Long indexPushedOffset, @TempDir Path tempDir)
+            throws Exception {
         initCoordinatorChannel(Collections.singleton(ApiKeys.UPDATE_METADATA));
         TablePath t1 = TablePath.of(defaultDatabase, "test_notify_with_shrink_isr");
         final long t1Id =
@@ -1346,8 +1351,9 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                         new FsPath(tempDir.resolve("late-snapshot").toUri()),
                         KvSnapshotHandle.create(
                                 Collections.emptyList(), Collections.emptyList(), 0),
-                        10L,
+                        1000L,
                         null,
+                        indexPushedOffset,
                         null);
         CompletableFuture<CommitKvSnapshotResponse> responseCompletableFuture2 =
                 new CompletableFuture<>();
@@ -1370,7 +1376,7 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                 NotifyKvSnapshotOffsetRequest request =
                         (NotifyKvSnapshotOffsetRequest) gateway.getRequest(0);
                 assertThat(request.getMinRetainOffset())
-                        .isEqualTo(completedSnapshot.getLogOffset());
+                        .isEqualTo(completedSnapshot.getMinRetainLogOffset());
             }
         }
     }
