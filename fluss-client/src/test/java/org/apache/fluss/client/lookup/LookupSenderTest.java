@@ -19,6 +19,7 @@ package org.apache.fluss.client.lookup;
 
 import org.apache.fluss.client.metadata.TestingMetadataUpdater;
 import org.apache.fluss.cluster.BucketLocation;
+import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
@@ -67,6 +68,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
 
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO_PK;
@@ -419,6 +421,12 @@ public class LookupSenderTest {
         ManualClock clock = new ManualClock(1_000);
         createLookupSender(new ExponentialBackoff(100, 2, 10_000, 0), clock);
         metadataUpdater.failLeaderLookups(Integer.MAX_VALUE, null);
+        List<LookupRequest> sentRequests = Collections.synchronizedList(new ArrayList<>());
+        gateway.setLookupHandler(
+                request -> {
+                    sentRequests.add(request);
+                    return CompletableFuture.completedFuture(new LookupResponse());
+                });
 
         List<AbstractLookupQuery<?>> lookups =
                 new ArrayList<>(
@@ -427,8 +435,15 @@ public class LookupSenderTest {
                                 new LookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("key2")),
                                 new PrefixLookupQuery(
                                         DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("prefix"))));
-        lookupSender.sendLookups(lookups);
+        List<AbstractLookupQuery<?>> firstPass = new ArrayList<>(lookups);
+        firstPass.add(new LookupQuery(DATA1_TABLE_PATH_PK, OTHER_TABLE_BUCKET, bytes("healthy")));
+        lookupSender.sendLookups(firstPass);
         assertLeaderlessLookupsWaitUntil(lookups, 1, 1_100);
+        // A bucket with a leader in the same pass is sent right away.
+        assertThat(sentRequests).hasSize(1);
+        assertThat(sentRequests.get(0).getBucketsReqsList())
+                .extracting(PbLookupReqForBucket::getBucketId)
+                .containsExactly(OTHER_TABLE_BUCKET.getBucket());
 
         // A lookup arriving during the backoff waits for the bucket without a metadata request.
         clock.advanceTime(50, TimeUnit.MILLISECONDS);
@@ -462,22 +477,44 @@ public class LookupSenderTest {
         createLookupSender(new ExponentialBackoff(100, 2, 10_000, 0), clock);
         gateway.setLookupHandler(request -> createSuccessResponse(request, bytes("value")));
 
-        metadataUpdater.failLeaderLookups(2, null);
+        metadataUpdater.failLeaderLookups(1, null);
         LookupQuery query = new LookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("key1"));
         lookupSender.sendLookups(Collections.singletonList(query));
         clock.advanceTime(100, TimeUnit.MILLISECONDS);
         lookupSender.sendLookups(lookupQueue.drainAll());
-        assertThat(query.nextRetryTimeMs()).isEqualTo(1_300);
-
-        clock.advanceTime(200, TimeUnit.MILLISECONDS);
-        lookupSender.sendLookups(lookupQueue.drainAll());
         assertThat(query.future().get(5, TimeUnit.SECONDS)).isEqualTo(bytes("value"));
 
-        // The bucket had a leader in between, so it backs off from the initial delay again.
+        // The bucket had a leader in between, so it backs off from the initial delay again
+        // instead of the 200 ms that would follow a second failure.
         metadataUpdater.failLeaderLookups(1, null);
         LookupQuery nextQuery = new LookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("key2"));
         lookupSender.sendLookups(Collections.singletonList(nextQuery));
         assertThat(nextQuery.nextRetryTimeMs()).isEqualTo(clock.milliseconds() + 100);
+    }
+
+    @Test
+    void testLeaderlessBucketStopsWaitingOnceLeaderIsCached() throws Exception {
+        teardown();
+        ManualClock clock = new ManualClock(1_000);
+        createLookupSender(new ExponentialBackoff(100, 2, 10_000, 0), clock);
+        gateway.setLookupHandler(request -> createSuccessResponse(request, bytes("value")));
+
+        metadataUpdater.failLeaderLookups(Integer.MAX_VALUE, null);
+        LookupQuery query = new LookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("key1"));
+        lookupSender.sendLookups(Collections.singletonList(query));
+        assertThat(query.nextRetryTimeMs()).isEqualTo(1_100);
+
+        // Another metadata refresh caches the leader before the bucket's backoff expires, so both
+        // the waiting and a new lookup are sent without waiting for it.
+        metadataUpdater.cacheLeader();
+        LookupQuery newQuery = new LookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("key2"));
+        List<AbstractLookupQuery<?>> pass = new ArrayList<>(lookupQueue.drainAll());
+        pass.add(newQuery);
+        lookupSender.sendLookups(pass);
+
+        assertThat(query.future().get(5, TimeUnit.SECONDS)).isEqualTo(bytes("value"));
+        assertThat(newQuery.future().get(5, TimeUnit.SECONDS)).isEqualTo(bytes("value"));
+        assertThat(metadataUpdater.failedLeaderLookups()).isEqualTo(1);
     }
 
     @Test
@@ -1075,14 +1112,17 @@ public class LookupSenderTest {
     }
 
     /**
-     * A {@link TestingMetadataUpdater} that can fail leader lookups for {@link #TABLE_BUCKET}, as
-     * when the bucket has no leader or a metadata refresh fails.
+     * A {@link TestingMetadataUpdater} in which {@link #TABLE_BUCKET} can lose its leader. While it
+     * has none, the cached metadata has no leader for it and the given number of metadata refreshes
+     * in {@link #leaderFor} fail, as when the bucket has no leader or the refresh fails.
      */
     private static class LeaderlessTestingMetadataUpdater extends TestingMetadataUpdater {
 
+        private final Cluster clusterWithLeaders;
         private final AtomicInteger remainingFailures = new AtomicInteger();
         private final AtomicInteger failedLeaderLookups = new AtomicInteger();
         private volatile RuntimeException failure;
+        private volatile boolean leaderRemoved;
 
         LeaderlessTestingMetadataUpdater(
                 Map<TablePath, TableInfo> tableInfos, TestTabletServerGateway gateway) {
@@ -1092,6 +1132,7 @@ public class LookupSenderTest {
                     tableInfos,
                     gatewaysForLeaders(gateway),
                     new Configuration());
+            this.clusterWithLeaders = cluster;
         }
 
         /** Serves the leaders of {@link #TABLE_BUCKET} and {@link #OTHER_TABLE_BUCKET}. */
@@ -1103,10 +1144,21 @@ public class LookupSenderTest {
             return gateways;
         }
 
-        /** Fails the next leader lookups with {@code failure}, or a generic error if null. */
+        /**
+         * Removes the cached leader of {@link #TABLE_BUCKET} and fails the next {@code failures}
+         * metadata refreshes for it with {@code failure}, or a generic error if null.
+         */
         void failLeaderLookups(int failures, @Nullable RuntimeException failure) {
             this.failure = failure;
             remainingFailures.set(failures);
+            leaderRemoved = true;
+            updateCluster(withoutLeader(clusterWithLeaders, TABLE_BUCKET));
+        }
+
+        /** Caches the leader of {@link #TABLE_BUCKET}, as a metadata refresh elsewhere would. */
+        void cacheLeader() {
+            leaderRemoved = false;
+            updateCluster(clusterWithLeaders);
         }
 
         int failedLeaderLookups() {
@@ -1115,15 +1167,42 @@ public class LookupSenderTest {
 
         @Override
         public int leaderFor(TablePath tablePath, TableBucket tableBucket) {
-            if (tableBucket.equals(TABLE_BUCKET)
-                    && remainingFailures.getAndUpdate(n -> Math.max(0, n - 1)) > 0) {
-                failedLeaderLookups.incrementAndGet();
-                throw failure != null
-                        ? failure
-                        : new FlussRuntimeException(
-                                "Leader not found for table bucket: " + tableBucket);
+            if (leaderRemoved
+                    && tableBucket.equals(TABLE_BUCKET)
+                    && cluster.leaderFor(tableBucket) == null) {
+                if (remainingFailures.getAndUpdate(n -> Math.max(0, n - 1)) > 0) {
+                    failedLeaderLookups.incrementAndGet();
+                    throw failure != null
+                            ? failure
+                            : new FlussRuntimeException(
+                                    "Leader not found for table bucket: " + tableBucket);
+                }
+                // The metadata refresh finds the leader again.
+                cacheLeader();
             }
             return super.leaderFor(tablePath, tableBucket);
+        }
+
+        private static Cluster withoutLeader(Cluster cluster, TableBucket tableBucket) {
+            Map<PhysicalTablePath, List<BucketLocation>> bucketLocations = new HashMap<>();
+            cluster.getBucketLocationsByPath()
+                    .forEach(
+                            (path, locations) ->
+                                    bucketLocations.put(
+                                            path,
+                                            locations.stream()
+                                                    .filter(
+                                                            location ->
+                                                                    !location.getTableBucket()
+                                                                            .equals(tableBucket))
+                                                    .collect(Collectors.toList())));
+            return new Cluster(
+                    new HashMap<>(cluster.getAliveTabletServers()),
+                    cluster.getCoordinatorServer(),
+                    bucketLocations,
+                    cluster.getTableIdByPath(),
+                    cluster.getPartitionIdByPath(),
+                    cluster.getBucketCountByTableOrPartition());
         }
     }
 }

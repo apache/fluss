@@ -180,21 +180,15 @@ class LookupSender implements Runnable {
     }
 
     @VisibleForTesting
-    void sendLookups(List<AbstractLookupQuery<?>> lookups) throws Exception {
+    void sendLookups(List<AbstractLookupQuery<?>> lookups) {
         if (lookups.isEmpty()) {
             return;
         }
-        // group by <leader, lookup type> to lookup batches
+        // group by <leader, lookup type> to lookup batches. Lookups without a leader are
+        // re-enqueued with a retry time, and LookupQueue#drain() waits for it, so there is no busy
+        // loop to guard against here.
         Map<Tuple2<Integer, LookupType>, List<AbstractLookupQuery<?>>> lookupBatches =
                 groupByLeaderAndType(lookups);
-
-        // if no lookup batches, sleep a bit to avoid busy loop. This case will happen when there is
-        // no leader for all the lookup request in queue.
-        if (lookupBatches.isEmpty() && !lookupQueue.hasUnDrained()) {
-            // TODO: may use wait/notify mechanism to avoid active sleep, and use a dynamic sleep
-            // time based on the request waited time.
-            Thread.sleep(100);
-        }
 
         // now, send the batches
         lookupBatches.forEach(
@@ -219,9 +213,12 @@ class LookupSender implements Runnable {
             TableBucket tb = entry.getKey();
             List<AbstractLookupQuery<?>> bucketLookups = entry.getValue();
             LeaderlessBucket leaderlessBucket = leaderlessBuckets.get(tb);
-            if (leaderlessBucket != null && nowMs < leaderlessBucket.retryTimeMs) {
+            if (leaderlessBucket != null
+                    && nowMs < leaderlessBucket.retryTimeMs
+                    && metadataUpdater.getCluster().leaderFor(tb) == null) {
                 // Lookups that arrive while the bucket backs off wait for it as well, instead of
-                // blocking the sender thread on another metadata request.
+                // blocking the sender thread on another metadata request. A leader cached by
+                // another metadata refresh, e.g. for another bucket of the table, ends the wait.
                 reEnqueueLookups(bucketLookups, leaderlessBucket.retryTimeMs);
                 continue;
             }
