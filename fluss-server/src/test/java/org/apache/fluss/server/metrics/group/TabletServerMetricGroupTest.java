@@ -20,12 +20,21 @@ package org.apache.fluss.server.metrics.group;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.metrics.Counter;
 import org.apache.fluss.metrics.Gauge;
+import org.apache.fluss.metrics.Metric;
 import org.apache.fluss.metrics.MetricNames;
+import org.apache.fluss.metrics.groups.AbstractMetricGroup;
 import org.apache.fluss.metrics.registry.NOPMetricRegistry;
 import org.apache.fluss.server.kv.rocksdb.RocksDBStatistics;
+import org.apache.fluss.server.metrics.group.TabletServerMetricGroup.RocksDBReadOperation;
 
 import org.junit.jupiter.api.Test;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
@@ -89,7 +98,53 @@ class TabletServerMetricGroupTest {
                 .isEqualTo(256L);
     }
 
+    @Test
+    void testRocksDBReadCounters() {
+        CollectingRegistry registry = new CollectingRegistry();
+        TabletServerMetricGroup metrics =
+                new TabletServerMetricGroup(registry, "cluster", "rack", "host", 0);
+        assertThat(registry.counters).hasSize(12);
+        registry.labels.forEach(
+                labels -> {
+                    assertThat(labels)
+                            .doesNotContainKeys("database", "table", "bucket", "bucket_id");
+                    assertThat(labels).containsKeys("cluster_id", "server_id");
+                });
+        metrics.recordRocksDBRead(RocksDBReadOperation.GET, 600);
+        metrics.recordRocksDBRead(RocksDBReadOperation.GET, 600);
+        assertThat(registry.value(MetricNames.ROCKSDB_READ_EXECUTION_TIME_US_TOTAL, "get"))
+                .isEqualTo(1);
+        assertThat(registry.value(MetricNames.ROCKSDB_READ_EXECUTION_COUNT_TOTAL, "get"))
+                .isEqualTo(2);
+        assertThat(registry.value(MetricNames.ROCKSDB_READ_EXECUTION_COUNT_TOTAL, "multiGet"))
+                .isZero();
+        assertThat(registry.value(MetricNames.ROCKSDB_SHARED_BLOCK_CACHE_HITS_TOTAL, "data"))
+                .isZero();
+    }
+
     private static Object gaugeValue(TabletServerMetricGroup metricGroup, String metricName) {
         return ((Gauge<?>) metricGroup.getMetrics().get(metricName)).getValue();
+    }
+
+    private static class CollectingRegistry extends NOPMetricRegistry {
+        private final Map<String, Counter> counters = new HashMap<>();
+        private final List<Map<String, String>> labels = new ArrayList<>();
+
+        @Override
+        public void register(Metric metric, String name, AbstractMetricGroup group) {
+            if (name.equals(MetricNames.ROCKSDB_SHARED_BLOCK_CACHE_HITS_TOTAL)
+                    || name.equals(MetricNames.ROCKSDB_SHARED_BLOCK_CACHE_MISSES_TOTAL)
+                    || name.equals(MetricNames.ROCKSDB_READ_EXECUTION_COUNT_TOTAL)
+                    || name.equals(MetricNames.ROCKSDB_READ_EXECUTION_TIME_US_TOTAL)) {
+                Map<String, String> variables = group.getAllVariables();
+                String label = variables.getOrDefault("operation", variables.get("block_type"));
+                counters.put(name + ":" + label, (Counter) metric);
+                labels.add(new HashMap<>(variables));
+            }
+        }
+
+        private long value(String name, String label) {
+            return counters.get(name + ":" + label).getCount();
+        }
     }
 }

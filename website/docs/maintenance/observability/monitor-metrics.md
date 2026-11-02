@@ -1191,11 +1191,11 @@ use their cumulative values with `rate()` over a suitable interval.
 Shared cache counters exclude independent DB caches, write buffer accounting caches and the OS page
 cache. They remain zero when the shared block cache is disabled. Collection reads six native tickers
 per distinct Statistics object per scrape, without enumerating cache entries. Buckets sharing the
-same table Statistics share one collection cursor, retained until the last participating DB closes.
-Private collection cursors retain six longs per Statistics object, in addition to reference counts
-and map/object overhead. Failed reads preserve the last
-cursor and accumulated total; the next successful read catches up. Failures are logged at debug level;
-a failed final collection can lose the remaining unsampled events.
+same table Statistics share one sampling baseline. Collection retains six longs per Statistics
+object. The last DB close collects the final interval before its Statistics are released. Failed
+reads preserve the baseline and accumulated total, so the next successful sample catches up.
+Failures are logged at debug level; a failed final collection can lose the remaining unsampled
+events.
 
 Read execution includes `get`, `multiGetAsList`, and the entire prefix `readAll()` seek, iteration and
 result materialization. It covers all callers, including pre-write old-value reads, but excludes RPC

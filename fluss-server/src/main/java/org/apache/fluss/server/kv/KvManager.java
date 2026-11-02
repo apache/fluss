@@ -144,7 +144,7 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
 
     private final Map<TableBucket, Object> kvLocks = new ConcurrentHashMap<>();
 
-    private final RocksDBStatisticsRegistry statisticsRegistry = new RocksDBStatisticsRegistry();
+    private final RocksDBStatisticsRegistry statisticsRegistry;
 
     /**
      * For arrow log format. The buffer allocator to allocate memory for arrow write batch of
@@ -202,6 +202,9 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
         this.serverMetricGroup = tabletServerMetricGroup;
         this.sharedRocksDBRateLimiter = createSharedRateLimiter(conf);
         this.sharedBlockCache = createSharedBlockCache(conf);
+        this.statisticsRegistry = new RocksDBStatisticsRegistry(sharedBlockCache != null);
+        tabletServerMetricGroup.setSharedBlockCacheStatistics(
+                statisticsRegistry::getSharedBlockCacheTickerCount);
         this.currentSharedRateLimitBytesPerSec =
                 conf.get(ConfigOptions.KV_SHARED_RATE_LIMITER_BYTES_PER_SEC).getBytes();
         KvFlushScheduler createdFlushScheduler =

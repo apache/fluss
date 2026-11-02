@@ -24,6 +24,8 @@ import org.apache.fluss.metrics.Histogram;
 import org.apache.fluss.rocksdb.RocksDBOperationUtils;
 import org.apache.fluss.rocksdb.RocksIteratorWrapper;
 import org.apache.fluss.server.kv.KvCloseMode;
+import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
+import org.apache.fluss.server.metrics.group.TabletServerMetricGroup.RocksDBReadOperation;
 import org.apache.fluss.server.utils.ResourceGuard;
 import org.apache.fluss.utils.IOUtils;
 
@@ -119,8 +121,7 @@ public class RocksDBKv implements AutoCloseable {
      */
     private final int flussL0SlowdownTrigger;
 
-    @Nullable private RocksDBMetrics metrics;
-    @Nullable private Runnable collectFinalCacheStatistics;
+    @Nullable private TabletServerMetricGroup metrics;
 
     private volatile boolean writeRejected;
 
@@ -172,11 +173,8 @@ public class RocksDBKv implements AutoCloseable {
     }
 
     /** Attaches server-scoped counters before this DB is published to callers. */
-    public void initializeMetrics(RocksDBMetrics metrics, boolean usesSharedBlockCache) {
+    public void initializeMetrics(TabletServerMetricGroup metrics) {
         this.metrics = metrics;
-        if (usesSharedBlockCache && statistics != null) {
-            collectFinalCacheStatistics = metrics.registerSharedCache(statistics);
-        }
     }
 
     public ResourceGuard getResourceGuard() {
@@ -213,7 +211,7 @@ public class RocksDBKv implements AutoCloseable {
         } catch (RocksDBException e) {
             throw new IOException("Fail to get key.", e);
         } finally {
-            recordRead(RocksDBMetrics.ReadOperation.GET, startNanos);
+            recordRead(RocksDBReadOperation.GET, startNanos);
         }
     }
 
@@ -224,13 +222,13 @@ public class RocksDBKv implements AutoCloseable {
         } catch (RocksDBException e) {
             throw new IOException("Fail to get keys.", e);
         } finally {
-            recordRead(RocksDBMetrics.ReadOperation.MULTI_GET, startNanos);
+            recordRead(RocksDBReadOperation.MULTI_GET, startNanos);
         }
     }
 
-    private void recordRead(RocksDBMetrics.ReadOperation operation, long startNanos) {
+    private void recordRead(RocksDBReadOperation operation, long startNanos) {
         if (metrics != null) {
-            metrics.recordRead(operation, System.nanoTime() - startNanos);
+            metrics.recordRocksDBRead(operation, System.nanoTime() - startNanos);
         }
     }
 
@@ -274,7 +272,7 @@ public class RocksDBKv implements AutoCloseable {
         // The upper bound must outlive the iterator and read options that reference it.
         @Nullable private final Slice upperBoundSlice;
         private final ResourceGuard.Lease lease;
-        @Nullable private final RocksDBMetrics metrics;
+        @Nullable private final TabletServerMetricGroup metrics;
         private boolean closed;
 
         private PrefixLookup(
@@ -283,7 +281,7 @@ public class RocksDBKv implements AutoCloseable {
                 ReadOptions readOptions,
                 @Nullable Slice upperBoundSlice,
                 ResourceGuard.Lease lease,
-                @Nullable RocksDBMetrics metrics) {
+                @Nullable TabletServerMetricGroup metrics) {
             this.prefixKey = prefixKey;
             this.iterator = new RocksIteratorWrapper(iterator);
             this.readOptions = readOptions;
@@ -299,9 +297,8 @@ public class RocksDBKv implements AutoCloseable {
                 return readValues();
             } finally {
                 if (metrics != null) {
-                    metrics.recordRead(
-                            RocksDBMetrics.ReadOperation.PREFIX_SCAN,
-                            System.nanoTime() - startNanos);
+                    metrics.recordRocksDBRead(
+                            RocksDBReadOperation.PREFIX_SCAN, System.nanoTime() - startNanos);
                 }
             }
         }
@@ -439,9 +436,6 @@ public class RocksDBKv implements AutoCloseable {
 
                 columnFamilyOptions.forEach(IOUtils::closeQuietly);
 
-                if (collectFinalCacheStatistics != null) {
-                    collectFinalCacheStatistics.run();
-                }
                 IOUtils.closeQuietly(optionsContainer);
             }
             this.closed = true;

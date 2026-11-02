@@ -18,10 +18,14 @@
 package org.apache.fluss.server.kv.rocksdb;
 
 import io.github.fluss_contrib.rocksdb.Statistics;
+import io.github.fluss_contrib.rocksdb.TickerType;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Queue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -90,6 +94,77 @@ class RocksDBStatisticsRegistryTest {
             for (RocksDBStatisticsRegistry.Lease lease : leases) {
                 lease.close();
             }
+        }
+    }
+
+    @Test
+    void testFailedCacheSamplePreservesCursorAndClosedDbTotals() {
+        TestingStatistics first = new TestingStatistics();
+        TestingStatistics second = new TestingStatistics();
+        Queue<Statistics> statistics = new ArrayDeque<>(Arrays.asList(first, second));
+        RocksDBStatisticsRegistry registry =
+                new RocksDBStatisticsRegistry(true, statistics::remove);
+        try (RocksDBStatisticsRegistry.Lease firstLease = registry.acquire(1);
+                RocksDBStatisticsRegistry.Lease secondLease = registry.acquire(2)) {
+            first.hits = 10;
+            second.hits = 20;
+            assertThat(registry.getSharedBlockCacheTickerCount(TickerType.BLOCK_CACHE_DATA_HIT))
+                    .isEqualTo(30);
+            first.fail = true;
+            first.hits = 15;
+            second.hits = 25;
+            assertThat(registry.getSharedBlockCacheTickerCount(TickerType.BLOCK_CACHE_DATA_HIT))
+                    .isEqualTo(35);
+            first.fail = false;
+            assertThat(registry.getSharedBlockCacheTickerCount(TickerType.BLOCK_CACHE_DATA_HIT))
+                    .isEqualTo(40);
+            first.hits = 17;
+            firstLease.close();
+            firstLease.close();
+            assertThat(first.isOwningHandle()).isFalse();
+            assertThat(registry.getSharedBlockCacheTickerCount(TickerType.BLOCK_CACHE_DATA_HIT))
+                    .isEqualTo(42);
+            second.hits = 1;
+            assertThat(registry.getSharedBlockCacheTickerCount(TickerType.BLOCK_CACHE_DATA_HIT))
+                    .isEqualTo(43);
+        }
+    }
+
+    @Test
+    void testSharedStatisticsAreSampledUntilLastLeaseCloses() {
+        TestingStatistics statistics = new TestingStatistics();
+        RocksDBStatisticsRegistry registry = new RocksDBStatisticsRegistry(true, () -> statistics);
+        try (RocksDBStatisticsRegistry.Lease first = registry.acquire(1)) {
+            statistics.hits = 10;
+            assertThat(registry.getSharedBlockCacheTickerCount(TickerType.BLOCK_CACHE_DATA_HIT))
+                    .isEqualTo(10);
+            try (RocksDBStatisticsRegistry.Lease second = registry.acquire(1)) {
+                statistics.hits = 15;
+                assertThat(registry.getSharedBlockCacheTickerCount(TickerType.BLOCK_CACHE_DATA_HIT))
+                        .isEqualTo(15);
+                first.close();
+                first.close();
+                statistics.hits = 20;
+                assertThat(registry.getSharedBlockCacheTickerCount(TickerType.BLOCK_CACHE_DATA_HIT))
+                        .isEqualTo(20);
+                statistics.hits = 25;
+            }
+            assertThat(statistics.isOwningHandle()).isFalse();
+            assertThat(registry.getSharedBlockCacheTickerCount(TickerType.BLOCK_CACHE_DATA_HIT))
+                    .isEqualTo(25);
+        }
+    }
+
+    private static class TestingStatistics extends Statistics {
+        private long hits;
+        private boolean fail;
+
+        @Override
+        public long getTickerCount(TickerType ticker) {
+            if (fail) {
+                throw new IllegalStateException("Statistics unavailable");
+            }
+            return ticker == TickerType.BLOCK_CACHE_DATA_HIT ? hits : 0;
         }
     }
 }
