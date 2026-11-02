@@ -47,6 +47,28 @@ import static org.assertj.core.api.Assertions.assertThat;
 class CoordinatorContextTest {
 
     @Test
+    void testRemovingOldTablePreservesRecreatedTablePath() {
+        CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
+        TablePath tablePath = TablePath.of("db", "table");
+        long oldTableId = 1L;
+        long newTableId = 2L;
+        TableInfo newTableInfo = createTableInfo(newTableId, tablePath, false);
+
+        context.putTablePath(oldTableId, tablePath);
+        context.putTablePath(newTableId, tablePath);
+        context.putTableInfo(newTableInfo);
+        context.removeTable(oldTableId);
+
+        assertThat(context.getTableIdByPath(tablePath)).isEqualTo(newTableId);
+        assertThat(context.getTablePathById(newTableId)).isEqualTo(tablePath);
+        assertThat(context.getTableInfoById(newTableId)).isEqualTo(newTableInfo);
+
+        context.removeTable(newTableId);
+        assertThat(context.getTableIdByPath(tablePath)).isEqualTo(TableInfo.UNKNOWN_TABLE_ID);
+        assertThat(context.getTableInfoById(newTableId)).isNull();
+    }
+
+    @Test
     void testKvBucketsAreTrackedIdempotently() {
         CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
         TableBucket first = new TableBucket(1L, 0);

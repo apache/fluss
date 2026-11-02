@@ -61,6 +61,7 @@ import org.apache.fluss.server.coordinator.event.CommitRemoteLogManifestEvent;
 import org.apache.fluss.server.coordinator.event.CoordinatorEventManager;
 import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrResponseReceivedEvent;
 import org.apache.fluss.server.coordinator.event.RetryOfflineLeaderEvent;
+import org.apache.fluss.server.coordinator.event.TableRegistrationChangeEvent;
 import org.apache.fluss.server.coordinator.remote.RemoteDirDynamicLoader;
 import org.apache.fluss.server.coordinator.statemachine.BucketState;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaState;
@@ -84,6 +85,7 @@ import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.TableAssignment;
+import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
 import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.server.zk.data.ZkVersion;
@@ -1822,6 +1824,34 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                     assertThat(tableInfoInCtx.getCustomProperties().toMap())
                             .containsEntry("custom.key", "custom.value");
                 });
+    }
+
+    @Test
+    void testTableRegistrationChangeSkipsMissingContextData() throws Exception {
+        TablePath unknownPath = TablePath.of(defaultDatabase, "unknown_registration");
+        TablePath missingInfoPath = TablePath.of(defaultDatabase, "missing_registration_info");
+        long tableId = 10001L;
+        TableRegistration registration =
+                TableRegistration.newTable(tableId, remoteDataDir, TEST_TABLE);
+
+        fromCtx(
+                ctx -> {
+                    ctx.putTablePath(tableId, missingInfoPath);
+                    return null;
+                });
+
+        assertThatCode(
+                        () ->
+                                eventProcessor.process(
+                                        new TableRegistrationChangeEvent(
+                                                unknownPath, registration)))
+                .doesNotThrowAnyException();
+        assertThatCode(
+                        () ->
+                                eventProcessor.process(
+                                        new TableRegistrationChangeEvent(
+                                                missingInfoPath, registration)))
+                .doesNotThrowAnyException();
     }
 
     @Test
