@@ -432,50 +432,6 @@ public class MetadataUpdaterTest {
         assertThat(cluster.getBucketCountEpoch(1)).hasValue(1);
     }
 
-    @Test
-    void testRecreatedObjectsDiscardPreviousLayouts() throws Exception {
-        TablePath path = TablePath.of("db", "table");
-        MetadataResponse first = routingPartitionResponse(3, 9, true);
-        first.addPartitionMetadata()
-                .setTableId(1)
-                .setPartitionId(7)
-                .setPartitionName("p")
-                .setBucketCount(3);
-        Cluster original = updateRouting(first, null, false);
-        MetadataResponse replacement = routingPartitionResponse(2, 0, true);
-        replacement.getTableMetadatasList().get(0).setTableId(2);
-        Cluster cluster = updateRouting(replacement, original, true);
-        assertThat(cluster.getBucketCount(TableOrPartition.ofTable(1))).isEmpty();
-        assertThat(cluster.getBucketCountEpoch(1)).isEmpty();
-        assertThat(cluster.getBucketCount(TableOrPartition.ofPartition(7))).isEmpty();
-        assertThat(cluster.getPartitionId(PhysicalTablePath.of(path, "p"))).isEmpty();
-        assertThat(cluster.getBucketCount(TableOrPartition.ofTable(2))).hasValue(2);
-        Cluster tableReplacement = cluster;
-        assertThatThrownBy(() -> updateRouting(first, tableReplacement, true))
-                .hasCauseInstanceOf(StaleMetadataException.class);
-
-        MetadataResponse newPartition = routingPartitionResponse(2, 0, true);
-        newPartition.getTableMetadatasList().get(0).setTableId(2);
-        newPartition
-                .addPartitionMetadata()
-                .setTableId(2)
-                .setPartitionId(8)
-                .setPartitionName("p")
-                .setBucketCount(2);
-        cluster = updateRouting(newPartition, cluster, true);
-        MetadataResponse recreatedPartition = routingPartitionResponse(2, 0, true);
-        recreatedPartition.getTableMetadatasList().get(0).setTableId(2);
-        recreatedPartition
-                .addPartitionMetadata()
-                .setTableId(2)
-                .setPartitionId(9)
-                .setPartitionName("p")
-                .setBucketCount(2);
-        cluster = updateRouting(recreatedPartition, cluster, true);
-        assertThat(cluster.getBucketCount(TableOrPartition.ofPartition(8))).isEmpty();
-        assertThat(cluster.getBucketCount(TableOrPartition.ofPartition(9))).hasValue(2);
-    }
-
     private static MetadataResponse routingResponse(int count, long epoch, boolean explicit) {
         MetadataResponse response = new MetadataResponse();
         response.addTabletServer().setNodeId(1).setHost("localhost").setPort(8080);

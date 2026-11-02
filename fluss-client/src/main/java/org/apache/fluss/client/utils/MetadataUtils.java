@@ -140,47 +140,6 @@ public class MetadataUtils {
                                 newBucketCountEpochByTableId =
                                         new HashMap<>(originCluster.getBucketCountEpochByTableId());
 
-                                // A path may have been dropped and recreated. Its old partitions
-                                // and layout must not be inherited by the new object.
-                                newTableMetadata.tablePathToTableId.forEach(
-                                        (path, id) -> {
-                                            Long previousId = newTablePathToTableId.get(path);
-                                            if (previousId != null && !previousId.equals(id)) {
-                                                newBucketCountByTableOrPartition.remove(
-                                                        TableOrPartition.ofTable(previousId));
-                                                newBucketCountEpochByTableId.remove(previousId);
-                                                newBucketLocations.remove(
-                                                        PhysicalTablePath.of(path));
-                                                newPartitionIdByPath
-                                                        .entrySet()
-                                                        .removeIf(
-                                                                entry -> {
-                                                                    if (entry.getKey()
-                                                                            .getTablePath()
-                                                                            .equals(path)) {
-                                                                        newBucketCountByTableOrPartition
-                                                                                .remove(
-                                                                                        TableOrPartition
-                                                                                                .ofPartition(
-                                                                                                        entry
-                                                                                                                .getValue()));
-                                                                        newBucketLocations.remove(
-                                                                                entry.getKey());
-                                                                        return true;
-                                                                    }
-                                                                    return false;
-                                                                });
-                                            }
-                                        });
-                                newTableMetadata.partitionIdByPath.forEach(
-                                        (path, id) -> {
-                                            Long previousId = newPartitionIdByPath.get(path);
-                                            if (previousId != null && !previousId.equals(id)) {
-                                                newBucketCountByTableOrPartition.remove(
-                                                        TableOrPartition.ofPartition(previousId));
-                                            }
-                                        });
-
                                 newTablePathToTableId.putAll(newTableMetadata.tablePathToTableId);
                                 newBucketLocations.putAll(newTableMetadata.bucketLocations);
                                 newPartitionIdByPath.putAll(newTableMetadata.partitionIdByPath);
@@ -235,13 +194,6 @@ public class MetadataUtils {
                             new TablePath(
                                     protoTablePath.getDatabaseName(),
                                     protoTablePath.getTableName());
-                    Long previousId =
-                            cluster == null ? null : cluster.getTableId(tablePath).orElse(null);
-                    // IDs are allocated by the monotonic ZooKeeper table-ID counter.
-                    if (previousId != null && previousId > tableId) {
-                        throw new StaleMetadataException(
-                                "Metadata refers to a replaced table: " + tablePath);
-                    }
                     newTablePathToTableId.put(tablePath, tableId);
                     newTablePathByTableId.put(tableId, tablePath);
 
@@ -323,22 +275,8 @@ public class MetadataUtils {
                         throw new StaleMetadataException(
                                 "Parent table metadata is unavailable for " + tableId);
                     }
-                    Long responseTableId = newTablePathToTableId.get(tablePath);
-                    if (responseTableId != null && responseTableId != tableId) {
-                        throw new StaleMetadataException(
-                                "Partition belongs to a replaced table: " + tablePath);
-                    }
                     PhysicalTablePath physicalTablePath =
                             PhysicalTablePath.of(tablePath, pbPartitionMetadata.getPartitionName());
-                    Long previousPartitionId =
-                            cluster == null
-                                    ? null
-                                    : cluster.getPartitionId(physicalTablePath).orElse(null);
-                    if (previousPartitionId != null
-                            && previousPartitionId > pbPartitionMetadata.getPartitionId()) {
-                        throw new StaleMetadataException(
-                                "Metadata refers to a replaced partition: " + physicalTablePath);
-                    }
                     newPartitionIdByPath.put(
                             physicalTablePath, pbPartitionMetadata.getPartitionId());
                     newBucketLocations.put(
