@@ -109,7 +109,15 @@ For tables with synchronous indexes, client log scans expose records only below 
 
 Each index appears in the same database as its main table under the name `__idx__<main-table-name>__<index-name>`. Its read permissions follow the main table. Use the main-table secondary-index API for queries; direct writes and changelog subscriptions to an internal index table are rejected.
 
-Dropping a main table also deletes its index tables. An index table cannot be dropped independently while its main table exists. If index-table cleanup fails after the main table is deleted, the remaining internal table can be removed separately.
+Dropping a main table also deletes its index tables, but deletion is not atomic across tables. If one index table fails to be deleted, cleanup continues for the others and the error reports the failed index-table paths.
+
+An index table cannot be dropped independently while its main table exists. After the main table has been deleted, remove each remaining index table directly using the reported path, for example:
+
+```sql
+DROP TABLE IF EXISTS __idx__orders__idx_user;
+```
+
+Retrying `DROP TABLE IF EXISTS orders` does not resume index cleanup once the main table is absent.
 
 For partitioned tables, lookup spans all main-table partitions without requiring the caller to supply a partition key unless it is itself an index column. Deleted partitions are filtered from results, and compaction eventually removes their index entries. Recreating a partition with the same name creates a new partition identity.
 
