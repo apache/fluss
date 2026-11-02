@@ -17,8 +17,11 @@
 
 package org.apache.fluss.rpc.netty.server;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.rpc.RpcGatewayService;
 import org.apache.fluss.rpc.protocol.RequestType;
+import org.apache.fluss.utils.clock.Clock;
+import org.apache.fluss.utils.clock.SystemClock;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -36,6 +39,7 @@ final class RequestProcessor implements Runnable {
     private final CompletableFuture<Void> shutdownComplete = new CompletableFuture<>();
     private final RequestHandler<?>[] requestHandlers;
     private final RequestsMetrics requestsMetrics;
+    private final Clock clock;
 
     private volatile boolean isRunning;
 
@@ -45,11 +49,29 @@ final class RequestProcessor implements Runnable {
             RpcGatewayService service,
             RequestHandler<?>[] requestHandlers,
             RequestsMetrics requestsMetrics) {
+        this(
+                processorId,
+                requestChannel,
+                service,
+                requestHandlers,
+                requestsMetrics,
+                SystemClock.getInstance());
+    }
+
+    @VisibleForTesting
+    RequestProcessor(
+            int processorId,
+            RequestChannel requestChannel,
+            RpcGatewayService service,
+            RequestHandler<?>[] requestHandlers,
+            RequestsMetrics requestsMetrics,
+            Clock clock) {
         this.processorId = processorId;
         this.service = service;
         this.requestChannel = requestChannel;
         this.requestHandlers = requestHandlers;
         this.requestsMetrics = requestsMetrics;
+        this.clock = clock;
         this.isRunning = true;
     }
 
@@ -65,7 +87,7 @@ final class RequestProcessor implements Runnable {
                             processorId);
                     completeShutdown();
                 } else {
-                    long startNanos = System.nanoTime();
+                    long startNanos = clock.nanoseconds();
                     RequestsMetrics.Metrics metrics =
                             request instanceof FlussRequest
                                     ? requestsMetrics.getMetrics((FlussRequest) request)
@@ -88,7 +110,7 @@ final class RequestProcessor implements Runnable {
                             request.releaseBuffer();
                         } finally {
                             long durationUs =
-                                    TimeUnit.NANOSECONDS.toMicros(System.nanoTime() - startNanos);
+                                    TimeUnit.NANOSECONDS.toMicros(clock.nanoseconds() - startNanos);
                             if (metrics != null) {
                                 metrics.recordSyncProcessTimeUs(durationUs);
                             }

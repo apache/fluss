@@ -29,6 +29,7 @@ import org.apache.fluss.rpc.messages.PrefixLookupRequest;
 import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.rpc.protocol.RequestType;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.Unpooled;
+import org.apache.fluss.utils.clock.ManualClock;
 
 import org.junit.jupiter.api.Test;
 
@@ -53,6 +54,7 @@ class RequestProcessorMetricsTest {
         RequestsMetrics requestsMetrics =
                 RequestsMetrics.createTabletServerRequestMetrics(serverMetricGroup);
         RequestChannel channel = new RequestChannel(10);
+        ManualClock clock = new ManualClock();
         RequestHandler<?>[] handlers = new RequestHandler<?>[RequestType.values().length - 1];
         handlers[RequestType.FLUSS.id] =
                 new RequestHandler<FlussRequest>() {
@@ -64,13 +66,21 @@ class RequestProcessorMetricsTest {
                     @Override
                     public void processRequest(FlussRequest request) {
                         if (request.getApiKey() == ApiKeys.PREFIX_LOOKUP.id) {
+                            clock.advanceTime(2500, TimeUnit.NANOSECONDS);
                             request.fail(new IllegalStateException("test failure"));
+                        } else {
+                            clock.advanceTime(1200, TimeUnit.NANOSECONDS);
                         }
                     }
                 };
         RequestProcessor processor =
                 new RequestProcessor(
-                        0, channel, new TestingTabletGatewayService(), handlers, requestsMetrics);
+                        0,
+                        channel,
+                        new TestingTabletGatewayService(),
+                        handlers,
+                        requestsMetrics,
+                        clock);
         CompletableFuture<ApiMessage> pendingResponse = new CompletableFuture<>();
         CompletableFuture<ApiMessage> failedResponse = new CompletableFuture<>();
         channel.putRequest(
@@ -87,8 +97,8 @@ class RequestProcessorMetricsTest {
 
             assertThat(pendingResponse).isNotDone();
             assertThat(failedResponse).isCompletedExceptionally();
-            assertRecordedTime(registry, "metadata");
-            assertRecordedTime(registry, "prefixLookup");
+            assertRecordedTime(registry, "metadata", 1L);
+            assertRecordedTime(registry, "prefixLookup", 2L);
         } finally {
             executor.shutdownNow();
         }
@@ -111,7 +121,9 @@ class RequestProcessorMetricsTest {
     }
 
     private static void assertRecordedTime(
-            RequestsMetricsTest.RecordingMetricRegistry registry, String requestType) {
+            RequestsMetricsTest.RecordingMetricRegistry registry,
+            String requestType,
+            long expectedTimeUs) {
         Histogram histogram =
                 (Histogram)
                         registry.metrics(MetricNames.REQUEST_SYNC_PROCESS_TIME_US, requestType)
@@ -123,8 +135,7 @@ class RequestProcessorMetricsTest {
                                 .get(0)
                                 .metric;
         assertThat(histogram.getCount()).isEqualTo(1);
-        assertThat(sum.getCount())
-                .isEqualTo(histogram.getStatistics().getValues()[0])
-                .isNotNegative();
+        assertThat(histogram.getStatistics().getValues()).containsExactly(expectedTimeUs);
+        assertThat(sum.getCount()).isEqualTo(expectedTimeUs);
     }
 }
