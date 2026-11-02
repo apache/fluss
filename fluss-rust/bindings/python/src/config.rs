@@ -242,6 +242,16 @@ impl Config {
                             FlussError::new_err(format!("Invalid value '{value}' for '{key}': {e}"))
                         })?;
                     }
+                    "lookup.retry-backoff-ms" => {
+                        config.lookup_retry_backoff_ms = value.parse::<u64>().map_err(|e| {
+                            FlussError::new_err(format!("Invalid value '{value}' for '{key}': {e}"))
+                        })?;
+                    }
+                    "lookup.retry-max-backoff-ms" => {
+                        config.lookup_retry_max_backoff_ms = value.parse::<u64>().map_err(|e| {
+                            FlussError::new_err(format!("Invalid value '{value}' for '{key}': {e}"))
+                        })?;
+                    }
                     "connect-timeout" => {
                         config.connect_timeout_ms = value.parse::<u64>().map_err(|e| {
                             FlussError::new_err(format!("Invalid value '{value}' for '{key}': {e}"))
@@ -705,6 +715,30 @@ impl Config {
     #[setter]
     fn set_lookup_max_retries(&mut self, value: i32) {
         self.inner.lookup_max_retries = value;
+    }
+
+    /// Get the base lookup retry backoff in milliseconds
+    #[getter]
+    fn lookup_retry_backoff_ms(&self) -> u64 {
+        self.inner.lookup_retry_backoff_ms
+    }
+
+    /// Set the base lookup retry backoff in milliseconds
+    #[setter]
+    fn set_lookup_retry_backoff_ms(&mut self, backoff: u64) {
+        self.inner.lookup_retry_backoff_ms = backoff;
+    }
+
+    /// Get the maximum lookup retry backoff in milliseconds, before jitter
+    #[getter]
+    fn lookup_retry_max_backoff_ms(&self) -> u64 {
+        self.inner.lookup_retry_max_backoff_ms
+    }
+
+    /// Set the maximum lookup retry backoff in milliseconds, before jitter
+    #[setter]
+    fn set_lookup_retry_max_backoff_ms(&mut self, backoff: u64) {
+        self.inner.lookup_retry_max_backoff_ms = backoff;
     }
 }
 

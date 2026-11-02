@@ -251,6 +251,8 @@ inline ffi::FfiConfig to_ffi_config(const Configuration& config) {
     ffi_config.lookup_batch_timeout_ms = config.lookup_batch_timeout_ms;
     ffi_config.lookup_max_inflight_requests = config.lookup_max_inflight_requests;
     ffi_config.lookup_max_retries = config.lookup_max_retries;
+    ffi_config.lookup_retry_backoff_ms = config.lookup_retry_backoff_ms;
+    ffi_config.lookup_retry_max_backoff_ms = config.lookup_retry_max_backoff_ms;
     return ffi_config;
 }
 

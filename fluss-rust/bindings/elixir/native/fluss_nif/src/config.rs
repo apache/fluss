@@ -37,6 +37,8 @@ pub struct NifConfig {
     pub lookup_max_inflight_requests: Option<u64>,
     pub lookup_max_retries: Option<i32>,
     pub lookup_queue_size: Option<u64>,
+    pub lookup_retry_backoff_ms: Option<u64>,
+    pub lookup_retry_max_backoff_ms: Option<u64>,
     pub remote_file_download_thread_num: Option<u64>,
     pub scanner_io_tmp_dir: Option<String>,
     pub scanner_log_fetch_max_bytes: Option<i32>,
@@ -180,6 +182,12 @@ impl NifConfig {
         if let Some(size) = self.lookup_queue_size {
             config.lookup_queue_size = size as usize;
         }
+        if let Some(backoff) = self.lookup_retry_backoff_ms {
+            config.lookup_retry_backoff_ms = backoff;
+        }
+        if let Some(backoff) = self.lookup_retry_max_backoff_ms {
+            config.lookup_retry_max_backoff_ms = backoff;
+        }
         config
     }
 }
@@ -197,6 +205,8 @@ mod tests {
             lookup_max_inflight_requests: None,
             lookup_max_retries: None,
             lookup_queue_size: None,
+            lookup_retry_backoff_ms: None,
+            lookup_retry_max_backoff_ms: None,
             remote_file_download_thread_num: None,
             scanner_io_tmp_dir: None,
             scanner_log_fetch_max_bytes: None,
@@ -239,6 +249,20 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[test]
+    fn lookup_retry_backoff_is_preserved_in_core_config() {
+        let core = default_config().into_core();
+        assert_eq!(core.lookup_retry_backoff_ms, 100);
+        assert_eq!(core.lookup_retry_max_backoff_ms, 1000);
+
+        let mut config = default_config();
+        config.lookup_retry_backoff_ms = Some(0);
+        config.lookup_retry_max_backoff_ms = Some(5_000);
+        let core = config.into_core();
+        assert_eq!(core.lookup_retry_backoff_ms, 0);
+        assert_eq!(core.lookup_retry_max_backoff_ms, 5_000);
     }
 
     #[test]

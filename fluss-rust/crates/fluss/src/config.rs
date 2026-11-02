@@ -51,6 +51,10 @@ const DEFAULT_CONNECT_TIMEOUT_MS: u64 = 15_000;
 // cycle, which turns one unhealthy leader into a request storm.
 const DEFAULT_WRITER_RETRY_BACKOFF_MS: u64 = 100;
 const DEFAULT_WRITER_RETRY_MAX_BACKOFF_MS: u64 = 1000;
+// Same shape for lookups, with the defaults of Java's `client.lookup.retry-backoff`
+// and `client.lookup.retry-backoff-max`.
+const DEFAULT_LOOKUP_RETRY_BACKOFF_MS: u64 = 100;
+const DEFAULT_LOOKUP_RETRY_MAX_BACKOFF_MS: u64 = 1000;
 const DEFAULT_SECURITY_PROTOCOL: &str = "PLAINTEXT";
 const DEFAULT_SASL_MECHANISM: &str = "PLAIN";
 
@@ -247,6 +251,19 @@ pub struct Config {
     /// Default: i32::MAX (matching Java CLIENT_LOOKUP_MAX_RETRIES)
     #[arg(long, default_value_t = i32::MAX)]
     pub lookup_max_retries: i32,
+
+    /// Initial delay before a lookup that failed with a retriable error is resent.
+    /// The delay doubles per attempt, up to `lookup_retry_max_backoff_ms`, and
+    /// carries +/-20% jitter. 0 resends immediately.
+    /// Default: 100 (matching Java CLIENT_LOOKUP_RETRY_BACKOFF)
+    #[arg(long, default_value_t = DEFAULT_LOOKUP_RETRY_BACKOFF_MS)]
+    pub lookup_retry_backoff_ms: u64,
+
+    /// Ceiling for the exponentially growing lookup retry delay, before jitter,
+    /// so a delay can reach 20% above it. Must be >= `lookup_retry_backoff_ms`.
+    /// Default: 1000 (matching Java CLIENT_LOOKUP_RETRY_BACKOFF_MAX)
+    #[arg(long, default_value_t = DEFAULT_LOOKUP_RETRY_MAX_BACKOFF_MS)]
+    pub lookup_retry_max_backoff_ms: u64,
 }
 
 impl std::fmt::Debug for Config {
@@ -335,6 +352,11 @@ impl std::fmt::Debug for Config {
                 &self.lookup_max_inflight_requests,
             )
             .field("lookup_max_retries", &self.lookup_max_retries)
+            .field("lookup_retry_backoff_ms", &self.lookup_retry_backoff_ms)
+            .field(
+                "lookup_retry_max_backoff_ms",
+                &self.lookup_retry_max_backoff_ms,
+            )
             .finish()
     }
 }
@@ -380,6 +402,8 @@ impl Default for Config {
             lookup_batch_timeout_ms: 100,
             lookup_max_inflight_requests: 128,
             lookup_max_retries: i32::MAX,
+            lookup_retry_backoff_ms: DEFAULT_LOOKUP_RETRY_BACKOFF_MS,
+            lookup_retry_max_backoff_ms: DEFAULT_LOOKUP_RETRY_MAX_BACKOFF_MS,
         }
     }
 }
@@ -449,6 +473,15 @@ impl Config {
             return Err(
                 "scanner_log_fetch_max_bytes_for_bucket must be <= scanner_log_fetch_max_bytes"
                     .to_string(),
+            );
+        }
+        Ok(())
+    }
+
+    pub fn validate_lookup(&self) -> Result<(), String> {
+        if self.lookup_retry_backoff_ms > self.lookup_retry_max_backoff_ms {
+            return Err(
+                "lookup_retry_backoff_ms must be <= lookup_retry_max_backoff_ms".to_string(),
             );
         }
         Ok(())
@@ -621,6 +654,19 @@ mod tests {
             ..Config::default()
         };
         assert!(config.validate_scanner().is_err());
+    }
+
+    #[test]
+    fn test_lookup_retry_backoff_bounds() {
+        assert!(Config::default().validate_lookup().is_ok());
+        for (initial_ms, max_ms, valid) in [(0, 0, true), (1000, 1000, true), (100, 10, false)] {
+            let config = Config {
+                lookup_retry_backoff_ms: initial_ms,
+                lookup_retry_max_backoff_ms: max_ms,
+                ..Config::default()
+            };
+            assert_eq!(config.validate_lookup().is_ok(), valid);
+        }
     }
 
     #[test]

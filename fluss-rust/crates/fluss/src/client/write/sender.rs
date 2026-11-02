@@ -45,14 +45,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
-// Retry backoff applied to a write batch before it is handed back to the
-// accumulator. Without it a retriable server-side rejection is resent on every
-// poll cycle, which turns a transient ISR shrink into a request storm against the
-// rejecting leader. Shaped like Java's ExponentialBackoff; the initial delay and
-// the cap come from `writer_retry_backoff_ms` / `writer_retry_max_backoff_ms`.
-const RETRY_BACKOFF_MULTIPLIER: f64 = 2.0;
-const RETRY_BACKOFF_JITTER: f64 = 0.2;
-
 type SendFuture<'a> = Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
 /// Resolves to the unknown leaders it refreshed and what to do with them next.
 type RefreshFuture<'a> =
@@ -1160,21 +1152,13 @@ impl Sender {
 
     /// Exponential backoff with jitter for a batch that has already made
     /// `attempts` send attempts. 0 when backoff is disabled.
+    ///
+    /// Without it a retriable server-side rejection is resent on every poll cycle,
+    /// which turns a transient ISR shrink into a request storm against the
+    /// rejecting leader.
     fn retry_backoff_ms(&self, attempts: i32) -> i64 {
-        use rand::Rng;
-        if self.retry_backoff_ms == 0 {
-            return 0;
-        }
-        let initial = self.retry_backoff_ms as f64;
-        let max = (self.retry_max_backoff_ms as f64).max(initial);
-        // Cap the exponent like Java's ExponentialBackoff.expMax so that jitter
-        // still produces a range at steady state instead of collapsing onto the max.
-        let exp_max = (max / initial).log2();
-        let exp = (attempts.max(0) as f64).min(exp_max);
-        let term = initial * RETRY_BACKOFF_MULTIPLIER.powf(exp);
-        let jitter_factor =
-            1.0 - RETRY_BACKOFF_JITTER + rand::rng().random::<f64>() * (2.0 * RETRY_BACKOFF_JITTER);
-        (term * jitter_factor) as i64
+        crate::util::retry_backoff_ms(self.retry_backoff_ms, self.retry_max_backoff_ms, attempts)
+            as i64
     }
 
     fn remove_from_inflight_batches(&self, ready_write_batch: &ReadyWriteBatch) {

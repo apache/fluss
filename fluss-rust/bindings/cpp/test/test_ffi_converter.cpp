@@ -83,6 +83,18 @@ TEST(FfiConverterTest, WriterRetryBackoffConfiguration) {
     EXPECT_EQ(ffi_config.writer_retry_max_backoff_ms, 5000u);
 }
 
+TEST(FfiConverterTest, LookupRetryBackoffConfiguration) {
+    fluss::Configuration config;
+    EXPECT_EQ(config.lookup_retry_backoff_ms, 100u);
+    EXPECT_EQ(config.lookup_retry_max_backoff_ms, 1000u);
+
+    config.lookup_retry_backoff_ms = 250;
+    config.lookup_retry_max_backoff_ms = 5000;
+    auto ffi_config = fluss::utils::to_ffi_config(config);
+    EXPECT_EQ(ffi_config.lookup_retry_backoff_ms, 250u);
+    EXPECT_EQ(ffi_config.lookup_retry_max_backoff_ms, 5000u);
+}
+
 TEST(FfiConverterTest, WriterDynamicCreatePartitionConfiguration) {
     fluss::Configuration config;
     EXPECT_TRUE(config.writer_dynamic_create_partition_enabled);

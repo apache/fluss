@@ -63,6 +63,16 @@ defmodule Fluss.ConfigTest do
     assert config.lookup_max_retries == 5
   end
 
+  test "set_lookup_retry_backoff_ms/2 sets the lookup retry backoff" do
+    config =
+      Fluss.Config.new("localhost:9123")
+      |> Fluss.Config.set_lookup_retry_backoff_ms(250)
+      |> Fluss.Config.set_lookup_retry_max_backoff_ms(5_000)
+
+    assert config.lookup_retry_backoff_ms == 250
+    assert config.lookup_retry_max_backoff_ms == 5_000
+  end
+
   test "set_lookup_queue_size/2 sets the lookup queue size" do
     config =
       Fluss.Config.new("localhost:9123")
