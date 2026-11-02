@@ -194,6 +194,11 @@ public final class SecondaryIndexLookuper implements Lookuper {
 
     @Override
     public CompletableFuture<LookupResult> lookup(InternalRow lookupKey) {
+        for (int i = 0; i < idxColumnGettersInLookupKey.length; i++) {
+            if (lookupKey.isNullAt(i)) {
+                return CompletableFuture.completedFuture(new LookupResult(Collections.emptyList()));
+            }
+        }
         Object[] expectedIdxValues = snapshotLookupKey(lookupKey);
         return indexTablePrefixLookuper
                 .lookup(indexLookupKeyEncoder.apply(lookupKey))

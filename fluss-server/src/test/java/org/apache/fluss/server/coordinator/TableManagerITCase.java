@@ -34,6 +34,7 @@ import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.SchemaNotExistException;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
+import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.Schema;
@@ -1144,6 +1145,48 @@ class TableManagerITCase {
                     .isTrue();
         } finally {
             limitedCluster.close();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"unset", "FULL", "WAL"})
+    void testIndexedTableChangelogImage(String image) throws Exception {
+        TablePath path = TablePath.of("fluss", "indexed_changelog_" + image);
+        Schema schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.STRING())
+                        .primaryKey("a")
+                        .index("idx_b", "b")
+                        .build();
+        TableDescriptor.Builder builder =
+                TableDescriptor.builder().schema(schema).distributedBy(1, "a");
+        if (!"unset".equals(image)) {
+            builder.property(ConfigOptions.TABLE_CHANGELOG_IMAGE.key(), image);
+        }
+        CreateTableRequest request = newCreateTableRequest(path, builder.build(), false);
+        AdminGateway gateway = FLUSS_CLUSTER_EXTENSION.newCoordinatorClient();
+        try {
+            if ("WAL".equals(image)) {
+                assertThatThrownBy(() -> gateway.createTable(request).get())
+                        .cause()
+                        .isInstanceOf(InvalidTableException.class)
+                        .hasMessageContaining("Tables with secondary indexes require")
+                        .hasMessageContaining(ConfigOptions.TABLE_CHANGELOG_IMAGE.key());
+            } else {
+                gateway.createTable(request).get();
+                TableDescriptor descriptor =
+                        TableDescriptor.fromJsonBytes(
+                                gateway.getTableInfo(newGetTableInfoRequest(path))
+                                        .get()
+                                        .getTableJson());
+                assertThat(
+                                Configuration.fromMap(descriptor.getProperties())
+                                        .get(ConfigOptions.TABLE_CHANGELOG_IMAGE))
+                        .isEqualTo(ChangelogImage.FULL);
+            }
+        } finally {
+            gateway.dropTable(newDropTableRequest("fluss", path.getTableName(), true)).get();
         }
     }
 

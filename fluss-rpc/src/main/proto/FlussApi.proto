@@ -248,7 +248,7 @@ message UpdateMetadataRequest {
   repeated PbTableMetadata table_metadata = 3;
   repeated PbPartitionMetadata partition_metadata = 4;
   optional int32 coordinator_epoch = 5;
-  // Per-main-table partition tombstones propagated from the Coordinator (P3T6).
+  // Per-main-table partition tombstones propagated from the Coordinator.
   // Each entry replaces the cached tombstone for the given table_id on the receiver.
   repeated PbPartitionTombstone partition_tombstones = 6;
 }

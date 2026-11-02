@@ -49,7 +49,6 @@ import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.lake.committer.TieringStats;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
-import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DatabaseChange;
 import org.apache.fluss.metadata.DatabaseDescriptor;
@@ -656,17 +655,6 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
         // apply system defaults if the config is not set
         tableDescriptor = applySystemDefaults(tablePath, tableDescriptor, lakeCatalogContainer);
-
-        // Tables with secondary indexes require FULL changelog image so the WAL-driven
-        // index replication pipeline can derive old index keys from UPDATE_BEFORE records.
-        if (!tableDescriptor.getSchema().getIndexes().isEmpty()) {
-            Map<String, String> properties = new HashMap<>(tableDescriptor.getProperties());
-            properties.put(
-                    ConfigOptions.TABLE_CHANGELOG_IMAGE.key(), ChangelogImage.FULL.toString());
-            tableDescriptor =
-                    tableDescriptor.withProperties(
-                            properties, tableDescriptor.getCustomProperties());
-        }
 
         // validate table descriptor before creating table in lake or fluss metadata,
         // to avoid orphaned lake tables when validation fails
