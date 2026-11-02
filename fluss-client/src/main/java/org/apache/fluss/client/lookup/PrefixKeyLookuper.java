@@ -78,7 +78,7 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
             List<String> lookupColumnNames) {
         super(tableInfo, metadataUpdater, lookupClient, schemaGetter);
         // sanity check
-        List<String> prefixKeys = validatePrefixLookup(tableInfo, lookupColumnNames);
+        List<String> prefixKeys = validateAndGetPrefixKeys(tableInfo, lookupColumnNames);
         this.numBuckets = tableInfo.getNumBuckets();
         // the row type of the input lookup row
         RowType lookupRowType = tableInfo.getRowType().project(lookupColumnNames);
@@ -115,7 +115,7 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
     }
 
     /** Validates the lookup columns and returns them without the partition fields. */
-    private List<String> validatePrefixLookup(TableInfo tableInfo, List<String> lookupColumns) {
+    private List<String> validateAndGetPrefixKeys(TableInfo tableInfo, List<String> lookupColumns) {
         // verify is primary key table
         if (!tableInfo.hasPrimaryKey()) {
             throw new IllegalArgumentException(
