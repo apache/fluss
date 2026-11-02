@@ -218,6 +218,14 @@ elif set_java_home; then
   "$(native_path "$JAVACMD")" -cp "$(native_path "$TMP_DOWNLOAD_DIR")" Downloader "$distributionUrl" "$(native_path "$targetZip")"
 fi
 
+# darwin sha command behavior requires "-"" as suffix to read from stdin
+SHA_CMD_SUFFIX=""
+case "$(uname -s)" in
+  Darwin*)
+      SHA_CMD_SUFFIX=" -"
+      echo "Using sha command on mac os with suffix : $SHA_CMD_SUFFIX"
+    ;;
+esac
 # If specified, validate the SHA-256 sum of the Maven distribution zip file
 if [ -n "${distributionSha256Sum-}" ]; then
   distributionSha256Result=false
@@ -226,11 +234,11 @@ if [ -n "${distributionSha256Sum-}" ]; then
     echo "Please disable validation by removing 'distributionSha256Sum' from your maven-wrapper.properties." >&2
     exit 1
   elif command -v sha256sum >/dev/null; then
-    if echo "$distributionSha256Sum  $TMP_DOWNLOAD_DIR/$distributionUrlName" | sha256sum -c >/dev/null 2>&1; then
+    if echo "$distributionSha256Sum  $TMP_DOWNLOAD_DIR/$distributionUrlName" | sha256sum -c $SHA_CMD_SUFFIX >/dev/null 2>&1; then
       distributionSha256Result=true
     fi
   elif command -v shasum >/dev/null; then
-    if echo "$distributionSha256Sum  $TMP_DOWNLOAD_DIR/$distributionUrlName" | shasum -a 256 -c >/dev/null 2>&1; then
+    if echo "$distributionSha256Sum  $TMP_DOWNLOAD_DIR/$distributionUrlName" | shasum -a 256 -c $SHA_CMD_SUFFIX >/dev/null 2>&1; then
       distributionSha256Result=true
     fi
   else
