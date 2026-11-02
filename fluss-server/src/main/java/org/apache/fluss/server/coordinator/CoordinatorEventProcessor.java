@@ -1956,6 +1956,18 @@ public class CoordinatorEventProcessor implements EventProcessor {
                                 }
                             });
         }
+        // DvPrepare buckets with no new offsets this round still need their Prepare (RowPos SSTs),
+        // otherwise they switch without it and their deletes never resolve.
+        for (TableBucket tb : dvPrepare.getBucketOffsets().keySet()) {
+            if (coordinatorContext.getBucketLeaderAndIsr(tb).isPresent()) {
+                for (Integer serverId : coordinatorContext.getAssignment(tb)) {
+                    if (serverId >= 0) {
+                        serverBucketReqs.computeIfAbsent(serverId, k -> new ArrayList<>());
+                        serverTableBuckets.computeIfAbsent(serverId, k -> new HashSet<>()).add(tb);
+                    }
+                }
+            }
+        }
 
         if (serverBucketReqs.isEmpty()) {
             LOG.warn(

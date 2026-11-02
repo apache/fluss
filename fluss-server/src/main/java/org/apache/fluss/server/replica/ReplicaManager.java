@@ -1201,9 +1201,17 @@ public class ReplicaManager implements ServerReconfigurable {
     }
 
     private File dvPrepareLocalTempDir(TableBucket tb, long snapshotId) {
+        // partition in the path: same bucket id across partitions must not share (and delete) SSTs
+        String partition = tb.getPartitionId() == null ? "" : "p" + tb.getPartitionId() + "/";
         return new File(
                 localDiskManager.dataDirs().get(0),
-                "dv-prepare/" + tb.getTableId() + "/" + tb.getBucket() + "/" + snapshotId);
+                "dv-prepare/"
+                        + tb.getTableId()
+                        + "/"
+                        + partition
+                        + tb.getBucket()
+                        + "/"
+                        + snapshotId);
     }
 
     private String createDvPrepareLocalTempDir(TableBucket tb, long snapshotId) {
