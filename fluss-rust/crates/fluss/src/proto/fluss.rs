@@ -1347,6 +1347,10 @@ pub struct PbTableMetadata {
     /// A table-level, monotonically increasing version for bucket.num changes.
     #[prost(int64, optional, tag = "9")]
     pub bucket_count_epoch: ::core::option::Option<i64>,
+    /// The table's default bucket count, independent of bucket location availability.
+    /// When present, bucket_count_epoch is also present, including epoch zero.
+    #[prost(int32, optional, tag = "10")]
+    pub bucket_count: ::core::option::Option<i32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PbPartitionMetadata {

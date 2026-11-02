@@ -1003,6 +1003,7 @@ mod tests {
                 modified_time: 0,
                 remote_data_dir: None,
                 bucket_count_epoch: None,
+                bucket_count: None,
             }],
             partition_metadata: vec![PbPartitionMetadata {
                 table_id,
@@ -1076,6 +1077,7 @@ mod tests {
                 modified_time: 0,
                 remote_data_dir: None,
                 bucket_count_epoch: Some(2),
+                bucket_count: None,
             }],
             partition_metadata: vec![],
         };
@@ -1157,6 +1159,7 @@ mod tests {
             modified_time: 0,
             remote_data_dir: None,
             bucket_count_epoch: None,
+            bucket_count: None,
         }
     }
 
