@@ -103,6 +103,23 @@ public interface KeyEncoder {
     }
 
     /**
+     * Returns whether prefix lookups on a table whose bucket key is a strict prefix of its primary
+     * key may use the primary key columns after the bucket key. This requires the primary key
+     * encoder of {@link #ofPrimaryKeyEncoder} to encode every such prefix as a byte prefix of the
+     * whole key, which the compacted encoding does, but the Paimon encoding of legacy tables (kv
+     * format version 1) doesn't: its offsets of variable-length fields depend on the field count.
+     */
+    static boolean supportsMultiKeyPrefixLookup(TableConfig tableConfig) {
+        int kvFormatVersion = tableConfig.getKvFormatVersion().orElse(1);
+        DataLakeFormat dataLakeFormat = tableConfig.getDataLakeFormat().orElse(null);
+        // legacy tables use the lake's key encoder; only these lake formats use the compacted one
+        return kvFormatVersion != 1
+                || dataLakeFormat == null
+                || dataLakeFormat == DataLakeFormat.LANCE
+                || dataLakeFormat == DataLakeFormat.HUDI;
+    }
+
+    /**
      * Creates a bucket key encoder for bucket calculation with a custom row type.
      *
      * @param rowType the row type of the input row

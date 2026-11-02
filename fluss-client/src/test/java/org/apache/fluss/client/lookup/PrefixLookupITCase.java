@@ -58,6 +58,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import static org.apache.fluss.config.ConfigOptions.CURRENT_KV_FORMAT_VERSION;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -101,15 +102,37 @@ class PrefixLookupITCase {
                 Arguments.of("hudi", DataLakeFormat.HUDI));
     }
 
-    static Stream<Arguments> compositeBucketKeyLakeFormats() {
-        // Iceberg, Lance and Hudi support a single bucket key column only
-        return Stream.of(Arguments.of("none", null), Arguments.of("paimon", DataLakeFormat.PAIMON));
+    static Stream<Arguments> lakeFormatsAndKvFormatVersions() {
+        // legacy tables (kv format version 1) encode the primary key with the lake format's
+        // encoder, which for Iceberg supports a single column only
+        return lakeFormats()
+                .flatMap(
+                        args ->
+                                Stream.of(1, 2)
+                                        .filter(
+                                                v ->
+                                                        v == 2
+                                                                || args.get()[1]
+                                                                        != DataLakeFormat.ICEBERG)
+                                        .map(v -> Arguments.of(args.get()[0], args.get()[1], v)));
     }
 
-    @ParameterizedTest(name = "lake format = {0}")
-    @MethodSource("lakeFormats")
-    void testPrefixLookup(String name, @Nullable DataLakeFormat lakeFormat) throws Exception {
-        try (Table table = createTable("prefix_" + name, lakeFormat, false, "a")) {
+    static Stream<Arguments> compositeBucketKeyLakeFormats() {
+        // Iceberg supports a single bucket key column only
+        return lakeFormats().filter(args -> args.get()[1] != DataLakeFormat.ICEBERG);
+    }
+
+    @ParameterizedTest(name = "lake format = {0}, kv format version = {2}")
+    @MethodSource("lakeFormatsAndKvFormatVersions")
+    void testPrefixLookup(String name, @Nullable DataLakeFormat lakeFormat, int kvFormatVersion)
+            throws Exception {
+        try (Table table =
+                createTable(
+                        "prefix_" + name + "_v" + kvFormatVersion,
+                        lakeFormat,
+                        kvFormatVersion,
+                        false,
+                        "a")) {
             List<Object[]> rows = rows(null);
             write(table, rows);
             assertSeveralBuckets(table, rows);
@@ -126,7 +149,14 @@ class PrefixLookupITCase {
     @MethodSource("compositeBucketKeyLakeFormats")
     void testPrefixLookupWithCompositeBucketKey(String name, @Nullable DataLakeFormat lakeFormat)
             throws Exception {
-        try (Table table = createTable("composite_" + name, lakeFormat, false, "a", "b")) {
+        try (Table table =
+                createTable(
+                        "composite_" + name,
+                        lakeFormat,
+                        CURRENT_KV_FORMAT_VERSION,
+                        false,
+                        "a",
+                        "b")) {
             List<Object[]> rows = rows(null);
             write(table, rows);
             assertSeveralBuckets(table, rows);
@@ -141,11 +171,18 @@ class PrefixLookupITCase {
         }
     }
 
-    @ParameterizedTest(name = "lake format = {0}")
-    @MethodSource("lakeFormats")
-    void testPrefixLookupOnPartitionedTable(String name, @Nullable DataLakeFormat lakeFormat)
+    @ParameterizedTest(name = "lake format = {0}, kv format version = {2}")
+    @MethodSource("lakeFormatsAndKvFormatVersions")
+    void testPrefixLookupOnPartitionedTable(
+            String name, @Nullable DataLakeFormat lakeFormat, int kvFormatVersion)
             throws Exception {
-        try (Table table = createTable("partitioned_" + name, lakeFormat, true, "a")) {
+        try (Table table =
+                createTable(
+                        "partitioned_" + name + "_v" + kvFormatVersion,
+                        lakeFormat,
+                        kvFormatVersion,
+                        true,
+                        "a")) {
             List<Object[]> rows = rows("p1");
             rows.addAll(rows("p2"));
             write(table, rows);
@@ -158,7 +195,7 @@ class PrefixLookupITCase {
 
     @Test
     void testInvalidPrefixLookupColumns() throws Exception {
-        try (Table table = createTable("invalid", null, false, "a")) {
+        try (Table table = createTable("invalid", null, CURRENT_KV_FORMAT_VERSION, false, "a")) {
             for (List<String> columns :
                     Arrays.asList(
                             Arrays.asList("a", "c"),
@@ -185,6 +222,7 @@ class PrefixLookupITCase {
     private Table createTable(
             String name,
             @Nullable DataLakeFormat lakeFormat,
+            int kvFormatVersion,
             boolean partitioned,
             String... bucketKeys)
             throws Exception {
@@ -203,7 +241,8 @@ class PrefixLookupITCase {
         TableDescriptor.Builder descriptor =
                 TableDescriptor.builder()
                         .schema(schema.build())
-                        .distributedBy(NUM_BUCKETS, bucketKeys);
+                        .distributedBy(NUM_BUCKETS, bucketKeys)
+                        .property(ConfigOptions.TABLE_KV_FORMAT_VERSION, kvFormatVersion);
         if (partitioned) {
             descriptor.partitionedBy("p");
         }
@@ -224,11 +263,14 @@ class PrefixLookupITCase {
         return conn.getTable(path);
     }
 
-    /** Rows whose keys are prefixes of each other, e.g. b = "a" and "ab". */
+    /**
+     * Rows whose keys are prefixes of each other, e.g. b = "a" and "ab", including strings longer
+     * than 7 bytes, which legacy Paimon keys don't store inline.
+     */
     private static List<Object[]> rows(@Nullable String partition) {
         List<Object[]> rows = new ArrayList<>();
         for (long a = 1; a <= 6; a++) {
-            for (String b : Arrays.asList("", "a", "ab")) {
+            for (String b : Arrays.asList("", "a", "ab", "abcdefghij", "abcdefghijk")) {
                 for (long c : new long[] {1, 129}) {
                     for (long d = 1; d <= 2; d++) {
                         String v = a + "-" + b + "-" + c + "-" + d;

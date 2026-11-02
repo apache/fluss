@@ -37,6 +37,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
@@ -61,6 +62,14 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
      */
     private @Nullable final PartitionGetter partitionGetter;
 
+    /**
+     * The lookup columns after the bucket key that the server can't match, because the table's key
+     * encoding doesn't support them in the prefix: getters in the lookup row and in the results.
+     */
+    private final InternalRow.FieldGetter[] clientFilterKeyGetters;
+
+    private final InternalRow.FieldGetter[] clientFilterResultGetters;
+
     public PrefixKeyLookuper(
             TableInfo tableInfo,
             SchemaGetter schemaGetter,
@@ -75,6 +84,15 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
         RowType lookupRowType = tableInfo.getRowType().project(lookupColumnNames);
         DataLakeFormat lakeFormat = tableInfo.getTableConfig().getDataLakeFormat().orElse(null);
 
+        List<String> bucketKeys = tableInfo.getBucketKeys();
+        List<String> clientFilterKeys =
+                KeyEncoder.supportsMultiKeyPrefixLookup(tableInfo.getTableConfig())
+                        ? Collections.emptyList()
+                        : prefixKeys.subList(bucketKeys.size(), prefixKeys.size());
+        prefixKeys = prefixKeys.subList(0, prefixKeys.size() - clientFilterKeys.size());
+        this.clientFilterKeyGetters = fieldGetters(lookupRowType, clientFilterKeys);
+        this.clientFilterResultGetters = fieldGetters(tableInfo.getRowType(), clientFilterKeys);
+
         // Use ofPrimaryKeyEncoder which follows primary key encoding rules
         this.prefixKeyEncoder =
                 KeyEncoder.ofPrimaryKeyEncoder(
@@ -85,10 +103,9 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
 
         // the prefix key bytes can be reused for bucketing only if they encode just the bucket key
         this.bucketKeyEncoder =
-                lakeFormat == null && prefixKeys.equals(tableInfo.getBucketKeys())
+                lakeFormat == null && prefixKeys.equals(bucketKeys)
                         ? this.prefixKeyEncoder
-                        : KeyEncoder.ofBucketKeyEncoder(
-                                lookupRowType, tableInfo.getBucketKeys(), lakeFormat);
+                        : KeyEncoder.ofBucketKeyEncoder(lookupRowType, bucketKeys, lakeFormat);
 
         this.bucketingFunction = BucketingFunction.of(lakeFormat);
         this.partitionGetter =
@@ -176,6 +193,37 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
 
     @Override
     public CompletableFuture<LookupResult> lookup(InternalRow prefixKey) {
+        CompletableFuture<LookupResult> result = lookupPrefix(prefixKey);
+        if (clientFilterKeyGetters.length == 0) {
+            return result;
+        }
+        Object[] expected = new Object[clientFilterKeyGetters.length];
+        for (int i = 0; i < expected.length; i++) {
+            expected[i] = clientFilterKeyGetters[i].getFieldOrNull(prefixKey);
+        }
+        return result.thenApply(
+                lookupResult -> {
+                    List<InternalRow> rows = new ArrayList<>();
+                    for (InternalRow row : lookupResult.getRowList()) {
+                        if (matches(row, expected)) {
+                            rows.add(row);
+                        }
+                    }
+                    return new LookupResult(rows);
+                });
+    }
+
+    private boolean matches(InternalRow row, Object[] expected) {
+        for (int i = 0; i < expected.length; i++) {
+            if (!Objects.deepEquals(
+                    clientFilterResultGetters[i].getFieldOrNull(row), expected[i])) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private CompletableFuture<LookupResult> lookupPrefix(InternalRow prefixKey) {
         byte[] prefixKeyBytes = prefixKeyEncoder.encodeKey(prefixKey);
         byte[] bucketKeyBytes =
                 prefixKeyEncoder == bucketKeyEncoder
@@ -219,5 +267,14 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
                             }
                         });
         return lookupFuture;
+    }
+
+    private static InternalRow.FieldGetter[] fieldGetters(RowType rowType, List<String> columns) {
+        InternalRow.FieldGetter[] getters = new InternalRow.FieldGetter[columns.size()];
+        for (int i = 0; i < getters.length; i++) {
+            int index = rowType.getFieldIndex(columns.get(i));
+            getters[i] = InternalRow.createFieldGetter(rowType.getTypeAt(index), index);
+        }
+        return getters;
     }
 }
