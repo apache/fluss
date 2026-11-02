@@ -668,25 +668,6 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
 
 ### Request
 
-Kafka listeners reuse the request metrics below under the `tabletserver_kafka_listener_request`
-namespace, with `listener` identifying the Kafka listener and `request=kafkaProduce` for Produce.
-All other Kafka APIs share `request=default`. The infixes are
-`kafka_listener_<listener>_request_kafkaProduce` and
-`kafka_listener_<listener>_request_default`. These groups are
-separate from the native Fluss request groups.
-
-For Kafka, successful requests update `requestsPerSecond`, `requestBytes`, and the four timing
-histograms when the response is submitted to Netty. Failed processing, response serialization,
-or a response containing any Kafka error updates `errorsPerSecond` once per request instead;
-multiple failed Produce partitions still count as one failed request. Cancelled requests are
-excluded. Request size includes the Kafka request header and body, excluding the frame length.
-The timing boundaries are request creation, handler dequeue, asynchronous processing completion,
-and response submission. Waiting for earlier responses on the connection is included in
-`responseSendTimeMs`; this does not wait for socket write completion or client receipt.
-For Produce with `acks=0`, metrics are recorded when the completed request is removed from the
-ordered response queue, without writing a response. Raw SASL authentication tokens and requests
-rejected before decoding are excluded.
-
 <table class="table table-bordered">
   <thead>
     <tr>
