@@ -28,6 +28,7 @@ import org.apache.fluss.server.log.FetchDataInfo;
 import org.apache.fluss.server.log.FetchIsolation;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.types.RowType;
 
 import org.junit.jupiter.api.Test;
 
@@ -39,7 +40,6 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.fail;
-import static org.mockito.Mockito.mock;
 
 /**
  * Covers replication-time fail-stop on a source WAL gap: when the pushed offset has fallen below
@@ -126,7 +126,9 @@ class IndexReplicationWalGapFailStopTest {
             IndexSourceReader.RemoteFetcherFactory remoteFetcherFactory,
             IndexSendBuffer sendBuffer,
             AtomicReference<Throwable> reportedFailure) {
-        LogRecordReadContext readContext = mock(LogRecordReadContext.class);
+        LogRecordReadContext readContext =
+                LogRecordReadContext.createCompactedRowReadContext(
+                        RowType.of(DataTypes.INT()), 1, null);
         IndexSourceReader sourceReader =
                 new IndexSourceReader(
                         gappedSourceLog(), remoteFetcherFactory, Runnable::run, readContext);

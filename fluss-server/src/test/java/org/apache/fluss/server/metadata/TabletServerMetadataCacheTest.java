@@ -72,8 +72,6 @@ import static org.apache.fluss.server.metadata.TableMetadata.DELETED_TABLE_PATH;
 import static org.apache.fluss.server.zk.data.LeaderAndIsr.NO_LEADER;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verifyNoInteractions;
 
 /** Test for {@link TabletServerMetadataCache}. */
 public class TabletServerMetadataCacheTest {
@@ -169,7 +167,8 @@ public class TabletServerMetadataCacheTest {
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testIndexReadAuthorizationUsesLocalMetadata(boolean singleTableUpdate) {
-        MetadataManager metadataManager = mock(MetadataManager.class);
+        TestingMetadataManager metadataManager =
+                new TestingMetadataManager(Collections.emptyList());
         serverMetadataCache = new TabletServerMetadataCache(metadataManager);
         TablePath indexPath = TablePath.of("test_db_1", "index_with_owner_property");
         long indexId = 200001L;
@@ -220,13 +219,14 @@ public class TabletServerMetadataCacheTest {
                 .contains(DATA1_TABLE_PATH);
         serverMetadataCache.clearTableMetadata();
         assertThat(serverMetadataCache.getReadAuthorizationTablePath(indexId)).isEmpty();
-        verifyNoInteractions(metadataManager);
+        assertThat(metadataManager.tableLookups).isZero();
     }
 
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testIndexAuthorizationMetadataDeletionAndRecreation(boolean deleteById) {
-        MetadataManager metadataManager = mock(MetadataManager.class);
+        TestingMetadataManager metadataManager =
+                new TestingMetadataManager(Collections.emptyList());
         serverMetadataCache = new TabletServerMetadataCache(metadataManager);
         TablePath indexPath = TablePath.of("test_db_1", "index_with_owner_property");
         long indexId = 200001L;
@@ -313,7 +313,7 @@ public class TabletServerMetadataCacheTest {
                 .contains(indexPath);
         assertThat(serverMetadataCache.getReadAuthorizationTablePath(indexPath))
                 .isEqualTo(indexPath);
-        verifyNoInteractions(metadataManager);
+        assertThat(metadataManager.tableLookups).isZero();
     }
 
     @Test
@@ -1487,6 +1487,7 @@ public class TabletServerMetadataCacheTest {
 
         private final Map<TablePath, TableInfo> tableInfoMap = new HashMap<>();
         private int partitionRegistrationReads;
+        private int tableLookups;
 
         public TestingMetadataManager(List<TableInfo> tableInfos) {
             super(
@@ -1505,6 +1506,7 @@ public class TabletServerMetadataCacheTest {
 
         @Override
         public TableInfo getTable(TablePath tablePath) throws TableNotExistException {
+            tableLookups++;
             TableInfo tableInfo = tableInfoMap.get(tablePath);
             if (tableInfo == null) {
                 throw new TableNotExistException("Table '" + tablePath + "' does not exist.");

@@ -25,6 +25,7 @@ import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.PaddingRow;
 import org.apache.fluss.row.compacted.CompactedRowDeserializer;
 import org.apache.fluss.row.compacted.CompactedRowReader;
 import org.apache.fluss.row.encode.hudi.HudiKeyEncoder;
@@ -50,9 +51,6 @@ import static org.apache.fluss.row.TestInternalRowGenerator.createAllRowType;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.anyInt;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 /** Test for {@link CompactedKeyEncoder}. */
 class CompactedKeyEncoderTest {
@@ -78,18 +76,23 @@ class CompactedKeyEncoderTest {
                 new CompactedKeyEncoder(RowType.of(DataTypes.INT(), DataTypes.INT()));
         CountDownLatch firstEncodeBlocked = new CountDownLatch(1);
         CountDownLatch secondEncodeDone = new CountDownLatch(1);
-        InternalRow blockedRow = mock(InternalRow.class);
-        when(blockedRow.isNullAt(anyInt())).thenReturn(false);
-        when(blockedRow.getInt(anyInt()))
-                .thenAnswer(
-                        invocation -> {
-                            int position = invocation.getArgument(0);
-                            if (position == 0) {
-                                firstEncodeBlocked.countDown();
+        InternalRow blockedRow =
+                new PaddingRow(2) {
+                    @Override
+                    public int getInt(int position) {
+                        if (position == 0) {
+                            firstEncodeBlocked.countDown();
+                            try {
                                 assertThat(secondEncodeDone.await(10, TimeUnit.SECONDS)).isTrue();
+                            } catch (InterruptedException e) {
+                                Thread.currentThread().interrupt();
+                                throw new AssertionError(
+                                        "Interrupted while coordinating encodes", e);
                             }
-                            return position + 1;
-                        });
+                        }
+                        return super.getInt(position);
+                    }
+                }.replaceRow(row(1, 2));
 
         ExecutorService executor = Executors.newFixedThreadPool(2);
         try {
