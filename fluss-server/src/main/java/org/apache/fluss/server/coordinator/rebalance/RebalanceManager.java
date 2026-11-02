@@ -421,6 +421,10 @@ public class RebalanceManager {
             return;
         }
 
+        if (cancelRequested) {
+            return;
+        }
+
         Set<TableBucket> tasksToCancel = findTasksToCancel();
         Set<TableBucket> canceledBuckets = canceledBuckets();
         canceledBuckets.addAll(tasksToCancel);
