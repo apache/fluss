@@ -47,6 +47,7 @@ import org.apache.fluss.lake.source.LakeSplit;
 import org.apache.fluss.lake.source.RowPosResult;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.fluss.lake.writer.LakeWriter;
+import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
@@ -254,10 +255,16 @@ public class TieringCommitOperator<WriteResult, Committable>
 
         // all buckets were empty — nothing to commit to the lake
         if (nonEmptyResults.isEmpty()) {
-            LOG.info(
-                    "Commit tiering write results is empty for table {}, table path {}",
-                    tableId,
-                    tablePath);
+            if (rowPosResults != null && !rowPosResults.isEmpty()) {
+                // DV index-only round (idle table): index the latest snapshot's files and make it
+                // readable without a lake commit, else its last writes stay unmasked until new data
+                commitDvIndexOnly(tableId, tablePath, rowPosResults, deletedFiles, indexSnapshotId);
+            } else {
+                LOG.info(
+                        "Commit tiering write results is empty for table {}, table path {}",
+                        tableId,
+                        tablePath);
+            }
             return new CommitResult(null, null);
         }
 
@@ -323,92 +330,16 @@ public class TieringCommitOperator<WriteResult, Committable>
             LakeCommitResult lakeCommitResult =
                     lakeCommitter.commit(committable, snapshotProperties);
 
-            // build DvPositionReport if DV scan results are available
-            Map<TableBucket, FlussTableLakeSnapshotCommitter.DvBucketData> dvReport = null;
-            if (rowPosResults != null && !rowPosResults.isEmpty()) {
-                dvReport =
-                        buildDvPositionReport(
-                                tableId, rowPosResults, deletedFiles, lakeCommitResult);
-            }
-
-            // Ensure ALL buckets from ReadableSnapshot are present in dvReport.
-            // This handles two cases:
-            // 1. DV-only compaction: dvReport is null because no RowPos scan was
-            //    triggered, but we still need DV orchestration for all buckets.
-            // 2. Partial compaction: dvReport has entries for only some partitions
-            //    (those with RowPos results), but ALL buckets must be switched
-            //    because the readable snapshot is table-level.
-            // 3. Iceberg (readable unknown): readers pin one table-level id, so every tiered
-            //    bucket switches, not just those with RowPos results (-1 = Iceberg readable).
-            LakeCommitResult.ReadableSnapshot readable = lakeCommitResult.getReadableSnapshot();
-            Map<TableBucket, Long> switchBuckets = null;
-            if (readable != null) {
-                switchBuckets = readable.getReadableLogEndOffsets();
-            } else if (dvReport != null) {
-                switchBuckets = new HashMap<>();
-                if (flussCurrentLakeSnapshot != null) {
-                    for (TableBucket tb :
-                            flussCurrentLakeSnapshot.getTableBucketsOffset().keySet()) {
-                        switchBuckets.put(tb, -1L);
-                    }
-                }
-                for (TableBucket tb : logEndOffsets.keySet()) {
-                    switchBuckets.put(tb, -1L);
-                }
-            }
-            if (switchBuckets != null) {
-                if (dvReport == null) {
-                    dvReport = new HashMap<>();
-                }
-
-                // Collect partitions that already have index.json from RowPos results
-                Set<Long> partitionsWithIndex = new HashSet<>();
-                if (rowPosResults != null) {
-                    for (RowPosResult result : rowPosResults) {
-                        Long pid = result.getPartitionId();
-                        partitionsWithIndex.add(pid != null ? pid : -1L);
-                    }
-                }
-
-                Set<Long> emptyIndexPartitions = new HashSet<>();
-                for (Map.Entry<TableBucket, Long> entry : switchBuckets.entrySet()) {
-                    dvReport.putIfAbsent(
-                            entry.getKey(),
-                            new FlussTableLakeSnapshotCommitter.DvBucketData(
-                                    entry.getValue(),
-                                    Collections.emptyMap(),
-                                    Collections.emptyList()));
-
-                    // Track partitions that need an empty index.json
-                    Long partitionId = entry.getKey().getPartitionId();
-                    long key = partitionId != null ? partitionId : -1L;
-                    if (!partitionsWithIndex.contains(key)) {
-                        emptyIndexPartitions.add(key);
-                    }
-                }
-
-                // Upload empty index.json for partitions without RowPos results
-                // so that DvPrepare can find the index file for every partition
-                if (!emptyIndexPartitions.isEmpty()) {
-                    String remoteDataDir = FlussConfigUtils.getDefaultRemoteDataDir(flussConfig);
-                    FsPath remoteLakeTableSnapshotDir =
-                            FlussPaths.remoteLakeTableSnapshotDir(
-                                    remoteDataDir, tablePath, tableId);
-                    RowPosSstUploader uploader = new RowPosSstUploader(remoteLakeTableSnapshotDir);
-                    RowPosSstIndex emptyIndex = new RowPosSstIndex(Collections.emptyMap());
-                    // empty index must key on the download snapshot (index snapshot when distinct)
-                    long emptyIndexSnapshotId =
-                            indexSnapshotId > 0
-                                    ? indexSnapshotId
-                                    : readable != null
-                                            ? readable.getReadableSnapshotId()
-                                            : lakeCommitResult.getCommittedSnapshotId();
-                    for (Long partKey : emptyIndexPartitions) {
-                        Long partitionId = partKey == -1L ? null : partKey;
-                        uploader.writeIndex(emptyIndexSnapshotId, partitionId, emptyIndex);
-                    }
-                }
-            }
+            Map<TableBucket, FlussTableLakeSnapshotCommitter.DvBucketData> dvReport =
+                    buildFullDvReport(
+                            tableId,
+                            tablePath,
+                            rowPosResults,
+                            deletedFiles,
+                            lakeCommitResult,
+                            flussCurrentLakeSnapshot,
+                            logEndOffsets.keySet(),
+                            indexSnapshotId);
 
             // commit to fluss
             flussTableLakeSnapshotCommitter.commit(
@@ -728,7 +659,6 @@ public class TieringCommitOperator<WriteResult, Committable>
             LakeSnapshot flussCurrentLakeSnapshot = getLatestLakeSnapshot(tablePath);
             long fromSnapshotId =
                     flussCurrentLakeSnapshot != null ? flussCurrentLakeSnapshot.getSnapshotId() : 0;
-
             return triggerRowPosScanIfNeeded(
                     tableId, tablePath, lakeSource, fromSnapshotId, flussColumnCount);
         } catch (Exception e) {
@@ -757,6 +687,16 @@ public class TieringCommitOperator<WriteResult, Committable>
 
         List<Split> splits = deltaPlan.getSplits();
         if (splits.isEmpty()) {
+            return false;
+        }
+        // Iceberg: plan(from) is deterministic; once indexed (e.g. by an index-only round) a rescan
+        // would re-upload the same SSTs (FileAlreadyExists) and double-index its files
+        String remoteDataDir = FlussConfigUtils.getDefaultRemoteDataDir(flussConfig);
+        FsPath remoteLakeTableSnapshotDir =
+                FlussPaths.remoteLakeTableSnapshotDir(remoteDataDir, tablePath, tableId);
+        if (DataLakeFormat.ICEBERG.toString().equalsIgnoreCase(dataLakeFormat)
+                && new RowPosSstUploader(remoteLakeTableSnapshotDir)
+                        .isIndexed(deltaPlan.getCompactSnapshotId())) {
             return false;
         }
 
@@ -818,9 +758,7 @@ public class TieringCommitOperator<WriteResult, Committable>
         pendingDeletedFiles.put(tableId, deltaPlan.getDeletedFiles());
         pendingCompactSnapshotIds.put(tableId, compactSnapshotId);
 
-        String remoteDataDir = FlussConfigUtils.getDefaultRemoteDataDir(flussConfig);
-        String remoteUploadBasePath =
-                FlussPaths.remoteLakeTableSnapshotDir(remoteDataDir, tablePath, tableId).toString();
+        String remoteUploadBasePath = remoteLakeTableSnapshotDir.toString();
 
         // send event to Enumerator
         RowPosRequestEvent event =
@@ -848,6 +786,141 @@ public class TieringCommitOperator<WriteResult, Committable>
                 deltaPlan.getDeletedFiles());
 
         return true;
+    }
+
+    /** Builds the DV report and makes every bucket switch to the table-level readable snapshot. */
+    @Nullable
+    private Map<TableBucket, FlussTableLakeSnapshotCommitter.DvBucketData> buildFullDvReport(
+            long tableId,
+            TablePath tablePath,
+            @Nullable List<RowPosResult> rowPosResults,
+            @Nullable Map<String, Map<Integer, List<String>>> deletedFiles,
+            LakeCommitResult lakeCommitResult,
+            @Nullable LakeSnapshot flussCurrentLakeSnapshot,
+            Set<TableBucket> roundBuckets,
+            long indexSnapshotId)
+            throws IOException {
+        // build DvPositionReport if DV scan results are available
+        Map<TableBucket, FlussTableLakeSnapshotCommitter.DvBucketData> dvReport = null;
+        if (rowPosResults != null && !rowPosResults.isEmpty()) {
+            dvReport =
+                    buildDvPositionReport(tableId, rowPosResults, deletedFiles, lakeCommitResult);
+        }
+
+        // Ensure ALL buckets from ReadableSnapshot are present in dvReport.
+        // This handles two cases:
+        // 1. DV-only compaction: dvReport is null because no RowPos scan was
+        //    triggered, but we still need DV orchestration for all buckets.
+        // 2. Partial compaction: dvReport has entries for only some partitions
+        //    (those with RowPos results), but ALL buckets must be switched
+        //    because the readable snapshot is table-level.
+        // 3. Iceberg (readable unknown): readers pin one table-level id, so every tiered
+        //    bucket switches, not just those with RowPos results (-1 = Iceberg readable).
+        LakeCommitResult.ReadableSnapshot readable = lakeCommitResult.getReadableSnapshot();
+        Map<TableBucket, Long> switchBuckets = null;
+        if (readable != null) {
+            switchBuckets = readable.getReadableLogEndOffsets();
+        } else if (dvReport != null) {
+            switchBuckets = new HashMap<>();
+            if (flussCurrentLakeSnapshot != null) {
+                for (TableBucket tb : flussCurrentLakeSnapshot.getTableBucketsOffset().keySet()) {
+                    switchBuckets.put(tb, -1L);
+                }
+            }
+            for (TableBucket tb : roundBuckets) {
+                switchBuckets.put(tb, -1L);
+            }
+        }
+        if (switchBuckets != null) {
+            if (dvReport == null) {
+                dvReport = new HashMap<>();
+            }
+
+            // Collect partitions that already have index.json from RowPos results
+            Set<Long> partitionsWithIndex = new HashSet<>();
+            if (rowPosResults != null) {
+                for (RowPosResult result : rowPosResults) {
+                    Long pid = result.getPartitionId();
+                    partitionsWithIndex.add(pid != null ? pid : -1L);
+                }
+            }
+
+            Set<Long> emptyIndexPartitions = new HashSet<>();
+            for (Map.Entry<TableBucket, Long> entry : switchBuckets.entrySet()) {
+                dvReport.putIfAbsent(
+                        entry.getKey(),
+                        new FlussTableLakeSnapshotCommitter.DvBucketData(
+                                entry.getValue(), Collections.emptyMap(), Collections.emptyList()));
+
+                // Track partitions that need an empty index.json
+                Long partitionId = entry.getKey().getPartitionId();
+                long key = partitionId != null ? partitionId : -1L;
+                if (!partitionsWithIndex.contains(key)) {
+                    emptyIndexPartitions.add(key);
+                }
+            }
+
+            // Upload empty index.json for partitions without RowPos results
+            // so that DvPrepare can find the index file for every partition
+            if (!emptyIndexPartitions.isEmpty()) {
+                String remoteDataDir = FlussConfigUtils.getDefaultRemoteDataDir(flussConfig);
+                FsPath remoteLakeTableSnapshotDir =
+                        FlussPaths.remoteLakeTableSnapshotDir(remoteDataDir, tablePath, tableId);
+                RowPosSstUploader uploader = new RowPosSstUploader(remoteLakeTableSnapshotDir);
+                RowPosSstIndex emptyIndex = new RowPosSstIndex(Collections.emptyMap());
+                // empty index must key on the download snapshot (index snapshot when distinct)
+                long emptyIndexSnapshotId =
+                        indexSnapshotId > 0
+                                ? indexSnapshotId
+                                : readable != null
+                                        ? readable.getReadableSnapshotId()
+                                        : lakeCommitResult.getCommittedSnapshotId();
+                for (Long partKey : emptyIndexPartitions) {
+                    Long partitionId = partKey == -1L ? null : partKey;
+                    uploader.writeIndex(emptyIndexSnapshotId, partitionId, emptyIndex);
+                }
+            }
+        }
+        return dvReport;
+    }
+
+    private void commitDvIndexOnly(
+            long tableId,
+            TablePath tablePath,
+            List<RowPosResult> rowPosResults,
+            @Nullable Map<String, Map<Integer, List<String>>> deletedFiles,
+            long indexSnapshotId)
+            throws Exception {
+        LakeSnapshot latest = getLatestLakeSnapshot(tablePath);
+        if (latest == null) {
+            return;
+        }
+        // readable = the indexed snapshot: a compaction plan's id, so readers move onto the
+        // compacted
+        // files the server just re-masked (same data as latest, so latest's offsets still hold)
+        long readableId = indexSnapshotId > 0 ? indexSnapshotId : latest.getSnapshotId();
+        LakeCommitResult result = LakeCommitResult.unknownReadableSnapshot(readableId);
+        Map<TableBucket, FlussTableLakeSnapshotCommitter.DvBucketData> dvReport =
+                buildFullDvReport(
+                        tableId,
+                        tablePath,
+                        rowPosResults,
+                        deletedFiles,
+                        result,
+                        latest,
+                        Collections.emptySet(),
+                        indexSnapshotId);
+        flussTableLakeSnapshotCommitter.commit(
+                tableId,
+                tablePath,
+                result,
+                flussTableLakeSnapshotCommitter.prepareLakeSnapshot(
+                        tableId, tablePath, latest.getTableBucketsOffset()),
+                Collections.emptyMap(),
+                Collections.emptyMap(),
+                dvReport,
+                indexSnapshotId);
+        LOG.info("DV index-only round made snapshot {} of {} readable.", readableId, tablePath);
     }
 
     /**

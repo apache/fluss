@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.Admin;
+import org.apache.fluss.client.metadata.LakeSnapshot;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.metrics.FlinkMetricRegistry;
@@ -28,11 +29,13 @@ import org.apache.fluss.flink.tiering.event.FailedTieringEvent;
 import org.apache.fluss.flink.tiering.event.FinishedTieringEvent;
 import org.apache.fluss.flink.tiering.event.RowPosRequestEvent;
 import org.apache.fluss.flink.tiering.event.TieringReachMaxDurationEvent;
+import org.apache.fluss.flink.tiering.source.split.TieringLogSplit;
 import org.apache.fluss.flink.tiering.source.split.TieringRowPosSplit;
 import org.apache.fluss.flink.tiering.source.split.TieringSplit;
 import org.apache.fluss.flink.tiering.source.split.TieringSplitGenerator;
 import org.apache.fluss.flink.tiering.source.state.TieringSourceEnumeratorState;
 import org.apache.fluss.lake.committer.TieringStats;
+import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
@@ -111,6 +114,9 @@ public class TieringSourceEnumerator
     private final Map<Long, Long> tieringTableEpochs;
     private final Map<Long, Long> failedTableEpochs;
     private final Map<Long, TieringFinishInfo> finishedTables;
+    // tableId -> latest lake snapshot already given an index-only round (lost on restart: one
+    // rerun)
+    private final Map<Long, Long> indexOnlySnapshots = new ConcurrentHashMap<>();
     private final Set<Long> tieringReachMaxDurationsTables;
 
     // lazily instantiated
@@ -541,8 +547,11 @@ public class TieringSourceEnumerator
         try {
             TablePath tablePath = tieringTable.f2;
             final TableInfo tableInfo = flussAdmin.getTableInfo(tablePath).get();
-            List<TieringSplit> tieringSplits =
-                    populateNumberOfTieringSplits(splitGenerator.generateTableSplits(tableInfo));
+            List<TieringSplit> generated = splitGenerator.generateTableSplits(tableInfo);
+            if (generated.isEmpty()) {
+                generated = dvIndexOnlySplits(tableInfo);
+            }
+            List<TieringSplit> tieringSplits = populateNumberOfTieringSplits(generated);
             // shuffle tiering split to avoid splits tiering skew
             // after introduce tiering max duration
             Collections.shuffle(tieringSplits);
@@ -577,6 +586,44 @@ public class TieringSourceEnumerator
             LOG.warn("Fail to generate Tiering splits for table {}.", tieringTable.f2, e);
             failedTableEpochs.put(tieringTable.f0, tieringTable.f1);
         }
+    }
+
+    /**
+     * Idle DV table with a latest commit not yet given an index-only round: one empty split so the
+     * committer indexes it (a no-op if already indexed), else its last writes stay unmasked.
+     */
+    private List<TieringSplit> dvIndexOnlySplits(TableInfo tableInfo) throws Exception {
+        // Iceberg only: Paimon's readable snapshot follows its own compaction, not this lag
+        if (!tableInfo.getTableConfig().isDeletionVectorsEnabled()
+                || tableInfo.getTableConfig().getDataLakeFormat().orElse(null)
+                        != DataLakeFormat.ICEBERG) {
+            return Collections.emptyList();
+        }
+        TablePath tablePath = tableInfo.getTablePath();
+        LakeSnapshot latest;
+        try {
+            latest = flussAdmin.getLatestLakeSnapshot(tablePath).get();
+        } catch (Exception e) {
+            return Collections.emptyList(); // nothing tiered yet
+        }
+        Long done = indexOnlySnapshots.put(tableInfo.getTableId(), latest.getSnapshotId());
+        if (done != null && done == latest.getSnapshotId()) {
+            return Collections.emptyList();
+        }
+        Map.Entry<TableBucket, Long> any =
+                latest.getTableBucketsOffset().entrySet().iterator().next();
+        TableBucket tb = any.getKey();
+        String partitionName = null;
+        if (tb.getPartitionId() != null) {
+            for (PartitionInfo info : flussAdmin.listPartitionInfos(tablePath).get()) {
+                if (info.getPartitionId() == tb.getPartitionId()) {
+                    partitionName = info.getPartitionName();
+                }
+            }
+        }
+        LOG.info("DV index-only round for table {} (latest snapshot not yet indexed).", tablePath);
+        return Collections.singletonList(
+                new TieringLogSplit(tablePath, tb, partitionName, any.getValue(), any.getValue()));
     }
 
     private List<TieringSplit> populateNumberOfTieringSplits(List<TieringSplit> tieringSplits) {

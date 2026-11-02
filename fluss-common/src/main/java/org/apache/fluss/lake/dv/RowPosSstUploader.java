@@ -165,6 +165,12 @@ public class RowPosSstUploader {
         }
     }
 
+    /** Whether a RowPos scan was already uploaded for this snapshot (any partition). */
+    public boolean isIndexed(long snapshotId) throws IOException {
+        FsPath dir = buildBaseDir(snapshotId, null);
+        return dir.getFileSystem().exists(dir);
+    }
+
     /** Builds the base directory path for a snapshot, optionally scoped to a partition. */
     private FsPath buildBaseDir(long snapshotId, @Nullable Long partitionId) {
         String path = ROW_POS_DIR + "/" + snapshotId;
