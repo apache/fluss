@@ -20,6 +20,8 @@ package org.apache.fluss.lake.paimon.utils;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.lake.paimon.source.FlussRowAsPaimonRow;
@@ -397,6 +399,15 @@ public class PaimonConversions {
             options.set(
                     CoreOptions.CHANGELOG_PRODUCER.key(),
                     CoreOptions.ChangelogProducer.INPUT.toString());
+            TableConfig tableConfig =
+                    new TableConfig(Configuration.fromMap(tableDescriptor.getProperties()));
+            if (tableConfig.isHistoricalPartitionEnabled()
+                    && !tableConfig.isDataLakeAutoCompaction()) {
+                // Use the snapshot's maximum sequence number to avoid repeated manifest scans
+                // when historical splits write to multiple partitions and buckets.
+                // Use a literal key because Paimon 1.4 does not define this option.
+                options.set("write.sequence-number-init-mode", "snapshot");
+            }
         }
 
         // set partition keys

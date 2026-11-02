@@ -45,6 +45,7 @@ import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.IntVector;
 import org.apache.arrow.vector.VarCharVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
+import org.apache.flink.testutils.logging.LoggerAuditingExtension;
 import org.apache.paimon.CoreOptions;
 import org.apache.paimon.Snapshot;
 import org.apache.paimon.catalog.Catalog;
@@ -53,11 +54,14 @@ import org.apache.paimon.catalog.CatalogFactory;
 import org.apache.paimon.catalog.Identifier;
 import org.apache.paimon.data.InternalRow;
 import org.apache.paimon.manifest.ManifestCommittable;
+import org.apache.paimon.operation.AbstractFileStoreScan;
 import org.apache.paimon.options.Options;
 import org.apache.paimon.partition.Partition;
 import org.apache.paimon.schema.Schema;
 import org.apache.paimon.table.FileStoreTable;
+import org.apache.paimon.table.sink.CommitMessageImpl;
 import org.apache.paimon.table.sink.TableCommitImpl;
+import org.apache.paimon.table.sink.TableWriteImpl;
 import org.apache.paimon.table.source.DataSplit;
 import org.apache.paimon.table.source.ReadBuilder;
 import org.apache.paimon.table.source.Split;
@@ -66,10 +70,12 @@ import org.apache.paimon.utils.CloseableIterator;
 import org.apache.paimon.utils.SnapshotManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.slf4j.event.Level;
 
 import javax.annotation.Nullable;
 
@@ -88,6 +94,7 @@ import java.util.stream.Stream;
 
 import static org.apache.fluss.lake.committer.LakeCommitter.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
+import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimonSchema;
 import static org.apache.fluss.lake.writer.LakeTieringFactory.FLUSS_LAKE_TIERING_COMMIT_USER;
 import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
@@ -99,11 +106,16 @@ import static org.apache.fluss.record.ChangeType.UPDATE_AFTER;
 import static org.apache.fluss.record.ChangeType.UPDATE_BEFORE;
 import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
+import static org.apache.paimon.CoreOptions.WRITE_SEQUENCE_NUMBER_INIT_MODE;
 import static org.apache.paimon.table.sink.BatchWriteBuilder.COMMIT_IDENTIFIER;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** The UT for tiering to Paimon via {@link PaimonLakeTieringFactory}. */
 class PaimonTieringTest {
+
+    @RegisterExtension
+    final LoggerAuditingExtension scanLogs =
+            new LoggerAuditingExtension(AbstractFileStoreScan.class, Level.INFO);
 
     private @TempDir File tempWarehouseDir;
     private PaimonLakeTieringFactory paimonLakeTieringFactory;
@@ -137,6 +149,19 @@ class PaimonTieringTest {
                 Arguments.of(false, true, false),
                 Arguments.of(false, false, true),
                 Arguments.of(false, false, false));
+    }
+
+    private static Stream<Arguments> historicalWriterOptions() {
+        return Stream.of(
+                Arguments.of(Collections.emptyMap(), true),
+                Arguments.of(
+                        Collections.singletonMap(
+                                ConfigOptions.TABLE_DATALAKE_AUTO_COMPACTION.key(), "true"),
+                        false),
+                Arguments.of(
+                        Collections.singletonMap(
+                                "paimon." + WRITE_SEQUENCE_NUMBER_INIT_MODE.key(), "scan"),
+                        false));
     }
 
     private static Stream<Arguments> partitionExpireArgs() {
@@ -233,43 +258,111 @@ class PaimonTieringTest {
     @Test
     void testHistoricalPrimaryKeyTiering() throws Exception {
         TablePath tablePath = TablePath.of("paimon", "test_historical_primary_key");
-        TableInfo tableInfo = createHistoricalTable(tablePath, true);
-        long timestamp = 1_000L;
-        List<LogRecord> records =
-                Arrays.asList(
-                        historicalRecord(0L, timestamp, 1, "20240101", INSERT),
-                        historicalRecord(1L, timestamp, 1, "20240102", INSERT));
-
-        PaimonWriteResult writeResult;
-        try (LakeWriter<PaimonWriteResult> lakeWriter =
-                createLakeWriter(tablePath, 0, HISTORICAL_PARTITION_VALUE, 1L, tableInfo)) {
-            for (LogRecord record : records) {
-                lakeWriter.write(record);
-            }
-            writeResult = lakeWriter.complete();
-        }
-
+        TableInfo tableInfo = createHistoricalTable(tablePath, true, Collections.emptyMap());
+        PaimonWriteResult writeResult =
+                writeHistoricalRecords(
+                        tableInfo,
+                        historicalRecord(0L, 1_000L, 1, "20240101", INSERT),
+                        historicalRecord(1L, 1_000L, 1, "20240102", INSERT));
         SimpleVersionedSerializer<PaimonWriteResult> serializer =
                 paimonLakeTieringFactory.getWriteResultSerializer();
         writeResult =
                 serializer.deserialize(serializer.getVersion(), serializer.serialize(writeResult));
         assertHistoricalPartitions(writeResult);
 
-        try (LakeCommitter<PaimonWriteResult, PaimonCommittable> committer =
-                createLakeCommitter(tablePath, tableInfo, new Configuration())) {
-            committer.commit(
-                    committer.toCommittable(Collections.singletonList(writeResult)),
-                    new CommitContext(Collections.emptyMap(), Collections.emptyMap()));
-        }
+        commitWriteResult(tablePath, tableInfo, writeResult);
         assertThat(paimonCatalog.listPartitions(toPaimon(tablePath)))
                 .extracting(partition -> partition.spec().get("c3"))
                 .containsExactlyInAnyOrder("20240101", "20240102");
     }
 
+    @ParameterizedTest
+    @MethodSource("historicalWriterOptions")
+    void testHistoricalWriterInitialization(
+            Map<String, String> properties, boolean snapshotSequence) throws Exception {
+        TablePath tablePath = TablePath.of("paimon", "test_historical_writer_initialization");
+        TableInfo tableInfo = createHistoricalTable(tablePath, true, properties);
+        PaimonWriteResult writeResult =
+                writeHistoricalRecords(
+                        tableInfo,
+                        historicalRecord(0L, 1_000L, 1, "20240101", INSERT),
+                        historicalRecord(1L, 1_000L, 1, "20240101", INSERT),
+                        historicalRecord(2L, 1_000L, 1, "20240101", INSERT),
+                        historicalRecord(3L, 1_000L, 1, "20240102", INSERT));
+        commitWriteResult(tablePath, tableInfo, writeResult);
+        assertMaxSequenceNumber(tablePath, 1L, snapshotSequence ? 2L : null);
+
+        long snapshotId = 1;
+        for (String partition : Arrays.asList("20240102", "20240101")) {
+            String writerPartition = snapshotId == 1 ? HISTORICAL_PARTITION_VALUE : partition;
+            long scansBefore = scanCount();
+            try (LakeWriter<PaimonWriteResult> writer =
+                    createLakeWriter(tablePath, 0, writerPartition, 1L, tableInfo)) {
+                writer.write(historicalRecord(4L, 2_000L, 1, partition, INSERT));
+                assertThat(scanCount() - scansBefore).isEqualTo(snapshotSequence ? 0 : 1);
+                writeResult = writer.complete();
+            }
+            commitWriteResult(tablePath, tableInfo, writeResult);
+            snapshotId++;
+            assertMaxSequenceNumber(
+                    tablePath, snapshotId, snapshotSequence ? snapshotId + 1 : null);
+        }
+    }
+
+    @ParameterizedTest
+    @MethodSource("historicalWriterOptions")
+    void testHistoricalTieringAfterExternalCompaction(
+            Map<String, String> properties, boolean snapshotSequence) throws Exception {
+        TablePath tablePath = TablePath.of("paimon", "test_historical_external_compaction");
+        TableInfo tableInfo = createHistoricalTable(tablePath, true, properties);
+        commitWriteResult(
+                tablePath,
+                tableInfo,
+                writeHistoricalRecords(
+                        tableInfo,
+                        historicalRecord(0L, 1_000L, 1, "20240101", INSERT),
+                        historicalRecord(1L, 1_000L, 1, "20240102", INSERT)));
+        PaimonWriteResult writeResult =
+                writeHistoricalRecords(
+                        tableInfo, historicalRecord(2L, 1_000L, 1, "20240101", INSERT));
+        commitWriteResult(tablePath, tableInfo, writeResult);
+
+        // An external compactor inherits the option without Fluss runtime overrides.
+        FileStoreTable table = (FileStoreTable) paimonCatalog.getTable(toPaimon(tablePath));
+        try (TableWriteImpl<?> compactor = table.newWrite("external-compactor");
+                TableCommitImpl commit = table.newCommit("external-compactor")) {
+            compactor.compact(
+                    ((CommitMessageImpl) writeResult.commitMessages().get(0)).partition(), 0, true);
+            commit.commit(compactor.prepareCommit());
+        }
+        Snapshot compactSnapshot = table.snapshotManager().latestSnapshot();
+        assertThat(compactSnapshot.commitKind()).isEqualTo(Snapshot.CommitKind.COMPACT);
+        assertMaxSequenceNumber(tablePath, compactSnapshot.id(), snapshotSequence ? 1L : null);
+
+        long scansBefore = scanCount();
+        LogRecord updated = historicalRecord(4L, 2_000L, 1, "20240102", INSERT);
+        try (LakeWriter<PaimonWriteResult> writer =
+                createLakeWriter(tablePath, 0, HISTORICAL_PARTITION_VALUE, 1L, tableInfo)) {
+            writer.write(historicalRecord(3L, 2_000L, 1, "20240101", DELETE));
+            assertThat(scanCount() - scansBefore).isEqualTo(snapshotSequence ? 0 : 1);
+            writer.write(updated);
+            assertThat(scanCount() - scansBefore).isEqualTo(snapshotSequence ? 0 : 2);
+            writeResult = writer.complete();
+        }
+        commitWriteResult(tablePath, tableInfo, writeResult);
+        try (CloseableIterator<InternalRow> deleted =
+                        getPaimonRows(tablePath, "20240101", true, 0);
+                CloseableIterator<InternalRow> remaining =
+                        getPaimonRows(tablePath, "20240102", true, 0)) {
+            assertThat(deleted.hasNext()).isFalse();
+            verifyTableRecords(remaining, Collections.singletonList(updated), 0, "20240102");
+        }
+    }
+
     @Test
     void testHistoricalArrowBatchTiering() throws Exception {
         TablePath tablePath = TablePath.of("paimon", "test_historical_arrow");
-        TableInfo tableInfo = createHistoricalTable(tablePath, false);
+        TableInfo tableInfo = createHistoricalTable(tablePath, false, Collections.emptyMap());
         long baseOffset = 10L;
         long timestamp = 1_000L;
         List<LogRecord> records =
@@ -1102,6 +1195,24 @@ class PaimonTieringTest {
         return readBuilder.newRead().createReader(splits).toCloseableIterator();
     }
 
+    private PaimonWriteResult writeHistoricalRecords(TableInfo tableInfo, LogRecord... records)
+            throws Exception {
+        try (LakeWriter<PaimonWriteResult> writer =
+                createLakeWriter(
+                        tableInfo.getTablePath(), 0, HISTORICAL_PARTITION_VALUE, 1L, tableInfo)) {
+            for (LogRecord record : records) {
+                writer.write(record);
+            }
+            return writer.complete();
+        }
+    }
+
+    private long scanCount() {
+        return scanLogs.getMessages().stream()
+                .filter(message -> message.startsWith("File store scan plan completed"))
+                .count();
+    }
+
     private LakeWriter<PaimonWriteResult> createLakeWriter(
             TablePath tablePath,
             int bucket,
@@ -1181,6 +1292,16 @@ class PaimonTieringTest {
                 });
     }
 
+    private void commitWriteResult(
+            TablePath tablePath, TableInfo tableInfo, PaimonWriteResult result) throws Exception {
+        try (LakeCommitter<PaimonWriteResult, PaimonCommittable> committer =
+                createLakeCommitter(tablePath, tableInfo, new Configuration())) {
+            committer.commit(
+                    committer.toCommittable(Collections.singletonList(result)),
+                    new CommitContext(Collections.emptyMap(), Collections.emptyMap()));
+        }
+    }
+
     private long commitEmptySnapshot(TablePath tablePath, TableInfo tableInfo, String offsets)
             throws Exception {
         try (LakeCommitter<PaimonWriteResult, PaimonCommittable> lakeCommitter =
@@ -1194,6 +1315,16 @@ class PaimonTieringTest {
                                     Collections.emptyMap()))
                     .getCommittedSnapshotId();
         }
+    }
+
+    private void assertMaxSequenceNumber(
+            TablePath tablePath, long snapshotId, @Nullable Long expected) throws Exception {
+        Map<String, String> properties = getSnapshotProperties(tablePath, snapshotId);
+        assertThat(
+                        properties == null
+                                ? null
+                                : properties.get("sequence.generation.max-sequence-number"))
+                .isEqualTo(expected == null ? null : expected.toString());
     }
 
     private void createTable(
@@ -1244,15 +1375,9 @@ class PaimonTieringTest {
         return TableInfo.of(tablePath, 0, 1, descriptor, DEFAULT_REMOTE_DATA_DIR, 1L, 1L);
     }
 
-    private TableInfo createHistoricalTable(TablePath tablePath, boolean isPrimaryKeyTable)
+    private TableInfo createHistoricalTable(
+            TablePath tablePath, boolean isPrimaryKeyTable, Map<String, String> properties)
             throws Exception {
-        createTable(
-                tablePath,
-                isPrimaryKeyTable,
-                true,
-                isPrimaryKeyTable ? 1 : null,
-                Collections.emptyMap());
-
         org.apache.fluss.metadata.Schema.Builder schemaBuilder =
                 org.apache.fluss.metadata.Schema.newBuilder()
                         .column("c1", org.apache.fluss.types.DataTypes.INT())
@@ -1267,7 +1392,15 @@ class PaimonTieringTest {
                         .partitionedBy("c3")
                         .distributedBy(1)
                         .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .property(ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED, true)
+                        .properties(properties)
                         .build();
+        createTable(
+                tablePath,
+                isPrimaryKeyTable,
+                true,
+                isPrimaryKeyTable ? 1 : null,
+                toPaimonSchema(descriptor).options());
         return TableInfo.of(tablePath, 0, 1, descriptor, DEFAULT_REMOTE_DATA_DIR, 1L, 1L);
     }
 

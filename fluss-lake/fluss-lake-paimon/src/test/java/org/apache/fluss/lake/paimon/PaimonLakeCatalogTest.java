@@ -44,6 +44,10 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+
+import javax.annotation.Nullable;
 
 import java.io.File;
 import java.util.Arrays;
@@ -51,12 +55,15 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 
+import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_AUTO_COMPACTION;
 import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_ENABLED;
 import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_FORMAT;
+import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.LAKESTREAM_ENABLED_OPTION_KEY;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.PARTITION_GENERATE_LEGACY_NAME_OPTION_KEY;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
 import static org.apache.fluss.lake.paimon.utils.PaimonTableValidation.isPaimonSchemaCompatible;
+import static org.apache.paimon.CoreOptions.WRITE_SEQUENCE_NUMBER_INIT_MODE;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -836,20 +843,64 @@ class PaimonLakeCatalogTest {
                                 changes));
     }
 
-    @Test
-    void testCreateTableSetsLakeStreamEnabledForCleanTable() throws Exception {
-        String database = "test_create_lakestream_db";
-        String tableName = "test_create_lakestream_table";
-        TablePath tablePath = TablePath.of(database, tableName);
-        Identifier identifier = Identifier.create(database, tableName);
+    @ParameterizedTest
+    @CsvSource({
+        "true,true,,,snapshot",
+        "true,true,false,,snapshot",
+        "true,true,true,,",
+        "true,false,false,,",
+        "false,true,false,,",
+        "false,true,true,,",
+        "true,true,false,scan,scan",
+        "true,true,true,snapshot,snapshot"
+    })
+    void testCreateTableOptions(
+            boolean primaryKey,
+            boolean historicalPartition,
+            @Nullable Boolean autoCompaction,
+            @Nullable String sequenceMode,
+            @Nullable String expectedSequenceMode)
+            throws Exception {
+        TablePath tablePath = TablePath.of("test_db", "test_create_options");
 
-        // getTableDescriptor sets table.datalake.enabled=true, so the clean table advertises its
-        // LakeStream state to Paimon
-        flussPaimonCatalog.createTable(
-                tablePath, getTableDescriptor(FLUSS_SCHEMA), LAKE_CATALOG_CONTEXT);
+        Schema.Builder schema = Schema.newBuilder().fromSchema(FLUSS_SCHEMA);
+        if (primaryKey) {
+            schema.primaryKey("id", "address");
+        }
+        TableDescriptor.Builder builder =
+                TableDescriptor.builder()
+                        .schema(schema.build())
+                        .partitionedBy("address")
+                        .distributedBy(3)
+                        .property(TABLE_DATALAKE_ENABLED, true)
+                        .property(TABLE_DATALAKE_FORMAT.key(), "paimon")
+                        .property(TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED, historicalPartition);
+        if (autoCompaction != null) {
+            builder.property(TABLE_DATALAKE_AUTO_COMPACTION, autoCompaction);
+        }
+        String option = "paimon." + WRITE_SEQUENCE_NUMBER_INIT_MODE.key();
+        if (sequenceMode != null) {
+            builder.customProperty(option, sequenceMode);
+        }
+        TableDescriptor descriptor = builder.build();
+        TestingLakeCatalogContext context = new TestingLakeCatalogContext(descriptor);
+        flussPaimonCatalog.createTable(tablePath, descriptor, context);
 
-        Table table = flussPaimonCatalog.getPaimonCatalog().getTable(identifier);
+        Table table = flussPaimonCatalog.getPaimonCatalog().getTable(toPaimon(tablePath));
         assertThat(table.options()).containsEntry(LAKESTREAM_ENABLED_OPTION_KEY, "true");
+        assertThat(table.options().get(WRITE_SEQUENCE_NUMBER_INIT_MODE.key()))
+                .isEqualTo(expectedSequenceMode);
+
+        if ("snapshot".equals(expectedSequenceMode)) {
+            flussPaimonCatalog.alterTable(
+                    tablePath, Collections.singletonList(TableChange.set(option, "scan")), context);
+            assertThat(
+                            flussPaimonCatalog
+                                    .getPaimonCatalog()
+                                    .getTable(toPaimon(tablePath))
+                                    .options())
+                    .containsEntry(WRITE_SEQUENCE_NUMBER_INIT_MODE.key(), "scan");
+        }
     }
 
     @Test
