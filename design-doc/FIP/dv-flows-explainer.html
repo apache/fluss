@@ -177,7 +177,7 @@ body.still *{transition:none!important;animation:none!important}
 
 <header>
   <h1>Fluss DV Layer for Iceberg PK reads</h1>
-  <span class="sub">watch one key get updated twice, and never rewrite a file</span>
+  <span class="sub">watch one key get updated twice, with no file rewritten per update</span>
   <div class="ctrl">
     <button id="pp" class="pri">&#10073;&#10073; Pause</button>
     <button id="rp">&#8635; Replay</button>
@@ -223,7 +223,7 @@ body.still *{transition:none!important;animation:none!important}
 
   <!-- 3. cold -->
   <section class="zone z-cold" id="zc">
-    <div class="zh"><span class="dot" style="background:var(--cold)"></span><h2>Iceberg &middot; file_A</h2></div>
+    <div class="zh"><span class="dot" style="background:var(--cold)"></span><h2 id="zct">Iceberg &middot; file_A</h2></div>
     <div class="zs">immutable parquet, fixed row positions</div>
     <div class="rack" id="rc"></div>
     <div class="foot"><span id="fc">no file yet</span><span class="pill" id="pc">LAKE DV</span>
@@ -256,7 +256,7 @@ body.still *{transition:none!important;animation:none!important}
   <span class="num" id="nnum">1</span>
   <div class="tx"><h3 id="ntit">&nbsp;</h3><p id="ndes">&nbsp;</p></div>
   <div class="win" id="win">
-    <div><div class="n">0</div><div class="l">files rewritten</div></div>
+    <div><div class="n">0</div><div class="l">files rewritten per update</div></div>
     <div><div class="n">instant</div><div class="l">correct on write</div></div>
     <div><div class="n">O(deletes)</div><div class="l">read cost</div></div>
   </div>
@@ -374,7 +374,7 @@ function count(){
   $("fo").textContent=out.length?`${out.length} rows returned`:"waiting";
 }
 
-/* ---- the six beats ---- */
+/* ---- the seven beats ---- */
 const STEPS=[
 {t:"Three rows are written",d:"Fluss acks in <em>milliseconds</em>. Nothing has touched Iceberg yet, so the data is fresh but it only lives in the hot log.",
  run:async tok=>{
@@ -411,7 +411,7 @@ const STEPS=[
   pend=ent("pdq",`off 0 &middot; key1 <span class="ar">stale v1</span>`,"pend");
   await sleep(500,tok);
 }},
-{t:"Readable switch: RowPos fills, the pending delete becomes a bit",d:"Fluss loads file_A's positions into the <em>RowPos index</em>, finds <em>off 0</em> &rarr; file_A, pos 0, and sets that bit in the <em>Lake DV</em>. No file is rewritten, and Fluss queries see it <em>instantly</em>. At the next tiering commit the same bitmap goes to <em>Puffin</em> for Spark and Trino.",
+{t:"Readable switch: RowPos fills, the pending delete becomes a bit",d:"Fluss loads file_A's positions into the <em>RowPos index</em>, finds <em>off 0</em> &rarr; file_A, pos 0, and sets that bit in the <em>Lake DV</em>. No file is rewritten, and Fluss queries see it <em>instantly</em>. At the next tiering commit the same bitmap goes to <em>Puffin</em> for Spark and Trino. If no new data arrives, an <em>index-only round</em> still runs this switch, so an idle table is never left unmasked.",
  run:async tok=>{
   act("st","zc");sql("(readable switch &mdash; no client write)",0);
   cold[0].el.classList.remove("warn");hot[0].el.classList.remove("warn");
@@ -443,6 +443,20 @@ const STEPS=[
   HB[0].classList.remove("hide");HB[0].classList.add("set");HB[0].textContent="1";
   await sleep(360,tok);kill(hot[0]);tag(hot[0],"masked");$("ph").classList.add("on");count();
   await sleep(500,tok);
+}},
+{t:"Compaction: file_A becomes file_B, masks stay right",d:"Compaction rewrites file_A into <em>file_B</em>, keeping only the <em>latest row per key</em>, so masked v1 is dropped. Fluss re-indexes file_B in <em>RowPos</em>, moves any pending masks onto it, and readers switch to file_B only <em>after</em> that, so no stale row reappears.",
+ run:async tok=>{
+  act("zc","st");sql("(auto-compaction &mdash; no client write)",0);
+  const gone=cold.shift();gone.el.classList.add("pop");await sleep(380,tok);gone.el.remove();
+  [...$("rpi").children].forEach(e=>e.classList.add("done"));await sleep(380,tok);
+  $("rpi").innerHTML="";$("zct").innerHTML="Iceberg &middot; file_B";
+  CB.forEach((b,i)=>{b.className=i<cold.length?"bit":"bit hide";b.textContent="0";});
+  for(let i=0;i<cold.length;i++){
+    put(cold[i],CS[i],true);await sleep(260,tok);
+    ent("rpi",`off ${i+1} &middot; ${cold[i].key} <span class="ar">&rarr;</span> file_B &middot; pos ${i}`);
+    await sleep(220,tok);
+  }
+  count();await sleep(500,tok);
 }},
 {t:"The union read: skip, then concatenate",d:"Masked rows are <em>skipped by position</em>, never read. What survives on each side is simply stacked &mdash; no sort, no merge, no equality-delete join.",
  run:async tok=>{
@@ -476,7 +490,7 @@ function reset(){
   [...HB,...CB].forEach(b=>{b.className="bit hide";b.textContent="0";});
   ["ph","pc","pp2"].forEach(i=>$(i).classList.remove("on"));
   act(); ["w1","w2","w3","w4"].forEach(w=>flow(w,0));
-  $("win").classList.remove("on");$("fw").textContent="idle";sql("&mdash;",0);count();
+  $("win").classList.remove("on");$("fw").textContent="idle";$("zct").innerHTML="Iceberg &middot; file_A";sql("&mdash;",0);count();
 }
 const Q=new URLSearchParams(location.search);
 const STILL=Q.has("still")?(+Q.get("step")||0):-1;   // render step N frozen, then stop
