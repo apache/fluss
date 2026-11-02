@@ -21,13 +21,17 @@ package org.apache.fluss.flink.tiering;
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.GlobalConfiguration;
+import org.apache.fluss.config.provider.ConfigProviders;
 import org.apache.fluss.exception.IllegalConfigurationException;
 import org.apache.fluss.flink.adapter.MultipleParameterToolAdapter;
 
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.CoreOptions;
+import org.apache.flink.configuration.JobManagerOptions;
+import org.apache.flink.configuration.RestartStrategyOptions;
 import org.apache.flink.configuration.TaskManagerOptions;
 import org.apache.flink.core.execution.JobClient;
+import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -37,17 +41,22 @@ import java.io.File;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.util.ServiceLoader;
 
-import static org.apache.fluss.flink.tiering.FlussLakeTiering.FLUSS_CONF_PREFIX;
-import static org.apache.fluss.flink.tiering.FlussLakeTiering.LAKE_TIERING_CONFIG_PREFIX;
+import static org.apache.flink.configuration.RestartStrategyOptions.RestartStrategyType.EXPONENTIAL_DELAY;
+import static org.apache.flink.runtime.executiongraph.failover.FailoverStrategyFactoryLoader.FULL_RESTART_STRATEGY_NAME;
 import static org.apache.fluss.flink.tiering.source.TieringSourceOptions.DATA_LAKE_CONFIG_PREFIX;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.utils.PropertiesUtils.extractAndRemovePrefix;
+import static org.apache.fluss.utils.PropertiesUtils.extractPrefix;
 
 /**
  * Runs the Fluss lake tiering job on an embedded, in-process Flink runtime.
  *
  * <p>Unlike {@link FlussLakeTieringEntrypoint}, which submits the job to a Flink cluster, this
- * entrypoint runs it on Flink's local runtime inside the same JVM. The tiering job itself is
- * unchanged; only the runtime hosting it differs.
+ * entrypoint runs it on Flink's local runtime inside the same JVM. This class is self-contained: it
+ * owns the configuration parsing, the split between tiering service parameters and embedded runtime
+ * parameters, and the construction and submission of the tiering job.
  *
  * <p>Parameters carrying a tiering prefix ({@code fluss.}, {@code datalake.}, {@code
  * lake.tiering.}) and the {@code config.providers.*} keys configure the tiering service, while all
@@ -57,12 +66,21 @@ import static org.apache.fluss.flink.tiering.source.TieringSourceOptions.DATA_LA
  * the job lifecycle.
  */
 @PublicEvolving
-public class EmbeddedFlussLakeTiering extends FlussLakeTiering {
+public class EmbeddedFlussLakeTiering {
 
     private static final Logger LOG = LoggerFactory.getLogger(EmbeddedFlussLakeTiering.class);
 
+    static final String FLUSS_CONF_PREFIX = "fluss.";
+    static final String LAKE_TIERING_CONFIG_PREFIX = "lake.tiering.";
+
     /** The command line option that points to the YAML config file with the tiering parameters. */
     public static final String CONFIG_FILE_OPTION = "config.file";
+
+    final StreamExecutionEnvironment execEnv;
+    final String dataLake;
+    final org.apache.fluss.config.Configuration flussConfig;
+    final org.apache.fluss.config.Configuration lakeConfig;
+    final org.apache.fluss.config.Configuration lakeTieringConfig;
 
     public static void main(String[] args) {
         try {
@@ -86,8 +104,16 @@ public class EmbeddedFlussLakeTiering extends FlussLakeTiering {
      * Creates an embedded tiering service from the given parameters and Flink configuration.
      *
      * <p>The tiering parameters use the same keys as the command line of {@link
-     * FlussLakeTieringEntrypoint}; see {@link FlussLakeTiering} for the expected shapes. The Flink
-     * configuration tunes the embedded Flink runtime that executes the tiering job.
+     * FlussLakeTieringEntrypoint}: {@code fluss.*} for the Fluss client configuration, {@code
+     * datalake.format} to select the lake format, {@code datalake.<format>.*} for the lake
+     * configuration, and {@code lake.tiering.*} for the tiering service configuration. Config
+     * provider markers are resolved on the given parameters, so callers pass the raw merged
+     * parameters without resolving them.
+     *
+     * <p>The Flink configuration is applied to the embedded runtime that executes the tiering job,
+     * on top of the full-restart failover and the exponential-delay restart strategy configured by
+     * this class: the given configuration is modified in place, the failover and restart strategy
+     * keys are set on it.
      *
      * @param tieringParams the tiering service parameters
      * @param flinkConfig the configuration for the embedded Flink runtime
@@ -97,7 +123,55 @@ public class EmbeddedFlussLakeTiering extends FlussLakeTiering {
      *     an undeclared provider, or the job's parallelism exceeds the aggregate slot capacity
      */
     public EmbeddedFlussLakeTiering(Map<String, String> tieringParams, Configuration flinkConfig) {
-        super(tieringParams, flinkConfig);
+        checkNotNull(tieringParams, "%s must not be null", "tieringParams");
+        checkNotNull(flinkConfig, "%s must not be null", "flinkConfig");
+
+        Map<String, String> resolvedParams = resolveConfigProviders(tieringParams);
+
+        // extract fluss config
+        Map<String, String> flussConfigMap =
+                extractAndRemovePrefix(resolvedParams, FLUSS_CONF_PREFIX);
+        // we need to get bootstrap.servers
+        String bootstrapServers = flussConfigMap.get(ConfigOptions.BOOTSTRAP_SERVERS.key());
+        if (bootstrapServers == null) {
+            throw new IllegalArgumentException(
+                    String.format(
+                            "The bootstrap server to fluss is not configured, please configure %s",
+                            FLUSS_CONF_PREFIX + ConfigOptions.BOOTSTRAP_SERVERS.key()));
+        }
+        this.flussConfig = org.apache.fluss.config.Configuration.fromMap(flussConfigMap);
+
+        this.dataLake = resolvedParams.get(ConfigOptions.DATALAKE_FORMAT.key());
+        if (dataLake == null) {
+            throw new IllegalArgumentException(
+                    ConfigOptions.DATALAKE_FORMAT.key() + " is not configured");
+        }
+
+        // extract lake config
+        Map<String, String> lakeConfigMap =
+                extractAndRemovePrefix(
+                        resolvedParams, String.format("%s%s.", DATA_LAKE_CONFIG_PREFIX, dataLake));
+        this.lakeConfig = org.apache.fluss.config.Configuration.fromMap(lakeConfigMap);
+
+        // extract tiering service config
+        Map<String, String> lakeTieringConfigMap =
+                extractPrefix(resolvedParams, LAKE_TIERING_CONFIG_PREFIX);
+        this.lakeTieringConfig =
+                org.apache.fluss.config.Configuration.fromMap(lakeTieringConfigMap);
+
+        // now, we must use full restart strategy if any task is failed,
+        // since committer is stateless, if tiering committer is failover, committer
+        // will lost the collected committable, and will never collect all committable to do commit
+        // todo: support region failover
+        flinkConfig.set(JobManagerOptions.EXECUTION_FAILOVER_STRATEGY, FULL_RESTART_STRATEGY_NAME);
+        // Configure restart strategy: the tiering job is completely stateless (offsets are
+        // persisted in Fluss Server's LakeSnapshot, not in Flink checkpoint state), so it is
+        // safe to restart indefinitely on failure. Without this, Flink defaults to "no-restart"
+        // when checkpoint is not enabled, causing the job to fail permanently on any exception.
+        flinkConfig.set(RestartStrategyOptions.RESTART_STRATEGY, EXPONENTIAL_DELAY.getMainValue());
+
+        this.execEnv = StreamExecutionEnvironment.getExecutionEnvironment(flinkConfig);
+
         validateParallelismAgainstSlots(flinkConfig);
     }
 
@@ -118,6 +192,59 @@ public class EmbeddedFlussLakeTiering extends FlussLakeTiering {
                 jobClient.getJobID());
         jobClient.getJobExecutionResult().get();
         LOG.info("The lake tiering job {} finished.", jobClient.getJobID());
+    }
+
+    /**
+     * Loads and applies all available decorator plugins, builds the tiering job, and submits it to
+     * the execution environment without waiting for its completion.
+     *
+     * @return the {@link JobClient} of the submitted tiering job
+     */
+    protected JobClient run() throws Exception {
+        // Load and apply all available decorator plugins
+        loadAndApplyDecoratorPlugins();
+
+        // build and run lake tiering job
+        JobClient jobClient =
+                LakeTieringJobBuilder.newBuilder(
+                                execEnv, flussConfig, lakeConfig, lakeTieringConfig, dataLake)
+                        .build();
+
+        System.out.printf(
+                "Starting data tiering service from Fluss to %s, jobId is %s.....%n",
+                dataLake, jobClient.getJobID());
+        return jobClient;
+    }
+
+    /**
+     * Loads all available {@link LakeTieringDecoratorPlugin} implementations and applies their
+     * decorators in sequence.
+     *
+     * <p>All available plugins will be loaded and their decorators will be called in the order they
+     * are discovered by the ServiceLoader. This allows multiple decorators to be applied
+     * sequentially, where each decorator can further customize the Flink execution environment and
+     * configurations.
+     */
+    protected void loadAndApplyDecoratorPlugins() {
+        ServiceLoader<LakeTieringDecoratorPlugin> serviceLoader =
+                ServiceLoader.load(
+                        LakeTieringDecoratorPlugin.class,
+                        LakeTieringDecoratorPlugin.class.getClassLoader());
+        for (LakeTieringDecoratorPlugin plugin : serviceLoader) {
+            String identifier = plugin.identifier();
+            System.out.printf(
+                    "Applying LakeTieringDecoratorPlugin with identifier: %s%n", identifier);
+            LakeTieringDecorator decorator = plugin.createLakeTieringDecorator();
+            decorator.decorate(execEnv, flussConfig, lakeConfig, lakeTieringConfig, dataLake);
+        }
+    }
+
+    /** Resolves {@code ${provider:...}} markers in all parameters before prefix extraction. */
+    private static Map<String, String> resolveConfigProviders(Map<String, String> paramsMap) {
+        org.apache.fluss.config.Configuration params =
+                org.apache.fluss.config.Configuration.fromMap(paramsMap);
+        ConfigProviders.resolve(params);
+        return new HashMap<>(params.toMap());
     }
 
     /**
@@ -154,8 +281,8 @@ public class EmbeddedFlussLakeTiering extends FlussLakeTiering {
      * <p>Config provider markers in the file are not resolved here. After the merge, markers in the
      * tiering service parameters (keys carrying the {@code fluss.}, {@code datalake.}, or {@code
      * lake.tiering.} prefixes, plus the {@code config.providers.*} keys declaring the providers)
-     * are resolved by {@link FlussLakeTiering}; markers in the remaining parameters, which
-     * configure the embedded Flink runtime, are kept verbatim.
+     * are resolved in the constructor; markers in the remaining parameters, which configure the
+     * embedded Flink runtime, are kept verbatim.
      *
      * @param configFilePath the path of the YAML config file
      * @return the parameters parsed from the config file
