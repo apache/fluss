@@ -2823,18 +2823,6 @@ public class ReplicaManager implements ServerReconfigurable {
         return allReplicas.getOrDefault(tableBucket, new NoneReplica());
     }
 
-    /** Marks only the expected failed replica offline without taking the lifecycle lock. */
-    public void markReplicaOffline(TableBucket tableBucket, Replica expectedReplica) {
-        allReplicas.computeIfPresent(
-                tableBucket,
-                (ignored, hostedReplica) ->
-                        hostedReplica instanceof OnlineReplica
-                                        && ((OnlineReplica) hostedReplica).getReplica()
-                                                == expectedReplica
-                                ? new OfflineReplica()
-                                : hostedReplica);
-    }
-
     private boolean isRequiredAcksInvalid(int requiredAcks) {
         return requiredAcks != 0 && requiredAcks != 1 && requiredAcks != -1;
     }

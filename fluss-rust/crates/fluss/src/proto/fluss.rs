@@ -310,7 +310,7 @@ pub struct UpdateMetadataRequest {
     pub partition_metadata: ::prost::alloc::vec::Vec<PbPartitionMetadata>,
     #[prost(int32, optional, tag = "5")]
     pub coordinator_epoch: ::core::option::Option<i32>,
-    /// Per-main-table partition tombstones propagated from the Coordinator (P3T6).
+    /// Per-main-table partition tombstones propagated from the Coordinator.
     /// Each entry replaces the cached tombstone for the given table_id on the receiver.
     #[prost(message, repeated, tag = "6")]
     pub partition_tombstones: ::prost::alloc::vec::Vec<PbPartitionTombstone>,

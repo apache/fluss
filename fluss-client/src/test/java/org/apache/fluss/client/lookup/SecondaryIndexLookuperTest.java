@@ -19,10 +19,14 @@ package org.apache.fluss.client.lookup;
 
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.encode.CompactedKeyEncoder;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.types.RowType;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -113,6 +117,39 @@ class SecondaryIndexLookuperTest {
 
         assertThat(mainLookupKeys).isEmpty();
         assertThat(result.getRowList()).isEmpty();
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {1, 2})
+    void testNullLookupDoesNotInvokeEitherHop(int fieldCount) throws Exception {
+        DataType[] types = new DataType[fieldCount];
+        InternalRow.FieldGetter[] getters = new InternalRow.FieldGetter[fieldCount];
+        for (int i = 0; i < fieldCount; i++) {
+            types[i] = DataTypes.INT().copy(false);
+            getters[i] = InternalRow.createFieldGetter(types[i], i);
+        }
+        CompactedKeyEncoder encoder = new CompactedKeyEncoder(RowType.of(types));
+        Lookuper unexpectedLookup =
+                key -> {
+                    throw new AssertionError("NULL index keys must not issue lookups");
+                };
+        SecondaryIndexLookuper lookuper =
+                new SecondaryIndexLookuper(
+                        unexpectedLookup,
+                        unexpectedLookup,
+                        key -> GenericRow.of(encoder.encodeKey(key)),
+                        getters,
+                        getters,
+                        types,
+                        key -> new GenericRow(1),
+                        Runnable::run);
+        for (int nullField = 0; nullField < fieldCount; nullField++) {
+            GenericRow key = new GenericRow(fieldCount);
+            for (int i = 0; i < fieldCount; i++) {
+                key.setField(i, i == nullField ? null : i);
+            }
+            assertThat(lookuper.lookup(key).get().getRowList()).isEmpty();
+        }
     }
 
     private LookupResult lookup(List<InternalRow> hop1Rows, InternalRow lookupKey)

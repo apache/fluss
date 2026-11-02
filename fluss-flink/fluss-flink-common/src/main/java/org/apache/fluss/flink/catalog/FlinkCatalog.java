@@ -1128,7 +1128,9 @@ public class FlinkCatalog extends AbstractCatalog {
         }
 
         return CatalogTableAdapter.toCatalogTable(
-                withIndex(table.getUnresolvedSchema(), indexes),
+                withIndex(
+                        table.getUnresolvedSchema(),
+                        indexes.stream().distinct().collect(Collectors.toList())),
                 table.getComment(),
                 table.getPartitionKeys(),
                 table.getOptions());

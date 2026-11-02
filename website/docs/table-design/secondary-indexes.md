@@ -99,6 +99,8 @@ Both modes fetch and validate the current main-table row, so an obsolete index e
 
 A synchronous write timeout does not roll back a committed main-table write. The index may become visible after the request times out; handle retries using the normal writer guarantees.
 
+With a synchronous index, even `acks=1` waits for the main-table high watermark and synchronous index progress, because index replication consumes only committed WAL.
+
 For tables with synchronous indexes, client log scans expose records only below both the main-table high watermark and the synchronous index replication progress. A stalled synchronous index therefore delays client log consumption as well as write acknowledgement. Remote log files are exposed only once all records in the file satisfy this visibility bound. Server-side log replication and index WAL consumption continue independently of this client read bound.
 
 ## Table and Partition Lifecycle
@@ -115,7 +117,7 @@ Index maintenance consumes committed main-table WAL. Snapshot metadata preserves
 
 [Index replication configuration](../maintenance/configuration.md#index-replication) controls reader and sender threads, window sizes, retained batch buffers, and retry backoff. TabletServer aggregate metrics include `indexReplicationPendingBytes`, `indexReplicationMaxNoProgressTimeMs`, `indexReplicationFailedSourceBucketCount`, and `indexReplicationRetriesPerSecond`. Use them with replication logs to investigate backlog or a stopped source bucket.
 
-Before creating indexed tables, upgrade all participating TabletServers to support the private `PutIndex` protocol, then the Coordinator and clients/connectors. Do not schedule an indexed main-table bucket or index bucket on a server without index support. `PutIndex` v0 uses API key 1075; preview binaries using API key 1068 are not wire-compatible.
+Before creating indexed tables, upgrade all participating TabletServers to support the private `PutIndex` protocol, then the Coordinator and clients/connectors. Do not schedule an indexed main-table bucket or index bucket on a server without index support. `PutIndex` v0 uses API key 1076.
 
 The following limitations apply:
 
