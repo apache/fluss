@@ -224,7 +224,7 @@ CREATE TABLE event_counts (
     cnt BIGINT,
     PRIMARY KEY (id) NOT ENFORCED
 ) WITH (
-    'merge-engine' = 'aggregation',
+    'table.merge-engine' = 'aggregation',
     'fields.cnt.agg' = 'count'
 );
 

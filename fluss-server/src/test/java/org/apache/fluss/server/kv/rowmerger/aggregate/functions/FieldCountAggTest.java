@@ -33,6 +33,8 @@ import org.apache.fluss.types.DataTypes;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
+import java.util.Arrays;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Tests COUNT through the row merger, including first writes and partial updates. */
@@ -124,6 +126,74 @@ class FieldCountAggTest {
         assertThat(value).isNotNull();
         assertThat(value.row.getLong(1)).isZero();
         assertThat(value.row.isNullAt(2)).isTrue();
+    }
+
+    @ParameterizedTest
+    @EnumSource(KvFormat.class)
+    void testFirstPartialUpdateIgnoresNonTargetValues(KvFormat format) {
+        RowMerger sumMerger = createMerger(format, new int[] {0, 2});
+        BinaryValue value = sumMerger.merge(null, input(format, 99L, 10L));
+        assertThat(value.row.isNullAt(1)).isTrue();
+        assertThat(value.row.getLong(2)).isEqualTo(10L);
+        assertThat(sumMerger.delete(copy(value))).isNull();
+
+        RowMerger countMerger = createMerger(format, new int[] {0, 1});
+        value = countMerger.merge(null, input(format, 42L, 99L));
+        assertThat(value.row.getLong(1)).isEqualTo(1L);
+        assertThat(value.row.isNullAt(2)).isTrue();
+        assertThat(countMerger.delete(copy(value))).isNull();
+    }
+
+    @ParameterizedTest
+    @EnumSource(KvFormat.class)
+    void testFirstPartialUpdateWithSchemaEvolution(KvFormat format) {
+        Schema inputSchema =
+                Schema.newBuilder()
+                        .fromColumns(
+                                Arrays.asList(
+                                        SCHEMA.getColumns().get(1),
+                                        SCHEMA.getColumns().get(0),
+                                        SCHEMA.getColumns().get(2)))
+                        .primaryKey("id")
+                        .build();
+        Schema latestSchema =
+                Schema.newBuilder()
+                        .fromColumns(
+                                Arrays.asList(
+                                        SCHEMA.getColumns().get(2),
+                                        SCHEMA.getColumns().get(1),
+                                        SCHEMA.getColumns().get(0)))
+                        .column("extra", DataTypes.BIGINT(), AggFunctions.SUM())
+                        .primaryKey("id")
+                        .build();
+        short latestSchemaId = 2;
+        TestingSchemaGetter schemaGetter =
+                new TestingSchemaGetter(new SchemaInfo(inputSchema, SCHEMA_ID));
+        schemaGetter.updateLatestSchemaInfo(new SchemaInfo(latestSchema, latestSchemaId));
+        RowMerger merger =
+                new AggregateRowMerger(new TableConfig(new Configuration()), format, schemaGetter)
+                        .configureTargetColumns(new int[] {0, 2}, latestSchemaId, latestSchema);
+        RowEncoder encoder = RowEncoder.create(format, inputSchema.getRowType());
+        encoder.startNewRow();
+        encoder.encodeField(0, 99L);
+        encoder.encodeField(1, 1);
+        encoder.encodeField(2, 10L);
+        BinaryValue input = new BinaryValue(SCHEMA_ID, encoder.finishRow());
+
+        BinaryValue value = merger.merge(null, input);
+        assertThat(value.schemaId).isEqualTo(SCHEMA_ID);
+        assertThat(value.row.isNullAt(0)).isTrue();
+        assertThat(value.row.getInt(1)).isEqualTo(1);
+        assertThat(value.row.getLong(2)).isEqualTo(10L);
+        assertThat(merger.delete(copy(value))).isNull();
+
+        value = merger.merge(copy(value), input);
+        assertThat(value.schemaId).isEqualTo(latestSchemaId);
+        assertThat(value.row.getLong(0)).isEqualTo(20L);
+        assertThat(value.row.isNullAt(1)).isTrue();
+        assertThat(value.row.getInt(2)).isEqualTo(1);
+        assertThat(value.row.isNullAt(3)).isTrue();
+        assertThat(merger.delete(copy(value))).isNull();
     }
 
     @ParameterizedTest
