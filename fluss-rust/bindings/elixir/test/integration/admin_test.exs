@@ -682,13 +682,10 @@ defmodule Fluss.Integration.AdminTest do
                {:ok, %{id: 1, region: "EU"}}
     end
 
-    # Hangs: core retries a missing partition forever, blocking later writes too. Expects
-    # partition_not_exists, since core doesn't create partitions on write as Java does.
-    @tag :skip
-    test "a write to a missing partition fails without blocking other writes", ctx do
-      # Its own connection, so the hang can't block other tests' writes.
-      %{config: config, admin: admin} = ctx
-      conn = Fluss.Connection.new!(config)
+    test "a write to a missing partition creates it without blocking other writes", %{
+      conn: conn,
+      admin: admin
+    } do
       table_name = partitioned_table(admin, ["region"])
       :ok = Fluss.Admin.create_partition(admin, @database, table_name, %{region: "EU"})
       table = Fluss.Table.get!(conn, @database, table_name)
@@ -697,8 +694,13 @@ defmodule Fluss.Integration.AdminTest do
       {:ok, missing} = Fluss.UpsertWriter.upsert(writer, %{id: 1, region: "US"})
       {:ok, existing} = Fluss.UpsertWriter.upsert(writer, %{id: 2, region: "EU"})
 
-      assert {:error, %Fluss.Error{code: :partition_not_exists}} = Fluss.WriteHandle.wait(missing)
+      assert :ok = Fluss.WriteHandle.wait(missing)
       assert :ok = Fluss.WriteHandle.wait(existing)
+
+      assert ["EU", "US"] =
+               Fluss.Admin.list_partition_infos!(admin, @database, table_name)
+               |> Enum.map(& &1.partition_name)
+               |> Enum.sort()
     end
 
     test "raises on a malformed spec", %{admin: admin} do
