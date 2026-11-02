@@ -20,8 +20,11 @@ package org.apache.fluss.flink.source.lookup;
 import org.apache.fluss.client.lookup.LookupType;
 import org.apache.fluss.flink.source.lookup.LookupNormalizer.RemainingFilter;
 
+import org.apache.flink.table.api.TableException;
 import org.apache.flink.table.data.GenericRowData;
+import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.types.logical.BigIntType;
+import org.apache.flink.table.types.logical.IntType;
 import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.RowType;
 import org.junit.jupiter.api.Test;
@@ -37,11 +40,95 @@ import java.util.stream.Stream;
 import static org.apache.fluss.client.lookup.LookupType.LOOKUP;
 import static org.apache.fluss.client.lookup.LookupType.PREFIX_LOOKUP;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** Tests for {@link LookupNormalizer} on a table with the BIGINT fields a, b, c, d and e. */
+/** Tests for lookup access-path selection and key normalization. */
 class LookupNormalizerTest {
 
-    private static final RowType SCHEMA = schema();
+    private static final RowType SCHEMA =
+            RowType.of(
+                    new LogicalType[] {new IntType(), new IntType(), new IntType(), new IntType()},
+                    new String[] {"customer_id", "order_id", "status", "year"});
+
+    @ParameterizedTest
+    @MethodSource("lookupPaths")
+    void testLookupPathPriority(
+            int[] lookupKeys, int[] bucketKeys, LookupType expectedType, int[] expectedKeys) {
+        LookupNormalizer normalizer = create(lookupKeys, bucketKeys, null);
+        assertThat(normalizer.getLookupType()).isEqualTo(expectedType);
+        assertThat(normalizer.getLookupKeyIndexes()).containsExactly(expectedKeys);
+    }
+
+    private static Stream<Arguments> lookupPaths() {
+        return Stream.of(
+                Arguments.of(
+                        new int[] {0, 1, 2, 3},
+                        new int[] {0},
+                        LookupType.LOOKUP,
+                        new int[] {0, 1, 3}),
+                Arguments.of(
+                        new int[] {0, 2, 3},
+                        new int[] {0},
+                        LookupType.PREFIX_LOOKUP,
+                        new int[] {0, 3}),
+                Arguments.of(
+                        new int[] {2, 3},
+                        new int[] {0},
+                        LookupType.SECONDARY_INDEX_LOOKUP,
+                        new int[] {2}),
+                Arguments.of(
+                        new int[] {0, 2},
+                        new int[] {0},
+                        LookupType.SECONDARY_INDEX_LOOKUP,
+                        new int[] {2}),
+                Arguments.of(
+                        new int[] {1, 2, 3},
+                        new int[] {1},
+                        LookupType.SECONDARY_INDEX_LOOKUP,
+                        new int[] {2}));
+    }
+
+    @Test
+    void testPrefixLookupPreservesProjectedKeysAndRemainingFilter() {
+        LookupNormalizer normalizer =
+                create(new int[] {0, 1, 2}, new int[] {0}, new int[] {2, 3, 0, 1});
+        assertThat(normalizer.getLookupType()).isEqualTo(LookupType.PREFIX_LOOKUP);
+        assertThat(normalizer.getLookupKeyIndexes()).containsExactly(0, 3);
+
+        RowData lookup = GenericRowData.of(7, 2026, 42);
+        RowData normalized = normalizer.normalizeLookupKey(lookup);
+        assertThat(normalized.getArity()).isEqualTo(2);
+        assertThat(normalized.getInt(0)).isEqualTo(42);
+        assertThat(normalized.getInt(1)).isEqualTo(2026);
+        LookupNormalizer.RemainingFilter filter = normalizer.createRemainingFilter(lookup);
+        assertThat(filter).isNotNull();
+        assertThat(filter.isMatch(GenericRowData.of(7, 2026, 42, 1))).isTrue();
+        assertThat(filter.isMatch(GenericRowData.of(8, 2026, 42, 1))).isFalse();
+    }
+
+    @Test
+    void testUnsupportedLookupIsRejected() {
+        assertThatThrownBy(() -> create(new int[] {1, 3}, new int[] {0}, null))
+                .isInstanceOf(TableException.class);
+    }
+
+    private static LookupNormalizer create(
+            int[] lookupKeys, int[] bucketKeys, int[] projectedFields) {
+        int[][] keys = new int[lookupKeys.length][];
+        for (int i = 0; i < lookupKeys.length; i++) {
+            keys[i] = new int[] {lookupKeys[i]};
+        }
+        return LookupNormalizer.validateAndCreateLookupNormalizer(
+                keys,
+                new int[] {0, 1, 3},
+                bucketKeys,
+                new int[] {3},
+                SCHEMA,
+                projectedFields,
+                new int[][] {{2}});
+    }
+
+    private static final RowType MULTI_KEY_SCHEMA = multiKeySchema();
     private static final int[] PK = {0, 1, 2, 3};
     private static final int[] NONE = {};
 
@@ -138,7 +225,12 @@ class LookupNormalizerTest {
             boolean expectedClientFilter) {
         LookupNormalizer normalizer =
                 LookupNormalizer.validateAndCreateLookupNormalizer(
-                        lookupKeys, primaryKey, bucketKey, partitionKeys, SCHEMA, projection);
+                        lookupKeys,
+                        primaryKey,
+                        bucketKey,
+                        partitionKeys,
+                        MULTI_KEY_SCHEMA,
+                        projection);
 
         assertThat(normalizer.getLookupType()).isEqualTo(expectedType);
         assertThat(normalizer.getLookupKeyIndexes()).containsExactly(expectedLookupKeys);
@@ -152,7 +244,7 @@ class LookupNormalizerTest {
         // (a, c): Fluss is asked for a, the client filters on c
         LookupNormalizer skipped =
                 LookupNormalizer.validateAndCreateLookupNormalizer(
-                        keys(0, 2), PK, ints(0), NONE, SCHEMA, null);
+                        keys(0, 2), PK, ints(0), NONE, MULTI_KEY_SCHEMA, null);
         assertThat(skipped.normalizeLookupKey(GenericRowData.of(1L, 3L)))
                 .isEqualTo(GenericRowData.of(1L));
         RemainingFilter filter = skipped.createRemainingFilter(GenericRowData.of(1L, 3L));
@@ -162,7 +254,7 @@ class LookupNormalizerTest {
         // (a, b) on the primary key (b, a, c, d): the key is reordered to (b, a)
         LookupNormalizer reordered =
                 LookupNormalizer.validateAndCreateLookupNormalizer(
-                        keys(0, 1), ints(1, 0, 2, 3), ints(1), NONE, SCHEMA, null);
+                        keys(0, 1), ints(1, 0, 2, 3), ints(1), NONE, MULTI_KEY_SCHEMA, null);
         assertThat(reordered.normalizeLookupKey(GenericRowData.of(1L, 2L)))
                 .isEqualTo(GenericRowData.of(2L, 1L));
     }
@@ -181,7 +273,7 @@ class LookupNormalizerTest {
         return GenericRowData.of(fields);
     }
 
-    private static RowType schema() {
+    private static RowType multiKeySchema() {
         LogicalType[] types = new LogicalType[5];
         Arrays.fill(types, new BigIntType());
         return RowType.of(types, new String[] {"a", "b", "c", "d", "e"});
