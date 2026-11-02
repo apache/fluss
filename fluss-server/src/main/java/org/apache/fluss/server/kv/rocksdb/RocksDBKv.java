@@ -24,8 +24,6 @@ import org.apache.fluss.metrics.Histogram;
 import org.apache.fluss.rocksdb.RocksDBOperationUtils;
 import org.apache.fluss.rocksdb.RocksIteratorWrapper;
 import org.apache.fluss.server.kv.KvCloseMode;
-import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
-import org.apache.fluss.server.metrics.group.TabletServerMetricGroup.RocksDBReadOperation;
 import org.apache.fluss.server.utils.ResourceGuard;
 import org.apache.fluss.utils.IOUtils;
 
@@ -121,8 +119,6 @@ public class RocksDBKv implements AutoCloseable {
      */
     private final int flussL0SlowdownTrigger;
 
-    @Nullable private TabletServerMetricGroup metrics;
-
     private volatile boolean writeRejected;
 
     private final AtomicLong nextL0RefreshNanos = new AtomicLong(Long.MIN_VALUE);
@@ -172,11 +168,6 @@ public class RocksDBKv implements AutoCloseable {
         }
     }
 
-    /** Attaches server-scoped counters before this DB is published to callers. */
-    public void initializeMetrics(TabletServerMetricGroup metrics) {
-        this.metrics = metrics;
-    }
-
     public ResourceGuard getResourceGuard() {
         return rocksDBResourceGuard;
     }
@@ -205,30 +196,18 @@ public class RocksDBKv implements AutoCloseable {
     }
 
     public @Nullable byte[] get(byte[] key) throws IOException {
-        long startNanos = System.nanoTime();
         try {
             return db.get(key);
         } catch (RocksDBException e) {
             throw new IOException("Fail to get key.", e);
-        } finally {
-            recordRead(RocksDBReadOperation.GET, startNanos);
         }
     }
 
     public List<byte[]> multiGet(List<byte[]> keys) throws IOException {
-        long startNanos = System.nanoTime();
         try {
             return db.multiGetAsList(keys);
         } catch (RocksDBException e) {
             throw new IOException("Fail to get keys.", e);
-        } finally {
-            recordRead(RocksDBReadOperation.MULTI_GET, startNanos);
-        }
-    }
-
-    private void recordRead(RocksDBReadOperation operation, long startNanos) {
-        if (metrics != null) {
-            metrics.recordRocksDBRead(operation, System.nanoTime() - startNanos);
         }
     }
 
@@ -252,7 +231,7 @@ public class RocksDBKv implements AutoCloseable {
             }
             iterator = db.newIterator(defaultColumnFamilyHandle, readOptions);
             return new PrefixLookup(
-                    prefixKey.clone(), iterator, readOptions, upperBoundSlice, lease, metrics);
+                    prefixKey.clone(), iterator, readOptions, upperBoundSlice, lease);
         } catch (Throwable t) {
             IOUtils.closeQuietly(iterator);
             IOUtils.closeQuietly(readOptions);
@@ -272,7 +251,6 @@ public class RocksDBKv implements AutoCloseable {
         // The upper bound must outlive the iterator and read options that reference it.
         @Nullable private final Slice upperBoundSlice;
         private final ResourceGuard.Lease lease;
-        @Nullable private final TabletServerMetricGroup metrics;
         private boolean closed;
 
         private PrefixLookup(
@@ -280,30 +258,16 @@ public class RocksDBKv implements AutoCloseable {
                 RocksIterator iterator,
                 ReadOptions readOptions,
                 @Nullable Slice upperBoundSlice,
-                ResourceGuard.Lease lease,
-                @Nullable TabletServerMetricGroup metrics) {
+                ResourceGuard.Lease lease) {
             this.prefixKey = prefixKey;
             this.iterator = new RocksIteratorWrapper(iterator);
             this.readOptions = readOptions;
             this.upperBoundSlice = upperBoundSlice;
             this.lease = lease;
-            this.metrics = metrics;
         }
 
         /** Seeks and collects values from the view fixed when this lookup was opened. */
         public List<byte[]> readAll() throws IOException {
-            long startNanos = System.nanoTime();
-            try {
-                return readValues();
-            } finally {
-                if (metrics != null) {
-                    metrics.recordRocksDBRead(
-                            RocksDBReadOperation.PREFIX_SCAN, System.nanoTime() - startNanos);
-                }
-            }
-        }
-
-        private List<byte[]> readValues() throws IOException {
             if (closed) {
                 throw new IOException("Prefix lookup is closed.");
             }

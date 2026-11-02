@@ -37,6 +37,8 @@ import org.apache.fluss.types.RowType;
 import io.github.fluss_contrib.rocksdb.Cache;
 import io.github.fluss_contrib.rocksdb.ColumnFamilyOptions;
 import io.github.fluss_contrib.rocksdb.FlushOptions;
+import io.github.fluss_contrib.rocksdb.HistogramData;
+import io.github.fluss_contrib.rocksdb.HistogramType;
 import io.github.fluss_contrib.rocksdb.HyperClockCache;
 import io.github.fluss_contrib.rocksdb.RocksDBException;
 import io.github.fluss_contrib.rocksdb.TickerType;
@@ -538,81 +540,17 @@ class RocksDBKvTest {
     }
 
     @Test
-    void testReadMetricsAggregateAcrossDbsAndIncludeFailedAttempts(@TempDir Path directory)
-            throws Exception {
-        TabletServerMetricGroup metrics =
-                new TabletServerMetricGroup(
-                        NOPMetricRegistry.INSTANCE, "cluster", "rack", "host", 0);
-        try (RocksDBKv first = buildRocksDBKv(directory.resolve("first").toFile());
-                RocksDBKv second = buildRocksDBKv(directory.resolve("second").toFile())) {
-            first.initializeMetrics(metrics);
-            second.initializeMetrics(metrics);
-            byte[] key = {1};
-            first.put(key, new byte[] {2});
-            assertThat(first.get(key)).containsExactly((byte) 2);
-            assertThat(second.get(key)).isNull();
-            assertThat(first.multiGet(Arrays.asList(key, new byte[] {3})))
-                    .containsExactly(new byte[] {2}, null);
-            try (RocksDBKv.PrefixLookup lookup = first.openPrefixLookup(key)) {
-                assertThat(lookup.readAll()).containsExactly(new byte[] {2});
-                lookup.close();
-                assertThatThrownBy(lookup::readAll).hasMessageContaining("closed");
-            }
-            assertThat(
-                            metricValue(
-                                    metrics,
-                                    MetricNames.ROCKSDB_READ_EXECUTION_COUNT_TOTAL,
-                                    "operation",
-                                    "get"))
-                    .isEqualTo(2);
-            assertThat(
-                            metricValue(
-                                    metrics,
-                                    MetricNames.ROCKSDB_READ_EXECUTION_COUNT_TOTAL,
-                                    "operation",
-                                    "multiGet"))
-                    .isEqualTo(1);
-            assertThat(
-                            metricValue(
-                                    metrics,
-                                    MetricNames.ROCKSDB_READ_EXECUTION_COUNT_TOTAL,
-                                    "operation",
-                                    "prefixScan"))
-                    .isEqualTo(2);
-            assertThat(
-                            metricValue(
-                                    metrics,
-                                    MetricNames.ROCKSDB_READ_EXECUTION_TIME_US_TOTAL,
-                                    "operation",
-                                    "get"))
-                    .isNotNegative();
-            assertThat(
-                            metricValue(
-                                    metrics,
-                                    MetricNames.ROCKSDB_SHARED_BLOCK_CACHE_HITS_TOTAL,
-                                    "block_type",
-                                    "data"))
-                    .isZero();
-            assertThat(
-                            metricValue(
-                                    metrics,
-                                    MetricNames.ROCKSDB_SHARED_BLOCK_CACHE_MISSES_TOTAL,
-                                    "block_type",
-                                    "data"))
-                    .isZero();
-        }
-    }
-
-    @Test
-    void testNativeCacheCountersSurviveDbClose(@TempDir Path directory) throws Exception {
+    void testNativeCountersSurviveDbClose(@TempDir Path directory) throws Exception {
         TabletServerMetricGroup metrics =
                 new TabletServerMetricGroup(
                         NOPMetricRegistry.INSTANCE, "cluster", "rack", "host", 0);
         RocksDBStatisticsRegistry registry = new RocksDBStatisticsRegistry(true);
-        metrics.setSharedBlockCacheStatistics(registry::getSharedBlockCacheTickerCount);
+        metrics.setRocksDBStatistics(registry);
         try (Cache cache = new HyperClockCache(1024 * 1024, 0, -1, false)) {
             long expectedHits;
             long expectedMisses;
+            HistogramData getData;
+            HistogramData multiGetData;
             RocksDBResourceContainer resources =
                     new RocksDBResourceContainer(
                             new Configuration(),
@@ -625,7 +563,6 @@ class RocksDBKvTest {
                     new RocksDBKvBuilder(
                                     directory.toFile(), resources, resources.getColumnOptions())
                             .build()) {
-                kv.initializeMetrics(metrics);
                 byte[] key = {1};
                 kv.put(key, new byte[] {2});
                 try (FlushOptions flush = new FlushOptions().setWaitForFlush(true)) {
@@ -633,6 +570,12 @@ class RocksDBKvTest {
                 }
                 kv.get(key);
                 kv.get(key);
+                assertThat(kv.multiGet(Arrays.asList(key, new byte[] {3})))
+                        .containsExactly(new byte[] {2}, null);
+                getData = kv.getStatistics().getHistogramData(HistogramType.DB_GET);
+                multiGetData = kv.getStatistics().getHistogramData(HistogramType.DB_MULTIGET);
+                assertThat(getData.getCount()).isEqualTo(2);
+                assertThat(multiGetData.getCount()).isEqualTo(1);
                 expectedHits = kv.getStatistics().getTickerCount(TickerType.BLOCK_CACHE_DATA_HIT);
                 expectedMisses =
                         kv.getStatistics().getTickerCount(TickerType.BLOCK_CACHE_DATA_MISS);
@@ -653,6 +596,34 @@ class RocksDBKvTest {
                                     "block_type",
                                     "data"))
                     .isEqualTo(expectedMisses);
+            assertThat(
+                            metricValue(
+                                    metrics,
+                                    MetricNames.ROCKSDB_NATIVE_READ_COUNT_TOTAL,
+                                    "operation",
+                                    "get"))
+                    .isEqualTo(getData.getCount());
+            assertThat(
+                            metricValue(
+                                    metrics,
+                                    MetricNames.ROCKSDB_NATIVE_READ_TIME_US_TOTAL,
+                                    "operation",
+                                    "get"))
+                    .isEqualTo(getData.getSum());
+            assertThat(
+                            metricValue(
+                                    metrics,
+                                    MetricNames.ROCKSDB_NATIVE_READ_COUNT_TOTAL,
+                                    "operation",
+                                    "multiGet"))
+                    .isEqualTo(multiGetData.getCount());
+            assertThat(
+                            metricValue(
+                                    metrics,
+                                    MetricNames.ROCKSDB_NATIVE_READ_TIME_US_TOTAL,
+                                    "operation",
+                                    "multiGet"))
+                    .isEqualTo(multiGetData.getSum());
         }
     }
 

@@ -27,7 +27,6 @@ import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.metrics.groups.AbstractMetricGroup;
 import org.apache.fluss.metrics.registry.NOPMetricRegistry;
 import org.apache.fluss.server.kv.rocksdb.RocksDBStatistics;
-import org.apache.fluss.server.metrics.group.TabletServerMetricGroup.RocksDBReadOperation;
 
 import org.junit.jupiter.api.Test;
 
@@ -99,24 +98,24 @@ class TabletServerMetricGroupTest {
     }
 
     @Test
-    void testRocksDBReadCounters() {
+    void testNativeRocksDBCounterLabels() {
         CollectingRegistry registry = new CollectingRegistry();
         TabletServerMetricGroup metrics =
                 new TabletServerMetricGroup(registry, "cluster", "rack", "host", 0);
-        assertThat(registry.counters).hasSize(12);
+        assertThat(registry.counters).hasSize(10);
         registry.labels.forEach(
                 labels -> {
                     assertThat(labels)
                             .doesNotContainKeys("database", "table", "bucket", "bucket_id");
                     assertThat(labels).containsKeys("cluster_id", "server_id");
                 });
-        metrics.recordRocksDBRead(RocksDBReadOperation.GET, 600);
-        metrics.recordRocksDBRead(RocksDBReadOperation.GET, 600);
-        assertThat(registry.value(MetricNames.ROCKSDB_READ_EXECUTION_TIME_US_TOTAL, "get"))
-                .isEqualTo(1);
-        assertThat(registry.value(MetricNames.ROCKSDB_READ_EXECUTION_COUNT_TOTAL, "get"))
-                .isEqualTo(2);
-        assertThat(registry.value(MetricNames.ROCKSDB_READ_EXECUTION_COUNT_TOTAL, "multiGet"))
+        assertThat(registry.labels)
+                .filteredOn(labels -> labels.containsKey("operation"))
+                .extracting(labels -> labels.get("operation"))
+                .containsOnly("get", "multiGet");
+        assertThat(registry.value(MetricNames.ROCKSDB_NATIVE_READ_TIME_US_TOTAL, "get")).isZero();
+        assertThat(registry.value(MetricNames.ROCKSDB_NATIVE_READ_COUNT_TOTAL, "get")).isZero();
+        assertThat(registry.value(MetricNames.ROCKSDB_NATIVE_READ_COUNT_TOTAL, "multiGet"))
                 .isZero();
         assertThat(registry.value(MetricNames.ROCKSDB_SHARED_BLOCK_CACHE_HITS_TOTAL, "data"))
                 .isZero();
@@ -134,8 +133,8 @@ class TabletServerMetricGroupTest {
         public void register(Metric metric, String name, AbstractMetricGroup group) {
             if (name.equals(MetricNames.ROCKSDB_SHARED_BLOCK_CACHE_HITS_TOTAL)
                     || name.equals(MetricNames.ROCKSDB_SHARED_BLOCK_CACHE_MISSES_TOTAL)
-                    || name.equals(MetricNames.ROCKSDB_READ_EXECUTION_COUNT_TOTAL)
-                    || name.equals(MetricNames.ROCKSDB_READ_EXECUTION_TIME_US_TOTAL)) {
+                    || name.equals(MetricNames.ROCKSDB_NATIVE_READ_COUNT_TOTAL)
+                    || name.equals(MetricNames.ROCKSDB_NATIVE_READ_TIME_US_TOTAL)) {
                 Map<String, String> variables = group.getAllVariables();
                 String label = variables.getOrDefault("operation", variables.get("block_type"));
                 counters.put(name + ":" + label, (Counter) metric);

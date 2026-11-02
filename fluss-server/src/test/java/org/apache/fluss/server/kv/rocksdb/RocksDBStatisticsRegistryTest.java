@@ -17,6 +17,8 @@
 
 package org.apache.fluss.server.kv.rocksdb;
 
+import io.github.fluss_contrib.rocksdb.HistogramData;
+import io.github.fluss_contrib.rocksdb.HistogramType;
 import io.github.fluss_contrib.rocksdb.Statistics;
 import io.github.fluss_contrib.rocksdb.TickerType;
 import org.junit.jupiter.api.Test;
@@ -155,9 +157,91 @@ class RocksDBStatisticsRegistryTest {
         }
     }
 
+    @Test
+    void testNativeReadTotalsSurviveFailuresResetAndReopenWithoutSharedCache() {
+        TestingStatistics first = new TestingStatistics();
+        TestingStatistics second = new TestingStatistics();
+        TestingStatistics reopened = new TestingStatistics();
+        Queue<Statistics> statistics = new ArrayDeque<>(Arrays.asList(first, second, reopened));
+        RocksDBStatisticsRegistry registry =
+                new RocksDBStatisticsRegistry(false, statistics::remove);
+        try (RocksDBStatisticsRegistry.Lease firstLease = registry.acquire(1);
+                RocksDBStatisticsRegistry.Lease duplicateLease = registry.acquire(1);
+                RocksDBStatisticsRegistry.Lease secondLease = registry.acquire(2)) {
+            first.reads = 2;
+            first.readMicros = 13;
+            second.reads = 3;
+            second.readMicros = 29;
+            first.hits = 10;
+            assertThat(registry.getSharedBlockCacheTickerCount(TickerType.BLOCK_CACHE_DATA_HIT))
+                    .isZero();
+            assertThat(registry.getNativeReadCount(HistogramType.DB_GET)).isEqualTo(5);
+            assertThat(registry.getNativeReadTimeMicros(HistogramType.DB_GET)).isEqualTo(42);
+            assertThat(registry.getNativeReadCount(HistogramType.DB_MULTIGET)).isZero();
+            assertThat(registry.getNativeReadTimeMicros(HistogramType.DB_MULTIGET)).isZero();
+
+            first.fail = true;
+            first.reads = 4;
+            first.readMicros = 23;
+            second.reads = 5;
+            second.readMicros = 39;
+            assertThat(registry.getNativeReadCount(HistogramType.DB_GET)).isEqualTo(7);
+            assertThat(registry.getNativeReadTimeMicros(HistogramType.DB_GET)).isEqualTo(52);
+            first.fail = false;
+            assertThat(registry.getNativeReadCount(HistogramType.DB_GET)).isEqualTo(9);
+            assertThat(registry.getNativeReadTimeMicros(HistogramType.DB_GET)).isEqualTo(62);
+
+            firstLease.close();
+            assertThat(first.isOwningHandle()).isTrue();
+            duplicateLease.close();
+            assertThat(first.isOwningHandle()).isFalse();
+            second.reads = 1;
+            second.readMicros = 100;
+            assertThat(registry.getNativeReadCount(HistogramType.DB_GET)).isEqualTo(10);
+            assertThat(registry.getNativeReadTimeMicros(HistogramType.DB_GET)).isEqualTo(162);
+            second.reads = 2;
+            second.readMicros = 1;
+            assertThat(registry.getNativeReadCount(HistogramType.DB_GET)).isEqualTo(12);
+            assertThat(registry.getNativeReadTimeMicros(HistogramType.DB_GET)).isEqualTo(163);
+            try (RocksDBStatisticsRegistry.Lease reopenedLease = registry.acquire(1)) {
+                assertThat(reopenedLease.getStatistics()).isSameAs(reopened);
+                reopened.reads = 2;
+                reopened.readMicros = 7;
+                reopened.multiReads = 3;
+                reopened.multiReadMicros = 11;
+            }
+            assertThat(registry.getNativeReadCount(HistogramType.DB_GET)).isEqualTo(14);
+            assertThat(registry.getNativeReadTimeMicros(HistogramType.DB_GET)).isEqualTo(170);
+            assertThat(registry.getNativeReadCount(HistogramType.DB_MULTIGET)).isEqualTo(3);
+            assertThat(registry.getNativeReadTimeMicros(HistogramType.DB_MULTIGET)).isEqualTo(11);
+        }
+    }
+
     private static class TestingStatistics extends Statistics {
         private long hits;
+        private long reads;
+        private long readMicros;
+        private long multiReads;
+        private long multiReadMicros;
         private boolean fail;
+
+        @Override
+        public HistogramData getHistogramData(HistogramType histogram) {
+            if (fail) {
+                throw new IllegalStateException("Statistics unavailable");
+            }
+            boolean get = histogram == HistogramType.DB_GET;
+            return new HistogramData(
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    get ? reads : multiReads,
+                    get ? readMicros : multiReadMicros,
+                    0);
+        }
 
         @Override
         public long getTickerCount(TickerType ticker) {

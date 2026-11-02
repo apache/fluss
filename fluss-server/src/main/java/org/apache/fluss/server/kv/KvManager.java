@@ -203,8 +203,7 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
         this.sharedRocksDBRateLimiter = createSharedRateLimiter(conf);
         this.sharedBlockCache = createSharedBlockCache(conf);
         this.statisticsRegistry = new RocksDBStatisticsRegistry(sharedBlockCache != null);
-        tabletServerMetricGroup.setSharedBlockCacheStatistics(
-                statisticsRegistry::getSharedBlockCacheTickerCount);
+        tabletServerMetricGroup.setRocksDBStatistics(statisticsRegistry);
         this.currentSharedRateLimitBytesPerSec =
                 conf.get(ConfigOptions.KV_SHARED_RATE_LIMITER_BYTES_PER_SEC).getBytes();
         KvFlushScheduler createdFlushScheduler =
