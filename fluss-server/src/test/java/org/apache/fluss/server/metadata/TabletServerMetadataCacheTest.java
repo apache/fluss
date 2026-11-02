@@ -27,6 +27,7 @@ import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
@@ -34,9 +35,12 @@ import org.apache.fluss.server.zk.data.PartitionRegistration;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.annotation.Nullable;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
@@ -93,13 +97,15 @@ public class TabletServerMetadataCacheTest {
     private final List<BucketMetadata> initialBucketMetadata =
             Arrays.asList(
                     new BucketMetadata(0, 0, 0, Arrays.asList(0, 1, 2)),
-                    new BucketMetadata(1, NO_LEADER, 0, Arrays.asList(1, 0, 2)));
+                    new BucketMetadata(1, NO_LEADER, 0, Arrays.asList(1, 0, 2)),
+                    new BucketMetadata(2, null, 0, Arrays.asList(2, 0, 1)));
     private final List<BucketMetadata> changedBucket1BucketMetadata =
             Collections.singletonList(new BucketMetadata(1, 1, 0, Arrays.asList(1, 0, 2)));
     private final List<BucketMetadata> afterChangeBucketMetadata =
             Arrays.asList(
                     new BucketMetadata(0, 0, 0, Arrays.asList(0, 1, 2)),
-                    new BucketMetadata(1, 1, 0, Arrays.asList(1, 0, 2)));
+                    new BucketMetadata(1, 1, 0, Arrays.asList(1, 0, 2)),
+                    new BucketMetadata(2, null, 0, Arrays.asList(2, 0, 1)));
 
     @BeforeEach
     public void setup() {
@@ -144,12 +150,14 @@ public class TabletServerMetadataCacheTest {
                                 partitionTableId,
                                 partitionName1,
                                 partitionId1,
-                                initialBucketMetadata),
+                                initialBucketMetadata,
+                                initialBucketMetadata.size()),
                         new PartitionMetadata(
                                 partitionTableId,
                                 partitionName2,
                                 partitionId2,
-                                initialBucketMetadata));
+                                initialBucketMetadata,
+                                initialBucketMetadata.size()));
     }
 
     @Test
@@ -277,6 +285,57 @@ public class TabletServerMetadataCacheTest {
                 initialBucketMetadata);
     }
 
+    @ParameterizedTest
+    @ValueSource(ints = {-1, 3})
+    void testInvalidBucketIdsAreCacheMisses(int invalidBucketId) {
+        List<BucketMetadata> buckets = bucketMetadata(3);
+        buckets.set(2, new BucketMetadata(invalidBucketId, 0, 0, Arrays.asList(0, 1, 2)));
+        serverMetadataCache.updateTableMetadata(new TableMetadata(DATA1_TABLE_INFO, buckets));
+        assertThat(serverMetadataCache.getTableMetadata(DATA1_TABLE_PATH)).isEmpty();
+
+        serverMetadataCache.updateTableMetadata(
+                new TableMetadata(partitionTableInfo, Collections.emptyList()));
+        serverMetadataCache.updatePartitionMetadata(
+                new PartitionMetadata(partitionTableId, partitionName1, partitionId1, buckets, 3));
+        assertThat(
+                        serverMetadataCache.getPartitionMetadata(
+                                PhysicalTablePath.of(partitionedTablePath, partitionName1)))
+                .isEmpty();
+    }
+
+    @Test
+    void testPartitionUsesItsOwnBucketCount() {
+        serverMetadataCache.updateTableMetadata(
+                new TableMetadata(partitionTableInfo, Collections.emptyList()));
+        serverMetadataCache.updatePartitionMetadata(
+                new PartitionMetadata(
+                        partitionTableId, partitionName1, partitionId1, bucketMetadata(1), 1));
+        assertThat(serverMetadataCache.getTableMetadata(partitionedTablePath))
+                .hasValueSatisfying(
+                        metadata -> assertThat(metadata.getBucketMetadataList()).isEmpty());
+        assertThat(
+                        serverMetadataCache.getPartitionMetadata(
+                                PhysicalTablePath.of(partitionedTablePath, partitionName1)))
+                .hasValueSatisfying(
+                        metadata -> {
+                            assertThat(metadata.getBucketCount()).isEqualTo(1);
+                            assertThat(metadata.getBucketMetadataList()).hasSize(1);
+                        });
+    }
+
+    @Test
+    void testPartitionWithoutExplicitBucketCountIsCacheMiss() {
+        serverMetadataCache.updateTableMetadata(
+                new TableMetadata(partitionTableInfo, Collections.emptyList()));
+        serverMetadataCache.updatePartitionMetadata(
+                new PartitionMetadata(
+                        partitionTableId, partitionName1, partitionId1, initialBucketMetadata));
+        assertThat(
+                        serverMetadataCache.getPartitionMetadata(
+                                PhysicalTablePath.of(partitionedTablePath, partitionName1)))
+                .isEmpty();
+    }
+
     @Test
     void testContainsTableBucket() {
         tableMetadataList =
@@ -348,6 +407,7 @@ public class TabletServerMetadataCacheTest {
     void testPartitionBucketCountRemovedOnDelete() {
         // Seed both partitions with explicit per-partition bucket counts.
         int explicitBucketCount = 8;
+        List<BucketMetadata> buckets = bucketMetadata(explicitBucketCount);
         serverMetadataCache.updateClusterMetadata(
                 new ClusterMetadata(
                         coordinatorServer,
@@ -358,16 +418,14 @@ public class TabletServerMetadataCacheTest {
                                         partitionTableId,
                                         partitionName1,
                                         partitionId1,
-                                        initialBucketMetadata,
+                                        buckets,
                                         explicitBucketCount),
                                 new PartitionMetadata(
                                         partitionTableId,
                                         partitionName2,
                                         partitionId2,
-                                        initialBucketMetadata,
+                                        buckets,
                                         explicitBucketCount))));
-        // The explicit count must be exposed via the updateClusterMetadata path (not the
-        // merged bucket-metadata-list size); the delete/re-add asserts below build on this.
         assertThat(
                         serverMetadataCache
                                 .getPartitionMetadata(
@@ -393,9 +451,7 @@ public class TabletServerMetadataCacheTest {
                                 PhysicalTablePath.of(partitionedTablePath, partitionName1)))
                 .isEmpty();
 
-        // Re-add partition1 WITHOUT an explicit bucketCount. The cache must NOT return the
-        // stale 8; the DELETED_PARTITION_ID path must have removed the prior entry from the
-        // partitionBucketCounts map so the fallback (bucketMetadataList.size()) applies.
+        // Re-adding without a count must not reuse the deleted partition's count.
         serverMetadataCache.updateClusterMetadata(
                 new ClusterMetadata(
                         coordinatorServer,
@@ -408,12 +464,15 @@ public class TabletServerMetadataCacheTest {
                                         partitionId1,
                                         initialBucketMetadata))));
         assertThat(
+                        serverMetadataCache.getPartitionMetadata(
+                                PhysicalTablePath.of(partitionedTablePath, partitionName1)))
+                .isEmpty();
+        assertThat(
                         serverMetadataCache
-                                .getPartitionMetadata(
-                                        PhysicalTablePath.of(partitionedTablePath, partitionName1))
-                                .get()
-                                .getBucketCount())
-                .isEqualTo(initialBucketMetadata.size());
+                                .getSnapshot()
+                                .getPartitionBucketCount(
+                                        new TablePartition(partitionTableId, partitionId1)))
+                .isNull();
 
         // Delete partition2 via DELETED_PARTITION_NAME (partitionName marks deletion).
         serverMetadataCache.updateClusterMetadata(
@@ -432,8 +491,7 @@ public class TabletServerMetadataCacheTest {
                                 PhysicalTablePath.of(partitionedTablePath, partitionName2)))
                 .isEmpty();
 
-        // Re-add partition2 WITHOUT explicit; the DELETED_PARTITION_NAME path must have also
-        // cleared partitionBucketCounts, so fallback (list size) applies rather than stale 8.
+        // The name-based deletion must also discard the partition's count.
         serverMetadataCache.updateClusterMetadata(
                 new ClusterMetadata(
                         coordinatorServer,
@@ -446,12 +504,15 @@ public class TabletServerMetadataCacheTest {
                                         partitionId2,
                                         initialBucketMetadata))));
         assertThat(
+                        serverMetadataCache.getPartitionMetadata(
+                                PhysicalTablePath.of(partitionedTablePath, partitionName2)))
+                .isEmpty();
+        assertThat(
                         serverMetadataCache
-                                .getPartitionMetadata(
-                                        PhysicalTablePath.of(partitionedTablePath, partitionName2))
-                                .get()
-                                .getBucketCount())
-                .isEqualTo(initialBucketMetadata.size());
+                                .getSnapshot()
+                                .getPartitionBucketCount(
+                                        new TablePartition(partitionTableId, partitionId2)))
+                .isNull();
     }
 
     @Test
@@ -472,7 +533,7 @@ public class TabletServerMetadataCacheTest {
                         partitionTableId,
                         partitionName1,
                         partitionId1,
-                        initialBucketMetadata,
+                        bucketMetadata(explicitBucketCount),
                         explicitBucketCount));
         assertThat(
                         serverMetadataCache
@@ -536,7 +597,7 @@ public class TabletServerMetadataCacheTest {
                 .contains(initialBucketMetadata.get(0));
         assertThat(serverMetadataCache.getCachedBucketMetadata(DATA1_TABLE_PATH, 1))
                 .contains(initialBucketMetadata.get(1));
-        assertThat(serverMetadataCache.getCachedBucketMetadata(DATA1_TABLE_PATH, 2)).isEmpty();
+        assertThat(serverMetadataCache.getCachedBucketMetadata(DATA1_TABLE_PATH, 3)).isEmpty();
         assertThat(
                         serverMetadataCache.getCachedBucketMetadata(
                                 TablePath.of("unknown_db", "unknown_table"), 0))
@@ -659,6 +720,7 @@ public class TabletServerMetadataCacheTest {
         List<BucketMetadata> newBucketMetadata =
                 Arrays.asList(
                         new BucketMetadata(0, 1, 1, Arrays.asList(1, 2, 3)),
+                        new BucketMetadata(1, 2, 1, Arrays.asList(1, 2, 3)),
                         new BucketMetadata(2, 2, 0, Arrays.asList(2, 3, 4)));
         TableMetadata newMetadata = new TableMetadata(DATA1_TABLE_INFO, newBucketMetadata);
         serverMetadataCache.updateTableMetadata(newMetadata);
@@ -682,7 +744,11 @@ public class TabletServerMetadataCacheTest {
         PhysicalTablePath partitionPath = PhysicalTablePath.of(partitionedTablePath, partitionName);
         PartitionMetadata partitionMetadata =
                 new PartitionMetadata(
-                        partitionTableId, partitionName, partitionId, initialBucketMetadata);
+                        partitionTableId,
+                        partitionName,
+                        partitionId,
+                        initialBucketMetadata,
+                        initialBucketMetadata.size());
 
         serverMetadataCache.updatePartitionMetadata(partitionMetadata);
 
@@ -729,7 +795,11 @@ public class TabletServerMetadataCacheTest {
         PhysicalTablePath partitionPath = PhysicalTablePath.of(partitionedTablePath, partitionName);
         PartitionMetadata existingPartitionMetadata =
                 new PartitionMetadata(
-                        partitionTableId, partitionName, partitionId, initialBucketMetadata);
+                        partitionTableId,
+                        partitionName,
+                        partitionId,
+                        initialBucketMetadata,
+                        initialBucketMetadata.size());
         serverMetadataCache.updatePartitionMetadata(existingPartitionMetadata);
 
         // When: update with new bucket metadata
@@ -737,7 +807,11 @@ public class TabletServerMetadataCacheTest {
                 Arrays.asList(new BucketMetadata(0, 1, 1, Arrays.asList(1, 2, 3)));
         PartitionMetadata newPartitionMetadata =
                 new PartitionMetadata(
-                        partitionTableId, partitionName, partitionId, newBucketMetadata);
+                        partitionTableId,
+                        partitionName,
+                        partitionId,
+                        newBucketMetadata,
+                        newBucketMetadata.size());
         serverMetadataCache.updatePartitionMetadata(newPartitionMetadata);
 
         // Then: verify the new metadata replaces the old one
@@ -952,6 +1026,14 @@ public class TabletServerMetadataCacheTest {
                         });
         cache.clearTableMetadata();
         assertThat(cache.getMetadataView("CLIENT", path -> true).getTablePaths()).isEmpty();
+    }
+
+    private static List<BucketMetadata> bucketMetadata(int count) {
+        List<BucketMetadata> buckets = new ArrayList<>();
+        for (int bucketId = 0; bucketId < count; bucketId++) {
+            buckets.add(new BucketMetadata(bucketId, 0, 0, Arrays.asList(0, 1, 2)));
+        }
+        return buckets;
     }
 
     private TableMetadata kafkaTable(long tableId, String enabled, List<BucketMetadata> buckets) {

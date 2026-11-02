@@ -160,8 +160,14 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
             if (tableInfo.getTableId() != tableId) {
                 return Optional.empty();
             }
+            Map<Integer, BucketMetadata> buckets = snapshot.getBucketMetadataForTable(tableId);
             List<BucketMetadata> bucketMetadataList =
-                    new ArrayList<>(snapshot.getBucketMetadataForTable(tableId).values());
+                    tableInfo.isPartitioned()
+                            ? new ArrayList<>(buckets.values())
+                            : completeBucketMetadata(buckets, tableInfo.getNumBuckets());
+            if (bucketMetadataList == null) {
+                return Optional.empty();
+            }
             return Optional.of(new TableMetadata(tableInfo, bucketMetadataList));
         } catch (Exception e) {
             // If table doesn't exist in ZK but exists in cache, return empty
@@ -228,22 +234,23 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
             }
             long tableId = tableIdOpt.getAsLong();
             long partitionId = partitionIdOpt.get();
-            List<BucketMetadata> bucketMetadataList =
-                    new ArrayList<>(snapshot.getBucketMetadataForPartition(partitionId).values());
-            // prefer the explicit bucket count sent by the coordinator; the merged bucket
-            // metadata list may be transiently partial during incremental updates
             Integer bucketCount =
                     snapshot.getPartitionBucketCount(new TablePartition(tableId, partitionId));
+            if (bucketCount == null) {
+                continue;
+            }
+            List<BucketMetadata> bucketMetadataList =
+                    completeBucketMetadata(
+                            snapshot.getBucketMetadataForPartition(partitionId), bucketCount);
+            if (bucketMetadataList == null) {
+                continue;
+            }
             cachedPartitionsByTable
                     .computeIfAbsent(tablePath, k -> new HashMap<>())
                     .put(
                             partitionName,
                             new PartitionMetadata(
-                                    tableId,
-                                    partitionName,
-                                    partitionId,
-                                    bucketMetadataList,
-                                    bucketCount != null ? bucketCount : bucketMetadataList.size()));
+                                    tableId, partitionName, partitionId, bucketMetadataList, bucketCount));
         }
 
         Map<PhysicalTablePath, PartitionMetadata> result = new HashMap<>();
@@ -640,10 +647,28 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                 });
     }
 
+    @Nullable
+    private static List<BucketMetadata> completeBucketMetadata(
+            Map<Integer, BucketMetadata> buckets, int bucketCount) {
+        if (bucketCount <= 0 || buckets.size() != bucketCount) {
+            return null;
+        }
+        List<BucketMetadata> result = new ArrayList<>(bucketCount);
+        // Unique map keys with this size must cover [0, bucketCount) to form a complete layout.
+        // Unknown leaders do not make a bucket assignment incomplete.
+        for (Map.Entry<Integer, BucketMetadata> entry : buckets.entrySet()) {
+            if (entry.getKey() < 0 || entry.getKey() >= bucketCount) {
+                return null;
+            }
+            result.add(entry.getValue());
+        }
+        return result;
+    }
+
     /**
      * Merges the coordinator-sent per-partition bucket count into the cache map. Coordinators of
-     * older versions do not send it; in that case the cache keeps no entry and readers fall back to
-     * the merged bucket metadata size (see {@link #getPartitionMetadata}).
+     * older versions do not send it; if no count is cached, readers must load authoritative
+     * metadata rather than infer a count from a potentially partial bucket list.
      */
     private static void mergePartitionBucketCount(
             Map<TablePartition, Integer> partitionBucketCounts,
