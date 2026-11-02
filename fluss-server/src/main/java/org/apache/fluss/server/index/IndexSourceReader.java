@@ -502,6 +502,18 @@ public final class IndexSourceReader implements AutoCloseable {
                 long start = nextOffset;
                 long end = Math.min(Math.min(batch.nextLogOffset(), upperBound), highWatermark);
                 if (start < end) {
+                    if (start != batch.baseLogOffset() || end != batch.nextLogOffset()) {
+                        throw corruption(
+                                "source read range ["
+                                        + start
+                                        + ", "
+                                        + end
+                                        + ") splits record batch ["
+                                        + batch.baseLogOffset()
+                                        + ", "
+                                        + batch.nextLogOffset()
+                                        + ")");
+                    }
                     batches.add(new SourceBatchSlice(batch, start, end));
                     bytes += batch.sizeInBytes();
                     if (metrics != null) {
