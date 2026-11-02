@@ -21,10 +21,12 @@ import org.apache.fluss.client.metadata.TestingMetadataUpdater;
 import org.apache.fluss.cluster.BucketLocation;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.HistoricalPartitionThrottledException;
 import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
+import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.exception.TimeoutException;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -46,6 +48,8 @@ import org.apache.fluss.utils.ExponentialBackoff;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+
+import javax.annotation.Nullable;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -73,7 +77,7 @@ public class LookupSenderTest {
 
     private final TableBucket tb1 = new TableBucket(DATA1_TABLE_ID_PK, 0);
 
-    private TestingMetadataUpdater metadataUpdater;
+    private LeaderlessTestingMetadataUpdater metadataUpdater;
     private LookupSender lookupSender;
 
     private static final int MAX_RETRIES = 3;
@@ -89,13 +93,9 @@ public class LookupSenderTest {
         // create a configurable gateway for testing
         gateway = new ConfigurableTestTabletServerGateway();
 
-        // build metadata updater with custom gateway using builder pattern
         Map<TablePath, TableInfo> tableInfos = new HashMap<>();
         tableInfos.put(DATA1_TABLE_PATH_PK, DATA1_TABLE_INFO_PK);
-        metadataUpdater =
-                TestingMetadataUpdater.builder(tableInfos)
-                        .withTabletServerGateway(1, gateway)
-                        .build();
+        metadataUpdater = new LeaderlessTestingMetadataUpdater(tableInfos, gateway);
 
         // Keep the backoff short so retry tests that don't assert on timing stay fast.
         startLookupSender(new ExponentialBackoff(10, 2, 100, 0.2));
@@ -117,6 +117,13 @@ public class LookupSenderTest {
     }
 
     private void startLookupSender(ExponentialBackoff retryBackoff) {
+        createLookupSender(retryBackoff);
+        senderThread = new Thread(lookupSender);
+        senderThread.start();
+    }
+
+    /** Creates a sender without starting its thread. */
+    private void createLookupSender(ExponentialBackoff retryBackoff) {
         Configuration conf = new Configuration();
         conf.set(ConfigOptions.CLIENT_LOOKUP_QUEUE_SIZE, 5);
         conf.set(ConfigOptions.CLIENT_LOOKUP_MAX_BATCH_SIZE, 10);
@@ -131,9 +138,7 @@ public class LookupSenderTest {
                         retryBackoff,
                         (short) -1,
                         1000);
-
-        senderThread = new Thread(lookupSender);
-        senderThread.start();
+        senderThread = null;
     }
 
     @Test
@@ -396,6 +401,71 @@ public class LookupSenderTest {
 
         assertThat(query.retries()).isEqualTo(1);
         assertThat(query.nextRetryTimeMs()).isLessThanOrEqualTo(System.currentTimeMillis());
+    }
+
+    @Test
+    void testLeaderlessBucketResolvesLeaderOncePerPassAndBacksOff() throws Exception {
+        // Drive each pass from the test thread, so the queue is not drained concurrently.
+        teardown();
+        long initialBackoffMs = 100;
+        createLookupSender(new ExponentialBackoff(initialBackoffMs, 2, 10_000, 0));
+        metadataUpdater.failLeaderLookups(Integer.MAX_VALUE, null);
+
+        List<AbstractLookupQuery<?>> lookups =
+                Arrays.asList(
+                        new LookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("key1")),
+                        new LookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("key2")),
+                        new PrefixLookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("prefix")));
+
+        for (int pass = 1; pass <= 2; pass++) {
+            long passStartMs = System.currentTimeMillis();
+            lookupSender.sendLookups(pass == 1 ? lookups : lookupQueue.drainAll());
+
+            assertThat(metadataUpdater.failedLeaderLookups()).isEqualTo(pass);
+            assertThat(lookupQueue.getReEnqueuedLookupQueue())
+                    .containsExactlyInAnyOrderElementsOf(lookups);
+            for (AbstractLookupQuery<?> lookup : lookups) {
+                assertThat(lookup.future()).isNotDone();
+                assertThat(lookup.retries()).isZero();
+                assertThat(lookup.leaderNotFoundRetries()).isEqualTo(pass);
+                assertThat(lookup.nextRetryTimeMs())
+                        .isGreaterThanOrEqualTo(passStartMs + (initialBackoffMs << (pass - 1)));
+            }
+        }
+    }
+
+    @Test
+    void testLeaderlessBucketDoesNotUseUpRetries() throws Exception {
+        int leaderlessPasses = MAX_RETRIES + 2;
+        metadataUpdater.failLeaderLookups(leaderlessPasses, null);
+        gateway.setLookupHandler(request -> createSuccessResponse(request, bytes("value")));
+
+        LookupQuery query = new LookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("key"));
+        lookupQueue.appendLookup(query);
+
+        assertThat(query.future().get(5, TimeUnit.SECONDS)).isEqualTo(bytes("value"));
+        assertThat(query.leaderNotFoundRetries()).isEqualTo(leaderlessPasses);
+        assertThat(query.retries()).isZero();
+    }
+
+    @Test
+    void testPartitionNotExistCompletesAllLookupsForBucket() throws Exception {
+        teardown();
+        createLookupSender(new ExponentialBackoff(10, 2, 100, 0.2));
+        metadataUpdater.failLeaderLookups(
+                Integer.MAX_VALUE, new PartitionNotExistException("partition dropped"));
+
+        LookupQuery query1 = new LookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("key1"));
+        LookupQuery query2 = new LookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("key2"));
+        lookupSender.sendLookups(Arrays.asList(query1, query2));
+
+        assertThat(metadataUpdater.failedLeaderLookups()).isEqualTo(1);
+        assertThat(lookupQueue.getReEnqueuedLookupQueue()).isEmpty();
+        for (LookupQuery query : Arrays.asList(query1, query2)) {
+            assertThatThrownBy(() -> query.future().get(5, TimeUnit.SECONDS))
+                    .isInstanceOf(ExecutionException.class)
+                    .hasRootCauseInstanceOf(PartitionNotExistException.class);
+        }
     }
 
     @Test
@@ -930,6 +1000,50 @@ public class LookupSenderTest {
                 return prefixLookupHandler.apply(request);
             }
             return CompletableFuture.completedFuture(new PrefixLookupResponse());
+        }
+    }
+
+    /**
+     * A {@link TestingMetadataUpdater} that can fail leader lookups for {@link #TABLE_BUCKET}, as
+     * when the bucket has no leader or a metadata refresh fails.
+     */
+    private static class LeaderlessTestingMetadataUpdater extends TestingMetadataUpdater {
+
+        private final AtomicInteger remainingFailures = new AtomicInteger();
+        private final AtomicInteger failedLeaderLookups = new AtomicInteger();
+        private volatile RuntimeException failure;
+
+        LeaderlessTestingMetadataUpdater(
+                Map<TablePath, TableInfo> tableInfos, TestTabletServerGateway gateway) {
+            super(
+                    COORDINATOR,
+                    Arrays.asList(NODE1, NODE2, NODE3),
+                    tableInfos,
+                    Collections.singletonMap(1, gateway),
+                    new Configuration());
+        }
+
+        /** Fails the next leader lookups with {@code failure}, or a generic error if null. */
+        void failLeaderLookups(int failures, @Nullable RuntimeException failure) {
+            this.failure = failure;
+            remainingFailures.set(failures);
+        }
+
+        int failedLeaderLookups() {
+            return failedLeaderLookups.get();
+        }
+
+        @Override
+        public int leaderFor(TablePath tablePath, TableBucket tableBucket) {
+            if (tableBucket.equals(TABLE_BUCKET)
+                    && remainingFailures.getAndUpdate(n -> Math.max(0, n - 1)) > 0) {
+                failedLeaderLookups.incrementAndGet();
+                throw failure != null
+                        ? failure
+                        : new FlussRuntimeException(
+                                "Leader not found for table bucket: " + tableBucket);
+            }
+            return super.leaderFor(tablePath, tableBucket);
         }
     }
 }

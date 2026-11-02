@@ -41,6 +41,10 @@ public abstract class AbstractLookupQuery<T> {
 
     private final int bucketCount;
     private int retries;
+
+    /** Times this lookup was re-enqueued because its bucket had no known leader. */
+    private int leaderNotFoundRetries;
+
     private long nextRetryTimeMs;
 
     public AbstractLookupQuery(
@@ -55,6 +59,7 @@ public abstract class AbstractLookupQuery<T> {
         this.originalPartitionName = originalPartitionName;
         this.bucketCount = bucketCount;
         this.retries = 0;
+        this.leaderNotFoundRetries = 0;
         this.nextRetryTimeMs = 0;
     }
 
@@ -85,6 +90,14 @@ public abstract class AbstractLookupQuery<T> {
 
     public void incrementRetries() {
         retries++;
+    }
+
+    public int leaderNotFoundRetries() {
+        return leaderNotFoundRetries;
+    }
+
+    public void incrementLeaderNotFoundRetries() {
+        leaderNotFoundRetries++;
     }
 
     public long nextRetryTimeMs() {

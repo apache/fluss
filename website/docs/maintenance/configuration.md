@@ -249,14 +249,16 @@ restores immediate retry behavior.
 
 | Key | Default | Type | Description |
 | :--- | :--- | :--- | :--- |
-| `client.lookup.retry-backoff` | `100 ms` | Duration | The initial delay before retrying a lookup that failed with a retriable error, such as `NOT_LEADER_OR_FOLLOWER`. The delay doubles with the lookup retry count and uses 20% jitter. Set to `0` to disable this backoff. |
+| `client.lookup.retry-backoff` | `100 ms` | Duration | The initial delay before retrying a lookup that failed with a retriable error, such as `NOT_LEADER_OR_FOLLOWER`, or whose bucket has no known leader. The delay doubles with each attempt and uses 20% jitter. Set to `0` to disable this backoff. |
 | `client.lookup.retry-backoff-max` | `1 s` | Duration | The maximum retry delay. Must be between the initial backoff and `2147483647ms`. |
 
 The retry backoff applies to each failed lookup and prefix lookup, preventing the client from
 resending lookups in a tight loop while a bucket has no ready leader, for example during a rolling
 restart of TabletServers. New lookups are not delayed by lookups that are waiting to be retried.
-The backoff remains subject to `client.lookup.max-retries`. Setting `client.lookup.retry-backoff`
-to `0` restores immediate retry behavior.
+The backoff remains subject to `client.lookup.max-retries`, except while the client's metadata has
+no leader for the bucket: those attempts also back off but are not counted, so lookups keep waiting
+for leader election instead of failing. Setting `client.lookup.retry-backoff` to `0` restores
+immediate retry behavior.
 
 ## Client disk write protection backoff
 

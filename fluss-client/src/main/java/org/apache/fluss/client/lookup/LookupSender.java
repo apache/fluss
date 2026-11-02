@@ -147,7 +147,8 @@ class LookupSender implements Runnable {
         sendLookups(lookups);
     }
 
-    private void sendLookups(List<AbstractLookupQuery<?>> lookups) throws Exception {
+    @VisibleForTesting
+    void sendLookups(List<AbstractLookupQuery<?>> lookups) throws Exception {
         if (lookups.isEmpty()) {
             return;
         }
@@ -173,32 +174,58 @@ class LookupSender implements Runnable {
         // <leader, LookupType> -> lookup batches
         Map<Tuple2<Integer, LookupType>, List<AbstractLookupQuery<?>>> lookupBatchesByLeader =
                 new HashMap<>();
+        // Resolve the leader once per bucket, as leaderFor() may block on metadata requests.
+        Map<TableBucket, List<AbstractLookupQuery<?>>> lookupsByBucket = new LinkedHashMap<>();
         for (AbstractLookupQuery<?> lookup : lookups) {
+            lookupsByBucket
+                    .computeIfAbsent(lookup.tableBucket(), k -> new ArrayList<>())
+                    .add(lookup);
+        }
+        for (Map.Entry<TableBucket, List<AbstractLookupQuery<?>>> entry :
+                lookupsByBucket.entrySet()) {
+            TableBucket tb = entry.getKey();
+            List<AbstractLookupQuery<?>> bucketLookups = entry.getValue();
             int leader;
-            // lookup the leader node
-            TableBucket tb = lookup.tableBucket();
             try {
                 // TODO Metadata requests are being sent too frequently here. consider first
                 // collecting the tables that need to be updated and then sending them together in
                 // one request.
-                leader = metadataUpdater.leaderFor(lookup.tablePath(), tb);
+                leader = metadataUpdater.leaderFor(bucketLookups.get(0).tablePath(), tb);
             } catch (PartitionNotExistException e) {
                 // Metadata refresh confirmed that the queued lookup carries a deleted partition
                 // id. Complete it instead of repeatedly enqueueing the stale TableBucket; a
                 // primary key lookuper can then reroute by partition name.
-                lookup.future().completeExceptionally(e);
+                bucketLookups.forEach(lookup -> lookup.future().completeExceptionally(e));
                 continue;
             } catch (Exception e) {
-                // if leader is not found, re-enqueue the lookup to send again.
-                LOG.warn("Failed to lookup the leader for {} when lookup", tb, e);
-                reEnqueueLookup(lookup);
+                reEnqueueLookupsWithoutLeader(tb, bucketLookups, e);
                 continue;
             }
-            lookupBatchesByLeader
-                    .computeIfAbsent(Tuple2.of(leader, lookup.lookupType()), k -> new ArrayList<>())
-                    .add(lookup);
+            for (AbstractLookupQuery<?> lookup : bucketLookups) {
+                lookupBatchesByLeader
+                        .computeIfAbsent(
+                                Tuple2.of(leader, lookup.lookupType()), k -> new ArrayList<>())
+                        .add(lookup);
+            }
         }
         return lookupBatchesByLeader;
+    }
+
+    private void reEnqueueLookupsWithoutLeader(
+            TableBucket tableBucket, List<AbstractLookupQuery<?>> lookups, Exception exception) {
+        long maxRetryDelayMs = 0;
+        for (AbstractLookupQuery<?> lookup : lookups) {
+            maxRetryDelayMs = Math.max(maxRetryDelayMs, prepareLeaderRetry(lookup));
+            reEnqueueLookup(lookup);
+        }
+        LOG.warn(
+                "Failed to find the leader for table bucket {}, retrying {} lookup(s) after up to "
+                        + "{} ms. Error: {}",
+                tableBucket,
+                lookups.size(),
+                maxRetryDelayMs,
+                exception.toString());
+        LOG.debug("Failed to find the leader for table bucket {}.", tableBucket, exception);
     }
 
     @VisibleForTesting
@@ -521,6 +548,15 @@ class LookupSender implements Runnable {
         long retryDelayMs = backoff.backoff(lookup.retries());
         lookup.setNextRetryTimeMs(System.currentTimeMillis() + retryDelayMs);
         lookup.incrementRetries();
+        return retryDelayMs;
+    }
+
+    private long prepareLeaderRetry(AbstractLookupQuery<?> lookup) {
+        // Not counted toward max retries: a bucket can be leaderless for a while during a routine
+        // rolling restart, and lookups should not fail because of that.
+        long retryDelayMs = retryBackoff.backoff(lookup.leaderNotFoundRetries());
+        lookup.setNextRetryTimeMs(System.currentTimeMillis() + retryDelayMs);
+        lookup.incrementLeaderNotFoundRetries();
         return retryDelayMs;
     }
 
