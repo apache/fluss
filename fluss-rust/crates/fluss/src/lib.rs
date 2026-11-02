@@ -136,6 +136,8 @@ pub mod error;
 pub mod metrics;
 
 mod bucketing;
+#[doc(hidden)]
+pub use bucketing::BucketingFunction;
 mod compression;
 pub mod io;
 mod util;

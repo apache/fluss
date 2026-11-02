@@ -2110,7 +2110,10 @@ impl LogFetcher {
                         message: format!(
                             "The fetching offset {fetch_offset} is out of range: {error_message}"
                         ),
-                        source: None,
+                        source: Some(Box::new(Error::from(ApiError {
+                            code: FlussError::LogOffsetOutOfRangeException.code(),
+                            message: error_message.to_string(),
+                        }))),
                     });
                 }
                 FetchErrorAction::Authorization => {
@@ -3226,6 +3229,40 @@ mod tests {
             metrics: Arc::clone(&fetcher.metrics),
             request_start_time: Instant::now(),
         }
+    }
+
+    #[tokio::test]
+    async fn collect_fetches_preserves_typed_offset_out_of_range() -> Result<()> {
+        let table_path = TablePath::new("db", "tbl");
+        let table_info = build_table_info(table_path.clone(), 1, 1);
+        let metadata = Arc::new(Metadata::new_for_test(build_cluster_arc(&table_path, 1, 1)));
+        let status = Arc::new(LogScannerStatus::new());
+        let bucket = TableBucket::new(1, 0);
+        status.assign_scan_bucket(bucket.clone(), 5);
+        let fetcher = filtering_fetcher(&table_info, &metadata, status.clone(), None)?;
+        let mut response = filtered_response(None, None);
+        let bucket_response = &mut response.tables_resp[0].buckets_resp[0];
+        bucket_response.error_code = Some(FlussError::LogOffsetOutOfRangeException.code());
+        bucket_response.error_message = Some("retained prefix expired".to_string());
+        LogFetcher::handle_fetch_response(response, test_response_context(&fetcher, &metadata))
+            .await;
+
+        let error = fetcher.collect_fetches().await.err().expect("offset error");
+        let Error::UnexpectedError {
+            source: Some(source),
+            ..
+        } = &error
+        else {
+            panic!("expected the existing fetch error wrapper");
+        };
+        assert_eq!(
+            source.downcast_ref::<Error>().unwrap().api_error(),
+            Some(FlussError::LogOffsetOutOfRangeException)
+        );
+        assert!(error.to_string().contains("offset 5"));
+        assert!(error.to_string().contains("retained prefix expired"));
+        assert_eq!(status.get_bucket_offset(&bucket), Some(5));
+        Ok(())
     }
 
     #[tokio::test]

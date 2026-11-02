@@ -18,7 +18,19 @@ limitations under the License.
 
 # UnionRead API discussion draft
 
-This PR adds only a design document. The APIs below describe the current local PoC and proposed contracts, not APIs available on main. The code examples illustrate call relationships; this document is not an executable example suite.
+This draft includes the actual Rust APIs, their supporting kernel implementation, and a Java boundary-preparation entry. The planner/executor are present so Scan/Reader methods have working implementations rather than stubs. Review the public contracts first; this is not a proposal to merge all implementation units in one PR. The Paimon backend and its dependencies remain in the separate backend work.
+
+The [crate README](../crates/fluss-lake/README.md) contains five compiled Rust examples. The shorter snippets below illustrate call relationships and are not standalone programs.
+
+| Review entry | Code |
+| --- | --- |
+| Table / Scan configuration and preparation | [table.rs](../crates/fluss-lake/src/table.rs) |
+| Frozen boundary types and transport | [read_context.rs](../crates/fluss-lake/src/read_context.rs), [partition.rs](../crates/fluss-lake/src/partition.rs) |
+| Plan / Split / Reader | [plan.rs](../crates/fluss-lake/src/plan.rs), [split.rs](../crates/fluss-lake/src/split.rs), [reader.rs](../crates/fluss-lake/src/reader.rs) |
+| LakeSource extension and request contexts | [source.rs](../crates/fluss-lake/src/source.rs) |
+| Java one-call preparation | [UnionReadBoundaryPlanner](../../fluss-client/src/main/java/org/apache/fluss/client/metadata/UnionReadBoundaryPlanner.java) |
+
+Private boundary capture, planning, execution and descriptor code support these entry points. Core additions reuse the existing scanner, predicate evaluator and Arrow representation; they include the current-view helper and table configuration accessors. No built-in lake file reader is added here.
 
 Related: [FIP-48](https://cwiki.apache.org/confluence/spaces/FLUSS/pages/444334625/FIP-48+Introduce+a+Union+Read+Kernel+for+fluss-rust), [umbrella issue #4713](https://github.com/apache/fluss/issues/4713), and [source-boundary PR #4887](https://github.com/apache/fluss/pull/4887).
 
@@ -46,13 +58,13 @@ FlussLakeTable
 | `scan.new_reader()` | Create a reader without planning or I/O. Read transported splits using the coordinator's scan configuration. |
 | `scan.with_lake_source(source)` | Replace lake planning and baseline reading; retain default Fluss log reading and PK reconciliation. |
 
-The ordinary planning path currently extracts implied STRING partition equalities, including AND conjuncts, before querying offsets. Other predicates retain a wider capture scope and participate in later pruning and exact filtering. The generated context records its scope. Callers sharing boundaries across different partition selections should use `table.prepare()` rather than reuse a query-specific context as a table-wide snapshot.
+The boundary PR provides explicit scoped capture; predicate-to-scope extraction belongs to the subsequent scan/planning implementation, included here for review. The ordinary planning path currently extracts implied STRING partition equalities, including AND conjuncts, before querying offsets. Other predicates retain a wider capture scope and participate in later pruning and exact filtering. The generated context records its scope. Callers sharing boundaries across different partition selections should use `table.prepare()` rather than reuse a query-specific context as a table-wide snapshot.
 
 An explicit PartitionSpec uses Fluss metadata values and constrains the input, rather than supplying a query-filter hint. An empty spec selects the whole table. There is no public `scan.prepare()` method.
 
 ## Rust usage
 
-These snippets show the full PoC API, not the API subset delivered by the boundary-only branch. They assume an existing connection and table path. Use `fluss::predicate::col`, `fluss::metadata::PartitionSpec`, `std::collections::HashMap` and `futures::TryStreamExt` as needed. Paimon reads require the `paimon` feature and runtime catalog configuration.
+These snippets use the APIs included in this draft. They assume an existing connection and table path. Use `fluss::predicate::col`, `fluss::metadata::PartitionSpec`, `std::collections::HashMap` and `futures::TryStreamExt` as needed. Fluss-only tables work without a lake backend; reads with a lake baseline require a supplied LakeSource. The separate Paimon backend will provide the built-in implementation.
 
 ```rust
 let table = FlussLakeTable::open(connection, &path).await?;
@@ -108,22 +120,24 @@ A Rust integration supplies `Arc<dyn LakeSource>` through `with_lake_source`. Th
 
 The extension replaces both lake planning and reading. There is no stable reader-only ABI for the default Paimon payload. A native Parquet reader alone does not supply PK baseline semantics.
 
-Java coordinators can encode existing Admin results without introducing another Java boundary object:
+Java coordinators obtain the boundary in one asynchronous call, without assembling snapshot and offset maps:
 
 ```java
-byte[] bytes = UnionReadContextEncoder.encode(
-        tableInfo, readableSnapshot, livePartitions, earliestOffsets, stoppingOffsets);
+byte[] bytes = UnionReadBoundaryPlanner.prepare(admin, tablePath).get();
+byte[] scoped = UnionReadBoundaryPlanner.prepare(admin, tablePath, scope).get();
 ```
 
-The overload accepting PartitionSpec encodes a restricted scope. Coordinators must apply the same scope before offset lookup, keep the snapshot and its seam offsets together, and recheck table and partition identities. The encoder validates and serializes supplied inputs; it performs no RPCs. Rust imports those bytes with `FlussLakeReadContext::from_json(&bytes)`.
+The planner captures the table schema and readable snapshot, applies the partition scope before querying earliest/stop offsets, and rechecks partition IDs and table identity. Snapshot seams remain paired with their snapshot; only confirmed removed partitions are skipped. Other lookup failures propagate. Later schema additions leave the frozen schema unchanged. The result uses the same v1 format as Rust's `FlussLakeReadContext::from_json(&bytes)`.
+
+The caller owns the Admin connection and distributes the bytes. The planner opens no lake files and uses a sequential partition pipeline to bound metadata fan-out. Because Admin offset request setup can block on metadata, it runs on the CompletableFuture default async executor rather than an RPC callback thread. Cancelling the returned future does not guarantee cancellation of composed RPCs. Encoding is package-private, so ordinary callers cannot accidentally bypass the capture sequence.
 
 An engine such as StarRocks can consume the boundary contract, plan its own lake tasks and Fluss ranges, and use native readers and PK reconciliation. It must honor the selected snapshot, scope, log bounds, schema and deletion semantics. Context ranges are source boundaries, not mandatory morsels, threads or BE assignments. Default Append tasks currently separate lake work from bucket tails; PK tasks group work by bucket. Further task splitting belongs in the planning/execution PRs and does not require changing the boundary API.
 
 | Consumer | Current implementation status |
 | --- | --- |
-| Rust client | Full PoC provides default reads, transported splits and LakeSource extension. The boundary branch provides preparation and transport only. |
+| Rust client | This draft provides Fluss-only execution, transported splits and the LakeSource extension. A lake backend is supplied by the caller; built-in Paimon reading is separate. |
 | DataFusion | Can use default splits/readers through an adapter. Predicate negotiation and runtime scheduling belong to that adapter. This draft does not deliver the adapter. |
-| Java | Thin context encoder implemented; RPC orchestration remains with the coordinator. |
+| Java | One-call prepare implemented, including metadata capture, identity rechecks and transport encoding. |
 | StarRocks / C++ | Native integration contract only here; no UnionRead C ABI or completed SR MPP integration. |
 | Python / Elixir | No UnionRead bindings in this change; SDK examples must follow actual binding APIs when implemented. |
 
@@ -131,14 +145,16 @@ An engine such as StarRocks can consume the boundary contract, plan its own lake
 
 Reads are bounded. A ReadContext fixes table identity, schema, partition scope, an optional lake snapshot and per-bucket `[start, stop)` ranges. These ranges are not a cross-bucket transactional snapshot or a retention lease. Workers use concrete offsets rather than resolving earliest again.
 
-Tables without lake configuration use the same entry. Where a bucket has a lake seam, the pinned baseline plus its log tail form the input. Without a baseline, reading starts at the captured earliest retained offset. Append returns records in the selected input; PK applies updates/deletes and filters the reconciled result. PK reads without a baseline reconstruct only keys represented in retained history, not a complete historical current view. KV snapshot fallback is deferred.
+Tables without lake configuration use the same entry. Where a bucket has a lake seam, the pinned baseline plus its log tail form the input. Without a baseline, reading starts at the captured earliest retained offset. Append returns records in the selected input; PK applies updates/deletes and filters the reconciled result. PK reads without a baseline reconstruct only keys represented in retained history, not a complete historical current view. KV snapshot fallback is deferred: Rust already has snapshot metadata and lease APIs, but not the snapshot download/restore/scan reader used by Java's KV-backed fallback.
 
 Ordinary filters are strict and exact. Adapters may negotiate accepted/remaining predicates; a condition accepted only for pruning must remain for exact evaluation. A shared negotiation helper is separate adapter work. Output order is unspecified. If required inputs expire, execution fails; callers must not combine partial results with a new query attempt using refreshed boundaries.
 
-Context v1 is an unpublished Java/Rust transport draft. Unknown optional metadata may be ignored; unknown versions or required semantics must fail. Log ranges currently use the extensible `Ordinary` partition association. Shared historical logs and streaming discovery/checkpointing need their own semantics and compatibility review before implementation. Neither an extensible enum nor lake-only expired-partition coverage provides those features today.
+Context v1 is an unpublished Java/Rust transport draft. Unknown optional metadata may be ignored; unknown versions or required semantics must fail. Log ranges currently use the extensible `Ordinary` partition association. Shared historical logs and streaming discovery/checkpointing need their own semantics and compatibility review before implementation. Neither an extensible enum nor lake-only expired-partition coverage provides those features today. Shared historical-log reads are tracked in [#5001](https://github.com/apache/fluss/issues/5001), separately from historical writes in #4973.
 
 ## Review and landing scope
 
-Review the complete usage and ownership contracts first. The initial API change should contain independently usable contracts and compiled examples for the APIs it actually provides. Concrete Scan/Plan/Reader methods require their implementations; do not introduce `todo!()` or empty results to make an API-only branch compile. Boundary capture, default planning, the Paimon source and Append/PK execution can land in their implementation PRs after the contracts settle.
+Review the public types and ownership contracts above first. The concrete Scan/Plan/Reader methods are backed by the real planner and executor; the draft does not add `todo!()` or empty implementations. Boundary capture, default planning and Append/PK execution remain separate landing units after interface review. The Paimon backend is not included. Further split subdivision, accepted/remaining negotiation, KV snapshot fallback and historical-log support remain follow-ups.
+
+The boundary-only PR wires its prepare IT into the existing `rust-integration` job. Automatic scan predicate extraction and execution coverage belong to the later planning/execution PRs, even though their implementation is available in this draft for interface review.
 
 The native execution path changes the responsibility split described in the published FIP. That clarification still needs community agreement; this draft does not present it as already accepted.
