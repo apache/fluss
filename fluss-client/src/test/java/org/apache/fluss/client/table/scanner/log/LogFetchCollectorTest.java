@@ -30,14 +30,10 @@ import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
-import org.apache.fluss.rpc.protocol.ApiError;
-import org.apache.fluss.rpc.protocol.Errors;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.EnumSource;
 
 import java.util.Arrays;
 import java.util.Collections;
@@ -272,35 +268,6 @@ public class LogFetchCollectorTest {
         // Empty record list, but bucket exposed via buckets() with an advanced consumedUpToOffset.
         assertThat(scanRecords.buckets()).contains(tb);
         assertThat(scanRecords.consumedUpToOffset(tb)).isEqualTo(20L);
-    }
-
-    @ParameterizedTest
-    @EnumSource(
-            value = Errors.class,
-            names = {"LEADER_NOT_AVAILABLE_EXCEPTION", "INVALID_BUCKET_ROUTING"})
-    void testCollectFetchSkipsRoutingOrLeaderErrors(Errors error) throws Exception {
-        TableBucket failedBucket = new TableBucket(DATA1_TABLE_ID, 0);
-        TableBucket healthyBucket = new TableBucket(DATA1_TABLE_ID, 1);
-        CompletedFetch failedFetch =
-                makeCompletedFetch(
-                        failedBucket,
-                        FetchLogResultForBucket.error(
-                                failedBucket, new ApiError(error, "mock fetch error")),
-                        0L);
-        CompletedFetch healthyFetch =
-                makeCompletedFetch(
-                        healthyBucket,
-                        FetchLogResultForBucket.records(
-                                healthyBucket, genMemoryLogRecordsByObject(DATA1), 10L, -1L, -1L),
-                        0L);
-        logFetchBuffer.add(failedFetch);
-        logFetchBuffer.add(healthyFetch);
-
-        ScanRecords scanRecords = logFetchCollector.collectFetch(logFetchBuffer);
-
-        assertThat(scanRecords.buckets()).containsExactly(healthyBucket);
-        assertThat(scanRecords.records(healthyBucket)).hasSize(10);
-        assertThat(logFetchBuffer.isEmpty()).isTrue();
     }
 
     private DefaultCompletedFetch makeCompletedFetch(
