@@ -260,6 +260,8 @@ public class KafkaMetadataITCase {
                                     .get()
                                     .isExists())
                     .isTrue();
+            // Kafka Metadata visibility can lag behind replica readiness.
+            awaitTopicError(node, "fluss.events", Errors.NONE);
             for (short version = 0; version <= 11; version++) {
                 MetadataResponse response = query(node, named(version, "events", "fluss.events"));
                 assertThat(response.data().topics().find("events").errorCode())
@@ -271,6 +273,7 @@ public class KafkaMetadataITCase {
                     createTable(
                             cluster, TablePath.of("custom_default", "events"), topicDescriptor());
             cluster.waitUntilTableReady(customId);
+            awaitTopicError(node, "custom_default.events", Errors.NONE);
             for (short version = 0; version <= 11; version++) {
                 MetadataResponse response =
                         query(
