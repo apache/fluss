@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Freezes the lake snapshot and server-issued log ranges before scan pruning.
+//! Freezes the lake snapshot and server-issued log ranges within a partition scope.
 //!
 //! This module does not open a lake catalog, generate splits or schedule reads.
 
@@ -24,16 +24,23 @@ use crate::{
     FlussLakeError, FlussLakeLogRange, FlussLakePartitionIdentity, FlussLakeReadContext, Result,
 };
 use fluss::client::FlussAdmin;
-use fluss::metadata::{LakeSnapshotInfo, PartitionInfo, TableBucket, TableInfo, TablePath};
+use fluss::metadata::{
+    LakeSnapshotInfo, PartitionInfo, PartitionSpec, TableBucket, TableInfo, TablePath,
+};
 use fluss::rpc::message::OffsetSpec;
-use futures::{StreamExt, TryStreamExt};
-use std::collections::HashMap;
+use futures::StreamExt;
+use std::collections::{HashMap, HashSet};
 
-/// Freezes all live boundaries for a resolved table, before scan pruning.
+/// Freezes live boundaries after applying the requested partition spec.
 pub(crate) async fn freeze_read_context(
     admin: &FlussAdmin,
     table_info: &TableInfo,
+    partition_filter: &PartitionSpec,
 ) -> Result<FlussLakeReadContext> {
+    crate::partition::validate_partition_filter(
+        partition_filter.get_spec_map().keys(),
+        &table_info.partition_keys,
+    )?;
     let table_path = &table_info.table_path;
     if table_info.num_buckets <= 0 {
         return Err(FlussLakeError::PlanningFailed(format!(
@@ -42,14 +49,24 @@ pub(crate) async fn freeze_read_context(
         )));
     }
 
-    let readable_snapshot = match admin.get_lake_snapshot(table_path, None, Some(true)).await {
-        Ok(snapshot) => Some(snapshot),
-        Err(error) if error.api_error() == Some(fluss::error::FlussError::LakeSnapshotNotExist) => {
-            None
+    let readable_snapshot = if table_info
+        .table_config
+        .is_datalake_enabled()
+        .map_err(|error| FlussLakeError::PlanningFailed(error.to_string()))?
+    {
+        match admin.get_lake_snapshot(table_path, None, Some(true)).await {
+            Ok(snapshot) => Some(snapshot),
+            Err(error)
+                if error.api_error() == Some(fluss::error::FlussError::LakeSnapshotNotExist) =>
+            {
+                None
+            }
+            Err(error) => {
+                return Err(planning_client_error("get readable lake snapshot", error));
+            }
         }
-        Err(error) => {
-            return Err(planning_client_error("get readable lake snapshot", error));
-        }
+    } else {
+        None
     };
 
     let snapshot_offsets =
@@ -63,7 +80,7 @@ pub(crate) async fn freeze_read_context(
         )]
     } else {
         let mut partition_infos = admin
-            .list_partition_infos(table_path)
+            .list_partition_infos_with_spec(table_path, Some(partition_filter))
             .await
             .map_err(|error| planning_client_error("list table partitions", error))?;
         partition_infos.sort_by(|left, right| {
@@ -82,45 +99,103 @@ pub(crate) async fn freeze_read_context(
     };
 
     // Bound metadata fan-out and preserve the canonical partition order.
-    let mut partitions = futures::stream::iter(partitions.into_iter().map(
-        |(id, name, identity, count)| async move {
-            let bucket_ids: Vec<i32> = (0..count).collect();
-            let offsets =
-                load_server_offsets(admin, table_path, name.as_deref(), &bucket_ids).await?;
-            Ok::<_, FlussLakeError>((id, identity, count, offsets))
-        },
-    ))
-    .buffered(8);
-    let mut bucket_ranges = Vec::new();
-    while let Some((
-        partition_id,
-        partition_identity,
-        bucket_count,
-        (earliest_offsets, latest_offsets),
-    )) = partitions.try_next().await?
-    {
-        for bucket_id in 0..bucket_count {
-            let table_bucket =
-                TableBucket::new_with_partition(table_info.table_id, partition_id, bucket_id);
-            let earliest_offset = required_offset(&earliest_offsets, &table_bucket, "earliest")?;
-            let stop_offset = required_offset(&latest_offsets, &table_bucket, "latest")?;
-            let snapshot_offset = snapshot_offsets.get(&table_bucket).copied();
-            bucket_ranges.push(freeze_bucket_range(
-                table_bucket,
-                partition_identity.clone(),
-                bucket_count,
-                snapshot_offset,
-                earliest_offset,
-                stop_offset,
-            )?);
-        }
-    }
+    let captured =
+        futures::stream::iter(partitions.into_iter().map(|(id, name, identity, count)| {
+            let snapshot_offsets = &snapshot_offsets;
+            async move {
+                let result = async {
+                    let bucket_ids: Vec<i32> = (0..count).collect();
+                    let (earliest_offsets, latest_offsets) =
+                        load_server_offsets(admin, table_path, name.as_deref(), &bucket_ids)
+                            .await?;
+                    (0..count)
+                        .map(|bucket_id| {
+                            let bucket =
+                                TableBucket::new_with_partition(table_info.table_id, id, bucket_id);
+                            let earliest = required_offset(&earliest_offsets, &bucket, "earliest")?;
+                            let stop = required_offset(&latest_offsets, &bucket, "latest")?;
+                            let seam = snapshot_offsets.get(&bucket).copied();
+                            freeze_bucket_range(
+                                bucket,
+                                identity.clone(),
+                                count,
+                                seam,
+                                earliest,
+                                stop,
+                            )
+                        })
+                        .collect::<Result<Vec<_>>>()
+                }
+                .await;
+                (id, result)
+            }
+        }))
+        .buffered(8)
+        .collect::<Vec<_>>()
+        .await;
 
-    FlussLakeReadContext::from_boundary(
+    let bucket_ranges = if table_info.partition_keys.is_empty() {
+        captured
+            .into_iter()
+            .map(|(_, result)| result)
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .flatten()
+            .collect()
+    } else {
+        // Offset lookup resolves partition names internally. Recheck IDs even
+        // after successful lookups: a name may now refer to a new partition.
+        // One recheck covers all captures, including failures of any kind.
+        let live_ids = admin
+            .list_partition_infos_with_spec(table_path, Some(partition_filter))
+            .await
+            .map(|partitions| {
+                partitions
+                    .into_iter()
+                    .map(|p| p.get_partition_id())
+                    .collect()
+            })
+            .map_err(|error| planning_client_error("recheck table partitions", error));
+        retain_live_ranges(captured, live_ids)?
+    };
+
+    let context = FlussLakeReadContext::from_boundary_with_partition_filter(
         table_info,
         readable_snapshot.map(|snapshot| snapshot.snapshot_id),
         bucket_ranges,
-    )
+        partition_filter,
+    )?;
+    // Name-based offset calls may also cross a table drop/recreate. Validate
+    // identity once after capture, without replacing the frozen schema.
+    let live_table = admin
+        .get_table_info(table_path)
+        .await
+        .map_err(|error| planning_client_error("recheck source table identity", error))?;
+    context.validate_table(&live_table)?;
+    Ok(context)
+}
+
+fn retain_live_ranges(
+    captured: Vec<(Option<i64>, Result<Vec<FlussLakeLogRange>>)>,
+    live_ids: Result<HashSet<i64>>,
+) -> Result<Vec<FlussLakeLogRange>> {
+    let live_ids = match live_ids {
+        Ok(ids) => ids,
+        Err(recheck_error) => {
+            // A failed recheck does not prove deletion. Preserve the lookup
+            // error when there was one, rather than hiding it with a new error.
+            return Err(captured
+                .into_iter()
+                .find_map(|(_, result)| result.err())
+                .unwrap_or(recheck_error));
+        }
+    };
+    captured
+        .into_iter()
+        .filter(|(id, _)| id.is_some_and(|id| live_ids.contains(&id)))
+        .map(|(_, result)| result)
+        .collect::<Result<Vec<_>>>()
+        .map(|ranges| ranges.into_iter().flatten().collect())
 }
 
 /// Admin resolves legacy counts; never substitute the table default here.
@@ -279,29 +354,65 @@ fn freeze_bucket_range(
             "server earliest offset {earliest_offset} exceeds latest offset {stop_offset} for {table_bucket}"
         )));
     }
-    // Without a lake baseline the complete history is required, not merely
-    // the retained suffix. Availability is checked after scan-specific pruning
-    // so an irrelevant range cannot break a lake-only or pruned read.
-    let start_offset = snapshot_offset.unwrap_or(0);
+    // Check retention availability after pruning: lake-only and pruned reads
+    // do not require the log tail.
+    let start_offset = snapshot_offset.unwrap_or(earliest_offset);
     if start_offset > stop_offset {
         return Err(FlussLakeError::PlanningFailed(format!(
             "read start offset {start_offset} exceeds server latest offset {stop_offset} for {table_bucket}"
         )));
     }
 
-    Ok(FlussLakeLogRange {
+    Ok(FlussLakeLogRange::new(
         table_bucket,
-        partition_identity,
+        crate::FlussLakeLogPartition::Ordinary(partition_identity),
         bucket_count,
-        start_offset,
+        snapshot_offset,
         stop_offset,
         earliest_offset,
-    })
+    ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn partition_recheck_discards_only_confirmed_deleted_ids() {
+        let error = || FlussLakeError::PlanningFailed("original offset failure".into());
+        let captured = || {
+            vec![
+                (Some(9), Err(error())),
+                (Some(10), Ok(vec![root_range(Some(12), 8, 20).unwrap()])),
+            ]
+        };
+        // ID 11 may be a replacement with the same name as ID 9.
+        let ranges = retain_live_ranges(captured(), Ok(HashSet::from([10, 11]))).unwrap();
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(
+            retain_live_ranges(captured(), Ok(HashSet::from([9, 10])))
+                .unwrap_err()
+                .to_string(),
+            error().to_string()
+        );
+        assert_eq!(
+            retain_live_ranges(
+                captured(),
+                Err(FlussLakeError::PlanningFailed("recheck failed".into()))
+            )
+            .unwrap_err()
+            .to_string(),
+            error().to_string()
+        );
+        // Successful name-based offsets are unsafe too when the original ID disappeared.
+        let successful = vec![(Some(9), Ok(vec![root_range(Some(12), 8, 20).unwrap()]))];
+        assert!(
+            retain_live_ranges(successful, Ok(HashSet::from([11])))
+                .unwrap()
+                .is_empty()
+        );
+        assert!(retain_live_ranges(vec![], Err(error())).is_err());
+    }
 
     #[test]
     fn uses_resolved_partition_bucket_counts_and_rejects_missing_counts() {
@@ -338,34 +449,22 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_offset_defines_start_and_server_latest_defines_stop() {
-        let range = root_range(Some(12), 8, 20).unwrap();
+    fn freezes_lake_seam_or_earliest_with_server_stop() {
+        use crate::FlussLakeBaseline::{Lake, None as NoBaseline};
 
-        assert_eq!(range.start_offset, 12);
-        assert_eq!(range.stop_offset, 20);
-        assert!(!range.is_empty());
-    }
-
-    #[test]
-    fn bucket_without_snapshot_requires_complete_history() {
-        let range = root_range(None, 8, 20).unwrap();
-
-        assert_eq!(range.start_offset, 0);
-        assert_eq!(range.stop_offset, 20);
-        assert!(matches!(
-            range.validate_available(),
-            Err(FlussLakeError::DataUnavailable(_))
-        ));
-    }
-
-    #[test]
-    fn snapshot_gap_caused_by_log_retention_is_data_unavailable() {
-        let result = root_range(Some(7), 8, 20).unwrap().validate_available();
-
-        // Re-executing a split frozen on this boundary can never succeed, so
-        // the error must invalidate the attempt rather than look like a
-        // generic planning failure. Replanning is not guaranteed to recover.
-        assert!(matches!(result, Err(FlussLakeError::DataUnavailable(_))));
+        for (seam, start, baseline) in [
+            (Some(12), 12, Lake),
+            (Some(7), 7, Lake),
+            (None, 8, NoBaseline),
+            (Some(20), 20, Lake),
+        ] {
+            let range = root_range(seam, 8, 20).unwrap();
+            assert_eq!(range.baseline(), baseline);
+            assert_eq!(range.start_offset(), start);
+            assert_eq!(range.stop_offset(), 20);
+            assert_eq!(range.is_empty(), start == 20);
+            assert_eq!(range.validate_available().is_ok(), start >= 8);
+        }
     }
 
     #[test]
@@ -373,12 +472,5 @@ mod tests {
         let result = root_range(Some(21), 8, 20);
 
         assert!(matches!(result, Err(FlussLakeError::PlanningFailed(_))));
-    }
-
-    #[test]
-    fn allows_empty_bounded_tail() {
-        let range = root_range(Some(20), 8, 20).unwrap();
-
-        assert!(range.is_empty());
     }
 }

@@ -20,11 +20,12 @@
 use crate::error::planning_client_error;
 use crate::{FlussLakeError, FlussLakeReadContext, Result};
 use fluss::client::FlussConnection;
-use fluss::metadata::{TableInfo, TablePath};
+use fluss::metadata::{PartitionSpec, TableInfo, TablePath};
+use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
-/// Entry point for source preparation over a lake-enabled Fluss table.
+/// Entry point for source preparation over a Fluss table.
 #[derive(Clone)]
 pub struct FlussLakeTable {
     connection: Arc<FlussConnection>,
@@ -32,7 +33,7 @@ pub struct FlussLakeTable {
 }
 
 impl FlussLakeTable {
-    /// Opens a table and validates that it is configured for lake reads.
+    /// Opens a table for bounded Fluss-only or lake and log reads.
     pub async fn open(connection: Arc<FlussConnection>, table_path: &TablePath) -> Result<Self> {
         let admin = connection
             .get_admin()
@@ -50,7 +51,7 @@ impl FlussLakeTable {
         connection: Arc<FlussConnection>,
         table_info: &TableInfo,
     ) -> Result<Self> {
-        validate_lake_readable(table_info)?;
+        validate_readable_table(table_info)?;
         Ok(Self {
             connection,
             table_path: table_info.table_path.clone(),
@@ -62,7 +63,24 @@ impl FlussLakeTable {
     /// The result may be shared by scans with different projections and
     /// predicates, including separate references to the table in one query.
     /// This does not open a lake catalog or acquire a retention lease.
-    pub async fn prepare(&self) -> Result<FlussLakeReadContext> {
+    pub async fn capture_read_context(&self) -> Result<FlussLakeReadContext> {
+        self.capture_read_context_with_partition_scope(&PartitionSpec::new(
+            HashMap::<String, String>::new(),
+        ))
+        .await
+    }
+
+    /// Captures only partitions matching an exact, possibly partial spec.
+    ///
+    /// Scope selection happens before offset queries and also constrains lake
+    /// planning. This is an input restriction, not an optional pruning hint. An empty spec selects
+    /// the whole table. Non-partition keys are rejected; values must use the
+    /// same encoding as Fluss partition metadata. General SQL predicates
+    /// remain the engine's responsibility.
+    pub async fn capture_read_context_with_partition_scope(
+        &self,
+        scope: &PartitionSpec,
+    ) -> Result<FlussLakeReadContext> {
         let admin = self
             .connection
             .get_admin()
@@ -71,8 +89,8 @@ impl FlussLakeTable {
             .get_table_info(&self.table_path)
             .await
             .map_err(|error| planning_client_error("get table metadata", error))?;
-        validate_lake_readable(&table_info)?;
-        crate::boundary::freeze_read_context(&admin, &table_info).await
+        validate_readable_table(&table_info)?;
+        crate::boundary::freeze_read_context(&admin, &table_info, scope).await
     }
 }
 
@@ -105,15 +123,10 @@ pub(crate) fn resolve_lake_table_path(table_info: &TableInfo) -> Result<TablePat
     Ok(TablePath::new(database, table))
 }
 
-pub(crate) fn validate_lake_readable(table_info: &TableInfo) -> Result<()> {
+pub(crate) fn validate_readable_table(table_info: &TableInfo) -> Result<()> {
     match table_info.table_config.is_datalake_enabled() {
         Ok(true) => {}
-        Ok(false) => {
-            return Err(FlussLakeError::NotLakeReadable(format!(
-                "table {} does not enable table.datalake.enabled",
-                table_info.table_path
-            )));
-        }
+        Ok(false) => return Ok(()),
         Err(error) => {
             return Err(FlussLakeError::NotLakeReadable(format!(
                 "table {} has an invalid lake configuration: {error}",
@@ -141,7 +154,7 @@ mod tests {
     use std::collections::HashMap;
 
     #[test]
-    fn preconfigured_lake_format_is_not_readable_until_enabled() {
+    fn disabled_lake_configuration_does_not_require_a_provider() {
         let schema = Schema::builder()
             .column("id", DataTypes::int())
             .build()
@@ -161,9 +174,6 @@ mod tests {
             0,
         );
 
-        assert!(matches!(
-            validate_lake_readable(&table_info),
-            Err(FlussLakeError::NotLakeReadable(_))
-        ));
+        validate_readable_table(&table_info).unwrap();
     }
 }
