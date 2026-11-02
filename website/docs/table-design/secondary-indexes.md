@@ -34,7 +34,9 @@ Use these options in the Fluss catalog:
 |---|---|---|
 | `secondary-index.<name>.columns` | Required | Ordered index columns, supplied as a comma-separated list or a JSON string array. |
 | `secondary-index.<name>.visibility` | `sync` | Whether write acknowledgement waits for this index: `sync` or `async`. |
-| `secondary-index.<name>.bucket.num` | Main-table bucket count | Positive number of buckets for this index. The replication factor is inherited from the main table. |
+| `secondary-index.<name>.bucket.num` | Main-table bucket count at creation | Positive number of buckets for this index. The replication factor is inherited from the main table. |
+
+Each Index Table retains its persisted bucket count independently of subsequent changes to the main table's `bucket.num`.
 
 To create a composite index, set the columns option to, for example, `'user_id,amount'` or `'["user_id","amount"]'`. Equality lookup must provide every column in the index. A composite index does not support lookup by only its leading columns.
 
