@@ -71,6 +71,7 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -241,6 +242,79 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
     }
 
     @ParameterizedTest
+    @CsvSource({"false,false", "true,false", "true,true"})
+    void testCancelledManifestUploadCannotReplaceNewTaskManifest(
+            boolean cancelDuringCommit, boolean loseResponse) throws Exception {
+        TableBucket bucket = makeTableBucket(false);
+        makeLogTableAsLeader(bucket, false);
+        Replica replica = replicaManager.getReplicaOrException(bucket);
+        addMultiSegmentsToLogTablet(replica.getLogTablet(), 5);
+        AtomicInteger commits = new AtomicInteger();
+        AtomicReference<LogTieringTask> oldTaskRef = new AtomicReference<>();
+        AtomicReference<RemoteLogManifestHandle> replacementHandle = new AtomicReference<>();
+        Runnable replaceTask =
+                () -> {
+                    remoteLogStorage.afterWriteManifest = () -> {};
+                    oldTaskRef.get().cancel();
+                    try {
+                        addMultiSegmentsToLogTablet(replica.getLogTablet(), 2);
+                        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+                        replacementHandle.set(zkClient.getRemoteLogManifestHandle(bucket).get());
+                    } catch (Exception e) {
+                        throw new RuntimeException(e);
+                    }
+                };
+        TestCoordinatorGateway gateway =
+                new TestCoordinatorGateway(zkClient) {
+                    @Override
+                    public CompletableFuture<CommitRemoteLogManifestResponse>
+                            commitRemoteLogManifest(CommitRemoteLogManifestRequest request) {
+                        int attempt = commits.incrementAndGet();
+                        CompletableFuture<CommitRemoteLogManifestResponse> response =
+                                super.commitRemoteLogManifest(request);
+                        if (cancelDuringCommit && attempt == 1) {
+                            replaceTask.run();
+                            if (loseResponse) {
+                                return FutureUtils.completedExceptionally(
+                                        new IOException("lost response"));
+                            }
+                        }
+                        return response;
+                    }
+                };
+        LogTieringTask oldTask =
+                new LogTieringTask(
+                        replica,
+                        remoteLogManager.remoteLogTablet(bucket),
+                        remoteLogStorage,
+                        remoteLogManager.getRemoteLogIndexCache(
+                                replica.getLogTablet().getDataDir()),
+                        gateway,
+                        zkClient,
+                        manualClock,
+                        Integer.MAX_VALUE);
+        oldTaskRef.set(oldTask);
+        if (!cancelDuringCommit) {
+            remoteLogStorage.afterWriteManifest = replaceTask;
+        }
+
+        oldTask.run();
+
+        assertThat(commits).hasValue(cancelDuringCommit ? 1 : 0);
+        assertThat(zkClient.getRemoteLogManifestHandle(bucket)).contains(replacementHandle.get());
+        RemoteLogManifest persisted =
+                remoteLogStorage.readRemoteLogManifestSnapshot(
+                        replacementHandle.get().getRemoteLogManifestPath());
+        assertThat(remoteLogManager.remoteLogTablet(bucket).allRemoteLogSegments())
+                .containsExactlyElementsOf(persisted.getRemoteLogSegmentList());
+        assertThat(listRemoteLogFiles(bucket))
+                .containsAll(
+                        persisted.getRemoteLogSegmentList().stream()
+                                .map(segment -> segment.remoteLogSegmentId().toString())
+                                .collect(Collectors.toSet()));
+    }
+
+    @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testLostCommitResponsePreservesFilesWhenRetriesFail(boolean rejectRetry) throws Exception {
         TableBucket bucket = makeTableBucket(false);
@@ -333,11 +407,17 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
 
         task.run();
 
-        verify(gateway, times(2)).commitRemoteLogManifest(any());
-        assertThat(remoteLog.allRemoteLogSegments()).hasSize(4);
+        verify(gateway, times(1)).commitRemoteLogManifest(any());
+        assertThat(remoteLog.allRemoteLogSegments()).isEmpty();
+        RemoteLogManifest committed =
+                remoteLogStorage.readRemoteLogManifestSnapshot(
+                        zkClient.getRemoteLogManifestHandle(bucket)
+                                .get()
+                                .getRemoteLogManifestPath());
+        assertThat(committed.getRemoteLogSegmentList()).hasSize(4);
         assertThat(listRemoteLogFiles(bucket))
                 .containsExactlyInAnyOrderElementsOf(
-                        remoteLog.allRemoteLogSegments().stream()
+                        committed.getRemoteLogSegmentList().stream()
                                 .map(segment -> segment.remoteLogSegmentId().toString())
                                 .collect(Collectors.toSet()));
         assertThat(zkClient.getRemoteLogManifestHandle(bucket)).isPresent();

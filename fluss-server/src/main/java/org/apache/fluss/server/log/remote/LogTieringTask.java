@@ -27,6 +27,7 @@ import org.apache.fluss.remote.RemoteLogManifest;
 import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.messages.CommitRemoteLogManifestRequest;
+import org.apache.fluss.rpc.messages.CommitRemoteLogManifestResponse;
 import org.apache.fluss.server.entity.CommitRemoteLogManifestData;
 import org.apache.fluss.server.log.LogSegment;
 import org.apache.fluss.server.log.LogTablet;
@@ -47,6 +48,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeCommitRemoteLogManifestRequest;
@@ -73,6 +75,7 @@ public class LogTieringTask implements Runnable {
     private volatile Long copiedOffset = null;
 
     private volatile boolean cancelled = false;
+    private final Object commitLock = new Object();
 
     public LogTieringTask(
             Replica replica,
@@ -179,6 +182,9 @@ public class LogTieringTask implements Runnable {
                                 remoteLog, newManifest, coordinatorEpoch, leaderEpoch);
 
                 if (success) {
+                    if (isCancelled()) {
+                        return;
+                    }
                     List<RemoteLogSegment> segmentsToDelete =
                             segmentsToDeleteAfterCommit(
                                     currentManifest, copiedSegments, newManifest);
@@ -425,13 +431,18 @@ public class LogTieringTask implements Runnable {
             return false;
         }
 
-        remoteLogTablet.loadRemoteLogManifest(newRemoteLogManifest);
-        LogTablet logTablet = replica.getLogTablet();
-        logTablet.updateRemoteLogOffsets(
-                newRemoteLogStartOffset,
-                newRemoteLogEndOffset,
-                newRemoteLogManifest.getHighestCopiedEndOffset());
-        logTablet.updateRemoteLogSize(newRemoteLogSize);
+        synchronized (commitLock) {
+            // A replacement task may already have installed a newer manifest after cancellation.
+            if (!cancelled) {
+                remoteLogTablet.loadRemoteLogManifest(newRemoteLogManifest);
+                LogTablet logTablet = replica.getLogTablet();
+                logTablet.updateRemoteLogOffsets(
+                        newRemoteLogStartOffset,
+                        newRemoteLogEndOffset,
+                        newRemoteLogManifest.getHighestCopiedEndOffset());
+                logTablet.updateRemoteLogSize(newRemoteLogSize);
+            }
+        }
         return true;
     }
 
@@ -469,7 +480,16 @@ public class LogTieringTask implements Runnable {
 
     private boolean commitRemoteLogManifest(CommitRemoteLogManifestData data) throws Exception {
         CommitRemoteLogManifestRequest request = makeCommitRemoteLogManifestRequest(data);
-        return coordinatorGateway.commitRemoteLogManifest(request).get().isCommitSuccess();
+        CompletableFuture<CommitRemoteLogManifestResponse> response;
+        synchronized (commitLock) {
+            // Linearize dispatch with cancellation, but never hold the lock while waiting for RPC.
+            // A cancelled task can still confirm a previously sent attempt through ZooKeeper.
+            if (cancelled) {
+                return false;
+            }
+            response = coordinatorGateway.commitRemoteLogManifest(request);
+        }
+        return response.get().isCommitSuccess();
     }
 
     private Path toPathIfExists(File file) {
@@ -560,7 +580,9 @@ public class LogTieringTask implements Runnable {
     }
 
     public void cancel() {
-        cancelled = true;
+        synchronized (commitLock) {
+            cancelled = true;
+        }
     }
 
     public boolean isCancelled() {
