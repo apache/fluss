@@ -23,6 +23,8 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.security.acl.Resource;
 import org.apache.fluss.security.acl.ResourceType;
+import org.apache.fluss.server.zk.data.bulkload.BulkLoadTransaction;
+import org.apache.fluss.server.zk.data.bulkload.BulkLoadTransactionJsonSerde;
 import org.apache.fluss.server.zk.data.lake.LakeTable;
 import org.apache.fluss.server.zk.data.lake.LakeTableJsonSerde;
 import org.apache.fluss.server.zk.data.lease.KvSnapshotLeaseMetadata;
@@ -36,6 +38,10 @@ import javax.annotation.Nullable;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
+import java.util.UUID;
+
+import static org.apache.fluss.utils.Preconditions.checkArgument;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** The data and path stored in ZooKeeper nodes (znodes). */
 public final class ZkData {
@@ -427,6 +433,28 @@ public final class ZkData {
 
         public static TabletServerRegistration decode(byte[] json) {
             return JsonSerdeUtils.readValue(json, TabletServerRegistrationJsonSerde.INSTANCE);
+        }
+    }
+
+    /** Parent for TabletServer ZooKeeper-session fences used by BulkLoad commands. */
+    public static final class TabletServerSessionFencesZNode {
+        public static String path() {
+            return "/tabletservers/session-fences";
+        }
+    }
+
+    /** Ephemeral proof that a TabletServer registration belongs to one exact ZooKeeper session. */
+    public static final class TabletServerSessionFenceZNode {
+        public static String path(int serverId, long sessionId) {
+            return TabletServerSessionFencesZNode.path()
+                    + "/"
+                    + serverId
+                    + "-"
+                    + Long.toUnsignedString(sessionId, 16);
+        }
+
+        public static byte[] encode() {
+            return new byte[0];
         }
     }
 
@@ -904,6 +932,70 @@ public final class ZkData {
     }
 
     // ------------------------------------------------------------------------------------------
+    // ZNodes under "/bulk_load/"
+    // ------------------------------------------------------------------------------------------
+
+    /** Root znode for all BulkLoad metadata. */
+    public static final class BulkLoadZNode {
+        public static String path() {
+            return "/bulk_load";
+        }
+    }
+
+    /** Static parent of all BulkLoad transactions. */
+    public static final class BulkLoadTransactionsZNode {
+        public static String path() {
+            return BulkLoadZNode.path() + "/transactions";
+        }
+
+        public static byte[] encode(BulkLoadTransaction transaction) {
+            return JsonSerdeUtils.writeValueAsBytes(
+                    transaction, BulkLoadTransactionJsonSerde.INSTANCE);
+        }
+
+        public static BulkLoadTransaction decode(byte[] json) {
+            return JsonSerdeUtils.readValue(json, BulkLoadTransactionJsonSerde.INSTANCE);
+        }
+    }
+
+    /** Static table-transaction parent and per-table transaction collection. */
+    public static final class BulkLoadTableTransactionsZNode {
+        public static String path() {
+            return BulkLoadTransactionsZNode.path() + "/tables";
+        }
+
+        public static String path(long tableId) {
+            return path() + "/" + requireNonNegativeId(tableId, "table ID");
+        }
+    }
+
+    /** Static partition-transaction parent and per-partition transaction collection. */
+    public static final class BulkLoadPartitionTransactionsZNode {
+        public static String path() {
+            return BulkLoadTransactionsZNode.path() + "/partitions";
+        }
+
+        public static String path(long partitionId) {
+            return path() + "/" + requireNonNegativeId(partitionId, "partition ID");
+        }
+    }
+
+    /** One non-partitioned table BulkLoad transaction root. */
+    public static final class BulkLoadTableTransactionZNode {
+        public static String path(long tableId, String bulkLoadId) {
+            return transactionPath(BulkLoadTableTransactionsZNode.path(), tableId, bulkLoadId);
+        }
+    }
+
+    /** One partition BulkLoad transaction root. */
+    public static final class BulkLoadPartitionTransactionZNode {
+        public static String path(long partitionId, String bulkLoadId) {
+            return transactionPath(
+                    BulkLoadPartitionTransactionsZNode.path(), partitionId, bulkLoadId);
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------
     // ZNodes under "/producers/"
     // ------------------------------------------------------------------------------------------
 
@@ -999,5 +1091,24 @@ public final class ZkData {
         public static KvSnapshotLeaseMetadata decode(byte[] json) {
             return JsonSerdeUtils.readValue(json, KvSnapshotLeaseMetadataJsonSerde.INSTANCE);
         }
+    }
+
+    private static String transactionPath(String prefix, long targetId, String bulkLoadId) {
+        return prefix
+                + "/"
+                + requireNonNegativeId(targetId, "target ID")
+                + "/"
+                + requireCanonicalBulkLoadId(bulkLoadId);
+    }
+
+    private static long requireNonNegativeId(long id, String name) {
+        checkArgument(id >= 0, "BulkLoad %s must be non-negative.", name);
+        return id;
+    }
+
+    private static String requireCanonicalBulkLoadId(String bulkLoadId) {
+        String canonical = UUID.fromString(checkNotNull(bulkLoadId)).toString();
+        checkArgument(canonical.equals(bulkLoadId), "BulkLoad ID must be a canonical UUID.");
+        return bulkLoadId;
     }
 }

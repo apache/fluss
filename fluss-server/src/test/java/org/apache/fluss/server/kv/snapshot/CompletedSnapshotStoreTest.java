@@ -29,7 +29,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -107,6 +109,108 @@ class CompletedSnapshotStoreTest {
         CompletedSnapshot snapshot = getSnapshot(1);
         completedSnapshotStore.add(snapshot);
         assertThat(completedSnapshotStore.getLatestSnapshot().get()).isEqualTo(snapshot);
+    }
+
+    @Test
+    void testLateSnapshotCannotReplaceImportedSnapshotOrChangeRetention() throws Exception {
+        CompletedSnapshot imported = getSnapshot(20L);
+        SharedKvFileRegistry registry = new SharedKvFileRegistry();
+        CompletedSnapshotStore store =
+                new CompletedSnapshotStore(
+                        1,
+                        registry,
+                        Collections.emptyList(),
+                        builder.build(),
+                        executorService,
+                        ignored -> false);
+        store.add(imported);
+        CompletedSnapshot late =
+                getSnapshotWithSharedFiles(
+                        19L,
+                        Collections.singletonList(
+                                KvFileHandleAndLocalPath.of(
+                                        new TestKvHandle("late.sst"), "late.sst")));
+
+        assertThatThrownBy(() -> store.add(late, "/table", 1, 1, 1))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("older than the latest");
+
+        assertThat(store.getAllSnapshots()).containsExactly(imported);
+        assertThat(registry.getFileSize()).isZero();
+        assertThat(
+                        imported.getMetadataFilePath()
+                                .getFileSystem()
+                                .exists(imported.getMetadataFilePath()))
+                .isTrue();
+    }
+
+    @Test
+    void testExternalSnapshotRetentionRequiresSuccessfulConfirmation() throws Exception {
+        CompletedSnapshotStore store =
+                createCompletedSnapshotStore(1, defaultHandleStore, Collections.emptyList());
+        CompletedSnapshot snapshot = getSnapshot(1L);
+        Path metadata = Paths.get(snapshot.getMetadataFilePath().toUri().getPath());
+        Files.createDirectories(metadata.getParent());
+        Files.write(metadata, CompletedSnapshotJsonSerde.toJson(snapshot));
+
+        assertThatThrownBy(
+                        () ->
+                                store.registerExternalSnapshot(
+                                        snapshot,
+                                        () -> {
+                                            throw new FlussException("confirmation failed");
+                                        }))
+                .isInstanceOf(FlussException.class);
+        assertThat(store.getAllSnapshots()).isEmpty();
+
+        store.registerExternalSnapshot(snapshot, () -> {});
+        store.registerExternalSnapshot(snapshot, () -> {});
+        assertThat(store.getAllSnapshots()).containsExactly(snapshot);
+        assertThatThrownBy(
+                        () ->
+                                store.registerExternalSnapshot(
+                                        snapshot,
+                                        () -> {
+                                            throw new FlussException("ownership changed");
+                                        }))
+                .isInstanceOf(FlussException.class);
+        assertThat(store.getAllSnapshots()).containsExactly(snapshot);
+        assertThat(
+                        snapshot.getMetadataFilePath()
+                                .getFileSystem()
+                                .exists(snapshot.getMetadataFilePath()))
+                .isTrue();
+    }
+
+    @Test
+    void testFailedNodeCreationDoesNotRegisterSharedFiles() {
+        SharedKvFileRegistry registry = new SharedKvFileRegistry();
+        TestCompletedSnapshotHandleStore failingHandleStore =
+                builder.setAddFunction(
+                                ignored -> {
+                                    throw new FlussException("node creation failed");
+                                })
+                        .build();
+        CompletedSnapshotStore store =
+                new CompletedSnapshotStore(
+                        2,
+                        registry,
+                        Collections.emptyList(),
+                        failingHandleStore,
+                        executorService,
+                        ignored -> false);
+        CompletedSnapshot snapshot =
+                getSnapshotWithSharedFiles(
+                        18L,
+                        Collections.singletonList(
+                                KvFileHandleAndLocalPath.of(
+                                        new TestKvHandle("unconfirmed-shared.sst"),
+                                        "unconfirmed-shared.sst")));
+
+        assertThatThrownBy(() -> store.add(snapshot)).isInstanceOf(FlussException.class);
+
+        assertThat(registry.getFileSize()).isZero();
+        assertThat(store.getAllSnapshots()).isEmpty();
     }
 
     @Test

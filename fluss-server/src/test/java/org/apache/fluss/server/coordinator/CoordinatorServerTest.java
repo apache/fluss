@@ -22,6 +22,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.server.ServerBase;
 import org.apache.fluss.server.ServerTestBase;
 import org.apache.fluss.server.zk.data.CoordinatorAddress;
+import org.apache.fluss.server.zk.data.ServerProtocolVersion;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -76,6 +77,8 @@ class CoordinatorServerTest extends ServerTestBase {
         verifyEndpoint(
                 optCoordinatorAddr.get().getEndpoints(),
                 coordinatorServer.getRpcServer().getBindEndpoints());
+        assertThat(optCoordinatorAddr.get().getServerProtocolVersion())
+                .isEqualTo(ServerProtocolVersion.CURRENT);
     }
 
     public void waitUntilCoordinatorServerElected() {

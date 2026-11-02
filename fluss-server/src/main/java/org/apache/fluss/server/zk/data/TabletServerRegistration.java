@@ -35,21 +35,44 @@ public class TabletServerRegistration {
     private final List<Endpoint> endpoints;
     private final long registerTimestamp;
     private final TabletServerResource resource;
+    private final int serverProtocolVersion;
 
+    /**
+     * Creates a tablet-server registration without resource information, advertising the legacy
+     * protocol version {@code 0}.
+     */
     public TabletServerRegistration(
             @Nullable String rack, List<Endpoint> endpoints, long registerTimestamp) {
-        this(rack, endpoints, registerTimestamp, TabletServerResource.unknown());
+        this(rack, endpoints, registerTimestamp, TabletServerResource.unknown(), 0);
     }
 
+    /**
+     * Creates a tablet-server registration with resource information, advertising the legacy
+     * protocol version {@code 0}.
+     */
     public TabletServerRegistration(
             @Nullable String rack,
             List<Endpoint> endpoints,
             long registerTimestamp,
             TabletServerResource resource) {
+        this(rack, endpoints, registerTimestamp, resource, 0);
+    }
+
+    /**
+     * Creates a tablet-server registration with resource information, advertising the given server
+     * protocol version.
+     */
+    public TabletServerRegistration(
+            @Nullable String rack,
+            List<Endpoint> endpoints,
+            long registerTimestamp,
+            TabletServerResource resource,
+            int serverProtocolVersion) {
         this.rack = rack;
         this.endpoints = endpoints;
         this.registerTimestamp = registerTimestamp;
         this.resource = resource;
+        this.serverProtocolVersion = serverProtocolVersion;
     }
 
     public List<Endpoint> getEndpoints() {
@@ -68,6 +91,11 @@ public class TabletServerRegistration {
         return resource;
     }
 
+    /** Returns the protocol version advertised by this tablet server. */
+    public int getServerProtocolVersion() {
+        return serverProtocolVersion;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) {
@@ -78,6 +106,7 @@ public class TabletServerRegistration {
         }
         TabletServerRegistration that = (TabletServerRegistration) o;
         return registerTimestamp == that.registerTimestamp
+                && serverProtocolVersion == that.serverProtocolVersion
                 && Objects.equals(endpoints, that.endpoints)
                 && Objects.equals(rack, that.rack)
                 && Objects.equals(resource, that.resource);
@@ -85,7 +114,7 @@ public class TabletServerRegistration {
 
     @Override
     public int hashCode() {
-        return Objects.hash(endpoints, registerTimestamp, rack, resource);
+        return Objects.hash(endpoints, registerTimestamp, rack, resource, serverProtocolVersion);
     }
 
     @Override
@@ -99,6 +128,8 @@ public class TabletServerRegistration {
                 + rack
                 + "', resource="
                 + resource
+                + ", serverProtocolVersion="
+                + serverProtocolVersion
                 + '}';
     }
 }

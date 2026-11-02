@@ -28,6 +28,8 @@ import org.junit.jupiter.api.Test;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
 /** Test for {@link TabletServerRegistrationJsonSerde}. */
 public class TabletServerRegistrationJsonSerdeTest
         extends JsonSerdeTestBase<TabletServerRegistration> {
@@ -57,17 +59,29 @@ public class TabletServerRegistrationJsonSerdeTest
                                 "CLIENT://localhost:2345,FLUSS://127.0.0.1:2346"),
                         10000,
                         new TabletServerResource(8.0, 1024L));
+        TabletServerRegistration tabletServerRegistration4 =
+                new TabletServerRegistration(
+                        "cn-hangzhou-server10",
+                        Endpoint.fromListenersString(
+                                "CLIENT://localhost:2345,FLUSS://127.0.0.1:2346"),
+                        10000,
+                        new TabletServerResource(8.0, 1024L),
+                        ServerProtocolVersion.CURRENT);
         return new TabletServerRegistration[] {
-            tabletServerRegistration1, tabletServerRegistration2, tabletServerRegistration3
+            tabletServerRegistration1,
+            tabletServerRegistration2,
+            tabletServerRegistration3,
+            tabletServerRegistration4
         };
     }
 
     @Override
     protected String[] expectedJsons() {
         return new String[] {
-            "{\"version\":4,\"listeners\":\"CLIENT://localhost:2345,FLUSS://127.0.0.1:2346\",\"register_timestamp\":10000}",
-            "{\"version\":4,\"listeners\":\"CLIENT://localhost:2345,FLUSS://127.0.0.1:2346\",\"register_timestamp\":10000,\"rack\":\"cn-hangzhou-server10\"}",
-            "{\"version\":4,\"listeners\":\"CLIENT://localhost:2345,FLUSS://127.0.0.1:2346\",\"register_timestamp\":10000,\"rack\":\"cn-hangzhou-server10\",\"cpu_cores\":8.0,\"memory_bytes\":1024}"
+            "{\"version\":5,\"listeners\":\"CLIENT://localhost:2345,FLUSS://127.0.0.1:2346\",\"register_timestamp\":10000,\"server_protocol_version\":0}",
+            "{\"version\":5,\"listeners\":\"CLIENT://localhost:2345,FLUSS://127.0.0.1:2346\",\"register_timestamp\":10000,\"rack\":\"cn-hangzhou-server10\",\"server_protocol_version\":0}",
+            "{\"version\":5,\"listeners\":\"CLIENT://localhost:2345,FLUSS://127.0.0.1:2346\",\"register_timestamp\":10000,\"rack\":\"cn-hangzhou-server10\",\"cpu_cores\":8.0,\"memory_bytes\":1024,\"server_protocol_version\":0}",
+            "{\"version\":5,\"listeners\":\"CLIENT://localhost:2345,FLUSS://127.0.0.1:2346\",\"register_timestamp\":10000,\"rack\":\"cn-hangzhou-server10\",\"cpu_cores\":8.0,\"memory_bytes\":1024,\"server_protocol_version\":1}"
         };
     }
 
@@ -120,5 +134,22 @@ public class TabletServerRegistrationJsonSerdeTest
                                 "CLIENT://localhost:2345,FLUSS://127.0.0.1:2346"),
                         10000);
         assertEquals(tabletServerRegistration, expectedTabletServerRegistration);
+    }
+
+    @Test
+    void testLegacyRegistrationWithoutServerProtocolVersion() throws IOException {
+        // version 4 znodes still carry cpu/memory but no server_protocol_version
+        JsonNode jsonInVersion4 =
+                new ObjectMapper()
+                        .readTree(
+                                ("{\"version\":4,\"listeners\":\"CLIENT://localhost:2345,FLUSS://127.0.0.1:2346\","
+                                                + "\"register_timestamp\":10000,\"rack\":\"cn-hangzhou-server10\","
+                                                + "\"cpu_cores\":8.0,\"memory_bytes\":1024}")
+                                        .getBytes(StandardCharsets.UTF_8));
+
+        TabletServerRegistration registration =
+                TabletServerRegistrationJsonSerde.INSTANCE.deserialize(jsonInVersion4);
+        assertThat(registration.getServerProtocolVersion()).isEqualTo(0);
+        assertThat(registration.getResource()).isEqualTo(new TabletServerResource(8.0, 1024L));
     }
 }

@@ -22,6 +22,7 @@ import org.apache.fluss.fs.FSDataOutputStream;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.utils.function.ThrowingRunnable;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -42,6 +43,7 @@ import java.util.Set;
 import java.util.concurrent.Executor;
 import java.util.concurrent.locks.ReentrantLock;
 
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
 
@@ -114,6 +116,77 @@ public class CompletedSnapshotStore {
                 () ->
                         addSnapshotAndSubsumeOldestOne(
                                 completedSnapshot, snapshotsCleaner, () -> {}));
+    }
+
+    /** Adds a snapshot under the current registration, coordinator and leader versions. */
+    public void add(
+            final CompletedSnapshot completedSnapshot,
+            final String sourceMetadataPath,
+            final int sourceMetadataVersion,
+            final int coordinatorZkVersion,
+            final int leaderAndIsrZkVersion)
+            throws Exception {
+        checkNotNull(completedSnapshot, "Snapshot");
+        inLock(
+                lock,
+                () -> {
+                    checkArgument(
+                            completedSnapshots.isEmpty()
+                                    || completedSnapshots.peekLast().getSnapshotID()
+                                            <= completedSnapshot.getSnapshotID(),
+                            "Cannot commit a snapshot older than the latest completed snapshot.");
+                    CompletedSnapshotHandle handle = store(completedSnapshot);
+                    completedSnapshotHandleStore.add(
+                            completedSnapshot.getTableBucket(),
+                            completedSnapshot.getSnapshotID(),
+                            handle,
+                            sourceMetadataPath,
+                            sourceMetadataVersion,
+                            coordinatorZkVersion,
+                            leaderAndIsrZkVersion);
+                    // The node is confirmed now. Only then expose shared handles and retention.
+                    adoptConfirmedSnapshot(completedSnapshot, snapshotsCleaner, () -> {});
+                });
+    }
+
+    /**
+     * Registers an external snapshot using the supplied persistent handle confirmation.
+     *
+     * <p>The callback must atomically confirm the immutable handle and its ownership. It runs under
+     * the store lock, including on retries. Retention is updated only after confirmation succeeds.
+     */
+    public void registerExternalSnapshot(
+            final CompletedSnapshot snapshot, ThrowingRunnable<Exception> confirmSnapshot)
+            throws Exception {
+        checkNotNull(snapshot, "Snapshot");
+        inLock(
+                lock,
+                () -> {
+                    CompletedSnapshot existing = stillInUseSnapshots.get(snapshot.getSnapshotID());
+                    for (CompletedSnapshot retained : completedSnapshots) {
+                        if (retained.getSnapshotID() == snapshot.getSnapshotID()) {
+                            existing = retained;
+                            break;
+                        }
+                    }
+                    if (existing != null) {
+                        checkArgument(
+                                existing.equals(snapshot),
+                                "Conflicting snapshot identity for %s snapshot %s.",
+                                snapshot.getTableBucket(),
+                                snapshot.getSnapshotID());
+                    } else {
+                        checkArgument(
+                                completedSnapshots.isEmpty()
+                                        || completedSnapshots.peekLast().getSnapshotID()
+                                                < snapshot.getSnapshotID(),
+                                "Cannot register an older snapshot that has already been subsumed.");
+                    }
+                    confirmSnapshot.run();
+                    if (existing == null) {
+                        adoptConfirmedSnapshot(snapshot, snapshotsCleaner, () -> {});
+                    }
+                });
     }
 
     public long getPhysicalStorageRemoteKvSize() {

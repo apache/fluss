@@ -41,7 +41,7 @@ public class TabletServerRegistrationJsonSerde
             new TabletServerRegistrationJsonSerde();
 
     private static final String VERSION_KEY = "version";
-    private static final int VERSION = 4;
+    private static final int VERSION = 5;
 
     @Deprecated private static final String HOST = "host";
     @Deprecated private static final String PORT = "port";
@@ -50,6 +50,7 @@ public class TabletServerRegistrationJsonSerde
     private static final String RACK = "rack";
     private static final String CPU_CORES = "cpu_cores";
     private static final String MEMORY_BYTES = "memory_bytes";
+    private static final String SERVER_PROTOCOL_VERSION = "server_protocol_version";
 
     @Override
     public void serialize(
@@ -71,6 +72,8 @@ public class TabletServerRegistrationJsonSerde
         if (resource.getMemoryBytes() != null) {
             generator.writeNumberField(MEMORY_BYTES, resource.getMemoryBytes());
         }
+        generator.writeNumberField(
+                SERVER_PROTOCOL_VERSION, tabletServerRegistration.getServerProtocolVersion());
         generator.writeEndObject();
     }
 
@@ -91,7 +94,7 @@ public class TabletServerRegistrationJsonSerde
             if (node.has(RACK)) {
                 rack = node.get(RACK).asText();
             }
-            if (version >= VERSION) {
+            if (version >= 4) {
                 Double cpuCores = node.has(CPU_CORES) ? node.get(CPU_CORES).asDouble() : null;
                 Long memoryBytes = node.has(MEMORY_BYTES) ? node.get(MEMORY_BYTES).asLong() : null;
                 resource = new TabletServerResource(cpuCores, memoryBytes);
@@ -99,6 +102,9 @@ public class TabletServerRegistrationJsonSerde
         }
 
         long registerTimestamp = node.get(REGISTER_TIMESTAMP).asLong();
-        return new TabletServerRegistration(rack, endpoints, registerTimestamp, resource);
+        int serverProtocolVersion =
+                node.has(SERVER_PROTOCOL_VERSION) ? node.get(SERVER_PROTOCOL_VERSION).asInt() : 0;
+        return new TabletServerRegistration(
+                rack, endpoints, registerTimestamp, resource, serverProtocolVersion);
     }
 }

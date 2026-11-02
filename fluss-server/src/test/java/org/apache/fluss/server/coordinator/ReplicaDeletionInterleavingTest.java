@@ -41,6 +41,7 @@ import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
 import org.apache.fluss.server.zk.data.ZkData.ServerIdZNode;
+import org.apache.fluss.server.zk.data.ZkData.TabletServerSessionFenceZNode;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -164,6 +165,43 @@ class ReplicaDeletionInterleavingTest extends CoordinatorEventProcessorTestBase 
         gateways.put(0, new TestTabletServerGateway(false, Collections.emptySet()));
         eventProcessor.getCoordinatorEventManager().put(new NewTabletServerEvent(server));
         awaitAssignmentRemoved(tableId);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testLateLeaderFailureBeforeDeletionAdmission(boolean partitioned) throws Exception {
+        long blockingTableId =
+                createTable(TablePath.of(defaultDatabase, "blocking_leader_failure_drop"), 1);
+        DeferredDeletionGateway blockingGateway = new DeferredDeletionGateway();
+        gateways.put(1, blockingGateway);
+        DeferredLeaderFailureGateway oldGateway = new DeferredLeaderFailureGateway();
+        gateways.put(0, oldGateway);
+        TablePath tablePath = TablePath.of(defaultDatabase, "leader_failure_before_admission");
+        TableBucket bucket =
+                partitioned
+                        ? createPartition(tablePath, "p1")
+                        : new TableBucket(createTable(tablePath, 0, 1, 2), 0);
+        TableBucketReplica replica = new TableBucketReplica(bucket, 0);
+        oldGateway.notificationReceived.get(30, TimeUnit.SECONDS);
+
+        metadataManager.dropTable(
+                TablePath.of(defaultDatabase, "blocking_leader_failure_drop"), false);
+        blockingGateway.deletionRequested.get(30, TimeUnit.SECONDS);
+        if (partitioned) {
+            zookeeperClient.deletePartition(tablePath, "p1");
+        } else {
+            metadataManager.dropTable(tablePath, false);
+        }
+        verifyContext(ctx -> assertThat(ctx.isToBeDeleted(bucket)).isFalse());
+
+        oldGateway.releaseFailure.complete(null);
+        awaitReplicaState(replica, OfflineReplica);
+        gateways.put(0, new TestTabletServerGateway(false, Collections.emptySet()));
+        blockingGateway.allowDeletion.complete(null);
+        awaitAssignmentRemoved(blockingTableId);
+        retry(
+                Duration.ofSeconds(30),
+                () -> verifyContext(ctx -> assertThat(ctx.getReplicaState(replica)).isNull()));
     }
 
     @ParameterizedTest
@@ -297,7 +335,15 @@ class ReplicaDeletionInterleavingTest extends CoordinatorEventProcessorTestBase 
         eventProcessor.shutdown();
         metadataManager.dropTable(blockingTablePath, false);
         metadataManager.dropTable(tablePath, false);
+        long sessionId =
+                zookeeperClient
+                        .getDataWithStat(ServerIdZNode.path(0))
+                        .getStat()
+                        .getEphemeralOwner();
         ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupPath(ServerIdZNode.path(0));
+        ZOO_KEEPER_EXTENSION_WRAPPER
+                .getCustomExtension()
+                .cleanupPath(TabletServerSessionFenceZNode.path(0, sessionId));
         DeferredDeletionGateway blockingGateway = new DeferredDeletionGateway();
         gateways.put(1, blockingGateway);
         eventProcessor = buildCoordinatorEventProcessor();

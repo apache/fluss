@@ -19,6 +19,12 @@ package org.apache.fluss.server.zk.data;
 
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.server.zk.data.ZkData.BulkLoadPartitionTransactionZNode;
+import org.apache.fluss.server.zk.data.ZkData.BulkLoadPartitionTransactionsZNode;
+import org.apache.fluss.server.zk.data.ZkData.BulkLoadTableTransactionZNode;
+import org.apache.fluss.server.zk.data.ZkData.BulkLoadTableTransactionsZNode;
+import org.apache.fluss.server.zk.data.ZkData.BulkLoadTransactionsZNode;
+import org.apache.fluss.server.zk.data.ZkData.BulkLoadZNode;
 import org.apache.fluss.server.zk.data.ZkData.PartitionZNode;
 import org.apache.fluss.server.zk.data.ZkData.SchemaZNode;
 import org.apache.fluss.server.zk.data.ZkData.TableZNode;
@@ -27,9 +33,12 @@ import org.apache.fluss.utils.types.Tuple2;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for {@link org.apache.fluss.server.zk.data.ZkData}. */
 public class ZkDataTest {
+
+    private static final String BULK_LOAD_ID = "550e8400-e29b-41d4-a716-446655440000";
 
     @Test
     void testParseTablePath() {
@@ -78,5 +87,34 @@ public class ZkDataTest {
         assertThat(SchemaZNode.parsePath(path + "*")).isNull();
         assertThat(SchemaZNode.parsePath("/metadata/databases/db1/t1/20240911")).isNull();
         assertThat(SchemaZNode.parsePath("/metadata/databases/db1/tables/t1/schemas/a")).isNull();
+    }
+
+    @Test
+    void testBulkLoadStaticParentsAndCanonicalPathVectors() {
+        assertThat(BulkLoadZNode.path()).isEqualTo("/bulk_load");
+        assertThat(BulkLoadTransactionsZNode.path()).isEqualTo("/bulk_load/transactions");
+        assertThat(BulkLoadTableTransactionsZNode.path())
+                .isEqualTo("/bulk_load/transactions/tables");
+        assertThat(BulkLoadPartitionTransactionsZNode.path())
+                .isEqualTo("/bulk_load/transactions/partitions");
+
+        assertThat(BulkLoadTableTransactionsZNode.path(41))
+                .isEqualTo("/bulk_load/transactions/tables/41");
+        assertThat(BulkLoadPartitionTransactionsZNode.path(73))
+                .isEqualTo("/bulk_load/transactions/partitions/73");
+        assertThat(BulkLoadTableTransactionZNode.path(41, BULK_LOAD_ID))
+                .isEqualTo("/bulk_load/transactions/tables/41/" + BULK_LOAD_ID);
+        assertThat(BulkLoadPartitionTransactionZNode.path(73, BULK_LOAD_ID))
+                .isEqualTo("/bulk_load/transactions/partitions/73/" + BULK_LOAD_ID);
+    }
+
+    @Test
+    void testBulkLoadPathBuildersRejectInvalidTypedInputs() {
+        assertThatThrownBy(() -> BulkLoadTableTransactionsZNode.path(-1))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> BulkLoadPartitionTransactionZNode.path(-1, BULK_LOAD_ID))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> BulkLoadTableTransactionZNode.path(1, "not-a-uuid"))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 }

@@ -21,4 +21,9 @@ package org.apache.fluss.server.coordinator.event;
 public interface EventManager {
 
     void put(CoordinatorEvent event);
+
+    /** Returns whether the caller is currently running on this manager's event thread. */
+    default boolean isEventThread() {
+        return false;
+    }
 }

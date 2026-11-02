@@ -20,6 +20,7 @@ package org.apache.fluss.rpc.protocol;
 import org.apache.fluss.exception.ApiException;
 import org.apache.fluss.exception.AuthenticationException;
 import org.apache.fluss.exception.AuthorizationException;
+import org.apache.fluss.exception.BulkLoadNotFoundException;
 import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.exception.ConsumerGroupIdNotFoundException;
 import org.apache.fluss.exception.ConsumerGroupOwnerLoadingException;
@@ -40,6 +41,7 @@ import org.apache.fluss.exception.IneligibleReplicaException;
 import org.apache.fluss.exception.InsufficientKvLeaderReplicaCapacityException;
 import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidBucketRoutingException;
+import org.apache.fluss.exception.InvalidBulkLoadRequestException;
 import org.apache.fluss.exception.InvalidColumnProjectionException;
 import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidConsumerGroupIdException;
@@ -319,7 +321,11 @@ public enum Errors {
     CONSUMER_OFFSET_METADATA_TOO_LARGE(
             80,
             "The metadata field of the consumer offset request is too large.",
-            ConsumerOffsetMetadataTooLargeException::new);
+            ConsumerOffsetMetadataTooLargeException::new),
+    BULK_LOAD_NOT_FOUND(
+            81, "The BulkLoad transaction does not exist.", BulkLoadNotFoundException::new),
+    INVALID_BULK_LOAD_REQUEST(
+            82, "The BulkLoad request is invalid.", InvalidBulkLoadRequestException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 

@@ -159,14 +159,18 @@ public class KvRecoverHelper {
                         }
                     };
 
-            nextLogOffset =
-                    readLogRecordsAndApply(
-                            nextLogOffset,
-                            localLogStartOffset,
-                            rowCountUpdater,
-                            autoIncIdRangeUpdater,
-                            FetchIsolation.HIGH_WATERMARK,
-                            resumeRecordApplier);
+            // A restored snapshot may be ahead of the locally checkpointed high watermark.
+            // Its data is already durable, so only replay committed records after its offset.
+            if (nextLogOffset < logTablet.getHighWatermark()) {
+                nextLogOffset =
+                        readLogRecordsAndApply(
+                                nextLogOffset,
+                                localLogStartOffset,
+                                rowCountUpdater,
+                                autoIncIdRangeUpdater,
+                                FetchIsolation.HIGH_WATERMARK,
+                                resumeRecordApplier);
+            }
         }
 
         // the all data up to nextLogOffset has been flush into kv

@@ -30,6 +30,8 @@ import org.apache.fluss.remote.RemoteLogFetchInfo;
 import org.apache.fluss.remote.RemoteLogManifest;
 import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
+import org.apache.fluss.rpc.messages.CommitRemoteLogManifestRequest;
+import org.apache.fluss.rpc.messages.CommitRemoteLogManifestResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.FetchLogReadPreference;
 import org.apache.fluss.server.coordinator.TestCoordinatorGateway;
@@ -45,6 +47,7 @@ import org.apache.fluss.server.testutils.ServerTestTags;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
 import org.apache.fluss.utils.FlussPaths;
+import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
@@ -56,6 +59,7 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.File;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -65,6 +69,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -142,6 +148,283 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         assertThat(remoteLogSegmentList.size()).isEqualTo(4);
         assertThat(remoteLogManager.lookupPositionForOffset(remoteLogSegmentList.get(0), 2L))
                 .isGreaterThan(10);
+    }
+
+    @Test
+    void testPauseLogTieringStopsSchedulingWithoutDeletingReadState() throws Exception {
+        TableBucket tableBucket = makeTableBucket(false);
+        makeLogTableAsLeader(tableBucket, false);
+        Replica replica = replicaManager.getReplicaOrException(tableBucket);
+        addMultiSegmentsToLogTablet(replica.getLogTablet(), 5);
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+        List<RemoteLogSegment> uploaded =
+                remoteLogManager.relevantRemoteLogSegments(tableBucket, 0L);
+        assertThat(uploaded).isNotEmpty();
+
+        remoteLogManager.pauseLogTiering(replica);
+        addMultiSegmentsToLogTablet(replica.getLogTablet(), 2);
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+
+        assertThat(remoteLogManager.relevantRemoteLogSegments(tableBucket, 0L))
+                .containsExactlyElementsOf(uploaded);
+        assertThat(remoteLogManager.remoteLogTablet(tableBucket)).isNotNull();
+        assertThat(remoteLogManager.lookupPositionForOffset(uploaded.get(0), 0L))
+                .isGreaterThanOrEqualTo(0);
+    }
+
+    @Test
+    void testResumeLogTieringIsIdempotentForSameLeaderReplica() throws Exception {
+        TableBucket tableBucket = makeTableBucket(false);
+        makeLogTableAsLeader(tableBucket, false);
+        Replica replica = replicaManager.getReplicaOrException(tableBucket);
+        remoteLogManager.pauseLogTiering(replica);
+
+        remoteLogManager.resumeLogTiering(replica);
+        RemoteLogManager.TaskWithFuture resumed = remoteLogManager.getTaskWithFuture(tableBucket);
+        assertThat(resumed).isNotNull();
+
+        remoteLogManager.resumeLogTiering(replica);
+
+        assertThat(remoteLogManager.getTaskWithFuture(tableBucket)).isSameAs(resumed);
+        assertThat(remoteLogTaskScheduler.getActivePeriodicScheduledTask()).hasSize(1);
+    }
+
+    @Test
+    void testCancelledUploadCannotReplaceNewTaskManifest() throws Exception {
+        TableBucket bucket = makeTableBucket(false);
+        makeLogTableAsLeader(bucket, false);
+        Replica replica = replicaManager.getReplicaOrException(bucket);
+        addMultiSegmentsToLogTablet(replica.getLogTablet(), 5);
+        AtomicInteger commits = new AtomicInteger();
+        TestCoordinatorGateway oldGateway =
+                new TestCoordinatorGateway(zkClient) {
+                    @Override
+                    public CompletableFuture<CommitRemoteLogManifestResponse>
+                            commitRemoteLogManifest(CommitRemoteLogManifestRequest request) {
+                        commits.incrementAndGet();
+                        return super.commitRemoteLogManifest(request);
+                    }
+                };
+        LogTieringTask oldTask =
+                new LogTieringTask(
+                        replica,
+                        buildRemoteLogTablet(replica.getLogTablet()),
+                        remoteLogStorage,
+                        remoteLogManager.getRemoteLogIndexCache(
+                                replica.getLogTablet().getDataDir()),
+                        oldGateway,
+                        zkClient,
+                        manualClock,
+                        Integer.MAX_VALUE);
+        AtomicInteger copies = new AtomicInteger();
+        remoteLogStorage.afterCopySegment =
+                () -> {
+                    if (copies.incrementAndGet() == 4) {
+                        remoteLogStorage.afterCopySegment = () -> {};
+                        oldTask.cancel();
+                        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+                    }
+                };
+
+        oldTask.run();
+
+        assertThat(commits).hasValue(0);
+        List<RemoteLogSegment> retained = remoteLogManager.relevantRemoteLogSegments(bucket, 0L);
+        assertThat(retained).hasSize(4);
+        assertThat(listRemoteLogFiles(bucket))
+                .containsExactlyInAnyOrderElementsOf(
+                        retained.stream()
+                                .map(segment -> segment.remoteLogSegmentId().toString())
+                                .collect(Collectors.toSet()));
+        assertThat(zkClient.getRemoteLogManifestHandle(bucket)).isPresent();
+    }
+
+    @ParameterizedTest
+    @CsvSource({"false,false", "true,false", "true,true"})
+    void testCancelledManifestUploadCannotReplaceNewTaskManifest(
+            boolean cancelDuringCommit, boolean loseResponse) throws Exception {
+        TableBucket bucket = makeTableBucket(false);
+        makeLogTableAsLeader(bucket, false);
+        Replica replica = replicaManager.getReplicaOrException(bucket);
+        addMultiSegmentsToLogTablet(replica.getLogTablet(), 5);
+        AtomicInteger commits = new AtomicInteger();
+        AtomicReference<LogTieringTask> oldTaskRef = new AtomicReference<>();
+        AtomicReference<RemoteLogManifestHandle> replacementHandle = new AtomicReference<>();
+        Runnable replaceTask =
+                () -> {
+                    remoteLogStorage.afterWriteManifest = () -> {};
+                    oldTaskRef.get().cancel();
+                    try {
+                        addMultiSegmentsToLogTablet(replica.getLogTablet(), 2);
+                        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+                        replacementHandle.set(zkClient.getRemoteLogManifestHandle(bucket).get());
+                    } catch (Exception e) {
+                        throw new RuntimeException(e);
+                    }
+                };
+        TestCoordinatorGateway gateway =
+                new TestCoordinatorGateway(zkClient) {
+                    @Override
+                    public CompletableFuture<CommitRemoteLogManifestResponse>
+                            commitRemoteLogManifest(CommitRemoteLogManifestRequest request) {
+                        int attempt = commits.incrementAndGet();
+                        CompletableFuture<CommitRemoteLogManifestResponse> response =
+                                super.commitRemoteLogManifest(request);
+                        if (cancelDuringCommit && attempt == 1) {
+                            replaceTask.run();
+                            if (loseResponse) {
+                                return FutureUtils.completedExceptionally(
+                                        new IOException("lost response"));
+                            }
+                        }
+                        return response;
+                    }
+                };
+        LogTieringTask oldTask =
+                new LogTieringTask(
+                        replica,
+                        remoteLogManager.remoteLogTablet(bucket),
+                        remoteLogStorage,
+                        remoteLogManager.getRemoteLogIndexCache(
+                                replica.getLogTablet().getDataDir()),
+                        gateway,
+                        zkClient,
+                        manualClock,
+                        Integer.MAX_VALUE);
+        oldTaskRef.set(oldTask);
+        if (!cancelDuringCommit) {
+            remoteLogStorage.afterWriteManifest = replaceTask;
+        }
+
+        oldTask.run();
+
+        assertThat(commits).hasValue(cancelDuringCommit ? 1 : 0);
+        assertThat(zkClient.getRemoteLogManifestHandle(bucket)).contains(replacementHandle.get());
+        RemoteLogManifest persisted =
+                remoteLogStorage.readRemoteLogManifestSnapshot(
+                        replacementHandle.get().getRemoteLogManifestPath());
+        assertThat(remoteLogManager.remoteLogTablet(bucket).allRemoteLogSegments())
+                .containsExactlyElementsOf(persisted.getRemoteLogSegmentList());
+        assertThat(listRemoteLogFiles(bucket))
+                .containsAll(
+                        persisted.getRemoteLogSegmentList().stream()
+                                .map(segment -> segment.remoteLogSegmentId().toString())
+                                .collect(Collectors.toSet()));
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testLostCommitResponsePreservesFilesWhenRetriesFail(boolean rejectRetry) throws Exception {
+        TableBucket bucket = makeTableBucket(false);
+        makeLogTableAsLeader(bucket, false);
+        Replica replica = replicaManager.getReplicaOrException(bucket);
+        addMultiSegmentsToLogTablet(replica.getLogTablet(), 5);
+        TestCoordinatorGateway gateway =
+                new TestCoordinatorGateway(zkClient) {
+                    private boolean firstCommit = true;
+
+                    @Override
+                    public CompletableFuture<CommitRemoteLogManifestResponse>
+                            commitRemoteLogManifest(CommitRemoteLogManifestRequest request) {
+                        if (firstCommit) {
+                            firstCommit = false;
+                            assertThat(
+                                            super.commitRemoteLogManifest(request)
+                                                    .join()
+                                                    .isCommitSuccess())
+                                    .isTrue();
+                            return FutureUtils.completedExceptionally(
+                                    new IOException("lost response"));
+                        }
+                        return rejectRetry
+                                ? CompletableFuture.completedFuture(
+                                        new CommitRemoteLogManifestResponse()
+                                                .setCommitSuccess(false))
+                                : FutureUtils.completedExceptionally(
+                                        new IOException("disconnected"));
+                    }
+                };
+        RemoteLogTablet remoteLog = buildRemoteLogTablet(replica.getLogTablet());
+        LogTieringTask task =
+                new LogTieringTask(
+                        replica,
+                        remoteLog,
+                        remoteLogStorage,
+                        remoteLogManager.getRemoteLogIndexCache(
+                                replica.getLogTablet().getDataDir()),
+                        gateway,
+                        zkClient,
+                        manualClock,
+                        Integer.MAX_VALUE);
+
+        task.run();
+
+        FsPath manifestPath =
+                zkClient.getRemoteLogManifestHandle(bucket).get().getRemoteLogManifestPath();
+        assertThat(manifestPath.getFileSystem().exists(manifestPath)).isTrue();
+        RemoteLogManifest persisted = remoteLogStorage.readRemoteLogManifestSnapshot(manifestPath);
+        assertThat(listRemoteLogFiles(bucket))
+                .containsExactlyInAnyOrderElementsOf(
+                        persisted.getRemoteLogSegmentList().stream()
+                                .map(segment -> segment.remoteLogSegmentId().toString())
+                                .collect(Collectors.toSet()));
+        assertThat(remoteLog.allRemoteLogSegments()).hasSize(4);
+    }
+
+    @Test
+    void testCancellationAfterLostCommitResponseStillConfirmsUploadedFiles() throws Exception {
+        TableBucket bucket = makeTableBucket(false);
+        makeLogTableAsLeader(bucket, false);
+        Replica replica = replicaManager.getReplicaOrException(bucket);
+        addMultiSegmentsToLogTablet(replica.getLogTablet(), 5);
+        AtomicInteger commits = new AtomicInteger();
+        AtomicReference<LogTieringTask> taskRef = new AtomicReference<>();
+        TestCoordinatorGateway gateway =
+                new TestCoordinatorGateway(zkClient) {
+                    @Override
+                    public CompletableFuture<CommitRemoteLogManifestResponse>
+                            commitRemoteLogManifest(CommitRemoteLogManifestRequest request) {
+                        int attempt = commits.incrementAndGet();
+                        CompletableFuture<CommitRemoteLogManifestResponse> response =
+                                super.commitRemoteLogManifest(request);
+                        if (attempt == 1) {
+                            taskRef.get().cancel();
+                            return FutureUtils.completedExceptionally(
+                                    new IOException("lost response"));
+                        }
+                        return response;
+                    }
+                };
+        RemoteLogTablet remoteLog = buildRemoteLogTablet(replica.getLogTablet());
+        LogTieringTask task =
+                new LogTieringTask(
+                        replica,
+                        remoteLog,
+                        remoteLogStorage,
+                        remoteLogManager.getRemoteLogIndexCache(
+                                replica.getLogTablet().getDataDir()),
+                        gateway,
+                        zkClient,
+                        manualClock,
+                        Integer.MAX_VALUE);
+        taskRef.set(task);
+
+        task.run();
+
+        assertThat(commits).hasValue(1);
+        assertThat(remoteLog.allRemoteLogSegments()).isEmpty();
+        RemoteLogManifest committed =
+                remoteLogStorage.readRemoteLogManifestSnapshot(
+                        zkClient.getRemoteLogManifestHandle(bucket)
+                                .get()
+                                .getRemoteLogManifestPath());
+        assertThat(committed.getRemoteLogSegmentList()).hasSize(4);
+        assertThat(listRemoteLogFiles(bucket))
+                .containsExactlyInAnyOrderElementsOf(
+                        committed.getRemoteLogSegmentList().stream()
+                                .map(segment -> segment.remoteLogSegmentId().toString())
+                                .collect(Collectors.toSet()));
+        assertThat(zkClient.getRemoteLogManifestHandle(bucket)).isPresent();
     }
 
     @ParameterizedTest

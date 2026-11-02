@@ -37,6 +37,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeUpdateMetadataRequest;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
@@ -89,6 +90,8 @@ class CoordinatorChannelManagerTest {
         checkSendRequest(coordinatorChannelManager, server1.id(), true);
         checkEnqueueRequest(coordinatorChannelManager, server1.id(), true);
 
+        checkSynchronousSendFailure(coordinatorChannelManager, server1.id());
+
         coordinatorChannelManager.close();
     }
 
@@ -117,9 +120,10 @@ class CoordinatorChannelManagerTest {
             CoordinatorChannelManager coordinatorChannelManager,
             int targetServerId,
             boolean expectCanSend) {
-        // 0 represents not send, 1 represents prepare to send, 2 represents success(received the
-        // success response)
-        AtomicInteger sendFlag = new AtomicInteger(0);
+        AtomicInteger requestInvocations = new AtomicInteger();
+        AtomicInteger callbackInvocations = new AtomicInteger();
+        AtomicReference<Object> responseRef = new AtomicReference<>();
+        AtomicReference<Throwable> failureRef = new AtomicReference<>();
         // we use update metadata request to test for simplicity
         UpdateMetadataRequest updateMetadataRequest =
                 makeUpdateMetadataRequest(
@@ -133,18 +137,61 @@ class CoordinatorChannelManagerTest {
                 updateMetadataRequest,
                 // when
                 (gateway, request) -> {
-                    // sending... set to 1
-                    sendFlag.set(1);
+                    requestInvocations.incrementAndGet();
                     return gateway.updateMetadata(request);
                 },
                 (response, throwable) -> {
-                    // receive response, set to 2
-                    sendFlag.set(2);
+                    callbackInvocations.incrementAndGet();
+                    responseRef.set(response);
+                    failureRef.set(throwable);
                 });
 
-        // if expect can send, flag is 2;
-        // otherwise, flag is 0
-        int expectedFlag = expectCanSend ? 2 : 0;
-        retry(Duration.ofMinutes(1), () -> assertThat(sendFlag.get()).isEqualTo(expectedFlag));
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    assertThat(requestInvocations.get()).isEqualTo(expectCanSend ? 1 : 0);
+                    assertThat(callbackInvocations.get()).isEqualTo(1);
+                    if (expectCanSend) {
+                        assertThat(responseRef.get()).isNotNull();
+                        assertThat(failureRef.get()).isNull();
+                    } else {
+                        assertThat(responseRef.get()).isNull();
+                        assertThat(failureRef.get()).isInstanceOf(IllegalStateException.class);
+                    }
+                });
+    }
+
+    private void checkSynchronousSendFailure(
+            CoordinatorChannelManager coordinatorChannelManager, int targetServerId) {
+        AtomicInteger requestInvocations = new AtomicInteger();
+        AtomicInteger callbackInvocations = new AtomicInteger();
+        AtomicReference<Object> responseRef = new AtomicReference<>();
+        AtomicReference<Throwable> failureRef = new AtomicReference<>();
+        IllegalStateException expectedFailure = new IllegalStateException("test send failure");
+        UpdateMetadataRequest updateMetadataRequest =
+                makeUpdateMetadataRequest(
+                        null,
+                        null,
+                        Collections.emptySet(),
+                        Collections.emptyList(),
+                        Collections.emptyList());
+
+        coordinatorChannelManager.sendRequest(
+                targetServerId,
+                updateMetadataRequest,
+                (gateway, request) -> {
+                    requestInvocations.incrementAndGet();
+                    throw expectedFailure;
+                },
+                (response, throwable) -> {
+                    callbackInvocations.incrementAndGet();
+                    responseRef.set(response);
+                    failureRef.set(throwable);
+                });
+
+        assertThat(requestInvocations.get()).isEqualTo(1);
+        assertThat(callbackInvocations.get()).isEqualTo(1);
+        assertThat(responseRef.get()).isNull();
+        assertThat(failureRef.get()).isSameAs(expectedFailure);
     }
 }

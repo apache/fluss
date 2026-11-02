@@ -79,8 +79,14 @@ public abstract class ZkAsyncResponse {
     public static class ZkGetDataResponse extends ZkAsyncResponse {
 
         private final byte[] data;
-        private final @Nullable Stat stat;
+        @Nullable private final Stat stat;
 
+        /** Creates a data response without the ZooKeeper metadata returned by the read. */
+        public ZkGetDataResponse(String path, Code resultCode, byte[] data) {
+            this(path, resultCode, data, null);
+        }
+
+        /** Creates a data response with the ZooKeeper metadata returned by the same read. */
         public ZkGetDataResponse(String path, Code resultCode, byte[] data, @Nullable Stat stat) {
             super(path, resultCode);
             this.data = data;
@@ -91,6 +97,7 @@ public abstract class ZkAsyncResponse {
             return data;
         }
 
+        /** Returns the ZooKeeper metadata from the same read, or null when unavailable. */
         public @Nullable Stat getStat() {
             return stat;
         }

@@ -39,6 +39,12 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public class TestingRemoteLogStorage extends DefaultRemoteLogStorage {
 
+    /** Invoked after a log segment and its indexes have been copied. */
+    public Runnable afterCopySegment = () -> {};
+
+    /** Invoked after a manifest has been uploaded and before its path is returned. */
+    public Runnable afterWriteManifest = () -> {};
+
     public final AtomicBoolean writeManifestFail = new AtomicBoolean(false);
 
     /**
@@ -114,6 +120,7 @@ public class TestingRemoteLogStorage extends DefaultRemoteLogStorage {
         }
         super.copyLogSegmentFiles(remoteLogDir, remoteLogSegment, logSegmentFiles);
         copySegmentCount.incrementAndGet();
+        afterCopySegment.run();
     }
 
     @Override
@@ -122,7 +129,9 @@ public class TestingRemoteLogStorage extends DefaultRemoteLogStorage {
         if (writeManifestFail.get()) {
             throw new RuntimeException("failed to upload remote log manifest snapshot");
         }
-        return super.writeRemoteLogManifestSnapshot(remoteLogDir, manifest);
+        FsPath path = super.writeRemoteLogManifestSnapshot(remoteLogDir, manifest);
+        afterWriteManifest.run();
+        return path;
     }
 
     @Override
