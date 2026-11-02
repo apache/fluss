@@ -20,6 +20,7 @@ package org.apache.fluss.flink.sink.undo;
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.record.ChangeType;
+import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.KeyEncoder;
 import org.apache.fluss.utils.ByteArrayWrapper;
@@ -66,6 +67,17 @@ public class UndoComputer {
     public UndoComputer(KeyEncoder keyEncoder, UpsertWriter writer) {
         this.keyEncoder = keyEncoder;
         this.writer = writer;
+    }
+
+    boolean selectRecord(
+            LogRecord record,
+            Set<ByteArrayWrapper> processedKeys,
+            Set<ByteArrayWrapper> selectedKeys) {
+        if (record.getChangeType() == ChangeType.UPDATE_AFTER) {
+            return false;
+        }
+        ByteArrayWrapper key = new ByteArrayWrapper(keyEncoder.encodeKey(record.getRow()));
+        return !processedKeys.contains(key) && selectedKeys.add(key);
     }
 
     /**
