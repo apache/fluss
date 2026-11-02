@@ -66,22 +66,21 @@ ARROW is less efficient for workloads that:
 
 ### Overview
 
-COMPACTED uses a **row-oriented format** that focuses on reducing storage size and CPU usage. It is optimized for workloads where queries typically access entire rows rather than individual columns.
+COMPACTED uses a **row-oriented format** that reduces storage size by encoding small integer and long values more efficiently — for example, a small ID or counter takes fewer bytes on disk than it would in a fixed-width format. The trade-off is that reading any field requires the entire row to be decoded first. It is best suited for workloads where queries access entire rows rather than individual columns.
 
 ### Key Features
 
-- **Reduced storage overhead**: Variable-length encoding minimizes disk usage
-- **Lower CPU overhead**: Efficient when all columns are accessed together
-- **Row-oriented access**: Optimized for full-row reads
+- **Smaller storage footprint**: Integer and long fields with small values (such as IDs, counters, and status codes) take less space on disk
+- **Row-oriented access**: Optimized for full-row reads and key-based lookups
 - **Key-value support**: Can be configured for key-based access patterns
 
 ### When to Use COMPACTED
 
 COMPACTED is recommended for:
 - Tables where queries usually select all columns
-- Large vector or embedding tables
 - Pre-aggregated results or materialized views
 - Denormalized or joined tables
+- Schemas with many small integer or long fields (IDs, counters, status codes)
 - Workloads that prioritize storage efficiency over selective column access
 
 ---
@@ -131,8 +130,8 @@ COMPACTED is not recommended when:
 | Typical access pattern | Scans with projection & filters     | Full-row reads or key lookups      |
 | Column pruning         | ✅ Yes                             | ❌ No                              |
 | Predicate pushdown     | ✅ Yes                              | ❌ No                             |
-| Storage efficiency     | Good                                | Excellent                          |
-| CPU efficiency         | Better for selective reads          | Better for full-row reads          |
+| Storage efficiency     | Good (with compression)             | Smaller storage for integer and long fields |
+| CPU efficiency         | Lower CPU for partial reads         | Higher CPU per read due to full-row decoding |
 | Log format             | ✅ Yes                              | ✅ Yes                            |
 | KV format              | ❌ No                               | ✅ Yes                            |
 | Best suited for        | Analytics workloads                 | State tables / materialized data   |
