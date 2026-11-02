@@ -26,6 +26,7 @@ import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.metadata.AggFunction;
 import org.apache.fluss.metadata.AggFunctionType;
 import org.apache.fluss.metadata.AggFunctions;
+import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.Schema;
@@ -41,6 +42,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.Collections;
 import java.util.HashMap;
@@ -175,6 +177,33 @@ class TableDescriptorValidationTest {
                 .isInstanceOf(InvalidTableException.class)
                 .hasMessageContaining(ConfigOptions.TABLE_KV_TTL.key())
                 .hasMessageContaining("primary key");
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testKvTTLRejectsSecondaryIndexes(boolean eventTime) {
+        TableDescriptor.Builder builder =
+                TableDescriptor.builder()
+                        .schema(indexedSchema())
+                        .distributedBy(3)
+                        .property(ConfigOptions.TABLE_REPLICATION_FACTOR, 3)
+                        .property(ConfigOptions.TABLE_CHANGELOG_IMAGE, ChangelogImage.FULL)
+                        .property(
+                                ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION,
+                                KvValueLayout.TAGGED.version())
+                        .property(ConfigOptions.TABLE_KV_TTL.key(), "1 h");
+        if (eventTime) {
+            builder.property(ConfigOptions.TABLE_KV_TTL_TIME_COLUMN.key(), "user_id");
+        }
+        TableDescriptor descriptor = builder.build();
+
+        assertThatThrownBy(
+                        () ->
+                                TableDescriptorValidation.validateTableDescriptor(
+                                        descriptor, 100, null))
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining(ConfigOptions.TABLE_KV_TTL.key())
+                .hasMessageContaining("secondary indexes");
     }
 
     @ParameterizedTest
