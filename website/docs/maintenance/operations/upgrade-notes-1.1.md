@@ -29,8 +29,8 @@ In v1.1, a lookup or prefix lookup that fails with a retriable error, such as
 delay starts at `client.lookup.retry-backoff` (default `100ms`) and doubles up to
 `client.lookup.retry-backoff-max` (default `1s`). This stops clients from flooding TabletServers
 and logs while a bucket has no ready leader, for example during a rolling restart. Lookups for a
-bucket that has no leader in the client's metadata back off the same way, without counting toward
-`client.lookup.max-retries`.
+bucket that has no leader in the client's metadata back off the same way, per bucket and without
+counting toward `client.lookup.max-retries`.
 
 The first retry after a leader change now waits about 100ms. To retain the previous behavior,
 set `client.lookup.retry-backoff: 0`.

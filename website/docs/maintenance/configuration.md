@@ -256,9 +256,9 @@ The retry backoff applies to each failed lookup and prefix lookup, preventing th
 resending lookups in a tight loop while a bucket has no ready leader, for example during a rolling
 restart of TabletServers. New lookups are not delayed by lookups that are waiting to be retried.
 The backoff remains subject to `client.lookup.max-retries`, except while the client's metadata has
-no leader for the bucket: those attempts also back off but are not counted, so lookups keep waiting
-for leader election instead of failing. Setting `client.lookup.retry-backoff` to `0` restores
-immediate retry behavior.
+no leader for the bucket: the bucket then backs off as a whole, new lookups for it wait for the same
+backoff, and the attempts are not counted, so lookups keep waiting for leader election instead of
+failing. Setting `client.lookup.retry-backoff` to `0` restores immediate retry behavior.
 
 ## Client disk write protection backoff
 

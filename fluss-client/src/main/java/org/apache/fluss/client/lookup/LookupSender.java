@@ -41,6 +41,8 @@ import org.apache.fluss.rpc.messages.PrefixLookupRequest;
 import org.apache.fluss.rpc.messages.PrefixLookupResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.utils.ExponentialBackoff;
+import org.apache.fluss.utils.clock.Clock;
+import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.slf4j.Logger;
@@ -91,6 +93,14 @@ class LookupSender implements Runnable {
 
     private final ExponentialBackoff historicalThrottleBackoff;
 
+    private final Clock clock;
+
+    /**
+     * Buckets whose leader could not be found, keyed to their backoff state. Only accessed by the
+     * sender thread.
+     */
+    private final Map<TableBucket, LeaderlessBucket> leaderlessBuckets = new HashMap<>();
+
     LookupSender(
             MetadataUpdater metadataUpdater,
             LookupQueue lookupQueue,
@@ -99,6 +109,27 @@ class LookupSender implements Runnable {
             ExponentialBackoff retryBackoff,
             short acks,
             int maxRequestTimeoutMs) {
+        this(
+                metadataUpdater,
+                lookupQueue,
+                maxFlightRequests,
+                maxRetries,
+                retryBackoff,
+                acks,
+                maxRequestTimeoutMs,
+                SystemClock.getInstance());
+    }
+
+    @VisibleForTesting
+    LookupSender(
+            MetadataUpdater metadataUpdater,
+            LookupQueue lookupQueue,
+            int maxFlightRequests,
+            int maxRetries,
+            ExponentialBackoff retryBackoff,
+            short acks,
+            int maxRequestTimeoutMs,
+            Clock clock) {
         this.metadataUpdater = metadataUpdater;
         this.lookupQueue = lookupQueue;
         this.maxInFlightReuqestsSemaphore = new Semaphore(maxFlightRequests);
@@ -108,6 +139,7 @@ class LookupSender implements Runnable {
         this.acks = acks;
         this.maxRequestTimeoutMs = maxRequestTimeoutMs;
         this.historicalThrottleBackoff = new ExponentialBackoff(100L, 2, 5000L, 0.2);
+        this.clock = clock;
     }
 
     @Override
@@ -181,10 +213,18 @@ class LookupSender implements Runnable {
                     .computeIfAbsent(lookup.tableBucket(), k -> new ArrayList<>())
                     .add(lookup);
         }
+        long nowMs = clock.milliseconds();
         for (Map.Entry<TableBucket, List<AbstractLookupQuery<?>>> entry :
                 lookupsByBucket.entrySet()) {
             TableBucket tb = entry.getKey();
             List<AbstractLookupQuery<?>> bucketLookups = entry.getValue();
+            LeaderlessBucket leaderlessBucket = leaderlessBuckets.get(tb);
+            if (leaderlessBucket != null && nowMs < leaderlessBucket.retryTimeMs) {
+                // Lookups that arrive while the bucket backs off wait for it as well, instead of
+                // blocking the sender thread on another metadata request.
+                reEnqueueLookups(bucketLookups, leaderlessBucket.retryTimeMs);
+                continue;
+            }
             int leader;
             try {
                 // TODO Metadata requests are being sent too frequently here. consider first
@@ -195,12 +235,18 @@ class LookupSender implements Runnable {
                 // Metadata refresh confirmed that the queued lookup carries a deleted partition
                 // id. Complete it instead of repeatedly enqueueing the stale TableBucket; a
                 // primary key lookuper can then reroute by partition name.
+                leaderlessBuckets.remove(tb);
                 bucketLookups.forEach(lookup -> lookup.future().completeExceptionally(e));
                 continue;
             } catch (Exception e) {
-                reEnqueueLookupsWithoutLeader(tb, bucketLookups, e);
+                if (leaderlessBucket == null) {
+                    leaderlessBucket = new LeaderlessBucket();
+                    leaderlessBuckets.put(tb, leaderlessBucket);
+                }
+                reEnqueueLookupsWithoutLeader(tb, leaderlessBucket, bucketLookups, e);
                 continue;
             }
+            leaderlessBuckets.remove(tb);
             for (AbstractLookupQuery<?> lookup : bucketLookups) {
                 lookupBatchesByLeader
                         .computeIfAbsent(
@@ -208,24 +254,42 @@ class LookupSender implements Runnable {
                         .add(lookup);
             }
         }
+        // Lookups waiting on a bucket come back once its backoff expires. A bucket without any is
+        // no longer looked up, e.g. its table was dropped, so stop tracking it.
+        leaderlessBuckets
+                .entrySet()
+                .removeIf(
+                        e ->
+                                e.getValue().retryTimeMs <= nowMs
+                                        && !lookupsByBucket.containsKey(e.getKey()));
         return lookupBatchesByLeader;
     }
 
     private void reEnqueueLookupsWithoutLeader(
-            TableBucket tableBucket, List<AbstractLookupQuery<?>> lookups, Exception exception) {
-        long maxRetryDelayMs = 0;
-        for (AbstractLookupQuery<?> lookup : lookups) {
-            maxRetryDelayMs = Math.max(maxRetryDelayMs, prepareLeaderRetry(lookup));
-            reEnqueueLookup(lookup);
-        }
+            TableBucket tableBucket,
+            LeaderlessBucket leaderlessBucket,
+            List<AbstractLookupQuery<?>> lookups,
+            Exception exception) {
+        // Not counted toward max retries: a bucket can be leaderless for a while during a routine
+        // rolling restart, and lookups should not fail because of that.
+        long retryDelayMs = retryBackoff.backoff(leaderlessBucket.attempts++);
+        leaderlessBucket.retryTimeMs = clock.milliseconds() + retryDelayMs;
+        reEnqueueLookups(lookups, leaderlessBucket.retryTimeMs);
         LOG.warn(
-                "Failed to find the leader for table bucket {}, retrying {} lookup(s) after up to "
-                        + "{} ms. Error: {}",
+                "Failed to find the leader for table bucket {}, retrying {} lookup(s) after {} ms. "
+                        + "Error: {}",
                 tableBucket,
                 lookups.size(),
-                maxRetryDelayMs,
+                retryDelayMs,
                 exception.toString());
         LOG.debug("Failed to find the leader for table bucket {}.", tableBucket, exception);
+    }
+
+    private void reEnqueueLookups(List<AbstractLookupQuery<?>> lookups, long retryTimeMs) {
+        for (AbstractLookupQuery<?> lookup : lookups) {
+            lookup.setNextRetryTimeMs(retryTimeMs);
+            reEnqueueLookup(lookup);
+        }
     }
 
     @VisibleForTesting
@@ -546,17 +610,8 @@ class LookupSender implements Runnable {
                         ? historicalThrottleBackoff
                         : retryBackoff;
         long retryDelayMs = backoff.backoff(lookup.retries());
-        lookup.setNextRetryTimeMs(System.currentTimeMillis() + retryDelayMs);
+        lookup.setNextRetryTimeMs(clock.milliseconds() + retryDelayMs);
         lookup.incrementRetries();
-        return retryDelayMs;
-    }
-
-    private long prepareLeaderRetry(AbstractLookupQuery<?> lookup) {
-        // Not counted toward max retries: a bucket can be leaderless for a while during a routine
-        // rolling restart, and lookups should not fail because of that.
-        long retryDelayMs = retryBackoff.backoff(lookup.leaderNotFoundRetries());
-        lookup.setNextRetryTimeMs(System.currentTimeMillis() + retryDelayMs);
-        lookup.incrementLeaderNotFoundRetries();
         return retryDelayMs;
     }
 
@@ -672,6 +727,15 @@ class LookupSender implements Runnable {
             this.tableIds = tableIds;
             this.tablePartitions = tablePartitions;
         }
+    }
+
+    /** Backoff state of a bucket whose leader could not be found. */
+    private static class LeaderlessBucket {
+        /** Failed leader lookups since the bucket last had a known leader. */
+        private int attempts;
+
+        /** The leader is not looked up again before this time. */
+        private long retryTimeMs;
     }
 
     private void invalidTableOrPartitions(TableOrPartitions tableOrPartitions) {
