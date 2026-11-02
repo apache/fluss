@@ -92,6 +92,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
@@ -918,6 +919,67 @@ final class SenderTest {
         // even double destroy is still safe.
         sender.destroyResources();
         sender.destroyResources();
+    }
+
+    @Test
+    void testGracefulCloseWaitsForInFlightBatchRetry() throws Exception {
+        sender.destroyResources();
+        AtomicBoolean shuttingDown = new AtomicBoolean(false);
+        AtomicInteger responses = new AtomicInteger();
+        metadataUpdater =
+                new TestingMetadataUpdater(
+                        Collections.singletonMap(DATA1_TABLE_PATH, DATA1_TABLE_INFO)) {
+                    @Override
+                    public Cluster getCluster() {
+                        if (shuttingDown.get() && pendingRequestSize(tb1) > 0) {
+                            finishRequest(
+                                    tb1,
+                                    0,
+                                    responses.getAndIncrement() == 0
+                                            ? createProduceLogResponse(tb1, Errors.REQUEST_TIME_OUT)
+                                            : createProduceLogResponse(tb1, 0, 1));
+                        }
+                        return super.getCluster();
+                    }
+                };
+        sender = setupWithIdempotenceState();
+
+        CompletableFuture<Exception> future = new CompletableFuture<>();
+        appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> future.complete(e));
+        sender.runOnce();
+        assertThat(sender.numOfInFlightBatches(tb1)).isEqualTo(1);
+        assertThat(accumulator.hasUnDrained()).isFalse();
+
+        sender.initiateClose();
+        shuttingDown.set(true);
+        sender.run();
+
+        assertThat(responses.get()).isEqualTo(2);
+        assertThat(future).isCompletedWithValue(null);
+        assertThat(accumulator.hasIncomplete()).isFalse();
+    }
+
+    @Test
+    void testForceCloseAbortsInFlightAndUndrainedBatches() throws Exception {
+        CompletableFuture<Exception> inFlight = new CompletableFuture<>();
+        appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> inFlight.complete(e));
+        sender.runOnce();
+        assertThat(sender.numOfInFlightBatches(tb1)).isEqualTo(1);
+        CompletableFuture<Exception> undrained = new CompletableFuture<>();
+        appendToAccumulator(tb1, row(2, "b"), (tb, leo, e) -> undrained.complete(e));
+        assertThat(accumulator.hasUnDrained()).isTrue();
+
+        sender.forceClose();
+        sender.run();
+
+        for (CompletableFuture<Exception> future : Arrays.asList(inFlight, undrained)) {
+            assertThat(future).isDone();
+            assertThat(future.get())
+                    .isInstanceOf(FlussRuntimeException.class)
+                    .hasMessageContaining("force closed");
+        }
+        assertThat(sender.numOfInFlightBatches(tb1)).isZero();
+        assertThat(accumulator.hasIncomplete()).isFalse();
     }
 
     @Test
