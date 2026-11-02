@@ -24,6 +24,7 @@ import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.PartitionSpec;
@@ -50,6 +51,7 @@ import org.junit.jupiter.params.provider.MethodSource;
 import javax.annotation.Nullable;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -82,7 +84,10 @@ class PrefixLookupITCase {
 
     @BeforeEach
     void setup() throws Exception {
-        conn = ConnectionFactory.createConnection(FLUSS_CLUSTER_EXTENSION.getClientConfig());
+        // each lookup is sent alone, so don't wait for the batch to fill up
+        Configuration clientConf = FLUSS_CLUSTER_EXTENSION.getClientConfig();
+        clientConf.set(ConfigOptions.CLIENT_LOOKUP_BATCH_TIMEOUT, Duration.ofMillis(1));
+        conn = ConnectionFactory.createConnection(clientConf);
         admin = conn.getAdmin();
         admin.createDatabase(DATABASE, DatabaseDescriptor.EMPTY, true).get();
     }

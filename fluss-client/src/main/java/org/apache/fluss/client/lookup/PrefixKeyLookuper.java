@@ -28,6 +28,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.encode.CompactedKeyEncoder;
 import org.apache.fluss.row.encode.KeyEncoder;
 import org.apache.fluss.types.RowType;
 
@@ -86,8 +87,18 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
         DataLakeFormat lakeFormat = tableInfo.getTableConfig().getDataLakeFormat().orElse(null);
 
         List<String> bucketKeys = tableInfo.getBucketKeys();
+        // only the compacted encoding encodes every primary key prefix as a byte prefix of the key;
+        // otherwise (e.g. Paimon on legacy tables) the keys after the bucket key are
+        // client-filtered
+        boolean compactedKey =
+                KeyEncoder.ofPrimaryKeyEncoder(
+                                lookupRowType,
+                                bucketKeys,
+                                tableInfo.getTableConfig(),
+                                tableInfo.isDefaultBucketKey())
+                        instanceof CompactedKeyEncoder;
         List<String> clientFilterKeys =
-                KeyEncoder.supportsMultiKeyPrefixLookup(tableInfo.getTableConfig())
+                compactedKey
                         ? Collections.emptyList()
                         : prefixKeys.subList(bucketKeys.size(), prefixKeys.size());
         prefixKeys = prefixKeys.subList(0, prefixKeys.size() - clientFilterKeys.size());

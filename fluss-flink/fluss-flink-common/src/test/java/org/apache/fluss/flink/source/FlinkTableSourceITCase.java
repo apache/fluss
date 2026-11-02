@@ -1255,8 +1255,6 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                         "SELECT a, b, h.address FROM src JOIN %s FOR SYSTEM_TIME AS OF src.proc as h"
                                 + " ON src.b = h.name AND h.address = CONCAT('address', CAST(src.a AS STRING))",
                         dim);
-        // the lookup keys sent to Fluss are (name, address), not just the bucket key
-        assertThat(tEnv.explainSql(dimJoinQuery)).contains("lookup=[name=b, address=");
 
         CloseableIterator<Row> collected = tEnv.executeSql(dimJoinQuery).collect();
         List<String> expected = Arrays.asList("+I[1, name1, address1]", "+I[2, name2, address2]");

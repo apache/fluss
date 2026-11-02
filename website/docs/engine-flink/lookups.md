@@ -136,7 +136,7 @@ For more details about Fluss partitioned table, see [Partitioned Tables](table-d
 ### Instructions
 
 - Use a primary key table as a dimension table, whose bucket key is a prefix of its primary key.
-- The join keys must include the bucket key, and can also include the primary key columns that follow it, in order. See [Examples (Multiple Keys)](#examples-multiple-keys).
+- The join keys must include the bucket key, and can also include the primary key columns that directly follow it. See [Examples (Multiple Keys)](#examples-multiple-keys).
 - Fluss prefix lookup join is in asynchronous mode by default for higher throughput. You can change the mode of prefix lookup join as synchronous mode by setting the SQL Hint `'lookup.async' = 'false'`.
 
 
@@ -295,7 +295,7 @@ FOR SYSTEM_TIME AS OF `o`.`ptime` AS `s`
 ON `o`.`o_custkey` = `s`.`cs_custkey` AND `o`.`o_orderstatus` = `s`.`cs_orderstatus`;
 ```
 
-The join keys must follow the primary key order without gaps: a join on `cs_custkey` and `cs_date` looks up by `cs_custkey` only.
+Fluss looks up by the bucket key and the primary key columns that directly follow it among the join keys. The other join keys are filtered after the lookup, so a join on `cs_custkey` and `cs_date` looks up by `cs_custkey` only.
 
 ## Lookup Shuffle
 
