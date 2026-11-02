@@ -47,10 +47,8 @@ import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.record.ProjectionPushdownCache;
 import org.apache.fluss.row.encode.CompactedKeyEncoder;
-import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.entity.PutKvResultForBucket;
 import org.apache.fluss.rpc.protocol.MergeMode;
-import org.apache.fluss.server.entity.FetchReqInfo;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.entity.PutIndexDataForBucket;
 import org.apache.fluss.server.index.IndexTableDescriptorFactory;
@@ -81,8 +79,6 @@ import org.apache.fluss.utils.types.Tuple2;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.File;
 import java.io.FileNotFoundException;
@@ -94,7 +90,6 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ScheduledFuture;
@@ -147,75 +142,6 @@ final class ReplicaTest extends ReplicaTestBase {
 
     private TestingHoldableKvFlushScheduler holdableKvFlushScheduler;
 
-    @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void testKvAppendWakesWaitingFollowers(boolean indexTable) throws Exception {
-        TablePath path = DATA1_TABLE_PATH_PK;
-        long tableId = DATA1_TABLE_ID_PK;
-        if (indexTable) {
-            path = TablePath.of("test_db_1", "__idx__fetch_wakeup__idx_b");
-            tableId = 800001L;
-            Schema schema =
-                    Schema.newBuilder()
-                            .fromColumns(DATA1_SCHEMA_PK.getColumns())
-                            .primaryKey("a")
-                            .index("idx_b", IndexType.SECONDARY, Collections.singletonList("b"))
-                            .build();
-            TableDescriptor descriptor =
-                    IndexTableDescriptorFactory.derive(
-                            DATA1_TABLE_DESCRIPTOR_PK.withReplicationFactor(3),
-                            DATA1_TABLE_ID_PK,
-                            schema.getIndexes().get(0));
-            zkClient.registerTable(
-                    path, TableRegistration.newTable(tableId, DEFAULT_REMOTE_DATA_DIR, descriptor));
-            zkClient.registerFirstSchema(path, descriptor.getSchema());
-        }
-        TableBucket tb = new TableBucket(tableId, 1);
-        makeKvTableAsLeader(
-                tb,
-                path,
-                Arrays.asList(1, 2, 3),
-                Arrays.asList(1, 2, 3),
-                INITIAL_LEADER_EPOCH,
-                false);
-        long firstOffset = indexTable ? 2 : 1;
-        long nextOffset = firstOffset * 2;
-        CompletableFuture<List<PutKvResultForBucket>> firstWrite = putForFollowerWakeup(tb, 1);
-        for (int follower : Arrays.asList(2, 3)) {
-            fetchAsFollower(tb, follower, 0, 0).get();
-            fetchAsFollower(tb, follower, firstOffset, 0).get();
-        }
-        assertThat(firstWrite.get(10, TimeUnit.SECONDS))
-                .containsExactly(new PutKvResultForBucket(tb, firstOffset));
-
-        CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> follower2 =
-                fetchAsFollower(tb, 2, firstOffset, 300000);
-        CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> follower3 =
-                fetchAsFollower(tb, 3, firstOffset, 300000);
-        assertThat(follower2).isNotDone();
-        assertThat(follower3).isNotDone();
-
-        CompletableFuture<List<PutKvResultForBucket>> write = putForFollowerWakeup(tb, 2);
-
-        // No timer or subsequent append is needed to deliver newly readable WAL.
-        assertThat(follower2).isDone();
-        assertThat(follower3).isDone();
-        for (CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> fetch :
-                Arrays.asList(follower2, follower3)) {
-            FetchLogResultForBucket result = fetch.get().get(tb);
-            assertThat(result.failed()).isFalse();
-            assertThat(result.recordsOrEmpty().batches().iterator().next().nextLogOffset())
-                    .isEqualTo(nextOffset);
-        }
-        // Delivering the log is not an acknowledgement of follower persistence.
-        assertThat(write).isNotDone();
-        fetchAsFollower(tb, 2, nextOffset, 0).get();
-        assertThat(write).isNotDone();
-        fetchAsFollower(tb, 3, nextOffset, 0).get();
-        assertThat(write.get(10, TimeUnit.SECONDS))
-                .containsExactly(new PutKvResultForBucket(tb, nextOffset));
-    }
-
     @Test
     void testIndexTableRejectsPublicWrites() throws Exception {
         TablePath path = TablePath.of("test_db_1", "__idx__public_write__idx_b");
@@ -237,7 +163,7 @@ final class ReplicaTest extends ReplicaTestBase {
         zkClient.registerFirstSchema(path, descriptor.getSchema());
         makeKvTableAsLeader(tb, path, INITIAL_LEADER_EPOCH, false);
         Replica replica = replicaManager.getReplicaOrException(tb);
-        assertThat(putForFollowerWakeup(tb, 1).get(10, TimeUnit.SECONDS))
+        assertThat(putIndexRecords(tb, 1).get(10, TimeUnit.SECONDS))
                 .containsExactly(new PutKvResultForBucket(tb, 2L));
 
         RowType rowType = replica.getTableInfo().getRowType();
@@ -263,77 +189,52 @@ final class ReplicaTest extends ReplicaTestBase {
                 .isInstanceOf(InvalidPartitionException.class)
                 .hasMessageContaining("primary-key table");
         assertThat(replica.getLogTablet().localLogEndOffset()).isEqualTo(2L);
-        assertThat(putForFollowerWakeup(tb, 2).get(10, TimeUnit.SECONDS))
+        assertThat(putIndexRecords(tb, 2).get(10, TimeUnit.SECONDS))
                 .containsExactly(new PutKvResultForBucket(tb, 4L));
     }
 
-    private CompletableFuture<List<PutKvResultForBucket>> putForFollowerWakeup(
-            TableBucket tb, int key) throws Exception {
+    private CompletableFuture<List<PutKvResultForBucket>> putIndexRecords(TableBucket tb, int key)
+            throws Exception {
         CompletableFuture<List<PutKvResultForBucket>> result = new CompletableFuture<>();
         TableInfo tableInfo = replicaManager.getReplicaOrException(tb).getTableInfo();
-        if (!tableInfo.isIndexTable()) {
-            replicaManager.putRecordsToKv(
-                    300000,
-                    -1,
-                    Collections.singletonMap(tb, genKvRecordBatch(new Object[] {key, "value"})),
-                    null,
-                    MergeMode.DEFAULT,
-                    (short) 1,
-                    result::complete);
-        } else {
-            RowType rowType = tableInfo.getRowType();
-            RowType keyType = rowType.project(tableInfo.getSchema().getPrimaryKeyIndexes());
-            byte[] routingKey = new byte[] {1};
-            byte[] rowKey = new byte[] {(byte) key};
-            Object[] dataKey = new Object[] {IndexTableUtils.DATA_RECORD_KIND, routingKey, rowKey};
-            Object[] progressKey =
-                    new Object[] {IndexTableUtils.PROGRESS_RECORD_KIND, routingKey, new byte[] {0}};
-            KvRecordBatch records =
-                    genKvRecordBatch(
-                            keyType,
-                            rowType,
-                            Arrays.asList(
-                                    Tuple2.of(
-                                            dataKey,
-                                            new Object[] {
-                                                "value", key, dataKey[0], routingKey, rowKey, null
-                                            }),
-                                    Tuple2.of(
-                                            progressKey,
-                                            new Object[] {
-                                                null,
-                                                null,
-                                                progressKey[0],
-                                                routingKey,
-                                                progressKey[2],
-                                                (long) key
-                                            })));
-            byte[] encodedProgressKey =
-                    new CompactedKeyEncoder(keyType).encodeKey(row(progressKey));
-            replicaManager.putIndexRecords(
-                    300000,
-                    -1,
-                    Collections.singletonList(
-                            new PutIndexDataForBucket(
-                                    tb,
-                                    new TableBucket(DATA1_TABLE_ID_PK, 1),
-                                    key,
-                                    encodedProgressKey,
-                                    records)),
-                    result::complete);
-        }
-        return result;
-    }
-
-    private CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> fetchAsFollower(
-            TableBucket tb, int follower, long offset, long maxWaitMs) {
-        CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> result =
-                new CompletableFuture<>();
-        replicaManager.fetchLogRecords(
-                new FetchParams(follower, 1024 * 1024, 1, maxWaitMs),
-                Collections.singletonMap(
-                        tb, new FetchReqInfo(tb.getTableId(), offset, 1024 * 1024)),
-                null,
+        RowType rowType = tableInfo.getRowType();
+        RowType keyType = rowType.project(tableInfo.getSchema().getPrimaryKeyIndexes());
+        byte[] routingKey = new byte[] {1};
+        byte[] rowKey = new byte[] {(byte) key};
+        Object[] dataKey = new Object[] {IndexTableUtils.DATA_RECORD_KIND, routingKey, rowKey};
+        Object[] progressKey =
+                new Object[] {IndexTableUtils.PROGRESS_RECORD_KIND, routingKey, new byte[] {0}};
+        KvRecordBatch records =
+                genKvRecordBatch(
+                        keyType,
+                        rowType,
+                        Arrays.asList(
+                                Tuple2.of(
+                                        dataKey,
+                                        new Object[] {
+                                            "value", key, dataKey[0], routingKey, rowKey, null
+                                        }),
+                                Tuple2.of(
+                                        progressKey,
+                                        new Object[] {
+                                            null,
+                                            null,
+                                            progressKey[0],
+                                            routingKey,
+                                            progressKey[2],
+                                            (long) key
+                                        })));
+        byte[] encodedProgressKey = new CompactedKeyEncoder(keyType).encodeKey(row(progressKey));
+        replicaManager.putIndexRecords(
+                300000,
+                -1,
+                Collections.singletonList(
+                        new PutIndexDataForBucket(
+                                tb,
+                                new TableBucket(DATA1_TABLE_ID_PK, 1),
+                                key,
+                                encodedProgressKey,
+                                records)),
                 result::complete);
         return result;
     }

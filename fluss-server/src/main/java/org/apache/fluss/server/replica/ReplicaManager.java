@@ -893,7 +893,6 @@ public class ReplicaManager implements ServerReconfigurable {
         LOG.debug(
                 "Put records to local kv storage and wait generate cdc log in {} ms",
                 System.currentTimeMillis() - startTime);
-        completeDelayedFetches(kvPutResult.values());
 
         // maybe do delay write operation to write cdc log to be replicated to other follower
         // replicas.
