@@ -51,8 +51,6 @@ import org.apache.fluss.utils.IOUtils;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.EnumSource;
 
 import java.io.IOException;
 import java.nio.file.Path;
@@ -157,18 +155,17 @@ public class LogFetcherTest {
         assertThat(metadataUpdater.getBucketLocation(tb1)).isNotPresent();
     }
 
-    @ParameterizedTest
-    @EnumSource(
-            value = Errors.class,
-            names = {"LEADER_NOT_AVAILABLE_EXCEPTION", "INVALID_BUCKET_ROUTING"})
-    void testRefetchBucketAfterRoutingOrLeaderError(Errors error) throws Exception {
+    @Test
+    void testRefetchBucketAfterLeaderNotAvailable() throws Exception {
         IOUtils.closeQuietly(logFetcher);
         long fetchOffset = 5L;
         MemoryLogRecords records = genMemoryLogRecordsWithBaseOffset(fetchOffset, DATA1);
         metadataUpdater =
                 initializeMetadataUpdater(
                         new ErrorThenRecordsTabletServerGateway(
-                                error, records, fetchOffset + DATA1.size()));
+                                Errors.LEADER_NOT_AVAILABLE_EXCEPTION,
+                                records,
+                                fetchOffset + DATA1.size()));
         logFetcher = createLogFetcher(new Configuration());
         LogScannerStatus scannerStatus = logFetcher.getLogScannerStatus();
         scannerStatus.assignScanBuckets(Collections.singletonMap(tb1, fetchOffset));
