@@ -94,6 +94,40 @@ class FieldCountAggTest {
 
     @ParameterizedTest
     @EnumSource(KvFormat.class)
+    void testFirstPartialUpdateWithoutCountCanBeDeleted(KvFormat format) {
+        RowMerger sumMerger = createMerger(format, new int[] {0, 2});
+        BinaryValue value = sumMerger.merge(null, input(format, null, 10L));
+        assertThat(value.row.getInt(0)).isEqualTo(1);
+        assertThat(value.schemaId).isEqualTo(SCHEMA_ID);
+        assertThat(value.row.getLong(2)).isEqualTo(10L);
+        assertThat(sumMerger.delete(copy(value))).isNull();
+        assertThat(value.row.isNullAt(1)).isTrue();
+
+        RowMerger countMerger = createMerger(format, new int[] {0, 1});
+        value = countMerger.merge(copy(value), input(format, 42L, null));
+        assertThat(value.row.getLong(1)).isEqualTo(1L);
+        assertThat(value.row.getLong(2)).isEqualTo(10L);
+    }
+
+    @ParameterizedTest
+    @EnumSource(KvFormat.class)
+    void testFirstPartialUpdateWithNullCount(KvFormat format) {
+        RowMerger countMerger = createMerger(format, new int[] {0, 1});
+        BinaryValue value = countMerger.merge(null, input(format, null, null));
+        assertThat(value.row.getLong(1)).isZero();
+        assertThat(value.row.isNullAt(2)).isTrue();
+
+        RowMerger sumMerger = createMerger(format, new int[] {0, 2});
+        value = sumMerger.merge(copy(value), input(format, null, 10L));
+        assertThat(value.row.getLong(1)).isZero();
+        value = sumMerger.delete(copy(value));
+        assertThat(value).isNotNull();
+        assertThat(value.row.getLong(1)).isZero();
+        assertThat(value.row.isNullAt(2)).isTrue();
+    }
+
+    @ParameterizedTest
+    @EnumSource(KvFormat.class)
     void testCountWithSchemaEvolution(KvFormat format) {
         Schema oldSchema =
                 Schema.newBuilder().column("id", DataTypes.INT()).primaryKey("id").build();

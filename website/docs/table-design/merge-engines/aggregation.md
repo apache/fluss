@@ -216,7 +216,7 @@ Counts non-null input values for each primary key.
 - **Supported Data Type**: `BIGINT`, for both input and stored count
 - **Behavior**: Each non-null input contributes one, regardless of its numeric value. The first non-null input is stored as `1`.
 - **Null Handling**: Null inputs contribute zero. A first null input is stored as `0`.
-- **Partial Updates**: The count changes only when the column is targeted by the update.
+- **Partial Updates**: The count changes only when the column is targeted by the update. On the first write for a key, an untargeted count column remains `NULL`; a targeted count column with a null input is stored as `0`.
 
 ```sql
 CREATE TABLE event_counts (
