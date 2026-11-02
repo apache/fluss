@@ -40,6 +40,7 @@ import static org.apache.fluss.utils.Preconditions.checkArgument;
 public enum AggFunctionType {
     // Numeric aggregation
     SUM,
+    COUNT,
     PRODUCT,
     MAX,
     MIN,
@@ -145,6 +146,8 @@ public enum AggFunctionType {
      */
     public DataTypeRoot[] getSupportedDataTypeRoots() {
         switch (this) {
+            case COUNT:
+                return new DataTypeRoot[] {DataTypeRoot.BIGINT};
             case BOOL_AND:
             case BOOL_OR:
                 return new DataTypeRoot[] {DataTypeRoot.BOOLEAN};

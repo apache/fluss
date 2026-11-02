@@ -209,6 +209,33 @@ writer.flush();
 
 Fluss currently supports the following aggregate functions:
 
+### count
+
+Counts non-null input values for each primary key.
+
+- **Supported Data Type**: `BIGINT`, for both input and stored count
+- **Behavior**: Each non-null input contributes one, regardless of its numeric value. The first non-null input is stored as `1`.
+- **Null Handling**: Null inputs contribute zero. A first null input is stored as `0`.
+- **Partial Updates**: The count changes only when the column is targeted by the update.
+
+```sql
+CREATE TABLE event_counts (
+    id INT,
+    cnt BIGINT,
+    PRIMARY KEY (id) NOT ENFORCED
+) WITH (
+    'merge-engine' = 'aggregation',
+    'fields.cnt.agg' = 'count'
+);
+
+INSERT INTO event_counts VALUES (1, 100), (1, 0), (1, NULL);
+-- The stored cnt for id = 1 is 2.
+```
+
+For the Java API, use `.column("cnt", DataTypes.BIGINT(), AggFunctions.COUNT())`.
+To count every input row, provide a non-null value for this column in every row.
+To accumulate counts already computed upstream, use `sum` instead. Like other aggregation functions, `count` does not support retractions.
+
 ### sum
 
 Aggregates values by computing the sum across multiple rows.

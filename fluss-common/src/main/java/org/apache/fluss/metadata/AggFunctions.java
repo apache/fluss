@@ -76,6 +76,18 @@ public final class AggFunctions {
     }
 
     /**
+     * Creates a COUNT aggregation function that counts non-null input values.
+     *
+     * <p>Supported data type: BIGINT. Each non-null input contributes one, regardless of its value.
+     * Null inputs contribute zero, including on the first write.
+     *
+     * @return a COUNT aggregation function
+     */
+    public static AggFunction COUNT() {
+        return new AggFunction(AggFunctionType.COUNT, null);
+    }
+
+    /**
      * Creates a MAX aggregation function that selects the maximum value.
      *
      * <p>Supported data types: CHAR, STRING, TINYINT, SMALLINT, INT, BIGINT, FLOAT, DOUBLE,
