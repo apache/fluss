@@ -17,6 +17,12 @@
 
 package org.apache.fluss.server.kv.rocksdb;
 
+import org.apache.fluss.metrics.Counter;
+import org.apache.fluss.metrics.MetricNames;
+import org.apache.fluss.metrics.groups.AbstractMetricGroup;
+import org.apache.fluss.metrics.registry.NOPMetricRegistry;
+import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
+
 import io.github.fluss_contrib.rocksdb.HistogramData;
 import io.github.fluss_contrib.rocksdb.HistogramType;
 import io.github.fluss_contrib.rocksdb.Statistics;
@@ -26,7 +32,9 @@ import org.junit.jupiter.api.Test;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.EnumMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Queue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -217,7 +225,49 @@ class RocksDBStatisticsRegistryTest {
         }
     }
 
+    @Test
+    void testSharedCacheTickerMetricMappings() {
+        TestingStatistics statistics = new TestingStatistics();
+        statistics.tickers.put(TickerType.BLOCK_CACHE_DATA_HIT, 11L);
+        statistics.tickers.put(TickerType.BLOCK_CACHE_DATA_MISS, 13L);
+        statistics.tickers.put(TickerType.BLOCK_CACHE_INDEX_HIT, 23L);
+        statistics.tickers.put(TickerType.BLOCK_CACHE_INDEX_MISS, 29L);
+        statistics.tickers.put(TickerType.BLOCK_CACHE_FILTER_HIT, 37L);
+        statistics.tickers.put(TickerType.BLOCK_CACHE_FILTER_MISS, 41L);
+        RocksDBStatisticsRegistry registry = new RocksDBStatisticsRegistry(true, () -> statistics);
+        TabletServerMetricGroup metrics =
+                new TabletServerMetricGroup(
+                        NOPMetricRegistry.INSTANCE, "cluster", "rack", "host", 0);
+        metrics.setRocksDBStatistics(registry);
+        try (RocksDBStatisticsRegistry.Lease lease = registry.acquire(1)) {
+            String[] blockTypes = {"data", "index", "filter"};
+            long[] expectedHits = {11, 23, 37};
+            long[] expectedMisses = {13, 29, 41};
+            for (int i = 0; i < blockTypes.length; i++) {
+                AbstractMetricGroup group =
+                        (AbstractMetricGroup) metrics.addGroup("block_type", blockTypes[i]);
+                assertThat(
+                                ((Counter)
+                                                group.getMetrics()
+                                                        .get(
+                                                                MetricNames
+                                                                        .ROCKSDB_SHARED_BLOCK_CACHE_HITS_TOTAL))
+                                        .getCount())
+                        .isEqualTo(expectedHits[i]);
+                assertThat(
+                                ((Counter)
+                                                group.getMetrics()
+                                                        .get(
+                                                                MetricNames
+                                                                        .ROCKSDB_SHARED_BLOCK_CACHE_MISSES_TOTAL))
+                                        .getCount())
+                        .isEqualTo(expectedMisses[i]);
+            }
+        }
+    }
+
     private static class TestingStatistics extends Statistics {
+        private final Map<TickerType, Long> tickers = new EnumMap<>(TickerType.class);
         private long hits;
         private long reads;
         private long readMicros;
@@ -248,7 +298,8 @@ class RocksDBStatisticsRegistryTest {
             if (fail) {
                 throw new IllegalStateException("Statistics unavailable");
             }
-            return ticker == TickerType.BLOCK_CACHE_DATA_HIT ? hits : 0;
+            return tickers.getOrDefault(
+                    ticker, ticker == TickerType.BLOCK_CACHE_DATA_HIT ? hits : 0L);
         }
     }
 }
