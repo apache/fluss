@@ -177,6 +177,9 @@ public final class IndexTableStorage {
         }
         validateBatch(sourceBucket, sourceEndOffset, progressKey, records);
 
+        // Only progress materialized in RocksDB can confirm a completed duplicate. Progress
+        // still in the pre-write buffer must remain retriable until the committed batch is
+        // materialized; acknowledging it early could lose the window after recovery.
         long durableProgress =
                 readProgress(kvTablet.multiGet(Collections.singletonList(progressKey)));
         if (durableProgress >= sourceEndOffset) {

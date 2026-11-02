@@ -19,6 +19,9 @@ package org.apache.fluss.flink.catalog;
 
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
+import org.apache.fluss.metadata.IndexType;
+import org.apache.fluss.metadata.IndexVisibility;
+import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.testutils.common.MultiVersionTest;
@@ -32,10 +35,62 @@ import org.apache.flink.types.Row;
 import org.apache.flink.util.CollectionUtil;
 import org.junit.jupiter.api.Test;
 
+import java.util.Collections;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** IT case for catalog in Flink 2.2. */
 public class Flink22CatalogITCase extends FlinkCatalogITCase {
+
+    @Test
+    @MultiVersionTest
+    void testDuplicateIndexColumnsResolveOnce() throws Exception {
+        String tableName = "table_with_duplicate_index_columns";
+        org.apache.fluss.metadata.Schema schema =
+                org.apache.fluss.metadata.Schema.newBuilder()
+                        .column("a", org.apache.fluss.types.DataTypes.INT())
+                        .column("b", org.apache.fluss.types.DataTypes.STRING())
+                        .column("c", org.apache.fluss.types.DataTypes.BIGINT())
+                        .primaryKey("a", "b")
+                        .index("idx_pk", "a", "b")
+                        .index("idx_prefix", "a")
+                        .index("idx_c_sync", "c")
+                        .index(
+                                "idx_c_async",
+                                IndexType.SECONDARY,
+                                Collections.singletonList("c"),
+                                IndexVisibility.ASYNC,
+                                1)
+                        .build();
+        try (Connection conn =
+                ConnectionFactory.createConnection(FLUSS_CLUSTER_EXTENSION.getClientConfig())) {
+            conn.getAdmin()
+                    .createTable(
+                            TablePath.of(DEFAULT_DB, tableName),
+                            TableDescriptor.builder().schema(schema).distributedBy(1, "a").build(),
+                            false)
+                    .get();
+            try {
+                assertThat(tEnv.from(tableName).getResolvedSchema().getColumnNames())
+                        .containsExactly("a", "b", "c");
+                CatalogTable table =
+                        (CatalogTable) catalog.getTable(new ObjectPath(DEFAULT_DB, tableName));
+                assertThat(table.getUnresolvedSchema())
+                        .isEqualTo(
+                                Schema.newBuilder()
+                                        .column("a", DataTypes.INT().notNull())
+                                        .column("b", DataTypes.STRING().notNull())
+                                        .column("c", DataTypes.BIGINT())
+                                        .primaryKey("a", "b")
+                                        .index("a", "b")
+                                        .index("a")
+                                        .index("c")
+                                        .build());
+            } finally {
+                conn.getAdmin().dropTable(TablePath.of(DEFAULT_DB, tableName), true).get();
+            }
+        }
+    }
 
     @Test
     @MultiVersionTest
