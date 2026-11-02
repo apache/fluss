@@ -161,7 +161,7 @@ public class DefaultSecurityTokenManager implements SecurityTokenManager {
     @VisibleForTesting
     long calculateRenewalDelay(Clock clock, long nextRenewal) {
         long now = clock.millis();
-        long renewalDelay = Math.round(tokensRenewalTimeRatio * (nextRenewal - now));
+        long renewalDelay = Math.max(0, Math.round(tokensRenewalTimeRatio * (nextRenewal - now)));
         LOG.debug(
                 "Calculated delay on renewal is {}, based on next renewal {} and the ratio {}, and current time {}",
                 renewalDelay,
