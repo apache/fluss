@@ -484,6 +484,10 @@ public final class TabletService extends RpcServiceBase
 
     @Override
     public CompletableFuture<PutIndexResponse> putIndex(PutIndexRequest request) {
+        if (!currentSession().isInternal()) {
+            throw new AuthorizationException(
+                    "PutIndex requests are only allowed on the internal listener.");
+        }
         authorizeTable(WRITE, request.getTableId());
         CompletableFuture<PutIndexResponse> response = new CompletableFuture<>();
         replicaManager.putIndexRecords(
