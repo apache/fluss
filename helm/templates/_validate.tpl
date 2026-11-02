@@ -56,9 +56,9 @@ Usage:
   include "fluss.tiering.validateError" .
 */}}
 {{- define "fluss.tiering.validateError" -}}
-{{- if .Values.tiering.enabled -}}
-  {{- if not (hasKey .Values.tiering.configurationOverrides "datalake.format") -}}
-    {{- printf "tiering.configurationOverrides must set datalake.format when tiering.enabled is true" -}}
+{{- if .Values.embeddedTiering.enabled -}}
+  {{- if not (hasKey .Values.embeddedTiering.configurationOverrides "datalake.format") -}}
+    {{- printf "embeddedTiering.configurationOverrides must set datalake.format when embeddedTiering.enabled is true" -}}
   {{- end -}}
 {{- end -}}
 {{- end -}}

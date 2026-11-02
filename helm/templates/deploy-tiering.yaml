@@ -16,19 +16,19 @@
 # limitations under the License.
 #
 
-{{- if .Values.tiering.enabled }}
+{{- if .Values.embeddedTiering.enabled }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "fluss.tiering.name" . }}
   labels:
   {{- include "fluss.labels" . | nindent 4 }}
-  {{- with .Values.tiering.annotations }}
+  {{- with .Values.embeddedTiering.annotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
   {{- end }}
 spec:
-  replicas: {{ .Values.tiering.numberOfReplicas }}
+  replicas: {{ .Values.embeddedTiering.numberOfReplicas }}
   selector:
     matchLabels:
       {{- include "fluss.selectorLabels" . | nindent 6 }}
@@ -36,14 +36,14 @@ spec:
   template:
     metadata:
       labels:
-        {{- with .Values.tiering.podLabels }}
+        {{- with .Values.embeddedTiering.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
         {{- include "fluss.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: tiering
       annotations:
         checksum/tiering-config: {{ include (print $.Template.BasePath "/configmap-tiering.yaml") . | sha256sum }}
-        {{- with omit .Values.tiering.podAnnotations "checksum/tiering-config" }}
+        {{- with omit .Values.embeddedTiering.podAnnotations "checksum/tiering-config" }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
     spec:
@@ -51,39 +51,39 @@ spec:
       serviceAccountName: {{ .Values.serviceAccount.name | default (include "fluss.fullname" .) }}
       {{- end }}
       {{- include "fluss.imagePullSecrets" . | nindent 6 }}
-      {{- with .Values.tiering.affinity }}
+      {{- with .Values.embeddedTiering.affinity }}
       affinity:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.tiering.nodeSelector }}
+      {{- with .Values.embeddedTiering.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.tiering.tolerations }}
+      {{- with .Values.embeddedTiering.tolerations }}
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.tiering.topologySpreadConstraints }}
+      {{- with .Values.embeddedTiering.topologySpreadConstraints }}
       topologySpreadConstraints:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       # The tiering job is stateless (progress persists in Fluss lake snapshots), so this only
       # needs to cover a clean shutdown of the embedded Flink runtime on SIGTERM.
-      terminationGracePeriodSeconds: {{ .Values.tiering.terminationGracePeriodSeconds }}
+      terminationGracePeriodSeconds: {{ .Values.embeddedTiering.terminationGracePeriodSeconds }}
       containers:
         - name: {{ .Chart.Name }}-tiering
-          image: {{ include "fluss.tiering.image" . }}
-          imagePullPolicy: {{ .Values.tiering.image.pullPolicy }}
-          {{- if or (include "fluss.secrets.enabled" .) .Values.tiering.extraEnv }}
+          image: {{ include "fluss.embeddedTiering.image" . }}
+          imagePullPolicy: {{ .Values.embeddedTiering.image.pullPolicy }}
+          {{- if or (include "fluss.secrets.enabled" .) .Values.embeddedTiering.extraEnv }}
           env:
             {{- if (include "fluss.secrets.enabled" .) }}
             {{- include "fluss.secrets.env" . | trim | nindent 12 }}
             {{- end }}
-            {{- with .Values.tiering.extraEnv }}
+            {{- with .Values.embeddedTiering.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
           {{- end }}
-          {{- with .Values.tiering.envFrom }}
+          {{- with .Values.embeddedTiering.envFrom }}
           envFrom:
             {{- toYaml . | nindent 12 }}
           {{- end }}
@@ -98,7 +98,7 @@ spec:
             {{- if (include "fluss.secrets.enabled" .) }}
             {{- include "fluss.secrets.volumeMounts" . | trim | nindent 12 }}
             {{- end }}
-            {{- with .Values.tiering.extraVolumeMounts }}
+            {{- with .Values.embeddedTiering.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
       volumes:
@@ -108,7 +108,7 @@ spec:
         {{- if (include "fluss.secrets.enabled" .) }}
         {{- include "fluss.secrets.volumes" . | trim | nindent 8 }}
         {{- end }}
-        {{- with .Values.tiering.extraVolumes }}
+        {{- with .Values.embeddedTiering.extraVolumes }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
 {{- end }}

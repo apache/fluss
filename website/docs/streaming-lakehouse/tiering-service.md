@@ -189,9 +189,9 @@ that defaults to tiering the release's own cluster:
 
 ```shell
 helm install fluss helm/ \
-    --set tiering.enabled=true \
-    --set tiering.image.repository=<registry>/fluss-tiering \
-    --set tiering.image.tag=<tag>
+    --set embeddedTiering.enabled=true \
+    --set embeddedTiering.image.repository=<registry>/fluss-tiering \
+    --set embeddedTiering.image.tag=<tag>
 ```
 
 See the [module README](https://github.com/apache/fluss/blob/main/fluss-flink/fluss-flink-tiering/src/README.md)

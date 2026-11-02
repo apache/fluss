@@ -209,7 +209,7 @@ coordinator:
 # process, so no separate Flink cluster is needed. Progress is persisted
 # through lake snapshots tracked by Fluss, not through Flink checkpoint
 # state, so the service needs no checkpoint storage either.
-tiering:
+embeddedTiering:
   enabled: false
   # Each replica is an independent tiering instance claiming tables from the coordinator;
   # raise this to spread tables across instances, and parallelism.default to scale one instance.

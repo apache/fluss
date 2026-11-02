@@ -16,7 +16,7 @@
 # limitations under the License.
 #
 
-{{- if .Values.tiering.enabled }}
+{{- if .Values.embeddedTiering.enabled }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -25,11 +25,11 @@ metadata:
   {{- include "fluss.labels" . | nindent 4 }}
 data:
   tiering.yaml: |
-    {{- range $key, $val := .Values.tiering.configurationOverrides }}
+    {{- range $key, $val := .Values.embeddedTiering.configurationOverrides }}
     {{ $key }}: {{ tpl (printf "%v" $val) $ }}
     {{- end }}
 
-    {{- if not (hasKey .Values.tiering.configurationOverrides "fluss.bootstrap.servers") }}
+    {{- if not (hasKey .Values.embeddedTiering.configurationOverrides "fluss.bootstrap.servers") }}
     fluss.bootstrap.servers: {{ include "fluss.tiering.defaultBootstrapServers" . }}
     {{- end }}
 

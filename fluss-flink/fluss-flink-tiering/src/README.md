@@ -115,12 +115,12 @@ Deployment. It is disabled by default and uses the image above:
 
 ```shell
 helm install fluss helm/ \
-    --set tiering.enabled=true \
-    --set tiering.image.repository=<registry>/fluss-tiering \
-    --set tiering.image.tag=<tag>
+    --set embeddedTiering.enabled=true \
+    --set embeddedTiering.image.repository=<registry>/fluss-tiering \
+    --set embeddedTiering.image.tag=<tag>
 ```
 
 By default the service tiers this release's own cluster and reads the lake catalog configuration
-from `tiering.configurationOverrides`. Set `tiering.configurationOverrides."fluss.bootstrap.servers"`
+from `embeddedTiering.configurationOverrides`. Set `embeddedTiering.configurationOverrides."fluss.bootstrap.servers"`
 to tier for a Fluss cluster outside the release. The chart validates that `datalake.format` is set
 when the service is enabled.

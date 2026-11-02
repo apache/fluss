@@ -34,7 +34,7 @@ tests:
 
   - it: should render a stateless Deployment with one replica by default
     set:
-      tiering.enabled: true
+      embeddedTiering.enabled: true
     asserts:
       - equal:
           path: kind
@@ -59,8 +59,8 @@ tests:
 
   - it: should track configuration in the pod checksum and preserve user annotations
     set:
-      tiering.enabled: true
-      tiering.podAnnotations:
+      embeddedTiering.enabled: true
+      embeddedTiering.podAnnotations:
         example.com/owner: tiering
         checksum/tiering-config: user-supplied
     asserts:
@@ -75,8 +75,8 @@ tests:
 
   - it: should track changed parallelism in the pod checksum
     set:
-      tiering.enabled: true
-      tiering.configurationOverrides:
+      embeddedTiering.enabled: true
+      embeddedTiering.configurationOverrides:
         parallelism.default: 2
         taskmanager.numberOfTaskSlots: 2
     asserts:
@@ -87,17 +87,17 @@ tests:
 
   - it: should fail when enabled without a lake format
     set:
-      tiering.enabled: true
-      tiering.configurationOverrides:
+      embeddedTiering.enabled: true
+      embeddedTiering.configurationOverrides:
         datalake.format: null
     asserts:
       - failedTemplate:
-          errorMessage: "VALUES VALIDATION:\ntiering.configurationOverrides must set datalake.format when tiering.enabled is true"
+          errorMessage: "VALUES VALIDATION:\nembeddedTiering.configurationOverrides must set datalake.format when embeddedTiering.enabled is true"
         template: templates/NOTES.txt
 
   - it: should default fluss.bootstrap.servers to the coordinator client listener
     set:
-      tiering.enabled: true
+      embeddedTiering.enabled: true
     asserts:
       - matchRegex:
           path: data["tiering.yaml"]
@@ -110,7 +110,7 @@ tests:
 
   - it: should default the embedded Flink runtime to a single-threaded tiering job
     set:
-      tiering.enabled: true
+      embeddedTiering.enabled: true
     asserts:
       - matchRegex:
           path: data["tiering.yaml"]
@@ -123,8 +123,8 @@ tests:
 
   - it: should keep an explicit fluss.bootstrap.servers
     set:
-      tiering.enabled: true
-      tiering.configurationOverrides:
+      embeddedTiering.enabled: true
+      embeddedTiering.configurationOverrides:
         "fluss.bootstrap.servers": fluss.example.com:9124
     asserts:
       - matchRegex:
@@ -138,8 +138,8 @@ tests:
 
   - it: should render the tiering and embedded Flink configuration
     set:
-      tiering.enabled: true
-      tiering.configurationOverrides:
+      embeddedTiering.enabled: true
+      embeddedTiering.configurationOverrides:
         datalake.paimon.warehouse: s3://bucket/warehouse
         parallelism.default: 4
     asserts:
@@ -154,8 +154,8 @@ tests:
 
   - it: should render configuration values raw without quoting
     set:
-      tiering.enabled: true
-      tiering.configurationOverrides:
+      embeddedTiering.enabled: true
+      embeddedTiering.configurationOverrides:
         datalake.paimon.warehouse: "/tmp/paimon # with comment"
     asserts:
       # Values are rendered verbatim like the server configmap and parsed by
@@ -170,7 +170,7 @@ tests:
 
   - it: should mount the tiering configuration into the pod
     set:
-      tiering.enabled: true
+      embeddedTiering.enabled: true
     asserts:
       - contains:
           path: spec.template.spec.containers[0].volumeMounts
@@ -185,7 +185,7 @@ tests:
 
   - it: should apply resources for the tiering service
     set:
-      tiering.enabled: true
+      embeddedTiering.enabled: true
       resources:
         tieringService:
           requests:
@@ -208,7 +208,7 @@ tests:
 
   - it: should describe the tiering service in the notes
     set:
-      tiering.enabled: true
+      embeddedTiering.enabled: true
     asserts:
       - matchRegexRaw:
           pattern: 'Deployment tiering-service'
@@ -219,7 +219,7 @@ tests:
 
   - it: should wire configured secret env entries into the tiering configuration and pod
     set:
-      tiering.enabled: true
+      embeddedTiering.enabled: true
       secrets.env:
         - name: PAIMON_S3_ACCESS_KEY
           secretName: fluss-paimon-creds
@@ -247,7 +247,7 @@ tests:
     release:
       name: alpha
     set:
-      tiering.enabled: true
+      embeddedTiering.enabled: true
       uniqueResourceNames: true
     asserts:
       - equal:

@@ -61,10 +61,10 @@ Image name
 Image of the tiering service. Separate from the server image because the
 tiering service bundles a Flink distribution with an embedded runtime.
 */}}
-{{- define "fluss.tiering.image" -}}
-{{- $registry := .Values.tiering.image.registry | default "" -}}
-{{- $repo := required "tiering.image.repository is required" .Values.tiering.image.repository -}}
-{{- $tag := .Values.tiering.image.tag | default .Chart.AppVersion | toString -}}
+{{- define "fluss.embeddedTiering.image" -}}
+{{- $registry := .Values.embeddedTiering.image.registry | default "" -}}
+{{- $repo := required "embeddedTiering.image.repository is required" .Values.embeddedTiering.image.repository -}}
+{{- $tag := .Values.embeddedTiering.image.tag | default .Chart.AppVersion | toString -}}
 
 {{- $image := $repo -}}
 
