@@ -275,6 +275,13 @@ public class TableDescriptorValidation {
             return;
         }
 
+        // TODO: Support secondary indexes with historical partition access by persisting index
+        // recovery progress and preserving index candidates across partition retirement.
+        if (!tableDescriptor.getSchema().getIndexes().isEmpty()) {
+            throw new InvalidConfigException(
+                    "Secondary indexes with historical partition access are not supported yet.");
+        }
+
         List<String> unmetRequirements = new ArrayList<>();
         if (!tableConf.get(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED)) {
             unmetRequirements.add(
