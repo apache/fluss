@@ -88,6 +88,7 @@ public class CoordinatorContext {
     // a map of partition assignment, <table_id, partition_id> -> <bucket, bucket_replicas>
     private final Map<TablePartition, Map<Integer, List<Integer>>> partitionAssignments =
             new HashMap<>();
+    private final Map<TablePartition, Integer> partitionBucketCounts = new HashMap<>();
     // a map from partition_id -> physicalTablePath
     private final Map<Long, PhysicalTablePath> pathByPartitionId = new HashMap<>();
     private final Map<PhysicalTablePath, Long> partitionIdByPath = new HashMap<>();
@@ -433,6 +434,16 @@ public class CoordinatorContext {
         this.pathByPartitionId.put(partitionId, physicalTablePath);
         this.partitionIdByPath.put(physicalTablePath, partitionId);
         this.partitionInfoById.put(partitionId, partitionInfo);
+    }
+
+    /** Stores a partition's logical count independently of its bucket locations. */
+    public void putPartitionBucketCount(TablePartition partition, int bucketCount) {
+        partitionBucketCounts.put(partition, bucketCount);
+    }
+
+    /** Returns the partition's registered count, or null before it has been loaded. */
+    public @Nullable Integer getPartitionBucketCount(TablePartition partition) {
+        return partitionBucketCounts.get(partition);
     }
 
     public TableInfo getTableInfoById(long tableId) {
@@ -787,6 +798,7 @@ public class CoordinatorContext {
     }
 
     public void removeTable(long tableId) {
+        partitionBucketCounts.keySet().removeIf(partition -> partition.getTableId() == tableId);
         tablesToBeDeleted.remove(tableId);
         Map<Integer, List<Integer>> assignment = tableAssignments.remove(tableId);
         if (assignment != null) {
@@ -810,6 +822,7 @@ public class CoordinatorContext {
     }
 
     public void removePartition(TablePartition tablePartition) {
+        partitionBucketCounts.remove(tablePartition);
         partitionsToBeDeleted.remove(tablePartition);
         Map<Integer, List<Integer>> assignment = partitionAssignments.remove(tablePartition);
         if (assignment != null) {
@@ -861,6 +874,7 @@ public class CoordinatorContext {
     private void clearTablesState() {
         tableAssignments.clear();
         partitionAssignments.clear();
+        partitionBucketCounts.clear();
         bucketLeaderAndIsr.clear();
         replicasOnOffline.clear();
         pendingLeaderActivationBuckets.clear();

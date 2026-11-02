@@ -2359,14 +2359,15 @@ class ReplicaManagerTest extends ReplicaTestBase {
         expectedTablePathById.put(nonePartitionTableId, nonePartitionTablePath);
         expectedTablePathById.put(partitionTableId, partitionTablePath);
 
-        expectedTableMetadataById.put(nonePartitionTablePath, tableMetadata1);
+        // Identity-only updates do not make the routing metadata ready.
+        expectedTableMetadataById.put(nonePartitionTablePath, null);
         expectedTableMetadataById.put(partitionTablePath, tableMetadata2);
 
         expectedPartitionNameById.put(partitionId1, partitionName1);
         expectedPartitionNameById.put(partitionId2, partitionName2);
 
-        expectedPartitionMetadataById.put(physicalTablePath1, partitionMetadata1);
-        expectedPartitionMetadataById.put(physicalTablePath2, partitionMetadata2);
+        expectedPartitionMetadataById.put(physicalTablePath1, null);
+        expectedPartitionMetadataById.put(physicalTablePath2, null);
 
         assertUpdateMetadataEquals(
                 expectedCoordinatorServer,

@@ -23,15 +23,24 @@ import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.metadata.TableOrPartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.RpcClient;
+import org.apache.fluss.rpc.messages.MetadataRequest;
+import org.apache.fluss.rpc.messages.MetadataResponse;
+import org.apache.fluss.server.coordinator.TestCoordinatorGateway;
+import org.apache.fluss.server.metadata.TableMetadata;
+import org.apache.fluss.server.tablet.TabletServer;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
 import static org.apache.fluss.client.utils.MetadataUtils.sendMetadataRequestAndRebuildCluster;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
@@ -43,6 +52,59 @@ class MetadataUpdaterITCase {
     @RegisterExtension
     public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
             FlussClusterExtension.builder().setNumOfTabletServers(2).build();
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testPartialCacheThroughRpcAndClientRouting(boolean explicitCount) throws Exception {
+        TablePath path = TablePath.of("fluss", "partial_routing_" + explicitCount);
+        long tableId;
+        try (Connection connection =
+                ConnectionFactory.createConnection(FLUSS_CLUSTER_EXTENSION.getClientConfig())) {
+            connection.getAdmin().createTable(path, DATA1_TABLE_DESCRIPTOR, false).get();
+            tableId = connection.getAdmin().getTableInfo(path).get().getTableId();
+        }
+        FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId);
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllGatewayHasSameMetadata();
+        TabletServer server = FLUSS_CLUSTER_EXTENSION.getTabletServers().iterator().next();
+        TableMetadata full = server.getMetadataCache().getTableMetadata(path).get();
+        server.getMetadataCache()
+                .updateTableMetadata(
+                        new TableMetadata(
+                                full.getTableInfo(),
+                                Collections.singletonList(full.getBucketMetadataList().get(0))));
+        Cluster cluster =
+                sendMetadataRequestAndRebuildCluster(
+                        new TestCoordinatorGateway() {
+                            @Override
+                            public CompletableFuture<MetadataResponse> metadata(
+                                    MetadataRequest request) {
+                                return FLUSS_CLUSTER_EXTENSION
+                                        .newTabletServerClientForNode(server.getServerId())
+                                        .metadata(request)
+                                        .thenApply(
+                                                response -> {
+                                                    assertThat(
+                                                                    response.getTableMetadatasList()
+                                                                            .get(0)
+                                                                            .getBucketCount())
+                                                            .isEqualTo(3);
+                                                    if (!explicitCount) {
+                                                        // Preserve the pre-extension response shape
+                                                        // after the real RPC.
+                                                        response.getTableMetadatasList()
+                                                                .get(0)
+                                                                .clearBucketCount();
+                                                    }
+                                                    return response;
+                                                });
+                            }
+                        },
+                        Collections.singleton(path));
+        assertThat(cluster.getBucketCount(TableOrPartition.ofTable(tableId))).hasValue(3);
+        assertThat(cluster.getBucketCountEpoch(tableId)).hasValue(0);
+        assertThat(server.getMetadataCache().getTableMetadata(path).get().getBucketMetadataList())
+                .hasSize(3);
+    }
 
     @Test
     void testRebuildClusterNTimes() throws Exception {

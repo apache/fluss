@@ -112,11 +112,15 @@ class BucketRoutingTest {
                         .setNodeId(NODE.id())
                         .setHost(NODE.host())
                         .setPort(NODE.port());
-                response.addPartitionMetadata()
+                response.addTableMetadata()
                         .setTableId(table.getTableId())
-                        .setPartitionId(PARTITION_ID)
-                        .setPartitionName(PATH.getPartitionName())
-                        .setBucketCount(count);
+                        .setBucketCount(count)
+                        .setBucketCountEpoch((count - 2) / 2)
+                        .setTableJson(
+                                table.toTableDescriptor().withBucketCount(count).toJsonBytes())
+                        .setTablePath()
+                        .setDatabaseName(PATH.getTablePath().getDatabaseName())
+                        .setTableName(PATH.getTablePath().getTableName());
                 AdminReadOnlyGateway gateway =
                         new TestCoordinatorGateway() {
                             @Override
@@ -130,9 +134,9 @@ class BucketRoutingTest {
                                 gateway,
                                 true,
                                 metadata,
+                                Collections.singleton(PATH.getTablePath()),
                                 null,
-                                null,
-                                Collections.singleton(PARTITION_ID));
+                                null);
 
                 // Keep the original TableInfo while starting a new, unresolved partition.
                 PhysicalTablePath newPath =

@@ -114,6 +114,7 @@ class MetadataUpdateITCase {
         MetadataResponse response =
                 gateway.metadata(newMetadataRequest(Collections.singletonList(tablePath))).get();
         assertThat(response.getTableMetadatasList()).hasSize(1);
+        assertThat(response.getTableMetadatasList().get(0).getBucketCount()).isEqualTo(3);
         assertThat(response.getTableMetadatasList().get(0).getBucketMetadatasList())
                 .extracting(PbBucketMetadata::getBucketId)
                 .containsExactlyInAnyOrder(0, 1, 2);

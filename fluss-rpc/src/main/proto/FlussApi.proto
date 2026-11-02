@@ -1026,6 +1026,10 @@ message PbTableMetadata {
   // A table-level, monotonically increasing version for bucket.num changes.
   optional int64 bucket_count_epoch = 9;
 
+  // The table's default bucket count, independent of bucket location availability.
+  // When present, bucket_count_epoch is also present, including epoch zero.
+  optional int32 bucket_count = 10;
+
   // TODO add a new filed 'deleted_table' to indicate this table is deleted in UpdateMetadataRequest.
   // trace by: https://github.com/apache/fluss/issues/981
 }

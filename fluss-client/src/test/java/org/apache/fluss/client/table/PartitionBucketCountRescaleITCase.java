@@ -36,8 +36,10 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableIterator;
@@ -55,6 +57,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.InternalRowAssert.assertThatRow;
@@ -73,6 +76,44 @@ class PartitionBucketCountRescaleITCase extends ClientToServerITCaseBase {
     private static final int NEW_BUCKET_NUM = 4;
     private static final int RECORDS_PER_PARTITION = 12;
     private static final List<String> OLD_NEW_PARTITIONS = Arrays.asList("old", "new");
+
+    @Test
+    void testCoordinatorReloadsRegisteredPartitionCountsAfterRescale() throws Exception {
+        TablePath path = TablePath.of("test_db_1", "rescale_restart_counts");
+        createPartitionedTable(path, logSchema());
+        List<PartitionInfo> partitions = setupOldNewPartitions(path);
+        long tableId = admin.getTableInfo(path).get().getTableId();
+        assertCoordinatorPartitionCounts(tableId, partitions);
+        FLUSS_CLUSTER_EXTENSION.stopCoordinatorServer();
+        FLUSS_CLUSTER_EXTENSION.startCoordinatorServer();
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllGatewayHasSameMetadata();
+        assertCoordinatorPartitionCounts(tableId, partitions);
+    }
+
+    private static void assertCoordinatorPartitionCounts(
+            long tableId, List<PartitionInfo> partitions) throws Exception {
+        AccessContextEvent<Map<String, Integer>> event =
+                new AccessContextEvent<>(
+                        context -> {
+                            Map<String, Integer> counts = new HashMap<>();
+                            for (PartitionInfo partition : partitions) {
+                                counts.put(
+                                        partition.getPartitionName(),
+                                        context.getPartitionBucketCount(
+                                                new TablePartition(
+                                                        tableId, partition.getPartitionId())));
+                            }
+                            return counts;
+                        });
+        FLUSS_CLUSTER_EXTENSION
+                .getCoordinatorServer()
+                .getCoordinatorEventProcessor()
+                .getCoordinatorEventManager()
+                .put(event);
+        assertThat(event.getResultFuture().get(30, TimeUnit.SECONDS))
+                .containsEntry("old", OLD_BUCKET_NUM)
+                .containsEntry("new", NEW_BUCKET_NUM);
+    }
 
     @Test
     void testLogTableReadWriteAcrossRescale() throws Exception {
