@@ -73,6 +73,7 @@ import org.apache.fluss.server.entity.CommitRemoteLogManifestData;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 import org.apache.fluss.server.entity.TablePropertyChanges;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
+import org.apache.fluss.server.kv.snapshot.KvSnapshotHandle;
 import org.apache.fluss.server.kv.snapshot.ZooKeeperCompletedSnapshotHandleStore;
 import org.apache.fluss.server.metadata.BucketMetadata;
 import org.apache.fluss.server.metadata.ClusterMetadata;
@@ -102,6 +103,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.NullSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.nio.charset.StandardCharsets;
@@ -1268,8 +1270,11 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
         assertThat(cleanupManager.getPendingDropCount()).isZero();
     }
 
-    @Test
-    void testNotifyOffsetsWithShrinkISR(@TempDir Path tempDir) throws Exception {
+    @ParameterizedTest
+    @NullSource
+    @ValueSource(longs = {600L})
+    void testNotifyOffsetsWithShrinkISR(Long indexPushedOffset, @TempDir Path tempDir)
+            throws Exception {
         initCoordinatorChannel(Collections.singleton(ApiKeys.UPDATE_METADATA));
         TablePath t1 = TablePath.of(defaultDatabase, "test_notify_with_shrink_isr");
         final long t1Id =
@@ -1329,7 +1334,17 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
 
         // verify CommitKvSnapshot trigger notify offsets request
         initCoordinatorChannel(Collections.singleton(ApiKeys.UPDATE_METADATA));
-        CompletedSnapshot completedSnapshot = mockCompletedSnapshot(tempDir, tableBucket, 0);
+        CompletedSnapshot completedSnapshot =
+                new CompletedSnapshot(
+                        tableBucket,
+                        0,
+                        new FsPath(tempDir.resolve("snapshot").toString()),
+                        KvSnapshotHandle.create(
+                                Collections.emptyList(), Collections.emptyList(), 0),
+                        1000L,
+                        null,
+                        indexPushedOffset,
+                        null);
         CompletableFuture<CommitKvSnapshotResponse> responseCompletableFuture2 =
                 new CompletableFuture<>();
         coordinatorEventManager.put(
@@ -1343,6 +1358,19 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                 () ->
                         verifyReceiveRequestExceptFor(
                                 3, leader, NotifyKvSnapshotOffsetRequest.class));
+        for (int serverId = 0; serverId < 3; serverId++) {
+            if (serverId != leader) {
+                TestTabletServerGateway gateway =
+                        (TestTabletServerGateway)
+                                testCoordinatorChannelManager
+                                        .getTabletServerGateway(serverId)
+                                        .get();
+                NotifyKvSnapshotOffsetRequest request =
+                        (NotifyKvSnapshotOffsetRequest) gateway.getRequest(0);
+                assertThat(request.getMinRetainOffset())
+                        .isEqualTo(indexPushedOffset == null ? 1000L : indexPushedOffset);
+            }
+        }
     }
 
     @Test

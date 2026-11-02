@@ -2324,7 +2324,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                         completedSnapshotStore.add(completedSnapshot);
                         coordinatorEventManager.put(
                                 new NotifyKvSnapshotOffsetEvent(
-                                        tb, completedSnapshot.getLogOffset()));
+                                        tb, completedSnapshot.getMinRetainLogOffset()));
                         callback.complete(new CommitKvSnapshotResponse());
                     } catch (Exception e) {
                         callback.completeExceptionally(e);
