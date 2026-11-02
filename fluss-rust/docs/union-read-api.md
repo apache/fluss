@@ -18,143 +18,306 @@ limitations under the License.
 
 # UnionRead API discussion draft
 
-This draft includes the actual Rust APIs, their supporting kernel implementation, and a Java boundary-preparation entry. The planner/executor are present so Scan/Reader methods have working implementations rather than stubs. Review the public contracts first; this is not a proposal to merge all implementation units in one PR. The Paimon backend and its dependencies remain in the separate backend work.
+This document proposes the public interfaces and their usage for review alongside [boundary PR #4887](https://github.com/apache/fluss/pull/4887). It covers the full read flow, beyond that PR's boundary-capture scope. It contains no executable implementation or tests. Signature blocks omit imports, method bodies and private fields; they are interface notation, not compilable Rust or Java source. Usage examples assume the corresponding implementation PRs.
 
-The [crate README](../crates/fluss-lake/README.md) contains five compiled Rust examples. The shorter snippets below illustrate call relationships and are not standalone programs.
+Implementation reference: [full PoC](https://github.com/naivedogger/fluss/tree/fip48-rust-union-read). Related: [umbrella #4713](https://github.com/apache/fluss/issues/4713), [FIP-48](https://cwiki.apache.org/confluence/spaces/FLUSS/pages/444334625/FIP-48+Introduce+a+Union+Read+Kernel+for+fluss-rust).
 
-| Review entry | Code |
-| --- | --- |
-| Table / Scan configuration and preparation | [table.rs](../crates/fluss-lake/src/table.rs) |
-| Frozen boundary types and transport | [read_context.rs](../crates/fluss-lake/src/read_context.rs), [partition.rs](../crates/fluss-lake/src/partition.rs) |
-| Plan / Split / Reader | [plan.rs](../crates/fluss-lake/src/plan.rs), [split.rs](../crates/fluss-lake/src/split.rs), [reader.rs](../crates/fluss-lake/src/reader.rs) |
-| LakeSource extension and request contexts | [source.rs](../crates/fluss-lake/src/source.rs) |
-| Java one-call preparation | [UnionReadBoundaryPlanner](../../fluss-client/src/main/java/org/apache/fluss/client/metadata/UnionReadBoundaryPlanner.java) |
-
-Private boundary capture, planning, execution and descriptor code support these entry points. Core additions reuse the existing scanner, predicate evaluator and Arrow representation; they include the current-view helper and table configuration accessors. No built-in lake file reader is added here.
-
-Related: [FIP-48](https://cwiki.apache.org/confluence/spaces/FLUSS/pages/444334625/FIP-48+Introduce+a+Union+Read+Kernel+for+fluss-rust), [umbrella issue #4713](https://github.com/apache/fluss/issues/4713), and [source-boundary PR #4887](https://github.com/apache/fluss/pull/4887).
-
-## Entry points
-
-Ordinary Rust callers configure a scan and ask it to plan a bounded read. Coordinators that need shared boundaries capture a ReadContext explicitly. Both paths use the same scan-created reader.
+## Read flow and ownership
 
 ```text
 FlussLakeTable
-  ├─ new_scan() → FlussLakeScan
-  │                ├─ plan() → ReadPlan → ReadSplits
-  │                ├─ plan_with_context(context) ──┘
-  │                └─ new_reader() → bounded Arrow batches
-  └─ capture_read_context() / capture_read_context_with_partition_scope(spec) → ReadContext
-                     ├─ default planner
-                     └─ engine-native planning and execution
+  ├─ capture_read_context() → ReadContext
+  │                            ├─ shared by multiple scans
+  │                            └─ engine-native planning and execution
+  └─ new_scan() → FlussLakeScan
+                   ├─ plan() → ReadPlan → ReadSplits
+                   ├─ plan_with_context(context) ──┘
+                   └─ new_reader() → read_split(s) → Arrow batches
 ```
 
-| Entry | Contract |
+| Object | Owns |
 | --- | --- |
-| `scan.with_filter(predicate).plan()` | Capture boundaries, plan tasks and retain the predicate for exact result filtering. Unsupported predicates fail binding. |
-| `table.capture_read_context()` | Capture table-wide boundaries without opening a lake catalog or reading lake files. |
-| `table.capture_read_context_with_partition_scope(spec)` | Capture boundaries restricted to an exact, possibly partial partition spec. The scope applies to lake and log inputs. |
-| `scan.plan_with_context(context)` | Use the supplied schema and boundaries without recapturing or narrowing the context. Apply scan filters during planning and execution. |
-| `scan.new_reader()` | Create a reader without planning or I/O. Read transported splits using the coordinator's scan configuration. |
-| `scan.with_lake_source(source)` | Replace lake planning and baseline reading; retain default Fluss log reading and PK reconciliation. |
+| ReadContext | Frozen source identity, schema, partition scope, optional lake snapshot and concrete log boundaries. No credentials or file tasks. |
+| Scan | Projection, predicate, read mode, output batch size and runtime LakeSource. |
+| Plan / Split | Output schema, scheduling descriptors and frozen execution inputs. Default split payloads are opaque to engines. |
+| Reader | Scan configuration and execution resources. It does not retain or rebuild a plan. |
+| LakeSource | Format-specific lake planning and baseline reading, including version reconciliation and deletion vectors. |
+| Engine | Task placement, concurrency, cancellation, retries and result publication. Native engines may own physical planning and PK reconciliation. |
 
-The boundary PR provides explicit scoped capture; predicate-to-scope extraction belongs to the subsequent scan/planning implementation, included here for review. The ordinary planning path currently extracts implied STRING partition equalities, including AND conjuncts, before querying offsets. Other predicates retain a wider capture scope and participate in later pruning and exact filtering. The generated context records its scope. Callers sharing boundaries across different partition selections should use `table.capture_read_context()` rather than reuse a query-specific context as a table-wide snapshot.
+## Table and scan interfaces
 
-An explicit PartitionSpec uses Fluss metadata values and constrains the input, rather than supplying a query-filter hint. An empty spec selects the whole table. There is no public `scan.capture_read_context()` method.
+```rust
+impl FlussLakeTable {
+    pub async fn open(connection: Arc<FlussConnection>, table_path: &TablePath) -> Result<Self>;
+    pub async fn open_with_properties(
+        connection: Arc<FlussConnection>,
+        table_path: &TablePath,
+        catalog_property_overrides: HashMap<String, String>,
+    ) -> Result<Self>;
+    pub fn try_from_table_info(connection: Arc<FlussConnection>, table_info: &TableInfo) -> Result<Self>;
+    pub fn new_scan(&self) -> FlussLakeScan;
+    pub async fn capture_read_context(&self) -> Result<FlussLakeReadContext>;
+    pub async fn capture_read_context_with_partition_scope(
+        &self, scope: &PartitionSpec,
+    ) -> Result<FlussLakeReadContext>;
+}
 
-## Rust usage
+impl FlussLakeScan {
+    pub fn with_projection(self, fields: Vec<usize>) -> Self;
+    pub fn with_projection_by_names(self, names: Vec<String>) -> Self;
+    pub fn with_filter(self, filter: Predicate) -> Self;
+    pub fn with_batch_size(self, batch_size: usize) -> Self;
+    pub fn with_lake_only(self, lake_only: bool) -> Self;
+    pub fn with_lake_source(self, source: Arc<dyn LakeSource>) -> Self;
+    pub async fn plan(&self) -> Result<FlussLakeReadPlan>;
+    pub async fn plan_with_context(&self, context: &FlussLakeReadContext) -> Result<FlussLakeReadPlan>;
+    pub fn new_reader(&self) -> FlussLakeReader;
+}
+```
 
-These snippets use the APIs included in this draft. They assume an existing connection and table path. Use `fluss::predicate::col`, `fluss::metadata::PartitionSpec`, `std::collections::HashMap` and `futures::TryStreamExt` as needed. Fluss-only tables work without a lake backend; reads with a lake baseline require a supplied LakeSource. The separate Paimon backend will provide the built-in implementation.
+`plan()` captures boundaries and plans tasks. Safe partition predicates can reduce offset queries before capture. The initial planner scope is implied STRING partition equalities, including AND conjuncts; other conditions keep a broader capture scope. Explicit capture remains table-wide by default so multiple scans can share one boundary set. `plan_with_context()` preserves the supplied context and never widens its scope or refreshes its boundaries.
+
+A PartitionSpec is an exact conjunction of metadata-encoded partition values, possibly covering only some partition keys. Empty means table-wide. Its scope constrains both lake and log inputs, including lake-only expired partitions. Explicit scoped capture belongs to #4887; predicate-to-scope extraction belongs to the planner PR.
+
+Projection indexes refer to the frozen Fluss schema; duplicate or out-of-range indexes fail, while an empty projection preserves row counts in zero-column batches. Repeated filters combine with AND. Ordinary client predicates must support exact evaluation or fail binding; they are not silently dropped. Predicate acceptance/remaining negotiation belongs to engine adapters. A predicate accepted only for pruning still needs exact evaluation.
+
+Runtime properties and credentials stay local. `new_reader()` captures immutable scan settings without I/O. Fluss-only tables need no lake backend; lake reads use a compatible LakeSource, with the built-in Paimon backend delivered separately. `with_lake_only(true)` requires lake configuration and returns no input before the first readable lake snapshot.
+
+## Boundary interfaces and semantics
+
+Boundary implementation and the v1 wire description are reviewed in [#4887](https://github.com/apache/fluss/pull/4887). The main consumer-facing accessors are:
+
+```rust
+impl FlussLakeReadContext {
+    pub fn context_version(&self) -> u32;
+    pub fn table_path(&self) -> &TablePath;
+    pub fn table_id(&self) -> i64;
+    pub fn schema_id(&self) -> i32;
+    pub fn table_schema(&self) -> &Schema;
+    pub fn partition_keys(&self) -> &[String];
+    pub fn partition_filter(&self) -> &BTreeMap<String, String>;
+    pub fn bucket_keys(&self) -> &[String];
+    pub fn num_buckets(&self) -> i32;
+    pub fn lake_table_path(&self) -> Option<&TablePath>;
+    pub fn lake_format(&self) -> Option<&str>;
+    pub fn lake_snapshot_id(&self) -> Option<i64>;
+    pub fn merge_engine(&self) -> Option<&str>;
+    pub fn log_ranges(&self) -> &[FlussLakeLogRange];
+    pub fn validate_table(&self, table: &TableInfo) -> Result<()>;
+    pub fn to_json(&self) -> Result<Vec<u8>>;
+    pub fn from_json(bytes: &[u8]) -> Result<Self>;
+}
+
+#[non_exhaustive]
+pub enum FlussLakeBaseline { None, Lake }
+
+#[non_exhaustive]
+pub enum FlussLakeLogPartition { Ordinary(FlussLakePartitionIdentity) }
+
+pub enum FlussLakePartitionIdentity {
+    Unpartitioned,
+    KeyValues(Vec<(String, String)>),
+}
+
+impl FlussLakeLogRange {
+    pub fn table_bucket(&self) -> &TableBucket;
+    pub fn partition(&self) -> &FlussLakeLogPartition;
+    pub fn bucket_count(&self) -> i32;
+    pub fn baseline(&self) -> FlussLakeBaseline;
+    pub fn start_offset(&self) -> i64;
+    pub fn stop_offset(&self) -> i64;
+    pub fn earliest_offset(&self) -> i64;
+    pub fn is_empty(&self) -> bool;
+    pub fn validate_available(&self) -> Result<()>;
+}
+```
+
+A context fixes source identity and schema, not a global transactional time point. Each log range is half-open `[start, stop)` and uses concrete offsets captured from the server. Per-partition bucket counts take precedence over the table default. A range is a source boundary, not a mandatory thread, split or engine scheduling unit.
+
+A lake baseline starts at its snapshot seam, including a valid seam of zero. Without a baseline, reading starts at the captured earliest retained offset. PK reads then reconstruct only keys represented in retained history, not the full KV state. KV snapshot fallback remains future work.
+
+Capture rechecks partition IDs after offset lookups and skips only confirmed removed or replaced IDs. Other failures propagate. Lake planning must independently cover the selected snapshot: `log_ranges()` is not a complete lake partition inventory. Table identity and lake mapping are checked without replacing the captured schema; readers map data to that schema by stable column ID. Later column additions do not invalidate it.
+
+Context v1 is a credential-free Java/Rust transport contract. Unknown optional fields may be ignored only when that preserves semantics. Missing required fields, unsupported versions and unknown baseline/log-partition kinds fail. Incompatible changes require a version bump and reader-first rollout; no automatic negotiation or downgrade is proposed. Runtime authentication remains separate from trusting the coordinator's descriptors.
+
+## Plan, split and reader interfaces
+
+```rust
+pub type RecordBatchStream = Pin<Box<dyn Stream<Item = Result<RecordBatch>> + Send>>;
+
+impl FlussLakeReadPlan {
+    pub fn read_context(&self) -> &FlussLakeReadContext;
+    pub fn schema(&self) -> SchemaRef;
+    pub fn split_count(&self) -> usize;
+    pub fn splits(&self) -> &[FlussLakeReadSplit];
+    pub fn statistics(&self) -> FlussLakePlanStatistics;
+}
+
+pub struct FlussLakePlanStatistics {
+    pub split_count: usize,
+    pub estimated_rows: Option<usize>,
+    pub estimated_size: Option<usize>,
+}
+
+pub struct FlussLakeReadSplit {
+    pub split_id: String,
+    pub bucket_id: i32,
+    pub partition: FlussLakePartitionIdentity,
+    pub estimated_rows: Option<usize>,
+    pub estimated_size: Option<usize>,
+    pub descriptor_version: u32,
+    // Private execution descriptor, included in serde transport.
+}
+
+impl FlussLakeReader {
+    pub async fn read_split(&self, split: &FlussLakeReadSplit) -> Result<RecordBatchStream>;
+    pub async fn read_splits(&self, splits: &[FlussLakeReadSplit]) -> Result<RecordBatchStream>;
+    pub async fn read_splits_with_concurrency(
+        &self, splits: &[FlussLakeReadSplit], concurrency: usize,
+    ) -> Result<RecordBatchStream>;
+}
+```
+
+Plans expose the final output schema. Statistics are input estimates, not exact PK result counts; None means unknown. Default Append planning separates lake tasks from bucket log tails. Default PK planning groups the baseline and tail by bucket. Further subdivision is planner/executor work, not a boundary API requirement.
+
+Splits support serde transport. Engines preserve their contents and provide matching projection, filter, mode, batch size and lake backend at execution. Splits do not transport predicates or prove that worker settings match the coordinator. No local plan identity is required. Supported versions, source identities and payloads are validated before use.
+
+`read_splits()` uses bounded concurrency, initially eight active tasks; the explicit limit must be positive. Engines can instead schedule `read_split()` themselves. Output order is unspecified. Opening is lazy, dropping a stream cancels its work, and the first error terminates the read and drops sibling streams. Missing required inputs must fail rather than refresh snapshots, advance offsets or silently skip data. The caller discards partial results before retrying with a new context. Capture does not provide retention leases.
+
+`Result<T>` uses `FlussLakeError`. Consumers distinguish invalid context or split versions, unsupported merge semantics, source/schema incompatibility, unavailable frozen data, and connection/planning/execution failures. Diagnostic strings are not a protocol. `DataUnavailable` invalidates the attempt; retrying with a new context may observe different data and is not guaranteed to recover.
+
+## LakeSource extension
+
+```rust
+pub enum LakeReadSemantics { Append, PrimaryKey }
+
+pub trait LakeSource: Send + Sync {
+    fn format(&self) -> &str;
+    fn plan<'a>(&'a self, context: LakePlannerContext<'a>)
+        -> BoxFuture<'a, Result<Vec<LakeSplit>>>;
+    fn read<'a>(&'a self, context: LakeReaderContext<'a>)
+        -> BoxFuture<'a, Result<RecordBatchStream>>;
+}
+
+pub struct LakePlannerContext<'a> {
+    pub table_info: &'a TableInfo,
+    pub snapshot_id: i64,
+    pub semantics: LakeReadSemantics,
+    pub reconcile_primary_key: bool,
+    pub filter: &'a BoundPredicate,
+}
+
+pub struct LakeReaderContext<'a> {
+    pub table_info: &'a TableInfo,
+    pub snapshot_id: i64,
+    pub semantics: LakeReadSemantics,
+    pub reconcile_primary_key: bool,
+    pub splits: &'a [LakeSplit],
+    pub projection: &'a [usize],
+    pub schema: SchemaRef,
+    pub filter: &'a BoundPredicate,
+}
+
+pub struct LakeSplit {
+    pub format: String,
+    pub snapshot_id: i64,
+    pub partition: FlussLakePartitionIdentity,
+    pub bucket_id: i32,
+    pub bucket_count: i32,
+    pub estimated_rows: Option<usize>,
+    pub estimated_size: Option<usize>,
+    pub payload_version: u32,
+    pub payload: Vec<u8>,
+}
+```
+
+The source owns both lake planning and baseline reading. Snapshot IDs are fixed; formats cannot substitute a newer snapshot. `table_info` carries the frozen schema/layout and locally supplied runtime properties. Reader projection indexes refer to the full Fluss schema, include hidden filter/key columns, and define the returned column order and Arrow schema.
+
+For PK reconciliation, the source must return at most one live row per full key across the supplied task group, applying lake versions and deletion vectors first. `reconcile_primary_key` distinguishes that requirement from lake-only reads using other merge semantics. The default executor then applies the Fluss tail and the exact result predicate. Only predicates safe before reconciliation reach the source; ignoring these optimization hints is permitted.
+
+LakeSplit payloads are format-owned, versioned and credential-free. They must retain snapshot-specific deletion-file associations and position information needed for DV application. PK tasks require compatible bucket ownership; Append tasks may use an independent lake layout, including `(-1, -1)` for bucket-unaware tasks. Sources reject unsupported payloads and release resources when reads are dropped. Concurrent requests must not overwrite shared request-specific state.
+
+This is a Rust extension API, not a stable binary ABI. It does not expose a reader-only plugin for opaque default Paimon payloads. Native engines can bypass it and use the boundary contract directly.
+
+## Usage examples
+
+Examples show call relationships, not runnable programs. `connection`, `path`, imports and runtime setup are assumed. `lake_source` is a compatible `Arc<dyn LakeSource>` supplied by the application.
+
+### Default read with a lake backend
 
 ```rust
 let table = FlussLakeTable::open(connection, &path).await?;
 let scan = table.new_scan()
+    .with_lake_source(lake_source)
     .with_filter(col("region").eq("US"))
-    .with_projection_by_names(vec!["id".to_string(), "name".to_string()])
-    .with_batch_size(4096);
+    .with_projection_by_names(vec!["id".into(), "name".into()]);
 let plan = scan.plan().await?;
 let mut batches = scan.new_reader().read_splits(plan.splits()).await?;
 while let Some(batch) = batches.try_next().await? {
-    // Consume within the current query attempt.
+    // Consume within this query attempt.
 }
 ```
 
-For two scans sharing table-wide boundaries:
+The same flow handles Fluss-only tables without `with_lake_source`. Custom lake readers implement LakeSource and use this entry while retaining default log reading and PK reconciliation.
+
+### Shared boundaries and partition scope
 
 ```rust
 let context = table.capture_read_context().await?;
 let plan_a = scan_a.plan_with_context(&context).await?;
 let plan_b = scan_b.plan_with_context(&context).await?;
+
+let scope = PartitionSpec::new(HashMap::from([("region", "US")]));
+let scoped = table.capture_read_context_with_partition_scope(&scope).await?;
+let scoped_plan = scan_a.plan_with_context(&scoped).await?;
 ```
 
-For scans restricted to a common partition scope:
+Scans sharing a scoped context must stay within that scope. Capturing a table-wide context is the default choice for multiple references with different partition selections.
+
+### Distributed default execution
 
 ```rust
-let scope = PartitionSpec::new(HashMap::from([
-    ("region".to_string(), "US".to_string()),
-]));
-let context = table.capture_read_context_with_partition_scope(&scope).await?;
-let plan = scan.plan_with_context(&context).await?;
-```
-
-A scoped context also includes eligible lake-only partitions that have expired from Fluss. An empty list of live log ranges does not imply an empty lake selection. The context accessors and wire field remain named `partition_filter`; the scope entry-point rename does not change the wire format.
-
-## Distributed default execution
-
-The coordinator serializes assigned splits without rewriting their contents. Workers reconstruct the same projection, filter, mode and batch size from the engine's physical plan, and provide a compatible lake source and runtime mapping. Credentials remain local.
-
-```rust
-// Coordinator: assign a subset in a real engine.
+// Coordinator: assign a subset in an actual engine.
 let task_bytes = serde_json::to_vec(plan.splits())?;
 
-// Worker: worker_scan has the coordinator's configuration.
+// Worker: matching scan settings and runtime resources supplied by the engine.
 let assigned: Vec<FlussLakeReadSplit> = serde_json::from_slice(&task_bytes)?;
 let mut batches = worker_scan.new_reader().read_splits(&assigned).await?;
 ```
 
-The worker does not replan or need the coordinator's plan object. Splits carry frozen source/schema information, but do not serialize predicates or prove that remote scan settings match. The engine owns that consistency, task assignment, cancellation, retries and result publication. Readers validate supported task versions, identities and payloads; these checks do not authenticate tasks.
+Workers do not recapture boundaries or need the coordinator's plan object. DataFusion can wrap these interfaces in its physical execution plan; adapter scheduling and predicate negotiation remain separate work.
 
-## Custom lake readers and native engines
+### Java capture and engine-native execution
 
-A Rust integration supplies `Arc<dyn LakeSource>` through `with_lake_source`. The source implements `format`, `plan(LakePlannerContext)` and `read(LakeReaderContext)`. Planning uses the pinned snapshot; reading returns the requested baseline as Arrow batches. For PK tables, the source must apply lake-specific version reconciliation and deletion vectors so that each full key has at most one live baseline row within its task group. Default Fluss reconciliation then applies the log tail and final predicate.
+The Java entry is implemented in #4887. Its public signatures are:
 
-The extension replaces both lake planning and reading. There is no stable reader-only ABI for the default Paimon payload. A native Parquet reader alone does not supply PK baseline semantics.
-
-Java coordinators obtain the boundary in one asynchronous call, without assembling snapshot and offset maps:
+```java
+public static CompletableFuture<byte[]> captureReadContext(Admin admin, TablePath tablePath);
+public static CompletableFuture<byte[]> captureReadContext(
+        Admin admin, TablePath tablePath, PartitionSpec scope);
+```
 
 ```java
 byte[] bytes = UnionReadBoundaryPlanner.captureReadContext(admin, tablePath).get();
 byte[] scoped = UnionReadBoundaryPlanner.captureReadContext(admin, tablePath, scope).get();
 ```
 
-The planner captures the table schema and readable snapshot, applies the partition scope before querying earliest/stop offsets, and rechecks partition IDs and table identity. Snapshot seams remain paired with their snapshot; only confirmed removed partitions are skipped. Other lookup failures propagate. Later schema additions leave the frozen schema unchanged. The result uses the same v1 format as Rust's `FlussLakeReadContext::from_json(&bytes)`.
+One call performs metadata capture, identity rechecks and context encoding without opening lake files. The caller owns Admin. Cancellation of the returned future does not guarantee cancellation of already issued RPCs. Rust imports the same bytes with `FlussLakeReadContext::from_json(&bytes)`.
 
-The caller owns the Admin connection and distributes the bytes. The planner opens no lake files and uses a sequential partition pipeline to bound metadata fan-out. Because Admin offset request setup can block on metadata, it runs on the CompletableFuture default async executor rather than an RPC callback thread. Cancelling the returned future does not guarantee cancellation of composed RPCs. Encoding is package-private, so ordinary callers cannot accidentally bypass the capture sequence.
+```text
+Java coordinator: captureReadContext
+    ↓ distribute context and engine-owned query configuration
+Engine: native file tasks / scan ranges / morsels
+    ↓
+Workers: native lake reader + bounded Fluss log reader + PK reconciliation
+```
 
-An engine such as StarRocks can consume the boundary contract, plan its own lake tasks and Fluss ranges, and use native readers and PK reconciliation. It must honor the selected snapshot, scope, log bounds, schema and deletion semantics. Context ranges are source boundaries, not mandatory morsels, threads or BE assignments. Default Append tasks currently separate lake work from bucket tails; PK tasks group work by bucket. Further task splitting belongs in the planning/execution PRs and does not require changing the boundary API.
+StarRocks-like engines may choose their own task granularity and native Parquet readers. They must enforce the pinned snapshot, partition scope, schema, log bounds and lake/DV semantics before reconciling PK changes. A raw Parquet reader alone is insufficient for PK baselines. No C ABI, completed SR MPP integration, Python or Elixir UnionRead bindings are proposed by this document.
 
-| Consumer | Current implementation status |
-| --- | --- |
-| Rust client | This draft provides Fluss-only execution, transported splits and the LakeSource extension. A lake backend is supplied by the caller; built-in Paimon reading is separate. |
-| DataFusion | Can use default splits/readers through an adapter. Predicate negotiation and runtime scheduling belong to that adapter. This draft does not deliver the adapter. |
-| Java | One-call boundary capture implemented, including metadata capture, identity rechecks and transport encoding. |
-| StarRocks / C++ | Native integration contract only here; no UnionRead C ABI or completed SR MPP integration. |
-| Python / Elixir | No UnionRead bindings in this change; SDK examples must follow actual binding APIs when implemented. |
+## Follow-ups and review scope
 
-## Result and compatibility contracts
+Boundary capture and transport belong to #4887. Default planning, Append/PK execution, lake adapters and engine integrations remain separate implementation work. This reference does not require those implementations to merge together.
 
-Reads are bounded. A ReadContext fixes table identity, schema, partition scope, an optional lake snapshot and per-bucket `[start, stop)` ranges. These ranges are not a cross-bucket transactional snapshot or a retention lease. Workers use concrete offsets rather than resolving earliest again.
+KV snapshot fallback, shared historical-log reads ([#5001](https://github.com/apache/fluss/issues/5001)), streaming discovery/checkpointing and shared accepted/remaining predicate negotiation remain follow-ups. Selected lake-only expired partitions are distinct from historical writes still present only in shared logs. New semantic kinds require explicit compatibility handling, not silently ignored hints.
 
-Tables without lake configuration use the same entry. Where a bucket has a lake seam, the pinned baseline plus its log tail form the input. Without a baseline, reading starts at the captured earliest retained offset. Append returns records in the selected input; PK applies updates/deletes and filters the reconciled result. PK reads without a baseline reconstruct only keys represented in retained history, not a complete historical current view. KV snapshot fallback is deferred: Rust already has snapshot metadata and lease APIs, but not the snapshot download/restore/scan reader used by Java's KV-backed fallback.
-
-Ordinary filters are strict and exact. Adapters may negotiate accepted/remaining predicates; a condition accepted only for pruning must remain for exact evaluation. A shared negotiation helper is separate adapter work. Output order is unspecified. If required inputs expire, execution fails; callers must not combine partial results with a new query attempt using refreshed boundaries.
-
-Context v1 is an unpublished Java/Rust transport draft. Unknown optional metadata may be ignored; unknown versions or required semantics must fail. Log ranges currently use the extensible `Ordinary` partition association. Shared historical logs and streaming discovery/checkpointing need their own semantics and compatibility review before implementation. Neither an extensible enum nor lake-only expired-partition coverage provides those features today. Shared historical-log reads are tracked in [#5001](https://github.com/apache/fluss/issues/5001), separately from historical writes in #4973.
-
-## Review and landing scope
-
-Review the public types and ownership contracts above first. The concrete Scan/Plan/Reader methods are backed by the real planner and executor; the draft does not add `todo!()` or empty implementations. Boundary capture, default planning and Append/PK execution remain separate landing units after interface review. The Paimon backend is not included. Further split subdivision, accepted/remaining negotiation, KV snapshot fallback and historical-log support remain follow-ups.
-
-The boundary-only PR wires its boundary-capture IT into the existing `rust-integration` job. Automatic scan predicate extraction and execution coverage belong to the later planning/execution PRs, even though their implementation is available in this draft for interface review.
-
-The native execution path changes the responsibility split described in the published FIP. That clarification still needs community agreement; this draft does not present it as already accepted.
+Allowing engine-native reconciliation changes the responsibility split in the published FIP and still needs community agreement. Review should settle that ownership boundary, the capture/scan separation, worker configuration obligations and LakeSource semantics before implementation details.
