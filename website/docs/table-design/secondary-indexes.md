@@ -86,7 +86,7 @@ The result contains current main-table rows rather than internal index records. 
 
 ## Flink Lookup Joins
 
-Flink selects an index when the equality join conditions contain all of its columns. If the conditions contain the complete primary key, Flink uses the primary-key lookup. Otherwise, it chooses an eligible secondary index with the most columns, with a stable column-position ordering to break ties. Additional join conditions filter the returned rows.
+Flink first uses a primary-key lookup when the equality join conditions contain the complete primary key, then a supported prefix lookup when all required bucket and partition keys are present. Otherwise, it selects a secondary index whose columns are all covered by the conditions. Among eligible indexes, it prefers the one with the most columns, with a stable column-position ordering to break ties. Additional join conditions filter the returned rows.
 
 Both synchronous and asynchronous Flink lookup execution are supported. The `lookup.async` option controls Flink execution and is independent of the index's write visibility. See [Flink Lookup Joins](../engine-flink/lookups.md#secondary-index-lookup) for an example.
 
