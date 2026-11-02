@@ -39,6 +39,9 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public class TestingRemoteLogStorage extends DefaultRemoteLogStorage {
 
+    /** Invoked after a log segment and its indexes have been copied. */
+    public Runnable afterCopySegment = () -> {};
+
     /** Invoked after a manifest has been uploaded and before its path is returned. */
     public Runnable afterWriteManifest = () -> {};
 
@@ -117,6 +120,7 @@ public class TestingRemoteLogStorage extends DefaultRemoteLogStorage {
         }
         super.copyLogSegmentFiles(remoteLogDir, remoteLogSegment, logSegmentFiles);
         copySegmentCount.incrementAndGet();
+        afterCopySegment.run();
     }
 
     @Override
