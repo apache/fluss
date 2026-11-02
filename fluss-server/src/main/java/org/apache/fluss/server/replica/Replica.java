@@ -1558,6 +1558,10 @@ public final class Replica {
                                         "Leader not local for bucket %s on tabletServer %d",
                                         tableBucket, localTabletServerId));
                     }
+                    if (tableInfo.isIndexTable()) {
+                        throw new InvalidTableException(
+                                "Put-kv request must not target a system-managed Index Table.");
+                    }
                     if (isHistoricalPartition()) {
                         throw new InvalidPartitionException(
                                 "Normal write request must not target a historical partition.");

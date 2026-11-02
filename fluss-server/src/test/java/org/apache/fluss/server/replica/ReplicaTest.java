@@ -19,6 +19,8 @@ package org.apache.fluss.server.replica;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.InvalidPartitionException;
+import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.KvStorageException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
@@ -212,6 +214,57 @@ final class ReplicaTest extends ReplicaTestBase {
         fetchAsFollower(tb, 3, nextOffset, 0).get();
         assertThat(write.get(10, TimeUnit.SECONDS))
                 .containsExactly(new PutKvResultForBucket(tb, nextOffset));
+    }
+
+    @Test
+    void testIndexTableRejectsPublicWrites() throws Exception {
+        TablePath path = TablePath.of("test_db_1", "__idx__public_write__idx_b");
+        TableBucket tb = new TableBucket(800001L, 1);
+        Schema schema =
+                Schema.newBuilder()
+                        .fromColumns(DATA1_SCHEMA_PK.getColumns())
+                        .primaryKey("a")
+                        .index("idx_b", IndexType.SECONDARY, Collections.singletonList("b"))
+                        .build();
+        TableDescriptor descriptor =
+                IndexTableDescriptorFactory.derive(
+                        DATA1_TABLE_DESCRIPTOR_PK.withReplicationFactor(1),
+                        DATA1_TABLE_ID_PK,
+                        schema.getIndexes().get(0));
+        zkClient.registerTable(
+                path,
+                TableRegistration.newTable(tb.getTableId(), DEFAULT_REMOTE_DATA_DIR, descriptor));
+        zkClient.registerFirstSchema(path, descriptor.getSchema());
+        makeKvTableAsLeader(tb, path, INITIAL_LEADER_EPOCH, false);
+        Replica replica = replicaManager.getReplicaOrException(tb);
+        assertThat(putForFollowerWakeup(tb, 1).get(10, TimeUnit.SECONDS))
+                .containsExactly(new PutKvResultForBucket(tb, 2L));
+
+        RowType rowType = replica.getTableInfo().getRowType();
+        RowType keyType = rowType.project(descriptor.getSchema().getPrimaryKeyIndexes());
+        byte[] routingKey = new byte[] {1};
+        byte[] rowKey = new byte[] {1};
+        Object[] dataKey = new Object[] {IndexTableUtils.DATA_RECORD_KIND, routingKey, rowKey};
+        KvRecordBatch records =
+                genKvRecordBatch(
+                        keyType,
+                        rowType,
+                        Collections.singletonList(
+                                Tuple2.of(
+                                        dataKey,
+                                        new Object[] {
+                                            "corrupted", 1, dataKey[0], routingKey, rowKey, null
+                                        })));
+        assertThatThrownBy(() -> replica.putRecordsToLeader(records, null, MergeMode.OVERWRITE, 1))
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining("system-managed Index Table");
+        assertThatThrownBy(
+                        () -> replica.appendRecordsToLeader(genMemoryLogRecordsByObject(DATA1), 1))
+                .isInstanceOf(InvalidPartitionException.class)
+                .hasMessageContaining("primary-key table");
+        assertThat(replica.getLogTablet().localLogEndOffset()).isEqualTo(2L);
+        assertThat(putForFollowerWakeup(tb, 2).get(10, TimeUnit.SECONDS))
+                .containsExactly(new PutKvResultForBucket(tb, 4L));
     }
 
     private CompletableFuture<List<PutKvResultForBucket>> putForFollowerWakeup(
