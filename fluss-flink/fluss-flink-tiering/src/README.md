@@ -33,10 +33,14 @@ on an embedded, in-process Flink runtime inside a single JVM process, so no sepa
 needs to be provisioned. The entrypoint for this mode is `EmbeddedFlussLakeTiering`:
 
 ```shell
-java -cp "$FLINK_HOME/lib/*" \
+java --add-opens=java.base/java.nio=ALL-UNNAMED \
+    -cp "$FLINK_HOME/lib/*" \
     org.apache.fluss.flink.tiering.EmbeddedFlussLakeTiering \
     --config.file /path/to/tiering.yaml
 ```
+
+The `--add-opens` option allows Arrow to access direct buffers on JDK 17. This option is supported
+on Java 9 and later; omit it when running on Java 8.
 
 The tiering job is unbounded and completely stateless: progress is persisted through lake snapshots
 tracked by Fluss, so no Flink checkpoint storage is needed. On a terminal job failure the process
@@ -64,12 +68,14 @@ pipeline.name: fluss-lake-tiering
 A value containing `#` is truncated at the comment marker (inherited `server.yaml` parser
 behavior), so avoid `#` in configuration values.
 
-The parallelism must stay within the number of slots the embedded runtime offers, so configure
-`taskmanager.numberOfTaskSlots` alongside `parallelism.default`; startup fails fast when it does
-not. If `parallelism.default` is unset, the embedded runtime runs the tiering source at the
-machine's CPU core count (Flink's default local parallelism). When `taskmanager.numberOfTaskSlots`
-is pinned below that, the service fails fast at startup. Set both `parallelism.default` and
-`taskmanager.numberOfTaskSlots` explicitly to control the parallelism and slot budget.
+When `taskmanager.numberOfTaskSlots` is set, the parallelism must not exceed the aggregate slot
+capacity: `taskmanager.numberOfTaskSlots` multiplied by `minicluster.number-of-taskmanagers`
+(default `1`). For example, two TaskManagers with one slot each support parallelism `2`, and both
+TaskManagers run inside the same JVM. Startup fails fast if the parallelism exceeds this capacity.
+If `parallelism.default` is unset, the embedded runtime runs the tiering source at the machine's
+CPU core count (Flink's default local parallelism), which must also fit within the aggregate slot
+capacity. If `taskmanager.numberOfTaskSlots` is unset, Flink auto-sizes the slots per TaskManager
+by rounding up the job's maximum parallelism divided by the TaskManager count.
 
 ### Docker image
 
