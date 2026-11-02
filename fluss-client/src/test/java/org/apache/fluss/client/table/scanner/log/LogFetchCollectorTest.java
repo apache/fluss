@@ -23,6 +23,7 @@ import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.compression.ArrowCompressionInfo;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.FetchException;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.ChangeType;
@@ -36,8 +37,6 @@ import org.apache.fluss.rpc.protocol.Errors;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.EnumSource;
 
 import java.util.Arrays;
 import java.util.Collections;
@@ -55,6 +54,7 @@ import static org.apache.fluss.record.TestData.TEST_SCHEMA_GETTER;
 import static org.apache.fluss.testutils.DataTestUtils.createBasicMemoryLogRecords;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link LogFetchCollector}. */
 public class LogFetchCollectorTest {
@@ -274,18 +274,17 @@ public class LogFetchCollectorTest {
         assertThat(scanRecords.consumedUpToOffset(tb)).isEqualTo(20L);
     }
 
-    @ParameterizedTest
-    @EnumSource(
-            value = Errors.class,
-            names = {"LEADER_NOT_AVAILABLE_EXCEPTION", "INVALID_BUCKET_ROUTING"})
-    void testCollectFetchSkipsRoutingOrLeaderErrors(Errors error) throws Exception {
+    @Test
+    void testCollectFetchSkipsLeaderNotAvailable() throws Exception {
         TableBucket failedBucket = new TableBucket(DATA1_TABLE_ID, 0);
         TableBucket healthyBucket = new TableBucket(DATA1_TABLE_ID, 1);
         CompletedFetch failedFetch =
                 makeCompletedFetch(
                         failedBucket,
                         FetchLogResultForBucket.error(
-                                failedBucket, new ApiError(error, "mock fetch error")),
+                                failedBucket,
+                                new ApiError(
+                                        Errors.LEADER_NOT_AVAILABLE_EXCEPTION, "mock fetch error")),
                         0L);
         CompletedFetch healthyFetch =
                 makeCompletedFetch(
@@ -301,6 +300,24 @@ public class LogFetchCollectorTest {
         assertThat(scanRecords.buckets()).containsExactly(healthyBucket);
         assertThat(scanRecords.records(healthyBucket)).hasSize(10);
         assertThat(logFetchBuffer.isEmpty()).isTrue();
+    }
+
+    @Test
+    void testCollectFetchFailsOnInvalidBucketRouting() {
+        // The bucket count of a table or partition never changes, so a routing mismatch is a
+        // contract violation rather than stale metadata, and must not be retried silently.
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
+        logFetchBuffer.add(
+                makeCompletedFetch(
+                        tb,
+                        FetchLogResultForBucket.error(
+                                tb,
+                                new ApiError(Errors.INVALID_BUCKET_ROUTING, "mock fetch error")),
+                        0L));
+
+        assertThatThrownBy(() -> logFetchCollector.collectFetch(logFetchBuffer))
+                .isInstanceOf(FetchException.class)
+                .hasMessageContaining("INVALID_BUCKET_ROUTING");
     }
 
     private DefaultCompletedFetch makeCompletedFetch(
