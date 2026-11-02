@@ -17,6 +17,8 @@
 
 package org.apache.fluss.client.table;
 
+import org.apache.fluss.client.Connection;
+import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.ClientToServerITCaseBase;
 import org.apache.fluss.client.lookup.LookupResult;
 import org.apache.fluss.client.lookup.Lookuper;
@@ -24,10 +26,13 @@ import org.apache.fluss.client.table.scanner.batch.BatchScanner;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.IndexType;
 import org.apache.fluss.metadata.IndexVisibility;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -350,6 +355,87 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
             assertThat(charlieRow.getInt(0)).isEqualTo(3);
             assertThat(charlieRow.getString(2).toString()).isEqualTo("charlie@example.com");
             assertThat(charlieRow.getString(3).toString()).isEqualTo("2024");
+        }
+    }
+
+    @Test
+    void testDefaultIndexBucketCountSurvivesMainTableRescale() throws Exception {
+        TablePath tablePath = TablePath.of(DB, "test_index_bucket_count_after_rescale");
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("name", DataTypes.STRING())
+                        .column("year", DataTypes.STRING())
+                        .primaryKey("id", "year")
+                        .index("idx_name", "name")
+                        .build();
+        long mainTableId =
+                createTable(
+                        tablePath,
+                        TableDescriptor.builder()
+                                .schema(schema)
+                                .distributedBy(2, "id")
+                                .partitionedBy("year")
+                                .build(),
+                        false);
+        TablePath indexPath = indexTablePath(tablePath, "idx_name");
+        TableInfo indexInfo = admin.getTableInfo(indexPath).get();
+        assertThat(indexInfo.getNumBuckets()).isEqualTo(2);
+        waitAllReplicasReady(indexInfo.getTableId(), 2);
+        admin.createPartition(tablePath, newPartitionSpec("year", "2023"), false).get();
+        long oldPartition =
+                FLUSS_CLUSTER_EXTENSION.waitUntilPartitionsCreated(tablePath, 1).get("2023");
+
+        try (Table table = conn.getTable(tablePath)) {
+            UpsertWriter writer = table.newUpsert().createWriter();
+            Lookuper lookuper = table.getSecondaryIndexLookuper("idx_name");
+            writer.upsert(row(1, "Alice", "2023"));
+            writer.flush();
+            assertSinglePartitionedRow(lookuper, "Alice", 1, "2023");
+
+            admin.alterTable(
+                            tablePath,
+                            Collections.singletonList(TableChange.modifyBucketCount(5)),
+                            false)
+                    .get();
+            assertThat(admin.getTableInfo(tablePath).get().getNumBuckets()).isEqualTo(5);
+            assertThat(admin.getTableInfo(indexPath).get().getNumBuckets()).isEqualTo(2);
+            admin.createPartition(tablePath, newPartitionSpec("year", "2024"), false).get();
+            long newPartition =
+                    FLUSS_CLUSTER_EXTENSION.waitUntilPartitionsCreated(tablePath, 2).get("2024");
+            assertThat(admin.listPartitionInfos(tablePath).get())
+                    .extracting(partition -> partition.getBucketCount())
+                    .containsExactlyInAnyOrder(2, 5);
+            writer.upsert(row(2, "Bob", "2024"));
+            writer.flush();
+            assertSinglePartitionedRow(lookuper, "Bob", 2, "2024");
+
+            for (int server = 0; server < 3; server++) {
+                FLUSS_CLUSTER_EXTENSION.restartTabletServer(server, new Configuration());
+                for (int bucket = 0; bucket < 5; bucket++) {
+                    FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(
+                            new TableBucket(mainTableId, newPartition, bucket));
+                    if (bucket < 2) {
+                        FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(
+                                new TableBucket(mainTableId, oldPartition, bucket));
+                    }
+                }
+                waitAllReplicasReady(indexInfo.getTableId(), 2);
+            }
+
+            try (Connection recoveredConnection =
+                            ConnectionFactory.createConnection(
+                                    FLUSS_CLUSTER_EXTENSION.getClientConfig());
+                    Table recoveredTable = recoveredConnection.getTable(tablePath)) {
+                UpsertWriter recoveredWriter = recoveredTable.newUpsert().createWriter();
+                Lookuper recoveredLookuper = recoveredTable.getSecondaryIndexLookuper("idx_name");
+                recoveredWriter.upsert(row(1, "Alice-updated", "2023"));
+                recoveredWriter.upsert(row(2, "Bob-updated", "2024"));
+                recoveredWriter.flush();
+                assertSinglePartitionedRow(recoveredLookuper, "Alice-updated", 1, "2023");
+                assertSinglePartitionedRow(recoveredLookuper, "Bob-updated", 2, "2024");
+            }
+            assertThat(admin.getTableInfo(indexPath).get().getNumBuckets()).isEqualTo(2);
         }
     }
 

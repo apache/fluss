@@ -366,15 +366,14 @@ public final class IndexSpecFactory {
         TableDescriptor expected =
                 IndexTableDescriptorFactory.derive(
                         mainTableInfo.toTableDescriptor(), mainTableInfo.getTableId(), index);
-        int expectedBucketCount =
-                expected.getTableDistribution()
-                        .flatMap(TableDescriptor.TableDistribution::getBucketCount)
-                        .orElseThrow(() -> invalidMetadata(path, "no derived bucket count"));
-        if (indexTableInfo.getNumBuckets() != expectedBucketCount) {
+        // The main-table bucket count supplies only the creation-time default.
+        Integer configuredBucketCount = index.getBucketCount().orElse(null);
+        if (configuredBucketCount != null
+                && indexTableInfo.getNumBuckets() != configuredBucketCount) {
             throw invalidMetadata(
                     path,
                     "bucket count "
-                            + expectedBucketCount
+                            + configuredBucketCount
                             + " but found "
                             + indexTableInfo.getNumBuckets());
         }
