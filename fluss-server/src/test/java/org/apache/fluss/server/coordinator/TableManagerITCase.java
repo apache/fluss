@@ -28,6 +28,7 @@ import org.apache.fluss.exception.DatabaseAlreadyExistException;
 import org.apache.fluss.exception.DatabaseNotEmptyException;
 import org.apache.fluss.exception.DatabaseNotExistException;
 import org.apache.fluss.exception.InsufficientKvLeaderReplicaCapacityException;
+import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidDatabaseException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.PartitionNotExistException;
@@ -1285,6 +1286,56 @@ class TableManagerITCase {
                     .isPresent();
         } finally {
             limitedCluster.close();
+        }
+    }
+
+    @Test
+    void testHistoricalPartitionRejectsSecondaryIndexes() throws Exception {
+        FlussClusterExtension cluster =
+                historicalPartitionCluster(ConfigOptions.MAX_PARTITION_NUM.defaultValue());
+        try {
+            cluster.start();
+            AdminGateway gateway = cluster.newCoordinatorClient();
+            TablePath tablePath = TablePath.of("fluss", "historical_secondary_indexes");
+            TableDescriptor baseDescriptor = historicalPartitionTable(false);
+            TableDescriptor indexedDescriptor =
+                    TableDescriptor.builder(baseDescriptor)
+                            .schema(
+                                    Schema.newBuilder()
+                                            .fromSchema(baseDescriptor.getSchema())
+                                            .index("idx_a", "a")
+                                            .build())
+                            .property(ConfigOptions.TABLE_REPLICATION_FACTOR, 1)
+                            .property(ConfigOptions.TABLE_CHANGELOG_IMAGE, ChangelogImage.FULL)
+                            .build();
+            TableDescriptor historicalIndexedDescriptor =
+                    TableDescriptor.builder(indexedDescriptor)
+                            .property(
+                                    ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED, true)
+                            .build();
+
+            assertThatThrownBy(
+                            () ->
+                                    gateway.createTable(
+                                                    newCreateTableRequest(
+                                                            tablePath,
+                                                            historicalIndexedDescriptor,
+                                                            false))
+                                            .get())
+                    .cause()
+                    .isInstanceOf(InvalidConfigException.class)
+                    .hasMessageContaining(
+                            "Secondary indexes with historical partition access are not supported yet");
+
+            gateway.createTable(newCreateTableRequest(tablePath, indexedDescriptor, false)).get();
+            assertThatThrownBy(() -> setHistoricalPartitionEnabled(gateway, tablePath, true))
+                    .cause()
+                    .isInstanceOf(InvalidConfigException.class)
+                    .hasMessageContaining(
+                            "Secondary indexes with historical partition access are not supported yet");
+            assertThat(isHistoricalPartitionEnabled(gateway, tablePath)).isFalse();
+        } finally {
+            cluster.close();
         }
     }
 
