@@ -29,9 +29,11 @@ set -o pipefail
 
 IMAGE="${TIERING_IMAGE:-fluss-tiering:dev}"
 CONTAINER="fluss-tiering-smoke-$$-${RANDOM}"
+SMOKE_DIR="$(mktemp -d)"
 
 cleanup() {
     docker rm --force "${CONTAINER}" >/dev/null 2>&1 || true
+    rm -rf "${SMOKE_DIR}"
 }
 trap cleanup EXIT
 
@@ -62,16 +64,16 @@ if ! grep -q "tieringService" <<< "${help_output}"; then
     exit 1
 fi
 
-# FLUSS_TIERING_PROPERTIES entries and ${VAR} references must be substituted
-# by the entrypoint (envsubst): with the bootstrap servers resolved from the
-# environment, the service fails on the next missing setting instead of the
-# bootstrap servers, so a missing or broken envsubst fails this check.
+# Inspect the staged value to prove that the entrypoint resolves ${VAR} references.
+# The missing datalake.format error alone also accepts an unresolved value.
 substitution_run_output="$(docker run --name "${CONTAINER}" \
     -e BOOTSTRAP_HOST="smoke-bootstrap:9123" \
     -e 'FLUSS_TIERING_PROPERTIES=fluss.bootstrap.servers: ${BOOTSTRAP_HOST}' \
     "${IMAGE}" 2>&1 || true)"
-if ! grep -q "datalake.format is not configured" <<< "${substitution_run_output}"; then
-    echo "The entrypoint did not substitute the FLUSS_TIERING_PROPERTIES ${VAR} reference." >&2
+if ! docker cp "${CONTAINER}:/tmp/fluss-tiering/tiering.yaml" "${SMOKE_DIR}/tiering.yaml" \
+    || ! grep -Fxq 'fluss.bootstrap.servers: smoke-bootstrap:9123' "${SMOKE_DIR}/tiering.yaml" \
+    || ! grep -q "datalake.format is not configured" <<< "${substitution_run_output}"; then
+    echo 'The entrypoint did not substitute the FLUSS_TIERING_PROPERTIES ${VAR} reference.' >&2
     echo "${substitution_run_output}"
     exit 1
 fi

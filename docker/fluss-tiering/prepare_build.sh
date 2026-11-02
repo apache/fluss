@@ -55,8 +55,23 @@ if [[ -z "${hadoop_version}" ]]; then
     exit 1
 fi
 
-LIB_DIR="${BUILD_DIR}/lib"
-mkdir -p "${LIB_DIR}"
+# Resolve every jar before replacing the script-owned lib directory. Other
+# build inputs remain untouched, and a failed preparation keeps lib usable.
+mkdir -p "${BUILD_DIR}"
+STAGING_DIR="$(mktemp -d "${BUILD_DIR}/.lib.XXXXXX")"
+LIB_DIR="${STAGING_DIR}/lib"
+
+cleanup() {
+    if [[ ( -e "${STAGING_DIR}/previous-lib" || -L "${STAGING_DIR}/previous-lib" ) \
+        && ! -e "${BUILD_DIR}/lib" && ! -L "${BUILD_DIR}/lib" ]]; then
+        mv "${STAGING_DIR}/previous-lib" "${BUILD_DIR}/lib"
+    fi
+    rm -rf "${STAGING_DIR}"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+mkdir "${LIB_DIR}"
 
 # Computes the SHA-1 digest of a file. shasum ships with macOS and with the
 # Perl toolkits of most Linux distributions; sha1sum covers the rest.
@@ -124,5 +139,10 @@ resolve_jar org.apache.fluss fluss-lake-lance "${fluss_version}" "fluss-lake-lan
 resolve_jar org.apache.paimon paimon-bundle "${paimon_version}" "paimon-bundle-${paimon_version}.jar"
 resolve_jar org.apache.iceberg iceberg-flink-runtime-1.20 "${iceberg_version}" "iceberg-flink-runtime-1.20-${iceberg_version}.jar"
 resolve_jar org.apache.flink flink-shaded-hadoop-2-uber "${hadoop_version}" "flink-shaded-hadoop-2-uber-${hadoop_version}.jar"
+
+if [[ -e "${BUILD_DIR}/lib" || -L "${BUILD_DIR}/lib" ]]; then
+    mv "${BUILD_DIR}/lib" "${STAGING_DIR}/previous-lib"
+fi
+mv "${LIB_DIR}" "${BUILD_DIR}/lib"
 
 echo "Prepared tiering image inputs under ${BUILD_DIR}."

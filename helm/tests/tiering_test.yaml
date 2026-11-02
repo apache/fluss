@@ -57,6 +57,34 @@ tests:
           value: apache/fluss-tiering:1.1.0
         template: templates/deploy-tiering.yaml
 
+  - it: should track configuration in the pod checksum and preserve user annotations
+    set:
+      tiering.enabled: true
+      tiering.podAnnotations:
+        example.com/owner: tiering
+        checksum/tiering-config: user-supplied
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["checksum/tiering-config"]
+          value: d56d8fee156d3855e7883969146d01cd5bc8746d0f20efcfe3c2fe39d20ab7fb
+        template: templates/deploy-tiering.yaml
+      - equal:
+          path: spec.template.metadata.annotations["example.com/owner"]
+          value: tiering
+        template: templates/deploy-tiering.yaml
+
+  - it: should track changed parallelism in the pod checksum
+    set:
+      tiering.enabled: true
+      tiering.configurationOverrides:
+        parallelism.default: 2
+        taskmanager.numberOfTaskSlots: 2
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["checksum/tiering-config"]
+          value: 90e1d20a7b1df5c26c43da3a7741735d73c69fc89058e064c3bbf266d1182c6b
+        template: templates/deploy-tiering.yaml
+
   - it: should fail when enabled without a lake format
     set:
       tiering.enabled: true

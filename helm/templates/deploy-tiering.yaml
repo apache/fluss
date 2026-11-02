@@ -41,10 +41,11 @@ spec:
         {{- end }}
         {{- include "fluss.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: tiering
-      {{- with .Values.tiering.podAnnotations }}
       annotations:
+        checksum/tiering-config: {{ include (print $.Template.BasePath "/configmap-tiering.yaml") . | sha256sum }}
+        {{- with omit .Values.tiering.podAnnotations "checksum/tiering-config" }}
         {{- toYaml . | nindent 8 }}
-      {{- end }}
+        {{- end }}
     spec:
       {{- if .Values.serviceAccount.create }}
       serviceAccountName: {{ .Values.serviceAccount.name | default (include "fluss.fullname" .) }}

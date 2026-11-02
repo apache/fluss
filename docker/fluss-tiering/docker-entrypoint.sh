@@ -36,33 +36,34 @@ prepare_configuration() {
     mkdir -p "$(dirname "${RUNTIME_CONFIG_FILE}")"
     cp "${TIERING_CONFIG_FILE}" "${RUNTIME_CONFIG_FILE}"
     if [ -n "${FLUSS_TIERING_PROPERTIES:-}" ]; then
-        echo "${FLUSS_TIERING_PROPERTIES}" >> "${RUNTIME_CONFIG_FILE}"
+        printf '\n%s\n' "${FLUSS_TIERING_PROPERTIES}" >> "${RUNTIME_CONFIG_FILE}"
     fi
-    # Substitute only the ${VAR} references actually present in the staged
-    # configuration: the envsubst SHELL-FORMAT list is built from those names,
-    # so unrelated environment references inside user values (for example a
-    # password containing $SECRET) pass through untouched. Config provider
-    # markers like ${provider:env:KEY} never match the ${VAR} pattern and are
-    # left for the tiering service to resolve.
-    local referenced_vars
-    referenced_vars="$(grep -oE '\$\{[A-Za-z_][A-Za-z0-9_]*\}' "${RUNTIME_CONFIG_FILE}" \
-        | sort -u | tr -d '${}' | sed 's/^/$/' | tr '\n' ' ' || true)"
-    if [ -n "${referenced_vars}" ]; then
-        # Fail fast on unset variables instead of substituting them with an empty
-        # string: an empty fluss.bootstrap.servers would pass the service's null
-        # check and surface later as a confusing client error.
-        local var
-        for var in ${referenced_vars}; do
-            local var_name="${var#\$}"
-            if [ -z "${!var_name:-}" ]; then
-                echo "The tiering configuration references the environment variable ${var_name}, which is not set." >&2
-                echo "Set ${var_name} or remove the reference from the tiering configuration." >&2
-                exit 1
-            fi
-        done
-        envsubst "${referenced_vars}" < "${RUNTIME_CONFIG_FILE}" > "${RUNTIME_CONFIG_FILE}.tmp" \
-            && mv "${RUNTIME_CONFIG_FILE}.tmp" "${RUNTIME_CONFIG_FILE}"
-    fi
+    # Expand only ${VAR}, leaving bare $VAR and ${provider:env:KEY} untouched.
+    # Concatenation preserves environment values literally, without replacement
+    # metacharacters or recursive expansion. GlobalConfiguration treats everything
+    # from the first # as a comment, so only scan the preceding text.
+    awk '
+        {
+            comment_start = index($0, "#")
+            comment = comment_start ? substr($0, comment_start) : ""
+            remaining = comment_start ? substr($0, 1, comment_start - 1) : $0
+            expanded = ""
+            while (match(remaining, /\$\{[A-Za-z_][A-Za-z0-9_]*\}/)) {
+                name = substr(remaining, RSTART + 2, RLENGTH - 3)
+                value = ENVIRON[name]
+                # Empty required settings must fail before the service starts.
+                if (value == "") {
+                    printf "The tiering configuration references the environment variable %s, which is not set.\n", name > "/dev/stderr"
+                    printf "Set %s or remove the reference from the tiering configuration.\n", name > "/dev/stderr"
+                    exit 1
+                }
+                expanded = expanded substr(remaining, 1, RSTART - 1) value
+                remaining = substr(remaining, RSTART + RLENGTH)
+            }
+            print expanded remaining comment
+        }
+    ' "${RUNTIME_CONFIG_FILE}" > "${RUNTIME_CONFIG_FILE}.tmp" \
+        && mv "${RUNTIME_CONFIG_FILE}.tmp" "${RUNTIME_CONFIG_FILE}"
 }
 
 args=("$@")

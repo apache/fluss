@@ -59,17 +59,19 @@ import static org.apache.fluss.flink.tiering.source.TieringSourceOptions.DATA_LA
  * for them, configure the tiering service exactly like the parameters of {@link
  * FlussLakeTieringEntrypoint}; all remaining parameters configure the embedded Flink runtime, for
  * example {@code parallelism.default} for the tiering parallelism, {@code
- * taskmanager.numberOfTaskSlots} for the number of slots the embedded runtime offers, or {@code
+ * taskmanager.numberOfTaskSlots} for the slots per TaskManager, {@code
+ * minicluster.number-of-taskmanagers} for the number of TaskManagers in the JVM, or {@code
  * pipeline.name} for the job name.
  *
  * <p>Startup fails fast on configurations the embedded runtime cannot honor: {@code config.file} is
- * only accepted on the command line, and the parallelism the job runs at must stay within {@code
- * taskmanager.numberOfTaskSlots} because the tiering job's source runs at the default parallelism.
- * If {@code parallelism.default} is unset, the embedded runtime runs the tiering source at the
- * machine's CPU core count (Flink's default local parallelism); when {@code
- * taskmanager.numberOfTaskSlots} is pinned below that, the service fails fast at startup. Set both
- * {@code parallelism.default} and {@code taskmanager.numberOfTaskSlots} explicitly to control the
- * parallelism and slot budget.
+ * only accepted on the command line, and the parallelism the job runs at must stay within the
+ * aggregate slot capacity: {@code taskmanager.numberOfTaskSlots} multiplied by {@code
+ * minicluster.number-of-taskmanagers} (default 1). The tiering job's source runs at the default
+ * parallelism. If {@code parallelism.default} is unset, the embedded runtime runs the tiering
+ * source at the machine's CPU core count (Flink's default local parallelism); when the aggregate
+ * capacity is pinned below that, the service fails fast at startup. If {@code
+ * taskmanager.numberOfTaskSlots} is unset, Flink sizes the slots per TaskManager to meet the job's
+ * demand.
  *
  * <p>The tiering job is unbounded: this entrypoint blocks until the job reaches a terminal state.
  * The tiering job is stateless (progress is persisted through lake snapshots tracked by Fluss), so
@@ -117,7 +119,8 @@ public class EmbeddedFlussLakeTiering extends FlussLakeTiering {
      * @throws IllegalConfigurationException if a config provider marker is malformed, references an
      *     undeclared provider, or fails to resolve
      * @throws IllegalConfigurationException if the parallelism the job runs at exceeds the number
-     *     of task slots pinned by {@code taskmanager.numberOfTaskSlots}
+     *     of task slots pinned by {@code taskmanager.numberOfTaskSlots} multiplied by {@code
+     *     minicluster.number-of-taskmanagers}
      */
     public EmbeddedFlussLakeTiering(Map<String, String> tieringParams, Configuration flinkConfig) {
         super(tieringParams, flinkConfig);
@@ -246,14 +249,14 @@ public class EmbeddedFlussLakeTiering extends FlussLakeTiering {
      *
      * <p>The tiering job's source runs at the environment default parallelism ({@code
      * parallelism.default}) while only the committer and the sink are pinned to parallelism 1, so
-     * the default parallelism must not exceed the slots ({@code taskmanager.numberOfTaskSlots}) the
-     * embedded runtime offers. The check applies only when {@code taskmanager.numberOfTaskSlots}
-     * pins the slot budget: with it unset, the embedded runtime sizes its slots to the job's
-     * demand, so no budget can be exceeded whatever the parallelism. With an unset {@code
-     * parallelism.default} and pinned slots, the embedded runtime runs the job at the machine's CPU
-     * core count (Flink's default local parallelism), so that core count is the effective
-     * parallelism to validate. A negative {@code parallelism.default} is passed through to Flink's
-     * own defaults and skips the check.
+     * the default parallelism must not exceed {@code taskmanager.numberOfTaskSlots} multiplied by
+     * {@code minicluster.number-of-taskmanagers}. The check applies only when {@code
+     * taskmanager.numberOfTaskSlots} pins the slot budget: with it unset, Flink sizes the slots per
+     * TaskManager by rounding up the job's maximum parallelism divided by the TaskManager count.
+     * With an unset {@code parallelism.default} and pinned slots, the embedded runtime runs the job
+     * at the machine's CPU core count (Flink's default local parallelism), so that core count is
+     * the effective parallelism to validate. A negative {@code parallelism.default} is passed
+     * through to Flink's own defaults and skips the check.
      *
      * @param flinkConfig the configuration for the embedded Flink runtime
      * @throws IllegalConfigurationException if the parallelism the job runs at exceeds the task
@@ -271,8 +274,10 @@ public class EmbeddedFlussLakeTiering extends FlussLakeTiering {
         Optional<Integer> configuredParallelism =
                 flinkConfig.getOptional(CoreOptions.DEFAULT_PARALLELISM);
         int parallelism = configuredParallelism.orElse(Runtime.getRuntime().availableProcessors());
-        int slots = flinkConfig.get(TaskManagerOptions.NUM_TASK_SLOTS);
-        if (parallelism <= 0 || parallelism <= slots) {
+        int slotsPerTaskManager = flinkConfig.get(TaskManagerOptions.NUM_TASK_SLOTS);
+        int taskManagers = flinkConfig.get(TaskManagerOptions.MINI_CLUSTER_NUM_TASK_MANAGERS);
+        long totalSlots = (long) slotsPerTaskManager * taskManagers;
+        if (parallelism <= 0 || parallelism <= totalSlots) {
             return;
         }
         if (!configuredParallelism.isPresent()) {
@@ -281,19 +286,25 @@ public class EmbeddedFlussLakeTiering extends FlussLakeTiering {
                             "Invalid configuration for the embedded Flink runtime: parallelism.default "
                                     + "is unset, so the embedded runtime runs the tiering job at the "
                                     + "machine's CPU core count (%d), but the runtime only offers %d task "
-                                    + "slot(s) (taskmanager.numberOfTaskSlots). Set parallelism.default "
-                                    + "explicitly (at most %d), or set taskmanager.numberOfTaskSlots to "
-                                    + "at least %d.",
-                            parallelism, slots, slots, parallelism));
+                                    + "slot(s) (taskmanager.numberOfTaskSlots=%d * "
+                                    + "minicluster.number-of-taskmanagers=%d). Set parallelism.default "
+                                    + "explicitly (at most %d), or increase taskmanager.numberOfTaskSlots "
+                                    + "or minicluster.number-of-taskmanagers.",
+                            parallelism,
+                            totalSlots,
+                            slotsPerTaskManager,
+                            taskManagers,
+                            totalSlots));
         }
         throw new IllegalConfigurationException(
                 String.format(
                         "Invalid configuration for the embedded Flink runtime: parallelism.default "
                                 + "is %d, but the runtime only offers %d task slot(s) "
-                                + "(taskmanager.numberOfTaskSlots). The tiering job runs its source at "
-                                + "the default parallelism, so parallelism.default must not exceed "
-                                + "taskmanager.numberOfTaskSlots. Lower parallelism.default or set "
-                                + "taskmanager.numberOfTaskSlots to at least %d.",
-                        parallelism, slots, parallelism));
+                                + "(taskmanager.numberOfTaskSlots=%d * minicluster.number-of-taskmanagers=%d). "
+                                + "The tiering job runs its source at the default parallelism, so "
+                                + "parallelism.default must not exceed the aggregate slot capacity. "
+                                + "Lower parallelism.default or increase taskmanager.numberOfTaskSlots "
+                                + "or minicluster.number-of-taskmanagers.",
+                        parallelism, totalSlots, slotsPerTaskManager, taskManagers));
     }
 }

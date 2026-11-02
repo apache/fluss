@@ -24,11 +24,15 @@ import org.apache.fluss.exception.IllegalConfigurationException;
 import org.apache.flink.api.common.JobExecutionResult;
 import org.apache.flink.api.common.restartstrategy.RestartStrategies;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.configuration.CoreOptions;
 import org.apache.flink.configuration.JobManagerOptions;
+import org.apache.flink.configuration.TaskManagerOptions;
 import org.apache.flink.core.execution.JobClient;
 import org.apache.flink.streaming.api.functions.sink.v2.DiscardingSink;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import java.io.File;
 import java.io.IOException;
@@ -38,6 +42,8 @@ import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 import static org.apache.flink.configuration.RestartStrategyOptions.RESTART_STRATEGY;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -179,26 +185,33 @@ class EmbeddedFlussLakeTieringTest {
                 .isEqualTo("exponential-delay");
     }
 
-    @Test
-    void testEmbeddedRuntimeExecutesJobWithConfiguredParallelism() throws Exception {
+    @ParameterizedTest
+    @CsvSource({"2, 1, 2", "2, 2, 1", "3, 2, "})
+    void testEmbeddedRuntimeExecutesJobWithConfiguredParallelism(
+            int parallelism, int taskManagers, Integer slotsPerTaskManager) throws Exception {
         Map<String, String> tieringParams =
                 params(
                         "fluss.bootstrap.servers", "localhost:9123",
                         "datalake.format", "paimon");
-        Configuration flinkConfig =
-                EmbeddedFlussLakeTiering.extractFlinkConfig(
-                        params(
-                                "parallelism.default", "2",
-                                "taskmanager.numberOfTaskSlots", "2"));
+        Configuration flinkConfig = new Configuration();
+        flinkConfig.set(CoreOptions.DEFAULT_PARALLELISM, parallelism);
+        flinkConfig.set(TaskManagerOptions.MINI_CLUSTER_NUM_TASK_MANAGERS, taskManagers);
+        if (slotsPerTaskManager != null) {
+            flinkConfig.set(TaskManagerOptions.NUM_TASK_SLOTS, slotsPerTaskManager);
+        }
         EmbeddedFlussLakeTiering tiering = new EmbeddedFlussLakeTiering(tieringParams, flinkConfig);
 
-        // the embedded runtime executes a bounded job on the local Flink
-        // cluster with the parallelism from the unprefixed config entries
-        assertThat(tiering.execEnv.getParallelism()).isEqualTo(2);
-        tiering.execEnv.fromElements(1, 2, 3).sinkTo(new DiscardingSink<>()).name("end");
-        JobExecutionResult result = tiering.execEnv.execute("embedded-runtime-smoke");
-
-        assertThat(result).isNotNull();
+        assertThat(tiering.execEnv.getParallelism()).isEqualTo(parallelism);
+        tiering.execEnv.fromSequence(1, 3).sinkTo(new DiscardingSink<>()).name("end");
+        JobClient jobClient = tiering.execEnv.executeAsync("embedded-runtime-smoke");
+        CompletableFuture<JobExecutionResult> result = jobClient.getJobExecutionResult();
+        try {
+            assertThat(result.get(60, TimeUnit.SECONDS)).isNotNull();
+        } finally {
+            if (!result.isDone()) {
+                jobClient.cancel().get(60, TimeUnit.SECONDS);
+            }
+        }
     }
 
     /**
@@ -277,6 +290,54 @@ class EmbeddedFlussLakeTieringTest {
                 .hasMessageContaining("2");
     }
 
+    @ParameterizedTest
+    @CsvSource({
+        "2, 1, 2",
+        "3, 2, 2",
+        "2147483647, 1073741824, 2",
+        "2147483647, 2147483647, 2147483647"
+    })
+    void testParallelismWithinAggregateSlotsPasses(
+            int parallelism, int slotsPerTaskManager, int taskManagers) {
+        Configuration flinkConfig = new Configuration();
+        flinkConfig.set(CoreOptions.DEFAULT_PARALLELISM, parallelism);
+        flinkConfig.set(TaskManagerOptions.NUM_TASK_SLOTS, slotsPerTaskManager);
+        flinkConfig.set(TaskManagerOptions.MINI_CLUSTER_NUM_TASK_MANAGERS, taskManagers);
+
+        assertThatCode(() -> EmbeddedFlussLakeTiering.validateParallelismAgainstSlots(flinkConfig))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void testParallelismExceedingAggregateSlotsFailsFast() {
+        Configuration flinkConfig =
+                EmbeddedFlussLakeTiering.extractFlinkConfig(
+                        params(
+                                "parallelism.default", "3",
+                                "taskmanager.numberOfTaskSlots", "1",
+                                "minicluster.number-of-taskmanagers", "2"));
+
+        assertThatThrownBy(
+                        () -> EmbeddedFlussLakeTiering.validateParallelismAgainstSlots(flinkConfig))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining("parallelism.default is 3")
+                .hasMessageContaining("only offers 2 task slot(s)")
+                .hasMessageContaining("taskmanager.numberOfTaskSlots")
+                .hasMessageContaining("minicluster.number-of-taskmanagers");
+    }
+
+    @Test
+    void testUnsetParallelismWithinAggregateSlotsPasses() {
+        Configuration flinkConfig = new Configuration();
+        flinkConfig.set(TaskManagerOptions.NUM_TASK_SLOTS, 1);
+        flinkConfig.set(
+                TaskManagerOptions.MINI_CLUSTER_NUM_TASK_MANAGERS,
+                Runtime.getRuntime().availableProcessors());
+
+        assertThatCode(() -> EmbeddedFlussLakeTiering.validateParallelismAgainstSlots(flinkConfig))
+                .doesNotThrowAnyException();
+    }
+
     @Test
     void testAutoParallelismSkipsSlotCheck() {
         Map<String, String> tieringParams =
@@ -320,7 +381,10 @@ class EmbeddedFlussLakeTieringTest {
         // with only the parallelism pinned, the embedded runtime sizes its
         // slots to the job's demand, so there is no slot budget to validate
         Configuration flinkConfig =
-                EmbeddedFlussLakeTiering.extractFlinkConfig(params("parallelism.default", "4"));
+                EmbeddedFlussLakeTiering.extractFlinkConfig(
+                        params(
+                                "parallelism.default", "4",
+                                "minicluster.number-of-taskmanagers", "2"));
 
         assertThatCode(() -> EmbeddedFlussLakeTiering.validateParallelismAgainstSlots(flinkConfig))
                 .doesNotThrowAnyException();
