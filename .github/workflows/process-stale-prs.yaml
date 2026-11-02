@@ -1,0 +1,58 @@
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.
+# The ASF licenses this file to You under the Apache License, Version 2.0
+# (the "License"); you may not use this file except in compliance with
+# the License.  You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Process Stale Pull Requests
+
+on:
+  schedule:
+    - cron: "30 8 * * *"
+  workflow_dispatch:
+
+# Runs share the cached processing state, so a new run waits for the one in progress instead of
+# marking the same pull requests as stale twice.
+concurrency:
+  group: ${{ github.workflow }}
+
+jobs:
+  stale:
+    if: github.repository == 'apache/fluss'
+    runs-on: ubuntu-latest
+    permissions:
+      # Required to replace the cached state that lets a run resume where the previous one stopped.
+      actions: write
+      # Required to list open pull requests, which the action does through the repository issues endpoint.
+      issues: read
+      pull-requests: write
+    steps:
+      # Later versions don't count pushes, reviews or description edits as activity on stale pull requests,
+      # since these create no issue events (https://github.com/actions/stale/issues/1378).
+      - uses: actions/stale@v10.2.0
+        with:
+          # Leave issues alone: they would otherwise be marked as stale after the 60-day default, and a Stale
+          # label added to an issue by hand would be removed on updates, which `issues: read` does not allow.
+          days-before-issue-stale: -1
+          days-before-issue-close: -1
+          remove-issue-stale-when-updated: false
+          days-before-pr-stale: 20
+          days-before-pr-close: 10
+          # Marking or closing a pull request takes about 4 operations, 2 of which create content, so 150 keeps
+          # a run below GitHub's secondary limit of 80 content-creating requests per minute. The default of 30
+          # would take weeks to work through the pull requests that are already inactive.
+          operations-per-run: 150
+          stale-pr-message: >-
+            This PR has been marked as stale because it has had no activity for 20 days.
+            It will be closed in 10 days unless it receives a new comment, commit or other update.
+          close-pr-message: >-
+            This PR was closed because it has been stale for 10 days with no activity.
