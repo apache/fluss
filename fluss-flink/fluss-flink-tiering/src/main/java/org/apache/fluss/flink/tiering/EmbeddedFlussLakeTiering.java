@@ -43,40 +43,18 @@ import static org.apache.fluss.flink.tiering.FlussLakeTiering.LAKE_TIERING_CONFI
 import static org.apache.fluss.flink.tiering.source.TieringSourceOptions.DATA_LAKE_CONFIG_PREFIX;
 
 /**
- * The entrypoint that runs the Fluss lake tiering job on an embedded, in-process Flink runtime.
+ * Runs the Fluss lake tiering job on an embedded, in-process Flink runtime.
  *
- * <p>Unlike {@link FlussLakeTieringEntrypoint}, which submits the tiering job to a Flink cluster
- * via {@code flink run}, this entrypoint executes the job on Flink's local runtime inside the same
- * JVM process, so no separate Flink cluster needs to be provisioned. The tiering job itself is
- * unchanged: it polls Fluss for tables with pending lake snapshots and tiers them to the configured
- * lake format, scaling with the configured parallelism.
+ * <p>Unlike {@link FlussLakeTieringEntrypoint}, which submits the job to a Flink cluster, this
+ * entrypoint runs it on Flink's local runtime inside the same JVM. The tiering job itself is
+ * unchanged; only the runtime hosting it differs.
  *
- * <p>Configuration is read from a YAML config file, using the same key-value syntax as Fluss's
- * {@code server.yaml}, and from the command line. The file is passed via {@link
- * #CONFIG_FILE_OPTION} and command line parameters take precedence over file entries. Parameters
- * carrying one of the tiering prefixes ({@code fluss.}, {@code datalake.}, or {@code
- * lake.tiering.}), together with the {@code config.providers.*} keys that declare config providers
- * for them, configure the tiering service exactly like the parameters of {@link
- * FlussLakeTieringEntrypoint}; all remaining parameters configure the embedded Flink runtime, for
- * example {@code parallelism.default} for the tiering parallelism, {@code
- * taskmanager.numberOfTaskSlots} for the slots per TaskManager, {@code
- * minicluster.number-of-taskmanagers} for the number of TaskManagers in the JVM, or {@code
- * pipeline.name} for the job name.
- *
- * <p>Startup fails fast on configurations the embedded runtime cannot honor: {@code config.file} is
- * only accepted on the command line, and the parallelism the job runs at must stay within the
- * aggregate slot capacity: {@code taskmanager.numberOfTaskSlots} multiplied by {@code
- * minicluster.number-of-taskmanagers} (default 1). The tiering job's source runs at the default
- * parallelism. If {@code parallelism.default} is unset, the embedded runtime runs the tiering
- * source at the machine's CPU core count (Flink's default local parallelism); when the aggregate
- * capacity is pinned below that, the service fails fast at startup. If {@code
- * taskmanager.numberOfTaskSlots} is unset, Flink sizes the slots per TaskManager to meet the job's
- * demand.
- *
- * <p>The tiering job is unbounded: this entrypoint blocks until the job reaches a terminal state.
- * The tiering job is stateless (progress is persisted through lake snapshots tracked by Fluss), so
- * on a terminal failure the process exits with a non-zero code and the surrounding container or
- * process supervisor simply starts it again.
+ * <p>Parameters carrying a tiering prefix ({@code fluss.}, {@code datalake.}, {@code
+ * lake.tiering.}) and the {@code config.providers.*} keys configure the tiering service, while all
+ * remaining parameters configure the embedded runtime, for example {@code parallelism.default}, or
+ * {@code taskmanager.numberOfTaskSlots} together with {@code minicluster.number-of-taskmanagers}.
+ * See {@link #validateParallelismAgainstSlots} for the startup checks and {@link #runEmbedded} for
+ * the job lifecycle.
  */
 @PublicEvolving
 public class EmbeddedFlussLakeTiering extends FlussLakeTiering {
@@ -109,18 +87,14 @@ public class EmbeddedFlussLakeTiering extends FlussLakeTiering {
      *
      * <p>The tiering parameters use the same keys as the command line of {@link
      * FlussLakeTieringEntrypoint}; see {@link FlussLakeTiering} for the expected shapes. The Flink
-     * configuration tunes the embedded Flink runtime that executes the tiering job. Startup fails
-     * fast when the parallelism the job runs at exceeds the number of task slots.
+     * configuration tunes the embedded Flink runtime that executes the tiering job.
      *
      * @param tieringParams the tiering service parameters
      * @param flinkConfig the configuration for the embedded Flink runtime
      * @throws IllegalArgumentException if {@code fluss.bootstrap.servers} or {@code
      *     datalake.format} is missing from the tiering parameters
-     * @throws IllegalConfigurationException if a config provider marker is malformed, references an
-     *     undeclared provider, or fails to resolve
-     * @throws IllegalConfigurationException if the parallelism the job runs at exceeds the number
-     *     of task slots pinned by {@code taskmanager.numberOfTaskSlots} multiplied by {@code
-     *     minicluster.number-of-taskmanagers}
+     * @throws IllegalConfigurationException if a config provider marker is malformed or references
+     *     an undeclared provider, or the job's parallelism exceeds the aggregate slot capacity
      */
     public EmbeddedFlussLakeTiering(Map<String, String> tieringParams, Configuration flinkConfig) {
         super(tieringParams, flinkConfig);
@@ -244,23 +218,16 @@ public class EmbeddedFlussLakeTiering extends FlussLakeTiering {
     }
 
     /**
-     * Fails fast when the parallelism the embedded Flink runtime runs the tiering job at exceeds
-     * the number of task slots it offers.
-     *
-     * <p>The tiering job's source runs at the environment default parallelism ({@code
-     * parallelism.default}) while only the committer and the sink are pinned to parallelism 1, so
-     * the default parallelism must not exceed {@code taskmanager.numberOfTaskSlots} multiplied by
-     * {@code minicluster.number-of-taskmanagers}. The check applies only when {@code
-     * taskmanager.numberOfTaskSlots} pins the slot budget: with it unset, Flink sizes the slots per
-     * TaskManager by rounding up the job's maximum parallelism divided by the TaskManager count.
-     * With an unset {@code parallelism.default} and pinned slots, the embedded runtime runs the job
-     * at the machine's CPU core count (Flink's default local parallelism), so that core count is
-     * the effective parallelism to validate. A negative {@code parallelism.default} is passed
-     * through to Flink's own defaults and skips the check.
+     * Fails fast when the parallelism the job runs at exceeds the aggregate slot capacity, i.e.
+     * {@code taskmanager.numberOfTaskSlots} multiplied by {@code
+     * minicluster.number-of-taskmanagers}. The capacity only binds when {@code
+     * taskmanager.numberOfTaskSlots} is pinned, since Flink otherwise sizes the slots to the job's
+     * demand; an unset {@code parallelism.default} is validated at the machine's CPU core count,
+     * which is the parallelism Flink runs the source at.
      *
      * @param flinkConfig the configuration for the embedded Flink runtime
-     * @throws IllegalConfigurationException if the parallelism the job runs at exceeds the task
-     *     slots
+     * @throws IllegalConfigurationException if the parallelism the job runs at exceeds the
+     *     aggregate slot capacity
      */
     static void validateParallelismAgainstSlots(Configuration flinkConfig) {
         // The embedded runtime sizes its task slots to the job's maximum parallelism whenever
