@@ -1190,8 +1190,10 @@ use their cumulative values with `rate()` over a suitable interval.
 
 Shared cache counters exclude independent DB caches, write buffer accounting caches and the OS page
 cache. They remain zero when the shared block cache is disabled. Collection reads six native tickers
-per participating DB per scrape, without enumerating cache entries. Private collection cursors retain
-six longs per participating DB, in addition to map/object overhead. Failed reads preserve the last
+per distinct Statistics object per scrape, without enumerating cache entries. Buckets sharing the
+same table Statistics share one collection cursor, retained until the last participating DB closes.
+Private collection cursors retain six longs per Statistics object, in addition to reference counts
+and map/object overhead. Failed reads preserve the last
 cursor and accumulated total; the next successful read catches up. Failures are logged at debug level;
 a failed final collection can lose the remaining unsampled events.
 

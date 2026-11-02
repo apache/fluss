@@ -145,6 +145,34 @@ class RocksDBMetricsTest {
     }
 
     @Test
+    void testSharedStatisticsRemainRegisteredUntilLastDbCloses() {
+        CollectingRegistry registry = new CollectingRegistry();
+        RocksDBMetrics metrics =
+                new TabletServerMetricGroup(registry, "cluster", "rack", "host", 0)
+                        .getRocksDBMetrics();
+        try (TestingStatistics statistics = new TestingStatistics()) {
+            Runnable closeFirst = metrics.registerSharedCache(statistics);
+            statistics.hits = 10;
+            assertThat(registry.value(MetricNames.ROCKSDB_SHARED_BLOCK_CACHE_HITS_TOTAL, "data"))
+                    .isEqualTo(10);
+            Runnable closeSecond = metrics.registerSharedCache(statistics);
+            statistics.hits = 15;
+            assertThat(registry.value(MetricNames.ROCKSDB_SHARED_BLOCK_CACHE_HITS_TOTAL, "data"))
+                    .isEqualTo(15);
+            closeFirst.run();
+            closeFirst.run();
+            statistics.hits = 20;
+            assertThat(registry.value(MetricNames.ROCKSDB_SHARED_BLOCK_CACHE_HITS_TOTAL, "data"))
+                    .isEqualTo(20);
+            statistics.hits = 25;
+            closeSecond.run();
+            statistics.close();
+            assertThat(registry.value(MetricNames.ROCKSDB_SHARED_BLOCK_CACHE_HITS_TOTAL, "data"))
+                    .isEqualTo(25);
+        }
+    }
+
+    @Test
     void testNativeCacheCountersSurviveDbClose(@TempDir Path directory) throws Exception {
         CollectingRegistry registry = new CollectingRegistry();
         RocksDBMetrics metrics =

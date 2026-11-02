@@ -30,6 +30,7 @@ import org.slf4j.LoggerFactory;
 import java.util.IdentityHashMap;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /** TabletServer-scoped read execution and shared block cache counters. */
 public class RocksDBMetrics {
@@ -60,7 +61,7 @@ public class RocksDBMetrics {
             new ThreadSafeSimpleCounter[ReadOperation.values().length];
     private final Object cacheLock = new Object();
     // These are private collection cursors, never bucket metrics or exported labels.
-    private final Map<Statistics, long[]> cacheSamples = new IdentityHashMap<>();
+    private final Map<Statistics, CacheSample> cacheSamples = new IdentityHashMap<>();
     private final long[] cacheTotals = new long[CACHE_TICKERS.length];
 
     /** Registers exactly twelve counters under the server's existing identity. */
@@ -110,14 +111,18 @@ public class RocksDBMetrics {
      */
     public Runnable registerSharedCache(Statistics statistics) {
         synchronized (cacheLock) {
-            cacheSamples.put(statistics, new long[CACHE_TICKERS.length]);
+            cacheSamples.computeIfAbsent(statistics, ignored -> new CacheSample()).references++;
         }
+        AtomicBoolean registered = new AtomicBoolean(true);
         return () -> {
             synchronized (cacheLock) {
-                long[] previous = cacheSamples.get(statistics);
-                if (previous != null) {
+                if (!registered.getAndSet(false)) {
+                    return;
+                }
+                CacheSample sample = cacheSamples.get(statistics);
+                if (--sample.references == 0) {
                     for (int i = 0; i < CACHE_TICKERS.length; i++) {
-                        sampleCache(statistics, previous, i);
+                        sampleCache(statistics, sample.previous, i);
                     }
                     cacheSamples.remove(statistics);
                 }
@@ -128,7 +133,7 @@ public class RocksDBMetrics {
     private long sampleCache(int index) {
         synchronized (cacheLock) {
             cacheSamples.forEach(
-                    (statistics, previous) -> sampleCache(statistics, previous, index));
+                    (statistics, sample) -> sampleCache(statistics, sample.previous, index));
             return cacheTotals[index];
         }
     }
@@ -143,5 +148,10 @@ public class RocksDBMetrics {
             // Preserve the cursor so the next successful sample still includes this interval.
             LOG.debug("Failed to sample shared block cache ticker {}", CACHE_TICKERS[index], e);
         }
+    }
+
+    private static final class CacheSample {
+        private final long[] previous = new long[CACHE_TICKERS.length];
+        private int references;
     }
 }
