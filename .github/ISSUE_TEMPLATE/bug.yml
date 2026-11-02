@@ -24,6 +24,9 @@ body:
     attributes:
       value: |
         Thank you very much for your feedback!
+        * **Possible security vulnerabilities**: STOP here and contact `security@apache.org`.
+        * _**Please provide a title above with a short, concise summary**_ - don't leave it "empty".
+        * Do **NOT** share any sensitive information like password, security tokens, private URLs, etc.
   - type: checkboxes
     attributes:
       label: Search before asking
