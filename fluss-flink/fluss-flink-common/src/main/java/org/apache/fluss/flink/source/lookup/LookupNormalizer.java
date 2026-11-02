@@ -327,6 +327,32 @@ public class LookupNormalizer implements Serializable {
                     LookupType.LOOKUP);
         }
 
+        // The encoded primary key excludes partition keys. Prefix lookup also needs all
+        // bucket and partition keys in this request, otherwise a secondary index may still work.
+        int[] encodedPrimaryKeys = ArrayUtils.removeSet(primaryKeys, partitionKeys);
+        int[] prefixLookupKeys = null;
+        if (bucketKeys.length <= encodedPrimaryKeys.length
+                && ArrayUtils.isPrefix(encodedPrimaryKeys, bucketKeys)) {
+            Set<Integer> lookupKeySet = new HashSet<>();
+            for (int lookupKey : lookupKeyInfo.beforeProjection) {
+                lookupKeySet.add(lookupKey);
+            }
+            int prefixLength = bucketKeys.length;
+            while (prefixLength < encodedPrimaryKeys.length - 1
+                    && lookupKeySet.contains(encodedPrimaryKeys[prefixLength])) {
+                prefixLength++;
+            }
+            int[] prefixKeys = Arrays.copyOf(encodedPrimaryKeys, prefixLength);
+            prefixLookupKeys =
+                    ArrayUtils.intersection(
+                            primaryKeys, ArrayUtils.concat(prefixKeys, partitionKeys));
+        }
+        if (prefixLookupKeys != null
+                && ArrayUtils.isSubset(lookupKeyInfo.beforeProjection, prefixLookupKeys)) {
+            return tryCreatePrefixLookupNormalizer(
+                    lookupKeyInfo, prefixLookupKeys, schema, primaryKeyNames);
+        }
+
         // try secondary index lookup (supports remaining filters when lookup keys are superset)
         int[] matchedIndex =
                 findMatchingSecondaryIndex(lookupKeyInfo.beforeProjection, secondaryIndexes);
@@ -340,9 +366,9 @@ public class LookupNormalizer implements Serializable {
                     LookupType.SECONDARY_INDEX_LOOKUP);
         }
 
-        // try prefix lookup
+        // Preserve the existing diagnostics when no supported access path matches.
         return tryCreatePrefixLookupNormalizer(
-                lookupKeyInfo, primaryKeys, bucketKeys, partitionKeys, schema, primaryKeyNames);
+                lookupKeyInfo, prefixLookupKeys, schema, primaryKeyNames);
     }
 
     /**
@@ -399,33 +425,13 @@ public class LookupNormalizer implements Serializable {
 
     private static LookupNormalizer tryCreatePrefixLookupNormalizer(
             LookupKeyInfo lookupKeyInfo,
-            int[] primaryKeys,
-            int[] bucketKeys,
-            int[] partitionKeys,
+            @Nullable int[] prefixLookupKeys,
             RowType schema,
             List<String> primaryKeyNames) {
-        // the encoding primary key is the primary key without partition keys.
-        int[] encodedPrimaryKeys = ArrayUtils.removeSet(primaryKeys, partitionKeys);
-        // the table support prefix lookup iff the bucket key is a prefix of the encoding pk
-        boolean supportPrefixLookup = ArrayUtils.isPrefix(encodedPrimaryKeys, bucketKeys);
-        if (supportPrefixLookup) {
-            // Extend the routed bucket prefix with consecutive primary keys present in the join.
-            Set<Integer> lookupKeySet = new HashSet<>();
-            for (int lookupKey : lookupKeyInfo.beforeProjection) {
-                lookupKeySet.add(lookupKey);
-            }
-            int prefixLength = bucketKeys.length;
-            while (prefixLength < encodedPrimaryKeys.length - 1
-                    && lookupKeySet.contains(encodedPrimaryKeys[prefixLength])) {
-                prefixLength++;
-            }
-            int[] prefixKeys = Arrays.copyOf(encodedPrimaryKeys, prefixLength);
-            int[] expectedLookupKeys =
-                    ArrayUtils.intersection(
-                            primaryKeys, ArrayUtils.concat(prefixKeys, partitionKeys));
+        if (prefixLookupKeys != null) {
             return createLookupNormalizer(
                     lookupKeyInfo.names,
-                    fieldNames(expectedLookupKeys, schema),
+                    fieldNames(prefixLookupKeys, schema),
                     lookupKeyInfo.indexes,
                     schema,
                     LookupType.PREFIX_LOOKUP);
