@@ -102,8 +102,9 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
                         ? Collections.emptyList()
                         : prefixKeys.subList(bucketKeys.size(), prefixKeys.size());
         prefixKeys = prefixKeys.subList(0, prefixKeys.size() - clientFilterKeys.size());
-        this.clientFilterKeyGetters = fieldGetters(lookupRowType, clientFilterKeys);
-        this.clientFilterResultGetters = fieldGetters(tableInfo.getRowType(), clientFilterKeys);
+        this.clientFilterKeyGetters = createFieldGetters(lookupRowType, clientFilterKeys);
+        this.clientFilterResultGetters =
+                createFieldGetters(tableInfo.getRowType(), clientFilterKeys);
 
         // Use ofPrimaryKeyEncoder which follows primary key encoding rules
         this.prefixKeyEncoder =
@@ -212,7 +213,7 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
         // copied: the caller may reuse the row's buffers before the lookup completes
         Object[] expected = new Object[clientFilterKeyGetters.length];
         for (int i = 0; i < expected.length; i++) {
-            expected[i] = copy(clientFilterKeyGetters[i].getFieldOrNull(prefixKey));
+            expected[i] = copyIfMutable(clientFilterKeyGetters[i].getFieldOrNull(prefixKey));
         }
         return result.thenApply(
                 lookupResult -> {
@@ -283,7 +284,7 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
     }
 
     /** Copies the key values that can be backed by mutable memory: strings and binaries. */
-    private static Object copy(@Nullable Object value) {
+    private static Object copyIfMutable(@Nullable Object value) {
         if (value instanceof BinaryString) {
             return ((BinaryString) value).copy();
         } else if (value instanceof byte[]) {
@@ -292,7 +293,8 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
         return value;
     }
 
-    private static InternalRow.FieldGetter[] fieldGetters(RowType rowType, List<String> columns) {
+    private static InternalRow.FieldGetter[] createFieldGetters(
+            RowType rowType, List<String> columns) {
         InternalRow.FieldGetter[] getters = new InternalRow.FieldGetter[columns.size()];
         for (int i = 0; i < getters.length; i++) {
             int index = rowType.getFieldIndex(columns.get(i));
