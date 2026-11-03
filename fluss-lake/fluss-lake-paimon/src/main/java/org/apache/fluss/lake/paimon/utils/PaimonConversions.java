@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.lake.paimon.source.FlussRowAsPaimonRow;
@@ -256,6 +257,55 @@ public class PaimonConversions {
     // Paimon schema change conversion
     // ------------------------------------------------------------------------
 
+    /** Validates an added column against the Paimon options resulting from this ALTER. */
+    public static void validateAddedColumnAggregation(
+            TablePath tablePath,
+            FileStoreTable table,
+            TableChange.AddColumn addColumn,
+            List<SchemaChange> schemaChanges) {
+        Map<String, String> updatedOptions = new HashMap<>(table.options());
+        for (SchemaChange schemaChange : schemaChanges) {
+            if (schemaChange instanceof SchemaChange.SetOption) {
+                SchemaChange.SetOption setOption = (SchemaChange.SetOption) schemaChange;
+                updatedOptions.put(setOption.key(), setOption.value());
+            } else if (schemaChange instanceof SchemaChange.RemoveOption) {
+                updatedOptions.remove(((SchemaChange.RemoveOption) schemaChange).key());
+            }
+        }
+        CoreOptions options = new CoreOptions(updatedOptions);
+        if (table.primaryKeys().isEmpty()
+                || (options.mergeEngine() != CoreOptions.MergeEngine.PARTIAL_UPDATE
+                        && options.mergeEngine() != CoreOptions.MergeEngine.AGGREGATE)) {
+            return;
+        }
+        try {
+            validatePrimaryKeyAggregateFunction(
+                    tablePath, options, addColumn.getName(), addColumn.getDataType().isNullable());
+            validateAggregateRetraction(tablePath, table, options, addColumn.getName());
+        } catch (InvalidTableException e) {
+            throw new InvalidAlterTableException(
+                    String.format(
+                            "Invalid aggregation function for column '%s': %s",
+                            addColumn.getName(), e.getMessage()),
+                    e);
+        }
+        AggFunction paimonFunction =
+                derivePrimaryKeyAggregateFunction(table, options, addColumn.getName());
+        // Fluss uses LAST_VALUE_IGNORE_NULLS when no function is specified.
+        AggFunction flussFunction =
+                addColumn.getAggFunction().orElseGet(AggFunctions::LAST_VALUE_IGNORE_NULLS);
+        if (!flussFunction.equals(paimonFunction)) {
+            throw new InvalidAlterTableException(
+                    String.format(
+                            "Cannot add column '%s' with aggregation function %s: "
+                                    + "Paimon merge engine '%s' requires %s.",
+                            addColumn.getName(),
+                            flussFunction,
+                            options.mergeEngine(),
+                            paimonFunction));
+        }
+    }
+
     public static List<SchemaChange> toPaimonSchemaChanges(
             Table paimonTable, List<TableChange> tableChanges) {
         // A legacy table (created before FIP-27) still carries the three trailing system columns,
@@ -349,6 +399,7 @@ public class PaimonConversions {
             TablePath tablePath, FileStoreTable table) {
         validateTable(tablePath, table);
         Map<String, String> properties = deriveTableProperties(table);
+        CoreOptions options = new CoreOptions(table.options());
 
         List<DataField> dataFields = table.schema().fields();
         org.apache.fluss.metadata.Schema.Builder schemaBuilder =
@@ -360,7 +411,8 @@ public class PaimonConversions {
                 AggFunction aggFunction =
                         table.primaryKeys().isEmpty()
                                 ? null
-                                : derivePrimaryKeyAggregateFunction(table, dataField);
+                                : derivePrimaryKeyAggregateFunction(
+                                        table, options, dataField.name());
                 if (aggFunction == null) {
                     schemaBuilder.column(dataField.name(), dataType);
                 } else {
@@ -668,7 +720,8 @@ public class PaimonConversions {
         validatePrimaryKeyRecordExpiration(tablePath, table, options);
         for (DataField field : table.schema().fields()) {
             if (!table.primaryKeys().contains(field.name())) {
-                validatePrimaryKeyAggregateFunction(tablePath, options, field);
+                validatePrimaryKeyAggregateFunction(
+                        tablePath, options, field.name(), field.type().isNullable());
             }
         }
         validateMergeEngineCompatibility(tablePath, table, options);
@@ -719,47 +772,55 @@ public class PaimonConversions {
                             + "retraction settings, so other defaults may be incompatible with Fluss changelog.");
         }
         for (DataField field : table.schema().fields()) {
-            AggFunction function = derivePrimaryKeyAggregateFunction(table, field);
-            if (function == null) {
-                continue;
-            }
-            boolean ignoreRetract = options.fieldAggIgnoreRetract(field.name());
-            String key = FIELDS_PREFIX + "." + field.name() + "." + IGNORE_RETRACT;
-            switch (function.getType()) {
-                case PRODUCT:
+            validateAggregateRetraction(tablePath, table, options, field.name());
+        }
+    }
+
+    private static void validateAggregateRetraction(
+            TablePath tablePath, FileStoreTable table, CoreOptions options, String fieldName) {
+        if (options.mergeEngine() != CoreOptions.MergeEngine.AGGREGATE) {
+            return;
+        }
+        AggFunction function = derivePrimaryKeyAggregateFunction(table, options, fieldName);
+        if (function == null) {
+            return;
+        }
+        boolean ignoreRetract = options.fieldAggIgnoreRetract(fieldName);
+        String key = FIELDS_PREFIX + "." + fieldName + "." + IGNORE_RETRACT;
+        switch (function.getType()) {
+            case PRODUCT:
+                throw unsupportedPrimaryKeyDefinition(
+                        tablePath,
+                        FIELDS_PREFIX + "." + fieldName + "." + AGG_FUNCTION,
+                        "Fluss tiering retracts complete aggregate results. Paimon PRODUCT "
+                                + "retracts by division, so zero-valued results can cause "
+                                + "division by zero or NaN and cannot be safely supported.");
+            case SUM:
+                if (ignoreRetract) {
                     throw unsupportedPrimaryKeyDefinition(
                             tablePath,
-                            FIELDS_PREFIX + "." + field.name() + "." + AGG_FUNCTION,
-                            "Fluss tiering retracts complete aggregate results. Paimon PRODUCT "
-                                    + "retracts by division, so zero-valued results can cause "
-                                    + "division by zero or NaN and cannot be safely supported.");
-                case SUM:
-                    if (ignoreRetract) {
-                        throw unsupportedPrimaryKeyDefinition(
-                                tablePath,
-                                key,
-                                "Fluss tiering writes complete aggregate results. SUM "
-                                        + "requires 'ignore-retract=false' to retract the previous "
-                                        + "result before accumulating the next result.");
-                    }
-                    break;
-                case LAST_VALUE:
-                case LAST_VALUE_IGNORE_NULLS:
-                    break;
-                default:
-                    // Preserve Paimon's rejection of unsupported retractions and fail early.
-                    if (!ignoreRetract) {
-                        throw unsupportedPrimaryKeyDefinition(
-                                tablePath,
-                                key,
-                                "Fluss tiering writes UPDATE_BEFORE records. This Paimon aggregation "
-                                        + "function throws UnsupportedOperationException when merging "
-                                        + "these records. Field-level "
-                                        + "'ignore-retract=true' is required and cannot be combined "
-                                        + "with 'aggregation.remove-record-on-delete=true'.");
-                    }
-                    break;
-            }
+                            key,
+                            "Fluss tiering writes complete aggregate results. SUM "
+                                    + "requires 'ignore-retract=false' to retract the previous "
+                                    + "result before accumulating the next result.");
+                }
+                break;
+            case LAST_VALUE:
+            case LAST_VALUE_IGNORE_NULLS:
+                break;
+            default:
+                // Preserve Paimon's rejection of unsupported retractions and fail early.
+                if (!ignoreRetract) {
+                    throw unsupportedPrimaryKeyDefinition(
+                            tablePath,
+                            key,
+                            "Fluss tiering writes UPDATE_BEFORE records. This Paimon aggregation "
+                                    + "function throws UnsupportedOperationException when merging "
+                                    + "these records. Field-level "
+                                    + "'ignore-retract=true' is required and cannot be combined "
+                                    + "with 'aggregation.remove-record-on-delete=true'.");
+                }
+                break;
         }
     }
 
@@ -853,8 +914,7 @@ public class PaimonConversions {
     }
 
     private static void validatePrimaryKeyAggregateFunction(
-            TablePath tablePath, CoreOptions options, DataField field) {
-        String fieldName = field.name();
+            TablePath tablePath, CoreOptions options, String fieldName, boolean nullable) {
         String function = getPaimonAggregateFunction(options, fieldName);
         String fieldPrefix = FIELDS_PREFIX + "." + fieldName + ".";
         String key = fieldPrefix + AGG_FUNCTION;
@@ -873,7 +933,7 @@ public class PaimonConversions {
                     key + "=" + function,
                     "No supported Fluss aggregation mapping preserves this Paimon function's semantics.");
         }
-        if (FieldFirstValueAggFactory.NAME.equals(function) && field.type().isNullable()) {
+        if (FieldFirstValueAggFactory.NAME.equals(function) && nullable) {
             throw unsupportedPrimaryKeyDefinition(
                     tablePath,
                     key,
@@ -941,18 +1001,17 @@ public class PaimonConversions {
 
     @Nullable
     private static AggFunction derivePrimaryKeyAggregateFunction(
-            FileStoreTable table, DataField field) {
-        if (table.primaryKeys().contains(field.name())) {
+            FileStoreTable table, CoreOptions options, String fieldName) {
+        if (table.primaryKeys().contains(fieldName)) {
             return null;
         }
-        CoreOptions options = new CoreOptions(table.options());
         if (options.mergeEngine() == CoreOptions.MergeEngine.PARTIAL_UPDATE) {
             return AggFunctions.LAST_VALUE_IGNORE_NULLS();
         }
         if (options.mergeEngine() != CoreOptions.MergeEngine.AGGREGATE) {
             return null;
         }
-        String function = getPaimonAggregateFunction(options, field.name());
+        String function = getPaimonAggregateFunction(options, fieldName);
         return function == null
                 ? AggFunctions.LAST_VALUE_IGNORE_NULLS()
                 : toFlussAggregateFunction(function);

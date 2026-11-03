@@ -23,6 +23,8 @@ import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.lake.lakestorage.TestingLakeCatalogContext;
 import org.apache.fluss.lake.paimon.utils.PaimonTestUtils.CompactHelper;
+import org.apache.fluss.metadata.AggFunctionType;
+import org.apache.fluss.metadata.AggFunctions;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -50,6 +52,7 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.File;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
@@ -57,6 +60,7 @@ import java.util.Optional;
 
 import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_ENABLED;
 import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_FORMAT;
+import static org.apache.fluss.config.ConfigOptions.TABLE_MERGE_ENGINE;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.LAKESTREAM_ENABLED_OPTION_KEY;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.PARTITION_GENERATE_LEGACY_NAME_OPTION_KEY;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
@@ -415,6 +419,160 @@ class PaimonLakeCatalogTest {
         Table table = flussPaimonCatalog.getPaimonCatalog().getTable(identifier);
         assertThat(table.rowType().getFieldNames())
                 .containsSequence("id", "name", "amount", "address", "new_col");
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+        "partial-update, , , LAST_VALUE, , false",
+        "partial-update, , , LAST_VALUE_IGNORE_NULLS, , true",
+        "partial-update, , , , , true",
+        "aggregation, , , LAST_VALUE, , false",
+        "aggregation, , , , , true",
+        "aggregation, last_value, , LAST_VALUE, , true",
+        "aggregation, last_value, , , , false",
+        "aggregation, last_value, last_non_null_value, LAST_VALUE, , false",
+        "aggregation, last_value, last_non_null_value, , , true",
+        "aggregation, last_non_null_value, last_value, LAST_VALUE, , true",
+        "aggregation, , sum, SUM, , true",
+        "aggregation, , sum, LAST_VALUE_IGNORE_NULLS, , false",
+        "aggregation, , product, PRODUCT, , false",
+        "aggregation, , first_value, FIRST_VALUE, , false",
+        "deduplicate, , , LAST_VALUE, , true",
+        "deduplicate, , , SUM, , true",
+        "aggregation, , sum, SUM, set-function, true",
+        "aggregation, , sum, LAST_VALUE_IGNORE_NULLS, set-function, false",
+        "aggregation, , last_value, , reset-function, true",
+        "aggregation, , last_value, LAST_VALUE, reset-function, false",
+        "aggregation, last_value, last_non_null_value, LAST_VALUE, reset-function, true",
+        "aggregation, , sum, SUM, set-ignore-retract, false",
+        "aggregation, , sum, SUM, reset-ignore-retract, true"
+    })
+    void testAlterTableAddColumnAggregation(
+            String mergeEngine,
+            String defaultFunction,
+            String fieldFunction,
+            String flussFunction,
+            String optionChange,
+            boolean compatible)
+            throws Exception {
+        TablePath tablePath = TablePath.of("test_add_column_aggregation", "t");
+        org.apache.paimon.schema.Schema.Builder builder =
+                org.apache.paimon.schema.Schema.newBuilder()
+                        .column("id", org.apache.paimon.types.DataTypes.BIGINT().notNull())
+                        .column("amount", org.apache.paimon.types.DataTypes.INT())
+                        .primaryKey("id")
+                        .option(CoreOptions.BUCKET.key(), "1")
+                        .option(CoreOptions.BUCKET_KEY.key(), "id")
+                        .option(CoreOptions.MERGE_ENGINE.key(), mergeEngine)
+                        .option(CoreOptions.IGNORE_DELETE.key(), "true");
+        if (defaultFunction != null) {
+            builder.option(CoreOptions.FIELDS_DEFAULT_AGG_FUNC.key(), defaultFunction);
+        }
+        createPaimonTable(tablePath, builder.build());
+        TableDescriptor current =
+                TableDescriptor.builder(flussPaimonCatalog.getTableDescriptor(tablePath))
+                        .property(TABLE_MERGE_ENGINE.key(), "aggregation")
+                        .build();
+        List<TableChange> changes =
+                new ArrayList<>(
+                        Collections.singletonList(
+                                TableChange.addColumn(
+                                        "new_col",
+                                        DataTypes.INT(),
+                                        null,
+                                        TableChange.ColumnPosition.last(),
+                                        flussFunction == null
+                                                ? null
+                                                : AggFunctions.of(
+                                                        AggFunctionType.fromString(
+                                                                flussFunction)))));
+        TableDescriptor expected =
+                TableDescriptor.builder(current)
+                        .schema(SchemaUpdate.applySchemaChanges(current.getSchema(), changes))
+                        .build();
+        TestingLakeCatalogContext context = new TestingLakeCatalogContext(current, expected);
+        boolean paimonColumnExists = fieldFunction != null && !"set-function".equals(optionChange);
+        if (paimonColumnExists) {
+            // Paimon requires a column to exist before setting its field-level function.
+            flussPaimonCatalog
+                    .getPaimonCatalog()
+                    .alterTable(
+                            toPaimon(tablePath),
+                            Arrays.asList(
+                                    SchemaChange.addColumn(
+                                            "new_col", org.apache.paimon.types.DataTypes.INT()),
+                                    SchemaChange.setOption(
+                                            "fields.new_col.aggregate-function", fieldFunction)),
+                            false);
+        }
+        if (optionChange != null) {
+            String functionKey = "paimon.fields.new_col.aggregate-function";
+            String retractKey = "paimon.fields.new_col.ignore-retract";
+            switch (optionChange) {
+                case "set-function":
+                    changes.add(TableChange.set(functionKey, fieldFunction));
+                    break;
+                case "reset-function":
+                    changes.add(TableChange.reset(functionKey));
+                    break;
+                case "set-ignore-retract":
+                    changes.add(TableChange.set(retractKey, "true"));
+                    break;
+                case "reset-ignore-retract":
+                    flussPaimonCatalog
+                            .getPaimonCatalog()
+                            .alterTable(
+                                    toPaimon(tablePath),
+                                    Collections.singletonList(
+                                            SchemaChange.setOption(
+                                                    "fields.new_col.ignore-retract", "true")),
+                                    false);
+                    changes.add(TableChange.reset(retractKey));
+                    break;
+                default:
+                    throw new IllegalArgumentException("Unknown option change: " + optionChange);
+            }
+        }
+        if (compatible) {
+            flussPaimonCatalog.alterTable(tablePath, changes, context);
+            assertThat(
+                            flussPaimonCatalog
+                                    .getPaimonCatalog()
+                                    .getTable(toPaimon(tablePath))
+                                    .rowType()
+                                    .getFieldNames())
+                    .containsExactly("id", "amount", "new_col");
+            flussPaimonCatalog.alterTable(tablePath, changes, context);
+        } else {
+            assertThatThrownBy(() -> flussPaimonCatalog.alterTable(tablePath, changes, context))
+                    .isInstanceOf(InvalidAlterTableException.class)
+                    .hasMessageContaining("new_col")
+                    .hasMessageContaining("aggregation function");
+            if (!paimonColumnExists) {
+                assertThat(
+                                flussPaimonCatalog
+                                        .getPaimonCatalog()
+                                        .getTable(toPaimon(tablePath))
+                                        .rowType()
+                                        .getFieldNames())
+                        .containsExactly("id", "amount");
+
+                // A retry must still validate semantics when Paimon already contains the column.
+                flussPaimonCatalog
+                        .getPaimonCatalog()
+                        .alterTable(
+                                toPaimon(tablePath),
+                                Collections.singletonList(
+                                        SchemaChange.addColumn(
+                                                "new_col",
+                                                org.apache.paimon.types.DataTypes.INT())),
+                                false);
+            }
+            assertThatThrownBy(() -> flussPaimonCatalog.alterTable(tablePath, changes, context))
+                    .isInstanceOf(InvalidAlterTableException.class)
+                    .hasMessageContaining("new_col")
+                    .hasMessageContaining("aggregation function");
+        }
     }
 
     @Test
