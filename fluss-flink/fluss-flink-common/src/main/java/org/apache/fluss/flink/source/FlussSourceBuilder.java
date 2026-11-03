@@ -27,6 +27,7 @@ import org.apache.fluss.client.initializer.SnapshotOffsetsInitializer;
 import org.apache.fluss.client.initializer.TimestampOffsetsInitializer;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.KvBatchStrategy;
 import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.flink.source.deserializer.FlussDeserializationSchema;
 import org.apache.fluss.flink.utils.LakeSourceUtils;
@@ -458,7 +459,12 @@ public class FlussSourceBuilder<OUT> {
         }
 
         LakeSource<LakeSplit> lakeSource = null;
-        if (lakeEnabled && fullStartup) {
+        boolean serverScan =
+                isBatch
+                        && hasPrimaryKey
+                        && flussConf.get(ConfigOptions.CLIENT_SCANNER_KV_BATCH_STRATEGY)
+                                == KvBatchStrategy.SERVER_SCAN;
+        if (lakeEnabled && fullStartup && !serverScan) {
             lakeSource =
                     LakeSourceUtils.createLakeSource(tablePath, tableInfo.getProperties().toMap());
             if (lakeSource != null) {

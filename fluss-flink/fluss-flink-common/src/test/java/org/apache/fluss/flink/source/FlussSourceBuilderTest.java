@@ -22,11 +22,16 @@ import org.apache.fluss.client.initializer.NoStoppingOffsetsInitializer;
 import org.apache.fluss.client.initializer.OffsetsInitializer;
 import org.apache.fluss.client.initializer.TimestampOffsetsInitializer;
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.KvBatchStrategy;
 import org.apache.fluss.flink.source.deserializer.FlussDeserializationSchema;
 import org.apache.fluss.flink.utils.FlinkTestBase;
+import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.types.RowType;
 
 import org.apache.flink.api.common.typeinfo.TypeInformation;
@@ -34,6 +39,9 @@ import org.apache.flink.api.connector.source.Boundedness;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.function.Executable;
+
+import java.util.HashMap;
+import java.util.Map;
 
 import static org.assertj.core.api.AssertionsForClassTypes.assertThat;
 import static org.assertj.core.api.AssertionsForClassTypes.assertThatThrownBy;
@@ -122,6 +130,35 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
         assertThat(source.isStreaming()).isFalse();
         assertThat(source.getStoppingOffsetsInitializer())
                 .isInstanceOf(LatestOffsetsInitializer.class);
+    }
+
+    @Test
+    public void testServerScanDoesNotRequireLakePlugin() throws Exception {
+        ZooKeeperClient zkClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
+        TableRegistration registration = zkClient.getTable(DEFAULT_TABLE_PATH).get();
+        Map<String, String> properties = new HashMap<>(registration.properties);
+        properties.put(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true");
+        properties.put(ConfigOptions.TABLE_DATALAKE_FORMAT.key(), DataLakeFormat.PAIMON.toString());
+        zkClient.updateTable(
+                DEFAULT_TABLE_PATH,
+                registration.newProperties(properties, registration.customProperties));
+
+        FlussSource<TestRecord> source =
+                FlussSource.<TestRecord>builder()
+                        .setBootstrapServers(bootstrapServers)
+                        .setDatabase(DEFAULT_DB)
+                        .setTable(DEFAULT_TABLE_PATH.getTableName())
+                        .setBatch()
+                        .setFlussConfig(
+                                new Configuration()
+                                        .set(
+                                                ConfigOptions.CLIENT_SCANNER_KV_BATCH_STRATEGY,
+                                                KvBatchStrategy.SERVER_SCAN))
+                        .setDeserializationSchema(new TestDeserializationSchema())
+                        .build();
+
+        assertThat(source.getBoundedness()).isEqualTo(Boundedness.BOUNDED);
+        assertThat(source.isStreaming()).isFalse();
     }
 
     @Test

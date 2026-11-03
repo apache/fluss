@@ -24,8 +24,8 @@ import javax.annotation.Nullable;
 /**
  * A bounded split that reads the full primary-key state of a bucket via the server-side kv scan.
  * Emitted by the enumerator for every bucket of a primary-key table when the source is running in
- * bounded mode under {@code client.scanner.kv.batch-strategy = server-scan}, and the table has no
- * lake snapshot to union-read from.
+ * bounded mode under {@code client.scanner.kv.batch-strategy = server-scan}, including when a lake
+ * snapshot exists. Partitions that exist only in the lake are not read.
  *
  * <p>This split has no resumable position: on Flink task restart the bucket is rescanned from
  * scratch, so rows already emitted are emitted again. The server pins one RocksDB snapshot per

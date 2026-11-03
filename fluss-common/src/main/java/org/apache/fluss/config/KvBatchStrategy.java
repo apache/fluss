@@ -31,7 +31,8 @@ public enum KvBatchStrategy {
     /**
      * Scan the live kv state on the tablet server. Avoids downloading snapshot files and replaying
      * the changelog, but the scan is not resumable and each bucket is read at the point in time its
-     * scanner was opened.
+     * scanner was opened. Bypasses lake union reads even when a lake snapshot exists; partitions
+     * that exist only in the lake are not read.
      */
     SERVER_SCAN("server-scan");
 
