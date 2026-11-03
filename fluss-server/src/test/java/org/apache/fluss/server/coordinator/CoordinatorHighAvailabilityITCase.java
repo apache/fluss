@@ -40,6 +40,7 @@ import org.apache.fluss.rpc.messages.PbServerNode;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
 import org.apache.fluss.server.tablet.TabletServer;
+import org.apache.fluss.server.tools.ClusterHealthReadinessCheck;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
@@ -58,8 +59,12 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.api.io.TempDir;
 
+import javax.annotation.Nullable;
+
+import java.net.ServerSocket;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
@@ -240,6 +245,79 @@ class CoordinatorHighAvailabilityITCase {
                                 == 0,
                 Duration.ofSeconds(30),
                 "Leader still reports the stopped standby coordinator");
+    }
+
+    @Test
+    void testReadinessCheckForLeaderAndStandby() throws Exception {
+        coordinatorServer1 = new CoordinatorServer(createConfiguration());
+        coordinatorServer2 = new CoordinatorServer(createConfiguration());
+        coordinatorServer1.start();
+        coordinatorServer2.start();
+        waitUntilCoordinatorServerElected();
+
+        String leaderId = zookeeperClient.getCoordinatorLeaderAddress().get().getId();
+        // Both coordinators advertise the same CLIENT address in this test, so the probe uses
+        // the FLUSS listener, where each coordinator has its own address.
+        String leader = internalAddress(findServerById(leaderId));
+        String standby = internalAddress(findServerByNotId(leaderId));
+        String coordinators = leader + "," + standby;
+
+        // the leader is Ready on its own cluster-health answer
+        assertThat(runCoordinatorReadinessCheck(leader, coordinators, null))
+                .isEqualTo(ClusterHealthReadinessCheck.EXIT_READY);
+
+        // the standby rejects cluster health and is Ready once the leader lists it
+        waitUntil(
+                () ->
+                        runCoordinatorReadinessCheck(standby, coordinators, standby)
+                                == ClusterHealthReadinessCheck.EXIT_READY,
+                Duration.ofSeconds(30),
+                "Standby coordinator did not become ready");
+
+        // a standby the leader does not list is not Ready
+        assertThat(runCoordinatorReadinessCheck(standby, coordinators, "unknown:1"))
+                .isEqualTo(ClusterHealthReadinessCheck.EXIT_NOT_READY);
+        // without a reachable leader the standby is not Ready
+        assertThat(runCoordinatorReadinessCheck(standby, standby, standby))
+                .isEqualTo(ClusterHealthReadinessCheck.EXIT_NOT_READY);
+
+        // a coordinator that accepts connections but never answers, listed before the leader,
+        // does not keep the standby NotReady
+        try (ServerSocket hung = new ServerSocket(0)) {
+            String withHung = "127.0.0.1:" + hung.getLocalPort() + "," + coordinators;
+            assertThat(runCoordinatorReadinessCheck(standby, withHung, standby))
+                    .isEqualTo(ClusterHealthReadinessCheck.EXIT_READY);
+        }
+    }
+
+    private static String internalAddress(CoordinatorServer server) {
+        Endpoint endpoint =
+                server.getRpcServer().getBindEndpoints().stream()
+                        .filter(e -> e.getListenerName().equals("FLUSS"))
+                        .findFirst()
+                        .get();
+        return endpoint.getHost() + ":" + endpoint.getPort();
+    }
+
+    private static int runCoordinatorReadinessCheck(
+            String local, String coordinators, @Nullable String advertised) {
+        int idx = local.lastIndexOf(':');
+        List<String> args =
+                new ArrayList<>(
+                        Arrays.asList(
+                                "--role",
+                                "coordinator",
+                                "--host",
+                                local.substring(0, idx),
+                                "--port",
+                                local.substring(idx + 1),
+                                "--coordinators",
+                                coordinators));
+        if (advertised != null) {
+            args.add("--advertisedAddress");
+            args.add(advertised);
+        }
+        return ClusterHealthReadinessCheck.run(args.toArray(new String[0]));
     }
 
     @Test
