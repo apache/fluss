@@ -242,9 +242,11 @@ final class ServerConnection {
                 }
             }
             // A cancelled future cannot take ownership of a lazily parsed response.
-            ByteBuf parsedBuffer = response.getParsedByteBuf();
-            if (parsedBuffer != null) {
-                parsedBuffer.release();
+            if (response.isLazilyParsed()) {
+                ByteBuf parsedBuffer = response.getParsedByteBuf();
+                if (parsedBuffer != null) {
+                    parsedBuffer.release();
+                }
             }
         }
 

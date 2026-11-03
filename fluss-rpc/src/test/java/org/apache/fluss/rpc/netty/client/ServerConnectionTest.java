@@ -42,6 +42,7 @@ import org.apache.fluss.rpc.messages.LimitScanRequest;
 import org.apache.fluss.rpc.messages.LimitScanResponse;
 import org.apache.fluss.rpc.messages.ListDatabasesRequest;
 import org.apache.fluss.rpc.messages.LookupRequest;
+import org.apache.fluss.rpc.messages.LookupResponse;
 import org.apache.fluss.rpc.messages.PbApiVersion;
 import org.apache.fluss.rpc.messages.PbLookupReqForBucket;
 import org.apache.fluss.rpc.messages.PbTablePath;
@@ -176,12 +177,32 @@ public class ServerConnectionTest {
 
     @Test
     void testCancelledRequestReleasesLateLazyResponse() throws Exception {
+        assertCancelledResponseReleasedOnce(
+                ApiKeys.LIMIT_SCAN,
+                new LimitScanRequest().setTableId(1).setBucketId(0).setLimit(1),
+                new LimitScanResponse().setRecords(new byte[64]));
+    }
+
+    @Test
+    void testCancelledRequestDoesNotReleaseEagerResponseTwice() throws Exception {
+        LookupRequest request = new LookupRequest().setTableId(1);
+        request.addBucketsReq().setBucketId(0);
+        assertCancelledResponseReleasedOnce(ApiKeys.LOOKUP, request, new LookupResponse());
+    }
+
+    private void assertCancelledResponseReleasedOnce(
+            ApiKeys apiKey, ApiMessage request, ApiMessage lateResponse) throws Exception {
         nettyServer.close();
         buildNettyServer(
                 new TestingTabletGatewayService() {
                     @Override
                     public CompletableFuture<LimitScanResponse> limitScan(
                             LimitScanRequest request) {
+                        return new CompletableFuture<>();
+                    }
+
+                    @Override
+                    public CompletableFuture<LookupResponse> lookup(LookupRequest request) {
                         return new CompletableFuture<>();
                     }
                 });
@@ -202,7 +223,7 @@ public class ServerConnectionTest {
                                                     ChannelPromise promise)
                                                     throws Exception {
                                                 ByteBuf encoded = (ByteBuf) message;
-                                                if (encoded.getShort(4) == ApiKeys.LIMIT_SCAN.id) {
+                                                if (encoded.getShort(4) == apiKey.id) {
                                                     requestId.complete(encoded.getInt(8));
                                                 }
                                                 super.write(context, message, promise);
@@ -220,17 +241,15 @@ public class ServerConnectionTest {
                         (con, error) -> {});
         ByteBuf buffer = Unpooled.buffer();
         try {
-            CompletableFuture<ApiMessage> response =
-                    connection.send(
-                            ApiKeys.LIMIT_SCAN,
-                            new LimitScanRequest().setTableId(1).setBucketId(0).setLimit(1));
+            CompletableFuture<ApiMessage> response = connection.send(apiKey, request);
             int id = requestId.get(10, TimeUnit.SECONDS);
             response.cancel(false);
-            LimitScanResponse lateResponse = new LimitScanResponse().setRecords(new byte[64]);
             buffer.writeInt(MessageCodec.RESPONSE_HEADER_LENGTH + lateResponse.totalSize());
             buffer.writeByte(ResponseType.SUCCESS_RESPONSE.id);
             buffer.writeInt(id);
             lateResponse.writeTo(buffer);
+            // Retain an independent owner to detect a second release without relying on logging.
+            buffer.retain();
             Channel channel = socket.get(10, TimeUnit.SECONDS);
             channel.eventLoop()
                     .submit(
@@ -241,11 +260,12 @@ public class ServerConnectionTest {
                                 return null;
                             })
                     .get(10, TimeUnit.SECONDS);
-            assertThat(buffer.refCnt()).isZero();
+            assertThat(buffer.refCnt()).isOne();
+            assertThat(connection.isReady()).isTrue();
         } finally {
             connection.close().get();
             if (buffer.refCnt() > 0) {
-                buffer.release();
+                buffer.release(buffer.refCnt());
             }
         }
     }
