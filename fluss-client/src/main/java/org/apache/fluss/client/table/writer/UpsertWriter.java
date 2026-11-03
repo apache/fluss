@@ -39,14 +39,16 @@ public interface UpsertWriter extends TableWriter {
     CompletableFuture<UpsertResult> upsert(InternalRow record);
 
     /**
-     * Retracts a previous aggregation contribution for the given row. The row must contain the
-     * primary key fields and the old aggregation values to retract.
+     * Applies field-level aggregation retraction to the supplied input contribution. The row must
+     * contain the primary key fields and the aggregation values to retract.
      *
      * <p>Each target field applies its aggregate function's retract rule. SUM subtracts the input
      * (or negates it when the accumulator is null). LAST_VALUE clears the field; it does not
      * restore earlier values. Retraction also applies to keys without a current row. Zero and
      * all-null aggregate fields do not delete the record. Primary keys and non-target fields are
-     * preserved. Use {@link #delete(InternalRow)} to request deletion instead.
+     * preserved. Use {@link #delete(InternalRow)} to request deletion instead. Fields configured
+     * with {@code fields.<column>.ignore-retract=true} keep their accumulators. The table's
+     * changelog DELETE policy and Flink's sink opt-in do not change this explicit API.
      *
      * <p>Each call is processed in order without inferring an update pair from adjacency or client
      * batching. Atomicity is not provided across separate requests.

@@ -2207,6 +2207,72 @@ class FlussTableITCase extends ClientToServerITCaseBase {
     }
 
     @Test
+    void testRetractHonorsPersistedFieldIgnoreRule() throws Exception {
+        TablePath tablePath = TablePath.of("test_db_1", "test_retract_ignore_field");
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("total", DataTypes.BIGINT(), AggFunctions.SUM())
+                        .column("maximum", DataTypes.INT(), AggFunctions.MAX())
+                        .primaryKey("id")
+                        .build();
+        createTable(
+                tablePath,
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .property("table.merge-engine", "aggregation")
+                        .property("fields.maximum.ignore-retract", "true")
+                        .build(),
+                false);
+        try (Table table = conn.getTable(tablePath)) {
+            UpsertWriter writer = table.newUpsert().createWriter();
+            writer.upsert(row(1, 100L, 9)).get();
+            writer.retract(row(1, 30L, 7)).get();
+            InternalRow result = lookupRow(table.newLookup().createLookuper(), row(1));
+            assertThat(result.getLong(1)).isEqualTo(70L);
+            assertThat(result.getInt(2)).isEqualTo(9);
+        }
+    }
+
+    @Test
+    void testPartialRetractAndWholeRowDeleteShareWriterOrdering() throws Exception {
+        TablePath tablePath = TablePath.of("test_db_1", "test_partial_retract_delete");
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("total", DataTypes.BIGINT(), AggFunctions.SUM())
+                        .column("other", DataTypes.BIGINT())
+                        .primaryKey("id")
+                        .build();
+        createTable(
+                tablePath,
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .property("table.merge-engine", "aggregation")
+                        .property("table.delete.behavior", "allow")
+                        .property("table.aggregation.remove-record-on-delete", "true")
+                        .build(),
+                false);
+        Configuration batchingConf = new Configuration(clientConf);
+        batchingConf.set(ConfigOptions.CLIENT_WRITER_BATCH_TIMEOUT, Duration.ofMinutes(1));
+        try (Connection batchingConnection = ConnectionFactory.createConnection(batchingConf);
+                Table table = batchingConnection.getTable(tablePath)) {
+            UpsertWriter full = table.newUpsert().createWriter();
+            UpsertWriter partial = table.newUpsert().partialUpdate("id", "total").createWriter();
+            CompletableFuture<?> first = full.upsert(row(1, 10L, 7L));
+            CompletableFuture<?> retract = partial.retract(row(1, 3L, 999L));
+            CompletableFuture<?> delete = full.delete(row(1, null, null));
+            CompletableFuture<?> last = partial.upsert(row(1, 4L, null));
+            partial.flush();
+            CompletableFuture.allOf(first, retract, delete, last).get();
+            InternalRow result = lookupRow(table.newLookup().createLookuper(), row(1));
+            assertThat(result).isNotNull();
+            assertThat(result.getLong(1)).isEqualTo(4L);
+            assertThat(result.isNullAt(2)).isTrue();
+        }
+    }
+
+    @Test
     void testRetractRequiresIdempotentWriter() throws Exception {
         TablePath tablePath = TablePath.of("test_db_1", "test_retract_idempotence_table");
         createTable(tablePath, aggSumTableDescriptor(), false);

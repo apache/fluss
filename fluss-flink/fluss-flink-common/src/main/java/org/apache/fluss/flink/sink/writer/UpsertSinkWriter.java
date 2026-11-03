@@ -45,6 +45,8 @@ import java.util.concurrent.CompletableFuture;
 public class UpsertSinkWriter<InputT> extends FlinkSinkWriter<InputT> {
 
     @VisibleForTesting transient UpsertWriter upsertWriter;
+    @Nullable private transient UpsertWriter deleteWriter;
+    private final boolean removeRecordOnDelete;
 
     /**
      * Optional context for reporting offsets to the upstream UndoRecoveryOperator.
@@ -61,6 +63,26 @@ public class UpsertSinkWriter<InputT> extends FlinkSinkWriter<InputT> {
      * either for the full schema or for a retract-safe partial-update column subset.
      */
     private final boolean schemaSupportsRetract;
+
+    /** Creates a writer with the existing upsert and delete behavior. */
+    public UpsertSinkWriter(
+            TablePath tablePath,
+            Configuration flussConfig,
+            RowType tableRowType,
+            @Nullable int[] targetColumnIndexes,
+            MailboxExecutor mailboxExecutor,
+            FlussSerializationSchema<InputT> flussSerializationSchema,
+            @Nullable ProducerOffsetReporter offsetReporter) {
+        this(
+                tablePath,
+                flussConfig,
+                tableRowType,
+                targetColumnIndexes,
+                mailboxExecutor,
+                flussSerializationSchema,
+                offsetReporter,
+                false);
+    }
 
     /**
      * Creates a new UpsertSinkWriter with ProducerOffsetReporter for UndoRecoveryOperator
@@ -85,6 +107,29 @@ public class UpsertSinkWriter<InputT> extends FlinkSinkWriter<InputT> {
             FlussSerializationSchema<InputT> flussSerializationSchema,
             @Nullable ProducerOffsetReporter offsetReporter,
             boolean schemaSupportsRetract) {
+        this(
+                tablePath,
+                flussConfig,
+                tableRowType,
+                targetColumnIndexes,
+                mailboxExecutor,
+                flussSerializationSchema,
+                offsetReporter,
+                schemaSupportsRetract,
+                false);
+    }
+
+    /** Creates a writer with an explicit whole-row policy for changelog DELETE. */
+    public UpsertSinkWriter(
+            TablePath tablePath,
+            Configuration flussConfig,
+            RowType tableRowType,
+            @Nullable int[] targetColumnIndexes,
+            MailboxExecutor mailboxExecutor,
+            FlussSerializationSchema<InputT> flussSerializationSchema,
+            @Nullable ProducerOffsetReporter offsetReporter,
+            boolean schemaSupportsRetract,
+            boolean removeRecordOnDelete) {
         super(
                 tablePath,
                 flussConfig,
@@ -94,6 +139,7 @@ public class UpsertSinkWriter<InputT> extends FlinkSinkWriter<InputT> {
                 flussSerializationSchema);
         this.offsetReporter = offsetReporter;
         this.schemaSupportsRetract = schemaSupportsRetract;
+        this.removeRecordOnDelete = removeRecordOnDelete;
     }
 
     @Override
@@ -104,6 +150,11 @@ public class UpsertSinkWriter<InputT> extends FlinkSinkWriter<InputT> {
             upsert = upsert.partialUpdate(targetColumnIndexes);
         }
         upsertWriter = upsert.createWriter();
+        // Both writers share the connection's WriterClient and its per-bucket sequence. A full
+        // delete must not inherit partial-update target columns from the aggregate writer.
+        if (removeRecordOnDelete && targetColumnIndexes != null) {
+            deleteWriter = table.newUpsert().createWriter();
+        }
         LOG.info("Finished opening Fluss {}.", this.getClass().getSimpleName());
     }
 
@@ -133,7 +184,8 @@ public class UpsertSinkWriter<InputT> extends FlinkSinkWriter<InputT> {
             }
             return future;
         } else if (opType == OperationType.DELETE) {
-            CompletableFuture<DeleteResult> future = upsertWriter.delete(internalRow);
+            CompletableFuture<DeleteResult> future =
+                    (deleteWriter == null ? upsertWriter : deleteWriter).delete(internalRow);
             if (offsetReporter != null) {
                 return future.thenAccept(
                         result ->

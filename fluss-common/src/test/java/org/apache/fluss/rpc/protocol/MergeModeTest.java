@@ -20,7 +20,6 @@ package org.apache.fluss.rpc.protocol;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link MergeMode}. */
 class MergeModeTest {
@@ -34,13 +33,9 @@ class MergeModeTest {
     }
 
     @Test
-    void testFromValueUnknownThrows() {
-        assertThatThrownBy(() -> MergeMode.fromValue(99))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("Unknown MergeMode value: 99");
-        assertThatThrownBy(() -> MergeMode.fromValue(-1))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("Unknown MergeMode value: -1");
+    void testFromValueUnknownReturnsDefault() {
+        assertThat(MergeMode.fromValue(99)).isEqualTo(MergeMode.DEFAULT);
+        assertThat(MergeMode.fromValue(-1)).isEqualTo(MergeMode.DEFAULT);
     }
 
     @Test

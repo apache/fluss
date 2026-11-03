@@ -55,6 +55,49 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class TableDescriptorValidationTest {
 
     @Test
+    void testAggregationRetractProperties() {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("value", DataTypes.INT(), AggFunctions.MAX())
+                        .primaryKey("id")
+                        .build();
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .distributedBy(1)
+                        .property("table.merge-engine", "aggregation")
+                        .property("fields.value.ignore-retract", "true")
+                        .build()
+                        .withReplicationFactor(3);
+        TableDescriptorValidation.validateTableDescriptor(descriptor, 100, null);
+
+        assertThatThrownBy(
+                        () ->
+                                TableDescriptorValidation.validateTableDescriptor(
+                                        TableDescriptor.builder(descriptor)
+                                                .property(
+                                                        "table.aggregation.remove-record-on-delete",
+                                                        "true")
+                                                .build(),
+                                        100,
+                                        null))
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining("conflicting");
+
+        assertThatThrownBy(
+                        () ->
+                                TableDescriptorValidation.validateTableDescriptor(
+                                        TableDescriptor.builder(descriptor)
+                                                .property("fields.missing.ignore-retract", "true")
+                                                .build(),
+                                        100,
+                                        null))
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining("unknown column");
+    }
+
+    @Test
     void testSkipUnchangedUpsertsWithDefaultMergeBehavior() {
         TableDescriptorValidation.validateTableDescriptor(
                 pkTableWithProperty(ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED.key(), "true"),

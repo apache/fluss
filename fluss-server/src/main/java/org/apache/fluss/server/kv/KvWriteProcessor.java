@@ -431,7 +431,7 @@ public final class KvWriteProcessor {
                                     historicalValueLookup);
                     break;
                 case RETRACT:
-                    if (!currentMerger.supportsRetract()) {
+                    if (!currentMerger.supportsRetract(schemaIdOfNewData)) {
                         throw new InvalidRecordException(
                                 "RETRACT records are only supported for aggregation merge "
                                         + "engine tables with retract-safe functions.");

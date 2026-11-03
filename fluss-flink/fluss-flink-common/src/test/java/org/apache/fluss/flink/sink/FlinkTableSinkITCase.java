@@ -1761,18 +1761,18 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
     }
 
     /**
-     * End-to-end test for retract behavior on aggregation tables. Mirrors Paimon's {@code
-     * SumRetractionAggregationITCase}: a Flink streaming GROUP BY produces UPDATE_BEFORE rows that
-     * are mapped to RETRACT operations on the aggregation merge engine.
+     * Verifies field retraction and both DELETE policies through a partial Flink SQL sink.
      *
-     * <p>Flow: INSERT INTO agg_table SELECT k, SUM(b) FROM pk_input GROUP BY k
-     *
-     * <p>When pk_input is updated, Flink's GROUP BY emits retract (UPDATE_BEFORE) + accumulate
-     * (UPDATE_AFTER). The aggregation table's merge engine applies retract (subtract old SUM) then
-     * accumulate (add new SUM), producing the correct final result.
+     * <p>The query exposes per-key SUM values from a primary-key input table. A non-target field
+     * distinguishes whole-row deletion from partial clearing. Updates retain their intermediate
+     * state transitions, independent of whether Flink simplifies the aggregation query.
      */
-    @Test
-    void testRetractOnAggregationTableEndToEnd() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testRetractOnAggregationTableEndToEnd(boolean removeRecordOnDelete) throws Exception {
+        // The pipeline, changelog reader, and bounded writes run concurrently in a four-slot
+        // mini-cluster. Give each job one task so writes can be scheduled while both readers run.
+        tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
         // Step 1: Create a PK input table (updates produce changelog with UPDATE_BEFORE)
         tEnv.executeSql(
                 "CREATE TABLE retract_input ("
@@ -1786,47 +1786,62 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                 "CREATE TABLE retract_agg ("
                         + "k INT NOT NULL, "
                         + "total BIGINT, "
+                        + "other BIGINT, "
                         + "PRIMARY KEY (k) NOT ENFORCED"
                         + ") WITH ("
                         + "'table.merge-engine' = 'aggregation', "
+                        + "'sink.enable-retract' = 'true', "
+                        + "'table.delete.behavior' = 'allow', "
+                        + "'table.aggregation.remove-record-on-delete' = '"
+                        + removeRecordOnDelete
+                        + "', "
                         + "'fields.total.agg' = 'sum'"
                         + ")");
 
-        // Step 3: Start streaming pipeline — GROUP BY produces retract changelog
+        tEnv.executeSql("INSERT INTO retract_agg VALUES (1, 0, 7), (2, 0, 7)").await();
+
+        // Write only k and total so the existing non-target value must be preserved on updates.
         TableResult pipelineResult =
                 tEnv.executeSql(
-                        "INSERT INTO retract_agg SELECT k, SUM(b) FROM retract_input GROUP BY k");
+                        "INSERT INTO retract_agg (k, total) SELECT k, SUM(b) FROM retract_input GROUP BY k");
 
         // Step 4: Start reading changelog from the aggregation table
-        CloseableIterator<Row> rowIter = tEnv.executeSql("SELECT * FROM retract_agg").collect();
+        CloseableIterator<Row> rowIter =
+                tEnv.executeSql("SELECT k, total FROM retract_agg").collect();
 
         try {
+            // Consume the seeded state before changing the input, establishing the read boundary.
+            assertResultsIgnoreOrder(rowIter, Arrays.asList("+I[1, 0]", "+I[2, 0]"), false);
             // Step 5: Insert initial data into the input table
             tEnv.executeSql("INSERT INTO retract_input VALUES (1, 10), (2, 20)").await();
 
-            // Expect: initial aggregation results (+I for each key)
-            // Flink GROUP BY emits SUM(10)=10 for k=1, SUM(20)=20 for k=2
-            // These arrive as UPSERT at the aggregation table → INSERT changelog
-            List<String> initialExpected = Arrays.asList("+I[1, 10]", "+I[2, 20]");
+            List<String> initialExpected =
+                    Arrays.asList("-U[1, 0]", "+U[1, 10]", "-U[2, 0]", "+U[2, 20]");
             assertResultsIgnoreOrder(rowIter, initialExpected, false);
 
-            // Step 6: Update the input table — triggers retract in the GROUP BY
-            // Updating k=1 from b=10 to b=30:
-            //   Flink GROUP BY emits: UPDATE_BEFORE(k=1, SUM=10), UPDATE_AFTER(k=1, SUM=30)
-            //   The sink sends each record with per-record MutationType (RETRACT / INSERT).
-            //   Server processes: retract 10, then aggregate 30.
-            //   Net effect: total = 10 - 10 + 30 = 30 → changelog: -U[1,10], +U[1,30]
-            // Updating k=2 from b=20 to b=40:
-            //   Net effect: total = 20 - 20 + 40 = 40 → changelog: -U[2,20], +U[2,40]
+            // Each UPDATE_BEFORE retracts the old total to zero before UPDATE_AFTER adds the new
+            // contribution. The resulting CDC includes both transitions.
             tEnv.executeSql("INSERT INTO retract_input VALUES (1, 30), (2, 40)").await();
 
-            // Expect: each key produces 2 changelog records (UPDATE_BEFORE/UPDATE_AFTER)
-            // No intermediate states because retract and upsert are processed sequentially.
             List<String> updateExpected =
                     Arrays.asList(
-                            "-U[1, 10]", "+U[1, 30]",
-                            "-U[2, 20]", "+U[2, 40]");
+                            "-U[1, 10]",
+                            "+U[1, 0]",
+                            "-U[1, 0]",
+                            "+U[1, 30]",
+                            "-U[2, 20]",
+                            "+U[2, 0]",
+                            "-U[2, 0]",
+                            "+U[2, 40]");
             assertResultsIgnoreOrder(rowIter, updateExpected, false);
+
+            tBatchEnv.executeSql("DELETE FROM retract_input WHERE k = 1").await();
+            assertResultsIgnoreOrder(
+                    rowIter,
+                    removeRecordOnDelete
+                            ? Collections.singletonList("-D[1, 30]")
+                            : Arrays.asList("-U[1, 30]", "+U[1, 0]"),
+                    false);
         } finally {
             rowIter.close();
             pipelineResult.getJobClient().ifPresent(JobClient::cancel);

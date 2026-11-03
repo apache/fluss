@@ -100,8 +100,7 @@ public enum MergeMode {
      * Converts an integer value to a MergeMode enum.
      *
      * @param value the integer value
-     * @return the corresponding MergeMode
-     * @throws IllegalArgumentException if the value is unknown
+     * @return the corresponding MergeMode, or DEFAULT if the value is unknown
      */
     public static MergeMode fromValue(int value) {
         switch (value) {
@@ -110,16 +109,15 @@ public enum MergeMode {
             case 1:
                 return OVERWRITE;
             default:
-                throw new IllegalArgumentException("Unknown MergeMode value: " + value);
+                return DEFAULT;
         }
     }
 
     /**
      * Converts a proto value to a MergeMode enum.
      *
-     * <p>Unlike {@link #fromValue(int)}, this method is lenient: unknown values return {@link
-     * #DEFAULT} with a warning log, providing backward compatibility when a newer server sends an
-     * unrecognized merge mode to an older client.
+     * <p>Unknown values return {@link #DEFAULT}, as in {@link #fromValue(int)}, and log a warning
+     * once for protocol diagnostics.
      *
      * @param protoValue the proto value
      * @return the corresponding MergeMode, or {@link #DEFAULT} for unknown values

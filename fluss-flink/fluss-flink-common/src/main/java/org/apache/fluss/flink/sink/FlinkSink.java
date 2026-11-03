@@ -274,6 +274,7 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
         private final boolean enableUndoRecovery;
         @Nullable private final String producerId;
         private final boolean schemaSupportsRetract;
+        private final boolean removeRecordOnDelete;
 
         /**
          * Optional factory for reporting offsets to the upstream UndoRecoveryOperator.
@@ -301,6 +302,38 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
                 boolean enableUndoRecovery,
                 @Nullable String producerId,
                 boolean schemaSupportsRetract) {
+            this(
+                    tablePath,
+                    flussConfig,
+                    tableRowType,
+                    targetColumnIndexes,
+                    numBucket,
+                    bucketKeys,
+                    partitionKeys,
+                    lakeFormat,
+                    distributionMode,
+                    flussSerializationSchema,
+                    enableUndoRecovery,
+                    producerId,
+                    schemaSupportsRetract,
+                    false);
+        }
+
+        UpsertSinkWriterBuilder(
+                TablePath tablePath,
+                Configuration flussConfig,
+                RowType tableRowType,
+                @Nullable int[] targetColumnIndexes,
+                int numBucket,
+                List<String> bucketKeys,
+                List<String> partitionKeys,
+                @Nullable DataLakeFormat lakeFormat,
+                DistributionMode distributionMode,
+                FlussSerializationSchema<InputT> flussSerializationSchema,
+                boolean enableUndoRecovery,
+                @Nullable String producerId,
+                boolean schemaSupportsRetract,
+                boolean removeRecordOnDelete) {
             this.tablePath = tablePath;
             this.flussConfig = flussConfig;
             this.tableRowType = tableRowType;
@@ -314,6 +347,7 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
             this.enableUndoRecovery = enableUndoRecovery;
             this.producerId = producerId;
             this.schemaSupportsRetract = schemaSupportsRetract;
+            this.removeRecordOnDelete = removeRecordOnDelete;
         }
 
         @Override
@@ -335,7 +369,8 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
                     mailboxExecutor,
                     flussSerializationSchema,
                     offsetReporter,
-                    schemaSupportsRetract);
+                    schemaSupportsRetract,
+                    removeRecordOnDelete);
         }
 
         @Override

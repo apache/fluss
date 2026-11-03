@@ -98,6 +98,11 @@ public class KvWriteBatch extends WriteBatch {
 
     @Override
     boolean tryAppendRecord(WriteRecord writeRecord, WriteCallback callback) throws Exception {
+        // Target columns belong to the batch header. Keep full-row deletes and partial field
+        // writes in separate, ordered batches within the same writer session.
+        if (!Arrays.equals(targetColumns, writeRecord.getTargetColumns())) {
+            return false;
+        }
         validateRecordConsistency(writeRecord);
 
         // V0 batch cannot carry RETRACT records — caller must create a new V2 batch.
@@ -123,13 +128,6 @@ public class KvWriteBatch extends WriteBatch {
     }
 
     private void validateRecordConsistency(WriteRecord writeRecord) {
-        if (!Arrays.equals(targetColumns, writeRecord.getTargetColumns())) {
-            throw new IllegalStateException(
-                    String.format(
-                            "target columns %s of the write record to append are not the same as the current target columns %s in the batch.",
-                            Arrays.toString(writeRecord.getTargetColumns()),
-                            Arrays.toString(targetColumns)));
-        }
         if (writeRecord.getMergeMode() != this.mergeMode) {
             throw new IllegalStateException(
                     String.format(

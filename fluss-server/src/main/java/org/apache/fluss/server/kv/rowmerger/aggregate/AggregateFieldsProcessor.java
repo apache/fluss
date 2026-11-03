@@ -334,6 +334,17 @@ public final class AggregateFieldsProcessor {
 
             Integer inputIdx = inputContext.getFieldIndex(columnId);
 
+            // An older schema does not retract fields it cannot represent. Absence must not
+            // become an explicit null retract or invoke a newly added unsupported function.
+            if (skipPrimaryKeys && inputIdx == null) {
+                if (oldIdx != null) {
+                    copyOldValueAndEncode(oldFieldGetters[oldIdx], oldRow, targetIdx, encoder);
+                } else {
+                    encoder.encodeField(targetIdx, null);
+                }
+                continue;
+            }
+
             // Get field getters (use NULL_FIELD_GETTER if column doesn't exist in that schema)
             InternalRow.FieldGetter oldFieldGetter =
                     (oldIdx != null) ? oldFieldGetters[oldIdx] : NULL_FIELD_GETTER;
@@ -440,6 +451,14 @@ public final class AggregateFieldsProcessor {
 
             if (targetColumnIdBitSet.get(columnId)) {
                 Integer inputIdx = inputContext.getFieldIndex(columnId);
+                if (skipPrimaryKeys && inputIdx == null) {
+                    if (oldIdx != null) {
+                        copyOldValueAndEncode(oldFieldGetters[oldIdx], oldRow, targetIdx, encoder);
+                    } else {
+                        encoder.encodeField(targetIdx, null);
+                    }
+                    continue;
+                }
                 InternalRow.FieldGetter oldFieldGetter =
                         (oldIdx != null) ? oldFieldGetters[oldIdx] : NULL_FIELD_GETTER;
                 InternalRow.FieldGetter inputFieldGetter =

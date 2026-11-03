@@ -213,11 +213,13 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
         org.apache.flink.configuration.Configuration resolvedOptions =
                 org.apache.flink.configuration.Configuration.fromMap(
                         resolvedCatalogTable.getOptions());
-        // Compute retract capability once so planner-time gating and runtime writer configuration
-        // use the same effective aggregation functions.
+        // Resolve table field rules only for explicit retract mode. The runtime provider validates
+        // the participating fields once the planner supplies the target columns.
         Set<String> nonRetractableColumns =
-                FlinkConversions.computeNonRetractableAggregationColumns(
-                        resolvedCatalogTable.getResolvedSchema(), resolvedOptions);
+                tableOptions.get(FlinkConnectorOptions.SINK_ENABLE_RETRACT)
+                        ? FlinkConversions.computeNonRetractableAggregationColumns(
+                                resolvedCatalogTable.getResolvedSchema(), resolvedOptions)
+                        : Collections.emptySet();
 
         return new FlinkTableSink(
                 toFlussTablePath(context.getObjectIdentifier()),
@@ -235,7 +237,10 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                 getBucketKeys(tableOptions),
                 distributionMode,
                 tableOptions.getOptional(FlinkConnectorOptions.SINK_PRODUCER_ID).orElse(null),
-                nonRetractableColumns);
+                nonRetractableColumns,
+                tableOptions.get(FlinkConnectorOptions.SINK_ENABLE_RETRACT),
+                tableOptions.get(
+                        toFlinkOption(ConfigOptions.TABLE_AGGREGATION_REMOVE_RECORD_ON_DELETE)));
     }
 
     @Override
@@ -272,6 +277,7 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                                 FlinkConnectorOptions.LOOKUP_FULL_CACHE_MAX_BACKGROUND_JOBS,
                                 FlinkConnectorOptions.LOOKUP_FULL_CACHE_MAX_OPEN_FILES,
                                 FlinkConnectorOptions.SINK_IGNORE_DELETE,
+                                FlinkConnectorOptions.SINK_ENABLE_RETRACT,
                                 FlinkConnectorOptions.SINK_BUCKET_SHUFFLE,
                                 FlinkConnectorOptions.SINK_DISTRIBUTION_MODE,
                                 FlinkConnectorOptions.SINK_PRODUCER_ID,

@@ -20,8 +20,7 @@ package org.apache.fluss.flink.sink.serializer;
 import java.io.Serializable;
 
 /**
- * Encapsulates the operation mode configuration for a Flink sink, replacing multiple boolean
- * constructor parameters with a self-documenting, validated configuration object.
+ * Describes append, legacy upsert, or explicitly enabled aggregation retract semantics.
  *
  * <p>Semantic precedence for UPDATE_BEFORE handling (evaluated in order):
  *
@@ -29,8 +28,11 @@ import java.io.Serializable;
  *   <li>{@code ignoreDelete} — if true, DELETE and UPDATE_BEFORE are silently dropped
  *   <li>{@code appendOnly} — if true, all operations map to APPEND
  *   <li>{@code supportsRetract} — if true, UPDATE_BEFORE maps to RETRACT
- *   <li>{@code aggregationTable} — if true and retract not supported, UPDATE_BEFORE fails fast
+ *   <li>{@code aggregationTable} — in retract mode, unsupported field retraction fails fast
  * </ol>
+ *
+ * <p>In aggregation retract mode, DELETE follows the same field rules unless the table selects
+ * whole-row deletion. A legacy upsert mode keeps DELETE and UPDATE_BEFORE as delete operations.
  */
 public final class SinkOperationMode implements Serializable {
     private static final long serialVersionUID = 1L;
@@ -39,12 +41,22 @@ public final class SinkOperationMode implements Serializable {
     private final boolean ignoreDelete;
     private final boolean aggregationTable;
     private final boolean supportsRetract;
+    private final boolean removeRecordOnDelete;
 
     private SinkOperationMode(
             boolean appendOnly,
             boolean ignoreDelete,
             boolean aggregationTable,
             boolean supportsRetract) {
+        this(appendOnly, ignoreDelete, aggregationTable, supportsRetract, false);
+    }
+
+    private SinkOperationMode(
+            boolean appendOnly,
+            boolean ignoreDelete,
+            boolean aggregationTable,
+            boolean supportsRetract,
+            boolean removeRecordOnDelete) {
         if (supportsRetract && !aggregationTable) {
             throw new IllegalArgumentException(
                     "supportsRetract requires aggregationTable to be true.");
@@ -53,6 +65,7 @@ public final class SinkOperationMode implements Serializable {
         this.ignoreDelete = ignoreDelete;
         this.aggregationTable = aggregationTable;
         this.supportsRetract = supportsRetract;
+        this.removeRecordOnDelete = removeRecordOnDelete;
     }
 
     /** Mode for append-only (log) tables. */
@@ -68,6 +81,18 @@ public final class SinkOperationMode implements Serializable {
     /** Mode for aggregation tables. */
     public static SinkOperationMode aggregation(boolean ignoreDelete, boolean supportsRetract) {
         return new SinkOperationMode(false, ignoreDelete, true, supportsRetract);
+    }
+
+    /** Mode for field retraction with an explicit policy for changelog DELETE. */
+    public static SinkOperationMode aggregation(
+            boolean ignoreDelete, boolean supportsRetract, boolean removeRecordOnDelete) {
+        return new SinkOperationMode(
+                false, ignoreDelete, true, supportsRetract, removeRecordOnDelete);
+    }
+
+    /** Whether changelog DELETE selects explicit record deletion in retract mode. */
+    public boolean removesRecordOnDelete() {
+        return removeRecordOnDelete;
     }
 
     public boolean isAppendOnly() {
@@ -89,7 +114,7 @@ public final class SinkOperationMode implements Serializable {
     @Override
     public String toString() {
         return String.format(
-                "SinkOperationMode{appendOnly=%s, ignoreDelete=%s, aggregationTable=%s, supportsRetract=%s}",
-                appendOnly, ignoreDelete, aggregationTable, supportsRetract);
+                "SinkOperationMode{appendOnly=%s, ignoreDelete=%s, aggregationTable=%s, supportsRetract=%s, removeRecordOnDelete=%s}",
+                appendOnly, ignoreDelete, aggregationTable, supportsRetract, removeRecordOnDelete);
     }
 }

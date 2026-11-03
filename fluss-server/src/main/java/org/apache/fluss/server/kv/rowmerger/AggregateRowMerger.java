@@ -77,7 +77,7 @@ public class AggregateRowMerger implements RowMerger {
         this.schemaGetter = schemaGetter;
         // Extract configuration from TableConfig to ensure single source of truth
         this.deleteBehavior = tableConfig.getDeleteBehavior().orElse(DeleteBehavior.IGNORE);
-        this.contextCache = new AggregationContextCache(schemaGetter, kvFormat);
+        this.contextCache = new AggregationContextCache(schemaGetter, kvFormat, tableConfig);
         // Initialize cache with same settings as PartialUpdaterCache and AggregationContextCache
         this.partialMergerCache =
                 Caffeine.newBuilder()
@@ -172,7 +172,13 @@ public class AggregateRowMerger implements RowMerger {
 
     @Override
     public boolean supportsRetract() {
-        return allAggregatorsSupportRetract(contextCache.getContext(targetSchemaId));
+        return supportsRetract(targetSchemaId);
+    }
+
+    @Override
+    public boolean supportsRetract(short inputSchemaId) {
+        return allAggregatorsSupportRetract(
+                contextCache.getContext(targetSchemaId), contextCache.getContext(inputSchemaId));
     }
 
     @Override
@@ -218,9 +224,14 @@ public class AggregateRowMerger implements RowMerger {
                 });
     }
 
-    private static boolean allAggregatorsSupportRetract(AggregationContext context) {
-        for (FieldAggregator agg : context.getAggregators()) {
-            if (agg != null && !agg.supportsRetract()) {
+    private static boolean allAggregatorsSupportRetract(
+            AggregationContext context, AggregationContext inputContext) {
+        FieldAggregator[] aggregators = context.getAggregators();
+        List<Schema.Column> columns = context.getSchema().getColumns();
+        for (int i = 0; i < aggregators.length; i++) {
+            if (inputContext.getFieldIndex(columns.get(i).getColumnId()) != null
+                    && aggregators[i] != null
+                    && !aggregators[i].supportsRetract()) {
                 return false;
             }
         }
@@ -449,15 +460,22 @@ public class AggregateRowMerger implements RowMerger {
 
         @Override
         public boolean supportsRetract() {
+            return supportsRetract(targetSchemaId);
+        }
+
+        @Override
+        public boolean supportsRetract(short inputSchemaId) {
             // Only check aggregators for target columns, not all columns.
             // A partial retract touching only SUM columns should succeed even if
             // the table has non-retractable columns like MAX/MIN.
             AggregationContext context = contextCache.getContext(targetSchemaId);
             List<Schema.Column> columns = context.getSchema().getColumns();
+            AggregationContext inputContext = contextCache.getContext(inputSchemaId);
             FieldAggregator[] aggregators = context.getAggregators();
             for (int i = 0; i < aggregators.length; i++) {
                 if (aggregators[i] != null
                         && targetColumnIdBitSet.get(columns.get(i).getColumnId())
+                        && inputContext.getFieldIndex(columns.get(i).getColumnId()) != null
                         && !aggregators[i].supportsRetract()) {
                     return false;
                 }

@@ -48,7 +48,7 @@ class RowDataSerializationSchemaTest {
     }
 
     @Test
-    void testDeleteStillMapsToDeleteWhenRetractCompatible() throws Exception {
+    void testDeleteMapsToRetractWhenEnabled() throws Exception {
         RowDataSerializationSchema schema =
                 new RowDataSerializationSchema(SinkOperationMode.aggregation(false, true));
         schema.open(new TestInitializationContext());
@@ -59,7 +59,19 @@ class RowDataSerializationSchemaTest {
         rowData.setRowKind(RowKind.DELETE);
 
         RowWithOp result = schema.serialize(rowData);
-        assertThat(result.getOperationType()).isEqualTo(OperationType.DELETE);
+        assertThat(result.getOperationType()).isEqualTo(OperationType.RETRACT);
+    }
+
+    @Test
+    void testWholeRowDeleteDoesNotChangeUpdateBefore() throws Exception {
+        RowDataSerializationSchema schema =
+                new RowDataSerializationSchema(SinkOperationMode.aggregation(false, true, true));
+        schema.open(new TestInitializationContext());
+        GenericRowData row = GenericRowData.of(1, 2);
+        row.setRowKind(RowKind.DELETE);
+        assertThat(schema.serialize(row).getOperationType()).isEqualTo(OperationType.DELETE);
+        row.setRowKind(RowKind.UPDATE_BEFORE);
+        assertThat(schema.serialize(row).getOperationType()).isEqualTo(OperationType.RETRACT);
     }
 
     @Test
@@ -90,13 +102,12 @@ class RowDataSerializationSchemaTest {
 
         assertThatThrownBy(() -> schema.serialize(rowData))
                 .isInstanceOf(UnsupportedOperationException.class)
-                .hasMessageContaining("does not support retract");
+                .hasMessageContaining("support retract");
     }
 
     @Test
     void testNonAggregationTableKeepsCurrentBehavior() throws Exception {
-        RowDataSerializationSchema schema =
-                new RowDataSerializationSchema(SinkOperationMode.upsert(false));
+        RowDataSerializationSchema schema = new RowDataSerializationSchema(false, false);
         schema.open(new TestInitializationContext());
 
         // INSERT -> UPSERT

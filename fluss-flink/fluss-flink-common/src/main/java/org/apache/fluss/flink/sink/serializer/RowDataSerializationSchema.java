@@ -95,11 +95,12 @@ public class RowDataSerializationSchema implements FlussSerializationSchema<RowD
     private final boolean schemaSupportsRetract;
 
     /**
-     * Whether the table uses the AGGREGATION merge engine (regardless of retract capability). Used
-     * to distinguish the fail-fast case: aggregation table without retract support should not
-     * silently map UPDATE_BEFORE to DELETE.
+     * Whether aggregation retract mode is explicitly enabled. In this mode unsupported retracts
+     * must fail instead of falling back to deletion. Legacy aggregation jobs use upsert mode.
      */
     private final boolean isAggregationTable;
+
+    private final boolean removeRecordOnDelete;
 
     /**
      * The converter used to transform Flink {@link RowData} to Fluss {@link InternalRow}.
@@ -136,6 +137,15 @@ public class RowDataSerializationSchema implements FlussSerializationSchema<RowD
         this.ignoreDelete = mode.isIgnoreDelete();
         this.isAggregationTable = mode.isAggregationTable();
         this.schemaSupportsRetract = mode.supportsRetract();
+        this.removeRecordOnDelete = mode.removesRecordOnDelete();
+    }
+
+    /** Creates a serializer with the existing append/upsert and ignore-delete behavior. */
+    public RowDataSerializationSchema(boolean isAppendOnly, boolean ignoreDelete) {
+        this(
+                isAppendOnly
+                        ? SinkOperationMode.appendOnly(ignoreDelete)
+                        : SinkOperationMode.upsert(ignoreDelete));
     }
 
     /**
@@ -220,21 +230,23 @@ public class RowDataSerializationSchema implements FlussSerializationSchema<RowD
                 case UPDATE_AFTER:
                     return OperationType.UPSERT;
                 case UPDATE_BEFORE:
+                case DELETE:
+                    if (rowKind == RowKind.DELETE && removeRecordOnDelete) {
+                        return OperationType.DELETE;
+                    }
                     if (schemaSupportsRetract) {
                         return OperationType.RETRACT;
                     } else if (isAggregationTable) {
-                        // Aggregation table without retract support: fail fast.
-                        // The planner should have rejected UPDATE_BEFORE via
-                        // getChangelogMode(), so reaching here indicates a bug.
+                        // Validate custom serializers and runtime schema changes as well as the
+                        // target-field check performed when constructing the runtime provider.
                         throw new UnsupportedOperationException(
-                                "Received UPDATE_BEFORE for an aggregation table whose schema "
-                                        + "does not support retract. This should have been "
-                                        + "rejected at plan time by getChangelogMode().");
+                                "Received "
+                                        + rowKind
+                                        + " for an aggregation table whose target "
+                                        + "fields do not support retract.");
                     } else {
                         return OperationType.DELETE;
                     }
-                case DELETE:
-                    return OperationType.DELETE;
                 default:
                     throw new UnsupportedOperationException("Unsupported row kind: " + rowKind);
             }

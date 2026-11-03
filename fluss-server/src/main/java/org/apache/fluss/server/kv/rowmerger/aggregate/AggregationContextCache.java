@@ -17,6 +17,8 @@
 
 package org.apache.fluss.server.kv.rowmerger.aggregate;
 
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
@@ -35,10 +37,18 @@ public class AggregationContextCache {
     private final Cache<Integer, AggregationContext> contexts;
     private final SchemaGetter schemaGetter;
     private final KvFormat kvFormat;
+    private final TableConfig tableConfig;
 
     public AggregationContextCache(SchemaGetter schemaGetter, KvFormat kvFormat) {
+        this(schemaGetter, kvFormat, new TableConfig(new Configuration()));
+    }
+
+    /** Creates a cache using the table's field retract configuration. */
+    public AggregationContextCache(
+            SchemaGetter schemaGetter, KvFormat kvFormat, TableConfig tableConfig) {
         this.schemaGetter = schemaGetter;
         this.kvFormat = kvFormat;
+        this.tableConfig = tableConfig;
         // Limit cache size to prevent memory leak, and expire entries after 5 minutes of inactivity
         this.contexts =
                 Caffeine.newBuilder()
@@ -81,6 +91,7 @@ public class AggregationContextCache {
      * @return the aggregation context
      */
     public AggregationContext getOrCreateContext(int schemaId, Schema schema) {
-        return contexts.get(schemaId, k -> AggregationContext.create(schema, kvFormat));
+        return contexts.get(
+                schemaId, k -> AggregationContext.create(schema, kvFormat, tableConfig));
     }
 }

@@ -55,6 +55,7 @@ import javax.annotation.Nullable;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -88,26 +89,57 @@ public class FlinkTableSink
     private final @Nullable DataLakeFormat lakeFormat;
     @Nullable private final String producerId;
 
-    /**
-     * Whether the table uses the AGGREGATION merge engine. Used to enable undo recovery for
-     * aggregation tables. Note: this does NOT control UPDATE_BEFORE admission — that is gated by
-     * {@link #schemaSupportsRetract}, which additionally requires all non-PK aggregation columns to
-     * support retract.
-     */
+    /** Whether the table needs aggregation undo recovery, independent of retract opt-in. */
     private final boolean isAggregationTable;
 
-    /**
-     * Whether all non-PK aggregation columns in the full schema support retract. This is the
-     * planner-time safety gate for accepting update changelog into an aggregation table.
-     */
+    /** Whether all value columns support retract, accounting for field ignore-retract rules. */
     private final boolean schemaSupportsRetract;
 
     /** Non-PK aggregation columns whose effective aggregation function is not retract-capable. */
     private final Set<String> nonRetractableColumns;
 
+    private final boolean enableRetract;
+    private final boolean removeRecordOnDelete;
+    private boolean requiresRetract;
+
     private boolean appliedUpdates = false;
     @Nullable private GenericRow deleteRow;
 
+    /** Creates a sink with the existing upsert changelog behavior. */
+    public FlinkTableSink(
+            TablePath tablePath,
+            Configuration flussConfig,
+            RowType tableRowType,
+            int[] primaryKeyIndexes,
+            List<String> partitionKeys,
+            boolean streaming,
+            @Nullable MergeEngineType mergeEngineType,
+            @Nullable DataLakeFormat lakeFormat,
+            boolean sinkIgnoreDelete,
+            DeleteBehavior tableDeleteBehavior,
+            int numBucket,
+            List<String> bucketKeys,
+            DistributionMode distributionMode,
+            @Nullable String producerId) {
+        this(
+                tablePath,
+                flussConfig,
+                tableRowType,
+                primaryKeyIndexes,
+                partitionKeys,
+                streaming,
+                mergeEngineType,
+                lakeFormat,
+                sinkIgnoreDelete,
+                tableDeleteBehavior,
+                numBucket,
+                bucketKeys,
+                distributionMode,
+                producerId,
+                Collections.emptySet());
+    }
+
+    /** Creates a sink with legacy changelog semantics and the supplied field capabilities. */
     public FlinkTableSink(
             TablePath tablePath,
             Configuration flussConfig,
@@ -124,6 +156,44 @@ public class FlinkTableSink
             DistributionMode distributionMode,
             @Nullable String producerId,
             Set<String> nonRetractableColumns) {
+        this(
+                tablePath,
+                flussConfig,
+                tableRowType,
+                primaryKeyIndexes,
+                partitionKeys,
+                streaming,
+                mergeEngineType,
+                lakeFormat,
+                sinkIgnoreDelete,
+                tableDeleteBehavior,
+                numBucket,
+                bucketKeys,
+                distributionMode,
+                producerId,
+                nonRetractableColumns,
+                false,
+                false);
+    }
+
+    public FlinkTableSink(
+            TablePath tablePath,
+            Configuration flussConfig,
+            RowType tableRowType,
+            int[] primaryKeyIndexes,
+            List<String> partitionKeys,
+            boolean streaming,
+            @Nullable MergeEngineType mergeEngineType,
+            @Nullable DataLakeFormat lakeFormat,
+            boolean sinkIgnoreDelete,
+            DeleteBehavior tableDeleteBehavior,
+            int numBucket,
+            List<String> bucketKeys,
+            DistributionMode distributionMode,
+            @Nullable String producerId,
+            Set<String> nonRetractableColumns,
+            boolean enableRetract,
+            boolean removeRecordOnDelete) {
         this.tablePath = tablePath;
         this.flussConfig = flussConfig;
         this.tableRowType = tableRowType;
@@ -141,30 +211,26 @@ public class FlinkTableSink
         this.isAggregationTable = mergeEngineType == MergeEngineType.AGGREGATION;
         this.nonRetractableColumns = new HashSet<>(nonRetractableColumns);
         this.schemaSupportsRetract = isAggregationTable && this.nonRetractableColumns.isEmpty();
+        this.enableRetract = enableRetract;
+        this.removeRecordOnDelete = removeRecordOnDelete;
+        if (enableRetract && !isAggregationTable) {
+            throw new ValidationException("sink.enable-retract requires an aggregation table.");
+        }
     }
 
     @Override
     public ChangelogMode getChangelogMode(ChangelogMode requestedMode) {
-        if (streaming
-                && isAggregationTable
-                && !schemaSupportsRetract
-                && containsUpdateChangelog(requestedMode)) {
-            throw new ValidationException(
-                    String.format(
-                            "Table %s uses the 'aggregation' merge engine with non-retractable aggregation columns %s. "
-                                    + "It cannot consume UPDATE changelog safely. Please use append-only input or change those columns to retract-capable aggregate functions.",
-                            tablePath, sortedNonRetractable()));
+        if (enableRetract && !sinkIgnoreDelete) {
+            // Target columns are only available when constructing the runtime provider. Defer
+            // field-capability validation until then so unrelated columns do not reject a write.
+            requiresRetract =
+                    requestedMode.contains(RowKind.UPDATE_BEFORE)
+                            || (!removeRecordOnDelete && requestedMode.contains(RowKind.DELETE));
+            return requestedMode;
         }
 
         if (primaryKeyIndexes.length > 0 || (streaming && sinkIgnoreDelete)) {
-            // Accept UPDATE_BEFORE in two cases:
-            // 1. writerSupportsRetract=true: retract-then-aggregate semantics
-            // 2. sink.ignore-delete=true on non-aggregation tables: serializer drops UPDATE_BEFORE
-            //    and DELETE as IGNORE
-            if (streaming && (schemaSupportsRetract || sinkIgnoreDelete)) {
-                return requestedMode;
-            }
-            // primary-key table without retract or ignore-delete: strip UPDATE_BEFORE
+            // Preserve the upsert changelog requested by existing jobs, including ignore-delete.
             ChangelogMode.Builder builder = ChangelogMode.newBuilder();
             for (RowKind kind : requestedMode.getContainedKinds()) {
                 if (kind != RowKind.UPDATE_BEFORE) {
@@ -244,7 +310,19 @@ public class FlinkTableSink
     private FlinkSink<RowData> getFlinkSink(int[] targetColumnIndexes) {
         // Enable undo recovery for aggregation tables
         boolean enableUndoRecovery = isAggregationTable;
-        boolean writerSupportsRetract = supportsRetract(targetColumnIndexes);
+        boolean writerSupportsRetract = enableRetract && supportsRetract(targetColumnIndexes);
+        if (requiresRetract && !writerSupportsRetract) {
+            throw new ValidationException(
+                    String.format(
+                            "Table %s cannot retract target aggregation columns %s. "
+                                    + "Use retract-capable functions or fields.<column>.ignore-retract=true.",
+                            tablePath,
+                            (targetColumnIndexes == null
+                                    ? nonRetractableColumns
+                                    : columns(targetColumnIndexes).stream()
+                                            .filter(nonRetractableColumns::contains)
+                                            .collect(Collectors.toList()))));
+        }
 
         FlinkSink.SinkWriterBuilder<? extends FlinkSinkWriter, RowData> flinkSinkWriterBuilder =
                 (primaryKeyIndexes.length > 0)
@@ -259,13 +337,16 @@ public class FlinkTableSink
                                 lakeFormat,
                                 distributionMode,
                                 new RowDataSerializationSchema(
-                                        isAggregationTable
+                                        enableRetract
                                                 ? SinkOperationMode.aggregation(
-                                                        sinkIgnoreDelete, writerSupportsRetract)
+                                                        sinkIgnoreDelete,
+                                                        writerSupportsRetract,
+                                                        removeRecordOnDelete)
                                                 : SinkOperationMode.upsert(sinkIgnoreDelete)),
                                 enableUndoRecovery,
                                 producerId,
-                                writerSupportsRetract)
+                                writerSupportsRetract,
+                                enableRetract && removeRecordOnDelete)
                         : new FlinkSink.AppendSinkWriterBuilder<>(
                                 tablePath,
                                 flussConfig,
@@ -306,15 +387,6 @@ public class FlinkTableSink
         return true;
     }
 
-    private boolean containsUpdateChangelog(ChangelogMode requestedMode) {
-        return requestedMode.contains(RowKind.UPDATE_BEFORE)
-                || requestedMode.contains(RowKind.UPDATE_AFTER);
-    }
-
-    private List<String> sortedNonRetractable() {
-        return nonRetractableColumns.stream().sorted().collect(Collectors.toList());
-    }
-
     @Override
     public DynamicTableSink copy() {
         FlinkTableSink sink =
@@ -333,8 +405,11 @@ public class FlinkTableSink
                         bucketKeys,
                         distributionMode,
                         producerId,
-                        nonRetractableColumns);
+                        nonRetractableColumns,
+                        enableRetract,
+                        removeRecordOnDelete);
         sink.appliedUpdates = appliedUpdates;
+        sink.requiresRetract = requiresRetract;
         sink.deleteRow = deleteRow;
         return sink;
     }

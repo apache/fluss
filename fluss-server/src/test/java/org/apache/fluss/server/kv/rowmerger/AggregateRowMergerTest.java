@@ -1129,6 +1129,72 @@ class AggregateRowMergerTest {
     }
 
     @Test
+    void testRetractFromOlderSchemaPreservesAbsentFields() {
+        Schema oldSchema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("total", DataTypes.BIGINT(), AggFunctions.SUM())
+                        .primaryKey("id")
+                        .build();
+        Schema newSchema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("total", DataTypes.BIGINT(), AggFunctions.SUM())
+                        .column("maximum", DataTypes.INT(), AggFunctions.MAX())
+                        .primaryKey("id")
+                        .build();
+        TestingSchemaGetter getter = new TestingSchemaGetter(new SchemaInfo(oldSchema, 1));
+        getter.updateLatestSchemaInfo(new SchemaInfo(newSchema, 2));
+        TableConfig config = new TableConfig(new Configuration());
+        AggregateRowMerger merger = new AggregateRowMerger(config, config.getKvFormat(), getter);
+        merger.configureTargetColumns(null, (short) 2, newSchema);
+        assertThat(merger.supportsRetract((short) 1)).isTrue();
+        assertThat(merger.supportsRetract()).isFalse();
+        BinaryValue result =
+                merger.retract(
+                        new BinaryValue(
+                                (short) 2,
+                                compactedRow(newSchema.getRowType(), new Object[] {1, 100L, 9})),
+                        new BinaryValue(
+                                (short) 1,
+                                compactedRow(oldSchema.getRowType(), new Object[] {1, 30L})));
+        assertThat(result.row.getLong(1)).isEqualTo(70L);
+        assertThat(result.row.getInt(2)).isEqualTo(9);
+    }
+
+    @Test
+    void testIgnoreRetractPreservesNonRetractableField() {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("total", DataTypes.BIGINT(), AggFunctions.SUM())
+                        .column("maximum", DataTypes.INT(), AggFunctions.MAX())
+                        .primaryKey("id")
+                        .build();
+        Configuration conf = new Configuration();
+        conf.setString("fields.maximum.ignore-retract", "true");
+        AggregateRowMerger merger = createMerger(schema, new TableConfig(conf));
+        merger.configureTargetColumns(null, SCHEMA_ID, schema);
+        assertThat(merger.supportsRetract()).isTrue();
+
+        BinaryValue oldValue =
+                toBinaryValue(compactedRow(schema.getRowType(), new Object[] {1, 100L, 9}));
+        BinaryValue input =
+                toBinaryValue(compactedRow(schema.getRowType(), new Object[] {1, 30L, 7}));
+        BinaryValue result = merger.retract(oldValue, input);
+        assertThat(result.row.getLong(1)).isEqualTo(70L);
+        assertThat(result.row.getInt(2)).isEqualTo(9);
+
+        BinaryValue next =
+                merger.merge(
+                        new BinaryValue(result.schemaId, result.row.copy()),
+                        toBinaryValue(
+                                compactedRow(schema.getRowType(), new Object[] {1, 30L, 12})));
+        assertThat(next.row.getLong(1)).isEqualTo(100L);
+        assertThat(next.row.getInt(2)).isEqualTo(12);
+    }
+
+    @Test
     void testPartialRetractFirstWrite() {
         AggregateRowMerger merger = createMerger(SCHEMA_SUM, new TableConfig(new Configuration()));
         RowMerger partial = merger.configureTargetColumns(new int[] {0, 1}, SCHEMA_ID, SCHEMA_SUM);

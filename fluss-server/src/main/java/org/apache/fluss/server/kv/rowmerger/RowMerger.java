@@ -86,6 +86,11 @@ public interface RowMerger {
         return false;
     }
 
+    /** Whether the fields present in the given input schema can be retracted. */
+    default boolean supportsRetract(short inputSchemaId) {
+        return supportsRetract();
+    }
+
     /**
      * The behavior of delete operations on primary key tables.
      *

@@ -23,69 +23,76 @@ import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.TablePath;
 
+import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.table.connector.ChangelogMode;
+import org.apache.flink.table.connector.sink.DynamicTableSink;
+import org.apache.flink.table.types.DataType;
+import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.types.RowKind;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for {@link FlinkTableSink}. */
 class FlinkTableSinkTest {
 
-    @Test
-    void testGetChangelogModeIncludesUpdateBeforeForRetractCapableAggregationTable() {
+    @ParameterizedTest
+    @CsvSource({"true, false", "false, false", "true, true", "false, true"})
+    void testDefaultModePreservesUpsertChangelog(boolean supportsRetract, boolean ignoreDelete) {
         FlinkTableSink sink =
-                createPkTableSink(MergeEngineType.AGGREGATION, /* schemaSupportsRetract= */ true);
-        ChangelogMode requestedMode = allKindsChangelogMode();
-
-        ChangelogMode result = sink.getChangelogMode(requestedMode);
-
-        assertThat(result.contains(RowKind.INSERT)).isTrue();
-        assertThat(result.contains(RowKind.UPDATE_AFTER)).isTrue();
-        assertThat(result.contains(RowKind.DELETE)).isTrue();
-        assertThat(result.contains(RowKind.UPDATE_BEFORE)).isTrue();
-    }
-
-    @Test
-    void testGetChangelogModeExcludesUpdateBeforeForNonRetractAggregationTable() {
-        FlinkTableSink sink =
-                createPkTableSink(MergeEngineType.AGGREGATION, /* schemaSupportsRetract= */ false);
-        ChangelogMode requestedMode = allKindsChangelogMode();
-
-        assertThatThrownBy(() -> sink.getChangelogMode(requestedMode))
-                .isInstanceOf(org.apache.flink.table.api.ValidationException.class)
-                .hasMessageContaining("cannot consume UPDATE changelog safely");
+                createPkTableSink(MergeEngineType.AGGREGATION, supportsRetract, ignoreDelete);
+        ChangelogMode result = sink.getChangelogMode(allKindsChangelogMode());
+        assertThat(result.getContainedKinds())
+                .containsExactlyInAnyOrder(RowKind.INSERT, RowKind.UPDATE_AFTER, RowKind.DELETE);
     }
 
     @Test
     void testGetChangelogModeExcludesUpdateBeforeForNonAggregationTable() {
-        FlinkTableSink sink = createPkTableSink(null, /* schemaSupportsRetract= */ false);
-        ChangelogMode requestedMode = allKindsChangelogMode();
-
-        ChangelogMode result = sink.getChangelogMode(requestedMode);
-
-        assertThat(result.contains(RowKind.INSERT)).isTrue();
-        assertThat(result.contains(RowKind.UPDATE_AFTER)).isTrue();
-        assertThat(result.contains(RowKind.DELETE)).isTrue();
-        assertThat(result.contains(RowKind.UPDATE_BEFORE)).isFalse();
+        FlinkTableSink sink = createPkTableSink(null, false);
+        assertThat(sink.getChangelogMode(allKindsChangelogMode()).getContainedKinds())
+                .containsExactlyInAnyOrder(RowKind.INSERT, RowKind.UPDATE_AFTER, RowKind.DELETE);
     }
 
     @Test
-    void testGetChangelogModeRejectsUpdateBeforeForNonRetractAggregationEvenWithIgnoreDelete() {
+    void testRetractModeValidatesActualTargetFields() {
         FlinkTableSink sink =
-                createPkTableSink(
-                        MergeEngineType.AGGREGATION,
-                        /* schemaSupportsRetract= */ false,
-                        /* sinkIgnoreDelete= */ true);
-        ChangelogMode requestedMode = allKindsChangelogMode();
-
-        assertThatThrownBy(() -> sink.getChangelogMode(requestedMode))
+                createPkTableSink(MergeEngineType.AGGREGATION, false, false, true, false);
+        assertThat(sink.getChangelogMode(allKindsChangelogMode()))
+                .isEqualTo(allKindsChangelogMode());
+        assertThatCode(() -> sink.getSinkRuntimeProvider(new TargetContext(new int[][] {{0}, {1}})))
+                .doesNotThrowAnyException();
+        assertThatThrownBy(() -> sink.getSinkRuntimeProvider(new TargetContext(null)))
                 .isInstanceOf(org.apache.flink.table.api.ValidationException.class)
-                .hasMessageContaining("cannot consume UPDATE changelog safely");
+                .hasMessageContaining("other");
+        assertThatThrownBy(() -> sink.copy().getSinkRuntimeProvider(new TargetContext(null)))
+                .isInstanceOf(org.apache.flink.table.api.ValidationException.class);
+    }
+
+    @Test
+    void testRetractModeAllowsAppendInputWithNonRetractableFields() {
+        FlinkTableSink sink =
+                createPkTableSink(MergeEngineType.AGGREGATION, false, false, true, false);
+        sink.getChangelogMode(ChangelogMode.insertOnly());
+        assertThatCode(() -> sink.getSinkRuntimeProvider(new TargetContext(null)))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void testIgnoreDeleteRetainsLegacyNegotiationWhenRetractEnabled() {
+        FlinkTableSink sink =
+                createPkTableSink(MergeEngineType.AGGREGATION, false, true, true, false);
+        assertThat(sink.getChangelogMode(allKindsChangelogMode()).contains(RowKind.UPDATE_BEFORE))
+                .isFalse();
+        assertThatCode(() -> sink.getSinkRuntimeProvider(new TargetContext(null)))
+                .doesNotThrowAnyException();
     }
 
     /** Creates a PK table FlinkTableSink for changelog mode testing. */
@@ -98,15 +105,26 @@ class FlinkTableSinkTest {
             MergeEngineType mergeEngineType,
             boolean schemaSupportsRetract,
             boolean sinkIgnoreDelete) {
+        return createPkTableSink(
+                mergeEngineType, schemaSupportsRetract, sinkIgnoreDelete, false, false);
+    }
+
+    private static FlinkTableSink createPkTableSink(
+            MergeEngineType mergeEngineType,
+            boolean schemaSupportsRetract,
+            boolean sinkIgnoreDelete,
+            boolean enableRetract,
+            boolean removeRecordOnDelete) {
         return new FlinkTableSink(
                 TablePath.of("test_db", "test_table"),
                 new Configuration(),
                 org.apache.flink.table.types.logical.RowType.of(
                         new org.apache.flink.table.types.logical.LogicalType[] {
                             new org.apache.flink.table.types.logical.IntType(),
+                            new org.apache.flink.table.types.logical.IntType(),
                             new org.apache.flink.table.types.logical.IntType()
                         },
-                        new String[] {"id", "value"}),
+                        new String[] {"id", "value", "other"}),
                 new int[] {0}, // primary key on first column
                 Collections.emptyList(),
                 true, // streaming
@@ -118,7 +136,42 @@ class FlinkTableSinkTest {
                 new ArrayList<>(),
                 DistributionMode.BUCKET,
                 null, // producerId
-                schemaSupportsRetract ? Collections.emptySet() : Collections.singleton("value"));
+                schemaSupportsRetract ? Collections.emptySet() : Collections.singleton("other"),
+                enableRetract,
+                removeRecordOnDelete);
+    }
+
+    private static class TargetContext implements DynamicTableSink.Context {
+        private final int[][] targets;
+
+        private TargetContext(int[][] targets) {
+            this.targets = targets;
+        }
+
+        @Override
+        public boolean isBounded() {
+            return false;
+        }
+
+        @Override
+        public <T> TypeInformation<T> createTypeInformation(DataType type) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public <T> TypeInformation<T> createTypeInformation(LogicalType type) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public DynamicTableSink.DataStructureConverter createDataStructureConverter(DataType type) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public Optional<int[][]> getTargetColumns() {
+            return Optional.ofNullable(targets);
+        }
     }
 
     /** Builds a ChangelogMode containing all four RowKinds. */

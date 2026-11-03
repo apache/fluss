@@ -812,6 +812,20 @@ public class FlinkConversionsTest {
 
         assertThat(FlinkConversions.computeNonRetractableAggregationColumns(schema, conf))
                 .containsExactlyInAnyOrder("min_val");
+        conf.setString("fields.min_val.ignore-retract", "true");
+        assertThat(FlinkConversions.computeNonRetractableAggregationColumns(schema, conf))
+                .isEmpty();
+
+        CatalogTable table =
+                CatalogTable.of(
+                        Schema.newBuilder().fromResolvedSchema(schema).build(),
+                        null,
+                        Collections.emptyList(),
+                        conf.toMap());
+        TableDescriptor descriptor =
+                FlinkConversions.toFlussTable(new ResolvedCatalogTable(table, schema));
+        assertThat(descriptor.getProperties())
+                .containsEntry("fields.min_val.ignore-retract", "true");
     }
 
     @Test

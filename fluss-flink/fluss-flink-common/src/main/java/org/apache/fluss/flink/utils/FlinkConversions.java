@@ -771,6 +771,9 @@ public class FlinkConversions {
         }
 
         Set<String> nonRetractableColumns = new HashSet<>();
+        org.apache.fluss.config.TableConfig retractConfig =
+                new org.apache.fluss.config.TableConfig(
+                        org.apache.fluss.config.Configuration.fromMap(tableOptions.toMap()));
         Set<String> pkSet =
                 new HashSet<>(
                         resolvedSchema
@@ -782,6 +785,9 @@ public class FlinkConversions {
                 continue;
             }
             String columnName = column.getName();
+            if (retractConfig.isFieldIgnoreRetract(columnName)) {
+                continue;
+            }
             DataType flussDataType = toFlussType(column.getDataType());
             Optional<AggFunction> aggFunc =
                     FlinkAggFunctionParser.parseAggFunction(
