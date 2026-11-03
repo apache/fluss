@@ -182,9 +182,6 @@ impl FlussLakeReadSplit {
 impl FlussLakeReader {
     pub fn read_split(&self, split: &FlussLakeReadSplit) -> Result<RecordBatchStream>;
     pub fn read_splits(&self, splits: &[FlussLakeReadSplit]) -> Result<RecordBatchStream>;
-    pub fn read_splits_with_concurrency(
-        &self, splits: &[FlussLakeReadSplit], concurrency: usize,
-    ) -> Result<RecordBatchStream>;
 }
 ```
 
@@ -192,7 +189,7 @@ Plans expose the final output schema. Statistics are input estimates, not exact 
 
 Splits are cloneable local tasks, not a public wire format. Tasks from one plan share frozen source metadata and can outlive the plan. Readers do not require a particular plan object. Callers must use the scan configuration that produced the tasks, including projection, filter, mode and a compatible lake backend. Public getters expose task identities and estimates without allowing task mutation. A future distributed adapter may define a task transport/recovery contract; this API does not predefine one.
 
-`read_splits()` uses bounded concurrency, initially eight active tasks; the explicit limit must be positive. Engines can instead schedule `read_split()` themselves. Output order is unspecified. Stream construction is synchronous and validates scan configuration and the task table without I/O. Polling the stream performs asynchronous initialization and reading; initialization failures are stream errors. Dropping a stream cancels its work, and the first error terminates the read and drops sibling streams. Missing required inputs must fail rather than refresh snapshots, advance offsets or silently skip data. The caller discards partial results before retrying with a new context. Capture does not provide retention leases.
+`read_splits()` consumes tasks sequentially in the supplied order. Engines and Rust callers control concurrency by scheduling `read_split()` streams themselves. Row order within each task is unspecified. Stream construction is synchronous and validates scan configuration and the task table without I/O. Polling the stream performs asynchronous initialization and reading; initialization failures are stream errors. Dropping a stream cancels its work. For `read_splits()`, the first error terminates the read without starting remaining tasks. When scheduling separate streams, the caller owns cancellation of sibling tasks. Missing required inputs must fail rather than refresh snapshots, advance offsets or silently skip data. The caller discards partial results before retrying with a new context. Capture does not provide retention leases.
 
 `Result<T>` uses `FlussLakeError`. Consumers distinguish invalid contexts or unsupported lake payload versions, unsupported merge semantics, source/schema incompatibility, unavailable frozen data, and connection/planning/execution failures. Diagnostic strings are not a protocol. `DataUnavailable` invalidates the attempt; retrying with a new context may observe different data and is not guaranteed to recover.
 
