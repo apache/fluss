@@ -36,6 +36,8 @@ Complete API reference for the Fluss C++ client.
 | `scanner_log_fetch_min_bytes`         | `int32_t`     | `1`                  | Minimum bytes the server must accumulate before returning a fetch response               |
 | `scanner_log_fetch_wait_max_time_ms`  | `int32_t`     | `500`                | Maximum time (ms) the server may wait to satisfy min-bytes                               |
 | `scanner_log_fetch_max_bytes_for_bucket`| `int32_t`   | `1048576` (1 MB)     | Maximum bytes per fetch response per bucket for LogScanner                               |
+| `lookup_retry_backoff_ms`             | `uint64_t`    | `100`                | Initial delay in ms before a lookup that failed with a retriable error is resent, doubling per retry with ±20% jitter; `0` resends immediately |
+| `lookup_retry_max_backoff_ms`         | `uint64_t`    | `1000`               | Cap in ms for the lookup retry delay, applied before jitter; must be >= `lookup_retry_backoff_ms` |
 | `connect_timeout_ms`                  | `uint64_t`    | `120000`             | TCP connect timeout in milliseconds                                                      |
 | `security_protocol`                   | `std::string` | `"PLAINTEXT"`        | `"PLAINTEXT"` (default) or `"sasl"` for SASL auth                                        |
 | `security_sasl_mechanism`             | `std::string` | `"PLAIN"`            | SASL mechanism (only `"PLAIN"` is supported)                                             |

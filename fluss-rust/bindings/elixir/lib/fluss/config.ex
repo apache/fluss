@@ -41,6 +41,8 @@ defmodule Fluss.Config do
             lookup_max_inflight_requests: nil,
             lookup_max_retries: nil,
             lookup_queue_size: nil,
+            lookup_retry_backoff_ms: nil,
+            lookup_retry_max_backoff_ms: nil,
             remote_file_download_thread_num: nil,
             scanner_io_tmp_dir: nil,
             scanner_log_fetch_max_bytes: nil,
@@ -79,6 +81,8 @@ defmodule Fluss.Config do
           lookup_max_inflight_requests: non_neg_integer() | nil,
           lookup_max_retries: non_neg_integer() | nil,
           lookup_queue_size: non_neg_integer() | nil,
+          lookup_retry_backoff_ms: non_neg_integer() | nil,
+          lookup_retry_max_backoff_ms: non_neg_integer() | nil,
           remote_file_download_thread_num: non_neg_integer() | nil,
           scanner_io_tmp_dir: String.t() | nil,
           scanner_log_fetch_max_bytes: non_neg_integer() | nil,
@@ -147,6 +151,24 @@ defmodule Fluss.Config do
   @spec set_lookup_queue_size(t(), non_neg_integer()) :: t()
   def set_lookup_queue_size(%__MODULE__{} = config, size) when is_non_neg_integer(size),
     do: %{config | lookup_queue_size: size}
+
+  @doc """
+  Sets the initial delay in milliseconds before a lookup that failed with a retriable error is
+  resent. The delay doubles per retry up to `lookup_retry_max_backoff_ms`, with +/-20% jitter.
+  `0` resends immediately. Defaults to `100`.
+  """
+  @spec set_lookup_retry_backoff_ms(t(), non_neg_integer()) :: t()
+  def set_lookup_retry_backoff_ms(%__MODULE__{} = config, ms) when is_non_neg_integer(ms),
+    do: %{config | lookup_retry_backoff_ms: ms}
+
+  @doc """
+  Sets the cap in milliseconds for the exponentially growing lookup retry delay. The +/-20% jitter
+  applies after the cap, so a delay can reach 20% above it. Must not be below
+  `lookup_retry_backoff_ms`. Defaults to `1000`.
+  """
+  @spec set_lookup_retry_max_backoff_ms(t(), non_neg_integer()) :: t()
+  def set_lookup_retry_max_backoff_ms(%__MODULE__{} = config, ms) when is_non_neg_integer(ms),
+    do: %{config | lookup_retry_max_backoff_ms: ms}
 
   @spec set_remote_file_download_thread_num(t(), non_neg_integer()) :: t()
   def set_remote_file_download_thread_num(%__MODULE__{} = config, threads)

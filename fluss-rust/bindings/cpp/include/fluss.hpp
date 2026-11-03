@@ -1703,6 +1703,11 @@ struct Configuration {
     size_t lookup_max_inflight_requests{128};
     // Maximum number of lookup retries
     int32_t lookup_max_retries{std::numeric_limits<int32_t>::max()};
+    // Base delay (ms) before resending a lookup that failed with a retriable error
+    uint64_t lookup_retry_backoff_ms{100};
+    // Maximum lookup retry backoff (ms) after exponential growth, before +/-20% jitter;
+    // must be >= lookup_retry_backoff_ms
+    uint64_t lookup_retry_max_backoff_ms{1000};
 };
 
 class Connection {

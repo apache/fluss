@@ -99,6 +99,8 @@ mod ffi {
         lookup_batch_timeout_ms: u64,
         lookup_max_inflight_requests: usize,
         lookup_max_retries: i32,
+        lookup_retry_backoff_ms: u64,
+        lookup_retry_max_backoff_ms: u64,
     }
 
     struct FfiResult {
@@ -1221,6 +1223,8 @@ fn new_connection(config: &ffi::FfiConfig) -> ffi::FfiPtrResult {
         lookup_batch_timeout_ms: config.lookup_batch_timeout_ms,
         lookup_max_inflight_requests: config.lookup_max_inflight_requests,
         lookup_max_retries: config.lookup_max_retries,
+        lookup_retry_backoff_ms: config.lookup_retry_backoff_ms,
+        lookup_retry_max_backoff_ms: config.lookup_retry_max_backoff_ms,
     };
 
     let conn = RUNTIME.block_on(async { fcore::client::FlussConnection::new(config_core).await });

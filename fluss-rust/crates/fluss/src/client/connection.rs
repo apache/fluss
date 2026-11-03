@@ -50,6 +50,8 @@ impl FlussConnection {
             .map_err(|msg| Error::IllegalArgument { message: msg })?;
         arg.validate_writer()
             .map_err(|msg| Error::IllegalArgument { message: msg })?;
+        arg.validate_lookup()
+            .map_err(|msg| Error::IllegalArgument { message: msg })?;
 
         let timeout = Duration::from_millis(arg.connect_timeout_ms);
         // connect_timeout_ms: no lower-bound validation to match Java behavior.

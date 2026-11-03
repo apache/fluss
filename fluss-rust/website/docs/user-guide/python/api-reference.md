@@ -35,6 +35,8 @@ Complete API reference for the Fluss Python client.
 | `lookup_batch_timeout_ms`             | `lookup.batch-timeout-ms`             | Get/set maximum time in ms a lookup waits for its batch to fill (default `100`)         |
 | `lookup_max_inflight_requests`        | `lookup.max-inflight-requests`        | Get/set maximum number of unacknowledged lookup requests (default `128`)                |
 | `lookup_max_retries`                  | `lookup.max-retries`                  | Get/set maximum number of lookup retries (default `2147483647`)                         |
+| `lookup_retry_backoff_ms`             | `lookup.retry-backoff-ms`             | Get/set initial lookup retry backoff in ms, doubling per retry with ±20% jitter; `0` retries immediately (default `100`) |
+| `lookup_retry_max_backoff_ms`         | `lookup.retry-max-backoff-ms`         | Get/set lookup retry backoff cap in ms, applied before jitter; must be >= `lookup_retry_backoff_ms` (default `1000`) |
 | `connect_timeout_ms`                  | `connect-timeout`                     | Get/set TCP connect timeout in milliseconds                                             |
 | `security_protocol`                   | `security.protocol`                   | Get/set security protocol (`"PLAINTEXT"` or `"sasl"`)                                   |
 | `security_sasl_mechanism`             | `security.sasl.mechanism`             | Get/set SASL mechanism (only `"PLAIN"` is supported)                                    |
