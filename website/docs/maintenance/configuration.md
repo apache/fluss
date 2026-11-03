@@ -249,14 +249,27 @@ restores immediate retry behavior.
 
 | Key | Default | Type | Description |
 | :--- | :--- | :--- | :--- |
-| `client.lookup.retry-backoff` | `100 ms` | Duration | The initial delay before retrying a lookup that failed with a retriable error, such as `NOT_LEADER_OR_FOLLOWER`. The delay doubles with the lookup retry count and uses 20% jitter. Set to `0` to disable this backoff. |
+| `client.lookup.retry-backoff` | `100 ms` | Duration | The initial delay before retrying a lookup that failed with a retriable error, such as `NOT_LEADER_OR_FOLLOWER`, or whose bucket has no known leader. The delay doubles with each attempt and uses 20% jitter. Set to `0` to disable this backoff. |
 | `client.lookup.retry-backoff-max` | `1 s` | Duration | The maximum retry delay. Must be between the initial backoff and `2147483647ms`. |
 
 The retry backoff applies to each failed lookup and prefix lookup, preventing the client from
 resending lookups in a tight loop while a bucket has no ready leader, for example during a rolling
-restart of TabletServers. New lookups are not delayed by lookups that are waiting to be retried.
-The backoff remains subject to `client.lookup.max-retries`. Setting `client.lookup.retry-backoff`
-to `0` restores immediate retry behavior.
+restart of TabletServers. New lookups are not delayed by lookups for other buckets that are waiting
+to be retried.
+The backoff remains subject to `client.lookup.max-retries`, except while the client's metadata has
+no leader for the bucket. In that case the bucket backs off as a whole: new lookups for it wait for
+the same backoff, the wait ends early once the client's metadata has a leader for the bucket, and
+the attempts don't count toward `client.lookup.max-retries`, so lookups keep waiting through leader
+election instead of failing. Setting `client.lookup.retry-backoff` to `0` restores immediate retry
+behavior.
+
+`client.lookup.queue-size` limits only the initial input queue, and adding a lookup may still block
+while that queue is full. Lookups waiting for a leader or for a retry are held outside this limit,
+so the total number of pending lookups can grow without bound. While a bucket has no leader, the
+sender moves its lookups out of the input queue without waiting on metadata requests, so an
+application that keeps issuing asynchronous lookups for it gets little backpressure from the
+client. Bound the number of outstanding lookups in the application, for example with the capacity
+of a Flink asynchronous lookup join.
 
 ## Client disk write protection backoff
 

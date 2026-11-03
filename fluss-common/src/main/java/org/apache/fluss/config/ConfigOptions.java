@@ -1807,7 +1807,11 @@ public class ConfigOptions {
             key("client.lookup.queue-size")
                     .intType()
                     .defaultValue(25600)
-                    .withDescription("The maximum number of pending lookup operations.");
+                    .withDescription(
+                            "The maximum number of lookup operations in the initial input queue. "
+                                    + "Adding a lookup blocks while this queue is full. Lookups waiting "
+                                    + "for a bucket's leader or for a retry are outside this limit, so the "
+                                    + "total number of pending lookups can grow beyond it.");
 
     public static final ConfigOption<Integer> CLIENT_LOOKUP_MAX_BATCH_SIZE =
             key("client.lookup.max-batch-size")
@@ -1845,8 +1849,10 @@ public class ConfigOptions {
                     .defaultValue(Duration.ofMillis(100))
                     .withDescription(
                             "The initial delay before retrying a lookup that failed with a retriable error, "
-                                    + "such as NOT_LEADER_OR_FOLLOWER. The delay doubles with the lookup retry "
-                                    + "count and uses 20% jitter, up to client.lookup.retry-backoff-max. "
+                                    + "such as NOT_LEADER_OR_FOLLOWER, or whose bucket has no known leader. The "
+                                    + "delay doubles with each attempt and uses 20% jitter, up to "
+                                    + "client.lookup.retry-backoff-max. Attempts made while a bucket has no known "
+                                    + "leader don't count toward client.lookup.max-retries. "
                                     + "Set to 0 to disable this backoff.");
 
     public static final ConfigOption<Duration> CLIENT_LOOKUP_RETRY_BACKOFF_MAX =
@@ -1854,7 +1860,7 @@ public class ConfigOptions {
                     .durationType()
                     .defaultValue(Duration.ofSeconds(1))
                     .withDescription(
-                            "The maximum delay before retrying a lookup that failed with a retriable error. "
+                            "The maximum delay before retrying a lookup. "
                                     + "Must be between the initial backoff and 2147483647ms.");
 
     public static final ConfigOption<Integer> CLIENT_SCANNER_REMOTE_LOG_PREFETCH_NUM =

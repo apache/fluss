@@ -43,7 +43,19 @@ In v1.1, a lookup or prefix lookup that fails with a retriable error, such as
 `NOT_LEADER_OR_FOLLOWER`, is retried after an exponential backoff instead of immediately. The
 delay starts at `client.lookup.retry-backoff` (default `100ms`) and doubles up to
 `client.lookup.retry-backoff-max` (default `1s`). This stops clients from flooding TabletServers
-and logs while a bucket has no ready leader, for example during a rolling restart.
+and logs while a bucket has no ready leader, for example during a rolling restart. Lookups for a
+bucket that has no leader in the client's metadata back off the same way, per bucket and without
+counting toward `client.lookup.max-retries`. As a result, these lookups may resume later after a
+new leader is elected than before, unless the client's metadata gets the leader earlier.
+`client.lookup.retry-backoff-max` caps only the backoff: batching (`client.lookup.batch-timeout`),
+queueing and the metadata request that finds the leader can delay the lookups further.
+
+`client.lookup.queue-size` limits only the initial input queue. Lookups waiting for a leader or for
+a retry are outside this limit, so the total number of pending lookups can grow without bound.
+Adding a lookup may still block while the input queue is full, but the client no longer blocks on
+metadata requests for each lookup of a bucket without a leader, so that queue now fills up less
+often while a leader is missing. Applications that issue asynchronous lookups should bound their
+outstanding lookups, for example with the capacity of a Flink asynchronous lookup join.
 
 The first retry after a leader change now waits about 100ms. To retain the previous behavior,
 set `client.lookup.retry-backoff: 0`.

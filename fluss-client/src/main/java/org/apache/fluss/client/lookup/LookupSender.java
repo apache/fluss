@@ -20,6 +20,7 @@ package org.apache.fluss.client.lookup;
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.metadata.MetadataUpdater;
+import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.exception.ApiException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.HistoricalPartitionThrottledException;
@@ -41,6 +42,7 @@ import org.apache.fluss.rpc.messages.PrefixLookupRequest;
 import org.apache.fluss.rpc.messages.PrefixLookupResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.utils.ExponentialBackoff;
+import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.slf4j.Logger;
@@ -48,10 +50,13 @@ import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Deque;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -91,6 +96,14 @@ class LookupSender implements Runnable {
 
     private final ExponentialBackoff historicalThrottleBackoff;
 
+    private final Clock clock;
+
+    /**
+     * Buckets whose leader could not be found, keyed to their backoff state. Only accessed by the
+     * sender thread.
+     */
+    private final Map<TableBucket, LeaderlessBucket> leaderlessBuckets = new HashMap<>();
+
     LookupSender(
             MetadataUpdater metadataUpdater,
             LookupQueue lookupQueue,
@@ -108,6 +121,8 @@ class LookupSender implements Runnable {
         this.acks = acks;
         this.maxRequestTimeoutMs = maxRequestTimeoutMs;
         this.historicalThrottleBackoff = new ExponentialBackoff(100L, 2, 5000L, 0.2);
+        // The queue checks retry times against its clock, so retry times must use the same one.
+        this.clock = lookupQueue.clock();
     }
 
     @Override
@@ -128,7 +143,7 @@ class LookupSender implements Runnable {
         // okay we stopped accepting requests but there may still be requests in the accumulator or
         // waiting for acknowledgment, wait until these are completed.
         // TODO Check the in flight request count in the accumulator.
-        if (!forceClose && lookupQueue.hasUnDrained()) {
+        if (!forceClose && (lookupQueue.hasUnDrained() || hasLookupsWaitingForLeader())) {
             try {
                 runOnce(true);
             } catch (Exception e) {
@@ -140,28 +155,44 @@ class LookupSender implements Runnable {
         LOG.debug("Shutdown of Fluss lookup sender I/O thread has completed.");
     }
 
-    /** Run a single iteration of sending. */
-    private void runOnce(boolean drainAll) throws Exception {
-        List<AbstractLookupQuery<?>> lookups =
-                drainAll ? lookupQueue.drainAll() : lookupQueue.drain();
-        sendLookups(lookups);
+    /**
+     * Run a single iteration of sending.
+     *
+     * @param drainAll whether the sender is closing. All lookups are drained, including those
+     *     waiting for a bucket's leader, and the queue no longer accepts lookups, so the leader of
+     *     each bucket is looked up once more regardless of its backoff, and lookups whose leader is
+     *     still not found fail instead of being retried.
+     */
+    @VisibleForTesting
+    void runOnce(boolean drainAll) throws Exception {
+        if (drainAll) {
+            List<AbstractLookupQuery<?>> lookups = lookupQueue.drainAll();
+            for (LeaderlessBucket leaderlessBucket : leaderlessBuckets.values()) {
+                lookups.addAll(leaderlessBucket.waitingLookups);
+            }
+            leaderlessBuckets.clear();
+            sendLookups(lookups, true);
+        } else {
+            // Before draining, so that the released lookups can be drained in this pass.
+            releaseLookupsWaitingForLeader();
+            sendLookups(lookupQueue.drain(), false);
+        }
     }
 
-    private void sendLookups(List<AbstractLookupQuery<?>> lookups) throws Exception {
+    @VisibleForTesting
+    void sendLookups(List<AbstractLookupQuery<?>> lookups) {
+        sendLookups(lookups, false);
+    }
+
+    private void sendLookups(List<AbstractLookupQuery<?>> lookups, boolean closing) {
         if (lookups.isEmpty()) {
             return;
         }
-        // group by <leader, lookup type> to lookup batches
+        // group by <leader, lookup type> to lookup batches. Lookups without a leader wait outside
+        // the queue, and LookupQueue#drain() blocks for up to the batch timeout while no lookup is
+        // ready, so there is no busy loop to guard against here.
         Map<Tuple2<Integer, LookupType>, List<AbstractLookupQuery<?>>> lookupBatches =
-                groupByLeaderAndType(lookups);
-
-        // if no lookup batches, sleep a bit to avoid busy loop. This case will happen when there is
-        // no leader for all the lookup request in queue.
-        if (lookupBatches.isEmpty() && !lookupQueue.hasUnDrained()) {
-            // TODO: may use wait/notify mechanism to avoid active sleep, and use a dynamic sleep
-            // time based on the request waited time.
-            Thread.sleep(100);
-        }
+                groupByLeaderAndType(lookups, closing);
 
         // now, send the batches
         lookupBatches.forEach(
@@ -169,36 +200,194 @@ class LookupSender implements Runnable {
     }
 
     private Map<Tuple2<Integer, LookupType>, List<AbstractLookupQuery<?>>> groupByLeaderAndType(
-            List<AbstractLookupQuery<?>> lookups) {
+            List<AbstractLookupQuery<?>> lookups, boolean closing) {
         // <leader, LookupType> -> lookup batches
         Map<Tuple2<Integer, LookupType>, List<AbstractLookupQuery<?>>> lookupBatchesByLeader =
                 new HashMap<>();
+        // Resolve the leader once per bucket, as leaderFor() may block on metadata requests.
+        Map<TableBucket, List<AbstractLookupQuery<?>>> lookupsByBucket = new LinkedHashMap<>();
         for (AbstractLookupQuery<?> lookup : lookups) {
-            int leader;
-            // lookup the leader node
-            TableBucket tb = lookup.tableBucket();
-            try {
-                // TODO Metadata requests are being sent too frequently here. consider first
-                // collecting the tables that need to be updated and then sending them together in
-                // one request.
-                leader = metadataUpdater.leaderFor(lookup.tablePath(), tb);
-            } catch (PartitionNotExistException e) {
-                // Metadata refresh confirmed that the queued lookup carries a deleted partition
-                // id. Complete it instead of repeatedly enqueueing the stale TableBucket; a
-                // primary key lookuper can then reroute by partition name.
-                lookup.future().completeExceptionally(e);
-                continue;
-            } catch (Exception e) {
-                // if leader is not found, re-enqueue the lookup to send again.
-                LOG.warn("Failed to lookup the leader for {} when lookup", tb, e);
-                reEnqueueLookup(lookup);
-                continue;
-            }
-            lookupBatchesByLeader
-                    .computeIfAbsent(Tuple2.of(leader, lookup.lookupType()), k -> new ArrayList<>())
+            lookupsByBucket
+                    .computeIfAbsent(lookup.tableBucket(), k -> new ArrayList<>())
                     .add(lookup);
         }
+        // <table id, partition id> -> error of a metadata refresh in this pass that found no
+        // leader. The refresh covers all buckets of the table or partition, so its other buckets
+        // only check the refreshed metadata instead of sending the same requests again, e.g. when
+        // a restarting TabletServer leads several buckets of the same table.
+        Map<Tuple2<Long, Long>, Exception> failedMetadataRefreshes = new HashMap<>();
+        for (Map.Entry<TableBucket, List<AbstractLookupQuery<?>>> entry :
+                lookupsByBucket.entrySet()) {
+            TableBucket tb = entry.getKey();
+            List<AbstractLookupQuery<?>> bucketLookups = entry.getValue();
+            LeaderlessBucket leaderlessBucket = leaderlessBuckets.get(tb);
+            if (leaderlessBucket != null
+                    && clock.milliseconds() < leaderlessBucket.nextLeaderLookupTimeMs
+                    && metadataUpdater.getCluster().leaderFor(tb) == null) {
+                // Lookups that arrive while the bucket backs off wait for it as well, instead of
+                // blocking the sender thread on another metadata request.
+                leaderlessBucket.waitingLookups.addAll(bucketLookups);
+                continue;
+            }
+            Tuple2<Long, Long> tableOrPartition = Tuple2.of(tb.getTableId(), tb.getPartitionId());
+            Exception leaderLookupError = failedMetadataRefreshes.get(tableOrPartition);
+            Integer leader;
+            if (leaderLookupError == null) {
+                try {
+                    // TODO Metadata requests are being sent too frequently here. consider first
+                    // collecting the tables that need to be updated and then sending them together
+                    // in one request.
+                    leader = metadataUpdater.leaderFor(bucketLookups.get(0).tablePath(), tb);
+                } catch (Exception e) {
+                    leader = null;
+                    leaderLookupError = e;
+                    failedMetadataRefreshes.put(tableOrPartition, e);
+                }
+            } else {
+                leader = metadataUpdater.getCluster().leaderFor(tb);
+            }
+            if (leader == null) {
+                if (leaderLookupError instanceof PartitionNotExistException) {
+                    // Metadata refresh confirmed that the queued lookups carry a deleted partition
+                    // id. Complete them instead of repeatedly enqueueing the stale TableBucket; a
+                    // primary key lookuper can then reroute by partition name.
+                    failLookups(bucketLookups, leaderLookupError);
+                    // Completing a lookup runs its callbacks on this thread, e.g. that reroute.
+                    // So the bucket's waiting lookups, however many, go back to the queue and fail
+                    // in later batches like these, instead of all at once here.
+                    LeaderlessBucket droppedBucket = leaderlessBuckets.get(tb);
+                    if (droppedBucket != null && reEnqueueWaitingLookups(droppedBucket)) {
+                        leaderlessBuckets.remove(tb);
+                    }
+                } else if (closing) {
+                    LOG.warn(
+                            "Failed to find the leader for table bucket {} of table {} while "
+                                    + "closing, failing {} lookup(s). Error: {}",
+                            tb,
+                            bucketLookups.get(0).tablePath(),
+                            bucketLookups.size(),
+                            leaderLookupError.toString());
+                    failLookups(bucketLookups, leaderLookupError);
+                } else {
+                    backOffLeaderlessBucket(tb, bucketLookups, leaderLookupError);
+                }
+                continue;
+            }
+            if (leaderlessBucket != null) {
+                // The next pass releases the bucket's waiting lookups and, if the leader is still
+                // cached by then, forgets the bucket.
+                leaderlessBucket.resetBackoff();
+            }
+            for (AbstractLookupQuery<?> lookup : bucketLookups) {
+                lookupBatchesByLeader
+                        .computeIfAbsent(
+                                Tuple2.of(leader, lookup.lookupType()), k -> new ArrayList<>())
+                        .add(lookup);
+            }
+        }
         return lookupBatchesByLeader;
+    }
+
+    /**
+     * Moves the lookups waiting for a bucket's leader back to the queue once the bucket's backoff
+     * has passed, or earlier once its leader is cached, e.g. by a metadata refresh for another
+     * bucket of the same table. A bucket whose leader is cached stops backing off.
+     */
+    private void releaseLookupsWaitingForLeader() {
+        if (leaderlessBuckets.isEmpty()) {
+            return;
+        }
+        Cluster cluster = metadataUpdater.getCluster();
+        long nowMs = clock.milliseconds();
+        Iterator<Map.Entry<TableBucket, LeaderlessBucket>> iterator =
+                leaderlessBuckets.entrySet().iterator();
+        while (iterator.hasNext()) {
+            Map.Entry<TableBucket, LeaderlessBucket> entry = iterator.next();
+            LeaderlessBucket leaderlessBucket = entry.getValue();
+            boolean leaderCached = cluster.leaderFor(entry.getKey()) != null;
+            if (leaderCached || nowMs >= leaderlessBucket.nextLeaderLookupTimeMs) {
+                if (!reEnqueueWaitingLookups(leaderlessBucket)) {
+                    // The queue got closed. The sender closes next and sends what's left.
+                    return;
+                }
+            }
+            if (leaderCached) {
+                iterator.remove();
+            }
+        }
+    }
+
+    private static void failLookups(List<AbstractLookupQuery<?>> lookups, Exception exception) {
+        for (AbstractLookupQuery<?> lookup : lookups) {
+            lookup.future().completeExceptionally(exception);
+        }
+    }
+
+    /**
+     * Moves the bucket's waiting lookups back to the queue.
+     *
+     * @return false if the queue got closed concurrently. The remaining lookups then stay with the
+     *     bucket, which must be kept, and are sent or failed when the sender closes.
+     */
+    private boolean reEnqueueWaitingLookups(LeaderlessBucket leaderlessBucket) {
+        AbstractLookupQuery<?> lookup;
+        while ((lookup = leaderlessBucket.waitingLookups.peek()) != null) {
+            if (!lookupQueue.tryReEnqueue(lookup)) {
+                return false;
+            }
+            leaderlessBucket.waitingLookups.poll();
+        }
+        return true;
+    }
+
+    private boolean hasLookupsWaitingForLeader() {
+        for (LeaderlessBucket leaderlessBucket : leaderlessBuckets.values()) {
+            if (!leaderlessBucket.waitingLookups.isEmpty()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void backOffLeaderlessBucket(
+            TableBucket tableBucket, List<AbstractLookupQuery<?>> lookups, Exception exception) {
+        LeaderlessBucket leaderlessBucket =
+                leaderlessBuckets.computeIfAbsent(tableBucket, k -> new LeaderlessBucket());
+        // Not counted toward max retries: a bucket can be leaderless for a while during a routine
+        // rolling restart, and lookups should not fail because of that.
+        long retryDelayMs = retryBackoff.backoff(leaderlessBucket.failedLeaderLookups++);
+        leaderlessBucket.nextLeaderLookupTimeMs = clock.milliseconds() + retryDelayMs;
+        leaderlessBucket.waitingLookups.addAll(lookups);
+        LOG.warn(
+                "Failed to find the leader for table bucket {} of table {} (failure {}), retrying "
+                        + "{} lookup(s) after up to {} ms. Error: {}",
+                tableBucket,
+                lookups.get(0).tablePath(),
+                leaderlessBucket.failedLeaderLookups,
+                leaderlessBucket.waitingLookups.size(),
+                retryDelayMs,
+                exception.toString());
+        LOG.debug("Failed to find the leader for table bucket {}.", tableBucket, exception);
+    }
+
+    /** Returns the lookups waiting for the bucket's leader. Not thread safe. */
+    @VisibleForTesting
+    List<AbstractLookupQuery<?>> getLookupsWaitingForLeader(TableBucket tableBucket) {
+        LeaderlessBucket leaderlessBucket = leaderlessBuckets.get(tableBucket);
+        return leaderlessBucket == null
+                ? Collections.emptyList()
+                : new ArrayList<>(leaderlessBucket.waitingLookups);
+    }
+
+    /**
+     * Returns the time before which the bucket's leader is not looked up again, or null if the
+     * bucket does not back off. Not thread safe.
+     */
+    @VisibleForTesting
+    @Nullable
+    Long getNextLeaderLookupTimeMs(TableBucket tableBucket) {
+        LeaderlessBucket leaderlessBucket = leaderlessBuckets.get(tableBucket);
+        return leaderlessBucket == null ? null : leaderlessBucket.nextLeaderLookupTimeMs;
     }
 
     @VisibleForTesting
@@ -519,7 +708,7 @@ class LookupSender implements Runnable {
                         ? historicalThrottleBackoff
                         : retryBackoff;
         long retryDelayMs = backoff.backoff(lookup.retries());
-        lookup.setNextRetryTimeMs(System.currentTimeMillis() + retryDelayMs);
+        lookup.setNextRetryTimeMs(clock.milliseconds() + retryDelayMs);
         lookup.incrementRetries();
         return retryDelayMs;
     }
@@ -635,6 +824,34 @@ class LookupSender implements Runnable {
                 @Nullable Set<Long> tableIds, @Nullable Set<TablePartition> tablePartitions) {
             this.tableIds = tableIds;
             this.tablePartitions = tablePartitions;
+        }
+    }
+
+    /**
+     * Backoff state of a bucket whose leader could not be found. Its waiting lookups are held here
+     * instead of the queue, so {@link LookupQueue#drain()} doesn't scan them on every pass. When
+     * the backoff has passed, they are moved back to the queue, but the state is kept until the
+     * leader is found or the partition turns out to be dropped. A waiting lookup that misses the
+     * next batch then still sees the bucket's backoff, instead of starting it again from the
+     * initial delay.
+     */
+    private static class LeaderlessBucket {
+        /** Failed leader lookups since the bucket last had a known leader. */
+        private int failedLeaderLookups;
+
+        /** The bucket's leader is not looked up again before this time, unless it gets cached. */
+        private long nextLeaderLookupTimeMs;
+
+        /** The lookups waiting for the bucket's leader. */
+        private final Deque<AbstractLookupQuery<?>> waitingLookups = new ArrayDeque<>();
+
+        /**
+         * Restarts the backoff after the leader is found. The next pass then releases the waiting
+         * lookups, as the backoff has passed.
+         */
+        private void resetBackoff() {
+            failedLeaderLookups = 0;
+            nextLeaderLookupTimeMs = 0;
         }
     }
 
