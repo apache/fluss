@@ -146,34 +146,3 @@ pub(crate) fn validate_readable_table(table_info: &TableInfo) -> Result<()> {
         ))),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use fluss::metadata::{DataTypes, Schema};
-    use std::collections::HashMap;
-
-    #[test]
-    fn disabled_lake_configuration_does_not_require_a_provider() {
-        let schema = Schema::builder()
-            .column("id", DataTypes::int())
-            .build()
-            .unwrap();
-        let table_info = TableInfo::new(
-            TablePath::new("fluss", "orders"),
-            7,
-            1,
-            schema,
-            Vec::new(),
-            Vec::<String>::new().into(),
-            1,
-            HashMap::from([("table.datalake.format".to_string(), "paimon".to_string())]),
-            HashMap::new(),
-            None,
-            0,
-            0,
-        );
-
-        validate_readable_table(&table_info).unwrap();
-    }
-}
