@@ -53,6 +53,7 @@ public final class FlussRequest implements RpcRequest {
     private volatile long requestDequeTimeMs;
     private volatile long requestCompletedTimeMs;
     private volatile boolean cancelled = false;
+    private Runnable queueRemovalCallback;
 
     public FlussRequest(
             short apiKey,
@@ -108,6 +109,19 @@ public final class FlussRequest implements RpcRequest {
     public void releaseBuffer() {
         if (message.isLazilyParsed()) {
             ReferenceCountUtil.safeRelease(buffer);
+        }
+    }
+
+    void setQueueRemovalCallback(Runnable callback) {
+        this.queueRemovalCallback = callback;
+    }
+
+    @Override
+    public void onDequeued() {
+        Runnable callback = queueRemovalCallback;
+        queueRemovalCallback = null;
+        if (callback != null) {
+            callback.run();
         }
     }
 

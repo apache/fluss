@@ -148,6 +148,67 @@ final class NettyServerHandlerTest {
     }
 
     @Test
+    void testDisconnectReleasesOnlyQueuedRequestsForThatConnection() throws Exception {
+        TestingRequestChannel channel = new TestingRequestChannel(100);
+        NettyServerHandler firstHandler = newServerHandler(channel);
+        NettyServerHandler secondHandler = newServerHandler(channel);
+        TestEmbeddedChannel first = new TestEmbeddedChannel(firstHandler);
+        TestEmbeddedChannel second = new TestEmbeddedChannel(secondHandler);
+        ByteBuf firstBuffer = encodeProduceLogRequest();
+        ByteBuf secondBuffer = encodeProduceLogRequest();
+        try {
+            firstHandler.channelRead(first.pipeline().context(firstHandler), firstBuffer);
+            secondHandler.channelRead(second.pipeline().context(secondHandler), secondBuffer);
+            assertThat(channel.requestsCount()).isEqualTo(2);
+
+            first.close();
+            first.runPendingTasks();
+            assertThat(firstBuffer.refCnt()).isZero();
+            assertThat(secondBuffer.refCnt()).isOne();
+            assertThat(channel.requestsCount()).isOne();
+
+            RpcRequest remaining = channel.pollRequest(0);
+            assertThat(remaining).isNotNull();
+            remaining.releaseBuffer();
+        } finally {
+            first.finishAndReleaseAll();
+            second.finishAndReleaseAll();
+            if (firstBuffer.refCnt() > 0) {
+                firstBuffer.release();
+            }
+            if (secondBuffer.refCnt() > 0) {
+                secondBuffer.release();
+            }
+        }
+    }
+
+    @Test
+    void testDisconnectDoesNotReleaseDequeuedRequest() throws Exception {
+        TestingRequestChannel channel = new TestingRequestChannel(100);
+        NettyServerHandler handler = newServerHandler(channel);
+        TestEmbeddedChannel connection = new TestEmbeddedChannel(handler);
+        ByteBuf buffer = encodeProduceLogRequest();
+        try {
+            handler.channelRead(connection.pipeline().context(handler), buffer);
+            RpcRequest processing = channel.pollRequest(0);
+            assertThat(processing).isNotNull();
+            handler.exceptionCaught(
+                    connection.pipeline().context(handler),
+                    new RuntimeException("connection lost"));
+            ((FlussRequest) processing).complete(new ProduceLogResponse());
+            connection.runPendingTasks();
+            assertThat(buffer.refCnt()).isOne();
+            processing.releaseBuffer();
+            assertThat(buffer.refCnt()).isZero();
+        } finally {
+            connection.finishAndReleaseAll();
+            if (buffer.refCnt() > 0) {
+                buffer.release();
+            }
+        }
+    }
+
+    @Test
     void testInactiveProduceRequestCannotAppendReleasedBuffer(@TempDir Path tempDir)
             throws Exception {
         CompletableFuture<MemoryLogRecords> capturedRecords = new CompletableFuture<>();
