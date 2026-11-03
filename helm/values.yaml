@@ -363,13 +363,10 @@ metrics:
     port: 9250
 
 resources:
-  # The server components keep the Helm scaffold's advice of shipping no default
-  # resources — the recommendation helm create writes into every new chart — so the
-  # chart stays runnable in small environments such as Minikube. The tiering service
-  # ships bounded defaults instead: it runs a full embedded Flink runtime in a single
-  # JVM, and its default JVM memory settings (60% of the container memory limit as
-  # heap, plus 512m direct memory) are only predictable when the container is
-  # memory-bounded. Override or clear these values like any other chart values.
+  # The tiering service ships bounded defaults, unlike the server components: it runs
+  # a full embedded Flink runtime in a single JVM, and its default JVM memory settings
+  # (a percentage of the container memory limit as heap) are only predictable when the
+  # limit is set. Override or clear these values like any other chart values.
   embeddedTiering:
     requests:
       cpu: 1
