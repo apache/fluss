@@ -82,7 +82,7 @@ public class LookupSenderTest {
 
     private final TableBucket tb1 = new TableBucket(DATA1_TABLE_ID_PK, 0);
 
-    private LeaderlessTestingMetadataUpdater metadataUpdater;
+    private TestingLeaderlessMetadataUpdater metadataUpdater;
     private LookupSender lookupSender;
 
     private static final int MAX_RETRIES = 3;
@@ -102,7 +102,7 @@ public class LookupSenderTest {
 
         Map<TablePath, TableInfo> tableInfos = new HashMap<>();
         tableInfos.put(DATA1_TABLE_PATH_PK, DATA1_TABLE_INFO_PK);
-        metadataUpdater = new LeaderlessTestingMetadataUpdater(tableInfos, gateway);
+        metadataUpdater = new TestingLeaderlessMetadataUpdater(tableInfos, gateway);
 
         // Keep the backoff short so retry tests that don't assert on timing stay fast.
         startLookupSender(new ExponentialBackoff(10, 2, 100, 0.2));
@@ -1169,7 +1169,7 @@ public class LookupSenderTest {
      * has none, the cached metadata has no leader for it and the given number of metadata refreshes
      * in {@link #leaderFor} fail, as when the bucket has no leader or the refresh fails.
      */
-    private static class LeaderlessTestingMetadataUpdater extends TestingMetadataUpdater {
+    private static class TestingLeaderlessMetadataUpdater extends TestingMetadataUpdater {
 
         private final Cluster clusterWithLeaders;
         private final AtomicInteger remainingFailures = new AtomicInteger();
@@ -1177,7 +1177,7 @@ public class LookupSenderTest {
         private volatile RuntimeException failure;
         private volatile boolean leaderRemoved;
 
-        LeaderlessTestingMetadataUpdater(
+        TestingLeaderlessMetadataUpdater(
                 Map<TablePath, TableInfo> tableInfos, TestTabletServerGateway gateway) {
             super(
                     COORDINATOR,

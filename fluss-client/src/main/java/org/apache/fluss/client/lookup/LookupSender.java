@@ -224,7 +224,7 @@ class LookupSender implements Runnable {
                     && metadataUpdater.getCluster().leaderFor(tb) == null) {
                 // Lookups that arrive while the bucket backs off wait for it as well, instead of
                 // blocking the sender thread on another metadata request.
-                waitForLeader(leaderlessBucket, bucketLookups);
+                reEnqueueLookupsWaitingForLeader(leaderlessBucket, bucketLookups);
                 continue;
             }
             int leader;
@@ -299,7 +299,7 @@ class LookupSender implements Runnable {
         // rolling restart, and lookups should not fail because of that.
         long retryDelayMs = retryBackoff.backoff(leaderlessBucket.attempts++);
         leaderlessBucket.retryTimeMs = clock.milliseconds() + retryDelayMs;
-        waitForLeader(leaderlessBucket, lookups);
+        reEnqueueLookupsWaitingForLeader(leaderlessBucket, lookups);
         LOG.warn(
                 "Failed to find the leader for table bucket {}, retrying {} lookup(s) after {} ms. "
                         + "Error: {}",
@@ -310,7 +310,7 @@ class LookupSender implements Runnable {
         LOG.debug("Failed to find the leader for table bucket {}.", tableBucket, exception);
     }
 
-    private void waitForLeader(
+    private void reEnqueueLookupsWaitingForLeader(
             LeaderlessBucket leaderlessBucket, List<AbstractLookupQuery<?>> lookups) {
         for (AbstractLookupQuery<?> lookup : lookups) {
             lookup.setNextRetryTimeMs(leaderlessBucket.retryTimeMs);
