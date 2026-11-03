@@ -72,6 +72,7 @@ import java.util.function.BiConsumer;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.hasHistoricalProduce;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.hasHistoricalPut;
 import static org.apache.fluss.utils.IOUtils.closeQuietly;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** Connection to a Netty server used by the {@link NettyClient}. */
 @ThreadSafe
@@ -698,6 +699,7 @@ final class ServerConnection {
 
         @Override
         public boolean completeExceptionally(Throwable error) {
+            checkNotNull(error);
             retire();
             return super.completeExceptionally(error);
         }

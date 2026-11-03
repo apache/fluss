@@ -706,6 +706,10 @@ final class NettyClientTest {
                 assertThat(delayedService.awaitFirstLookup()).isTrue();
                 ServerConnection connection = nettyClient.connections().iterator().next();
                 assertThat(connection.numInflightRequests()).isOne();
+                assertThatThrownBy(() -> response.completeExceptionally(null))
+                        .isInstanceOf(NullPointerException.class);
+                assertThat(response).isNotDone();
+                assertThat(connection.numInflightRequests()).isOne();
                 response.cancel(false);
                 assertThat(connection.numInflightRequests()).isZero();
                 delayedService.completeFirstLookup();
