@@ -336,6 +336,20 @@ public class ZooKeeperClient implements AutoCloseable {
         return getChildren(ZkData.CoordinatorIdsZNode.path());
     }
 
+    /** Gets the registered addresses of the given coordinator servers, keyed by coordinator id. */
+    public Map<String, CoordinatorAddress> getCoordinatorServers(Collection<String> coordinatorIds)
+            throws Exception {
+        Map<String, String> path2IdMap =
+                coordinatorIds.stream().collect(toMap(ZkData.CoordinatorIdZNode::path, id -> id));
+
+        List<ZkGetDataResponse> responses = getDataInBackground(path2IdMap.keySet());
+        return processGetDataResponses(
+                responses,
+                response -> path2IdMap.get(response.getPath()),
+                ZkData.CoordinatorIdZNode::decode,
+                "coordinator server registration");
+    }
+
     /** Ensure epoch znode exists. */
     public void ensureEpochZnodeExists() throws Exception {
         String path = ZkData.CoordinatorEpochZNode.path();

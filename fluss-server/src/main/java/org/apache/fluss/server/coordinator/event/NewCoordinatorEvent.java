@@ -17,19 +17,21 @@
 
 package org.apache.fluss.server.coordinator.event;
 
+import org.apache.fluss.server.zk.data.CoordinatorAddress;
+
 import java.util.Objects;
 
 /** An event for new coordinator server. */
 public class NewCoordinatorEvent implements CoordinatorEvent {
 
-    private final String serverId;
+    private final CoordinatorAddress coordinatorAddress;
 
-    public NewCoordinatorEvent(String serverId) {
-        this.serverId = serverId;
+    public NewCoordinatorEvent(CoordinatorAddress coordinatorAddress) {
+        this.coordinatorAddress = coordinatorAddress;
     }
 
-    public String getServerId() {
-        return serverId;
+    public CoordinatorAddress getCoordinatorAddress() {
+        return coordinatorAddress;
     }
 
     @Override
@@ -41,16 +43,16 @@ public class NewCoordinatorEvent implements CoordinatorEvent {
             return false;
         }
         NewCoordinatorEvent that = (NewCoordinatorEvent) o;
-        return Objects.equals(serverId, that.serverId);
+        return Objects.equals(coordinatorAddress, that.coordinatorAddress);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(serverId);
+        return Objects.hash(coordinatorAddress);
     }
 
     @Override
     public String toString() {
-        return "NewCoordinatorEvent{" + "serverId=" + serverId + '}';
+        return "NewCoordinatorEvent{" + "coordinatorAddress=" + coordinatorAddress + '}';
     }
 }

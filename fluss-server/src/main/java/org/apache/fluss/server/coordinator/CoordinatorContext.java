@@ -30,6 +30,7 @@ import org.apache.fluss.server.coordinator.statemachine.BucketState;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaState;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.zk.ZkEpoch;
+import org.apache.fluss.server.zk.data.CoordinatorAddress;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.utils.types.Tuple2;
 
@@ -42,6 +43,7 @@ import javax.annotation.concurrent.NotThreadSafe;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -70,7 +72,8 @@ public class CoordinatorContext {
     // a success deletion.
     private final Map<TableBucketReplica, Integer> failDeleteNumbers = new HashMap<>();
 
-    private final Set<String> liveCoordinatorServers = new HashSet<>();
+    // coordinator id -> registered address, for all live coordinators including the active one
+    private final Map<String, CoordinatorAddress> liveCoordinatorServers = new HashMap<>();
     private final Map<Integer, ServerInfo> liveTabletServers = new HashMap<>();
     private final Set<Integer> shuttingDownTabletServers = new HashSet<>();
 
@@ -133,6 +136,9 @@ public class CoordinatorContext {
 
     private ServerInfo coordinatorServerInfo = null;
 
+    /** The id of the active coordinator, used to tell it apart from the standby coordinators. */
+    @Nullable private String coordinatorServerId = null;
+
     public CoordinatorContext(ZkEpoch zkEpoch) {
         this.coordinatorEpoch = zkEpoch.getCoordinatorEpoch();
         this.coordinatorEpochZkVersion = zkEpoch.getCoordinatorEpochZkVersion();
@@ -147,16 +153,16 @@ public class CoordinatorContext {
     }
 
     public Set<String> getLiveCoordinatorServers() {
-        return liveCoordinatorServers;
+        return Collections.unmodifiableSet(liveCoordinatorServers.keySet());
     }
 
-    public void setLiveCoordinators(Set<String> servers) {
+    public void setLiveCoordinators(Collection<CoordinatorAddress> servers) {
         liveCoordinatorServers.clear();
-        liveCoordinatorServers.addAll(servers);
+        servers.forEach(this::addLiveCoordinator);
     }
 
-    public void addLiveCoordinator(String serverId) {
-        this.liveCoordinatorServers.add(serverId);
+    public void addLiveCoordinator(CoordinatorAddress server) {
+        this.liveCoordinatorServers.put(server.getId(), server);
     }
 
     public void removeLiveCoordinator(String serverId) {
@@ -197,6 +203,22 @@ public class CoordinatorContext {
 
     public void setCoordinatorServerInfo(ServerInfo coordinatorServerInfo) {
         this.coordinatorServerInfo = coordinatorServerInfo;
+    }
+
+    public void setCoordinatorServerId(String coordinatorServerId) {
+        this.coordinatorServerId = coordinatorServerId;
+    }
+
+    /**
+     * Returns the live coordinators other than the active one, sorted by coordinator id. A
+     * coordinator is live while its registration in ZooKeeper exists; this does not imply that it
+     * is ready to take over leadership.
+     */
+    public List<CoordinatorAddress> getCoordinatorStandbys() {
+        return liveCoordinatorServers.values().stream()
+                .filter(server -> !server.getId().equals(coordinatorServerId))
+                .sorted(Comparator.comparing(CoordinatorAddress::getId))
+                .collect(Collectors.toList());
     }
 
     public void addLiveTabletServer(ServerInfo serverInfo) {

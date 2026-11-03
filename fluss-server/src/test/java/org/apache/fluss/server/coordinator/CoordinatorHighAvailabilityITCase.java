@@ -34,7 +34,9 @@ import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.CreateDatabaseRequest;
+import org.apache.fluss.rpc.messages.DescribeClusterRequest;
 import org.apache.fluss.rpc.messages.MetadataRequest;
+import org.apache.fluss.rpc.messages.PbServerNode;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
 import org.apache.fluss.server.tablet.TabletServer;
@@ -179,6 +181,65 @@ class CoordinatorHighAvailabilityITCase {
                 .isInstanceOf(ExecutionException.class)
                 .hasCauseInstanceOf(NotCoordinatorLeaderException.class)
                 .hasMessageContaining("not the current leader");
+    }
+
+    @Test
+    void testDescribeClusterReportsLiveStandbyCoordinators() throws Exception {
+        coordinatorServer1 = new CoordinatorServer(createConfiguration());
+        coordinatorServer2 = new CoordinatorServer(createConfiguration());
+        coordinatorServer1.start();
+        coordinatorServer2.start();
+        waitUntilCoordinatorServerElected();
+
+        String leaderId = zookeeperClient.getCoordinatorLeaderAddress().get().getId();
+        CoordinatorServer standbyServer = findServerByNotId(leaderId);
+        String standbyId = standbyServer.getServerId();
+        CoordinatorGateway leaderGateway = createGatewayForServer(findServerById(leaderId));
+        List<Endpoint> standbyEndpoints =
+                zookeeperClient
+                        .getCoordinatorServers(Collections.singleton(standbyId))
+                        .get(standbyId)
+                        .getEndpoints();
+
+        // the leader is reported as coordinator_server and only the other one as standby
+        waitUntil(
+                () ->
+                        leaderGateway
+                                        .describeCluster(new DescribeClusterRequest())
+                                        .get()
+                                        .getCoordinatorStandbysCount()
+                                == 1,
+                Duration.ofSeconds(30),
+                "Leader did not report the standby coordinator");
+        PbServerNode standby =
+                leaderGateway
+                        .describeCluster(new DescribeClusterRequest())
+                        .get()
+                        .getCoordinatorStandbysList()
+                        .get(0);
+        assertThat(standbyEndpoints)
+                .anySatisfy(
+                        endpoint -> {
+                            assertThat(endpoint.getHost()).isEqualTo(standby.getHost());
+                            assertThat(endpoint.getPort()).isEqualTo(standby.getPort());
+                        });
+
+        // a stopped standby is no longer reported
+        standbyServer.close();
+        if (standbyServer == coordinatorServer1) {
+            coordinatorServer1 = null;
+        } else {
+            coordinatorServer2 = null;
+        }
+        waitUntil(
+                () ->
+                        leaderGateway
+                                        .describeCluster(new DescribeClusterRequest())
+                                        .get()
+                                        .getCoordinatorStandbysCount()
+                                == 0,
+                Duration.ofSeconds(30),
+                "Leader still reports the stopped standby coordinator");
     }
 
     @Test

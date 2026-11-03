@@ -26,10 +26,12 @@ import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.metrics.group.CoordinatorMetricGroup;
 import org.apache.fluss.server.zk.ZkEpoch;
+import org.apache.fluss.server.zk.data.CoordinatorAddress;
 
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.util.Collections;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
@@ -54,7 +56,8 @@ class CoordinatorEventManagerTest {
     @Test
     void testMetricsUpdatedImmediatelyOnStartup() {
         CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
-        context.addLiveCoordinator("coordinator-0");
+        context.addLiveCoordinator(
+                new CoordinatorAddress("coordinator-0", Collections.emptyList()));
         context.addLiveTabletServer(
                 new ServerInfo(
                         0,

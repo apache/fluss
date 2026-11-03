@@ -263,6 +263,8 @@ message DescribeClusterResponse {
   repeated PbServerNode tablet_servers = 2;
   // Also includes offline servers with assigned replicas. Missing loads are not zero counts.
   repeated PbTabletServerLoad tablet_server_loads = 3;
+  // Live standby coordinators, excluding the active coordinator_server. Fluss versions >= 1.1.
+  repeated PbServerNode coordinator_standbys = 4;
 }
 
 // produce log request and response

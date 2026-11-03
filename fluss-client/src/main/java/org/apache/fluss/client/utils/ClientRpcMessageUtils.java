@@ -1004,6 +1004,10 @@ public class ClientRpcMessageUtils {
                 response.hasCoordinatorServer()
                         ? toServerNode(response.getCoordinatorServer(), ServerType.COORDINATOR)
                         : null;
+        List<ServerNode> coordinatorStandbys = new ArrayList<>();
+        for (PbServerNode node : response.getCoordinatorStandbysList()) {
+            coordinatorStandbys.add(toServerNode(node, ServerType.COORDINATOR));
+        }
         Map<Integer, ServerNode> tabletServers = new HashMap<>();
         for (PbServerNode node : response.getTabletServersList()) {
             tabletServers.put(node.getNodeId(), toServerNode(node, ServerType.TABLET_SERVER));
@@ -1020,7 +1024,7 @@ public class ClientRpcMessageUtils {
                             load.getActiveLeaderReplicas(),
                             load.getLeaderlessReplicas()));
         }
-        return new ClusterDescription(coordinator, tabletServers, loads);
+        return new ClusterDescription(coordinator, coordinatorStandbys, tabletServers, loads);
     }
 
     private static ServerNode toServerNode(PbServerNode node, ServerType type) {

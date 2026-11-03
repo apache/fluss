@@ -326,6 +326,9 @@ pub struct DescribeClusterResponse {
     /// Also includes offline servers with assigned replicas. Missing loads are not zero counts.
     #[prost(message, repeated, tag = "3")]
     pub tablet_server_loads: ::prost::alloc::vec::Vec<PbTabletServerLoad>,
+    /// Live standby coordinators, excluding the active coordinator_server. Fluss versions >= 1.1.
+    #[prost(message, repeated, tag = "4")]
+    pub coordinator_standbys: ::prost::alloc::vec::Vec<PbServerNode>,
 }
 /// produce log request and response
 #[derive(Clone, PartialEq, ::prost::Message)]

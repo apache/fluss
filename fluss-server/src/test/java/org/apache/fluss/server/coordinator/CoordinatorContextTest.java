@@ -32,6 +32,7 @@ import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.zk.ZkEpoch;
+import org.apache.fluss.server.zk.data.CoordinatorAddress;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.types.DataTypes;
 
@@ -49,6 +50,29 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link CoordinatorContext}. */
 class CoordinatorContextTest {
+
+    @Test
+    void testCoordinatorStandbysExcludeActiveCoordinator() {
+        CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
+        CoordinatorAddress active =
+                new CoordinatorAddress("b", Endpoint.fromListenersString("CLIENT://host-b:9123"));
+        CoordinatorAddress standby1 =
+                new CoordinatorAddress("c", Endpoint.fromListenersString("CLIENT://host-c:9123"));
+        CoordinatorAddress standby2 =
+                new CoordinatorAddress("a", Endpoint.fromListenersString("CLIENT://host-a:9123"));
+        context.setCoordinatorServerId(active.getId());
+        context.setLiveCoordinators(Arrays.asList(active, standby1, standby2));
+
+        assertThat(context.getLiveCoordinatorServers()).containsExactlyInAnyOrder("a", "b", "c");
+        assertThat(context.getCoordinatorStandbys()).containsExactly(standby2, standby1);
+
+        context.removeLiveCoordinator(standby1.getId());
+        assertThat(context.getCoordinatorStandbys()).containsExactly(standby2);
+
+        context.resetContext();
+        assertThat(context.getLiveCoordinatorServers()).isEmpty();
+        assertThat(context.getCoordinatorStandbys()).isEmpty();
+    }
 
     @Test
     void testRemovePartitionClearsPartitionInfo() {

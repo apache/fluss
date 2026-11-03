@@ -303,7 +303,9 @@ public class ServerRpcMessageUtils {
     }
 
     public static DescribeClusterResponse buildDescribeClusterResponse(
-            @Nullable ServerNode coordinatorServer, Collection<ServerNode> aliveTabletServers) {
+            @Nullable ServerNode coordinatorServer,
+            List<ServerNode> coordinatorStandbys,
+            Collection<ServerNode> aliveTabletServers) {
         DescribeClusterResponse describeClusterResponse = new DescribeClusterResponse();
 
         if (coordinatorServer != null) {
@@ -333,6 +335,14 @@ public class ServerRpcMessageUtils {
         }
 
         describeClusterResponse.addAllTabletServers(pbServerNodeList);
+
+        for (ServerNode standby : coordinatorStandbys) {
+            describeClusterResponse
+                    .addCoordinatorStandby()
+                    .setNodeId(standby.id())
+                    .setHost(standby.host())
+                    .setPort(standby.port());
+        }
         return describeClusterResponse;
     }
 

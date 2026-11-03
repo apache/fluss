@@ -122,6 +122,7 @@ import org.apache.fluss.server.metrics.group.CoordinatorMetricGroup;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.BucketAssignment;
+import org.apache.fluss.server.zk.data.CoordinatorAddress;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.PartitionRegistration;
@@ -322,7 +323,14 @@ public class CoordinatorEventProcessor implements EventProcessor {
     }
 
     public void startup() {
-        coordinatorContext.setCoordinatorServerInfo(getCoordinatorServerInfo());
+        CoordinatorAddress coordinatorAddress = getCoordinatorLeaderAddress();
+        coordinatorContext.setCoordinatorServerId(coordinatorAddress.getId());
+        coordinatorContext.setCoordinatorServerInfo(
+                new ServerInfo(
+                        0,
+                        null, // For coordinatorServer, no rack info
+                        coordinatorAddress.getEndpoints(),
+                        ServerType.COORDINATOR));
         // start watchers first so that we won't miss node in zk;
         coordinatorChangeWatcher.start();
         tabletServerChangeWatcher.start();
@@ -357,17 +365,10 @@ public class CoordinatorEventProcessor implements EventProcessor {
         updateObservedKvLeaderReplicaCount();
     }
 
-    private ServerInfo getCoordinatorServerInfo() {
+    private CoordinatorAddress getCoordinatorLeaderAddress() {
         try {
             return zooKeeperClient
                     .getCoordinatorLeaderAddress()
-                    .map(
-                            coordinatorAddress ->
-                                    new ServerInfo(
-                                            0,
-                                            null, // For coordinatorServer, no rack info
-                                            coordinatorAddress.getEndpoints(),
-                                            ServerType.COORDINATOR))
                     .orElseGet(
                             () -> {
                                 LOG.error("Coordinator server address is empty in zookeeper.");
@@ -392,7 +393,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
         long start = System.currentTimeMillis();
         // get all coordinator servers
         List<String> currentCoordinatorServers = zooKeeperClient.getCoordinatorServerList();
-        coordinatorContext.setLiveCoordinators(new HashSet<>(currentCoordinatorServers));
+        coordinatorContext.setLiveCoordinators(
+                zooKeeperClient.getCoordinatorServers(currentCoordinatorServers).values());
         LOG.info("Load coordinator servers success when initializing coordinator context.");
 
         // get all tablet server's
@@ -1340,7 +1342,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
     }
 
     private void processNewCoordinator(NewCoordinatorEvent newCoordinatorEvent) {
-        String coordinatorServerId = newCoordinatorEvent.getServerId();
+        CoordinatorAddress coordinatorAddress = newCoordinatorEvent.getCoordinatorAddress();
+        String coordinatorServerId = coordinatorAddress.getId();
         if (coordinatorContext.getLiveCoordinatorServers().contains(coordinatorServerId)) {
             return;
         }
@@ -1348,7 +1351,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         // process new coordinator server
         LOG.info("New coordinator server callback for coordinator server {}", coordinatorServerId);
 
-        coordinatorContext.addLiveCoordinator(coordinatorServerId);
+        coordinatorContext.addLiveCoordinator(coordinatorAddress);
     }
 
     private void processDeadCoordinator(DeadCoordinatorEvent deadCoordinatorEvent) {
