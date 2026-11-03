@@ -188,9 +188,56 @@ fn validate_server_type(
     })
 }
 
+/// Identifies a cached connection by server UID, host and port.
+///
+/// Connections to different endpoints of one server may coexist: `ServerNode` carries no epoch,
+/// so the client cannot tell which endpoint is newer while callers hold different metadata
+/// snapshots. Once a metadata refresh advertises a server at another endpoint,
+/// [`RpcClient::disconnect_superseded_endpoints`] drops the connections to its old endpoints.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct ConnectionKey {
+    server_uid: String,
+    host: String,
+    port: u32,
+}
+
+impl From<&ServerNode> for ConnectionKey {
+    fn from(node: &ServerNode) -> Self {
+        ConnectionKey {
+            server_uid: node.uid().to_owned(),
+            host: node.host().to_owned(),
+            port: node.port(),
+        }
+    }
+}
+
+impl fmt::Display for ConnectionKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}@{}:{}", self.server_uid, self.host, self.port)
+    }
+}
+
+#[derive(Debug, Default)]
+struct ConnectionCache {
+    connections: HashMap<ConnectionKey, ServerConnection>,
+    /// The endpoint of each server, by UID, in the metadata last passed to
+    /// [`RpcClient::disconnect_superseded_endpoints`].
+    advertised: HashMap<String, ConnectionKey>,
+}
+
+/// Returns the endpoint at which `advertised` lists the server of `key`, if it is another one.
+fn superseding_endpoint<'a>(
+    advertised: &'a HashMap<String, ConnectionKey>,
+    key: &ConnectionKey,
+) -> Option<&'a ConnectionKey> {
+    advertised
+        .get(&key.server_uid)
+        .filter(|endpoint| *endpoint != key)
+}
+
 #[derive(Debug, Default)]
 pub struct RpcClient {
-    connections: RwLock<HashMap<String, ServerConnection>>,
+    cache: RwLock<ConnectionCache>,
     client_id: Arc<str>,
     timeout: Option<Duration>,
     max_message_size: usize,
@@ -200,7 +247,7 @@ pub struct RpcClient {
 impl RpcClient {
     pub fn new() -> Self {
         RpcClient {
-            connections: Default::default(),
+            cache: Default::default(),
             client_id: Arc::from(""),
             timeout: None,
             max_message_size: usize::MAX,
@@ -218,33 +265,92 @@ impl RpcClient {
         self
     }
 
-    pub(crate) fn disconnect(&self, server_uid: &str) {
-        self.connections.write().remove(server_uid);
+    /// Drops the cached connection to the endpoint of `server_node`. Requests already sent on it
+    /// still complete, since they hold their own reference to the connection.
+    pub(crate) fn disconnect_endpoint(&self, server_node: &ServerNode) {
+        self.cache
+            .write()
+            .connections
+            .remove(&ConnectionKey::from(server_node));
+    }
+
+    /// Drops the cached connections of servers that `live_nodes` advertise at another endpoint.
+    ///
+    /// A server that moved may have left its old address to another server, so the connection to
+    /// the old address must not be reused. While the latest call advertises the server at another
+    /// endpoint, [`get_connection`](Self::get_connection) does not cache connections to the old
+    /// address either, including those whose handshake is in progress during this call.
+    /// Connections of servers missing from `live_nodes` are kept.
+    pub(crate) fn disconnect_superseded_endpoints(&self, live_nodes: &[ServerNode]) {
+        let advertised: HashMap<String, ConnectionKey> = live_nodes
+            .iter()
+            .map(|node| (node.uid().to_owned(), ConnectionKey::from(node)))
+            .collect();
+        let mut dropped = Vec::new();
+        {
+            let mut guard = self.cache.write();
+            let cache = &mut *guard;
+            cache.advertised = advertised;
+            cache.connections.retain(
+                |key, _| match superseding_endpoint(&cache.advertised, key) {
+                    Some(endpoint) => {
+                        dropped.push((key.clone(), endpoint.clone()));
+                        false
+                    }
+                    None => true,
+                },
+            );
+        }
+        for (key, endpoint) in dropped {
+            log::info!(
+                "Dropping the connection to {key}: the server moved to {}:{}.",
+                endpoint.host,
+                endpoint.port
+            );
+        }
     }
 
     pub(crate) async fn get_connection(
         &self,
         server_node: &ServerNode,
     ) -> Result<ServerConnection, Error> {
-        let server_id = server_node.uid();
+        let key = ConnectionKey::from(server_node);
         {
-            let connections = self.connections.read();
-            if let Some(conn) = connections.get(server_id).cloned() {
+            let cache = self.cache.read();
+            if let Some(conn) = cache.connections.get(&key).cloned() {
                 if !conn.is_poisoned() {
                     return Ok(conn);
                 }
             }
         }
         let new_server = self.connect(server_node).await?;
-        {
-            let mut connections = self.connections.write();
-            if let Some(race_conn) = connections.get(server_id) {
+        let superseded = {
+            let mut cache = self.cache.write();
+            if let Some(race_conn) = cache.connections.get(&key) {
                 if !race_conn.is_poisoned() {
                     return Ok(race_conn.clone());
                 }
             }
 
-            connections.insert(server_id.to_owned(), new_server.clone());
+            // A superseded endpoint means the request was routed with metadata older than the
+            // latest refresh, which may have run during the handshake. Caching the connection
+            // would keep it past that refresh.
+            match superseding_endpoint(&cache.advertised, &key).cloned() {
+                Some(endpoint) => Some((key, endpoint)),
+                None => {
+                    cache.connections.insert(key, new_server.clone());
+                    None
+                }
+            }
+        };
+        if let Some((key, endpoint)) = superseded {
+            // The caller still sends its request to the endpoint it was routed to; the
+            // connection closes once it is released.
+            log::info!(
+                "Not caching the connection to {key}: the server moved to {}:{}.",
+                endpoint.host,
+                endpoint.port
+            );
         }
         Ok(new_server)
     }
@@ -345,6 +451,27 @@ impl RpcClient {
                 Err(e) => return Err(e),
             }
         }
+    }
+}
+
+#[cfg(test)]
+impl RpcClient {
+    /// Drops the cached connections to every endpoint of the server `server_uid`. Requests
+    /// already sent on them still complete, since they hold their own reference to the connection.
+    pub(crate) fn disconnect(&self, server_uid: &str) {
+        self.cache
+            .write()
+            .connections
+            .retain(|key, _| key.server_uid != server_uid);
+    }
+
+    pub(crate) fn cached_endpoints(&self) -> std::collections::HashSet<String> {
+        self.cache
+            .read()
+            .connections
+            .keys()
+            .map(ToString::to_string)
+            .collect()
     }
 }
 
@@ -820,7 +947,9 @@ mod tests {
     use metrics::{SharedString, Unit};
     use metrics_util::CompositeKey;
     use metrics_util::debugging::{DebugValue, DebuggingRecorder};
+    use std::collections::HashSet;
     use tokio::io::{AsyncReadExt, AsyncWriteExt, BufStream, DuplexStream};
+    use tokio::net::{TcpListener, TcpStream};
 
     // -- Test-only request/response types --------------------------------
 
@@ -1531,5 +1660,199 @@ mod tests {
             validate_server_type(&ServerType::CoordinatorServer, Some(99),),
             Err(Error::InvalidServerType { .. })
         ));
+    }
+
+    // -- Connection cache ------------------------------------------------
+
+    async fn bind() -> TcpListener {
+        TcpListener::bind("127.0.0.1:0").await.unwrap()
+    }
+
+    fn node(id: i32, port: u16, server_type: ServerType) -> ServerNode {
+        ServerNode::new(id, "127.0.0.1".to_string(), u32::from(port), server_type)
+    }
+
+    fn port(listener: &TcpListener) -> u16 {
+        listener.local_addr().unwrap().port()
+    }
+
+    async fn accept_handshake(
+        listener: &TcpListener,
+        server_type: &ServerType,
+        before_reply: impl FnOnce(),
+    ) -> TcpStream {
+        use prost::Message;
+
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let len = stream.read_i32().await.unwrap();
+        let mut request = vec![0u8; len as usize];
+        stream.read_exact(&mut request).await.unwrap();
+        assert_eq!(
+            i16::from_be_bytes([request[0], request[1]]),
+            i16::from(ApiKey::ApiVersion)
+        );
+        let mut reply = vec![0u8];
+        reply.extend_from_slice(&request[4..8]);
+        crate::proto::ApiVersionsResponse {
+            api_versions: vec![],
+            server_type: Some(server_type.to_type_id()),
+        }
+        .encode(&mut reply)
+        .unwrap();
+        before_reply();
+        stream.write_i32(reply.len() as i32).await.unwrap();
+        stream.write_all(&reply).await.unwrap();
+        stream
+    }
+
+    async fn connect(
+        client: &RpcClient,
+        node: &ServerNode,
+        listener: &TcpListener,
+    ) -> (ServerConnection, TcpStream) {
+        connect_with(client, node, listener, || {}).await
+    }
+
+    async fn connect_with(
+        client: &RpcClient,
+        node: &ServerNode,
+        listener: &TcpListener,
+        before_reply: impl FnOnce(),
+    ) -> (ServerConnection, TcpStream) {
+        let (connection, stream) = tokio::time::timeout(Duration::from_secs(10), async {
+            tokio::join!(
+                client.get_connection(node),
+                accept_handshake(listener, node.server_type(), before_reply)
+            )
+        })
+        .await
+        .unwrap_or_else(|_| panic!("no new connection to {}", node.url()));
+        (connection.unwrap(), stream)
+    }
+
+    fn endpoint(node: &ServerNode) -> String {
+        ConnectionKey::from(node).to_string()
+    }
+
+    #[tokio::test]
+    async fn connections_are_cached_per_endpoint() {
+        let (old_listener, new_listener) = (bind().await, bind().await);
+        let client = RpcClient::new();
+        let at_old = node(1, port(&old_listener), ServerType::TabletServer);
+        let at_new = node(1, port(&new_listener), ServerType::TabletServer);
+
+        let (old_connection, _old_stream) = connect(&client, &at_old, &old_listener).await;
+        let (new_connection, _new_stream) = connect(&client, &at_new, &new_listener).await;
+        assert!(!Arc::ptr_eq(&old_connection, &new_connection));
+
+        let reused_old = client.get_connection(&at_old).await.unwrap();
+        let reused_new = client.get_connection(&at_new).await.unwrap();
+        assert!(Arc::ptr_eq(&reused_old, &old_connection));
+        assert!(Arc::ptr_eq(&reused_new, &new_connection));
+
+        client.disconnect_endpoint(&at_old);
+        assert_eq!(
+            client.cached_endpoints(),
+            HashSet::from([endpoint(&at_new)])
+        );
+    }
+
+    #[tokio::test]
+    async fn disconnect_drops_every_endpoint_of_server() {
+        let (old_listener, new_listener) = (bind().await, bind().await);
+        let client = RpcClient::new();
+        let at_old = node(1, port(&old_listener), ServerType::TabletServer);
+        let at_new = node(1, port(&new_listener), ServerType::TabletServer);
+        let other_server = node(2, port(&old_listener), ServerType::TabletServer);
+        let mut connections = Vec::new();
+        for (cached, listener) in [
+            (&at_old, &old_listener),
+            (&at_new, &new_listener),
+            (&other_server, &old_listener),
+        ] {
+            connections.push(connect(&client, cached, listener).await);
+        }
+
+        client.disconnect(at_old.uid());
+        assert_eq!(
+            client.cached_endpoints(),
+            HashSet::from([endpoint(&other_server)])
+        );
+    }
+
+    #[tokio::test]
+    async fn connections_to_superseded_endpoints_are_not_cached() {
+        let (old_listener, new_listener) = (bind().await, bind().await);
+        let client = RpcClient::new();
+        let at_old = node(1, port(&old_listener), ServerType::TabletServer);
+        let at_new = node(1, port(&new_listener), ServerType::TabletServer);
+
+        let (connection, _old_stream) = connect_with(&client, &at_old, &old_listener, || {
+            client.disconnect_superseded_endpoints(std::slice::from_ref(&at_new))
+        })
+        .await;
+        assert!(client.cached_endpoints().is_empty());
+        let released = Arc::downgrade(&connection);
+        drop(connection);
+        assert!(released.upgrade().is_none());
+
+        let (_stale_connection, _stale_stream) = connect(&client, &at_old, &old_listener).await;
+        connect(&client, &at_new, &new_listener).await;
+        assert_eq!(
+            client.cached_endpoints(),
+            HashSet::from([endpoint(&at_new)])
+        );
+
+        client.disconnect_superseded_endpoints(std::slice::from_ref(&at_old));
+        connect(&client, &at_old, &old_listener).await;
+        assert_eq!(
+            client.cached_endpoints(),
+            HashSet::from([endpoint(&at_old)])
+        );
+
+        client.disconnect_superseded_endpoints(&[]);
+        connect(&client, &at_new, &new_listener).await;
+        assert_eq!(
+            client.cached_endpoints(),
+            HashSet::from([endpoint(&at_old), endpoint(&at_new)])
+        );
+    }
+
+    #[tokio::test]
+    async fn superseded_endpoints_are_disconnected() {
+        let listener = bind().await;
+        let old_port = port(&listener);
+        let new_port = port(&bind().await);
+        let client = RpcClient::new();
+        let moved_coordinator = node(0, old_port, ServerType::CoordinatorServer);
+        let moved_server = node(1, old_port, ServerType::TabletServer);
+        let reusing_server = node(2, old_port, ServerType::TabletServer);
+        let unlisted_server = node(3, old_port, ServerType::TabletServer);
+        let bootstrap = node(-1, old_port, ServerType::Unknown);
+        let mut connections = Vec::new();
+        for cached in [
+            &moved_coordinator,
+            &moved_server,
+            &reusing_server,
+            &unlisted_server,
+            &bootstrap,
+        ] {
+            connections.push(connect(&client, cached, &listener).await);
+        }
+
+        client.disconnect_superseded_endpoints(&[
+            node(0, new_port, ServerType::CoordinatorServer),
+            node(1, new_port, ServerType::TabletServer),
+            reusing_server.clone(),
+        ]);
+
+        assert_eq!(
+            client.cached_endpoints(),
+            HashSet::from([
+                endpoint(&reusing_server),
+                endpoint(&unlisted_server),
+                endpoint(&bootstrap),
+            ])
+        );
     }
 }

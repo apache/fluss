@@ -180,7 +180,7 @@ impl Metadata {
                 Self::retry_bootstrap(
                     &bootstrap.raw,
                     || Self::fetch_cluster_from_bootstrap(&server_node, connections.clone()),
-                    || connections.disconnect(server_node.uid()),
+                    || connections.disconnect_endpoint(&server_node),
                 )
                 .await
             } else {
@@ -258,6 +258,8 @@ impl Metadata {
         self.unavailable_tablet_server_ids
             .write()
             .retain(|id| cluster.get_tablet_server(*id).is_none());
+        self.connections
+            .disconnect_superseded_endpoints(&cluster.get_server_nodes());
         *guard = Arc::new(cluster);
     }
 
@@ -568,7 +570,7 @@ mod tests {
     use prost::Message;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
+    use tokio::net::{TcpListener, TcpStream};
 
     fn server_metadata(ids: &[i32], port: u16) -> MetadataResponse {
         MetadataResponse {
@@ -590,6 +592,14 @@ mod tests {
         listener: TcpListener,
         response: std::result::Result<MetadataResponse, FlussError>,
     ) {
+        serve_metadata_as(listener, ServerType::TabletServer, response).await;
+    }
+
+    async fn serve_metadata_as(
+        listener: TcpListener,
+        server_type: ServerType,
+        response: std::result::Result<MetadataResponse, FlussError>,
+    ) -> TcpStream {
         let (mut stream, _) = listener.accept().await.unwrap();
         let versions = ApiVersionsResponse {
             api_versions: vec![PbApiVersion {
@@ -597,7 +607,7 @@ mod tests {
                 min_version: 0,
                 max_version: 0,
             }],
-            server_type: Some(ServerType::TabletServer.to_type_id()),
+            server_type: Some(server_type.to_type_id()),
         };
         for api_key in [ApiKey::ApiVersion, ApiKey::MetaData] {
             let len = stream.read_u32().await.unwrap() as usize;
@@ -629,6 +639,34 @@ mod tests {
             stream.write_u32(reply.len() as u32).await.unwrap();
             stream.write_all(&reply).await.unwrap();
         }
+        stream
+    }
+
+    async fn request_coordinator(metadata: &Metadata, listener: TcpListener) -> TcpStream {
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(serve_metadata_as(
+            listener,
+            ServerType::CoordinatorServer,
+            Ok(MetadataResponse::default()),
+        ));
+        tokio::time::timeout(Duration::from_secs(10), async {
+            let coordinator = metadata.get_cluster().get_coordinator_server().cloned();
+            let connection = metadata
+                .get_connection(&coordinator.unwrap())
+                .await
+                .unwrap();
+            connection
+                .request(UpdateMetadataRequest::new(
+                    &HashSet::new(),
+                    &HashSet::new(),
+                    vec![],
+                ))
+                .await
+                .unwrap();
+            server.await.unwrap()
+        })
+        .await
+        .unwrap_or_else(|_| panic!("the coordinator request did not reach {address}"))
     }
 
     #[tokio::test]
@@ -724,6 +762,37 @@ mod tests {
             metadata.get_cluster().get_tablet_server(1).unwrap().port(),
             u32::from(port)
         );
+    }
+
+    #[tokio::test]
+    async fn metadata_refresh_drops_connections_to_moved_servers() {
+        let server_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let old_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let new_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let server_port = server_listener.local_addr().unwrap().port();
+        let coordinator_at = |listener: &TcpListener| PbServerNode {
+            node_id: 0,
+            host: "127.0.0.1".to_string(),
+            port: i32::from(listener.local_addr().unwrap().port()),
+            ..Default::default()
+        };
+        let mut response = server_metadata(&[1], server_port);
+        response.coordinator_server = Some(coordinator_at(&old_listener));
+        let cluster = Cluster::from_metadata_response(response, None).unwrap();
+        let metadata = Metadata::new_for_test(Arc::new(cluster));
+        let _old_stream = request_coordinator(&metadata, old_listener).await;
+
+        let mut response = server_metadata(&[1, 2], server_port);
+        response.tablet_servers[0].port = 0;
+        response.coordinator_server = Some(coordinator_at(&new_listener));
+        let server = tokio::spawn(serve_metadata(server_listener, Ok(response)));
+        metadata
+            .update_tables_metadata(&HashSet::new(), &HashSet::new(), vec![])
+            .await
+            .unwrap();
+        server.await.unwrap();
+        assert!(metadata.connections.cached_endpoints().is_empty());
+        request_coordinator(&metadata, new_listener).await;
     }
 
     #[tokio::test]
