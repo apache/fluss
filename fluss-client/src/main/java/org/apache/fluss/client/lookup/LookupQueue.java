@@ -50,7 +50,7 @@ class LookupQueue {
     private final BlockingQueue<AbstractLookupQuery<?>> reEnqueuedLookupQueue;
     private final int maxBatchSize;
     private final long batchTimeoutNanos;
-    // Must be the clock the sender sets retry times with.
+    // Retry times are checked against this clock. The sender takes it from here to set them.
     private final Clock clock;
 
     LookupQueue(Configuration conf) {
@@ -92,6 +92,11 @@ class LookupQueue {
         } catch (InterruptedException e) {
             lookup.future().completeExceptionally(e);
         }
+    }
+
+    /** Returns the clock that the retry times of re-enqueued lookups are checked against. */
+    Clock clock() {
+        return clock;
     }
 
     boolean hasUnDrained() {
