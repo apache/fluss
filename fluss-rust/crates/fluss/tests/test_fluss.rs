@@ -25,6 +25,8 @@ mod integration {
     mod bucket_rescale;
     mod fluss_cluster;
     mod kv_changelog;
+    #[cfg(feature = "kv-snapshot")]
+    mod kv_snapshot;
     mod kv_table;
     mod log_table;
     mod record_batch_log_reader;

@@ -185,12 +185,14 @@ jobs:
           path: /tmp
       - name: Load server image
         run: docker load -i /tmp/fluss-dev.tar
+      - name: Install RocksDB build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libclang-dev
       - name: Rust Cache
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: fluss-rust
       - name: Integration tests
-        run: cargo test --features integration_tests --test test_fluss -p fluss-rs
+        run: cargo test --features integration_tests,kv-snapshot --test test_fluss -p fluss-rs
         env:
           RUST_LOG: DEBUG
           RUST_BACKTRACE: full

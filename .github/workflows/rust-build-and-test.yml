@@ -64,16 +64,20 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Install RocksDB build dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libclang-dev
+
       - name: Rust Cache
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: fluss-rust
 
       - name: Build
-        run: cargo build --workspace --all-targets --exclude fluss_python --exclude fluss-cpp --exclude fluss_nif
+        run: cargo build --workspace --all-targets --exclude fluss_python --exclude fluss-cpp --exclude fluss_nif --features fluss-rs/kv-snapshot
 
       - name: Unit Test
-        run: cargo test --all-targets --workspace --exclude fluss_python --exclude fluss-cpp --exclude fluss_nif
+        run: cargo test --all-targets --workspace --exclude fluss_python --exclude fluss-cpp --exclude fluss_nif --features fluss-rs/kv-snapshot
         env:
           RUST_LOG: DEBUG
           RUST_BACKTRACE: full
