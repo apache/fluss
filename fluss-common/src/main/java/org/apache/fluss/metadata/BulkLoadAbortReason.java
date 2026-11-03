@@ -23,9 +23,8 @@ import org.apache.fluss.annotation.PublicEvolving;
 @PublicEvolving
 public enum BulkLoadAbortReason {
     TARGET_NOT_EMPTY(0),
-    BUILD_DEADLINE_EXCEEDED(1),
-    COMMIT_DECISION_DEADLINE_EXCEEDED(2),
-    ABORTED_BY_CALLER(3);
+    DEADLINE_EXCEEDED(1),
+    ABORTED_BY_CALLER(2);
 
     private final int code;
 

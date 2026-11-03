@@ -1273,26 +1273,21 @@ public class ConfigOptions {
     //  BulkLoad Settings
     // ------------------------------------------------------------------------
 
-    public static final ConfigOption<Duration> BULKLOAD_BUILD_TIMEOUT_DEFAULT =
-            key("bulkload.build-timeout.default")
+    public static final ConfigOption<Duration> COORDINATOR_BULKLOAD_TIMEOUT_DEFAULT =
+            key("coordinator.bulkload.timeout.default")
                     .durationType()
                     .defaultValue(Duration.ofHours(24))
                     .withDescription(
-                            "The default time available to build the files for a newly begun BulkLoad transaction.");
+                            "The default budget from BulkLoad Begin through file construction, upload and server-side validation. "
+                                    + "Expiry only aborts before the commit decision is durable; "
+                                    + "this is not a hard limit on total completion time.");
 
-    public static final ConfigOption<Duration> BULKLOAD_BUILD_TIMEOUT_MAX =
-            key("bulkload.build-timeout.max")
+    public static final ConfigOption<Duration> COORDINATOR_BULKLOAD_TIMEOUT_MAX =
+            key("coordinator.bulkload.timeout.max")
                     .durationType()
                     .defaultValue(Duration.ofDays(7))
                     .withDescription(
-                            "The maximum build timeout accepted for a BulkLoad transaction.");
-
-    public static final ConfigOption<Duration> BULKLOAD_COMMIT_DECISION_TIMEOUT =
-            key("bulkload.commit-decision-timeout")
-                    .durationType()
-                    .defaultValue(Duration.ofHours(24))
-                    .withDescription(
-                            "The time available to validate BulkLoad snapshot metadata and durably decide commit.");
+                            "The maximum timeout accepted by BulkLoad Begin. This limits the shared budget before the commit decision.");
 
     public static final ConfigOption<Duration> BULKLOAD_RESULT_RETENTION =
             key("bulkload.result-retention")

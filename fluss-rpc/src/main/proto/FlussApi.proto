@@ -968,7 +968,7 @@ message GetClusterHealthResponse {
 
 message BeginBulkLoadRequest {
   required PbPhysicalTablePath target = 1;
-  optional int64 build_timeout_ms = 2;
+  optional int64 timeout_ms = 2;
 }
 
 message PbBulkLoadHandle {

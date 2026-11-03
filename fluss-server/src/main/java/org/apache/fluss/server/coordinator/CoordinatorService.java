@@ -382,7 +382,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         PhysicalTablePath target = validateBulkLoadTarget(request);
         authorize(target, OperationType.WRITE);
         FlussPrincipal creator = currentSession().getPrincipal();
-        Long timeout = request.hasBuildTimeoutMs() ? request.getBuildTimeoutMs() : null;
+        Long timeout = request.hasTimeoutMs() ? request.getTimeoutMs() : null;
         return submitBulkLoad(manager -> manager.begin(target, timeout, creator));
     }
 
@@ -435,7 +435,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     }
 
     private PhysicalTablePath validateBulkLoadTarget(BeginBulkLoadRequest request) {
-        if (request.hasBuildTimeoutMs() && request.getBuildTimeoutMs() <= 0) {
+        if (request.hasTimeoutMs() && request.getTimeoutMs() <= 0) {
             throw new InvalidBulkLoadRequestException("Invalid BulkLoad Begin request.");
         }
         return validateBulkLoadTarget(request.hasTarget() ? request.getTarget() : null);

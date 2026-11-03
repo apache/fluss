@@ -372,12 +372,45 @@ class BulkLoadMetadataStoreTest {
     }
 
     @Test
+    void testCommitAndRecoveryPreserveBeginDeadline() throws Exception {
+        long deadline = System.currentTimeMillis() + Duration.ofMinutes(1).toMillis();
+        Fixture fixture = fixture(BulkLoadState.BEGUN, new long[] {7L}, deadline);
+        BulkLoadManager manager = manager(zkClient);
+
+        assertThat(manager.commit(fixture.handle, SNAPSHOT_SHA)).isNotDone();
+        assertThat(fixture.transaction().getValue().getDeadlineMs()).isEqualTo(deadline);
+        assertThat(manager.commit(fixture.handle, SNAPSHOT_SHA)).isNotDone();
+        assertThat(fixture.transaction().getValue().getDeadlineMs()).isEqualTo(deadline);
+
+        BulkLoadManager recovered = manager(zkClient);
+        recovered.restoreTransactions(Collections.singletonList(fixture.handle));
+        recovered.resumeRecoveredTransactions();
+        assertThat(fixture.transaction().getValue().getDeadlineMs()).isEqualTo(deadline);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testDeadlineOnlyAbortsBeforeCommitDecision(boolean committing) throws Exception {
+        Fixture fixture =
+                fixture(
+                        committing ? BulkLoadState.COMMITTING : BulkLoadState.BEGUN,
+                        new long[] {7L});
+        BulkLoadTransaction transaction = fixture.transaction().getValue();
+        long deadline = transaction.getDeadlineMs();
+        assertThat(BulkLoadManager.deadlineReason(transaction, deadline - 1)).isNull();
+        assertThat(BulkLoadManager.deadlineReason(transaction, deadline))
+                .isEqualTo(committing ? null : BulkLoadAbortReason.DEADLINE_EXCEEDED);
+        assertThat(BulkLoadManager.deadlineReason(transaction, deadline + 1))
+                .isEqualTo(committing ? null : BulkLoadAbortReason.DEADLINE_EXCEEDED);
+    }
+
+    @Test
     void testAbortWinsWhileFrozenInputValidationIsInFlight() throws Exception {
         long deadline = System.currentTimeMillis() + Duration.ofMinutes(1).toMillis();
         Fixture fixture = fixture(BulkLoadState.BEGUN, new long[] {7L}, deadline);
         BulkLoadHandle handle = fixture.handle;
         String inputSha256 = writeSnapshots(remoteDataDir, handle, fixture.tableBucket, 7L);
-        fixture.update(value -> value.withInput(inputSha256, deadline));
+        fixture.update(value -> value.withInput(inputSha256));
         BulkLoadManager manager = manager(zkClient);
 
         CompletableFuture<CommitBulkLoadResponse> commitFuture =
@@ -520,10 +553,7 @@ class BulkLoadMetadataStoreTest {
         Fixture damaged = fixture(BulkLoadState.BEGUN, null, Long.MAX_VALUE);
         Fixture healthy = fixture(BulkLoadState.BEGUN, new long[] {7L}, 0L);
         if (inputFrozen) {
-            healthy.update(value -> value.withInput(SNAPSHOT_SHA, Long.MAX_VALUE));
-            assertThat(BulkLoadManager.deadlineReason(healthy.transaction().getValue(), 0L))
-                    .isNull();
-            healthy.update(value -> value.withInput(SNAPSHOT_SHA, 0L));
+            healthy.update(value -> value.withInput(SNAPSHOT_SHA));
         }
         BulkLoadManager manager = manager(zkClient);
         manager.restoreTransactions(Arrays.asList(damaged.handle, healthy.handle));
@@ -536,10 +566,7 @@ class BulkLoadMetadataStoreTest {
         manager.process(new BulkLoadMaintenanceEvent());
 
         assertThat(healthy.transaction().getValue().getAbortReason())
-                .isEqualTo(
-                        inputFrozen
-                                ? BulkLoadAbortReason.COMMIT_DECISION_DEADLINE_EXCEEDED
-                                : BulkLoadAbortReason.BUILD_DEADLINE_EXCEEDED);
+                .isEqualTo(BulkLoadAbortReason.DEADLINE_EXCEEDED);
     }
 
     @ParameterizedTest
@@ -638,7 +665,7 @@ class BulkLoadMetadataStoreTest {
         return fixture(state, snapshotIds, 300L);
     }
 
-    private Fixture fixture(BulkLoadState state, long[] snapshotIds, long buildDeadlineMs)
+    private Fixture fixture(BulkLoadState state, long[] snapshotIds, long deadlineMs)
             throws Exception {
         TableInfo info =
                 createTable(
@@ -658,7 +685,7 @@ class BulkLoadMetadataStoreTest {
                         info.getSchemaId(),
                         registration.getVersion() + 1,
                         snapshotIds,
-                        state == BulkLoadState.BEGUN ? buildDeadlineMs : 400L,
+                        state == BulkLoadState.BEGUN ? deadlineMs : 400L,
                         state == BulkLoadState.BEGUN ? null : SNAPSHOT_SHA,
                         null,
                         null),

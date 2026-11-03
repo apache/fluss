@@ -1263,7 +1263,7 @@ pub struct BeginBulkLoadRequest {
     #[prost(message, required, tag = "1")]
     pub target: PbPhysicalTablePath,
     #[prost(int64, optional, tag = "2")]
-    pub build_timeout_ms: ::core::option::Option<i64>,
+    pub timeout_ms: ::core::option::Option<i64>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PbBulkLoadHandle {

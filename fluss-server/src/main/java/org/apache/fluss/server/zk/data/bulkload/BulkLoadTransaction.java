@@ -109,8 +109,8 @@ public final class BulkLoadTransaction {
                 abortMessage);
     }
 
-    /** Returns a transaction bound to the submitted input digest and decision deadline. */
-    public BulkLoadTransaction withInput(String sha256, long deadline) {
+    /** Returns a transaction bound to the submitted input digest, preserving its deadline. */
+    public BulkLoadTransaction withInput(String sha256) {
         return new BulkLoadTransaction(
                 handle,
                 state,
@@ -120,7 +120,7 @@ public final class BulkLoadTransaction {
                 schemaId,
                 metadataVersion,
                 snapshotIds,
-                deadline,
+                deadlineMs,
                 sha256,
                 abortReason,
                 abortMessage);
@@ -249,7 +249,9 @@ public final class BulkLoadTransaction {
         return snapshotIds == null ? null : snapshotIds.clone();
     }
 
-    /** Returns the build, commit-decision, or terminal-retention deadline for the current phase. */
+    /**
+     * Returns the shared pre-commit deadline, or the result expiry time for a terminal transaction.
+     */
     public long getDeadlineMs() {
         return deadlineMs;
     }

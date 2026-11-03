@@ -250,20 +250,19 @@ public class FlussConfigUtils {
     }
 
     private static void validateBulkLoadConfigs(Configuration conf) {
-        validMinDuration(conf, ConfigOptions.BULKLOAD_BUILD_TIMEOUT_DEFAULT, 1);
-        validMinDuration(conf, ConfigOptions.BULKLOAD_BUILD_TIMEOUT_MAX, 1);
-        validMinDuration(conf, ConfigOptions.BULKLOAD_COMMIT_DECISION_TIMEOUT, 1);
+        validMinDuration(conf, ConfigOptions.COORDINATOR_BULKLOAD_TIMEOUT_DEFAULT, 1);
+        validMinDuration(conf, ConfigOptions.COORDINATOR_BULKLOAD_TIMEOUT_MAX, 1);
         validMinDuration(conf, ConfigOptions.BULKLOAD_RESULT_RETENTION, 1);
         validMinValue(conf, ConfigOptions.BULKLOAD_MAX_ACTIVE_TRANSACTIONS, 1);
         validPositiveMemory(conf, ConfigOptions.BULKLOAD_SNAPSHOT_METADATA_MAX_SIZE);
 
-        Duration defaultBuildTimeout = conf.get(ConfigOptions.BULKLOAD_BUILD_TIMEOUT_DEFAULT);
-        Duration maxBuildTimeout = conf.get(ConfigOptions.BULKLOAD_BUILD_TIMEOUT_MAX);
-        if (defaultBuildTimeout.compareTo(maxBuildTimeout) > 0) {
+        Duration defaultTimeout = conf.get(ConfigOptions.COORDINATOR_BULKLOAD_TIMEOUT_DEFAULT);
+        Duration maxTimeout = conf.get(ConfigOptions.COORDINATOR_BULKLOAD_TIMEOUT_MAX);
+        if (defaultTimeout.compareTo(maxTimeout) > 0) {
             throw new IllegalConfigurationException(
                     "Invalid configuration for %s, it must be less than or equal to %s.",
-                    ConfigOptions.BULKLOAD_BUILD_TIMEOUT_DEFAULT.key(),
-                    ConfigOptions.BULKLOAD_BUILD_TIMEOUT_MAX.key());
+                    ConfigOptions.COORDINATOR_BULKLOAD_TIMEOUT_DEFAULT.key(),
+                    ConfigOptions.COORDINATOR_BULKLOAD_TIMEOUT_MAX.key());
         }
     }
 

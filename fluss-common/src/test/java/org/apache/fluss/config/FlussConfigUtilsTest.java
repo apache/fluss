@@ -295,14 +295,13 @@ class FlussConfigUtilsTest {
     void testBulkLoadConfigValuesMustBePositiveForBothServerRoles() {
         Map<String, Consumer<Configuration>> invalidValues = new LinkedHashMap<>();
         invalidValues.put(
-                "bulkload.build-timeout.default",
-                conf -> conf.set(ConfigOptions.BULKLOAD_BUILD_TIMEOUT_DEFAULT, Duration.ZERO));
+                "coordinator.bulkload.timeout.default",
+                conf ->
+                        conf.set(
+                                ConfigOptions.COORDINATOR_BULKLOAD_TIMEOUT_DEFAULT, Duration.ZERO));
         invalidValues.put(
-                "bulkload.build-timeout.max",
-                conf -> conf.set(ConfigOptions.BULKLOAD_BUILD_TIMEOUT_MAX, Duration.ZERO));
-        invalidValues.put(
-                "bulkload.commit-decision-timeout",
-                conf -> conf.set(ConfigOptions.BULKLOAD_COMMIT_DECISION_TIMEOUT, Duration.ZERO));
+                "coordinator.bulkload.timeout.max",
+                conf -> conf.set(ConfigOptions.COORDINATOR_BULKLOAD_TIMEOUT_MAX, Duration.ZERO));
         invalidValues.put(
                 "bulkload.result-retention",
                 conf -> conf.set(ConfigOptions.BULKLOAD_RESULT_RETENTION, Duration.ZERO));
@@ -327,14 +326,15 @@ class FlussConfigUtilsTest {
     @Test
     void testBulkLoadCrossOptionValidationForBothServerRoles() {
         Configuration timeoutOrder = validServerConfiguration();
-        timeoutOrder.set(ConfigOptions.BULKLOAD_BUILD_TIMEOUT_DEFAULT, Duration.ofDays(2));
-        timeoutOrder.set(ConfigOptions.BULKLOAD_BUILD_TIMEOUT_MAX, Duration.ofDays(1));
+        timeoutOrder.set(ConfigOptions.COORDINATOR_BULKLOAD_TIMEOUT_DEFAULT, Duration.ofDays(2));
+        timeoutOrder.set(ConfigOptions.COORDINATOR_BULKLOAD_TIMEOUT_MAX, Duration.ofDays(1));
         assertBulkLoadValidationRejected(
-                timeoutOrder, ConfigOptions.BULKLOAD_BUILD_TIMEOUT_DEFAULT.key());
+                timeoutOrder, ConfigOptions.COORDINATOR_BULKLOAD_TIMEOUT_DEFAULT.key());
 
         Configuration equalityBoundary = validServerConfiguration();
-        equalityBoundary.set(ConfigOptions.BULKLOAD_BUILD_TIMEOUT_DEFAULT, Duration.ofHours(1));
-        equalityBoundary.set(ConfigOptions.BULKLOAD_BUILD_TIMEOUT_MAX, Duration.ofHours(1));
+        equalityBoundary.set(
+                ConfigOptions.COORDINATOR_BULKLOAD_TIMEOUT_DEFAULT, Duration.ofHours(1));
+        equalityBoundary.set(ConfigOptions.COORDINATOR_BULKLOAD_TIMEOUT_MAX, Duration.ofHours(1));
         assertThatCode(() -> validateCoordinatorConfigs(new Configuration(equalityBoundary)))
                 .doesNotThrowAnyException();
         assertThatCode(() -> validateTabletConfigs(new Configuration(equalityBoundary)))

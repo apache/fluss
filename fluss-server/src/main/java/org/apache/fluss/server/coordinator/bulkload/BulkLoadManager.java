@@ -239,19 +239,17 @@ public final class BulkLoadManager {
                 || now < transaction.getDeadlineMs()) {
             return null;
         }
-        return transaction.getInputSha256() == null
-                ? BulkLoadAbortReason.BUILD_DEADLINE_EXCEEDED
-                : BulkLoadAbortReason.COMMIT_DECISION_DEADLINE_EXCEEDED;
+        return BulkLoadAbortReason.DEADLINE_EXCEEDED;
     }
 
     /** Handles Begin on the Coordinator event thread. */
     public CompletableFuture<BeginBulkLoadResponse> begin(
-            PhysicalTablePath target, @Nullable Long buildTimeoutMs, FlussPrincipal creator) {
+            PhysicalTablePath target, @Nullable Long timeoutMs, FlussPrincipal creator) {
         CompletableFuture<BeginBulkLoadResponse> future = new CompletableFuture<>();
         BulkLoadHandle attemptedHandle = null;
         try {
             requireClusterCapabilities();
-            BeginAdmission admission = readBeginAdmission(target, buildTimeoutMs, creator);
+            BeginAdmission admission = readBeginAdmission(target, timeoutMs, creator);
             attemptedHandle = admission.transaction.getHandle();
             PendingBulkLoad work = new PendingBulkLoad();
             work.beginResult = future;
@@ -332,14 +330,7 @@ public final class BulkLoadManager {
                         throw new InvalidBulkLoadRequestException(
                                 "BulkLoad Commit requires an input digest.");
                     }
-                    long deadline =
-                            Math.addExact(
-                                    System.currentTimeMillis(),
-                                    configuration
-                                            .get(ConfigOptions.BULKLOAD_COMMIT_DECISION_TIMEOUT)
-                                            .toMillis());
-                    BulkLoadTransaction frozen =
-                            transaction.getValue().withInput(inputSha256, deadline);
+                    BulkLoadTransaction frozen = transaction.getValue().withInput(inputSha256);
                     transaction =
                             recordActiveTransaction(
                                     metadataStore.update(
@@ -715,7 +706,7 @@ public final class BulkLoadManager {
     }
 
     private BeginAdmission readBeginAdmission(
-            PhysicalTablePath target, @Nullable Long buildTimeoutMs, FlussPrincipal creator)
+            PhysicalTablePath target, @Nullable Long timeoutMs, FlussPrincipal creator)
             throws Exception {
         TablePath tablePath = target.getTablePath();
         PhysicalTarget physical = readPhysicalTarget(target);
@@ -754,13 +745,17 @@ public final class BulkLoadManager {
                 ZkData.SchemaZNode::decode,
                 "schema");
         long timeout =
-                buildTimeoutMs == null
-                        ? configuration.get(ConfigOptions.BULKLOAD_BUILD_TIMEOUT_DEFAULT).toMillis()
-                        : buildTimeoutMs;
+                timeoutMs == null
+                        ? configuration
+                                .get(ConfigOptions.COORDINATOR_BULKLOAD_TIMEOUT_DEFAULT)
+                                .toMillis()
+                        : timeoutMs;
         if (timeout <= 0
                 || timeout
-                        > configuration.get(ConfigOptions.BULKLOAD_BUILD_TIMEOUT_MAX).toMillis()) {
-            throw new InvalidBulkLoadRequestException("Invalid BulkLoad build timeout.");
+                        > configuration
+                                .get(ConfigOptions.COORDINATOR_BULKLOAD_TIMEOUT_MAX)
+                                .toMillis()) {
+            throw new InvalidBulkLoadRequestException("Invalid BulkLoad timeout.");
         }
         long now = System.currentTimeMillis();
         BulkLoadTransaction transaction =
