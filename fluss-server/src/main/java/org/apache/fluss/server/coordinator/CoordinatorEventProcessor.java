@@ -117,10 +117,12 @@ import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotStore;
 import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
+import org.apache.fluss.server.metadata.RegisteredTabletServer;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.metrics.group.CoordinatorMetricGroup;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.ZooKeeperClient.DataWithStat;
 import org.apache.fluss.server.zk.ZooKeeperClient.VersionedData;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
@@ -470,7 +472,10 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
         // init tablet server channels
         coordinatorChannelManager.startup(internalServerNodes);
-        bulkLoadManager.bindStartupTabletServerGateways(tabletServerInfos);
+        coordinatorContext.clearBoundTabletServerRegistrations();
+        for (ServerInfo server : tabletServerInfos) {
+            bindTabletServerRegistration(server);
+        }
 
         // load server tags.
         zooKeeperClient
@@ -1387,6 +1392,40 @@ public class CoordinatorEventProcessor implements EventProcessor {
         coordinatorContext.removeLiveCoordinator(coordinatorServerId);
     }
 
+    /**
+     * Binds the current registration after gateway installation during startup or on the
+     * Coordinator event thread. This does not confirm an RPC connection to the owning session.
+     */
+    private void bindTabletServerRegistration(ServerInfo server) {
+        int serverId = server.id();
+        coordinatorContext.unbindTabletServerRegistration(serverId);
+        Optional<DataWithStat> observed;
+        try {
+            observed = zooKeeperClient.getDataWithStatIfExists(ZkData.ServerIdZNode.path(serverId));
+        } catch (Exception failure) {
+            throw new FlussRuntimeException(
+                    "Failed to bind the ready TabletServer registration.", failure);
+        }
+        if (!observed.isPresent()) {
+            return;
+        }
+        DataWithStat data = observed.get();
+        RegisteredTabletServer current =
+                new RegisteredTabletServer(
+                        serverId,
+                        ZkData.ServerIdZNode.decode(data.getData()),
+                        ZkData.ServerIdZNode.path(serverId),
+                        data.getStat().getVersion(),
+                        data.getStat().getEphemeralOwner());
+        ServerInfo currentLive = coordinatorContext.getLiveTabletServers().get(serverId);
+        if (currentLive == null
+                || !currentLive.equals(server)
+                || !current.matchesLive(currentLive)) {
+            return;
+        }
+        coordinatorContext.bindTabletServerRegistration(current);
+    }
+
     private void processNewTabletServer(NewTabletServerEvent newTabletServerEvent) {
         // NOTE: we won't need to detect bounced tablet servers like Kafka as we won't
         // miss the event of tablet server un-register and register again since we can
@@ -1417,7 +1456,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         coordinatorContext.addLiveTabletServer(serverInfo);
         ServerNode serverNode = serverInfo.nodeOrThrow(internalListenerName);
         coordinatorChannelManager.addTabletServer(serverNode);
-        bulkLoadManager.bindTabletServerGateway(serverInfo);
+        bindTabletServerRegistration(serverInfo);
 
         // Update the Coordinator metadata cache to include the newly registered TabletServer.
         serverMetadataCache.updateMetadata(
@@ -1466,7 +1505,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         LOG.info("Tablet server failure callback for {}.", tabletServerId);
         coordinatorContext.removeOfflineBucketInServer(tabletServerId);
 
-        bulkLoadManager.unbindTabletServerGateway(tabletServerId);
+        coordinatorContext.unbindTabletServerRegistration(tabletServerId);
         coordinatorContext.removeLiveTabletServer(tabletServerId);
         coordinatorContext.shuttingDownTabletServers().remove(tabletServerId);
         coordinatorChannelManager.removeTabletServer(tabletServerId);

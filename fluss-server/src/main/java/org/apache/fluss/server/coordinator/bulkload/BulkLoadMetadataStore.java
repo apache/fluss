@@ -20,6 +20,7 @@ package org.apache.fluss.server.coordinator.bulkload;
 import org.apache.fluss.metadata.BulkLoadHandle;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.coordinator.bulkload.BulkLoadReplicaConvergence.ReplicaConvergenceContext;
+import org.apache.fluss.server.metadata.RegisteredTabletServer;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperClient.DataWithStat;
 import org.apache.fluss.server.zk.ZooKeeperOp;
@@ -27,7 +28,6 @@ import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
-import org.apache.fluss.server.zk.data.TabletServerRegistration;
 import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.server.zk.data.bulkload.BulkLoadDataState;
 import org.apache.fluss.server.zk.data.bulkload.BulkLoadTransaction;
@@ -177,17 +177,16 @@ final class BulkLoadMetadataStore {
 
     private void addRegistrationChecks(
             List<CuratorOp> operations, ReplicaConvergenceContext assignment) throws Exception {
-        for (Map.Entry<Integer, RegisteredServer> entry : assignment.holders.entrySet()) {
-            RegisteredServer holder = entry.getValue();
+        for (Map.Entry<Integer, RegisteredTabletServer> entry : assignment.holders.entrySet()) {
+            RegisteredTabletServer holder = entry.getValue();
             if (holder == null) {
                 zkOp.assertAbsent(operations, ZkData.ServerIdZNode.path(entry.getKey()));
             } else {
-                Versioned<TabletServerRegistration> registration = holder.registration;
-                operations.add(zkOp.checkOp(registration.getPath(), registration.getVersion()));
+                operations.add(zkOp.checkOp(holder.getPath(), holder.getVersion()));
                 operations.add(
                         zkOp.checkOp(
                                 ZkData.TabletServerSessionFenceZNode.path(
-                                        holder.serverId, registration.getEphemeralOwner()),
+                                        holder.getServerId(), holder.getEphemeralOwner()),
                                 0));
             }
         }
@@ -270,16 +269,6 @@ final class BulkLoadMetadataStore {
 
         public long getEphemeralOwner() {
             return ephemeralOwner;
-        }
-    }
-
-    static final class RegisteredServer {
-        final int serverId;
-        final Versioned<TabletServerRegistration> registration;
-
-        RegisteredServer(int serverId, Versioned<TabletServerRegistration> registration) {
-            this.serverId = serverId;
-            this.registration = registration;
         }
     }
 }

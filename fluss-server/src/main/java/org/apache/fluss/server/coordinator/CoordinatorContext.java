@@ -27,6 +27,7 @@ import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.coordinator.statemachine.BucketState;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaState;
+import org.apache.fluss.server.metadata.RegisteredTabletServer;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.zk.ZkEpoch;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
@@ -71,6 +72,10 @@ public class CoordinatorContext {
 
     private final Set<String> liveCoordinatorServers = new HashSet<>();
     private final Map<Integer, ServerInfo> liveTabletServers = new HashMap<>();
+
+    // Registrations associated with installed communication facilities, not RPC handshakes.
+    private final Map<Integer, RegisteredTabletServer> boundTabletServerRegistrations =
+            new HashMap<>();
     private final Set<Integer> shuttingDownTabletServers = new HashSet<>();
 
     // a map from the table bucket to the state of the bucket.
@@ -193,6 +198,28 @@ public class CoordinatorContext {
 
     public void setCoordinatorServerInfo(ServerInfo coordinatorServerInfo) {
         this.coordinatorServerInfo = coordinatorServerInfo;
+    }
+
+    /**
+     * Returns the read-only live view of registrations bound to installed TabletServer gateways.
+     */
+    public Map<Integer, RegisteredTabletServer> getBoundTabletServerRegistrations() {
+        return Collections.unmodifiableMap(boundTabletServerRegistrations);
+    }
+
+    /** Records a gateway binding during startup or on the Coordinator event thread. */
+    void bindTabletServerRegistration(RegisteredTabletServer registration) {
+        boundTabletServerRegistrations.put(registration.getServerId(), registration);
+    }
+
+    /** Invalidates a binding before its live server and communication facilities are removed. */
+    void unbindTabletServerRegistration(int serverId) {
+        boundTabletServerRegistrations.remove(serverId);
+    }
+
+    /** Clears gateway bindings before startup initializes its TabletServer registrations. */
+    void clearBoundTabletServerRegistrations() {
+        boundTabletServerRegistrations.clear();
     }
 
     public void addLiveTabletServer(ServerInfo serverInfo) {

@@ -32,14 +32,13 @@ import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.coordinator.CoordinatorChannelManager;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
-import org.apache.fluss.server.coordinator.bulkload.BulkLoadMetadataStore.RegisteredServer;
 import org.apache.fluss.server.coordinator.bulkload.BulkLoadMetadataStore.Versioned;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
+import org.apache.fluss.server.metadata.RegisteredTabletServer;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.tablet.bulkload.BulkLoadTargetMetadata;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.TableAssignment;
-import org.apache.fluss.server.zk.data.TabletServerRegistration;
 import org.apache.fluss.server.zk.data.bulkload.BulkLoadDataState;
 import org.apache.fluss.server.zk.data.bulkload.BulkLoadTransaction;
 
@@ -49,7 +48,6 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -82,16 +80,16 @@ final class BulkLoadReplicaConvergence {
             boolean requireEmpty) {
         captureBucketLeaderAndIsr(transaction, round);
         Versioned<? extends TableAssignment> assignment = round.assignment;
-        List<RegisteredServer> registrations = round.recipients;
+        List<RegisteredTabletServer> registrations = round.recipients;
         List<CompletableFuture<Void>> acknowledgements = new ArrayList<>();
-        for (RegisteredServer registration : registrations) {
+        for (RegisteredTabletServer registration : registrations) {
             List<PbNotifyLeaderAndIsrReqForBucket> notifications = new ArrayList<>();
             List<PbStopReplicaReqForBucket> localOnlyDeletes = new ArrayList<>();
             for (Map.Entry<TableBucket, LeaderAndIsr> entry : round.bucketLeaderAndIsr.entrySet()) {
                 TableBucket bucket = entry.getKey();
                 List<Integer> replicas =
                         assignment.getValue().getBucketAssignment(bucket.getBucket()).getReplicas();
-                if (replicas.contains(registration.serverId)) {
+                if (replicas.contains(registration.getServerId())) {
                     notifications.add(
                             makeNotifyBucketLeaderAndIsr(
                                     new NotifyLeaderAndIsrData(
@@ -111,10 +109,10 @@ final class BulkLoadReplicaConvergence {
                 }
             }
             if (!notifications.isEmpty()) {
-                acknowledgements.add(sendNotify(registration.serverId, notifications));
+                acknowledgements.add(sendNotify(registration.getServerId(), notifications));
             }
             if (!localOnlyDeletes.isEmpty()) {
-                acknowledgements.add(sendStop(registration.serverId, localOnlyDeletes));
+                acknowledgements.add(sendStop(registration.getServerId(), localOnlyDeletes));
             }
         }
         return complete(acknowledgements);
@@ -231,29 +229,21 @@ final class BulkLoadReplicaConvergence {
         }
     }
 
-    static List<RegisteredServer> liveRecipients(
-            CoordinatorContext context,
-            List<RegisteredServer> registrations,
-            Map<Integer, RegisteredServer> readyRegistrations) {
-        List<RegisteredServer> recipients = new ArrayList<>();
-        for (RegisteredServer registration : registrations) {
-            ServerInfo live = context.getLiveTabletServers().get(registration.serverId);
-            RegisteredServer ready = readyRegistrations.get(registration.serverId);
+    static List<RegisteredTabletServer> liveRecipients(
+            CoordinatorContext context, List<RegisteredTabletServer> registrations) {
+        List<RegisteredTabletServer> recipients = new ArrayList<>();
+        for (RegisteredTabletServer registration : registrations) {
+            ServerInfo live = context.getLiveTabletServers().get(registration.getServerId());
+            RegisteredTabletServer bound =
+                    context.getBoundTabletServerRegistrations().get(registration.getServerId());
             if (live != null
-                    && ready != null
-                    && matchesLive(registration, live)
-                    && sameRegistration(registration.registration, ready.registration)) {
+                    && bound != null
+                    && registration.matchesLive(live)
+                    && registration.matchesRegistration(bound)) {
                 recipients.add(registration);
             }
         }
         return Collections.unmodifiableList(recipients);
-    }
-
-    static boolean matchesLive(RegisteredServer registration, ServerInfo live) {
-        TabletServerRegistration value = registration.registration.getValue();
-        return Objects.equals(value.getRack(), live.rack())
-                && value.getResource().equals(live.resource())
-                && new HashSet<>(value.getEndpoints()).equals(new HashSet<>(live.endpoints()));
     }
 
     private static BulkLoadTargetMetadata target(
@@ -264,20 +254,20 @@ final class BulkLoadReplicaConvergence {
     /** Assignment, holder sessions and bucket LeaderAndIsr captured for replica convergence. */
     static final class ReplicaConvergenceContext {
         final Versioned<? extends TableAssignment> assignment;
-        final List<RegisteredServer> recipients;
-        final Map<Integer, RegisteredServer> holders = new HashMap<>();
+        final List<RegisteredTabletServer> recipients;
+        final Map<Integer, RegisteredTabletServer> holders = new HashMap<>();
         private final Map<TableBucket, LeaderAndIsr> bucketLeaderAndIsr;
 
         ReplicaConvergenceContext(
                 Versioned<? extends TableAssignment> assignment,
-                List<RegisteredServer> recipients,
+                List<RegisteredTabletServer> recipients,
                 Map<TableBucket, LeaderAndIsr> bucketLeaderAndIsr) {
             this.assignment = assignment;
             this.recipients = recipients;
             this.bucketLeaderAndIsr = new HashMap<>(bucketLeaderAndIsr);
-            Map<Integer, RegisteredServer> byId = new HashMap<>();
-            for (RegisteredServer recipient : recipients) {
-                byId.put(recipient.serverId, recipient);
+            Map<Integer, RegisteredTabletServer> byId = new HashMap<>();
+            for (RegisteredTabletServer recipient : recipients) {
+                byId.put(recipient.getServerId(), recipient);
             }
             for (int bucket : assignment.getValue().getBuckets()) {
                 for (int id : assignment.getValue().getBucketAssignment(bucket).getReplicas()) {
@@ -289,8 +279,7 @@ final class BulkLoadReplicaConvergence {
         boolean matchesRoundFacts(
                 Versioned<? extends TableAssignment> assignment,
                 CoordinatorContext context,
-                List<RegisteredServer> registrations,
-                Map<Integer, RegisteredServer> readyRegistrations) {
+                List<RegisteredTabletServer> registrations) {
             if (this.assignment.getVersion() != assignment.getVersion()) {
                 return false;
             }
@@ -300,43 +289,34 @@ final class BulkLoadReplicaConvergence {
                     return false;
                 }
             }
-            Map<Integer, RegisteredServer> currentById = new HashMap<>();
-            for (RegisteredServer registration : registrations) {
-                currentById.put(registration.serverId, registration);
+            Map<Integer, RegisteredTabletServer> currentById = new HashMap<>();
+            for (RegisteredTabletServer registration : registrations) {
+                currentById.put(registration.getServerId(), registration);
             }
-            for (Map.Entry<Integer, RegisteredServer> entry : this.holders.entrySet()) {
-                RegisteredServer expected = entry.getValue();
-                RegisteredServer current = currentById.get(entry.getKey());
+            for (Map.Entry<Integer, RegisteredTabletServer> entry : this.holders.entrySet()) {
+                RegisteredTabletServer expected = entry.getValue();
+                RegisteredTabletServer current = currentById.get(entry.getKey());
                 if (expected == null
                         ? current != null
-                        : current == null
-                                || !sameRegistration(expected.registration, current.registration)) {
+                        : current == null || !expected.matchesRegistration(current)) {
                     return false;
                 }
             }
-            for (RegisteredServer expected : recipients) {
-                RegisteredServer current = currentById.get(expected.serverId);
-                RegisteredServer ready = readyRegistrations.get(expected.serverId);
-                ServerInfo live = context.getLiveTabletServers().get(expected.serverId);
+            for (RegisteredTabletServer expected : recipients) {
+                RegisteredTabletServer current = currentById.get(expected.getServerId());
+                RegisteredTabletServer bound =
+                        context.getBoundTabletServerRegistrations().get(expected.getServerId());
+                ServerInfo live = context.getLiveTabletServers().get(expected.getServerId());
                 if (current == null
-                        || ready == null
+                        || bound == null
                         || live == null
-                        || !sameRegistration(expected.registration, current.registration)
-                        || !sameRegistration(expected.registration, ready.registration)
-                        || !matchesLive(current, live)) {
+                        || !expected.matchesRegistration(current)
+                        || !expected.matchesRegistration(bound)
+                        || !current.matchesLive(live)) {
                     return false;
                 }
             }
             return true;
         }
-    }
-
-    private static boolean sameRegistration(
-            Versioned<TabletServerRegistration> expected,
-            Versioned<TabletServerRegistration> current) {
-        return expected.getPath().equals(current.getPath())
-                && expected.getVersion() == current.getVersion()
-                && expected.getEphemeralOwner() == current.getEphemeralOwner()
-                && expected.getValue().equals(current.getValue());
     }
 }

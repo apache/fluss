@@ -17,18 +17,95 @@
 
 package org.apache.fluss.server.coordinator.bulkload;
 
+import org.apache.fluss.cluster.Endpoint;
+import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.exception.InvalidBulkLoadRequestException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.rpc.messages.PbNotifyLeaderAndIsrRespForBucket;
 import org.apache.fluss.rpc.protocol.Errors;
+import org.apache.fluss.server.coordinator.CoordinatorContext;
+import org.apache.fluss.server.coordinator.CoordinatorTestUtils;
+import org.apache.fluss.server.coordinator.bulkload.BulkLoadMetadataStore.Versioned;
+import org.apache.fluss.server.coordinator.bulkload.BulkLoadReplicaConvergence.ReplicaConvergenceContext;
+import org.apache.fluss.server.metadata.RegisteredTabletServer;
+import org.apache.fluss.server.metadata.ServerInfo;
+import org.apache.fluss.server.metadata.TabletServerResource;
+import org.apache.fluss.server.zk.ZkEpoch;
+import org.apache.fluss.server.zk.data.BucketAssignment;
+import org.apache.fluss.server.zk.data.ServerProtocolVersion;
+import org.apache.fluss.server.zk.data.TableAssignment;
+import org.apache.fluss.server.zk.data.TabletServerRegistration;
+import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.utils.ExceptionUtils;
 
 import org.junit.jupiter.api.Test;
+
+import java.util.Collections;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for the per-bucket failure translation of {@link BulkLoadReplicaConvergence}. */
 class BulkLoadReplicaConvergenceTest {
+
+    @Test
+    void testReRegisteredServerRequiresItsOwnGatewayBinding() {
+        int serverId = 1;
+        CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
+        TabletServerRegistration registration =
+                new TabletServerRegistration(
+                        "rack",
+                        Collections.singletonList(new Endpoint("localhost", 20001, "INTERNAL")),
+                        1L,
+                        TabletServerResource.unknown(),
+                        ServerProtocolVersion.CURRENT);
+        context.setLiveTabletServers(
+                Collections.singletonList(
+                        new ServerInfo(
+                                serverId,
+                                "rack",
+                                registration.getEndpoints(),
+                                ServerType.TABLET_SERVER)));
+        RegisteredTabletServer original =
+                new RegisteredTabletServer(
+                        serverId, registration, ZkData.ServerIdZNode.path(serverId), 0, 11L);
+        RegisteredTabletServer replacement =
+                new RegisteredTabletServer(
+                        serverId, registration, ZkData.ServerIdZNode.path(serverId), 0, 12L);
+        CoordinatorTestUtils.bindTabletServerRegistration(context, original);
+        Versioned<TableAssignment> assignment =
+                new Versioned<>(
+                        TableAssignment.builder().add(0, BucketAssignment.of(serverId)).build(),
+                        "/assignment",
+                        0,
+                        0L);
+        ReplicaConvergenceContext captured =
+                new ReplicaConvergenceContext(
+                        assignment, Collections.singletonList(original), Collections.emptyMap());
+        assertThat(
+                        captured.matchesRoundFacts(
+                                assignment, context, Collections.singletonList(original)))
+                .isTrue();
+
+        assertThat(
+                        BulkLoadReplicaConvergence.liveRecipients(
+                                context, Collections.singletonList(replacement)))
+                .isEmpty();
+        assertThat(
+                        captured.matchesRoundFacts(
+                                assignment, context, Collections.singletonList(replacement)))
+                .isFalse();
+
+        CoordinatorTestUtils.bindTabletServerRegistration(context, replacement);
+
+        assertThat(
+                        BulkLoadReplicaConvergence.liveRecipients(
+                                context, Collections.singletonList(replacement)))
+                .containsExactly(replacement);
+        assertThat(
+                        captured.matchesRoundFacts(
+                                assignment, context, Collections.singletonList(replacement)))
+                .isFalse();
+    }
 
     @Test
     void testRejectedBucketKeepsItsErrorType() {

@@ -45,14 +45,13 @@ import org.apache.fluss.server.coordinator.CompletedSnapshotStoreManager;
 import org.apache.fluss.server.coordinator.CoordinatorChannelManager;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.coordinator.MetadataManager;
-import org.apache.fluss.server.coordinator.bulkload.BulkLoadMetadataStore.RegisteredServer;
 import org.apache.fluss.server.coordinator.bulkload.BulkLoadMetadataStore.Versioned;
 import org.apache.fluss.server.coordinator.bulkload.BulkLoadReplicaConvergence.ReplicaConvergenceContext;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.BulkLoadMaintenanceEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
-import org.apache.fluss.server.metadata.ServerInfo;
+import org.apache.fluss.server.metadata.RegisteredTabletServer;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperClient.DataWithStat;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
@@ -105,7 +104,6 @@ public final class BulkLoadManager {
     private final MetadataManager metadataManager;
     private final ExecutorService ioExecutor;
     private final EventManager eventManager;
-    private final Map<Integer, RegisteredServer> readyRegistrations = new HashMap<>();
     private final BulkLoadReplicaConvergence convergence;
     private final BulkLoadResultGc resultGc;
     private final CompletedSnapshotStoreManager completedSnapshotStoreManager;
@@ -244,54 +242,6 @@ public final class BulkLoadManager {
         return transaction.getInputSha256() == null
                 ? BulkLoadAbortReason.BUILD_DEADLINE_EXCEEDED
                 : BulkLoadAbortReason.COMMIT_DECISION_DEADLINE_EXCEEDED;
-    }
-
-    /** Binds the exact registrations whose gateways were installed during Coordinator startup. */
-    public void bindStartupTabletServerGateways(List<ServerInfo> servers) {
-        readyRegistrations.clear();
-        for (ServerInfo server : servers) {
-            bindTabletServerGateway(server);
-        }
-    }
-
-    /**
-     * Binds the exact current registration after its gateway is ready in the Coordinator event
-     * thread.
-     */
-    public void bindTabletServerGateway(ServerInfo server) {
-        int serverId = server.id();
-        readyRegistrations.remove(serverId);
-        Optional<DataWithStat> observed;
-        try {
-            observed = zkClient.getDataWithStatIfExists(ZkData.ServerIdZNode.path(serverId));
-        } catch (Exception failure) {
-            throw new FlussRuntimeException(
-                    "Failed to bind the ready TabletServer registration.", failure);
-        }
-        if (!observed.isPresent()) {
-            return;
-        }
-        DataWithStat data = observed.get();
-        RegisteredServer current =
-                new RegisteredServer(
-                        serverId,
-                        new Versioned<>(
-                                ZkData.ServerIdZNode.decode(data.getData()),
-                                ZkData.ServerIdZNode.path(serverId),
-                                data.getStat().getVersion(),
-                                data.getStat().getEphemeralOwner()));
-        ServerInfo currentLive = coordinatorContext.getLiveTabletServers().get(serverId);
-        if (currentLive == null
-                || !currentLive.equals(server)
-                || !BulkLoadReplicaConvergence.matchesLive(current, currentLive)) {
-            return;
-        }
-        readyRegistrations.put(serverId, current);
-    }
-
-    /** Invalidates a registration before its live identity and gateway are removed. */
-    public void unbindTabletServerGateway(int serverId) {
-        readyRegistrations.remove(serverId);
     }
 
     /** Handles Begin on the Coordinator event thread. */
@@ -699,8 +649,7 @@ public final class BulkLoadManager {
                                                         && !confirmation.matchesRoundFacts(
                                                                 readAssignment(handle),
                                                                 coordinatorContext,
-                                                                readRegisteredServers(),
-                                                                readyRegistrations)) {
+                                                                readRegisteredTabletServers())) {
                                                     advance(handle);
                                                     return null;
                                                 }
@@ -841,7 +790,7 @@ public final class BulkLoadManager {
                                     "Coordinator registration")
                             .getValue());
         }
-        List<RegisteredServer> tablets = readRegisteredServers();
+        List<RegisteredTabletServer> tablets = readRegisteredTabletServers();
         if (!ServerProtocolVersion.coordinatorsSupportBulkLoad(coordinators)) {
             throw new UnsupportedVersionException(
                     "Every Coordinator must cover the BulkLoad capability set.");
@@ -849,10 +798,10 @@ public final class BulkLoadManager {
         validateTabletCapabilities(tablets);
     }
 
-    private static void validateTabletCapabilities(List<RegisteredServer> registrations) {
+    private static void validateTabletCapabilities(List<RegisteredTabletServer> registrations) {
         List<TabletServerRegistration> values = new ArrayList<>();
-        for (RegisteredServer registration : registrations) {
-            values.add(registration.registration.getValue());
+        for (RegisteredTabletServer registration : registrations) {
+            values.add(registration.getRegistration());
         }
         if (!ServerProtocolVersion.tabletServersSupportBulkLoad(values)) {
             throw new UnsupportedVersionException(
@@ -860,16 +809,21 @@ public final class BulkLoadManager {
         }
     }
 
-    List<RegisteredServer> readRegisteredServers() throws Exception {
-        List<RegisteredServer> result = new ArrayList<>();
+    List<RegisteredTabletServer> readRegisteredTabletServers() throws Exception {
+        List<RegisteredTabletServer> result = new ArrayList<>();
         for (int id : zkClient.getSortedTabletServerList()) {
+            Versioned<TabletServerRegistration> registration =
+                    requireFound(
+                            ZkData.ServerIdZNode.path(id),
+                            ZkData.ServerIdZNode::decode,
+                            "TabletServer registration");
             result.add(
-                    new RegisteredServer(
+                    new RegisteredTabletServer(
                             id,
-                            requireFound(
-                                    ZkData.ServerIdZNode.path(id),
-                                    ZkData.ServerIdZNode::decode,
-                                    "TabletServer registration")));
+                            registration.getValue(),
+                            registration.getPath(),
+                            registration.getVersion(),
+                            registration.getEphemeralOwner()));
         }
         return Collections.unmodifiableList(result);
     }
@@ -877,20 +831,19 @@ public final class BulkLoadManager {
     private @Nullable ReplicaConvergenceContext registrationsForRound(
             Versioned<? extends TableAssignment> assignment, boolean requireAllHolders)
             throws Exception {
-        List<RegisteredServer> registrations = readRegisteredServers();
-        List<RegisteredServer> recipients =
-                BulkLoadReplicaConvergence.liveRecipients(
-                        coordinatorContext, registrations, readyRegistrations);
+        List<RegisteredTabletServer> registrations = readRegisteredTabletServers();
+        List<RegisteredTabletServer> recipients =
+                BulkLoadReplicaConvergence.liveRecipients(coordinatorContext, registrations);
         if (!recipients.isEmpty()) {
             validateTabletCapabilities(recipients);
         }
         Set<Integer> registeredIds = new HashSet<>();
-        for (RegisteredServer registration : registrations) {
-            registeredIds.add(registration.serverId);
+        for (RegisteredTabletServer registration : registrations) {
+            registeredIds.add(registration.getServerId());
         }
         ReplicaConvergenceContext round =
                 new ReplicaConvergenceContext(assignment, recipients, Collections.emptyMap());
-        for (Map.Entry<Integer, RegisteredServer> holder : round.holders.entrySet()) {
+        for (Map.Entry<Integer, RegisteredTabletServer> holder : round.holders.entrySet()) {
             if (holder.getValue() == null
                     && (requireAllHolders || registeredIds.contains(holder.getKey()))) {
                 return null;

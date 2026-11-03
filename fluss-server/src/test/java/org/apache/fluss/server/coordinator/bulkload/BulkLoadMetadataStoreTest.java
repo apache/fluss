@@ -43,6 +43,7 @@ import org.apache.fluss.rpc.messages.UpdateMetadataResponse;
 import org.apache.fluss.security.acl.FlussPrincipal;
 import org.apache.fluss.server.coordinator.CompletedSnapshotStoreManager;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
+import org.apache.fluss.server.coordinator.CoordinatorTestUtils;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.coordinator.TestCoordinatorChannelManager;
@@ -51,6 +52,7 @@ import org.apache.fluss.server.coordinator.bulkload.BulkLoadReplicaConvergence.R
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.BulkLoadMaintenanceEvent;
 import org.apache.fluss.server.coordinator.event.TestingEventManager;
+import org.apache.fluss.server.metadata.RegisteredTabletServer;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.metadata.TabletServerResource;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
@@ -450,7 +452,16 @@ class BulkLoadMetadataStoreTest {
                         ServerType.TABLET_SERVER);
         context.setLiveTabletServers(Collections.singletonList(liveServer));
         BulkLoadManager manager = manager(uncertainZkClient);
-        manager.bindTabletServerGateway(liveServer);
+        ZooKeeperClient.DataWithStat serverData =
+                uncertainZkClient.getDataWithStat(ZkData.ServerIdZNode.path(serverId));
+        CoordinatorTestUtils.bindTabletServerRegistration(
+                context,
+                new RegisteredTabletServer(
+                        serverId,
+                        ZkData.ServerIdZNode.decode(serverData.getData()),
+                        ZkData.ServerIdZNode.path(serverId),
+                        serverData.getStat().getVersion(),
+                        serverData.getStat().getEphemeralOwner()));
 
         uncertainZkClient.failNextCheckedMultiAndReadAfterCommit();
         CompletableFuture<BeginBulkLoadResponse> uncertainBegin = begin(manager, firstPath);
