@@ -586,10 +586,11 @@ for (const auto& completion : completed) {
 }
 ```
 
-`LookupAsync` allows at most 1024 outstanding requests per lookuper. If that
-limit is reached, it returns an error; poll completed requests before
-submitting more. `Poll` returns at most 1024 completions per call and includes
-lock acquisition in its timeout.
+The number of outstanding requests and queued completions is controlled by
+`Configuration::lookup_queue_size`. If that limit is reached, `LookupAsync`
+returns an error; poll completed requests before submitting more. Each
+completion retains its capacity permit until it is consumed. `Poll` returns at
+most 1024 completions per call and includes lock acquisition in its timeout.
 
 `Poll` waits for at most `timeout_ms` for the first completion and then drains
 already completed lookups. A timeout is not an error and does not cancel

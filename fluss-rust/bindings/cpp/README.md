@@ -96,9 +96,10 @@ while (completed.size() < submitted) {
 Each completion carries the caller's request ID, a per-lookup `Result`, and the
 lookup result. `PrefixLookuper::PrefixLookupAsync` and its `Poll` overload
 provide the same behavior for prefix lookups.
-At most 1024 asynchronous lookups may be outstanding per lookuper. When that
-limit is reached, `LookupAsync` returns an error; callers should poll before
-submitting more work. The completion queue holds up to 1024 results, and
+The number of outstanding asynchronous lookups and queued completions is
+controlled by `Configuration::lookup_queue_size`. When that limit is reached,
+`LookupAsync` returns an error; callers should poll before submitting more work.
+Each completion retains its capacity permit until the caller consumes it.
 `Poll` returns at most 1024 completions per call.
 
 The SDK executes `WriteCallback` (`void(const WriteCompletion&)`) on one shared

@@ -1698,7 +1698,7 @@ struct Configuration {
     std::string security_sasl_username;
     // SASL password (required when security_protocol is "sasl")
     std::string security_sasl_password;
-    // Maximum number of pending lookup operations
+    // Maximum number of pending lookup operations, including async polling completions
     size_t lookup_queue_size{25600};
     // Maximum batch size of merging lookup operations to one lookup request
     size_t lookup_max_batch_size{128};
