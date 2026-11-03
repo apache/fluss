@@ -26,8 +26,8 @@ use testcontainers::bollard::Docker;
 use testcontainers::bollard::query_parameters::{
     ListContainersOptionsBuilder, RemoveContainerOptionsBuilder,
 };
-use testcontainers::core::ContainerPort;
 use testcontainers::core::client::docker_client_instance;
+use testcontainers::core::{CmdWaitFor, ContainerPort, ExecCommand};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, GenericImage, ImageExt};
 
@@ -546,6 +546,16 @@ impl FlussTestingCluster {
         self.tablet_servers
             .get(&server_id)
             .expect("unknown tablet server")
+    }
+
+    /// Executes a command as the tablet server container's user and waits for exit code zero.
+    pub async fn exec_in_tablet_server(&self, server_id: u16, command: Vec<String>) {
+        self.tablet_servers
+            .get(&server_id)
+            .expect("tablet server must exist")
+            .exec(ExecCommand::new(command).with_cmd_ready_condition(CmdWaitFor::exit_code(0)))
+            .await
+            .expect("tablet server command must succeed");
     }
 
     pub fn stop(&self) {

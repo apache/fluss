@@ -26,6 +26,8 @@ pub const EARLIEST_OFFSET: i64 = -2;
 
 mod append;
 mod batch_scanner;
+#[cfg(feature = "kv-snapshot")]
+mod kv_snapshot;
 mod kv_value_decoder;
 mod lookup;
 
@@ -39,6 +41,8 @@ mod upsert;
 
 pub use append::{AppendWriter, TableAppend};
 pub use batch_scanner::LimitBatchScanner;
+#[cfg(feature = "kv-snapshot")]
+pub use kv_snapshot::{KvSnapshotLeaseMode, KvSnapshotReader, KvSnapshotReaderOptions};
 pub use lookup::{LookupResult, Lookuper, PrefixKeyLookuper, TableLookup, TablePrefixLookup};
 pub use reader::{
     BoundedCollectOutcome, BoundedLogReadRange, RecordBatchLogReader, RecordBatchReadOutcome,
