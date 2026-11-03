@@ -88,7 +88,7 @@ public class AggregateRowMerger implements RowMerger {
     public BinaryValue merge(@Nullable BinaryValue oldValue, BinaryValue newValue) {
         // First write: no existing row
         if (oldValue == null || oldValue.row == null) {
-            return aggregateFirstRow(contextCache, newValue, null);
+            return mergeFirstRow(newValue);
         }
 
         // Get contexts for schema evolution support
@@ -108,18 +108,16 @@ public class AggregateRowMerger implements RowMerger {
         return new BinaryValue(targetSchemaId, mergedRow);
     }
 
-    private static BinaryValue aggregateFirstRow(
-            AggregationContextCache contextCache,
-            BinaryValue value,
-            @Nullable BitSet targetColumnIdBitSet) {
+    private BinaryValue mergeFirstRow(BinaryValue value) {
         AggregationContext context = contextCache.getContext(value.schemaId);
-        if (targetColumnIdBitSet == null && !context.requiresAggOnFirstWrite()) {
-            return value;
-        }
+        return context.requiresAggOnFirstWrite() ? aggregateFirstRow(context, value, null) : value;
+    }
+
+    private static BinaryValue aggregateFirstRow(
+            AggregationContext context, BinaryValue value, @Nullable BitSet targetPosBitSet) {
         RowEncoder encoder = context.getRowEncoder();
         encoder.startNewRow();
-        AggregateFieldsProcessor.aggregateFirstRow(
-                value.row, context, targetColumnIdBitSet, encoder);
+        AggregateFieldsProcessor.aggregateFirstRow(value.row, context, targetPosBitSet, encoder);
         return new BinaryValue(value.schemaId, encoder.finishRow());
     }
 
@@ -250,11 +248,14 @@ public class AggregateRowMerger implements RowMerger {
         // Schema evolution support
         private final SchemaGetter schemaGetter;
         private final AggregationContextCache contextCache;
-        // The schema ID this PartialAggregateRowMerger was created for (used for delete operations)
+        // The schema ID this PartialAggregateRowMerger was created for
         private final short targetSchemaId;
 
-        // Cache for target position BitSets by schema ID to support schema evolution in delete
-        // operations
+        private final BitSet targetPosBitSet;
+
+        private final boolean targetRequiresAggOnFirstWrite;
+
+        // Cache target positions for other schemas used by first writes and delete operations
         private final Cache<Short, BitSet> targetPosBitSetCache;
 
         PartialAggregateRowMerger(
@@ -273,6 +274,8 @@ public class AggregateRowMerger implements RowMerger {
             // Perform sanity check using the provided schema
             AggregationContext context = contextCache.getOrCreateContext(schemaId, schema);
             context.sanityCheckTargetColumns(targetColumnIdBitSet);
+            this.targetPosBitSet = computeTargetPosBitSet(schema);
+            this.targetRequiresAggOnFirstWrite = requiresAggOnFirstWrite(context, targetPosBitSet);
 
             // Initialize cache for target position BitSets
             this.targetPosBitSetCache =
@@ -286,7 +289,7 @@ public class AggregateRowMerger implements RowMerger {
         public BinaryValue merge(@Nullable BinaryValue oldValue, BinaryValue newValue) {
             // First write: no existing row
             if (oldValue == null || oldValue.row == null) {
-                return aggregateFirstRow(contextCache, newValue, targetColumnIdBitSet);
+                return mergeFirstRow(newValue);
             }
 
             // Get contexts for schema evolution support
@@ -378,12 +381,15 @@ public class AggregateRowMerger implements RowMerger {
          * Get or compute target position BitSet for a given schema ID.
          *
          * <p>This method uses a cache to avoid repeated computation of target position BitSets for
-         * different schemas during delete operations.
+         * different schemas during first writes and delete operations.
          *
          * @param schemaId the schema ID
          * @return BitSet marking target column positions
          */
         private BitSet getOrComputeTargetPosBitSet(short schemaId) {
+            if (schemaId == targetSchemaId) {
+                return targetPosBitSet;
+            }
             return targetPosBitSetCache.get(
                     schemaId,
                     sid -> {
@@ -392,16 +398,45 @@ public class AggregateRowMerger implements RowMerger {
                             throw new IllegalStateException(
                                     String.format("Schema with ID %d not found", sid));
                         }
-                        // Compute target position BitSet by mapping column IDs to positions
-                        BitSet targetPosBitSet = new BitSet();
-                        for (int pos = 0; pos < schema.getColumns().size(); pos++) {
-                            int columnId = schema.getColumns().get(pos).getColumnId();
-                            if (targetColumnIdBitSet.get(columnId)) {
-                                targetPosBitSet.set(pos);
-                            }
-                        }
-                        return targetPosBitSet;
+                        return computeTargetPosBitSet(schema);
                     });
+        }
+
+        private BinaryValue mergeFirstRow(BinaryValue value) {
+            AggregationContext context = contextCache.getContext(value.schemaId);
+            BitSet positions = getOrComputeTargetPosBitSet(value.schemaId);
+            boolean requiresAggregation =
+                    value.schemaId == targetSchemaId
+                            ? targetRequiresAggOnFirstWrite
+                            : requiresAggOnFirstWrite(context, positions);
+            if (!requiresAggregation
+                    && !AggregateFieldsProcessor.hasNonTargetNonNullField(value.row, positions)) {
+                return value;
+            }
+            return aggregateFirstRow(context, value, positions);
+        }
+
+        private BitSet computeTargetPosBitSet(Schema schema) {
+            BitSet positions = new BitSet();
+            for (int pos = 0; pos < schema.getColumns().size(); pos++) {
+                if (targetColumnIdBitSet.get(schema.getColumns().get(pos).getColumnId())) {
+                    positions.set(pos);
+                }
+            }
+            return positions;
+        }
+
+        private static boolean requiresAggOnFirstWrite(
+                AggregationContext context, BitSet positions) {
+            if (!context.requiresAggOnFirstWrite()) {
+                return false;
+            }
+            for (int pos = positions.nextSetBit(0); pos >= 0; pos = positions.nextSetBit(pos + 1)) {
+                if (context.getAggregators()[pos].requiresAggOnFirstWrite()) {
+                    return true;
+                }
+            }
+            return false;
         }
     }
 }

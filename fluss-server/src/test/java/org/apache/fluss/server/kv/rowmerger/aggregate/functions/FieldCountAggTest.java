@@ -194,6 +194,20 @@ class FieldCountAggTest {
         assertThat(value.row.getInt(2)).isEqualTo(1);
         assertThat(value.row.isNullAt(3)).isTrue();
         assertThat(merger.delete(copy(value))).isNull();
+
+        RowMerger countMerger =
+                new AggregateRowMerger(new TableConfig(new Configuration()), format, schemaGetter)
+                        .configureTargetColumns(new int[] {1, 2}, latestSchemaId, latestSchema);
+        encoder.startNewRow();
+        encoder.encodeField(0, 99L);
+        encoder.encodeField(1, 1);
+        encoder.encodeField(2, null);
+        value = countMerger.merge(null, new BinaryValue(SCHEMA_ID, encoder.finishRow()));
+        assertThat(value.schemaId).isEqualTo(SCHEMA_ID);
+        assertThat(value.row.getLong(0)).isEqualTo(1L);
+        assertThat(value.row.getInt(1)).isEqualTo(1);
+        assertThat(value.row.isNullAt(2)).isTrue();
+        assertThat(countMerger.delete(copy(value))).isNull();
     }
 
     @ParameterizedTest

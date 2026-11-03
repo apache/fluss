@@ -158,20 +158,19 @@ public final class AggregateFieldsProcessor {
      *
      * @param row the first row written for the key
      * @param context context for the row schema
-     * @param targetColumnIdBitSet target column IDs, or null for a full-row write
+     * @param targetPosBitSet target column positions in the input schema, or null for a full-row
+     *     write
      * @param encoder the row encoder to encode results (should match context)
      */
     public static void aggregateFirstRow(
             BinaryRow row,
             AggregationContext context,
-            @Nullable BitSet targetColumnIdBitSet,
+            @Nullable BitSet targetPosBitSet,
             RowEncoder encoder) {
         InternalRow.FieldGetter[] fieldGetters = context.getFieldGetters();
         FieldAggregator[] aggregators = context.getAggregators();
-        List<Schema.Column> columns = context.getSchema().getColumns();
         for (int idx = 0; idx < context.getFieldCount(); idx++) {
-            if (targetColumnIdBitSet != null
-                    && !targetColumnIdBitSet.get(columns.get(idx).getColumnId())) {
+            if (targetPosBitSet != null && !targetPosBitSet.get(idx)) {
                 encoder.encodeField(idx, null);
                 continue;
             }
