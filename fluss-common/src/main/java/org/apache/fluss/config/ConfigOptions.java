@@ -3073,6 +3073,13 @@ public class ConfigOptions {
                                     + "If not configured and the tiering service runs in a Flink job, Fluss uses "
                                     + "Flink's IO temporary directories with a 'fluss' child directory.");
 
+    public static final ConfigOption<Integer> LAKE_TIERING_COMMIT_THREAD_NUM =
+            key("lake.tiering.commit-thread-num")
+                    .intType()
+                    .defaultValue(2)
+                    .withDescription(
+                            "The number of threads the tiering service uses to commit tables concurrently. Must be positive.");
+
     // ------------------------------------------------------------------------
     //  ConfigOptions for fluss kafka
     // ------------------------------------------------------------------------
