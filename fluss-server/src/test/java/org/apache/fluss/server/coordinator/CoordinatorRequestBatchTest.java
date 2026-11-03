@@ -27,14 +27,24 @@ import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
 import org.apache.fluss.rpc.messages.PbNotifyLeaderAndIsrReqForBucket;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
+import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZkEpoch;
+import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.server.zk.data.TableRegistration;
+import org.apache.fluss.server.zk.data.bulkload.BulkLoadDataState;
+import org.apache.fluss.testutils.common.AllCallbackWrapper;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
 
@@ -46,10 +56,19 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /** Test for the {@link CoordinatorRequestBatch}. */
 class CoordinatorRequestBatchTest {
 
+    @RegisterExtension
+    public static final AllCallbackWrapper<ZooKeeperExtension> ZOO_KEEPER_EXTENSION_WRAPPER =
+            new AllCallbackWrapper<>(new ZooKeeperExtension());
+
+    private ZooKeeperClient zookeeperClient;
     private CoordinatorContext coordinatorContext;
 
     @BeforeEach
     void beforeEach() {
+        zookeeperClient =
+                ZOO_KEEPER_EXTENSION_WRAPPER
+                        .getCustomExtension()
+                        .getZooKeeperClient(NOPErrorHandler.INSTANCE);
         coordinatorContext = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
     }
 
@@ -59,12 +78,16 @@ class CoordinatorRequestBatchTest {
      * AccessContextEvent dispatched on the event manager.
      */
     @Test
-    void testNotifyLeaderAndIsrSendFailureClearsLeaderPending() {
+    void testNotifyLeaderAndIsrSendFailureClearsLeaderPending() throws Exception {
         long tableId = 100L;
         TableBucket tb = new TableBucket(tableId, 0);
         TablePath tablePath = TablePath.of("db1", "t1");
 
         coordinatorContext.putTablePath(tableId, tablePath);
+        zookeeperClient.registerTable(
+                tablePath,
+                TableRegistration.newTable(
+                        tableId, DEFAULT_REMOTE_DATA_DIR, DATA1_TABLE_DESCRIPTOR));
         putTableInfo(tableId, tablePath);
         coordinatorContext.setLiveTabletServers(
                 CoordinatorTestUtils.createServers(Collections.singletonList(0)));
@@ -77,7 +100,8 @@ class CoordinatorRequestBatchTest {
         EventManager eventManager = newSynchronousAccessContextEventManager();
 
         CoordinatorRequestBatch batch =
-                new CoordinatorRequestBatch(failingChannel, eventManager, coordinatorContext);
+                new CoordinatorRequestBatch(
+                        failingChannel, eventManager, coordinatorContext, zookeeperClient);
         // server 0 IS the leader, so this request will mark tb pending.
         batch.addNotifyLeaderRequestForTabletServers(
                 Collections.singleton(0),
@@ -93,12 +117,16 @@ class CoordinatorRequestBatchTest {
     }
 
     @Test
-    void testNotifyLeaderAndIsrSendFailurePreservesOverlappingSameBucketPending() {
+    void testNotifyLeaderAndIsrSendFailurePreservesOverlappingSameBucketPending() throws Exception {
         long tableId = 150L;
         TableBucket tableBucket = new TableBucket(tableId, 0);
         TablePath tablePath = TablePath.of("db1", "overlapping_pending");
 
         coordinatorContext.putTablePath(tableId, tablePath);
+        zookeeperClient.registerTable(
+                tablePath,
+                TableRegistration.newTable(
+                        tableId, DEFAULT_REMOTE_DATA_DIR, DATA1_TABLE_DESCRIPTOR));
         coordinatorContext.setLiveTabletServers(
                 CoordinatorTestUtils.createServers(Collections.singletonList(0)));
         coordinatorContext.updateBucketReplicaAssignment(tableBucket, Collections.singletonList(0));
@@ -113,7 +141,8 @@ class CoordinatorRequestBatchTest {
                 new CoordinatorRequestBatch(
                         newAlwaysFailingChannelManager(),
                         newSynchronousAccessContextEventManager(),
-                        coordinatorContext);
+                        coordinatorContext,
+                        zookeeperClient);
         batch.addNotifyLeaderRequestForTabletServers(
                 Collections.singleton(0),
                 PhysicalTablePath.of(tablePath),
@@ -134,13 +163,17 @@ class CoordinatorRequestBatchTest {
      * entries added by another in-flight sender targeting the actual leader.
      */
     @Test
-    void testNotifyLeaderAndIsrSendFailureToFollowerDoesNotClearOtherPending() {
+    void testNotifyLeaderAndIsrSendFailureToFollowerDoesNotClearOtherPending() throws Exception {
         long tableId = 200L;
         TableBucket followerTb = new TableBucket(tableId, 0);
         TableBucket otherLeaderTb = new TableBucket(tableId, 1);
         TablePath tablePath = TablePath.of("db1", "t2");
 
         coordinatorContext.putTablePath(tableId, tablePath);
+        zookeeperClient.registerTable(
+                tablePath,
+                TableRegistration.newTable(
+                        tableId, DEFAULT_REMOTE_DATA_DIR, DATA1_TABLE_DESCRIPTOR));
         putTableInfo(tableId, tablePath);
         coordinatorContext.setLiveTabletServers(
                 CoordinatorTestUtils.createServers(Arrays.asList(0, 1)));
@@ -158,7 +191,8 @@ class CoordinatorRequestBatchTest {
         EventManager eventManager = newSynchronousAccessContextEventManager();
 
         CoordinatorRequestBatch batch =
-                new CoordinatorRequestBatch(failingChannel, eventManager, coordinatorContext);
+                new CoordinatorRequestBatch(
+                        failingChannel, eventManager, coordinatorContext, zookeeperClient);
         // Send to server 1, which is a follower for followerTb (leader is 0). Because
         // leader != serverId, this request does NOT add followerTb to pending, so the failure
         // callback must short-circuit without dispatching an AccessContextEvent.
@@ -177,11 +211,15 @@ class CoordinatorRequestBatchTest {
     }
 
     @Test
-    void testNotifyLeaderAndIsrAllowsMissingRoutingState() {
+    void testNotifyLeaderAndIsrAllowsMissingRoutingState() throws Exception {
         long tableId = 300L;
         TableBucket tb = new TableBucket(tableId, 0);
         TablePath tablePath = TablePath.of("db1", "t3");
         coordinatorContext.putTablePath(tableId, tablePath);
+        zookeeperClient.registerTable(
+                tablePath,
+                TableRegistration.newTable(
+                        tableId, DEFAULT_REMOTE_DATA_DIR, DATA1_TABLE_DESCRIPTOR));
         coordinatorContext.setLiveTabletServers(
                 CoordinatorTestUtils.createServers(Collections.singletonList(0)));
         LeaderAndIsr leaderAndIsr =
@@ -206,7 +244,8 @@ class CoordinatorRequestBatchTest {
                 new CoordinatorRequestBatch(
                         channelManager,
                         newSynchronousAccessContextEventManager(),
-                        coordinatorContext);
+                        coordinatorContext,
+                        zookeeperClient);
 
         batch.addNotifyLeaderRequestForTabletServers(
                 Collections.singleton(0),
@@ -224,6 +263,71 @@ class CoordinatorRequestBatchTest {
                 sentRequest.get().getNotifyBucketsLeaderReqsList().get(0);
         assertThat(bucketRequest.hasBucketCount()).isFalse();
         assertThat(bucketRequest.hasBucketCountEpoch()).isFalse();
+        assertThat(bucketRequest.hasMetadataVersion()).isTrue();
+        assertThat(bucketRequest.getMetadataVersion()).isZero();
+        assertThat(bucketRequest.hasDataState()).isTrue();
+        assertThat(bucketRequest.getDataState()).isEqualTo(BulkLoadDataState.ACTIVE.getCode());
+        assertThat(coordinatorContext.getPendingLeaderActivationBuckets()).isEmpty();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testDoesNotNotifyDeletedOrRecreatedTarget(boolean recreated) throws Exception {
+        long tableId = 400L;
+        TablePath tablePath = TablePath.of("db1", "missing_target_" + recreated);
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+        zookeeperClient.registerTable(
+                tablePath,
+                TableRegistration.newTable(
+                        tableId, DEFAULT_REMOTE_DATA_DIR, DATA1_TABLE_DESCRIPTOR));
+        zookeeperClient.deleteTable(tablePath);
+        if (recreated) {
+            zookeeperClient.registerTable(
+                    tablePath,
+                    TableRegistration.newTable(
+                            tableId + 1, DEFAULT_REMOTE_DATA_DIR, DATA1_TABLE_DESCRIPTOR));
+        }
+        coordinatorContext.putTablePath(tableId, tablePath);
+        coordinatorContext.setLiveTabletServers(
+                CoordinatorTestUtils.createServers(Collections.singletonList(0)));
+        LeaderAndIsr leaderAndIsr =
+                new LeaderAndIsr(0, 0, Collections.singletonList(0), Collections.emptyList(), 0, 0);
+        AtomicInteger notifications = new AtomicInteger();
+        TestCoordinatorChannelManager channelManager =
+                new TestCoordinatorChannelManager() {
+                    @Override
+                    public void sendBucketLeaderAndIsrRequest(
+                            int receiveServerId,
+                            NotifyLeaderAndIsrRequest request,
+                            BiConsumer<NotifyLeaderAndIsrResponse, ? super Throwable>
+                                    responseConsumer) {
+                        notifications.incrementAndGet();
+                    }
+                };
+        CoordinatorRequestBatch batch =
+                new CoordinatorRequestBatch(
+                        channelManager,
+                        newSynchronousAccessContextEventManager(),
+                        coordinatorContext,
+                        zookeeperClient);
+        Runnable addNotification =
+                () ->
+                        batch.addNotifyLeaderRequestForTabletServers(
+                                Collections.singleton(0),
+                                PhysicalTablePath.of(tablePath),
+                                tableBucket,
+                                Collections.singletonList(0),
+                                leaderAndIsr);
+        if (recreated) {
+            assertThatThrownBy(addNotification::run)
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("Failed to load exact target metadata");
+        } else {
+            addNotification.run();
+        }
+        batch.sendRequestToTabletServers(0);
+
+        assertThat(notifications).hasValue(0);
         assertThat(coordinatorContext.getPendingLeaderActivationBuckets()).isEmpty();
     }
 
@@ -244,7 +348,10 @@ class CoordinatorRequestBatchTest {
     void testDiscardIncompleteBatchStartsWithNoPendingRequests() {
         CoordinatorRequestBatch batch =
                 new CoordinatorRequestBatch(
-                        new TestCoordinatorChannelManager(), event -> {}, coordinatorContext);
+                        new TestCoordinatorChannelManager(),
+                        event -> {},
+                        coordinatorContext,
+                        zookeeperClient);
         TableBucket tableBucket = new TableBucket(3L, 0);
         coordinatorContext.updateBucketReplicaAssignment(tableBucket, Collections.singletonList(1));
 

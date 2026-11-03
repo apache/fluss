@@ -212,6 +212,8 @@ class ReplicaStateMachineTest {
                         System.currentTimeMillis(),
                         System.currentTimeMillis()));
         coordinatorContext.putTablePath(tableId, DATA1_TABLE_PATH);
+        CoordinatorTestUtils.registerTable(
+                zookeeperClient, DATA1_TABLE_PATH, tableId, DATA1_TABLE_DESCRIPTOR);
         TableBucket tableBucket = new TableBucket(tableId, 0);
         List<TableBucketReplica> replicas = new ArrayList<>();
         for (int i = 0; i < 3; i++) {
@@ -260,6 +262,8 @@ class ReplicaStateMachineTest {
                         System.currentTimeMillis(),
                         System.currentTimeMillis()));
         coordinatorContext.putTablePath(tableId, DATA1_TABLE_PATH);
+        CoordinatorTestUtils.registerTable(
+                zookeeperClient, DATA1_TABLE_PATH, tableId, DATA1_TABLE_DESCRIPTOR);
         TableBucket tableBucket = new TableBucket(tableId, 0);
         for (int i = 0; i < 3; i++) {
             TableBucketReplica replica = new TableBucketReplica(tableBucket, i);
@@ -326,7 +330,8 @@ class ReplicaStateMachineTest {
                         (event) -> {
                             // do nothing
                         },
-                        coordinatorContext),
+                        coordinatorContext,
+                        zookeeperClient),
                 zookeeperClient);
     }
 
@@ -357,7 +362,8 @@ class ReplicaStateMachineTest {
                                 }
                             }
                         },
-                        coordinatorContext),
+                        coordinatorContext,
+                        zookeeperClient),
                 zookeeperClient);
     }
 

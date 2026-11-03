@@ -82,6 +82,7 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeNotifyRemo
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeStopBucketReplica;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeUpdateMetadataRequest;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTableBucket;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
 /** A request sender for coordinator server to request to tablet server by batch. */
@@ -122,26 +123,19 @@ public class CoordinatorRequestBatch {
     private final CoordinatorChannelManager coordinatorChannelManager;
     private final EventManager eventManager;
     private final CoordinatorContext coordinatorContext;
-    private final @Nullable ZooKeeperClient zooKeeperClient;
+    private final ZooKeeperClient zooKeeperClient;
 
     private final Map<String, ZooKeeperClient.DataWithStat> targetMetadata = new HashMap<>();
 
     public CoordinatorRequestBatch(
             CoordinatorChannelManager coordinatorChannelManager,
             EventManager eventManager,
-            CoordinatorContext coordinatorContext) {
-        this(coordinatorChannelManager, eventManager, coordinatorContext, null);
-    }
-
-    public CoordinatorRequestBatch(
-            CoordinatorChannelManager coordinatorChannelManager,
-            EventManager eventManager,
             CoordinatorContext coordinatorContext,
-            @Nullable ZooKeeperClient zooKeeperClient) {
+            ZooKeeperClient zooKeeperClient) {
         this.coordinatorChannelManager = coordinatorChannelManager;
         this.eventManager = eventManager;
         this.coordinatorContext = coordinatorContext;
-        this.zooKeeperClient = zooKeeperClient;
+        this.zooKeeperClient = checkNotNull(zooKeeperClient);
     }
 
     public void newBatch() {
@@ -271,7 +265,7 @@ public class CoordinatorRequestBatch {
             List<Integer> bucketReplicas,
             LeaderAndIsr leaderAndIsr) {
         BulkLoadTargetMetadata metadataIdentity = loadAppliedTarget(tablePath, tableBucket);
-        if (zooKeeperClient != null && metadataIdentity == null) {
+        if (metadataIdentity == null) {
             // The target was deleted after this state transition was scheduled. Do not emit a v1
             // request without its required identity; the queued deletion event owns cleanup.
             return false;
@@ -832,9 +826,6 @@ public class CoordinatorRequestBatch {
 
     private @Nullable BulkLoadTargetMetadata loadAppliedTarget(
             PhysicalTablePath physicalPath, TableBucket tableBucket) {
-        if (zooKeeperClient == null) {
-            return null;
-        }
         try {
             return readTargetMetadata(physicalPath, tableBucket);
         } catch (KeeperException.NoNodeException e) {

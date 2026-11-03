@@ -20,12 +20,16 @@ package org.apache.fluss.server.coordinator;
 import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.tablet.TestTabletServerGateway;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.server.zk.data.TableRegistration;
+import org.apache.fluss.server.zk.data.ZkData;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -34,10 +38,21 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Utils related to coordinator for test purpose. */
 public class CoordinatorTestUtils {
+
+    /** Persists the table registration used by coordinator notification fixtures. */
+    public static void registerTable(
+            ZooKeeperClient client, TablePath path, long tableId, TableDescriptor descriptor)
+            throws Exception {
+        client.registerTable(
+                path,
+                TableRegistration.newTable(tableId, DEFAULT_REMOTE_DATA_DIR, descriptor),
+                !client.pathExists(ZkData.TableZNode.path(path)));
+    }
 
     public static void makeSendLeaderAndStopRequestAlwaysSuccess(
             CoordinatorContext coordinatorContext,

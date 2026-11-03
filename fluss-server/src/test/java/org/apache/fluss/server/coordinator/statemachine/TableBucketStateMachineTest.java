@@ -135,7 +135,8 @@ class TableBucketStateMachineTest {
                         event -> {
                             // do nothing
                         },
-                        coordinatorContext);
+                        coordinatorContext,
+                        zookeeperClient);
         serverMetadataCache = new CoordinatorMetadataCache();
         replicaCapacityController =
                 new ReplicaCapacityController(
@@ -182,7 +183,11 @@ class TableBucketStateMachineTest {
         long t2Id = 2;
         TableBucket t2b0 = new TableBucket(t2Id, 0);
         coordinatorContext.putTablePath(t1Id, TablePath.of("db1", "t1"));
+        CoordinatorTestUtils.registerTable(
+                zookeeperClient, TablePath.of("db1", "t1"), t1Id, DATA1_TABLE_DESCRIPTOR);
         coordinatorContext.putTablePath(t2Id, TablePath.of("db1", "t2"));
+        CoordinatorTestUtils.registerTable(
+                zookeeperClient, TablePath.of("db1", "t2"), t2Id, DATA1_TABLE_DESCRIPTOR);
         coordinatorContext.putTableInfo(
                 TableInfo.of(
                         TablePath.of("db1", "t1"),
@@ -280,6 +285,8 @@ class TableBucketStateMachineTest {
                         System.currentTimeMillis(),
                         System.currentTimeMillis()));
         coordinatorContext.putTablePath(tableId, fakeTablePath);
+        CoordinatorTestUtils.registerTable(
+                zookeeperClient, fakeTablePath, tableId, DATA1_TABLE_DESCRIPTOR);
         coordinatorContext.updateBucketReplicaAssignment(tableBucket, Arrays.asList(0, 1, 2));
         coordinatorContext.putBucketState(tableBucket, NewBucket);
         // case1: init a new leader for NewBucket to OnlineBucket
@@ -355,7 +362,10 @@ class TableBucketStateMachineTest {
                         coordinatorEventProcessor, TestingMetricGroups.COORDINATOR_METRICS);
         coordinatorRequestBatch =
                 new CoordinatorRequestBatch(
-                        testCoordinatorChannelManager, eventManager, coordinatorContext);
+                        testCoordinatorChannelManager,
+                        eventManager,
+                        coordinatorContext,
+                        zookeeperClient);
         tableBucketStateMachine =
                 new TableBucketStateMachine(
                         coordinatorContext, coordinatorRequestBatch, zookeeperClient);
@@ -368,6 +378,8 @@ class TableBucketStateMachineTest {
         tableId = 5;
         final TableBucket tableBucket1 = new TableBucket(tableId, 0);
         coordinatorContext.putTablePath(tableId, fakeTablePath);
+        CoordinatorTestUtils.registerTable(
+                zookeeperClient, fakeTablePath, tableId, DATA1_TABLE_DESCRIPTOR);
         coordinatorContext.putTableInfo(
                 TableInfo.of(
                         fakeTablePath,
@@ -378,6 +390,8 @@ class TableBucketStateMachineTest {
                         System.currentTimeMillis(),
                         System.currentTimeMillis()));
         coordinatorContext.putTablePath(tableId, fakeTablePath);
+        CoordinatorTestUtils.registerTable(
+                zookeeperClient, fakeTablePath, tableId, DATA1_TABLE_DESCRIPTOR);
         coordinatorContext.updateBucketReplicaAssignment(tableBucket1, Arrays.asList(0, 1, 2));
         coordinatorContext.putBucketState(tableBucket1, NewBucket);
         tableBucketStateMachine.handleStateChange(
@@ -445,6 +459,8 @@ class TableBucketStateMachineTest {
                         System.currentTimeMillis(),
                         System.currentTimeMillis()));
         coordinatorContext.putTablePath(tableId, fakeTablePath);
+        CoordinatorTestUtils.registerTable(
+                zookeeperClient, fakeTablePath, tableId, DATA1_TABLE_DESCRIPTOR);
         tableBuckets.forEach(
                 tableBucket -> {
                     coordinatorContext.updateBucketReplicaAssignment(
@@ -518,7 +534,7 @@ class TableBucketStateMachineTest {
     }
 
     @Test
-    void testControlledShutdownWithMixedBucketStates() {
+    void testControlledShutdownWithMixedBucketStates() throws Exception {
         long tableId = 10;
         TablePath tablePath = TablePath.of("db1", "mixed-bucket-states");
         TableBucket onlineBucket = new TableBucket(tableId, 0);
@@ -555,6 +571,8 @@ class TableBucketStateMachineTest {
                         System.currentTimeMillis(),
                         System.currentTimeMillis()));
         coordinatorContext.putTablePath(tableId, tablePath);
+        CoordinatorTestUtils.registerTable(
+                zookeeperClient, tablePath, tableId, DATA1_TABLE_DESCRIPTOR);
         tableBuckets.forEach(
                 tableBucket ->
                         coordinatorContext.updateBucketReplicaAssignment(
@@ -594,7 +612,7 @@ class TableBucketStateMachineTest {
     }
 
     @Test
-    void testControlledShutdownFallsBackToIndividualUpdates() {
+    void testControlledShutdownFallsBackToIndividualUpdates() throws Exception {
         long tableId = 8;
         TablePath tablePath = TablePath.of("db1", "fallback");
         TableBucket tableBucket = new TableBucket(tableId, 0);
@@ -618,6 +636,8 @@ class TableBucketStateMachineTest {
                         System.currentTimeMillis(),
                         System.currentTimeMillis()));
         coordinatorContext.putTablePath(tableId, tablePath);
+        CoordinatorTestUtils.registerTable(
+                zookeeperClient, tablePath, tableId, DATA1_TABLE_DESCRIPTOR);
         coordinatorContext.updateBucketReplicaAssignment(tableBucket, aliveServers);
         coordinatorContext.putBucketLeaderAndIsr(tableBucket, originalLeaderAndIsr);
         coordinatorContext.putBucketState(tableBucket, OnlineBucket);
@@ -658,7 +678,7 @@ class TableBucketStateMachineTest {
     }
 
     @Test
-    void testControlledShutdownRetriesMissingBatchReadResultIndividually() {
+    void testControlledShutdownRetriesMissingBatchReadResultIndividually() throws Exception {
         long tableId = 9;
         TablePath tablePath = TablePath.of("db1", "partial-batch-read");
         TableBucket batchUpdatedBucket = new TableBucket(tableId, 0);
@@ -688,6 +708,8 @@ class TableBucketStateMachineTest {
                         System.currentTimeMillis(),
                         System.currentTimeMillis()));
         coordinatorContext.putTablePath(tableId, tablePath);
+        CoordinatorTestUtils.registerTable(
+                zookeeperClient, tablePath, tableId, DATA1_TABLE_DESCRIPTOR);
         tableBuckets.forEach(
                 tableBucket -> {
                     coordinatorContext.updateBucketReplicaAssignment(tableBucket, aliveServers);

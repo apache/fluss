@@ -136,7 +136,10 @@ class TableManagerTest {
         conf.setString(ConfigOptions.REMOTE_DATA_DIR, "/tmp/fluss/remote-data");
         CoordinatorRequestBatch coordinatorRequestBatch =
                 new CoordinatorRequestBatch(
-                        testCoordinatorChannelManager, testingEventManager, coordinatorContext);
+                        testCoordinatorChannelManager,
+                        testingEventManager,
+                        coordinatorContext,
+                        zookeeperClient);
         ReplicaStateMachine replicaStateMachine =
                 new ReplicaStateMachine(
                         coordinatorContext, coordinatorRequestBatch, zookeeperClient);
@@ -188,6 +191,8 @@ class TableManagerTest {
                         DEFAULT_REMOTE_DATA_DIR,
                         System.currentTimeMillis(),
                         System.currentTimeMillis()));
+        CoordinatorTestUtils.registerTable(
+                zookeeperClient, DATA1_TABLE_PATH, tableId, DATA1_TABLE_DESCRIPTOR);
         tableManager.onCreateNewTable(DATA1_TABLE_PATH, tableId, assignment);
 
         assertThat(coordinatorContext.getKvBucketCount()).isZero();
@@ -214,6 +219,8 @@ class TableManagerTest {
                         DEFAULT_REMOTE_DATA_DIR,
                         System.currentTimeMillis(),
                         System.currentTimeMillis()));
+        CoordinatorTestUtils.registerTable(
+                zookeeperClient, DATA1_TABLE_PATH_PK, tableId, DATA1_TABLE_DESCRIPTOR_PK);
         tableManager.onCreateNewTable(DATA1_TABLE_PATH_PK, tableId, assignment);
         assertThat(coordinatorContext.getKvBucketCount()).isEqualTo(assignment.getBuckets().size());
         assertThat(replicaCapacityController.getKvLeaderReplicaCount())
@@ -258,6 +265,8 @@ class TableManagerTest {
                         DEFAULT_REMOTE_DATA_DIR,
                         System.currentTimeMillis(),
                         System.currentTimeMillis()));
+        CoordinatorTestUtils.registerTable(
+                zookeeperClient, DATA1_TABLE_PATH, tableId, DATA1_TABLE_DESCRIPTOR);
         tableManager.onCreateNewTable(DATA1_TABLE_PATH, tableId, assignment);
 
         int offlineServerId = 0;
@@ -350,6 +359,8 @@ class TableManagerTest {
                         DEFAULT_REMOTE_DATA_DIR,
                         System.currentTimeMillis(),
                         System.currentTimeMillis()));
+        CoordinatorTestUtils.registerTable(
+                zookeeperClient, DATA1_TABLE_PATH, tableId, DATA1_TABLE_DESCRIPTOR);
         tableManager.onCreateNewTable(DATA1_TABLE_PATH, tableId, assignment);
 
         // now, delete the created table/partition
@@ -401,6 +412,8 @@ class TableManagerTest {
                         DEFAULT_REMOTE_DATA_DIR,
                         System.currentTimeMillis(),
                         System.currentTimeMillis()));
+        CoordinatorTestUtils.registerTable(
+                zookeeperClient, DATA1_TABLE_PATH, tableId, DATA1_TABLE_DESCRIPTOR);
         tableManager.onCreateNewTable(DATA1_TABLE_PATH, tableId, assignment);
 
         PartitionAssignment partitionAssignment =

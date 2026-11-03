@@ -86,6 +86,7 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.config.ConfigOptions.DEFAULT_LISTENER_NAME;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
 import static org.apache.fluss.server.coordinator.statemachine.BucketState.OnlineBucket;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.OnlineReplica;
 import static org.apache.fluss.server.testutils.KvTestUtils.mockCompletedSnapshot;
@@ -176,11 +177,14 @@ class CoordinatorBulkLoadEventProcessorTest extends CoordinatorEventProcessorTes
                         Collections.emptyList(),
                         eventProcessor.getCoordinatorContext().getCoordinatorEpoch(),
                         1);
+        CoordinatorTestUtils.registerTable(
+                zookeeperClient, tablePath, tableId, DATA1_TABLE_DESCRIPTOR);
         CoordinatorRequestBatch requestBatch =
                 new CoordinatorRequestBatch(
                         testCoordinatorChannelManager,
                         eventProcessor.getCoordinatorEventManager(),
-                        eventProcessor.getCoordinatorContext());
+                        eventProcessor.getCoordinatorContext(),
+                        zookeeperClient);
 
         fromCtx(
                 context -> {
