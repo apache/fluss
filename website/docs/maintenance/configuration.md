@@ -263,6 +263,13 @@ the attempts don't count toward `client.lookup.max-retries`, so lookups keep wai
 election instead of failing. Setting `client.lookup.retry-backoff` to `0` restores immediate retry
 behavior.
 
+Lookups that wait for a leader or for a retry are held outside the lookup queue, so
+`client.lookup.queue-size` bounds only the lookups that have not been sent yet, not the total
+number of pending lookups. While a bucket has no leader, an application that keeps issuing
+asynchronous lookups for it gets no backpressure from the client, and the waiting lookups can grow
+without bound. Bound the number of outstanding lookups in the application, for example with the
+capacity of a Flink asynchronous lookup join.
+
 ## Client disk write protection backoff
 
 | Key | Default | Type | Description |

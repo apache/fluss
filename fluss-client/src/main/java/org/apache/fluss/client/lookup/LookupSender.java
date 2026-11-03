@@ -254,12 +254,9 @@ class LookupSender implements Runnable {
                     failLookups(bucketLookups, leaderLookupError);
                     // Completing a lookup runs its callbacks on this thread, e.g. that reroute.
                     // So the bucket's waiting lookups, however many, go back to the queue and fail
-                    // in later batches like these, instead of all at once here. The bucket is
-                    // forgotten only after that, so that its lookups are still sent on close if the
-                    // queue gets closed concurrently.
+                    // in later batches like these, instead of all at once here.
                     LeaderlessBucket droppedBucket = leaderlessBuckets.get(tb);
-                    if (droppedBucket != null) {
-                        reEnqueueWaitingLookups(droppedBucket);
+                    if (droppedBucket != null && reEnqueueWaitingLookups(droppedBucket)) {
                         leaderlessBuckets.remove(tb);
                     }
                 } else if (closing) {
@@ -309,7 +306,10 @@ class LookupSender implements Runnable {
             LeaderlessBucket leaderlessBucket = entry.getValue();
             boolean leaderCached = cluster.leaderFor(entry.getKey()) != null;
             if (leaderCached || nowMs >= leaderlessBucket.nextLeaderLookupTimeMs) {
-                reEnqueueWaitingLookups(leaderlessBucket);
+                if (!reEnqueueWaitingLookups(leaderlessBucket)) {
+                    // The queue got closed. The sender closes next and sends what's left.
+                    return;
+                }
             }
             if (leaderCached) {
                 iterator.remove();
@@ -323,14 +323,21 @@ class LookupSender implements Runnable {
         }
     }
 
-    private void reEnqueueWaitingLookups(LeaderlessBucket leaderlessBucket) {
-        // Removed one at a time, so that a lookup is not lost if the queue gets closed
-        // concurrently. The remaining ones are then sent when the sender closes.
+    /**
+     * Moves the bucket's waiting lookups back to the queue.
+     *
+     * @return false if the queue got closed concurrently. The remaining lookups then stay with the
+     *     bucket, which must be kept, and are sent or failed when the sender closes.
+     */
+    private boolean reEnqueueWaitingLookups(LeaderlessBucket leaderlessBucket) {
         AbstractLookupQuery<?> lookup;
         while ((lookup = leaderlessBucket.waitingLookups.peek()) != null) {
-            reEnqueueLookup(lookup);
+            if (!lookupQueue.tryReEnqueue(lookup)) {
+                return false;
+            }
             leaderlessBucket.waitingLookups.poll();
         }
+        return true;
     }
 
     private boolean hasLookupsWaitingForLeader() {

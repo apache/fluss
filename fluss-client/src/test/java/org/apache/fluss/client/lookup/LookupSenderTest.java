@@ -877,7 +877,10 @@ public class LookupSenderTest {
             runOnceOn(senderExecutor);
             assertThat(replacements).hasSize(waitingQueries.size() + 1);
             for (LookupQuery replacement : replacements) {
-                assertThat(replacement.future()).isDone();
+                assertThat(replacement.future().get(5, TimeUnit.SECONDS))
+                        .isEqualTo(
+                                responseValue(
+                                        "", new String(replacement.key(), StandardCharsets.UTF_8)));
             }
             assertThat(lookupQueue.hasUnDrained()).isFalse();
         } finally {
@@ -893,15 +896,17 @@ public class LookupSenderTest {
         LookupQueue queue =
                 new LookupQueue(lookupQueueConf(), clock) {
                     @Override
-                    void reEnqueue(AbstractLookupQuery<?> lookup) {
-                        super.reEnqueue(lookup);
+                    boolean tryReEnqueue(AbstractLookupQuery<?> lookup) {
+                        boolean reEnqueued = super.tryReEnqueue(lookup);
                         // The client is closed while the waiting lookups go back to the queue.
                         if (closeOnReEnqueue.get()) {
                             close();
                         }
+                        return reEnqueued;
                     }
                 };
         createLookupSender(queue, new ExponentialBackoff(100, 2, 10_000, 0));
+        gateway.setLookupHandler(this::createPartitionNameEchoResponse);
         metadataUpdater.failLeaderLookups(TABLE_BUCKET, Integer.MAX_VALUE, null);
         List<LookupQuery> waitingQueries =
                 Arrays.asList(
@@ -917,12 +922,20 @@ public class LookupSenderTest {
                 Integer.MAX_VALUE,
                 new PartitionNotExistException("partition dropped"));
         closeOnReEnqueue.set(true);
+        // The healthy lookup is grouped first, so that it is pending when the queue closes.
+        LookupQuery healthyQuery =
+                new LookupQuery(DATA1_TABLE_PATH_PK, OTHER_TABLE_BUCKET, bytes("healthy"));
         LookupQuery query = new LookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("key"));
-        assertThatThrownBy(() -> lookupSender.sendLookups(Collections.singletonList(query)))
-                .isInstanceOf(IllegalStateException.class);
+        lookupSender.sendLookups(Arrays.asList(healthyQuery, query));
         assertFailedWithPartitionNotExist(Collections.singletonList(query));
+        // The pass goes on, and the lookup that didn't make it back to the queue stays with the
+        // bucket.
+        assertThat(healthyQuery.future().get(5, TimeUnit.SECONDS))
+                .isEqualTo(responseValue("", "healthy"));
+        assertThat(lookupSender.getLookupsWaitingForLeader(TABLE_BUCKET))
+                .containsExactly(waitingQueries.get(1));
 
-        // The waiting lookup that didn't make it back to the queue still completes on close.
+        // Both waiting lookups still complete when the sender closes.
         lookupSender.initiateClose();
         lookupSender.run();
         assertFailedWithPartitionNotExist(waitingQueries);
@@ -1515,8 +1528,10 @@ public class LookupSenderTest {
         /** Buckets without a leader -> metadata refreshes left to fail for them. */
         private final Map<TableBucket, Integer> remainingFailures = new HashMap<>();
 
+        /** Buckets without a leader -> the error their metadata refreshes fail with, if given. */
+        private final Map<TableBucket, RuntimeException> injectedErrors = new HashMap<>();
+
         private final AtomicInteger failedLeaderLookups = new AtomicInteger();
-        private volatile RuntimeException failure;
 
         TestingLeaderlessMetadataUpdater(
                 Map<TablePath, TableInfo> tableInfos, TestTabletServerGateway gateway) {
@@ -1545,7 +1560,11 @@ public class LookupSenderTest {
          */
         synchronized void failLeaderLookups(
                 TableBucket tableBucket, int failures, @Nullable RuntimeException failure) {
-            this.failure = failure;
+            if (failure == null) {
+                injectedErrors.remove(tableBucket);
+            } else {
+                injectedErrors.put(tableBucket, failure);
+            }
             remainingFailures.put(tableBucket, failures);
             updateCluster(withoutLeaders(clusterWithLeaders, remainingFailures.keySet()));
         }
@@ -1553,6 +1572,7 @@ public class LookupSenderTest {
         /** Caches the leader of the bucket, as a metadata refresh elsewhere would. */
         synchronized void cacheLeader(TableBucket tableBucket) {
             remainingFailures.remove(tableBucket);
+            injectedErrors.remove(tableBucket);
             updateCluster(withoutLeaders(clusterWithLeaders, remainingFailures.keySet()));
         }
 
@@ -1567,6 +1587,7 @@ public class LookupSenderTest {
                 if (remaining > 0) {
                     remainingFailures.put(tableBucket, remaining - 1);
                     failedLeaderLookups.incrementAndGet();
+                    RuntimeException failure = injectedErrors.get(tableBucket);
                     throw failure != null
                             ? failure
                             : new FlussRuntimeException(

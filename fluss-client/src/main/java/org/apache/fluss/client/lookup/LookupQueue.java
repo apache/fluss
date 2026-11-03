@@ -105,6 +105,20 @@ class LookupQueue {
         }
     }
 
+    /**
+     * Re-enqueues the lookup unless the queue is closed. Only for the draining thread: a lookup
+     * that it adds just as the queue gets closed is still drained by its final {@link #drainAll()}.
+     *
+     * @return false if the queue is closed and the lookup was not re-enqueued
+     */
+    boolean tryReEnqueue(AbstractLookupQuery<?> lookup) {
+        if (closed) {
+            return false;
+        }
+        reEnqueuedLookupQueue.add(lookup);
+        return true;
+    }
+
     /** Returns the clock that the retry times of re-enqueued lookups are checked against. */
     Clock clock() {
         return clock;
