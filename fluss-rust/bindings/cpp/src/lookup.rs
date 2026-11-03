@@ -26,6 +26,7 @@ use fluss as fcore;
 use fluss::metadata::TableInfo;
 use fluss::row::GenericRow;
 use fluss::rpc::FlussError as CoreFlussError;
+use tokio::sync::OwnedSemaphorePermit;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::task::JoinHandle;
 
@@ -33,8 +34,6 @@ use crate::{
     CLIENT_ERROR_CODE, GenericRowInner, LookupResultInner, Lookuper, PrefixLookupResultInner,
     PrefixLookuper, RUNTIME, client_err_ptr, err_from_core_error, ffi, ok_ptr, types,
 };
-
-pub(crate) const COMPLETION_QUEUE_CAPACITY: usize = 1024;
 
 enum PollOutcome<T> {
     Completion(T),
@@ -159,11 +158,13 @@ pub struct PendingPrefixLookup(Pending<Box<PrefixLookupResultInner>>);
 pub struct LookupCompletion {
     request_id: u64,
     result: Option<Box<LookupResultInner>>,
+    _permit: Option<OwnedSemaphorePermit>,
 }
 
 pub struct PrefixLookupCompletion {
     request_id: u64,
     result: Option<Box<PrefixLookupResultInner>>,
+    _permit: Option<OwnedSemaphorePermit>,
 }
 
 impl LookupCompletion {
@@ -304,9 +305,9 @@ impl Lookuper {
                         .send(LookupCompletion {
                             request_id,
                             result: Some(result),
+                            _permit: Some(permit),
                         })
                         .await;
-                    drop(permit);
                 });
                 crate::ok_result()
             }
@@ -390,9 +391,9 @@ impl PrefixLookuper {
                         .send(PrefixLookupCompletion {
                             request_id,
                             result: Some(result),
+                            _permit: Some(permit),
                         })
                         .await;
-                    drop(permit);
                 });
                 crate::ok_result()
             }
