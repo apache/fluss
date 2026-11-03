@@ -586,6 +586,8 @@ message GetLatestKvSnapshotsResponse {
   // null if it is a non-partitioned table, otherwise, it must be not null
   optional int64 partition_id = 2;
   repeated PbKvSnapshot latest_snapshots = 3;
+  // Clients select a visible retained snapshot for SYNC-index tables.
+  optional bool has_sync_indexes = 4;
 }
 
 message GetKvSnapshotMetadataRequest {
@@ -685,6 +687,8 @@ message PbRemoteLogManifestEntry {
 message ListKvSnapshotsRequest {
   required int64 table_id = 1;
   optional int64 partition_id = 2;
+  // Read snapshot offsets only for callers selecting snapshots against a log boundary.
+  optional bool include_log_offsets = 3;
 }
 
 message ListKvSnapshotsResponse {

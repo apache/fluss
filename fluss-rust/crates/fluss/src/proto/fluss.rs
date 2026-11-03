@@ -758,6 +758,9 @@ pub struct GetLatestKvSnapshotsResponse {
     pub partition_id: ::core::option::Option<i64>,
     #[prost(message, repeated, tag = "3")]
     pub latest_snapshots: ::prost::alloc::vec::Vec<PbKvSnapshot>,
+    /// Clients select a visible retained snapshot for SYNC-index tables.
+    #[prost(bool, optional, tag = "4")]
+    pub has_sync_indexes: ::core::option::Option<bool>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetKvSnapshotMetadataRequest {
@@ -897,6 +900,9 @@ pub struct ListKvSnapshotsRequest {
     pub table_id: i64,
     #[prost(int64, optional, tag = "2")]
     pub partition_id: ::core::option::Option<i64>,
+    /// Read snapshot offsets only for callers selecting snapshots against a log boundary.
+    #[prost(bool, optional, tag = "3")]
+    pub include_log_offsets: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListKvSnapshotsResponse {
