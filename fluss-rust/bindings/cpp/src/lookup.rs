@@ -34,6 +34,54 @@ use crate::{
     PrefixLookuper, RUNTIME, client_err_ptr, err_from_core_error, ffi, ok_ptr, types,
 };
 
+pub(crate) const COMPLETION_QUEUE_CAPACITY: usize = 1024;
+
+enum PollOutcome<T> {
+    Completion(T),
+    Empty,
+    Closed,
+}
+
+fn poll_receiver<T>(
+    receiver: &tokio::sync::Mutex<tokio::sync::mpsc::Receiver<T>>,
+    timeout_ms: i64,
+) -> PollOutcome<T>
+where
+    T: Send + 'static,
+{
+    RUNTIME.block_on(async {
+        if timeout_ms < 0 {
+            let mut receiver = receiver.lock().await;
+            return match receiver.recv().await {
+                Some(completion) => PollOutcome::Completion(completion),
+                None => PollOutcome::Closed,
+            };
+        }
+
+        if timeout_ms == 0 {
+            let Ok(mut receiver) = receiver.try_lock() else {
+                return PollOutcome::Empty;
+            };
+            return match receiver.try_recv() {
+                Ok(completion) => PollOutcome::Completion(completion),
+                Err(TryRecvError::Empty) => PollOutcome::Empty,
+                Err(TryRecvError::Disconnected) => PollOutcome::Closed,
+            };
+        }
+
+        match tokio::time::timeout(Duration::from_millis(timeout_ms as u64), async {
+            let mut receiver = receiver.lock().await;
+            receiver.recv().await
+        })
+        .await
+        {
+            Ok(Some(completion)) => PollOutcome::Completion(completion),
+            Ok(None) => PollOutcome::Closed,
+            Err(_) => PollOutcome::Empty,
+        }
+    })
+}
+
 /// A lookup result for C++, or the error in its place.
 trait Outcome: Send + 'static {
     fn from_error(code: i32, message: String) -> Self;
@@ -238,6 +286,15 @@ impl Lookuper {
     ) -> ffi::FfiResult {
         match self.key(pk_row) {
             Ok(key) => {
+                let permit = self
+                    .completion_permits
+                    .clone()
+                    .try_acquire_owned()
+                    .map_err(|_| "Too many outstanding asynchronous lookups".to_string());
+                let permit = match permit {
+                    Ok(permit) => permit,
+                    Err(message) => return crate::err_result(CLIENT_ERROR_CODE, message),
+                };
                 let sender = self.completion_sender.clone();
                 let inner = Arc::clone(&self.inner);
                 let table_info = Arc::clone(&self.table_info);
@@ -249,6 +306,7 @@ impl Lookuper {
                             result: Some(result),
                         })
                         .await;
+                    drop(permit);
                 });
                 crate::ok_result()
             }
@@ -257,28 +315,12 @@ impl Lookuper {
     }
 
     pub(crate) fn poll_lookup(&self, timeout_ms: i64) -> ffi::FfiPtrResult {
-        let mut receiver = self.completion_receiver.lock().unwrap();
-        let completion = if timeout_ms < 0 {
-            RUNTIME.block_on(receiver.recv())
-        } else if timeout_ms == 0 {
-            match receiver.try_recv() {
-                Ok(completion) => Some(completion),
-                Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => None,
+        match poll_receiver(&self.completion_receiver, timeout_ms) {
+            PollOutcome::Completion(completion) => {
+                ok_ptr(Box::into_raw(Box::new(completion)) as usize)
             }
-        } else {
-            RUNTIME.block_on(async {
-                tokio::time::timeout(Duration::from_millis(timeout_ms as u64), receiver.recv())
-                    .await
-                    .ok()
-                    .flatten()
-            })
-        };
-        match completion {
-            Some(completion) => ok_ptr(Box::into_raw(Box::new(completion)) as usize),
-            None if receiver.is_closed() => {
-                client_err_ptr("Lookup completion queue closed".to_string())
-            }
-            None => ok_ptr(0),
+            PollOutcome::Closed => client_err_ptr("Lookup completion queue closed".to_string()),
+            PollOutcome::Empty => ok_ptr(0),
         }
     }
 }
@@ -330,6 +372,15 @@ impl PrefixLookuper {
     ) -> ffi::FfiResult {
         match self.key(prefix_row) {
             Ok(key) => {
+                let permit = self
+                    .completion_permits
+                    .clone()
+                    .try_acquire_owned()
+                    .map_err(|_| "Too many outstanding asynchronous lookups".to_string());
+                let permit = match permit {
+                    Ok(permit) => permit,
+                    Err(message) => return crate::err_result(CLIENT_ERROR_CODE, message),
+                };
                 let sender = self.completion_sender.clone();
                 let inner = Arc::clone(&self.inner);
                 let table_info = Arc::clone(&self.table_info);
@@ -341,6 +392,7 @@ impl PrefixLookuper {
                             result: Some(result),
                         })
                         .await;
+                    drop(permit);
                 });
                 crate::ok_result()
             }
@@ -349,28 +401,12 @@ impl PrefixLookuper {
     }
 
     pub(crate) fn poll_prefix_lookup(&self, timeout_ms: i64) -> ffi::FfiPtrResult {
-        let mut receiver = self.completion_receiver.lock().unwrap();
-        let completion = if timeout_ms < 0 {
-            RUNTIME.block_on(receiver.recv())
-        } else if timeout_ms == 0 {
-            match receiver.try_recv() {
-                Ok(completion) => Some(completion),
-                Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => None,
+        match poll_receiver(&self.completion_receiver, timeout_ms) {
+            PollOutcome::Completion(completion) => {
+                ok_ptr(Box::into_raw(Box::new(completion)) as usize)
             }
-        } else {
-            RUNTIME.block_on(async {
-                tokio::time::timeout(Duration::from_millis(timeout_ms as u64), receiver.recv())
-                    .await
-                    .ok()
-                    .flatten()
-            })
-        };
-        match completion {
-            Some(completion) => ok_ptr(Box::into_raw(Box::new(completion)) as usize),
-            None if receiver.is_closed() => {
-                client_err_ptr("Lookup completion queue closed".to_string())
-            }
-            None => ok_ptr(0),
+            PollOutcome::Closed => client_err_ptr("Lookup completion queue closed".to_string()),
+            PollOutcome::Empty => ok_ptr(0),
         }
     }
 }

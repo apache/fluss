@@ -82,10 +82,13 @@ request:
 
 ```cpp
 std::vector<fluss::LookupCompletion> completed;
+size_t submitted = 0;
 for (size_t i = 0; i < keys.size(); ++i) {
-    lookuper.LookupAsync(keys[i], i);
+    if (lookuper.LookupAsync(keys[i], i).Ok()) {
+        ++submitted;
+    }
 }
-while (completed.size() < keys.size()) {
+while (completed.size() < submitted) {
     lookuper.Poll(1000, completed);
 }
 ```
@@ -93,8 +96,10 @@ while (completed.size() < keys.size()) {
 Each completion carries the caller's request ID, a per-lookup `Result`, and the
 lookup result. `PrefixLookuper::PrefixLookupAsync` and its `Poll` overload
 provide the same behavior for prefix lookups.
-The completion queue holds up to 1024 results; when it is full, lookup tasks
-wait for the caller to poll before publishing more completions.
+At most 1024 asynchronous lookups may be outstanding per lookuper. When that
+limit is reached, `LookupAsync` returns an error; callers should poll before
+submitting more work. The completion queue holds up to 1024 results, and
+`Poll` returns at most 1024 completions per call.
 
 The SDK executes `WriteCallback` (`void(const WriteCompletion&)`) on one shared
 worker, serially in dispatch order and off the I/O threads. `WriteCompletion.result`

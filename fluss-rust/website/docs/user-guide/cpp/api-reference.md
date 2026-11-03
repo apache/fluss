@@ -565,13 +565,16 @@ For fan-out workloads, use `LookupAsync` and `Poll` instead of retaining one
 pending handle per key:
 
 ```cpp
+size_t submitted = 0;
 for (size_t i = 0; i < keys.size(); ++i) {
     if (!lookuper.LookupAsync(keys[i], i).Ok()) {
         // This lookup did not start.
+    } else {
+        ++submitted;
     }
 }
 std::vector<fluss::LookupCompletion> completed;
-while (completed.size() < keys.size()) {
+while (completed.size() < submitted) {
     if (!lookuper.Poll(1000, completed).Ok()) {
         // Handle a polling error.
     }
@@ -582,6 +585,11 @@ for (const auto& completion : completed) {
     }
 }
 ```
+
+`LookupAsync` allows at most 1024 outstanding requests per lookuper. If that
+limit is reached, it returns an error; poll completed requests before
+submitting more. `Poll` returns at most 1024 completions per call and includes
+lock acquisition in its timeout.
 
 `Poll` waits for at most `timeout_ms` for the first completion and then drains
 already completed lookups. A timeout is not an error and does not cancel

@@ -1082,7 +1082,8 @@ pub struct Lookuper {
     inner: Arc<fcore::client::Lookuper>,
     table_info: Arc<TableInfo>,
     completion_sender: tokio::sync::mpsc::Sender<LookupCompletion>,
-    completion_receiver: Mutex<tokio::sync::mpsc::Receiver<LookupCompletion>>,
+    completion_receiver: tokio::sync::Mutex<tokio::sync::mpsc::Receiver<LookupCompletion>>,
+    completion_permits: Arc<tokio::sync::Semaphore>,
 }
 
 pub struct PrefixLookuper {
@@ -1091,7 +1092,8 @@ pub struct PrefixLookuper {
     /// Full-schema indices of the lookup columns, used to compact the input row.
     lookup_column_indices: Vec<usize>,
     completion_sender: tokio::sync::mpsc::Sender<PrefixLookupCompletion>,
-    completion_receiver: Mutex<tokio::sync::mpsc::Receiver<PrefixLookupCompletion>>,
+    completion_receiver: tokio::sync::Mutex<tokio::sync::mpsc::Receiver<PrefixLookupCompletion>>,
+    completion_permits: Arc<tokio::sync::Semaphore>,
 }
 
 // C++ callers may share one lookuper across threads.
@@ -2206,13 +2208,17 @@ impl Table {
             Ok(l) => l,
             Err(e) => return err_ptr_from_core(&e),
         };
-        let (completion_sender, completion_receiver) = tokio::sync::mpsc::channel(1024);
+        let (completion_sender, completion_receiver) =
+            tokio::sync::mpsc::channel(lookup::COMPLETION_QUEUE_CAPACITY);
 
         let ptr = Box::into_raw(Box::new(Lookuper {
             inner: Arc::new(lookuper),
             table_info: Arc::new(self.table_info.clone()),
             completion_sender,
-            completion_receiver: Mutex::new(completion_receiver),
+            completion_receiver: tokio::sync::Mutex::new(completion_receiver),
+            completion_permits: Arc::new(tokio::sync::Semaphore::new(
+                lookup::COMPLETION_QUEUE_CAPACITY,
+            )),
         }));
         ok_ptr(ptr as usize)
     }
@@ -2240,14 +2246,18 @@ impl Table {
             Ok(l) => l,
             Err(e) => return err_ptr_from_core(&e),
         };
-        let (completion_sender, completion_receiver) = tokio::sync::mpsc::channel(1024);
+        let (completion_sender, completion_receiver) =
+            tokio::sync::mpsc::channel(lookup::COMPLETION_QUEUE_CAPACITY);
 
         let ptr = Box::into_raw(Box::new(PrefixLookuper {
             inner: Arc::new(lookuper),
             table_info: Arc::new(self.table_info.clone()),
             lookup_column_indices,
             completion_sender,
-            completion_receiver: Mutex::new(completion_receiver),
+            completion_receiver: tokio::sync::Mutex::new(completion_receiver),
+            completion_permits: Arc::new(tokio::sync::Semaphore::new(
+                lookup::COMPLETION_QUEUE_CAPACITY,
+            )),
         }));
         ok_ptr(ptr as usize)
     }
