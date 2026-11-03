@@ -19,10 +19,20 @@ package org.apache.fluss.client.metadata;
 
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
+import org.apache.fluss.client.FlussConnection;
 import org.apache.fluss.client.admin.Admin;
+import org.apache.fluss.client.table.Table;
+import org.apache.fluss.client.table.scanner.ScanRecord;
+import org.apache.fluss.client.table.scanner.log.LogScanner;
+import org.apache.fluss.client.table.scanner.log.LogScannerImpl;
+import org.apache.fluss.client.table.scanner.log.ScanRecords;
+import org.apache.fluss.client.table.writer.AppendWriter;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TableOrPartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.RpcClient;
@@ -38,12 +48,21 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 import static org.apache.fluss.client.utils.MetadataUtils.sendMetadataRequestAndRebuildCluster;
+import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
+import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** IT test for update metadata of {@link MetadataUpdater}. */
@@ -57,11 +76,27 @@ class MetadataUpdaterITCase {
     @ValueSource(booleans = {true, false})
     void testPartialCacheThroughRpcAndClientRouting(boolean explicitCount) throws Exception {
         TablePath path = TablePath.of("fluss", "partial_routing_" + explicitCount);
+        int recordCount = 30;
         long tableId;
         try (Connection connection =
                 ConnectionFactory.createConnection(FLUSS_CLUSTER_EXTENSION.getClientConfig())) {
-            connection.getAdmin().createTable(path, DATA1_TABLE_DESCRIPTOR, false).get();
+            connection
+                    .getAdmin()
+                    .createTable(
+                            path,
+                            TableDescriptor.builder()
+                                    .schema(DATA1_SCHEMA)
+                                    .distributedBy(3, "a")
+                                    .build(),
+                            false)
+                    .get();
             tableId = connection.getAdmin().getTableInfo(path).get().getTableId();
+            try (Table table = connection.getTable(path)) {
+                AppendWriter writer = table.newAppend().createWriter();
+                for (int id = 0; id < recordCount; id++) {
+                    writer.append(row(id, "row-" + id)).get(30, TimeUnit.SECONDS);
+                }
+            }
         }
         FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId);
         FLUSS_CLUSTER_EXTENSION.waitUntilAllGatewayHasSameMetadata();
@@ -104,6 +139,57 @@ class MetadataUpdaterITCase {
         assertThat(cluster.getBucketCountEpoch(tableId)).hasValue(0);
         assertThat(server.getMetadataCache().getTableMetadata(path).get().getBucketMetadataList())
                 .hasSize(3);
+        assertRecordsFromAllBuckets(full.getTableInfo(), cluster, recordCount);
+    }
+
+    private static void assertRecordsFromAllBuckets(
+            TableInfo tableInfo, Cluster cluster, int expectedRecords) throws Exception {
+        Configuration conf = FLUSS_CLUSTER_EXTENSION.getClientConfig();
+        MetadataUpdater updater =
+                new MetadataUpdater(FLUSS_CLUSTER_EXTENSION.getRpcClient(), conf, cluster);
+        List<Integer> actualIds = new ArrayList<>();
+        Map<Integer, Integer> recordsPerBucket = new HashMap<>();
+        // Keep the RPC-rebuilt snapshot instead of refreshing it through Connection.getTable.
+        try (FlussConnection connection =
+                        (FlussConnection) ConnectionFactory.createConnection(conf);
+                LogScanner scanner =
+                        new LogScannerImpl(
+                                conf,
+                                tableInfo,
+                                updater,
+                                connection.getClientMetricGroup(),
+                                connection.getOrCreateRemoteFileDownloader(),
+                                null,
+                                new ClientSchemaGetter(
+                                        tableInfo.getTablePath(),
+                                        tableInfo.getSchemaInfo(),
+                                        connection.getAdmin()),
+                                null)) {
+            int bucketCount =
+                    cluster.getBucketCountOrElseThrow(
+                            TableOrPartition.ofTable(tableInfo.getTableId()));
+            for (int bucket = 0; bucket < bucketCount; bucket++) {
+                scanner.subscribe(bucket, 0L);
+            }
+            long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
+            while (actualIds.size() < expectedRecords && System.nanoTime() < deadline) {
+                ScanRecords records = scanner.poll(Duration.ofMillis(100));
+                for (TableBucket bucket : records.buckets()) {
+                    for (ScanRecord record : records.records(bucket)) {
+                        int id = record.getRow().getInt(0);
+                        actualIds.add(id);
+                        assertThat(record.getRow().getString(1).toString()).isEqualTo("row-" + id);
+                        int bucketRecords = recordsPerBucket.getOrDefault(bucket.getBucket(), 0);
+                        assertThat(record.logOffset()).isEqualTo((long) bucketRecords);
+                        recordsPerBucket.put(bucket.getBucket(), bucketRecords + 1);
+                    }
+                }
+            }
+        }
+        assertThat(actualIds)
+                .containsExactlyInAnyOrderElementsOf(
+                        IntStream.range(0, expectedRecords).boxed().collect(Collectors.toList()));
+        assertThat(recordsPerBucket).containsOnlyKeys(0, 1, 2);
     }
 
     @Test
