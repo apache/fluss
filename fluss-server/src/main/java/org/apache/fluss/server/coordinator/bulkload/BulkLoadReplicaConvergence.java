@@ -72,12 +72,11 @@ final class BulkLoadReplicaConvergence {
         this.channelManager = channelManager;
     }
 
-    /** Applies the replica work required by the current durable transaction and target state. */
+    /** Applies one BulkLoad replica action using the current durable transaction and assignment. */
     CompletableFuture<Void> apply(
             BulkLoadTransaction transaction,
             ReplicaConvergenceContext round,
-            BulkLoadDataState state,
-            boolean requireEmpty) {
+            BulkLoadReplicaAction action) {
         captureBucketLeaderAndIsr(transaction, round);
         Versioned<? extends TableAssignment> assignment = round.assignment;
         List<RegisteredTabletServer> registrations = round.recipients;
@@ -100,9 +99,11 @@ final class BulkLoadReplicaConvergence {
                                             assignment.getValue().getBuckets().size(),
                                             context.getTableInfoById(transaction.getTableId())
                                                     .getBucketCountEpoch(),
-                                            target(transaction, bucket, state),
-                                            requireEmpty)));
-                } else if (!requireEmpty) {
+                                            target(transaction, bucket, action.targetState()),
+                                            action.requiresEmptyTarget())));
+                } else if (action.shouldCleanUnassignedReplicas()) {
+                    // Nodes outside the assignment must stop serving stale local replicas.
+                    // Keep remote data available to the assigned replicas during recovery.
                     localOnlyDeletes.add(
                             makeStopBucketReplica(
                                     bucket, true, false, entry.getValue().leaderEpoch()));
@@ -249,6 +250,34 @@ final class BulkLoadReplicaConvergence {
     private static BulkLoadTargetMetadata target(
             BulkLoadTransaction transaction, TableBucket bucket, BulkLoadDataState state) {
         return new BulkLoadTargetMetadata(bucket, transaction.getMetadataVersion(), state);
+    }
+
+    /**
+     * Replica operations for a BulkLoad target, derived without changing persisted target state.
+     */
+    enum BulkLoadReplicaAction {
+        /** Fences assigned replicas in LOADING and requires empty-target validation. */
+        FENCE_EMPTY_TARGET,
+
+        /** Restores replicas after snapshot installation while the target remains LOADING. */
+        RECOVER_LOADING_TARGET,
+
+        /** Confirms replicas against the target's already persisted ACTIVE state. */
+        CONFIRM_ACTIVE_TARGET;
+
+        BulkLoadDataState targetState() {
+            return this == CONFIRM_ACTIVE_TARGET
+                    ? BulkLoadDataState.ACTIVE
+                    : BulkLoadDataState.LOADING;
+        }
+
+        boolean requiresEmptyTarget() {
+            return this == FENCE_EMPTY_TARGET;
+        }
+
+        boolean shouldCleanUnassignedReplicas() {
+            return this != FENCE_EMPTY_TARGET;
+        }
     }
 
     /** Assignment, holder sessions and bucket LeaderAndIsr captured for replica convergence. */

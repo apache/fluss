@@ -46,6 +46,7 @@ import org.apache.fluss.server.coordinator.CoordinatorChannelManager;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.coordinator.bulkload.BulkLoadMetadataStore.Versioned;
+import org.apache.fluss.server.coordinator.bulkload.BulkLoadReplicaConvergence.BulkLoadReplicaAction;
 import org.apache.fluss.server.coordinator.bulkload.BulkLoadReplicaConvergence.ReplicaConvergenceContext;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.BulkLoadMaintenanceEvent;
@@ -463,7 +464,10 @@ public final class BulkLoadManager {
         await(
                 transaction,
                 convergence
-                        .apply(transaction.getValue(), round, BulkLoadDataState.LOADING, true)
+                        .apply(
+                                transaction.getValue(),
+                                round,
+                                BulkLoadReplicaAction.FENCE_EMPTY_TARGET)
                         .thenCompose(
                                 ignored ->
                                         io(
@@ -615,9 +619,13 @@ public final class BulkLoadManager {
             return;
         }
         BulkLoadDataState targetState = registrationState(readRegistration(handle)).state;
+        BulkLoadReplicaAction action =
+                targetState == BulkLoadDataState.LOADING
+                        ? BulkLoadReplicaAction.RECOVER_LOADING_TARGET
+                        : BulkLoadReplicaAction.CONFIRM_ACTIVE_TARGET;
         await(
                 transaction,
-                convergence.apply(value, confirmation, targetState, false),
+                convergence.apply(value, confirmation, action),
                 confirmation,
                 (current, ignored) -> onReplicasConverged(current, confirmation, targetState),
                 null);
