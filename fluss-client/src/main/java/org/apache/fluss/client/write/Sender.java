@@ -401,6 +401,11 @@ public class Sender implements Runnable {
     private void maybeRemoveAndDeallocateBatch(ReadyWriteBatch readyWriteBatch) {
         maybeRemoveFromInflightBatches(readyWriteBatch);
         accumulator.deallocate(readyWriteBatch.writeBatch());
+        // The shutdown loop may be waiting for the next ready check with nothing left to send, so
+        // wake it up to exit once the last batch completes instead of after the batch timeout.
+        if (!running && !accumulator.hasIncomplete()) {
+            wakeup();
+        }
     }
 
     private void maybeRemoveFromInflightBatches(ReadyWriteBatch batch) {

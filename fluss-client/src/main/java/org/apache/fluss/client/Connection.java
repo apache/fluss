@@ -75,8 +75,8 @@ public interface Connection extends AutoCloseable {
      * <p>This is equivalent to closing with an unbounded timeout: it waits for all pending write
      * and lookup requests to be processed before releasing the resources. Writes failing with
      * retriable errors keep being retried, up to {@code client.writer.retries}, so this may wait
-     * for a long time. When called from a write callback, it doesn't wait, see {@link
-     * #close(Duration)}.
+     * for a long time. When called from a write callback, it doesn't wait for pending writes, see
+     * {@link #close(Duration)}.
      */
     @Override
     void close() throws Exception;
@@ -90,8 +90,9 @@ public interface Connection extends AutoCloseable {
      * abandoning any unsent or in-flight requests. This is useful for fail-fast scenarios such as
      * task failover or cancellation, where waiting for pending requests may block indefinitely.
      *
-     * <p>When called from a write callback, the writer is closed without waiting regardless of the
-     * timeout, since the pending writes may need the thread running the callback to complete.
+     * <p>When called from a write callback, the writer is closed without waiting for pending writes
+     * regardless of the timeout, since they may need the thread running the callback to complete.
+     * Closing the rest of the connection, such as pending lookups, may still block that thread.
      *
      * @param timeout the maximum time to wait for pending requests to complete
      */

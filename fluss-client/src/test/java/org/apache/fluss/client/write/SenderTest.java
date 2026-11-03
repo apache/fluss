@@ -960,6 +960,50 @@ final class SenderTest {
     }
 
     @Test
+    void testGracefulCloseExitsWhenLastBatchCompletes() throws Exception {
+        sender.destroyResources();
+        // A batch timeout far beyond the test's waits makes the sender exit only when woken up.
+        sender =
+                setupWithIdempotenceState(
+                        createIdempotenceManager(false),
+                        Integer.MAX_VALUE,
+                        (int) Duration.ofHours(1).toMillis());
+        CompletableFuture<Exception> future = new CompletableFuture<>();
+        appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> future.complete(e));
+
+        // Closing the accumulator makes the batch ready, so the shutdown loop sends it.
+        sender.initiateClose();
+        CompletableFuture<Void> finished = new CompletableFuture<>();
+        Thread thread =
+                new Thread(
+                        () -> {
+                            try {
+                                sender.run();
+                                finished.complete(null);
+                            } catch (Throwable t) {
+                                finished.completeExceptionally(t);
+                            }
+                        },
+                        "graceful-close-wakeup-test");
+        thread.start();
+        try {
+            retry(Duration.ofSeconds(10), () -> assertThat(pendingRequestSize(tb1)).isOne());
+            // With nothing left to send, the sender waits for the next ready check.
+            retry(
+                    Duration.ofSeconds(10),
+                    () -> assertThat(thread.getState()).isEqualTo(Thread.State.TIMED_WAITING));
+
+            finishRequest(tb1, 0, createProduceLogResponse(tb1, 0, 1));
+            assertThat(future.get(10, TimeUnit.SECONDS)).isNull();
+            finished.get(10, TimeUnit.SECONDS);
+            assertThat(accumulator.hasIncomplete()).isFalse();
+        } finally {
+            sender.forceClose();
+            thread.join(10000);
+        }
+    }
+
+    @Test
     void testForceCloseAbortsInFlightAndUndrainedBatches() throws Exception {
         CompletableFuture<Exception> inFlight = new CompletableFuture<>();
         appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> inFlight.complete(e));

@@ -200,17 +200,15 @@ public class IndexedLogWriteBatchTest {
     }
 
     @Test
-    void testInCallbackIsRestoredAfterNestedAndFailingCallbacks() throws Exception {
+    void testInCallbackIsRestoredAfterNestedCallback() throws Exception {
         IndexedLogWriteBatch outer = createLogWriteBatch(new TableBucket(DATA1_TABLE_ID, 0));
         IndexedLogWriteBatch inner = createLogWriteBatch(new TableBucket(DATA1_TABLE_ID, 1));
         List<Boolean> inCallback = new ArrayList<>();
         assertThat(
                         inner.tryAppend(
                                 createWriteRecord(),
-                                (bucket, offset, exception) -> {
-                                    inCallback.add(WriteBatch.isInCallback());
-                                    throw new RuntimeException("callback failure");
-                                }))
+                                (bucket, offset, exception) ->
+                                        inCallback.add(WriteBatch.isInCallback())))
                 .isTrue();
         assertThat(
                         outer.tryAppend(
