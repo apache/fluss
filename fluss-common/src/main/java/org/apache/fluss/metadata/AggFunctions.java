@@ -81,6 +81,11 @@ public final class AggFunctions {
      * <p>Supported data type: BIGINT. Each non-null input contributes one, regardless of its value.
      * Null inputs contribute zero, including on the first write.
      *
+     * <p>For partial updates, only updates targeting this column contribute to the count. An
+     * untargeted column retains its previous value, or remains null on the first write for a key.
+     * When targeted, a null input initializes a null count to zero and leaves an existing count
+     * unchanged.
+     *
      * @return a COUNT aggregation function
      */
     public static AggFunction COUNT() {

@@ -215,8 +215,8 @@ Counts non-null input values for each primary key.
 
 - **Supported Data Type**: `BIGINT`, for both input and stored count
 - **Behavior**: Each non-null input contributes one, regardless of its numeric value. The first non-null input is stored as `1`.
-- **Null Handling**: Null inputs contribute zero. A first null input is stored as `0`.
-- **Partial Updates**: The count changes only when the column is targeted by the update. On the first write for a key, an untargeted count column remains `NULL`; a targeted count column with a null input is stored as `0`.
+- **Null Handling**: Null inputs contribute zero. A null input initializes a `NULL` count to `0` and leaves an existing count unchanged.
+- **Partial Updates**: Only updates targeting this column contribute to the count. An untargeted count column retains its previous value, or remains `NULL` on the first write for a key. A targeted column follows the behavior above, including initialization to `0` for a null input.
 
 ```sql
 CREATE TABLE event_counts (
@@ -235,6 +235,8 @@ INSERT INTO event_counts VALUES (1, 100), (1, 0), (1, NULL);
 For the Java API, use `.column("cnt", DataTypes.BIGINT(), AggFunctions.COUNT())`.
 To count every input row, provide a non-null value for this column in every row.
 To accumulate counts already computed upstream, use `sum` instead. Like other aggregation functions, `count` does not support retractions.
+
+When `'table.delete.behavior' = 'allow'`, a partial delete targeting the count column clears it to `NULL` rather than decrementing it. A subsequent targeted update starts the count at `1` for a non-null input or `0` for a null input. If the count column is not targeted by the delete, its value is retained; a count of `0` is non-null and therefore prevents the entire record from being removed when deleting other columns. See [Delete Behavior](#delete-behavior) for the full and partial delete rules.
 
 ### sum
 
