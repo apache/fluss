@@ -47,7 +47,7 @@ import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.coordinator.TestCoordinatorChannelManager;
 import org.apache.fluss.server.coordinator.bulkload.BulkLoadMetadataStore.Versioned;
-import org.apache.fluss.server.coordinator.bulkload.BulkLoadReplicaConvergence.ReplicaRound;
+import org.apache.fluss.server.coordinator.bulkload.BulkLoadReplicaConvergence.ReplicaConvergenceContext;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.BulkLoadMaintenanceEvent;
 import org.apache.fluss.server.coordinator.event.TestingEventManager;
@@ -273,7 +273,7 @@ class BulkLoadMetadataStoreTest {
                                                 .getValue()
                                                 .withSnapshotIds(new long[] {7L}),
                                         fixture.registration(),
-                                        new ReplicaRound(
+                                        new ReplicaConvergenceContext(
                                                 staleAssignment,
                                                 Collections.emptyList(),
                                                 Collections.emptyMap()),
@@ -736,7 +736,8 @@ class BulkLoadMetadataStoreTest {
                     current,
                     transition.apply(current.getValue()),
                     registration(),
-                    new ReplicaRound(assignment(), Collections.emptyList(), Collections.emptyMap()),
+                    new ReplicaConvergenceContext(
+                            assignment(), Collections.emptyList(), Collections.emptyMap()),
                     coordinatorEpochVersion);
         }
 

@@ -47,7 +47,7 @@ import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.coordinator.bulkload.BulkLoadMetadataStore.RegisteredServer;
 import org.apache.fluss.server.coordinator.bulkload.BulkLoadMetadataStore.Versioned;
-import org.apache.fluss.server.coordinator.bulkload.BulkLoadReplicaConvergence.ReplicaRound;
+import org.apache.fluss.server.coordinator.bulkload.BulkLoadReplicaConvergence.ReplicaConvergenceContext;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.BulkLoadMaintenanceEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
@@ -452,7 +452,7 @@ public final class BulkLoadManager {
         BulkLoadHandle handle = transaction.getValue().getHandle();
         requireControl(transaction, BulkLoadDataState.LOADING);
         Versioned<? extends TableAssignment> assignment = readAssignment(handle);
-        ReplicaRound round = registrationsForRound(assignment, true);
+        ReplicaConvergenceContext round = registrationsForRound(assignment, true);
         if (round == null) {
             return;
         }
@@ -570,7 +570,7 @@ public final class BulkLoadManager {
         BulkLoadTransaction value = transaction.getValue();
         BulkLoadHandle handle = value.getHandle();
         Versioned<? extends TableAssignment> assignment = readAssignment(handle);
-        ReplicaRound confirmation = registrationsForRound(assignment, false);
+        ReplicaConvergenceContext confirmation = registrationsForRound(assignment, false);
         if (confirmation == null) {
             return;
         }
@@ -671,7 +671,7 @@ public final class BulkLoadManager {
     private <T> void await(
             Versioned<BulkLoadTransaction> observed,
             CompletableFuture<T> completion,
-            @Nullable ReplicaRound confirmation,
+            @Nullable ReplicaConvergenceContext confirmation,
             boolean provingEmpty,
             Continuation<T> continuation) {
         BulkLoadHandle handle = observed.getValue().getHandle();
@@ -874,7 +874,7 @@ public final class BulkLoadManager {
         return Collections.unmodifiableList(result);
     }
 
-    private @Nullable ReplicaRound registrationsForRound(
+    private @Nullable ReplicaConvergenceContext registrationsForRound(
             Versioned<? extends TableAssignment> assignment, boolean requireAllHolders)
             throws Exception {
         List<RegisteredServer> registrations = readRegisteredServers();
@@ -888,7 +888,8 @@ public final class BulkLoadManager {
         for (RegisteredServer registration : registrations) {
             registeredIds.add(registration.serverId);
         }
-        ReplicaRound round = new ReplicaRound(assignment, recipients, Collections.emptyMap());
+        ReplicaConvergenceContext round =
+                new ReplicaConvergenceContext(assignment, recipients, Collections.emptyMap());
         for (Map.Entry<Integer, RegisteredServer> holder : round.holders.entrySet()) {
             if (holder.getValue() == null
                     && (requireAllHolders || registeredIds.contains(holder.getKey()))) {

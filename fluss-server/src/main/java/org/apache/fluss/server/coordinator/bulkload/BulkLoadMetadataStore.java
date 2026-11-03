@@ -19,7 +19,7 @@ package org.apache.fluss.server.coordinator.bulkload;
 
 import org.apache.fluss.metadata.BulkLoadHandle;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.server.coordinator.bulkload.BulkLoadReplicaConvergence.ReplicaRound;
+import org.apache.fluss.server.coordinator.bulkload.BulkLoadReplicaConvergence.ReplicaConvergenceContext;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperClient.DataWithStat;
 import org.apache.fluss.server.zk.ZooKeeperOp;
@@ -127,7 +127,7 @@ final class BulkLoadMetadataStore {
             Versioned<BulkLoadTransaction> current,
             BulkLoadTransaction replacement,
             Versioned<?> registration,
-            @Nullable ReplicaRound confirmed,
+            @Nullable ReplicaConvergenceContext confirmed,
             int coordinatorEpochVersion)
             throws Exception {
         List<CuratorOp> operations = controlChecks(coordinatorEpochVersion, current, registration);
@@ -175,8 +175,8 @@ final class BulkLoadMetadataStore {
         return operations;
     }
 
-    private void addRegistrationChecks(List<CuratorOp> operations, ReplicaRound assignment)
-            throws Exception {
+    private void addRegistrationChecks(
+            List<CuratorOp> operations, ReplicaConvergenceContext assignment) throws Exception {
         for (Map.Entry<Integer, RegisteredServer> entry : assignment.holders.entrySet()) {
             RegisteredServer holder = entry.getValue();
             if (holder == null) {

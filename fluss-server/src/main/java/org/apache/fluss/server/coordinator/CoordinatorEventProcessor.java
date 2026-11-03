@@ -374,7 +374,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                     e.addSuppressed(closeFailure);
                 }
             }
-            throw new FlussRuntimeException("Fail to recover persisted BulkLoad state.", e);
+            throw new FlussRuntimeException("Fail to start Coordinator event processor.", e);
         }
 
         rebalanceManager.start();
@@ -2316,14 +2316,14 @@ public class CoordinatorEventProcessor implements EventProcessor {
         // commit the kv snapshot asynchronously
         TableBucket tb = event.getTableBucket();
         TablePath tablePath = coordinatorContext.getTablePathById(tb.getTableId());
-        final String sourceMetadataPath;
-        final int sourceMetadataVersion;
+        final String registrationPath;
+        final int registrationVersion;
         final int coordinatorZkVersion;
         final int leaderAndIsrZkVersion;
         try {
-            sourceMetadataPath = canonicalMetadataPath(tb, tablePath);
-            sourceMetadataVersion =
-                    zooKeeperClient.getDataWithStat(sourceMetadataPath).getStat().getVersion();
+            registrationPath = getTableOrPartitionRegistrationPath(tb, tablePath);
+            registrationVersion =
+                    zooKeeperClient.getDataWithStat(registrationPath).getStat().getVersion();
             coordinatorZkVersion = coordinatorContext.getCoordinatorZkVersion();
             leaderAndIsrZkVersion = readLeaderAndIsrZkVersion(event);
         } catch (Exception e) {
@@ -2342,8 +2342,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
                         // this involves IO operation (ZK), so we do it in ioExecutor
                         completedSnapshotStore.add(
                                 completedSnapshot,
-                                sourceMetadataPath,
-                                sourceMetadataVersion,
+                                registrationPath,
+                                registrationVersion,
                                 coordinatorZkVersion,
                                 leaderAndIsrZkVersion);
                         coordinatorEventManager.put(
@@ -2409,10 +2409,11 @@ public class CoordinatorEventProcessor implements EventProcessor {
         TableBucket tb = event.getTableBucket();
         try {
             validateFencedEvent(event);
-            String sourceMetadataPath =
-                    canonicalMetadataPath(tb, coordinatorContext.getTablePathById(tb.getTableId()));
-            int sourceMetadataVersion =
-                    zooKeeperClient.getDataWithStat(sourceMetadataPath).getStat().getVersion();
+            String registrationPath =
+                    getTableOrPartitionRegistrationPath(
+                            tb, coordinatorContext.getTablePathById(tb.getTableId()));
+            int registrationVersion =
+                    zooKeeperClient.getDataWithStat(registrationPath).getStat().getVersion();
             int leaderAndIsrZkVersion = readLeaderAndIsrZkVersion(event);
             // do commit remote log manifest snapshot path to zk.
             RemoteLogManifestHandle manifestHandle =
@@ -2422,8 +2423,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
             zooKeeperClient.upsertRemoteLogManifestHandle(
                     tb,
                     manifestHandle,
-                    sourceMetadataPath,
-                    sourceMetadataVersion,
+                    registrationPath,
+                    registrationVersion,
                     coordinatorContext.getCoordinatorZkVersion(),
                     leaderAndIsrZkVersion);
         } catch (Exception e) {
@@ -2454,7 +2455,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
         return response;
     }
 
-    private String canonicalMetadataPath(TableBucket tableBucket, TablePath tablePath) {
+    private String getTableOrPartitionRegistrationPath(
+            TableBucket tableBucket, TablePath tablePath) {
         if (tableBucket.getPartitionId() == null) {
             return ZkData.TableZNode.path(tablePath);
         } else {

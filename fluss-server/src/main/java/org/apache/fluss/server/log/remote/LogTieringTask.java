@@ -353,6 +353,12 @@ public class LogTieringTask implements Runnable {
         return endOffset;
     }
 
+    /**
+     * Uploads the manifest and commits its handle before publishing local offsets. A confirmed
+     * rejection removes the uploaded manifest so the caller can clean up its copied segments. An
+     * unknown commit outcome must be confirmed through the persisted handle; if confirmation fails,
+     * the uploaded manifest and segments are retained.
+     */
     private boolean tryToCommitRemoteLogManifest(
             RemoteLogTablet remoteLogTablet,
             RemoteLogManifest newRemoteLogManifest,

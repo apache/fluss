@@ -77,17 +77,17 @@ final class BulkLoadReplicaConvergence {
     /** Applies the replica work required by the current durable transaction and target state. */
     CompletableFuture<Void> apply(
             BulkLoadTransaction transaction,
-            ReplicaRound round,
+            ReplicaConvergenceContext round,
             BulkLoadDataState state,
             boolean requireEmpty) {
-        observeRoles(transaction, round);
+        captureBucketLeaderAndIsr(transaction, round);
         Versioned<? extends TableAssignment> assignment = round.assignment;
         List<RegisteredServer> registrations = round.recipients;
         List<CompletableFuture<Void>> acknowledgements = new ArrayList<>();
         for (RegisteredServer registration : registrations) {
             List<PbNotifyLeaderAndIsrReqForBucket> notifications = new ArrayList<>();
             List<PbStopReplicaReqForBucket> localOnlyDeletes = new ArrayList<>();
-            for (Map.Entry<TableBucket, LeaderAndIsr> entry : round.roles.entrySet()) {
+            for (Map.Entry<TableBucket, LeaderAndIsr> entry : round.bucketLeaderAndIsr.entrySet()) {
                 TableBucket bucket = entry.getKey();
                 List<Integer> replicas =
                         assignment.getValue().getBucketAssignment(bucket.getBucket()).getReplicas();
@@ -215,7 +215,8 @@ final class BulkLoadReplicaConvergence {
         return CompletableFuture.allOf(acknowledgements.toArray(new CompletableFuture<?>[0]));
     }
 
-    void observeRoles(BulkLoadTransaction transaction, ReplicaRound round) {
+    void captureBucketLeaderAndIsr(
+            BulkLoadTransaction transaction, ReplicaConvergenceContext round) {
         for (Integer bucketId : round.assignment.getValue().getBuckets()) {
             TableBucket bucket =
                     new TableBucket(
@@ -226,7 +227,7 @@ final class BulkLoadReplicaConvergence {
                                     () ->
                                             new TimeoutException(
                                                     "Missing current role for " + bucket + '.'));
-            round.roles.put(bucket, role);
+            round.bucketLeaderAndIsr.put(bucket, role);
         }
     }
 
@@ -260,20 +261,20 @@ final class BulkLoadReplicaConvergence {
         return new BulkLoadTargetMetadata(bucket, transaction.getMetadataVersion(), state);
     }
 
-    /** Assignment, holder sessions and roles captured together for one protocol round. */
-    static final class ReplicaRound {
+    /** Assignment, holder sessions and bucket LeaderAndIsr captured for replica convergence. */
+    static final class ReplicaConvergenceContext {
         final Versioned<? extends TableAssignment> assignment;
         final List<RegisteredServer> recipients;
         final Map<Integer, RegisteredServer> holders = new HashMap<>();
-        private final Map<TableBucket, LeaderAndIsr> roles;
+        private final Map<TableBucket, LeaderAndIsr> bucketLeaderAndIsr;
 
-        ReplicaRound(
+        ReplicaConvergenceContext(
                 Versioned<? extends TableAssignment> assignment,
                 List<RegisteredServer> recipients,
-                Map<TableBucket, LeaderAndIsr> roles) {
+                Map<TableBucket, LeaderAndIsr> bucketLeaderAndIsr) {
             this.assignment = assignment;
             this.recipients = recipients;
-            this.roles = new HashMap<>(roles);
+            this.bucketLeaderAndIsr = new HashMap<>(bucketLeaderAndIsr);
             Map<Integer, RegisteredServer> byId = new HashMap<>();
             for (RegisteredServer recipient : recipients) {
                 byId.put(recipient.serverId, recipient);
@@ -293,7 +294,7 @@ final class BulkLoadReplicaConvergence {
             if (this.assignment.getVersion() != assignment.getVersion()) {
                 return false;
             }
-            for (Map.Entry<TableBucket, LeaderAndIsr> role : roles.entrySet()) {
+            for (Map.Entry<TableBucket, LeaderAndIsr> role : bucketLeaderAndIsr.entrySet()) {
                 Optional<LeaderAndIsr> current = context.getBucketLeaderAndIsr(role.getKey());
                 if (!current.isPresent() || !current.get().equals(role.getValue())) {
                     return false;
