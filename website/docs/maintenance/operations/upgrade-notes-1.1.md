@@ -20,6 +20,21 @@ is unchanged.
 Explicit settings remain effective. To retain the previous behavior, set
 `log.retention.roll-active-segment.enabled: false` before upgrading.
 
+## Helm Chart Changes
+
+### Readiness Probes Need a Credential When Client SASL Is Enabled
+
+In v1.1, the chart fails to render when `security.client.sasl.mechanism` is set and either
+readiness probe has no credential. Previously, the chart rendered without one, and on a cluster
+with client SASL the TabletServer probe failed to authenticate until its 20-minute health check
+budget ran out. The coordinator readiness probe is new in this release and also authenticates
+against the client listener.
+
+Before upgrading the chart, set `coordinator.readinessProbe.healthCheckAuth` and
+`tablet.readinessProbe.healthCheckAuth`, or add a `READINESS_HEALTH_CHECK_AUTH` entry to
+`secrets.env` to read the credential from a Secret. See
+[Coordinator Readiness Probe](../../install-deploy/deploying-with-helm.md#coordinator-readiness-probe).
+
 ## Client Configuration Changes
 
 ### Lookup Retries Back Off by Default
