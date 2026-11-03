@@ -131,6 +131,7 @@ import org.apache.fluss.rpc.messages.PbAlterConfig;
 import org.apache.fluss.rpc.messages.PbHeartbeatReqForTable;
 import org.apache.fluss.rpc.messages.PbHeartbeatRespForTable;
 import org.apache.fluss.rpc.messages.PbKeyValue;
+import org.apache.fluss.rpc.messages.PbKvSnapshot;
 import org.apache.fluss.rpc.messages.PbKvSnapshotLeaseForTable;
 import org.apache.fluss.rpc.messages.PbLakeTieringStats;
 import org.apache.fluss.rpc.messages.PbPrepareLakeTableRespForTable;
@@ -1494,6 +1495,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             ListKvSnapshotsRequest request) {
         long tableId = request.getTableId();
         Long partitionId = request.hasPartitionId() ? request.getPartitionId() : null;
+        boolean includeLogOffsets = request.hasIncludeLogOffsets() && request.isIncludeLogOffsets();
         if (authorizer != null) {
             authorizeTableWithSession(currentSession(), OperationType.DESCRIBE, tableId);
         }
@@ -1534,9 +1536,29 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                                                 stillInUse.getOrDefault(
                                                         bucketId, Collections.emptySet()));
                                         for (Long snapId : merged) {
-                                            response.addActiveSnapshot()
-                                                    .setBucketId(bucketId)
-                                                    .setSnapshotId(snapId);
+                                            PbKvSnapshot snapshot =
+                                                    response.addActiveSnapshot()
+                                                            .setBucketId(bucketId)
+                                                            .setSnapshotId(snapId);
+                                            if (includeLogOffsets) {
+                                                try {
+                                                    zkClient.getTableBucketSnapshot(
+                                                                    new TableBucket(
+                                                                            tableId,
+                                                                            partitionId,
+                                                                            bucketId),
+                                                                    snapId)
+                                                            .ifPresent(
+                                                                    retained ->
+                                                                            snapshot.setLogOffset(
+                                                                                    retained
+                                                                                            .getLogOffset()));
+                                                } catch (Exception e) {
+                                                    throw new FlussRuntimeException(
+                                                            "Failed to read KV snapshot " + snapId,
+                                                            e);
+                                                }
+                                            }
                                         }
                                     }
                                     return response;

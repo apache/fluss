@@ -33,6 +33,7 @@ import org.apache.fluss.exception.UnsupportedVersionException;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
 import org.apache.fluss.metadata.DatabaseInfo;
+import org.apache.fluss.metadata.IndexVisibility;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.SchemaInfo;
@@ -546,8 +547,13 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
             } else {
                 snapshots = zkClient.getTableLatestBucketSnapshot(tableId);
             }
-            return CompletableFuture.completedFuture(
-                    makeGetLatestKvSnapshotsResponse(tableId, partitionId, snapshots, numBuckets));
+            GetLatestKvSnapshotsResponse response =
+                    makeGetLatestKvSnapshotsResponse(tableId, partitionId, snapshots, numBuckets);
+            if (tableInfo.getSchema().getIndexes().stream()
+                    .anyMatch(index -> index.getVisibility() == IndexVisibility.SYNC)) {
+                response.setHasSyncIndexes(true);
+            }
+            return CompletableFuture.completedFuture(response);
         } catch (Exception e) {
             throw new RuntimeException(e);
         }

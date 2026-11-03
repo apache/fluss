@@ -433,6 +433,17 @@ impl FlussAdmin {
             None
         };
 
+        self.list_offsets_by_id(table_id, partition_id, buckets_id, offset_spec)
+            .await
+    }
+
+    async fn list_offsets_by_id(
+        &self,
+        table_id: TableId,
+        partition_id: Option<PartitionId>,
+        buckets_id: &[BucketId],
+        offset_spec: OffsetSpec,
+    ) -> Result<HashMap<i32, i64>> {
         // Prepare requests
         let requests_by_server =
             self.prepare_list_offsets_requests(table_id, partition_id, buckets_id, offset_spec)?;
@@ -656,7 +667,54 @@ impl FlussAdmin {
             .await?
             .request(GetLatestKvSnapshotsRequest::new(table_path, partition_name))
             .await?;
-        Ok(LatestKvSnapshots::from_pb(&response))
+        let snapshots = LatestKvSnapshots::from_pb(&response);
+        if !response.has_sync_indexes.unwrap_or(false) {
+            return Ok(snapshots);
+        }
+        self.metadata.update_table_metadata(table_path).await?;
+        if let Some(partition_id) = response.partition_id {
+            self.metadata
+                .check_and_update_partition_metadata_by_ids(table_path, &[partition_id])
+                .await?;
+        }
+        let buckets: Vec<_> = snapshots
+            .latest_snapshots
+            .iter()
+            .map(|s| s.bucket_id)
+            .collect();
+        let (visible, start) = futures::try_join!(
+            self.list_offsets_by_id(
+                response.table_id,
+                response.partition_id,
+                &buckets,
+                OffsetSpec::Latest
+            ),
+            self.list_offsets_by_id(
+                response.table_id,
+                response.partition_id,
+                &buckets,
+                OffsetSpec::Earliest
+            ),
+        )?;
+        if snapshots.latest_snapshots.iter().all(|snapshot| {
+            let bucket = snapshot.bucket_id;
+            if snapshot.snapshot_id.is_none() {
+                start[&bucket] == 0
+            } else {
+                snapshot_offset_is_readable(snapshot.log_offset, visible[&bucket], start[&bucket])
+            }
+        }) {
+            return Ok(snapshots);
+        }
+        let retained = self
+            .admin_gateway()
+            .await?
+            .request(
+                ListKvSnapshotsRequest::new(response.table_id, response.partition_id)
+                    .with_log_offsets(),
+            )
+            .await?;
+        select_readable_snapshots(snapshots, &retained.active_snapshots, &visible, &start)
     }
 
     /// Get KV snapshot metadata (manifest file list).
@@ -952,6 +1010,42 @@ impl FlussAdmin {
     }
 }
 
+fn snapshot_offset_is_readable(offset: Option<i64>, visible: i64, start: i64) -> bool {
+    offset.is_some_and(|offset| offset <= visible && offset >= start)
+}
+
+fn select_readable_snapshots(
+    mut snapshots: LatestKvSnapshots,
+    candidates: &[crate::proto::PbKvSnapshot],
+    visible: &HashMap<BucketId, i64>,
+    start: &HashMap<BucketId, i64>,
+) -> Result<LatestKvSnapshots> {
+    let mut selected = HashMap::new();
+    for candidate in candidates {
+        let bucket = candidate.bucket_id;
+        if snapshot_offset_is_readable(candidate.log_offset, visible[&bucket], start[&bucket]) {
+            let previous = selected.entry(bucket).or_insert(candidate);
+            if candidate.snapshot_id > previous.snapshot_id {
+                *previous = candidate;
+            }
+        }
+    }
+    for bucket in &mut snapshots.latest_snapshots {
+        let snapshot = selected.get(&bucket.bucket_id);
+        if snapshot.is_none() && start[&bucket.bucket_id] > 0 {
+            // TODO: Improve this rare case. More retained snapshots and a longer log TTL
+            // can preserve the history needed to start a full read.
+            return Err(Error::UnexpectedError {
+                message: format!("No readable KV snapshot and complete changelog history for bucket {}. Increase kv.snapshot.num-retained and log TTL.", bucket.bucket_id),
+                source: None,
+            });
+        }
+        bucket.snapshot_id = snapshot.and_then(|snapshot| snapshot.snapshot_id);
+        bucket.log_offset = snapshot.and_then(|snapshot| snapshot.log_offset);
+    }
+    Ok(snapshots)
+}
+
 fn group_stats_requests_by_leader(
     cluster: &Cluster,
     table_id: TableId,
@@ -1012,6 +1106,209 @@ mod tests {
     use std::sync::Arc;
 
     const TABLE_ID: i64 = 1;
+
+    #[tokio::test]
+    async fn test_snapshot_discovery_public_entry() {
+        use crate::client::metadata::Metadata;
+        use crate::rpc::RpcClient;
+        use crate::test_utils::build_cluster_with_port;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::Duration;
+        use tokio::net::TcpListener;
+        for (sync, visible, expected, history_queries) in [
+            (Some(true), 100, 2, 1),
+            (Some(true), 120, 3, 0),
+            (Some(false), 0, 3, 0),
+            (None, 0, 3, 0),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let node = crate::proto::PbServerNode {
+                node_id: 1,
+                host: "127.0.0.1".into(),
+                port: port.into(),
+                ..Default::default()
+            };
+            let metadata = crate::proto::MetadataResponse {
+                coordinator_server: Some(crate::proto::PbServerNode {
+                    node_id: 0,
+                    ..node.clone()
+                }),
+                tablet_servers: vec![node],
+                ..Default::default()
+            };
+            let path = TablePath::new("db", "snapshot_table");
+            let cached = build_cluster_with_port(&path, TABLE_ID, 1, port.into());
+            let cluster = Cluster::from_metadata_response(metadata.clone(), Some(&cached)).unwrap();
+            let history = Arc::new(AtomicUsize::new(0));
+            let count = history.clone();
+            let server = tokio::spawn(async move {
+                let mut connections = tokio::task::JoinSet::new();
+                loop {
+                    let (stream, _) = listener.accept().await.unwrap();
+                    connections.spawn(serve_snapshot_requests(
+                        stream,
+                        metadata.clone(),
+                        sync,
+                        visible,
+                        count.clone(),
+                    ));
+                }
+            });
+            let admin = super::FlussAdmin::new(
+                Arc::new(RpcClient::new().with_timeout(Duration::from_secs(2))),
+                Arc::new(Metadata::new_for_test(Arc::new(cluster))),
+            );
+            let selected = tokio::time::timeout(
+                Duration::from_secs(10),
+                admin.get_latest_kv_snapshots(&path, None),
+            )
+            .await;
+            server.abort();
+            let _ = server.await;
+            let selected = selected.unwrap().unwrap();
+            assert_eq!(selected.latest_snapshots[0].snapshot_id, Some(expected));
+            assert_eq!(history.load(Ordering::SeqCst), history_queries);
+        }
+    }
+
+    async fn serve_snapshot_requests(
+        mut stream: tokio::net::TcpStream,
+        metadata: crate::proto::MetadataResponse,
+        sync: Option<bool>,
+        visible: i64,
+        history: Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        use crate::proto::{
+            ApiVersionsResponse, GetLatestKvSnapshotsResponse, ListKvSnapshotsRequest,
+            ListKvSnapshotsResponse, ListOffsetsRequest, ListOffsetsResponse, PbApiVersion,
+            PbKvSnapshot, PbListOffsetsRespForBucket,
+        };
+        use prost::Message;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        loop {
+            let Ok(size) = stream.read_i32().await else {
+                return;
+            };
+            let mut request = vec![0; size as usize];
+            stream.read_exact(&mut request).await.unwrap();
+            let api = i16::from_be_bytes(request[..2].try_into().unwrap());
+            let id = i32::from_be_bytes(request[4..8].try_into().unwrap());
+            let payload = &request[crate::rpc::message::REQUEST_HEADER_LENGTH..];
+            let body = match api {
+                1000 => ApiVersionsResponse {
+                    api_versions: [1000, 1012, 1021, 1023, 1064]
+                        .into_iter()
+                        .map(|api_key| PbApiVersion {
+                            api_key,
+                            min_version: 0,
+                            max_version: 0,
+                        })
+                        .collect(),
+                    server_type: None,
+                }
+                .encode_to_vec(),
+                1012 => metadata.encode_to_vec(),
+                1023 => GetLatestKvSnapshotsResponse {
+                    table_id: TABLE_ID,
+                    partition_id: None,
+                    has_sync_indexes: sync,
+                    latest_snapshots: vec![PbKvSnapshot {
+                        bucket_id: 0,
+                        snapshot_id: Some(3),
+                        log_offset: Some(120),
+                    }],
+                }
+                .encode_to_vec(),
+                1021 => {
+                    let request = ListOffsetsRequest::decode(payload).unwrap();
+                    assert_eq!(request.table_id, TABLE_ID);
+                    assert_eq!(request.follower_server_id, -1);
+                    ListOffsetsResponse {
+                        buckets_resp: vec![PbListOffsetsRespForBucket {
+                            bucket_id: 0,
+                            offset: Some(if request.offset_type == 1 { visible } else { 0 }),
+                            ..Default::default()
+                        }],
+                    }
+                    .encode_to_vec()
+                }
+                1064 => {
+                    let request = ListKvSnapshotsRequest::decode(payload).unwrap();
+                    assert_eq!(request.include_log_offsets, Some(true));
+                    history.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    ListKvSnapshotsResponse {
+                        table_id: TABLE_ID,
+                        partition_id: None,
+                        active_snapshots: vec![PbKvSnapshot {
+                            bucket_id: 0,
+                            snapshot_id: Some(2),
+                            log_offset: Some(100),
+                        }],
+                    }
+                    .encode_to_vec()
+                }
+                other => panic!("Unexpected snapshot discovery API {other}"),
+            };
+            stream.write_i32((5 + body.len()) as i32).await.unwrap();
+            stream.write_u8(0).await.unwrap();
+            stream.write_i32(id).await.unwrap();
+            stream.write_all(&body).await.unwrap();
+        }
+    }
+
+    #[test]
+    fn test_snapshot_selection_requires_visibility_and_complete_wal() {
+        use crate::metadata::{KvSnapshot, LatestKvSnapshots};
+        use crate::proto::PbKvSnapshot;
+        let candidates: Vec<_> = (1..=3)
+            .map(|id| PbKvSnapshot {
+                bucket_id: 0,
+                snapshot_id: Some(id),
+                log_offset: Some(60 + 20 * id),
+            })
+            .collect();
+        for (visible, start, expected) in [
+            (100, 0, Some(2)),
+            (90, 0, Some(1)),
+            (70, 0, None),
+            (100, 90, Some(2)),
+        ] {
+            let snapshots = LatestKvSnapshots {
+                table_id: TABLE_ID,
+                partition_id: None,
+                latest_snapshots: vec![KvSnapshot {
+                    bucket_id: 0,
+                    snapshot_id: Some(3),
+                    log_offset: Some(120),
+                }],
+            };
+            let selected = super::select_readable_snapshots(
+                snapshots.clone(),
+                &candidates,
+                &HashMap::from([(0, visible)]),
+                &HashMap::from([(0, start)]),
+            )
+            .unwrap();
+            assert_eq!(selected.latest_snapshots[0].snapshot_id, expected);
+            assert!(super::select_readable_snapshots(
+                snapshots.clone(),
+                &candidates,
+                &HashMap::from([(0, 90)]),
+                &HashMap::from([(0, 81)]),
+            )
+            .is_err());
+            if expected.is_none() {
+                assert!(super::select_readable_snapshots(
+                    snapshots,
+                    &candidates,
+                    &HashMap::from([(0, visible)]),
+                    &HashMap::from([(0, 1)])
+                )
+                .is_err());
+            }
+        }
+    }
 
     fn cluster(leaders: [Option<i32>; 4]) -> Cluster {
         let table_path = TablePath::new("db", "tbl");
