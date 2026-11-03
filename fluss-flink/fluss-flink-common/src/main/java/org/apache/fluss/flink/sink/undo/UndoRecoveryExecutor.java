@@ -19,6 +19,7 @@ package org.apache.fluss.flink.sink.undo;
 
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
+import org.apache.fluss.client.table.scanner.log.LogScannerImpl;
 import org.apache.fluss.client.table.scanner.log.ScanRecords;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.metadata.TableBucket;
@@ -29,8 +30,10 @@ import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
@@ -179,9 +182,38 @@ public class UndoRecoveryExecutor {
         long startTimeMs = System.currentTimeMillis();
         long lastProgressLogTime = System.currentTimeMillis();
         Set<TableBucket> unsubscribedBuckets = new HashSet<>();
+        Map<TableBucket, BucketRecoveryContext> contextsByBucket = new HashMap<>();
+        for (BucketRecoveryContext context : contexts) {
+            contextsByBucket.put(context.getBucket(), context);
+        }
 
         while (!allComplete(contexts)) {
-            ScanRecords records = scanner.poll(Duration.ofMillis(POLL_TIMEOUT_MS));
+            ScanRecords records;
+            if (scanner instanceof LogScannerImpl) {
+                // Reserve keys only within this poll. Persistent deduplication is updated after
+                // the selected rows have been copied and their undo writes have been submitted.
+                Map<TableBucket, Set<ByteArrayWrapper>> selectedKeys = new HashMap<>();
+                records =
+                        ((LogScannerImpl) scanner)
+                                .pollFiltered(
+                                        Duration.ofMillis(POLL_TIMEOUT_MS),
+                                        (bucket, record) -> {
+                                            BucketRecoveryContext context =
+                                                    contextsByBucket.get(bucket);
+                                            return context != null
+                                                    && !context.isComplete()
+                                                    && record.logOffset()
+                                                            < context.getLogEndOffset()
+                                                    && undoComputer.selectRecord(
+                                                            record,
+                                                            context.getProcessedKeys(),
+                                                            selectedKeys.computeIfAbsent(
+                                                                    bucket,
+                                                                    ignored -> new HashSet<>()));
+                                        });
+            } else {
+                records = scanner.poll(Duration.ofMillis(POLL_TIMEOUT_MS));
+            }
 
             if (!records.hasProgress()) {
                 // Check if we've exceeded the maximum total wait time
@@ -235,7 +267,7 @@ public class UndoRecoveryExecutor {
         if (LOG.isDebugEnabled()) {
             for (BucketRecoveryContext ctx : contexts) {
                 LOG.debug(
-                        "Bucket {} read {} records, executed {} undo operations",
+                        "Bucket {} processed {} returned records, executed {} undo operations",
                         ctx.getBucket(),
                         ctx.getTotalRecordsProcessed(),
                         ctx.getProcessedKeys().size());

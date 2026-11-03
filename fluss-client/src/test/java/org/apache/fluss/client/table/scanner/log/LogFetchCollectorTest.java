@@ -91,6 +91,38 @@ public class LogFetchCollectorTest {
     }
 
     @Test
+    void testFilteredRecordsRespectPollLimitAndAdvanceOffsets() throws Exception {
+        TableBucket bucket = new TableBucket(DATA1_TABLE_ID, 0);
+        logFetchCollector =
+                new LogFetchCollector(
+                        logScannerStatus,
+                        new Configuration()
+                                .set(ConfigOptions.CLIENT_SCANNER_LOG_MAX_POLL_RECORDS, 3),
+                        new TestingMetadataUpdater(
+                                Collections.singletonMap(DATA1_TABLE_PATH, DATA1_TABLE_INFO)));
+        CompletedFetch fetch =
+                makeCompletedFetch(
+                        bucket,
+                        FetchLogResultForBucket.records(
+                                bucket, genMemoryLogRecordsByObject(DATA1), 10L, -1L, -1L),
+                        0L);
+        logFetchBuffer.add(fetch);
+        logFetchCollector.setRecordFilter((ignored, record) -> false);
+        ScanRecords first = logFetchCollector.collectFetch(logFetchBuffer);
+        assertThat(first.records(bucket)).isEmpty();
+        assertThat(first.consumedUpToOffset(bucket)).isEqualTo(3L);
+        assertThat(first.hasProgress()).isTrue();
+        assertThat(logScannerStatus.getBucketOffset(bucket)).isEqualTo(3L);
+
+        logFetchCollector.setRecordFilter(null);
+        ScanRecords second = logFetchCollector.collectFetch(logFetchBuffer);
+        assertThat(second.records(bucket))
+                .extracting(ScanRecord::logOffset)
+                .containsExactly(3L, 4L, 5L);
+        assertThat(second.consumedUpToOffset(bucket)).isEqualTo(6L);
+    }
+
+    @Test
     void testNormal() throws Exception {
         long fetchOffset = 0L;
         int bucketId = 0; // records for 0-10.

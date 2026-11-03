@@ -18,10 +18,13 @@
 package org.apache.fluss.flink.sink.undo;
 
 import org.apache.fluss.client.table.scanner.ScanRecord;
+import org.apache.fluss.client.table.scanner.log.LogScannerImpl;
+import org.apache.fluss.client.table.scanner.log.ScanRecords;
 import org.apache.fluss.flink.utils.TestLogScanner;
 import org.apache.fluss.flink.utils.TestUpsertWriter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.ChangeType;
+import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.row.encode.KeyEncoder;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
@@ -29,13 +32,22 @@ import org.apache.fluss.types.RowType;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.function.BiPredicate;
 
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /**
  * Unit tests for {@link UndoRecoveryExecutor}.
@@ -69,6 +81,72 @@ class UndoRecoveryExecutorTest {
         executor =
                 new UndoRecoveryExecutor(
                         mockScanner, mockWriter, undoComputer, TEST_MAX_TOTAL_WAIT_TIME_MS);
+    }
+
+    @Test
+    void testFilteredRecoveryIsolatesBucketKeysAndCompletesFromEmptyPollProgress()
+            throws Exception {
+        TableBucket bucket0 = new TableBucket(TABLE_ID, 0);
+        TableBucket bucket1 = new TableBucket(TABLE_ID, 1);
+        BucketRecoveryContext ctx0 = new BucketRecoveryContext(bucket0, 0L, 3L);
+        BucketRecoveryContext ctx1 = new BucketRecoveryContext(bucket1, 3L, 5L);
+        ScanRecord first0 =
+                new ScanRecord(0L, 0L, ChangeType.UPDATE_BEFORE, row(1, "bucket0", 100));
+        ScanRecord first1 =
+                new ScanRecord(3L, 0L, ChangeType.UPDATE_BEFORE, row(1, "bucket1", 200));
+        ScanRecord duplicate0 =
+                new ScanRecord(1L, 0L, ChangeType.UPDATE_BEFORE, row(1, "duplicate", 300));
+        ScanRecord end0 = new ScanRecord(3L, 0L, ChangeType.UPDATE_BEFORE, row(2, "outside", 400));
+        ScanRecord remaining0 =
+                new ScanRecord(2L, 0L, ChangeType.UPDATE_BEFORE, row(1, "duplicate", 500));
+        ScanRecord after1 = new ScanRecord(4L, 0L, ChangeType.UPDATE_AFTER, row(2, "after", 600));
+        LogScannerImpl scanner = mock(LogScannerImpl.class);
+        when(scanner.pollFiltered(any(Duration.class), any()))
+                .thenAnswer(
+                        invocation -> {
+                            BiPredicate<TableBucket, LogRecord> filter = invocation.getArgument(1);
+                            assertThat(filter.test(bucket0, first0)).isTrue();
+                            assertThat(filter.test(bucket0, duplicate0)).isFalse();
+                            assertThat(filter.test(bucket0, end0)).isFalse();
+                            assertThat(filter.test(bucket1, first1)).isTrue();
+                            assertThat(filter.test(new TableBucket(TABLE_ID, 2), first0)).isFalse();
+                            assertThat(ctx0.getProcessedKeys()).isEmpty();
+                            assertThat(ctx1.getProcessedKeys()).isEmpty();
+                            Map<TableBucket, List<ScanRecord>> selected = new HashMap<>();
+                            selected.put(bucket0, Collections.singletonList(first0));
+                            selected.put(bucket1, Collections.singletonList(first1));
+                            Map<TableBucket, Long> progress = new HashMap<>();
+                            progress.put(bucket0, 2L);
+                            progress.put(bucket1, 4L);
+                            return new ScanRecords(selected, progress);
+                        })
+                .thenAnswer(
+                        invocation -> {
+                            BiPredicate<TableBucket, LogRecord> filter = invocation.getArgument(1);
+                            assertThat(filter.test(bucket0, remaining0)).isFalse();
+                            assertThat(filter.test(bucket1, after1)).isFalse();
+                            Map<TableBucket, Long> progress = new HashMap<>();
+                            progress.put(bucket0, 3L);
+                            progress.put(bucket1, 5L);
+                            return new ScanRecords(Collections.emptyMap(), progress);
+                        })
+                .thenThrow(
+                        new AssertionError("Recovery polled after consuming both bucket ranges"));
+
+        new UndoRecoveryExecutor(scanner, mockWriter, undoComputer, TEST_MAX_TOTAL_WAIT_TIME_MS)
+                .execute(Arrays.asList(ctx0, ctx1));
+
+        assertThat(mockWriter.getAllUpsertedRows())
+                .containsExactly(first0.getRow(), first1.getRow());
+        assertThat(mockWriter.getDeleteCount()).isZero();
+        assertThat(mockWriter.isFlushCalled()).isTrue();
+        assertThat(ctx0.isComplete()).isTrue();
+        assertThat(ctx1.isComplete()).isTrue();
+        assertThat(ctx0.getProcessedKeys()).hasSize(1);
+        assertThat(ctx1.getProcessedKeys()).hasSize(1);
+        verify(scanner, times(2)).pollFiltered(any(Duration.class), any());
+        verify(scanner).unsubscribe(0);
+        verify(scanner).unsubscribe(1);
     }
 
     /**

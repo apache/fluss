@@ -39,6 +39,7 @@ import org.apache.fluss.metadata.TableOrPartition;
 import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.predicate.Predicate;
+import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
@@ -77,6 +78,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.BiPredicate;
 
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.getFetchLogResultForBucket;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -200,6 +202,10 @@ public class LogFetcher implements Closeable {
 
     public ScanRecords collectFetch() {
         return logFetchCollector.collectFetch(logFetchBuffer);
+    }
+
+    void setRecordFilter(@Nullable BiPredicate<TableBucket, LogRecord> recordFilter) {
+        logFetchCollector.setRecordFilter(recordFilter);
     }
 
     public ArrowScanRecords collectArrowFetch() {
