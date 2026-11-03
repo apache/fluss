@@ -349,6 +349,9 @@ message LookupResponse {
 message PrefixLookupRequest {
   required int64 table_id = 1;
   repeated PbPrefixLookupReqForBucket buckets_req = 2;
+  // Per-prefix candidate limit. Absent means unlimited. Requires API version 2.
+  optional int32 limit = 3;
+  optional bool fail_on_limit_exceeded = 4;
 }
 
 message PrefixLookupResponse {

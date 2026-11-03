@@ -32,6 +32,7 @@ import org.apache.fluss.rpc.messages.ApiVersionsRequest;
 import org.apache.fluss.rpc.messages.ApiVersionsResponse;
 import org.apache.fluss.rpc.messages.AuthenticateRequest;
 import org.apache.fluss.rpc.messages.AuthenticateResponse;
+import org.apache.fluss.rpc.messages.PrefixLookupRequest;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
@@ -77,6 +78,7 @@ final class ServerConnection {
     private static final short HISTORICAL_PRODUCE_LOG_MIN_VERSION = 1;
     private static final short HISTORICAL_PUT_KV_MIN_VERSION = 3;
     private static final short ALTER_BUCKET_COUNT_MIN_VERSION = 1;
+    private static final short PREFIX_LOOKUP_LIMIT_MIN_VERSION = 2;
 
     private final ServerNode node;
 
@@ -387,6 +389,19 @@ final class ServerConnection {
 
     @VisibleForTesting
     void validateVersionCompatibility(ApiKeys apiKey, short version, ApiMessage rawRequest) {
+        if (apiKey == ApiKeys.PREFIX_LOOKUP
+                && version < PREFIX_LOOKUP_LIMIT_MIN_VERSION
+                && ((PrefixLookupRequest) rawRequest).hasLimit()) {
+            throw new UnsupportedVersionException(
+                    "Limited prefix lookups require PREFIX_LOOKUP version "
+                            + PREFIX_LOOKUP_LIMIT_MIN_VERSION
+                            + " or newer, but server "
+                            + node
+                            + " negotiated version "
+                            + version
+                            + '.');
+        }
+
         if (apiKey == ApiKeys.PRODUCE_LOG && version < HISTORICAL_PRODUCE_LOG_MIN_VERSION) {
             ProduceLogRequest produceLogRequest = (ProduceLogRequest) rawRequest;
             if (hasHistoricalProduce(produceLogRequest)) {

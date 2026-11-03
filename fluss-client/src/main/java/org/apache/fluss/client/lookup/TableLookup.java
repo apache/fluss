@@ -128,7 +128,13 @@ public class TableLookup implements Lookup {
                                 + ". Please use primary key lookup (Lookuper without lookupBy) instead.");
             }
             return new PrefixKeyLookuper(
-                    tableInfo, schemaGetter, metadataUpdater, lookupClient, lookupColumnNames);
+                    tableInfo,
+                    schemaGetter,
+                    metadataUpdater,
+                    lookupClient,
+                    lookupColumnNames,
+                    tableInfo.isIndexTable() ? lookupClient.secondaryIndexMaxCandidates() : 0,
+                    tableInfo.isIndexTable());
         }
     }
 

@@ -27,6 +27,7 @@ import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.LookupLimitExceededException;
 import org.apache.fluss.metadata.IndexType;
 import org.apache.fluss.metadata.IndexVisibility;
 import org.apache.fluss.metadata.PartitionSpec;
@@ -45,6 +46,8 @@ import org.apache.fluss.utils.CloseableIterator;
 import org.apache.fluss.utils.IndexTableUtils;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.math.BigDecimal;
 import java.time.Duration;
@@ -136,6 +139,68 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
         assertThat(rows).hasSize(1);
         assertThat(rows.get(0).getInt(0)).isEqualTo(1);
         return rows.get(0);
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {2, 1024})
+    void testCandidateLimitOnlyAffectsSecondaryIndexes(int limit) throws Exception {
+        TablePath path = TablePath.of(DB, "candidate_limit_" + limit);
+        Schema schema =
+                Schema.newBuilder()
+                        .column("tenant", DataTypes.INT())
+                        .column("id", DataTypes.INT())
+                        .column("tag", DataTypes.STRING())
+                        .primaryKey("tenant", "id")
+                        .index(
+                                "idx_tag",
+                                IndexType.SECONDARY,
+                                Collections.singletonList("tag"),
+                                IndexVisibility.SYNC,
+                                1)
+                        .build();
+        createTable(
+                path,
+                TableDescriptor.builder().schema(schema).distributedBy(1, "tenant").build(),
+                true);
+        try (Table table = conn.getTable(path)) {
+            UpsertWriter writer = table.newUpsert().createWriter();
+            for (int i = 0; i < limit * 2 + 1; i++) {
+                writer.upsert(row(1, i, i < limit ? "exact" : "overflow"));
+            }
+            writer.flush();
+        }
+        Configuration config = new Configuration(clientConf);
+        if (limit != 1024) {
+            config.set(ConfigOptions.CLIENT_LOOKUP_SECONDARY_INDEX_MAX_CANDIDATES, limit);
+        }
+        try (Connection limited = ConnectionFactory.createConnection(config);
+                Table table = limited.getTable(path)) {
+            Lookuper index = table.getSecondaryIndexLookuper("idx_tag");
+            assertThat(index.lookup(row("exact")).get().getRowList()).hasSize(limit);
+            assertThatThrownBy(() -> index.lookup(row("overflow")).get())
+                    .hasRootCauseInstanceOf(LookupLimitExceededException.class)
+                    .hasStackTraceContaining("candidate limit of " + limit);
+            assertThat(
+                            table.newLookup()
+                                    .lookupBy("tenant")
+                                    .createLookuper()
+                                    .lookup(row(1))
+                                    .get()
+                                    .getRowList())
+                    .hasSize(limit * 2 + 1);
+            assertThat(table.newLookup().createLookuper().lookup(row(1, 0)).get().getRowList())
+                    .hasSize(1);
+        }
+        config.set(ConfigOptions.CLIENT_LOOKUP_SECONDARY_INDEX_MAX_CANDIDATES, limit + 1);
+        try (Connection raised = ConnectionFactory.createConnection(config);
+                Table table = raised.getTable(path)) {
+            assertThat(
+                            table.getSecondaryIndexLookuper("idx_tag")
+                                    .lookup(row("overflow"))
+                                    .get()
+                                    .getRowList())
+                    .hasSize(limit + 1);
+        }
     }
 
     @Test

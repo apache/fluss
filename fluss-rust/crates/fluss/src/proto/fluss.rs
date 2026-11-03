@@ -443,6 +443,11 @@ pub struct PrefixLookupRequest {
     pub table_id: i64,
     #[prost(message, repeated, tag = "2")]
     pub buckets_req: ::prost::alloc::vec::Vec<PbPrefixLookupReqForBucket>,
+    /// Per-prefix candidate limit. Absent means unlimited. Requires API version 2.
+    #[prost(int32, optional, tag = "3")]
+    pub limit: ::core::option::Option<i32>,
+    #[prost(bool, optional, tag = "4")]
+    pub fail_on_limit_exceeded: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PrefixLookupResponse {

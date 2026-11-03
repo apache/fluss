@@ -2036,6 +2036,12 @@ public final class Replica {
     }
 
     public List<ByteArraySlice> prefixLookup(byte[] prefixKey) {
+        return prefixLookup(prefixKey, 0, false);
+    }
+
+    /** Reads a prefix with a candidate limit; zero preserves unlimited reads. */
+    public List<ByteArraySlice> prefixLookup(
+            byte[] prefixKey, int limit, boolean failOnLimitExceeded) {
         if (!isKvTable()) {
             throw new NonPrimaryKeyTableException(
                     "Try to do prefix lookup on a non primary key table: " + getTablePath());
@@ -2053,7 +2059,7 @@ public final class Replica {
                         }
                         checkNotNull(
                                 kvTablet, "KvTablet for the replica to get key shouldn't be null.");
-                        return kvTablet.prefixLookup(prefixKey);
+                        return kvTablet.prefixLookup(prefixKey, limit, failOnLimitExceeded);
                     } catch (IOException e) {
                         String errorMsg =
                                 String.format(

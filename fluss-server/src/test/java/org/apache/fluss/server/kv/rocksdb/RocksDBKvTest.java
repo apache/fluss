@@ -19,6 +19,7 @@ package org.apache.fluss.server.kv.rocksdb;
 
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.LookupLimitExceededException;
 import org.apache.fluss.metrics.SimpleCounter;
 import org.apache.fluss.metrics.util.TestHistogram;
 import org.apache.fluss.row.BinaryString;
@@ -143,6 +144,42 @@ class RocksDBKvTest {
                             .as("prefix %s (flushed=%s)", Arrays.toString(prefix), flush)
                             .containsExactly(expected);
                 }
+            }
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testPrefixCandidateLimit(boolean flush, @TempDir Path tempDir) throws Exception {
+        try (RocksDBKv kv = buildRocksDBKv(tempDir.toFile())) {
+            kv.put(new byte[] {1, 1}, new byte[] {1});
+            kv.put(new byte[] {1, 2}, new byte[] {2});
+            kv.put(new byte[] {1, 3}, new byte[] {3});
+            kv.put(new byte[] {2, 1}, new byte[] {4});
+            if (flush) {
+                try (FlushOptions options = new FlushOptions().setWaitForFlush(true)) {
+                    kv.db.flush(options);
+                }
+            }
+            try (RocksDBKv.PrefixLookup lookup = kv.openPrefixLookup(new byte[] {1})) {
+                assertThat(lookup.readAll(2, false))
+                        .containsExactly(new byte[] {1}, new byte[] {2});
+            }
+            try (RocksDBKv.PrefixLookup lookup = kv.openPrefixLookup(new byte[] {1})) {
+                assertThatThrownBy(() -> lookup.readAll(2, true))
+                        .isInstanceOf(LookupLimitExceededException.class)
+                        .hasMessageContaining("2");
+            }
+            try (RocksDBKv.PrefixLookup lookup = kv.openPrefixLookup(new byte[] {1})) {
+                assertThat(lookup.readAll(3, true))
+                        .containsExactly(new byte[] {1}, new byte[] {2}, new byte[] {3});
+            }
+            try (RocksDBKv.PrefixLookup lookup = kv.openPrefixLookup(new byte[] {1})) {
+                assertThat(lookup.readAll())
+                        .containsExactly(new byte[] {1}, new byte[] {2}, new byte[] {3});
+            }
+            try (RocksDBKv.PrefixLookup lookup = kv.openPrefixLookup(new byte[] {3})) {
+                assertThat(lookup.readAll(1, true)).isEmpty();
             }
         }
     }
