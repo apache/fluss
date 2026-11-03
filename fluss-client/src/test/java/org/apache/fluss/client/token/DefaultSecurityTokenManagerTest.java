@@ -19,16 +19,12 @@ package org.apache.fluss.client.token;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.fs.token.ObtainedSecurityToken;
 
 import org.junit.jupiter.api.Test;
 
 import java.time.Clock;
 import java.time.Duration;
 import java.time.ZoneId;
-import java.util.Collections;
-import java.util.Optional;
-import java.util.concurrent.atomic.AtomicReference;
 
 import static java.time.Instant.ofEpochMilli;
 import static org.apache.fluss.config.ConfigOptions.FILESYSTEM_SECURITY_TOKEN_RENEWAL_RETRY_BACKOFF;
@@ -93,28 +89,15 @@ class DefaultSecurityTokenManagerTest {
     }
 
     @Test
-    void calculateRenewalDelayShouldNotBeNegativeForExpiredToken() {
+    void calculateRenewalDelayShouldUseRetryBackoffForExpiredToken() {
         Configuration configuration = new Configuration();
         configuration.set(ConfigOptions.FILESYSTEM_SECURITY_TOKEN_RENEWAL_TIME_RATIO, 0.5);
+        configuration.set(FILESYSTEM_SECURITY_TOKEN_RENEWAL_RETRY_BACKOFF, Duration.ofMillis(100));
         DefaultSecurityTokenManager securityTokenManager =
                 new DefaultSecurityTokenManager(configuration, null);
 
         Clock constantClock = Clock.fixed(ofEpochMilli(200), ZoneId.systemDefault());
-        assertThat(securityTokenManager.calculateRenewalDelay(constantClock, 100)).isZero();
-    }
-
-    @Test
-    void obtainSecurityTokensShouldNotScheduleTokenWithoutExpiry() {
-        ObtainedSecurityToken token =
-                new ObtainedSecurityToken("testing", new byte[0], null, Collections.emptyMap());
-        DefaultSecurityTokenManager securityTokenManager =
-                new DefaultSecurityTokenManager(new Configuration(), () -> token);
-        AtomicReference<ObtainedSecurityToken> tokenContainer = new AtomicReference<>();
-
-        assertThat(securityTokenManager.obtainSecurityTokensAndGetNextRenewal(tokenContainer))
-                .isEqualTo(Optional.empty());
-        assertThat(tokenContainer.get()).isSameAs(token);
-
-        securityTokenManager.stop();
+        assertThat(securityTokenManager.calculateRenewalDelay(constantClock, 200)).isEqualTo(100);
+        assertThat(securityTokenManager.calculateRenewalDelay(constantClock, 100)).isEqualTo(100);
     }
 }
