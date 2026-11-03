@@ -355,7 +355,7 @@ async fn decode_kv_batch(
 /// Build one [`FixedSchemaDecoder`] per distinct schema id. The current schema
 /// decodes without projection; older schemas are fetched and projected onto the
 /// current schema.
-async fn build_kv_decoders(
+pub(super) async fn build_kv_decoders(
     schema_getter: &ClientSchemaGetter,
     target_schema: &Schema,
     target_schema_id: i16,
@@ -408,7 +408,7 @@ fn value_records_to_record_batch(
 }
 
 /// Read the leading little-endian schema id from a `[schema_id | row]` payload.
-fn read_schema_id(payload: &[u8]) -> Result<i16> {
+pub(super) fn read_schema_id(payload: &[u8]) -> Result<i16> {
     if payload.len() < SCHEMA_ID_LENGTH {
         return Err(Error::UnexpectedError {
             message: format!(

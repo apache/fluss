@@ -85,6 +85,22 @@ Running all integration test cases:
 cargo test --features integration_tests --workspace
 ```
 
+### Reading persisted KV snapshots
+
+Enable `kv-snapshot` on `fluss-rs` to use `FlussTable::create_kv_snapshot_reader(bucket, snapshot_id)`. This downloads the selected snapshot under `scanner_io_tmp_dir`, opens the complete RocksDB database read-only, and returns Arrow batches aligned to the table handle's fixed schema. `next_batch(max_rows)` returns `None` at EOF; `close()` or dropping the reader releases its local files. It supports COMPACTED values with plain or tagged layouts. INDEXED values are currently unsupported by the Rust row decoder.
+
+The feature is off by default. It adds `rocksdb 0.24` / native RocksDB 10.4.2, requiring a C++ compiler and libclang during builds, with compression libraries built by the native dependencies. Their declared MSRV is 1.85, matching this workspace; no existing dependency is upgraded. RocksDB and the wrapper offer Apache-2.0 licensing. Distribution builds that enable the feature must include the additional native dependency licenses. Python/C++/Elixir bindings do not enable this feature by default.
+
+Initialization leases the exact snapshot, renews the lease during download, and releases it before returning. Cancellation finishes an in-flight file download before cleanup; keep the connection and Tokio runtime alive for lease release. Runtime shutdown or a failed release leaves the server lease to expire. Schema discovery makes one local pass over the snapshot before decoding, so there is no metadata RPC per record. Reading seeks once per batch and bounds output by row count; no throughput benchmark has been run.
+
+For a bounded read, select the snapshot and its matching log offset `S`, then capture stop `E`. Use the snapshot rows as the baseline and consume the fixed `[S, E)` log range for that partition/bucket. `reader.log_offset()` reports `S` and should match the planned seam. Neither missing files nor unavailable snapshots cause a switch to a newer snapshot or an online scan. The UnionRead planner and deduplicate merge are separate integration work.
+
+Run the relevant integration test against the normal container harness, or set `FLUSS_KV_SNAPSHOT_BOOTSTRAP` to a test cluster configured with a short `kv.snapshot.interval` and host-accessible local remote storage:
+
+```bash
+cargo test -p fluss-rs --features kv-snapshot,integration_tests --test test_fluss persisted_snapshot_current_view_and_schema
+```
+
 
 ### License check (cargo-deny)
 

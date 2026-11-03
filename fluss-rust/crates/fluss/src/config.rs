@@ -141,7 +141,7 @@ pub struct Config {
     #[arg(long, default_value_t = DEFAULT_SCANNER_REMOTE_LOG_READ_CONCURRENCY)]
     pub scanner_remote_log_read_concurrency: usize,
 
-    /// Parent directory for downloaded remote logs. None uses the OS temporary directory plus `/fluss`.
+    /// Parent directory for downloaded remote logs and KV snapshots. None uses the OS temporary directory plus `/fluss`.
     /// Missing parent directories are created when a remote file is downloaded.
     #[arg(long)]
     pub scanner_io_tmp_dir: Option<String>,
