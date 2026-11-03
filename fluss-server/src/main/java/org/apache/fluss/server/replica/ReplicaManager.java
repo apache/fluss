@@ -34,6 +34,7 @@ import org.apache.fluss.exception.InvalidRequiredAcksException;
 import org.apache.fluss.exception.KvStorageException;
 import org.apache.fluss.exception.LogOffsetOutOfRangeException;
 import org.apache.fluss.exception.LogStorageException;
+import org.apache.fluss.exception.LookupLimitExceededException;
 import org.apache.fluss.exception.NonPrimaryKeyTableException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.exception.StorageBackpressureException;
@@ -1333,6 +1334,16 @@ public class ReplicaManager implements ServerReconfigurable {
             Map<TableBucket, List<byte[]>> entriesPerBucket,
             short apiVersion,
             Consumer<Map<TableBucket, PrefixLookupResultForBucket>> responseCallback) {
+        prefixLookups(entriesPerBucket, apiVersion, 0, false, responseCallback);
+    }
+
+    /** Looks up each prefix with an independent candidate limit. */
+    public void prefixLookups(
+            Map<TableBucket, List<byte[]>> entriesPerBucket,
+            short apiVersion,
+            int limit,
+            boolean failOnLimitExceeded,
+            Consumer<Map<TableBucket, PrefixLookupResultForBucket>> responseCallback) {
         TableMetricGroup tableMetrics = null;
         Map<TableBucket, PrefixLookupResultForBucket> result = new HashMap<>();
         for (Map.Entry<TableBucket, List<byte[]>> entry : entriesPerBucket.entrySet()) {
@@ -1344,7 +1355,8 @@ public class ReplicaManager implements ServerReconfigurable {
                 tableMetrics = replica.tableMetrics();
                 tableMetrics.totalPrefixLookupRequests().inc();
                 for (byte[] prefixKey : entry.getValue()) {
-                    List<ByteArraySlice> resultForPerKey = replica.prefixLookup(prefixKey);
+                    List<ByteArraySlice> resultForPerKey =
+                            replica.prefixLookup(prefixKey, limit, failOnLimitExceeded);
                     resultForBucket.add(resultForPerKey);
                 }
                 result.put(tb, new PrefixLookupResultForBucket(tb, resultForBucket));
@@ -2145,6 +2157,7 @@ public class ReplicaManager implements ServerReconfigurable {
         return !(e instanceof UnknownTableOrBucketException
                 || e instanceof NotLeaderOrFollowerException
                 || e instanceof LogOffsetOutOfRangeException
+                || e instanceof LookupLimitExceededException
                 || e instanceof StorageBackpressureException);
     }
 

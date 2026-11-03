@@ -58,6 +58,8 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
 
     private final BucketingFunction bucketingFunction;
     private final int numBuckets;
+    private final int limit;
+    private final boolean failOnLimitExceeded;
 
     /**
      * a getter to extract partition from prefix lookup key row, null when it's not a partitioned.
@@ -78,7 +80,20 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
             MetadataUpdater metadataUpdater,
             LookupClient lookupClient,
             List<String> lookupColumnNames) {
+        this(tableInfo, schemaGetter, metadataUpdater, lookupClient, lookupColumnNames, 0, false);
+    }
+
+    PrefixKeyLookuper(
+            TableInfo tableInfo,
+            SchemaGetter schemaGetter,
+            MetadataUpdater metadataUpdater,
+            LookupClient lookupClient,
+            List<String> lookupColumnNames,
+            int limit,
+            boolean failOnLimitExceeded) {
         super(tableInfo, metadataUpdater, lookupClient, schemaGetter);
+        this.limit = limit;
+        this.failOnLimitExceeded = failOnLimitExceeded;
         // sanity check
         List<String> prefixKeys = validateAndGetPrefixKeys(tableInfo, lookupColumnNames);
         this.numBuckets = tableInfo.getNumBuckets();
@@ -267,7 +282,13 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
         CompletableFuture<LookupResult> lookupFuture = new CompletableFuture<>();
         TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), partitionId, bucketId);
         lookupClient
-                .prefixLookup(tableInfo.getTablePath(), tableBucket, prefixKeyBytes, bucketCount)
+                .prefixLookup(
+                        tableInfo.getTablePath(),
+                        tableBucket,
+                        prefixKeyBytes,
+                        bucketCount,
+                        limit,
+                        failOnLimitExceeded)
                 .whenComplete(
                         (result, error) -> {
                             if (error != null) {

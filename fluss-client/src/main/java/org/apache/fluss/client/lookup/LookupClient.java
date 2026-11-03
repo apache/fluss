@@ -63,12 +63,15 @@ public class LookupClient {
     public static final String LOOKUP_CONTINUATION_THREAD_PREFIX = "fluss-lookup-continuation";
 
     private final LookupQueue lookupQueue;
+    private final int secondaryIndexMaxCandidates;
 
     private final ExecutorService lookupSenderThreadPool;
     private final LookupSender lookupSender;
     private final ExecutorService lookupContinuationExecutor;
 
     public LookupClient(Configuration conf, MetadataUpdater metadataUpdater) {
+        this.secondaryIndexMaxCandidates =
+                conf.get(ConfigOptions.CLIENT_LOOKUP_SECONDARY_INDEX_MAX_CANDIDATES);
         ExponentialBackoff retryBackoff = createRetryBackoff(conf);
         this.lookupQueue = new LookupQueue(conf);
         this.lookupSenderThreadPool = createThreadPool();
@@ -124,6 +127,14 @@ public class LookupClient {
                 new ExecutorThreadFactory(LOOKUP_CONTINUATION_THREAD_PREFIX));
     }
 
+    int secondaryIndexMaxCandidates() {
+        checkArgument(
+                secondaryIndexMaxCandidates > 0,
+                "%s must be positive.",
+                ConfigOptions.CLIENT_LOOKUP_SECONDARY_INDEX_MAX_CANDIDATES.key());
+        return secondaryIndexMaxCandidates;
+    }
+
     public ExecutorService getLookupContinuationExecutor() {
         return lookupContinuationExecutor;
     }
@@ -161,8 +172,19 @@ public class LookupClient {
 
     public CompletableFuture<List<byte[]>> prefixLookup(
             TablePath tablePath, TableBucket tableBucket, byte[] keyBytes, int bucketCount) {
+        return prefixLookup(tablePath, tableBucket, keyBytes, bucketCount, 0, false);
+    }
+
+    CompletableFuture<List<byte[]>> prefixLookup(
+            TablePath tablePath,
+            TableBucket tableBucket,
+            byte[] keyBytes,
+            int bucketCount,
+            int limit,
+            boolean failOnLimitExceeded) {
         PrefixLookupQuery prefixLookup =
-                new PrefixLookupQuery(tablePath, tableBucket, keyBytes, bucketCount);
+                new PrefixLookupQuery(
+                        tablePath, tableBucket, keyBytes, bucketCount, limit, failOnLimitExceeded);
         lookupQueue.appendLookup(prefixLookup);
         return prefixLookup.future();
     }

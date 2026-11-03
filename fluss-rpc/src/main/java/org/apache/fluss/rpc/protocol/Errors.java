@@ -64,6 +64,7 @@ import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.exception.LogOffsetOutOfRangeException;
 import org.apache.fluss.exception.LogStorageException;
+import org.apache.fluss.exception.LookupLimitExceededException;
 import org.apache.fluss.exception.NetworkException;
 import org.apache.fluss.exception.NoRebalanceInProgressException;
 import org.apache.fluss.exception.NonPrimaryKeyTableException;
@@ -324,7 +325,9 @@ public enum Errors {
     INVALID_REQUEST(
             81,
             "The request contains an invalid combination or value of parameters.",
-            InvalidRequestException::new);
+            InvalidRequestException::new),
+    LOOKUP_LIMIT_EXCEEDED(
+            82, "The lookup candidate limit was exceeded.", LookupLimitExceededException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 

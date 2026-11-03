@@ -135,6 +135,6 @@ The following limitations apply:
 - Tables with `table.datalake.historical-partition.enabled` set to `true` do not support secondary indexes yet. Enabling historical partition access on an indexed table is also rejected.
 - Tables with `table.kv.ttl` do not support secondary indexes yet. Row TTL cleanup does not emit changelog deletes to remove index entries.
 - Index queries require equality on all index columns. Range predicates and partial composite-index keys are not supported.
-- Index queries have no pagination or candidate-count limit. Low-selectivity values may cause many primary-key lookups.
+- Index queries have no pagination. `client.lookup.secondary-index.max-candidates` limits each lookup to 1024 first-hop candidates by default. The value must be positive. Exceeding it fails the query before primary-key lookups begin; results are never silently truncated. Candidates are counted before deduplication and main-table validation, so stale entries also consume the limit. Ordinary primary-key and prefix lookups are unaffected.
 - Schema evolution must preserve the names, types, and ordinal positions of primary-key and indexed columns. Appending columns is supported; internal index tables cannot evolve independently.
 - Index lookup integration is provided by the Java API and Flink connector. Spark and lakehouse index lookup are not supported.

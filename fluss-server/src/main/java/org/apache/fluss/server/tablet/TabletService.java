@@ -199,6 +199,7 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toLookupData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toPrefixLookupData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toProduceLogDataForBuckets;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toPutKvDataForBuckets;
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /** An RPC Gateway service for tablet server. */
 public final class TabletService extends RpcServiceBase
@@ -580,6 +581,9 @@ public final class TabletService extends RpcServiceBase
 
     @Override
     public CompletableFuture<PrefixLookupResponse> prefixLookup(PrefixLookupRequest request) {
+        if (request.hasLimit()) {
+            checkArgument(request.getLimit() > 0, "Prefix lookup limit must be positive.");
+        }
         long tableId = request.getTableId();
         Map<TableBucket, List<byte[]>> prefixLookupData = toPrefixLookupData(request);
         Map<TableBucket, PrefixLookupResultForBucket> errorResponseMap = new HashMap<>();
@@ -605,6 +609,8 @@ public final class TabletService extends RpcServiceBase
         replicaManager.prefixLookups(
                 prefixLookupData,
                 currentSession().getApiVersion(),
+                request.hasLimit() ? request.getLimit() : 0,
+                request.hasFailOnLimitExceeded() && request.isFailOnLimitExceeded(),
                 value -> response.complete(makePrefixLookupResponse(value, errorResponseMap)));
         return response;
     }

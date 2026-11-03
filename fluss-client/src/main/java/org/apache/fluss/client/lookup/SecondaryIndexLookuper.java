@@ -29,9 +29,6 @@ import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.IndexTableUtils;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import javax.annotation.concurrent.ThreadSafe;
 
 import java.util.ArrayList;
@@ -74,9 +71,6 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 @Internal
 @ThreadSafe
 public final class SecondaryIndexLookuper implements Lookuper {
-
-    private static final Logger LOG = LoggerFactory.getLogger(SecondaryIndexLookuper.class);
-    private static final int LOW_SELECTIVITY_WARN_CANDIDATE_THRESHOLD = 1024;
 
     private final Lookuper indexTablePrefixLookuper;
     private final Lookuper mainTablePointLookuper;
@@ -209,12 +203,6 @@ public final class SecondaryIndexLookuper implements Lookuper {
     private CompletableFuture<LookupResult> doHop2(
             LookupResult hop1Result, Object[] expectedIdxValues) {
         List<InternalRow> candidateIndexRows = hop1Result.getRowList();
-        if (candidateIndexRows.size() >= LOW_SELECTIVITY_WARN_CANDIDATE_THRESHOLD) {
-            LOG.warn(
-                    "Secondary index lookup produced {} Hop1 candidate rows, reaching the low-selectivity warning threshold {}. This may indicate a low-selectivity secondary index or stale index entries; Hop2 will still process all candidates.",
-                    candidateIndexRows.size(),
-                    LOW_SELECTIVITY_WARN_CANDIDATE_THRESHOLD);
-        }
         if (candidateIndexRows.isEmpty()) {
             return CompletableFuture.completedFuture(
                     new LookupResult(Collections.<InternalRow>emptyList()));
