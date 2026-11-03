@@ -265,17 +265,6 @@ impl RpcClient {
         self
     }
 
-    /// Drops the cached connections to every endpoint of the server `server_uid`. Requests
-    /// already sent on them still complete, since they hold their own reference to the connection.
-    // Only tests call it for now; kept next to `disconnect_endpoint` as in the Java client.
-    #[allow(dead_code)]
-    pub(crate) fn disconnect(&self, server_uid: &str) {
-        self.cache
-            .write()
-            .connections
-            .retain(|key, _| key.server_uid != server_uid);
-    }
-
     /// Drops the cached connection to the endpoint of `server_node`. Requests already sent on it
     /// still complete, since they hold their own reference to the connection.
     pub(crate) fn disconnect_endpoint(&self, server_node: &ServerNode) {
@@ -467,6 +456,15 @@ impl RpcClient {
 
 #[cfg(test)]
 impl RpcClient {
+    /// Drops the cached connections to every endpoint of the server `server_uid`. Requests
+    /// already sent on them still complete, since they hold their own reference to the connection.
+    pub(crate) fn disconnect(&self, server_uid: &str) {
+        self.cache
+            .write()
+            .connections
+            .retain(|key, _| key.server_uid != server_uid);
+    }
+
     pub(crate) fn cached_endpoints(&self) -> std::collections::HashSet<String> {
         self.cache
             .read()
