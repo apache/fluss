@@ -35,6 +35,7 @@ import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
+import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.shaded.curator5.org.apache.curator.retry.ExponentialBackoffRetry;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
@@ -337,8 +338,22 @@ class KvTabletSnapshotTargetTest {
                                     snapshot.getSnapshotID(),
                                     snapshot.getSnapshotLocation(),
                                     snapshot.getLogOffset());
+                    String path =
+                            KvTestUtils.prepareSnapshotCommit(
+                                    zooKeeperClient, snapshot.getTableBucket());
                     completedSnapshotHandleStore.add(
-                            snapshot.getTableBucket(), snapshot.getSnapshotID(), handle);
+                            snapshot.getTableBucket(),
+                            snapshot.getSnapshotID(),
+                            handle,
+                            path,
+                            zooKeeperClient.getDataWithStat(path).getStat().getVersion(),
+                            zooKeeperClient.getCurrentEpoch().getCoordinatorEpochZkVersion(),
+                            zooKeeperClient
+                                    .getDataWithStat(
+                                            ZkData.LeaderAndIsrZNode.path(
+                                                    snapshot.getTableBucket()))
+                                    .getStat()
+                                    .getVersion());
 
                     // Then throw exception - simulating coordinator failover after ZK commit
                     throw new FlussException("Coordinator failover after ZK commit");
@@ -720,7 +735,7 @@ class KvTabletSnapshotTargetTest {
         public void commitKvSnapshot(
                 CompletedSnapshot snapshot, int coordinatorEpoch, int bucketLeaderEpoch)
                 throws Exception {
-            completedSnapshotStore.add(snapshot);
+            KvTestUtils.commitSnapshot(zooKeeperClient, completedSnapshotStore, snapshot);
         }
     }
 }

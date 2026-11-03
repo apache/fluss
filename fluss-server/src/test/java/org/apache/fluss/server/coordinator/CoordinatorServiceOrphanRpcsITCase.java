@@ -142,7 +142,7 @@ class CoordinatorServiceOrphanRpcsITCase {
         TableBucket tb = new TableBucket(pkTableId, 0);
         CompletedSnapshotStore store = createTestStore(snapshot -> false);
         for (long snapId = 1L; snapId <= 4L; snapId++) {
-            store.add(createMinimalSnapshot(tb, snapId));
+            store.add(createMinimalSnapshot(tb, snapId), "/table", 1, 1, 1);
         }
         injectStore(tb, store);
 
@@ -167,7 +167,7 @@ class CoordinatorServiceOrphanRpcsITCase {
         TableBucket tb = new TableBucket(pkTableId, 1);
         CompletedSnapshotStore store = createTestStore(snapshot -> snapshot.getSnapshotID() == 1L);
         for (long snapId = 1L; snapId <= 4L; snapId++) {
-            store.add(createMinimalSnapshot(tb, snapId));
+            store.add(createMinimalSnapshot(tb, snapId), "/table", 1, 1, 1);
         }
         injectStore(tb, store);
 
@@ -311,7 +311,11 @@ class CoordinatorServiceOrphanRpcsITCase {
         public void add(
                 TableBucket tableBucket,
                 long snapshotId,
-                CompletedSnapshotHandle completedSnapshotHandle) {}
+                CompletedSnapshotHandle completedSnapshotHandle,
+                String sourceMetadataPath,
+                int sourceMetadataVersion,
+                int coordinatorZkVersion,
+                int leaderAndIsrZkVersion) {}
 
         @Override
         public void remove(TableBucket tableBucket, long snapshotId) {}

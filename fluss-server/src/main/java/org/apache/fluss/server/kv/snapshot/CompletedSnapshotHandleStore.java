@@ -29,20 +29,6 @@ import java.util.Optional;
 public interface CompletedSnapshotHandleStore {
 
     /**
-     * Persist the snapshot handle to coordination system(e.g. Zookeeper, Kubernetes, etc.).
-     *
-     * @param tableBucket the table bucket the snapshot belongs to
-     * @param snapshotId the snapshot id
-     * @param completedSnapshotHandle CompletedSnapshotHandle to be added
-     * @throws Exception if persisting snapshot or writing snapshot handle failed
-     */
-    void add(
-            TableBucket tableBucket,
-            long snapshotId,
-            CompletedSnapshotHandle completedSnapshotHandle)
-            throws Exception;
-
-    /**
      * Persists an ordinary snapshot commit with coordinator and target-metadata fences in the same
      * coordination-system transaction.
      */

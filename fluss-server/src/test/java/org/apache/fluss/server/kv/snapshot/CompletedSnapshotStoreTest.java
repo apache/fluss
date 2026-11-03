@@ -107,7 +107,7 @@ class CompletedSnapshotStoreTest {
                         1, completedSnapshotHandleStore, Collections.emptyList());
         assertThat(completedSnapshotStore.getLatestSnapshot()).isEmpty();
         CompletedSnapshot snapshot = getSnapshot(1);
-        completedSnapshotStore.add(snapshot);
+        completedSnapshotStore.add(snapshot, "/table", 1, 1, 1);
         assertThat(completedSnapshotStore.getLatestSnapshot().get()).isEqualTo(snapshot);
     }
 
@@ -123,7 +123,10 @@ class CompletedSnapshotStoreTest {
                         builder.build(),
                         executorService,
                         ignored -> false);
-        store.add(imported);
+        Path metadata = Paths.get(imported.getMetadataFilePath().toUri());
+        Files.createDirectories(metadata.getParent());
+        Files.write(metadata, CompletedSnapshotJsonSerde.toJson(imported));
+        store.registerExternalSnapshot(imported, () -> {});
         CompletedSnapshot late =
                 getSnapshotWithSharedFiles(
                         19L,
@@ -207,7 +210,8 @@ class CompletedSnapshotStoreTest {
                                         new TestKvHandle("unconfirmed-shared.sst"),
                                         "unconfirmed-shared.sst")));
 
-        assertThatThrownBy(() -> store.add(snapshot)).isInstanceOf(FlussException.class);
+        assertThatThrownBy(() -> store.add(snapshot, "/table", 1, 1, 1))
+                .isInstanceOf(FlussException.class);
 
         assertThat(registry.getFileSize()).isZero();
         assertThat(store.getAllSnapshots()).isEmpty();
@@ -234,7 +238,7 @@ class CompletedSnapshotStoreTest {
 
         final long ckpId = 100L;
         final CompletedSnapshot ckp = getSnapshot(ckpId);
-        completedSnapshotStore.add(ckp);
+        completedSnapshotStore.add(ckp, "/table", 1, 1, 1);
 
         // We should persist the completed snapshot to snapshot handle store.
         final CompletedSnapshotHandle addedCkpHandle =
@@ -270,7 +274,7 @@ class CompletedSnapshotStoreTest {
         final long ckpId = 100L;
         final CompletedSnapshot ckp = getSnapshot(ckpId);
 
-        assertThatThrownBy(() -> completedSnapshotStore.add(ckp))
+        assertThatThrownBy(() -> completedSnapshotStore.add(ckp, "/table", 1, 1, 1))
                 .as("We should get an exception when add snapshot to failed..")
                 .hasMessageContaining(errMsg)
                 .isInstanceOf(FlussException.class);
@@ -279,6 +283,18 @@ class CompletedSnapshotStoreTest {
         assertThat(completedSnapshotStore.getAllSnapshots()).hasSize(num);
         assertThat(completedSnapshotStore.getAllSnapshots().get(0).getSnapshotID()).isOne();
         assertThat(completedSnapshotStore.getLatestSnapshot().get().getSnapshotID()).isOne();
+    }
+
+    private static void addConcurrentSnapshot(
+            CompletedSnapshotStore store, CompletedSnapshot snapshot) throws Exception {
+        try {
+            store.add(snapshot, "/table", 1, 1, 1);
+        } catch (IllegalArgumentException lateSnapshot) {
+            if (!lateSnapshot.getMessage().contains("older than the latest")
+                    || store.getLatestSnapshot().get().getSnapshotID() < snapshot.getSnapshotID()) {
+                throw lateSnapshot;
+            }
+        }
     }
 
     @Test
@@ -308,7 +324,7 @@ class CompletedSnapshotStoreTest {
                                     long snapshotId =
                                             (long) finalThreadId * snapshotsPerThread + i + 1;
                                     CompletedSnapshot snapshot = getSnapshot(snapshotId);
-                                    completedSnapshotStore.add(snapshot);
+                                    addConcurrentSnapshot(completedSnapshotStore, snapshot);
                                 }
                             } catch (Exception e) {
                                 exceptionCount.incrementAndGet();
@@ -387,7 +403,7 @@ class CompletedSnapshotStoreTest {
                                     long snapshotId =
                                             (long) finalThreadId * snapshotsPerWriter + i + 1;
                                     CompletedSnapshot snapshot = getSnapshot(snapshotId);
-                                    completedSnapshotStore.add(snapshot);
+                                    addConcurrentSnapshot(completedSnapshotStore, snapshot);
                                 }
                             } catch (Exception e) {
                                 exceptionCount.incrementAndGet();
@@ -493,7 +509,7 @@ class CompletedSnapshotStoreTest {
                                     long snapshotId =
                                             (long) finalThreadId * snapshotsPerThread + i + 1;
                                     CompletedSnapshot snapshot = getSnapshot(snapshotId);
-                                    completedSnapshotStore.add(snapshot);
+                                    addConcurrentSnapshot(completedSnapshotStore, snapshot);
                                 }
                             } catch (Exception e) {
                                 exceptionCount.incrementAndGet();
@@ -568,7 +584,7 @@ class CompletedSnapshotStoreTest {
                                 if (operationId % 2 == 0) {
                                     // Add snapshot
                                     CompletedSnapshot snapshot = getSnapshot(operationId + 1);
-                                    completedSnapshotStore.add(snapshot);
+                                    addConcurrentSnapshot(completedSnapshotStore, snapshot);
                                 } else {
                                     // Read snapshot
                                     long numSnapshots = completedSnapshotStore.getNumSnapshots();
@@ -624,12 +640,12 @@ class CompletedSnapshotStoreTest {
         CompletedSnapshot cp2 = getSnapshot(2L);
         CompletedSnapshot cp3 = getSnapshot(3L);
 
-        store.add(cp1);
+        store.add(cp1, "/table", 1, 1, 1);
         assertThat(store.getAllSnapshots()).hasSize(1);
         assertThat(store.getAllSnapshots().get(0).getSnapshotID()).isEqualTo(1L);
         assertThat(store.stillInUseSnapshots).isEmpty();
 
-        store.add(cp2);
+        store.add(cp2, "/table", 1, 1, 1);
 
         // After adding cp1 and cp2 with maxRetain=1:
         // cp1 can't be subsumed (leased) → moved to stillInUseSnapshots
@@ -638,7 +654,7 @@ class CompletedSnapshotStoreTest {
         assertThat(store.getAllSnapshots().get(0).getSnapshotID()).isEqualTo(2L);
         assertThat(store.stillInUseSnapshots).containsKey(1L);
 
-        store.add(cp3);
+        store.add(cp3, "/table", 1, 1, 1);
 
         // After adding cp3 with maxRetain=1:
         // cp1 is still in stillInUseSnapshots (lease not expired)
@@ -713,11 +729,11 @@ class CompletedSnapshotStoreTest {
                         executorService,
                         bucket -> bucket.getSnapshotID() == 1L);
 
-        store.add(cp1);
-        store.add(cp2);
-        store.add(cp3);
-        store.add(cp4);
-        store.add(cp5);
+        store.add(cp1, "/table", 1, 1, 1);
+        store.add(cp2, "/table", 1, 1, 1);
+        store.add(cp3, "/table", 1, 1, 1);
+        store.add(cp4, "/table", 1, 1, 1);
+        store.add(cp5, "/table", 1, 1, 1);
 
         // Wait for async cleanup
         Thread.sleep(200);
@@ -780,8 +796,8 @@ class CompletedSnapshotStoreTest {
                         executorService,
                         bucket -> leasedSnapshotIds.contains(bucket.getSnapshotID()));
 
-        store.add(cp1);
-        store.add(cp2);
+        store.add(cp1, "/table", 1, 1, 1);
+        store.add(cp2, "/table", 1, 1, 1);
 
         // cp1 leased → moved to stillInUseSnapshots, completedSnapshots = [2]
         assertThat(store.stillInUseSnapshots).containsKey(1L);
@@ -799,7 +815,7 @@ class CompletedSnapshotStoreTest {
                         Collections.singletonList(
                                 KvFileHandleAndLocalPath.of(
                                         new PlaceholderKvFileHandler(fileA), "a.sst")));
-        store.add(cp3);
+        store.add(cp3, "/table", 1, 1, 1);
         Thread.sleep(200);
 
         // After lease expiry: stillInUseSnapshots should be empty
@@ -849,7 +865,7 @@ class CompletedSnapshotStoreTest {
         return new CompletedSnapshot(
                 tableBucket,
                 id,
-                new FsPath(tempDir.toString(), "test_snapshot"),
+                FsPath.fromLocalFile(tempDir.resolve("snapshot_" + id).toFile()),
                 KvSnapshotHandle.create(Collections.emptyList(), Collections.emptyList(), 0));
     }
 
@@ -868,14 +884,13 @@ class CompletedSnapshotStoreTest {
             List<CompletedSnapshot> completed,
             List<CompletedSnapshot> expectedRetained)
             throws Exception {
-        List<Tuple2<CompletedSnapshotHandle, String>> snapshotHandles = createSnapshotHandles(3);
-        final List<CompletedSnapshot> completedSnapshots = mapToCompletedSnapshot(snapshotHandles);
         final TestCompletedSnapshotHandleStore snapshotHandleStore = builder.build();
         final CompletedSnapshotStore completedSnapshotStore =
-                createCompletedSnapshotStore(numToRetain, snapshotHandleStore, completedSnapshots);
+                createCompletedSnapshotStore(
+                        numToRetain, snapshotHandleStore, Collections.emptyList());
 
         for (CompletedSnapshot c : completed) {
-            completedSnapshotStore.add(c);
+            completedSnapshotStore.add(c, "/table", 1, 1, 1);
         }
         assertThat(completedSnapshotStore.getAllSnapshots()).isEqualTo(expectedRetained);
     }

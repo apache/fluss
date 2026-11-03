@@ -64,29 +64,6 @@ public class ZooKeeperCompletedSnapshotHandleStore implements CompletedSnapshotH
      */
     @Override
     public void add(
-            TableBucket tableBucket, long snapshotId, CompletedSnapshotHandle snapshotHandle)
-            throws Exception {
-        checkNotNull(snapshotHandle, "completed snapshot handle");
-
-        boolean success = false;
-        try {
-            client.registerTableBucketSnapshot(
-                    tableBucket,
-                    new BucketSnapshot(
-                            snapshotId,
-                            snapshotHandle.getLogOffset(),
-                            snapshotHandle.getMetadataFilePath().toString()));
-            success = true;
-        } finally {
-            if (!success) {
-                // Cleanup the snapshot metadata handle if it was not written to zookeeper
-                snapshotHandle.discard();
-            }
-        }
-    }
-
-    @Override
-    public void add(
             TableBucket tableBucket,
             long snapshotId,
             CompletedSnapshotHandle snapshotHandle,

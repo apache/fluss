@@ -110,14 +110,6 @@ public class CompletedSnapshotStore {
         this.snapshotsCleaner = new SnapshotsCleaner();
     }
 
-    public void add(final CompletedSnapshot completedSnapshot) throws Exception {
-        inLock(
-                lock,
-                () ->
-                        addSnapshotAndSubsumeOldestOne(
-                                completedSnapshot, snapshotsCleaner, () -> {}));
-    }
-
     /** Adds a snapshot under the current registration, coordinator and leader versions. */
     public void add(
             final CompletedSnapshot completedSnapshot,
@@ -216,27 +208,6 @@ public class CompletedSnapshotStore {
                     ids.addAll(stillInUseSnapshots.keySet());
                     return ids;
                 });
-    }
-
-    /**
-     * Synchronously writes the new snapshots to snapshot handle store and asynchronously removes
-     * older ones.
-     *
-     * @param snapshot Completed snapshot to add.
-     */
-    @VisibleForTesting
-    void addSnapshotAndSubsumeOldestOne(
-            final CompletedSnapshot snapshot,
-            SnapshotsCleaner snapshotsCleaner,
-            Runnable postCleanup)
-            throws Exception {
-        checkNotNull(snapshot, "Snapshot");
-
-        CompletedSnapshotHandle completedSnapshotHandle = store(snapshot);
-        completedSnapshotHandleStore.add(
-                snapshot.getTableBucket(), snapshot.getSnapshotID(), completedSnapshotHandle);
-
-        adoptConfirmedSnapshot(snapshot, snapshotsCleaner, postCleanup);
     }
 
     /**

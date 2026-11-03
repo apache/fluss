@@ -23,6 +23,7 @@ import org.apache.fluss.metadata.BulkLoadHandle;
 import org.apache.fluss.metadata.KvSnapshotFileMetadata;
 import org.apache.fluss.metadata.KvSnapshotFileMetadataJsonSerde;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.messages.LookupResponse;
 import org.apache.fluss.rpc.messages.PbLookupRespForBucket;
 import org.apache.fluss.rpc.messages.PbPrefixLookupRespForBucket;
@@ -33,11 +34,17 @@ import org.apache.fluss.server.kv.rocksdb.RocksDBKv;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKvBuilder;
 import org.apache.fluss.server.kv.rocksdb.RocksDBResourceContainer;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
+import org.apache.fluss.server.kv.snapshot.CompletedSnapshotStore;
 import org.apache.fluss.server.kv.snapshot.KvFileHandleAndLocalPath;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotDataDownloader;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotDownloadSpec;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotHandle;
 import org.apache.fluss.server.kv.snapshot.PlaceholderKvFileHandler;
+import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.server.zk.data.TableRegistration;
+import org.apache.fluss.server.zk.data.ZkData;
+import org.apache.fluss.server.zk.data.ZkVersion;
 import org.apache.fluss.utils.CloseableRegistry;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
@@ -57,10 +64,58 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
 
+import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
+import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test utils related to Kv. */
 public class KvTestUtils {
+
+    /** Prepares registration and epochs for ordinary unpartitioned snapshot commit tests. */
+    public static String prepareSnapshotCommit(ZooKeeperClient client, TableBucket bucket)
+            throws Exception {
+        checkArgument(bucket.getPartitionId() == null, "Fixture requires an unpartitioned table.");
+        TablePath table = TablePath.of("snapshot_tests", "table_" + bucket.getTableId());
+        String path = ZkData.TableZNode.path(table);
+        if (!client.pathExists(path)) {
+            client.registerTable(
+                    table,
+                    TableRegistration.newTable(
+                            bucket.getTableId(), DEFAULT_REMOTE_DATA_DIR, DATA1_TABLE_DESCRIPTOR));
+        }
+        if (!client.pathExists(ZkData.CoordinatorEpochZNode.path())) {
+            client.fenceBecomeCoordinatorLeader("snapshot-tests");
+        }
+        if (!client.pathExists(ZkData.LeaderAndIsrZNode.path(bucket))) {
+            client.registerLeaderAndIsr(
+                    bucket,
+                    new LeaderAndIsr(
+                            0,
+                            0,
+                            Collections.singletonList(0),
+                            Collections.emptyList(),
+                            client.getCurrentEpoch().getCoordinatorEpoch(),
+                            0),
+                    ZkVersion.MATCH_ANY_VERSION.getVersion());
+        }
+        return path;
+    }
+
+    /** Commits through the ordinary version-fenced path using real ZooKeeper metadata. */
+    public static void commitSnapshot(
+            ZooKeeperClient client, CompletedSnapshotStore store, CompletedSnapshot snapshot)
+            throws Exception {
+        String path = prepareSnapshotCommit(client, snapshot.getTableBucket());
+        store.add(
+                snapshot,
+                path,
+                client.getDataWithStat(path).getStat().getVersion(),
+                client.getCurrentEpoch().getCoordinatorEpochZkVersion(),
+                client.getDataWithStat(ZkData.LeaderAndIsrZNode.path(snapshot.getTableBucket()))
+                        .getStat()
+                        .getVersion());
+    }
 
     /** Writes a snapshot manifest and dummy SST for metadata validation tests. */
     public static FsPath writeSnapshotMetadata(

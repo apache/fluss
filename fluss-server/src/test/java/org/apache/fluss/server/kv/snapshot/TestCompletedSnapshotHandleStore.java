@@ -42,7 +42,13 @@ public class TestCompletedSnapshotHandleStore implements CompletedSnapshotHandle
 
     @Override
     public void add(
-            TableBucket tableBucket, long snapshotId, CompletedSnapshotHandle snapshotHandle)
+            TableBucket tableBucket,
+            long snapshotId,
+            CompletedSnapshotHandle snapshotHandle,
+            String sourceMetadataPath,
+            int sourceMetadataVersion,
+            int coordinatorZkVersion,
+            int leaderAndIsrZkVersion)
             throws Exception {
         addFunction.apply(snapshotHandle);
     }
