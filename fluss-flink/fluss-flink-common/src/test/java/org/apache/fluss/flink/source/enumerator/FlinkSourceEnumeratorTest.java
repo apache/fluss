@@ -60,6 +60,7 @@ import org.apache.fluss.predicate.PredicateBuilder;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.CompactedKeyEncoder;
 import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.lake.LakeTableHelper;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.shaded.guava32.com.google.common.collect.ImmutableMap;
@@ -78,6 +79,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.nio.file.Path;
@@ -166,53 +168,6 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
     }
 
     @Test
-    void testBoundedPkTableEmitsKvBatchSplits() throws Throwable {
-        long tableId = createTable(DEFAULT_TABLE_PATH, DEFAULT_PK_TABLE_DESCRIPTOR);
-        int numSubtasks = DEFAULT_BUCKET_NUM;
-        Configuration enabled = new Configuration(flussConf);
-        enabled.set(ConfigOptions.CLIENT_SCANNER_KV_BATCH_STRATEGY, KvBatchStrategy.SERVER_SCAN);
-        try (MockSplitEnumeratorContext<SourceSplitBase> context =
-                new MockSplitEnumeratorContext<>(numSubtasks)) {
-            FlinkSourceEnumerator enumerator =
-                    new FlinkSourceEnumerator(
-                            DEFAULT_TABLE_PATH,
-                            enabled,
-                            true,
-                            false,
-                            context,
-                            OffsetsInitializer.full(),
-                            DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
-                            false, // bounded
-                            null,
-                            null,
-                            LeaseContext.DEFAULT,
-                            false);
-
-            enumerator.start();
-            for (int i = 0; i < numSubtasks; i++) {
-                registerReader(context, enumerator, i);
-            }
-            assertThat(context.getSplitsAssignmentSequence()).isEmpty();
-
-            // Drive the bounded-mode async split generation.
-            context.runNextOneTimeCallable();
-
-            Map<Integer, List<SourceSplitBase>> expectedAssignment = new HashMap<>();
-            for (int bucket = 0; bucket < DEFAULT_BUCKET_NUM; bucket++) {
-                KvBatchSplit split = new KvBatchSplit(new TableBucket(tableId, bucket), null);
-                int owner = enumerator.getSplitOwner(split);
-                expectedAssignment.computeIfAbsent(owner, k -> new ArrayList<>()).add(split);
-            }
-            Map<Integer, List<SourceSplitBase>> actualAssignment = getReadersAssignments(context);
-            assertThat(actualAssignment).isEqualTo(expectedAssignment);
-            actualAssignment
-                    .values()
-                    .forEach(
-                            splits -> splits.forEach(s -> assertThat(s.isKvBatchSplit()).isTrue()));
-        }
-    }
-
-    @Test
     void testBoundedPkTableEmitsSnapshotSplitsByDefault() throws Throwable {
         TablePath tablePath = TablePath.of(DEFAULT_DB, "bounded-pk-snapshot-default");
         long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
@@ -252,6 +207,117 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                             .collect(Collectors.toList());
             assertThat(allAssigned).isNotEmpty();
             allAssigned.forEach(s -> assertThat(s.isHybridSnapshotLogSplit()).isTrue());
+        }
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+        "false, true, SERVER_SCAN, false",
+        "true, true, SERVER_SCAN, false",
+        "false, true, SNAPSHOT_MERGE, false",
+        "true, true, SNAPSHOT_MERGE, false",
+        "false, false, SERVER_SCAN, false",
+        "true, false, SERVER_SCAN, false",
+        "false, true, SERVER_SCAN, true",
+        "true, true, SERVER_SCAN, true"
+    })
+    void testBoundedPkTableEmitsKvBatchSplits(
+            boolean partitioned,
+            boolean primaryKey,
+            KvBatchStrategy strategy,
+            boolean streamingRead,
+            @TempDir Path tempDir)
+            throws Throwable {
+        TableDescriptor descriptor =
+                partitioned
+                        ? primaryKey
+                                ? DEFAULT_AUTO_PARTITIONED_PK_TABLE_DESCRIPTOR
+                                : DEFAULT_AUTO_PARTITIONED_LOG_TABLE_DESCRIPTOR
+                        : primaryKey ? DEFAULT_PK_TABLE_DESCRIPTOR : DEFAULT_LOG_TABLE_DESCRIPTOR;
+        TablePath tablePath =
+                TablePath.of(
+                        DEFAULT_DB,
+                        "kv-batch-"
+                                + partitioned
+                                + "-"
+                                + primaryKey
+                                + "-"
+                                + strategy
+                                + "-"
+                                + streamingRead);
+        long tableId = createTable(tablePath, descriptor);
+        ZooKeeperClient zkClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
+        Map<Long, String> partitions =
+                partitioned
+                        ? waitUntilPartitions(zkClient, tablePath)
+                        : Collections.singletonMap(null, null);
+        Map<TableBucket, Long> lakeOffsets = new HashMap<>();
+        List<LakeSplit> lakeSplits = new ArrayList<>();
+        List<SourceSplitBase> expectedKvSplits = new ArrayList<>();
+        for (Map.Entry<Long, String> partition : partitions.entrySet()) {
+            for (int bucket = 0; bucket < DEFAULT_BUCKET_NUM; bucket++) {
+                TableBucket tableBucket = new TableBucket(tableId, partition.getKey(), bucket);
+                FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tableBucket);
+                lakeOffsets.put(tableBucket, 0L);
+                lakeSplits.add(
+                        new TestingLakeSplit(
+                                bucket,
+                                partitioned
+                                        ? Collections.singletonList(partition.getValue())
+                                        : Collections.emptyList()));
+                expectedKvSplits.add(new KvBatchSplit(tableBucket, partition.getValue()));
+            }
+        }
+        if (partitioned) {
+            // This historical partition exists only in the lake and must not be server-scanned.
+            lakeSplits.add(new TestingLakeSplit(0, Collections.singletonList("2000")));
+        }
+        TableRegistration registration = zkClient.getTable(tablePath).get();
+        Map<String, String> properties = new HashMap<>(registration.properties);
+        properties.put(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true");
+        zkClient.updateTable(
+                tablePath, registration.newProperties(properties, registration.customProperties));
+        new LakeTableHelper(zkClient, tempDir.toString())
+                .registerLakeTableSnapshotV1(tableId, new LakeTableSnapshot(0, lakeOffsets));
+        Configuration scanConf = new Configuration(flussConf);
+        scanConf.set(ConfigOptions.CLIENT_SCANNER_KV_BATCH_STRATEGY, strategy);
+
+        try (MockSplitEnumeratorContext<SourceSplitBase> context =
+                        new MockSplitEnumeratorContext<>(1);
+                FlinkSourceEnumerator enumerator =
+                        new FlinkSourceEnumerator(
+                                tablePath,
+                                scanConf,
+                                primaryKey,
+                                partitioned,
+                                context,
+                                OffsetsInitializer.full(),
+                                -1L,
+                                streamingRead,
+                                null,
+                                TestingLakeSource.fromSplits(lakeSplits),
+                                LeaseContext.DEFAULT,
+                                false)) {
+            enumerator.start();
+            registerReader(context, enumerator, 0);
+            if (!streamingRead || partitioned) {
+                context.runNextOneTimeCallable();
+            }
+            List<SourceSplitBase> assigned = getReadersAssignments(context).get(0);
+            if (primaryKey && !streamingRead && strategy == KvBatchStrategy.SERVER_SCAN) {
+                assertThat(assigned).containsExactlyInAnyOrderElementsOf(expectedKvSplits);
+                assertThat(assigned).allMatch(SourceSplitBase::isKvBatchSplit);
+            } else {
+                assertThat(assigned)
+                        .anyMatch(
+                                split ->
+                                        split instanceof LakeSnapshotSplit
+                                                || split instanceof LakeSnapshotAndFlussLogSplit);
+                assertThat(assigned).noneMatch(SourceSplitBase::isKvBatchSplit);
+            }
+            if (!streamingRead) {
+                assertThat(context.hasNoMoreSplits(0)).isTrue();
+            }
         }
     }
 

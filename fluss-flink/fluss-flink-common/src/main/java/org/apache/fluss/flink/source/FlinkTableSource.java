@@ -21,6 +21,7 @@ import org.apache.fluss.client.initializer.OffsetsInitializer;
 import org.apache.fluss.client.table.getter.PartitionGetter;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.KvBatchStrategy;
 import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.flink.adapter.SupportsLookupCustomShuffleAdapter;
@@ -310,7 +311,12 @@ public class FlinkTableSource
         this.leaseContext = leaseContext;
         this.mergeEngineType = mergeEngineType;
         this.tableOptions = tableOptions;
-        if (isDataLakeEnabled) {
+        boolean serverScan =
+                !streaming
+                        && hasPrimaryKey()
+                        && flussConfig.get(ConfigOptions.CLIENT_SCANNER_KV_BATCH_STRATEGY)
+                                == KvBatchStrategy.SERVER_SCAN;
+        if (isDataLakeEnabled && !serverScan) {
             this.lakeSource =
                     checkNotNull(
                             createLakeSource(tablePath, tableOptions),

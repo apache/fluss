@@ -714,8 +714,9 @@ public class FlinkSourceEnumerator
 
     private void startInBatchMode() {
         boolean serverScan =
-                flussConf.get(ConfigOptions.CLIENT_SCANNER_KV_BATCH_STRATEGY)
-                        == KvBatchStrategy.SERVER_SCAN;
+                hasPrimaryKey
+                        && flussConf.get(ConfigOptions.CLIENT_SCANNER_KV_BATCH_STRATEGY)
+                                == KvBatchStrategy.SERVER_SCAN;
         if (hasPrimaryKey && !(startingOffsetsInitializer instanceof SnapshotOffsetsInitializer)) {
             throw new UnsupportedOperationException(
                     "Batch mode on primary-key tables only supports full startup mode.");
@@ -723,7 +724,7 @@ public class FlinkSourceEnumerator
 
         FlussOnlyBatchSplitGenerator flussOnlyBatchSplitGenerator =
                 createFlussOnlyBatchSplitGenerator();
-        boolean useLakeUnionRead = lakeEnabled && lakeSource != null;
+        boolean useLakeUnionRead = lakeEnabled && lakeSource != null && !serverScan;
         if (useLakeUnionRead) {
             context.callAsync(
                     () -> {
@@ -767,7 +768,7 @@ public class FlinkSourceEnumerator
      */
     private List<SourceSplitBase> generateFlussOnlyBatchSplits(
             boolean serverScan, FlussOnlyBatchSplitGenerator flussOnlyBatchSplitGenerator) {
-        if (serverScan && hasPrimaryKey) {
+        if (serverScan) {
             if (isPartitioned) {
                 Set<PartitionInfo> partitionInfos = listPartitions();
                 List<SourceSplitBase> splits = new ArrayList<>();

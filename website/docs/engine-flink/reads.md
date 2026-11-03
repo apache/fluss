@@ -268,9 +268,10 @@ the tablet server instead, which avoids downloading snapshot files and replaying
 This is intended for interactive queries over small primary-key tables — the kind of full scan that
 backs a dashboard of a few thousand rows. It is not a general replacement for the default strategy.
 
-The option applies only to primary-key tables that have no lake snapshot to read from. On a
-lake-enabled primary-key table with a lake snapshot, a bounded read performs the lake + Fluss-log
-union read and this option is not consulted.
+On a lake-enabled primary-key table, `server-scan` bypasses the lake + Fluss-log union read even
+when a lake snapshot exists. It reads only the live kv state retained in Fluss, so partitions
+that have expired in Fluss and exist only in the lake are not included. The default
+`snapshot-merge` strategy continues to use the union read when a lake snapshot exists.
 
 #### Example
 
@@ -305,7 +306,7 @@ every bounded reader of that table, including jobs written later by other users.
 
 #### Trade-offs
 
-Both strategies return the current state of the table. They differ in guarantees and cost:
+For data retained in Fluss, the strategies differ in guarantees and cost:
 
 | | `snapshot-merge` (default) | `server-scan` |
 |---|---|---|
