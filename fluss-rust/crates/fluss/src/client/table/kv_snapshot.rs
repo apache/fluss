@@ -19,11 +19,11 @@ use super::FlussTable;
 use super::batch_scanner::{build_kv_decoders, read_schema_id};
 use super::remote_log::RemoteLogDownloader;
 use crate::SnapshotId;
-use crate::client::{ClientSchemaGetter, FlussAdmin, SecurityTokenManager};
+use crate::client::{ClientSchemaGetter, CredentialsReceiver, FlussAdmin, SecurityTokenManager};
 use crate::error::{Error, Result};
 use crate::metadata::{
-    KvSnapshotLeaseForBucket, KvSnapshotLeaseForTable, KvSnapshotMetadata, SchemaInfo, TableBucket,
-    TableInfo,
+    KvSnapshotLeaseForBucket, KvSnapshotLeaseForTable, KvSnapshotMetadata, RemotePathAndLocalFile,
+    SchemaInfo, TableBucket, TableInfo,
 };
 use crate::record::RowAppendRecordBatchBuilder;
 use crate::row::FixedSchemaDecoder;
@@ -31,12 +31,15 @@ use arrow::array::RecordBatch;
 use futures::Stream;
 use rocksdb::{DB, Options, ReadOptions};
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
 use std::path::{Component, Path};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tempfile::TempDir;
-use tokio::sync::{oneshot, watch};
+use tokio::sync::{Semaphore, oneshot, watch};
 use tokio::task::JoinHandle;
+
+const DEFAULT_SNAPSHOT_LEASE_DURATION: Duration = Duration::from_secs(300);
 
 fn snapshot_error(message: impl Into<String>) -> Error {
     Error::UnexpectedError {
@@ -84,7 +87,7 @@ impl FlussTable<'_> {
     /// released before returning. Missing snapshots, files, schemas, and unsupported formats fail
     /// creation. Cancelling creation completes any in-flight file download before cleaning up;
     /// the connection/runtime must remain alive for asynchronous lease release. If the runtime
-    /// is shut down, the server lease expires after 60 seconds without renewal.
+    /// is shut down, the server lease expires after five minutes without renewal.
     ///
     /// `reader.log_offset()` is the exclusive end of the snapshot's log prefix and the start of
     /// a subsequent `[S, E)` tail. Capture `E` only after selecting this snapshot and `S`.
@@ -93,6 +96,31 @@ impl FlussTable<'_> {
         bucket: TableBucket,
         snapshot_id: SnapshotId,
     ) -> Result<KvSnapshotReader> {
+        self.create_kv_snapshot_reader_with_lease_duration(
+            bucket,
+            snapshot_id,
+            DEFAULT_SNAPSHOT_LEASE_DURATION,
+        )
+        .await
+    }
+
+    /// Creates a reader with a caller-selected download lease duration.
+    ///
+    /// The duration is rounded down to milliseconds and must be at least one millisecond.
+    /// Successful renewals are followed by a wait of one third of this duration. Transient
+    /// failures are retried with backoff within the last confirmed lease lifetime; permanent
+    /// errors or unavailable snapshots fail creation. Choose a duration that tolerates expected
+    /// RPC delays and process pauses; this is not a download timeout.
+    /// The reader manages renewal and release. If the runtime stops, the lease expires after
+    /// the selected duration without renewal. Other behavior matches
+    /// [`create_kv_snapshot_reader`](Self::create_kv_snapshot_reader).
+    pub async fn create_kv_snapshot_reader_with_lease_duration(
+        &self,
+        bucket: TableBucket,
+        snapshot_id: SnapshotId,
+        lease_duration: Duration,
+    ) -> Result<KvSnapshotReader> {
+        let lease_duration_ms = validate_lease_duration(lease_duration)?;
         if !self.has_primary_key
             || bucket.table_id() != self.table_info.table_id
             || bucket.bucket_id() < 0
@@ -120,70 +148,111 @@ impl FlussTable<'_> {
         );
         let table_info = self.table_info.clone();
         let config = self.conn.config().clone();
+        let download_slots = self.conn.snapshot_download_slots();
         let tokens = SecurityTokenManager::new(self.conn.get_connections(), self.metadata.clone());
         let (mut tx, rx) = oneshot::channel();
         // This task owns acquisition as well as cleanup: dropping the caller cannot race a
         // successful acquire response or remove a directory underneath an in-flight file write.
         tokio::spawn(async move {
             let result = async {
-                let lease = DownloadLease::acquire(admin.clone(), &bucket, snapshot_id).await?;
+                let lease =
+                    DownloadLease::acquire(admin.clone(), &bucket, snapshot_id, lease_duration_ms)
+                        .await?;
                 let result = async {
-                    let metadata = admin.get_kv_snapshot_metadata(
-                        bucket.table_id(), bucket.partition_id(), bucket.bucket_id(), snapshot_id,
-                    ).await?;
+                    let metadata = admin
+                        .get_kv_snapshot_metadata(
+                            bucket.table_id(),
+                            bucket.partition_id(),
+                            bucket.bucket_id(),
+                            snapshot_id,
+                        )
+                        .await?;
                     validate_files(&metadata)?;
-                    let parent = config.scanner_io_tmp_dir.as_ref().map(std::path::PathBuf::from)
+                    let parent = config
+                        .scanner_io_tmp_dir
+                        .as_ref()
+                        .map(std::path::PathBuf::from)
                         .unwrap_or_else(|| std::env::temp_dir().join("fluss"));
                     std::fs::create_dir_all(&parent)?;
-                    let directory = tempfile::Builder::new().prefix("kv-snapshot-").tempdir_in(parent)?;
+                    let directory = tempfile::Builder::new()
+                        .prefix("kv-snapshot-")
+                        .tempdir_in(parent)?;
                     let mut credentials = tokens.subscribe();
                     tokens.start();
                     for file in &metadata.snapshot_files {
-                        if tx.is_closed() { return Err(snapshot_error("Snapshot creation cancelled")); }
-                        let props = tokio::select! {
-                            _ = tx.closed() => return Err(snapshot_error("Snapshot creation cancelled")),
-                            result = credentials.wait_for(|value| value.is_some()) => result
-                                .map_err(|e| snapshot_error(format!("Snapshot credentials unavailable: {e}")))?
-                                .clone().unwrap(),
-                        };
-                        RemoteLogDownloader::download_file(
-                            &file.remote_path, &file.remote_path,
-                            &directory.path().join(&file.local_file_name), &props,
+                        if tx.is_closed() {
+                            return Err(snapshot_error("Snapshot creation cancelled"));
+                        }
+                        download_snapshot_file(
+                            file,
+                            directory.path(),
+                            &mut credentials,
+                            &download_slots,
+                            &mut tx,
                             config.scanner_remote_log_read_concurrency.max(1),
-                        ).await?;
+                        )
+                        .await?;
                         lease.check()?;
                     }
-                    if tx.is_closed() { return Err(snapshot_error("Snapshot creation cancelled")); }
-                    let (local, schema_ids) = tokio::task::spawn_blocking(move || {
-                        open_local(directory, value_offset)
-                    }).await.map_err(|e| snapshot_error(format!("Snapshot open task failed: {e}")))??;
+                    if tx.is_closed() {
+                        return Err(snapshot_error("Snapshot creation cancelled"));
+                    }
+                    let (local, schema_ids) =
+                        tokio::task::spawn_blocking(move || open_local(directory, value_offset))
+                            .await
+                            .map_err(|e| {
+                                snapshot_error(format!("Snapshot open task failed: {e}"))
+                            })??;
                     let target_id = i16::try_from(table_info.get_schema_id())
                         .map_err(|e| snapshot_error(format!("Invalid target schema ID: {e}")))?;
                     let decoders = build_kv_decoders(
-                        &schema_getter, table_info.get_schema(), target_id,
-                        table_info.table_config.get_kv_format()?, &schema_ids,
-                    ).await?;
-                    if admin.get_table_info(&table_info.table_path).await?.table_id != bucket.table_id() {
-                        return Err(snapshot_error("Table was replaced while resolving snapshot schemas"));
+                        &schema_getter,
+                        table_info.get_schema(),
+                        target_id,
+                        table_info.table_config.get_kv_format()?,
+                        &schema_ids,
+                    )
+                    .await?;
+                    if admin.get_table_info(&table_info.table_path).await?.table_id
+                        != bucket.table_id()
+                    {
+                        return Err(snapshot_error(
+                            "Table was replaced while resolving snapshot schemas",
+                        ));
                     }
                     lease.check()?;
                     Ok(KvSnapshotReader {
-                        bucket, snapshot_id, log_offset: metadata.log_offset,
-                        state: Some(ReadState { local, table_info, decoders, value_offset, last_key: None }),
+                        bucket,
+                        snapshot_id,
+                        log_offset: metadata.log_offset,
+                        state: Some(ReadState {
+                            local,
+                            table_info,
+                            decoders,
+                            value_offset,
+                            last_key: None,
+                        }),
                     })
-                }.await;
+                }
+                .await;
                 let released = lease.release().await;
                 // Report the original read/download failure if cleanup also fails.
                 match result {
-                    Ok(reader) => { released?; Ok(reader) },
+                    Ok(reader) => {
+                        released?;
+                        Ok(reader)
+                    }
                     Err(error) => {
                         if let Err(cleanup_error) = released {
-                            log::warn!("Failed to release KV snapshot download lease: {cleanup_error}");
+                            log::warn!(
+                                "Failed to release KV snapshot download lease: {cleanup_error}"
+                            );
                         }
                         Err(error)
                     }
                 }
-            }.await;
+            }
+            .await;
             let _ = tx.send(result);
         });
         rx.await
@@ -285,6 +354,47 @@ impl ReadState {
     }
 }
 
+async fn download_snapshot_file(
+    file: &RemotePathAndLocalFile,
+    directory: &Path,
+    credentials: &mut CredentialsReceiver,
+    slots: &Semaphore,
+    caller: &mut oneshot::Sender<Result<KvSnapshotReader>>,
+    read_concurrency: usize,
+) -> Result<()> {
+    // Initial token acquisition must not hold a connection-wide download slot.
+    tokio::select! {
+        biased;
+        _ = caller.closed() => return Err(snapshot_error("Snapshot creation cancelled")),
+        result = credentials.wait_for(|value| value.is_some()) => {
+            drop(result.map_err(|e| snapshot_error(format!("Snapshot credentials unavailable: {e}")))?);
+        }
+    }
+    let _permit = tokio::select! {
+        biased;
+        _ = caller.closed() => return Err(snapshot_error("Snapshot creation cancelled")),
+        permit = slots.acquire() => permit
+            .map_err(|e| snapshot_error(format!("Snapshot download limiter closed: {e}")))?,
+    };
+    // Read credentials after waiting for a slot so queued downloads see refreshed tokens.
+    let props = tokio::select! {
+        biased;
+        _ = caller.closed() => return Err(snapshot_error("Snapshot creation cancelled")),
+        result = credentials.wait_for(|value| value.is_some()) => result
+            .map_err(|e| snapshot_error(format!("Snapshot credentials unavailable: {e}")))?
+            .clone().unwrap(),
+    };
+    RemoteLogDownloader::download_file(
+        &file.remote_path,
+        &file.remote_path,
+        &directory.join(&file.local_file_name),
+        &props,
+        read_concurrency,
+    )
+    .await?;
+    Ok(())
+}
+
 fn open_local(directory: TempDir, value_offset: usize) -> Result<(LocalSnapshot, Vec<i16>)> {
     let db = DB::open_for_read_only(&Options::default(), directory.path(), true)
         .map_err(|e| snapshot_error(format!("Cannot open persisted KV snapshot: {e}")))?;
@@ -358,6 +468,25 @@ fn validate_files(metadata: &KvSnapshotMetadata) -> Result<()> {
     Ok(())
 }
 
+fn validate_lease_duration(duration: Duration) -> Result<i64> {
+    let invalid = || Error::IllegalArgument {
+        message: "Snapshot lease duration must be at least 1 ms and fit its expiration timestamp"
+            .into(),
+    };
+    let millis = i64::try_from(duration.as_millis()).map_err(|_| invalid())?;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| snapshot_error(format!("Cannot determine lease expiration time: {e}")))?
+        .as_millis();
+    if millis == 0
+        || now + millis as u128 > i64::MAX as u128
+        || tokio::time::Instant::now().checked_add(duration).is_none()
+    {
+        return Err(invalid());
+    }
+    Ok(millis)
+}
+
 struct DownloadLease {
     stop: oneshot::Sender<()>,
     task: JoinHandle<Result<()>>,
@@ -369,6 +498,7 @@ impl DownloadLease {
         admin: Arc<FlussAdmin>,
         bucket: &TableBucket,
         snapshot_id: SnapshotId,
+        lease_duration_ms: i64,
     ) -> Result<Self> {
         let id = format!("rust-kv-snapshot-{}", uuid::Uuid::new_v4());
         let snapshots = vec![KvSnapshotLeaseForTable {
@@ -379,9 +509,10 @@ impl DownloadLease {
                 snapshot_id,
             }],
         }];
-        let mut valid_until = tokio::time::Instant::now() + Duration::from_secs(60);
+        let lease_duration = Duration::from_millis(lease_duration_ms as u64);
+        let valid_until = tokio::time::Instant::now() + lease_duration;
         let acquired = admin
-            .create_kv_snapshot_lease(&id, 60_000, snapshots.clone())
+            .create_kv_snapshot_lease(&id, lease_duration_ms, snapshots.clone())
             .await;
         match acquired {
             Ok(result) if result.unavailable_snapshots.is_empty() => {}
@@ -393,37 +524,16 @@ impl DownloadLease {
                 ));
             }
         }
-        let (stop, mut stopped) = oneshot::channel();
+        let (stop, stopped) = oneshot::channel();
         let (failed, failure) = watch::channel((valid_until, None));
         let task = tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    _ = &mut stopped => break,
-                    _ = tokio::time::sleep(Duration::from_secs(20)) => {}
-                }
-                let renewed_until = tokio::time::Instant::now() + Duration::from_secs(60);
-                let renewed = admin
-                    .create_kv_snapshot_lease(&id, 60_000, snapshots.clone())
-                    .await;
-                let error = if tokio::time::Instant::now() >= valid_until {
-                    Some("KV snapshot lease renewal missed its expiration deadline".to_string())
-                } else {
-                    match renewed {
-                        Ok(result) if result.unavailable_snapshots.is_empty() => None,
-                        Ok(_) => {
-                            Some("KV snapshot became unavailable during lease renewal".to_string())
-                        }
-                        Err(error) => Some(format!("KV snapshot lease renewal failed: {error}")),
-                    }
-                };
-                if let Some(error) = error {
-                    let _ = failed.send((valid_until, Some(error)));
-                    let _ = stopped.await;
-                    break;
-                }
-                valid_until = renewed_until;
-                let _ = failed.send((valid_until, None));
-            }
+            renew_download_lease(lease_duration, valid_until, stopped, failed, || async {
+                admin
+                    .create_kv_snapshot_lease(&id, lease_duration_ms, snapshots.clone())
+                    .await
+                    .map(|result| result.unavailable_snapshots.is_empty())
+            })
+            .await;
             // Complete an in-flight acquire/renew before releasing, so a late RPC cannot
             // recreate a lease that cancellation already released.
             admin.drop_kv_snapshot_lease(&id).await
@@ -454,6 +564,61 @@ impl DownloadLease {
     }
 }
 
+async fn renew_download_lease<F, Fut>(
+    duration: Duration,
+    mut valid_until: tokio::time::Instant,
+    mut stopped: oneshot::Receiver<()>,
+    status: watch::Sender<(tokio::time::Instant, Option<String>)>,
+    mut renew: F,
+) where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<bool>>,
+{
+    let interval = duration / 3;
+    let min_backoff = Duration::from_secs(1).min(interval);
+    let max_backoff = Duration::from_secs(10).min(interval);
+    let mut backoff = min_backoff;
+    let mut next_attempt = tokio::time::Instant::now() + interval;
+    let error = loop {
+        tokio::select! {
+            biased;
+            _ = &mut stopped => return,
+            _ = tokio::time::sleep_until(next_attempt.min(valid_until)) => {}
+        }
+        let started = tokio::time::Instant::now();
+        if started >= valid_until {
+            break "KV snapshot download lease expired".to_string();
+        }
+        let renewed = renew().await;
+        if tokio::time::Instant::now() >= valid_until {
+            break "KV snapshot lease renewal missed its expiration deadline".to_string();
+        }
+        let delay = match renewed {
+            Ok(true) => {
+                // Response latency must not extend the locally confirmed protection period.
+                valid_until = started + duration;
+                let _ = status.send((valid_until, None));
+                backoff = min_backoff;
+                interval
+            }
+            Ok(false) => {
+                break "KV snapshot became unavailable during lease renewal".to_string();
+            }
+            Err(error) if error.is_retriable() => {
+                log::warn!("KV snapshot lease renewal failed; retrying in {backoff:?}: {error}");
+                let delay = backoff;
+                backoff = (backoff * 2).min(max_backoff);
+                delay
+            }
+            Err(error) => break format!("KV snapshot lease renewal failed: {error}"),
+        };
+        next_attempt = tokio::time::Instant::now() + delay;
+    };
+    let _ = status.send((valid_until, Some(error)));
+    // The download owner stops file writes before allowing the lease to be released.
+    let _ = stopped.await;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -461,6 +626,262 @@ mod tests {
     use crate::row::binary::BinaryWriter;
     use crate::row::compacted::CompactedRowWriter;
     use crate::test_utils::build_table_info_with_columns;
+
+    fn transient_lease_error() -> Error {
+        crate::rpc::RpcError::ConnectionError("temporary disconnect".into()).into()
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn snapshot_lease_retries_without_extending_unconfirmed_deadline() {
+        let duration = DEFAULT_SNAPSHOT_LEASE_DURATION;
+        let initial_deadline = tokio::time::Instant::now() + duration;
+        let (stop, stopped) = oneshot::channel();
+        let (status, observed) = watch::channel((initial_deadline, None));
+        let calls = std::cell::Cell::new(0);
+        let mut task = Box::pin(renew_download_lease(
+            duration,
+            initial_deadline,
+            stopped,
+            status,
+            || {
+                calls.set(calls.get() + 1);
+                std::future::ready(if calls.get() <= 2 {
+                    Err(transient_lease_error())
+                } else {
+                    Ok(true)
+                })
+            },
+        ));
+        assert!(futures::poll!(task.as_mut()).is_pending());
+        for (delay, expected_calls) in [(100, 1), (1, 2)] {
+            tokio::time::advance(Duration::from_secs(delay)).await;
+            assert!(futures::poll!(task.as_mut()).is_pending());
+            assert_eq!(calls.get(), expected_calls);
+            assert_eq!(*observed.borrow(), (initial_deadline, None));
+        }
+        tokio::time::advance(Duration::from_secs(2)).await;
+        assert!(futures::poll!(task.as_mut()).is_pending());
+        assert_eq!(calls.get(), 3);
+        assert_eq!(
+            *observed.borrow(),
+            (tokio::time::Instant::now() + duration, None)
+        );
+        tokio::time::advance(Duration::from_secs(100)).await;
+        assert!(futures::poll!(task.as_mut()).is_pending());
+        assert_eq!(calls.get(), 4);
+        stop.send(()).unwrap();
+        task.await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn snapshot_lease_stops_retrying_at_expiration() {
+        let duration = Duration::from_secs(3);
+        let deadline = tokio::time::Instant::now() + duration;
+        let (stop, stopped) = oneshot::channel();
+        let (status, observed) = watch::channel((deadline, None));
+        let calls = std::cell::Cell::new(0);
+        let mut task = Box::pin(renew_download_lease(
+            duration,
+            deadline,
+            stopped,
+            status,
+            || {
+                calls.set(calls.get() + 1);
+                std::future::ready(Err(transient_lease_error()))
+            },
+        ));
+        assert!(futures::poll!(task.as_mut()).is_pending());
+        for _ in 0..3 {
+            tokio::time::advance(Duration::from_secs(1)).await;
+            assert!(futures::poll!(task.as_mut()).is_pending());
+        }
+        assert_eq!(calls.get(), 2);
+        assert_eq!(observed.borrow().0, deadline);
+        assert!(observed.borrow().1.as_ref().unwrap().contains("expired"));
+        stop.send(()).unwrap();
+        task.await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn snapshot_lease_does_not_retry_unavailable_or_permanent_errors() {
+        for result in [
+            Ok(false),
+            Err(Error::IllegalArgument {
+                message: "invalid lease".into(),
+            }),
+        ] {
+            let duration = Duration::from_secs(30);
+            let deadline = tokio::time::Instant::now() + duration;
+            let (stop, stopped) = oneshot::channel();
+            let (status, observed) = watch::channel((deadline, None));
+            let mut result = Some(result);
+            let mut task = Box::pin(renew_download_lease(
+                duration,
+                deadline,
+                stopped,
+                status,
+                || std::future::ready(result.take().expect("must not retry")),
+            ));
+            assert!(futures::poll!(task.as_mut()).is_pending());
+            tokio::time::advance(Duration::from_secs(10)).await;
+            assert!(futures::poll!(task.as_mut()).is_pending());
+            assert!(observed.borrow().1.is_some());
+            tokio::time::advance(duration).await;
+            assert!(futures::poll!(task.as_mut()).is_pending());
+            stop.send(()).unwrap();
+            task.await;
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn snapshot_lease_finishes_in_flight_renewal_before_stopping() {
+        for expires in [false, true] {
+            let duration = Duration::from_secs(3);
+            let deadline = tokio::time::Instant::now() + duration;
+            let (stop, stopped) = oneshot::channel();
+            let (status, observed) = watch::channel((deadline, None));
+            let (reply, response) = oneshot::channel();
+            let mut response = Some(response);
+            let mut task = Box::pin(renew_download_lease(
+                duration,
+                deadline,
+                stopped,
+                status,
+                || {
+                    let response = response.take().expect("must not start another renewal");
+                    async move { response.await.unwrap() }
+                },
+            ));
+            assert!(futures::poll!(task.as_mut()).is_pending());
+            tokio::time::advance(Duration::from_secs(1)).await;
+            assert!(futures::poll!(task.as_mut()).is_pending());
+            if expires {
+                tokio::time::advance(Duration::from_secs(2)).await;
+            }
+            stop.send(()).unwrap();
+            assert!(futures::poll!(task.as_mut()).is_pending());
+            reply.send(Ok(true)).unwrap();
+            task.await;
+            if expires {
+                assert_eq!(observed.borrow().0, deadline);
+                assert!(observed.borrow().1.as_ref().unwrap().contains("deadline"));
+            } else {
+                assert!(observed.borrow().1.is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn snapshot_lease_duration_rejects_unrepresentable_expiration() {
+        assert_eq!(
+            validate_lease_duration(Duration::from_micros(1_999)).unwrap(),
+            1
+        );
+        for duration in [
+            Duration::ZERO,
+            Duration::from_nanos(999_999),
+            Duration::MAX,
+            Duration::from_millis(i64::MAX as u64),
+        ] {
+            assert!(matches!(
+                validate_lease_duration(duration),
+                Err(Error::IllegalArgument { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn snapshot_downloads_share_slots_and_cancel_while_queued() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source");
+        std::fs::write(&source, b"snapshot-file").unwrap();
+        let file = RemotePathAndLocalFile {
+            remote_path: url::Url::from_file_path(source).unwrap().to_string(),
+            local_file_name: "CURRENT".into(),
+        };
+        let first_path = directory.path().join("first");
+        let second_path = directory.path().join("second");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .max_blocking_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let (release, wait) = std::sync::mpsc::channel();
+            let (started, ready) = oneshot::channel();
+            let blocker = tokio::task::spawn_blocking(move || {
+                started.send(()).unwrap();
+                wait.recv().unwrap();
+            });
+            ready.await.unwrap();
+            let slots = Semaphore::new(1);
+            let (_credentials_tx, mut first_credentials) = watch::channel(Some(HashMap::new()));
+            let mut second_credentials = first_credentials.clone();
+            let (mut first_tx, _first_rx) = oneshot::channel();
+            let (mut second_tx, second_rx) = oneshot::channel();
+            let mut first = Box::pin(download_snapshot_file(
+                &file,
+                &first_path,
+                &mut first_credentials,
+                &slots,
+                &mut first_tx,
+                1,
+            ));
+            assert!(futures::poll!(first.as_mut()).is_pending());
+            let slots_while_downloading = slots.available_permits();
+            let mut second = Box::pin(download_snapshot_file(
+                &file,
+                &second_path,
+                &mut second_credentials,
+                &slots,
+                &mut second_tx,
+                1,
+            ));
+            assert!(futures::poll!(second.as_mut()).is_pending());
+            drop(second_rx);
+            // Release the worker before assertions so a failure cannot hang runtime shutdown.
+            release.send(()).unwrap();
+            blocker.await.unwrap();
+            assert_eq!(slots_while_downloading, 0);
+            assert!(second.await.unwrap_err().to_string().contains("cancelled"));
+            first.await.unwrap();
+            assert!(!second_path.exists());
+            assert_eq!(slots.available_permits(), 1);
+        });
+    }
+
+    #[tokio::test]
+    async fn snapshot_waiting_for_credentials_keeps_download_slot_available() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = RemotePathAndLocalFile {
+            remote_path: url::Url::from_file_path(directory.path().join("source"))
+                .unwrap()
+                .to_string(),
+            local_file_name: "CURRENT".into(),
+        };
+        let slots = Semaphore::new(1);
+        let (_credentials_tx, mut credentials) = watch::channel(None);
+        let (mut caller, receiver) = oneshot::channel();
+        let mut download = Box::pin(download_snapshot_file(
+            &file,
+            directory.path(),
+            &mut credentials,
+            &slots,
+            &mut caller,
+            1,
+        ));
+        assert!(futures::poll!(download.as_mut()).is_pending());
+        assert!(slots.try_acquire().is_ok());
+        drop(receiver);
+        assert!(
+            download
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("cancelled")
+        );
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
+    }
 
     fn reader() -> (KvSnapshotReader, std::path::PathBuf) {
         let directory = tempfile::tempdir().unwrap();
@@ -480,8 +901,7 @@ mod tests {
             db.put(b"key", value).unwrap();
             db.flush().unwrap();
         }
-        let (local, ids) = open_local(directory, 0).unwrap();
-        assert_eq!(ids, vec![1]);
+        let (local, _) = open_local(directory, 0).unwrap();
         let decoder =
             FixedSchemaDecoder::new_no_projection(KvFormat::COMPACTED, info.get_schema()).unwrap();
         (
@@ -543,14 +963,6 @@ mod tests {
             tokio::task::spawn_blocking(|| {}).await.unwrap();
             assert!(!path.exists());
         });
-    }
-
-    #[test]
-    fn snapshot_open_failure_removes_directory() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().to_owned();
-        assert!(open_local(directory, 0).is_err());
-        assert!(!path.exists());
     }
 
     #[test]

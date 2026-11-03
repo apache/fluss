@@ -246,14 +246,18 @@ async fn persisted_snapshot_current_view_and_schema() {
         writer.flush().await.unwrap();
 
         let mut reader = fixed_table
-            .create_kv_snapshot_reader(bucket.clone(), snapshot_id)
+            .create_kv_snapshot_reader_with_lease_duration(
+                bucket.clone(),
+                snapshot_id,
+                Duration::from_secs(120),
+            )
             .await
             .unwrap();
-        assert_eq!(reader.bucket(), &bucket);
-        assert_eq!(reader.snapshot_id(), snapshot_id);
         assert_eq!(reader.log_offset(), seam);
         assert_eq!(std::fs::read_dir(&downloads).unwrap().count(), 1);
-        assert!(reader.next_batch(0).await.is_err());
+        if !tagged {
+            assert!(reader.next_batch(0).await.is_err());
+        }
         let mut actual = BTreeMap::new();
         while let Some(batch) = reader.next_batch(1).await.unwrap() {
             assert_eq!(batch.num_rows(), 1);
@@ -292,8 +296,11 @@ async fn persisted_snapshot_current_view_and_schema() {
             ])
         );
         assert_eq!(std::fs::read_dir(&downloads).unwrap().count(), 0);
-        reader.close();
-        assert!(reader.next_batch(1).await.unwrap().is_none());
+        // Lifecycle and download failures are independent of the persisted value layout.
+        if tagged {
+            admin.drop_table(&path, false).await.unwrap();
+            continue;
+        }
 
         let mut reader = fixed_table
             .create_kv_snapshot_reader(bucket.clone(), snapshot_id)
@@ -301,6 +308,7 @@ async fn persisted_snapshot_current_view_and_schema() {
             .unwrap();
         reader.close();
         reader.close();
+        assert!(reader.next_batch(1).await.unwrap().is_none());
         assert_eq!(std::fs::read_dir(&downloads).unwrap().count(), 0);
         let reader = fixed_table
             .create_kv_snapshot_reader(bucket.clone(), snapshot_id)

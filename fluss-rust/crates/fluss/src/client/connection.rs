@@ -40,6 +40,8 @@ pub struct FlussConnection {
     lookup_client: RwLock<Option<Arc<LookupClient>>>,
     /// Per table, the bucket-count epoch and the rescaled partitions `get_table` cached.
     rescaled_partitions: Mutex<HashMap<TableId, (i64, Vec<PartitionId>)>>,
+    #[cfg(feature = "kv-snapshot")]
+    snapshot_download_slots: Arc<tokio::sync::Semaphore>,
 }
 
 impl FlussConnection {
@@ -76,6 +78,10 @@ impl FlussConnection {
             admin_client: RwLock::new(None),
             lookup_client: Default::default(),
             rescaled_partitions: Default::default(),
+            #[cfg(feature = "kv-snapshot")]
+            snapshot_download_slots: Arc::new(tokio::sync::Semaphore::new(
+                arg.remote_file_download_thread_num,
+            )),
         })
     }
 
@@ -102,6 +108,11 @@ impl FlussConnection {
 
     pub fn config(&self) -> &Config {
         &self.args
+    }
+
+    #[cfg(feature = "kv-snapshot")]
+    pub(super) fn snapshot_download_slots(&self) -> Arc<tokio::sync::Semaphore> {
+        Arc::clone(&self.snapshot_download_slots)
     }
 
     pub fn get_admin(&self) -> Result<Arc<FlussAdmin>> {
