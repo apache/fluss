@@ -1807,7 +1807,11 @@ public class ConfigOptions {
             key("client.lookup.queue-size")
                     .intType()
                     .defaultValue(25600)
-                    .withDescription("The maximum number of pending lookup operations.");
+                    .withDescription(
+                            "The maximum number of lookup operations in the initial input queue. "
+                                    + "Adding a lookup blocks while this queue is full. Lookups waiting "
+                                    + "for a bucket's leader or for a retry are outside this limit, so the "
+                                    + "total number of pending lookups can grow beyond it.");
 
     public static final ConfigOption<Integer> CLIENT_LOOKUP_MAX_BATCH_SIZE =
             key("client.lookup.max-batch-size")

@@ -35,11 +35,12 @@ new leader is elected than before, unless the client's metadata gets the leader 
 `client.lookup.retry-backoff-max` caps only the backoff: batching (`client.lookup.batch-timeout`),
 queueing and the metadata request that finds the leader can delay the lookups further.
 
-Lookups waiting for a leader are held outside the lookup queue, and the client no longer blocks on
-metadata requests for each of them, so a full `client.lookup.queue-size` no longer slows down
-applications that keep issuing lookups for a bucket without a leader. Applications that issue
-asynchronous lookups should bound their outstanding lookups, for example with the capacity of a
-Flink asynchronous lookup join.
+`client.lookup.queue-size` limits only the initial input queue. Lookups waiting for a leader or for
+a retry are outside this limit, so the total number of pending lookups can grow without bound.
+Adding a lookup may still block while the input queue is full, but the client no longer blocks on
+metadata requests for each lookup of a bucket without a leader, so that queue now fills up less
+often while a leader is missing. Applications that issue asynchronous lookups should bound their
+outstanding lookups, for example with the capacity of a Flink asynchronous lookup join.
 
 The first retry after a leader change now waits about 100ms. To retain the previous behavior,
 set `client.lookup.retry-backoff: 0`.

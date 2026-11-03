@@ -733,6 +733,15 @@ public class LookupSenderTest {
                         reEnqueues.incrementAndGet();
                         super.reEnqueue(lookup);
                     }
+
+                    @Override
+                    boolean tryReEnqueue(AbstractLookupQuery<?> lookup) {
+                        boolean reEnqueued = super.tryReEnqueue(lookup);
+                        if (reEnqueued) {
+                            reEnqueues.incrementAndGet();
+                        }
+                        return reEnqueued;
+                    }
                 };
         createLookupSender(countingQueue, new ExponentialBackoff(60_000, 2, 60_000, 0));
         metadataUpdater.failLeaderLookups(TABLE_BUCKET, Integer.MAX_VALUE, null);
