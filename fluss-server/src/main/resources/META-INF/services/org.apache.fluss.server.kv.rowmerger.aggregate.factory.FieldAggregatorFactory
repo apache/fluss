@@ -17,6 +17,7 @@
 #
 
 org.apache.fluss.server.kv.rowmerger.aggregate.factory.FieldSumAggFactory
+org.apache.fluss.server.kv.rowmerger.aggregate.factory.FieldCountAggFactory
 org.apache.fluss.server.kv.rowmerger.aggregate.factory.FieldMaxAggFactory
 org.apache.fluss.server.kv.rowmerger.aggregate.factory.FieldMinAggFactory
 org.apache.fluss.server.kv.rowmerger.aggregate.factory.FieldLastValueAggFactory
