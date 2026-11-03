@@ -2895,7 +2895,9 @@ final class SenderTest {
                 reties,
                 metadataUpdater,
                 idempotenceManager,
-                writerMetricGroup);
+                writerMetricGroup,
+                new DynamicPartitionCreator(
+                        metadataUpdater, null, false, t -> {}, (path, tableId, rejection) -> {}));
     }
 
     private IdempotenceManager createIdempotenceManager(boolean idempotenceEnabled) {
