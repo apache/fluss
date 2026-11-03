@@ -30,9 +30,10 @@ delay starts at `client.lookup.retry-backoff` (default `100ms`) and doubles up t
 `client.lookup.retry-backoff-max` (default `1s`). This stops clients from flooding TabletServers
 and logs while a bucket has no ready leader, for example during a rolling restart. Lookups for a
 bucket that has no leader in the client's metadata back off the same way, per bucket and without
-counting toward `client.lookup.max-retries`. As a result, these lookups may resume up to
-`client.lookup.retry-backoff-max` after a new leader is elected, unless the client's metadata gets
-the leader earlier.
+counting toward `client.lookup.max-retries`. As a result, these lookups may resume later after a
+new leader is elected than before, unless the client's metadata gets the leader earlier.
+`client.lookup.retry-backoff-max` caps only the backoff: batching (`client.lookup.batch-timeout`),
+queueing and the metadata request that finds the leader can delay the lookups further.
 
 The first retry after a leader change now waits about 100ms. To retain the previous behavior,
 set `client.lookup.retry-backoff: 0`.

@@ -52,6 +52,8 @@ class LookupQueue {
     private final long batchTimeoutNanos;
     // Retry times are checked against this clock. The sender takes it from here to set them.
     private final Clock clock;
+    // The thread that drains the queue, i.e. the sender thread.
+    private volatile Thread drainingThread;
 
     LookupQueue(Configuration conf) {
         this(conf, SystemClock.getInstance());
@@ -74,6 +76,15 @@ class LookupQueue {
                     "Can not append lookup operation since the LookupQueue is closed.");
         }
 
+        if (Thread.currentThread() == drainingThread) {
+            // A completion callback on the sender thread, e.g. a lookuper rerouting a lookup of a
+            // dropped partition, must not wait for space in the queue, as only this thread drains
+            // it.
+            if (!lookupQueue.offer(lookup)) {
+                reEnqueuedLookupQueue.add(lookup);
+            }
+            return;
+        }
         try {
             lookupQueue.put(lookup);
         } catch (InterruptedException e) {
@@ -105,6 +116,7 @@ class LookupQueue {
 
     /** Drain a batch of {@link LookupQuery}s from the lookup queue. */
     List<AbstractLookupQuery<?>> drain() throws Exception {
+        drainingThread = Thread.currentThread();
         final long startNanos = System.nanoTime();
         List<AbstractLookupQuery<?>> lookupOperations = new ArrayList<>(maxBatchSize);
         int count = 0;
@@ -156,6 +168,7 @@ class LookupQueue {
 
     /** Drain all the {@link LookupQuery}s from the lookup queue. */
     List<AbstractLookupQuery<?>> drainAll() {
+        drainingThread = Thread.currentThread();
         List<AbstractLookupQuery<?>> lookupOperations = new ArrayList<>(lookupQueue.size());
         lookupQueue.drainTo(lookupOperations);
         reEnqueuedLookupQueue.drainTo(lookupOperations);

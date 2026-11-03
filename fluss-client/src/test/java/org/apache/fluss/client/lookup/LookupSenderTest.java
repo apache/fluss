@@ -67,7 +67,10 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
@@ -748,9 +751,10 @@ public class LookupSenderTest {
                 Duration.ofSeconds(10),
                 "lookups to wait for the leader");
 
+        // Started before the drains are counted, so the window covers every counted drain.
+        long startNanos = System.nanoTime();
         int drainsBefore = drains.get();
         int reEnqueuesBefore = reEnqueues.get();
-        long startNanos = System.nanoTime();
         waitUntil(
                 () -> drains.get() >= drainsBefore + 5,
                 Duration.ofSeconds(10),
@@ -798,11 +802,167 @@ public class LookupSenderTest {
         LookupQuery query1 = new LookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("key1"));
         LookupQuery query2 = new LookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("key2"));
         lookupSender.sendLookups(Arrays.asList(query1, query2));
-
         assertThat(metadataUpdater.failedLeaderLookups()).isEqualTo(2);
-        assertThat(lookupQueue.getReEnqueuedLookupQueue()).isEmpty();
         assertThat(lookupSender.getNextLeaderLookupTimeMs(TABLE_BUCKET)).isNull();
-        for (LookupQuery query : Arrays.asList(waitingQuery, query1, query2)) {
+        assertFailedWithPartitionNotExist(Arrays.asList(query1, query2));
+        // The waiting lookup goes back to the queue and fails in the next batch.
+        assertThat(waitingQuery.future()).isNotDone();
+        assertThat(lookupQueue.getReEnqueuedLookupQueue()).containsExactly(waitingQuery);
+
+        lookupSender.runOnce(false);
+        assertThat(metadataUpdater.failedLeaderLookups()).isEqualTo(3);
+        assertFailedWithPartitionNotExist(Collections.singletonList(waitingQuery));
+        assertThat(lookupQueue.hasUnDrained()).isFalse();
+    }
+
+    @Test
+    void testDroppedPartitionDoesNotBlockSenderOnReroutedLookups() throws Exception {
+        teardown();
+        ManualClock clock = new ManualClock(1_000);
+        AtomicBoolean expireBackoffDuringDrain = new AtomicBoolean();
+        LookupQueue queue =
+                new LookupQueue(lookupQueueConf(), clock) {
+                    @Override
+                    List<AbstractLookupQuery<?>> drain() throws Exception {
+                        List<AbstractLookupQuery<?>> drained = super.drain();
+                        if (expireBackoffDuringDrain.compareAndSet(true, false)) {
+                            clock.advanceTime(100, TimeUnit.MILLISECONDS);
+                        }
+                        return drained;
+                    }
+                };
+        createLookupSender(queue, new ExponentialBackoff(100, 2, 10_000, 0));
+        gateway.setLookupHandler(this::createPartitionNameEchoResponse);
+
+        // More lookups wait for the leader than the queue holds. Like a primary key lookuper, each
+        // one that fails is rerouted by a callback that enqueues a replacement lookup.
+        metadataUpdater.failLeaderLookups(TABLE_BUCKET, Integer.MAX_VALUE, null);
+        List<LookupQuery> waitingQueries = new ArrayList<>();
+        List<LookupQuery> replacements = Collections.synchronizedList(new ArrayList<>());
+        for (int i = 0; i <= lookupQueue.getLookupQueue().remainingCapacity(); i++) {
+            waitingQueries.add(
+                    reroutedLookup(bytes("waiting" + i), bytes("rerouted" + i), replacements));
+        }
+        lookupSender.sendLookups(new ArrayList<>(waitingQueries));
+        assertThat(lookupSender.getLookupsWaitingForLeader(TABLE_BUCKET))
+                .containsExactlyElementsOf(waitingQueries);
+
+        // The partition is dropped, and the bucket's backoff expires while a new lookup for it is
+        // drained, so that lookup finds out while the others still wait.
+        metadataUpdater.failLeaderLookups(
+                TABLE_BUCKET,
+                Integer.MAX_VALUE,
+                new PartitionNotExistException("partition dropped"));
+        LookupQuery lateQuery = reroutedLookup(bytes("late"), bytes("rerouted-late"), replacements);
+        lookupQueue.appendLookup(lateQuery);
+        expireBackoffDuringDrain.set(true);
+
+        // Run the passes on another thread, as the sender thread does, so that a pass blocked on
+        // the full queue fails the test instead of blocking it.
+        ExecutorService senderExecutor = Executors.newSingleThreadExecutor();
+        try {
+            runOnceOn(senderExecutor);
+            assertFailedWithPartitionNotExist(Collections.singletonList(lateQuery));
+            // The waiting lookups fail in later batches instead of all at once.
+            for (LookupQuery waitingQuery : waitingQueries) {
+                assertThat(waitingQuery.future()).isNotDone();
+            }
+            assertThat(lookupQueue.getReEnqueuedLookupQueue())
+                    .containsExactlyElementsOf(waitingQueries);
+
+            // Their replacements don't fit in the queue, but the sender doesn't wait for space.
+            runOnceOn(senderExecutor);
+            assertFailedWithPartitionNotExist(waitingQueries);
+
+            runOnceOn(senderExecutor);
+            assertThat(replacements).hasSize(waitingQueries.size() + 1);
+            for (LookupQuery replacement : replacements) {
+                assertThat(replacement.future()).isDone();
+            }
+            assertThat(lookupQueue.hasUnDrained()).isFalse();
+        } finally {
+            senderExecutor.shutdownNow();
+        }
+    }
+
+    @Test
+    void testDroppedPartitionKeepsWaitingLookupsWhenQueueClosesConcurrently() throws Exception {
+        teardown();
+        ManualClock clock = new ManualClock(1_000);
+        AtomicBoolean closeOnReEnqueue = new AtomicBoolean();
+        LookupQueue queue =
+                new LookupQueue(lookupQueueConf(), clock) {
+                    @Override
+                    void reEnqueue(AbstractLookupQuery<?> lookup) {
+                        super.reEnqueue(lookup);
+                        // The client is closed while the waiting lookups go back to the queue.
+                        if (closeOnReEnqueue.get()) {
+                            close();
+                        }
+                    }
+                };
+        createLookupSender(queue, new ExponentialBackoff(100, 2, 10_000, 0));
+        metadataUpdater.failLeaderLookups(TABLE_BUCKET, Integer.MAX_VALUE, null);
+        List<LookupQuery> waitingQueries =
+                Arrays.asList(
+                        new LookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("waiting1")),
+                        new LookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("waiting2")));
+        lookupSender.sendLookups(new ArrayList<>(waitingQueries));
+
+        // After the backoff, a new lookup finds that the partition was dropped, and the queue
+        // closes after the first waiting lookup is moved back to it.
+        clock.advanceTime(100, TimeUnit.MILLISECONDS);
+        metadataUpdater.failLeaderLookups(
+                TABLE_BUCKET,
+                Integer.MAX_VALUE,
+                new PartitionNotExistException("partition dropped"));
+        closeOnReEnqueue.set(true);
+        LookupQuery query = new LookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("key"));
+        assertThatThrownBy(() -> lookupSender.sendLookups(Collections.singletonList(query)))
+                .isInstanceOf(IllegalStateException.class);
+        assertFailedWithPartitionNotExist(Collections.singletonList(query));
+
+        // The waiting lookup that didn't make it back to the queue still completes on close.
+        lookupSender.initiateClose();
+        lookupSender.run();
+        assertFailedWithPartitionNotExist(waitingQueries);
+    }
+
+    /**
+     * Creates a lookup for {@link #TABLE_BUCKET} that, when it fails, enqueues a replacement lookup
+     * for {@link #OTHER_TABLE_BUCKET}.
+     */
+    private LookupQuery reroutedLookup(
+            byte[] key, byte[] replacementKey, List<LookupQuery> replacements) {
+        LookupQuery lookup = new LookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, key);
+        lookup.future()
+                .whenComplete(
+                        (result, error) -> {
+                            if (error != null) {
+                                LookupQuery replacement =
+                                        new LookupQuery(
+                                                DATA1_TABLE_PATH_PK,
+                                                OTHER_TABLE_BUCKET,
+                                                replacementKey);
+                                replacements.add(replacement);
+                                lookupQueue.appendLookup(replacement);
+                            }
+                        });
+        return lookup;
+    }
+
+    private void runOnceOn(ExecutorService senderExecutor) throws Exception {
+        senderExecutor
+                .submit(
+                        () -> {
+                            lookupSender.runOnce(false);
+                            return null;
+                        })
+                .get(10, TimeUnit.SECONDS);
+    }
+
+    private static void assertFailedWithPartitionNotExist(List<LookupQuery> queries) {
+        for (LookupQuery query : queries) {
             assertThatThrownBy(() -> query.future().get(5, TimeUnit.SECONDS))
                     .isInstanceOf(ExecutionException.class)
                     .hasRootCauseInstanceOf(PartitionNotExistException.class);

@@ -141,6 +141,22 @@ class LookupQueueTest {
         assertThat(queue.hasUnDrained()).isFalse();
     }
 
+    @Test
+    void testAppendOnDrainingThreadDoesNotWaitForSpace() throws Exception {
+        Configuration conf = new Configuration();
+        conf.set(CLIENT_LOOKUP_QUEUE_SIZE, 2);
+        conf.setString(CLIENT_LOOKUP_BATCH_TIMEOUT.key(), "1ms");
+        LookupQueue queue = new LookupQueue(conf);
+
+        // Draining makes this thread the draining thread, like the sender thread. Its lookups,
+        // e.g. from completion callbacks, don't wait for space, as only it drains the queue.
+        assertThat(queue.drain()).isEmpty();
+        appendLookups(queue, 3);
+        assertThat(queue.getLookupQueue()).hasSize(2);
+        assertThat(queue.getReEnqueuedLookupQueue()).hasSize(1);
+        assertThat(queue.drainAll()).hasSize(3);
+    }
+
     private static void appendLookups(LookupQueue queue, int count) {
         for (int i = 0; i < count; i++) {
             queue.appendLookup(

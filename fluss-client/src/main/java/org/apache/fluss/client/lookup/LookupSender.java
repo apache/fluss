@@ -251,7 +251,17 @@ class LookupSender implements Runnable {
                     // Metadata refresh confirmed that the queued lookups carry a deleted partition
                     // id. Complete them instead of repeatedly enqueueing the stale TableBucket; a
                     // primary key lookuper can then reroute by partition name.
-                    failLookupsWithoutLeader(tb, bucketLookups, leaderLookupError);
+                    failLookups(bucketLookups, leaderLookupError);
+                    // Completing a lookup runs its callbacks on this thread, e.g. that reroute.
+                    // So the bucket's waiting lookups, however many, go back to the queue and fail
+                    // in later batches like these, instead of all at once here. The bucket is
+                    // forgotten only after that, so that its lookups are still sent on close if the
+                    // queue gets closed concurrently.
+                    LeaderlessBucket droppedBucket = leaderlessBuckets.get(tb);
+                    if (droppedBucket != null) {
+                        reEnqueueWaitingLookups(droppedBucket);
+                        leaderlessBuckets.remove(tb);
+                    }
                 } else if (closing) {
                     LOG.warn(
                             "Failed to find the leader for table bucket {} of table {} while "
@@ -260,7 +270,7 @@ class LookupSender implements Runnable {
                             bucketLookups.get(0).tablePath(),
                             bucketLookups.size(),
                             leaderLookupError.toString());
-                    failLookupsWithoutLeader(tb, bucketLookups, leaderLookupError);
+                    failLookups(bucketLookups, leaderLookupError);
                 } else {
                     backOffLeaderlessBucket(tb, bucketLookups, leaderLookupError);
                 }
@@ -299,17 +309,27 @@ class LookupSender implements Runnable {
             LeaderlessBucket leaderlessBucket = entry.getValue();
             boolean leaderCached = cluster.leaderFor(entry.getKey()) != null;
             if (leaderCached || nowMs >= leaderlessBucket.nextLeaderLookupTimeMs) {
-                // Removed one at a time, so that a lookup is not lost if the queue gets closed
-                // concurrently. The remaining ones are then sent when the sender closes.
-                AbstractLookupQuery<?> lookup;
-                while ((lookup = leaderlessBucket.waitingLookups.peek()) != null) {
-                    reEnqueueLookup(lookup);
-                    leaderlessBucket.waitingLookups.poll();
-                }
+                reEnqueueWaitingLookups(leaderlessBucket);
             }
             if (leaderCached) {
                 iterator.remove();
             }
+        }
+    }
+
+    private static void failLookups(List<AbstractLookupQuery<?>> lookups, Exception exception) {
+        for (AbstractLookupQuery<?> lookup : lookups) {
+            lookup.future().completeExceptionally(exception);
+        }
+    }
+
+    private void reEnqueueWaitingLookups(LeaderlessBucket leaderlessBucket) {
+        // Removed one at a time, so that a lookup is not lost if the queue gets closed
+        // concurrently. The remaining ones are then sent when the sender closes.
+        AbstractLookupQuery<?> lookup;
+        while ((lookup = leaderlessBucket.waitingLookups.peek()) != null) {
+            reEnqueueLookup(lookup);
+            leaderlessBucket.waitingLookups.poll();
         }
     }
 
@@ -341,17 +361,6 @@ class LookupSender implements Runnable {
                 retryDelayMs,
                 exception.toString());
         LOG.debug("Failed to find the leader for table bucket {}.", tableBucket, exception);
-    }
-
-    /** Fails the given lookups and the lookups waiting for the bucket's leader. */
-    private void failLookupsWithoutLeader(
-            TableBucket tableBucket, List<AbstractLookupQuery<?>> lookups, Exception exception) {
-        lookups.forEach(lookup -> lookup.future().completeExceptionally(exception));
-        LeaderlessBucket leaderlessBucket = leaderlessBuckets.remove(tableBucket);
-        if (leaderlessBucket != null) {
-            leaderlessBucket.waitingLookups.forEach(
-                    lookup -> lookup.future().completeExceptionally(exception));
-        }
     }
 
     /** Returns the lookups waiting for the bucket's leader. Not thread safe. */
