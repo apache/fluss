@@ -207,9 +207,8 @@ class KvTabletOldValueTest {
                 .isEqualTo(batchOldValueLookupEnabled ? 1 : 0);
         assertThat(statistics.getTickerCount(TickerType.NUMBER_MULTIGET_KEYS_READ) - keys)
                 .isEqualTo(batchOldValueLookupEnabled ? 2 : 0);
-        // MultiGet re-reads the "missing" miss with a point read to tell it from a read error.
         assertThat(statistics.getTickerCount(TickerType.NUMBER_KEYS_READ) - gets)
-                .isEqualTo(batchOldValueLookupEnabled ? 1 : 3);
+                .isEqualTo(batchOldValueLookupEnabled ? 0 : 3);
         checkEqual(
                 readLogRecords(offset),
                 Collections.singletonList(

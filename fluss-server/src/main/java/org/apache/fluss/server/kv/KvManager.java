@@ -812,12 +812,12 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
 
     @Override
     public void reconfigure(Configuration newConfig) throws ConfigException {
+        kvConfig.update(newConfig);
         long newSharedRateLimitBytes =
                 newConfig.get(ConfigOptions.KV_SHARED_RATE_LIMITER_BYTES_PER_SEC).getBytes();
 
         // If value hasn't changed, skip
         if (newSharedRateLimitBytes == currentSharedRateLimitBytesPerSec) {
-            kvConfig.update(newConfig);
             LOG.debug(
                     "Shared RocksDB rate limiter config unchanged: {} bytes/sec",
                     newSharedRateLimitBytes);
@@ -831,7 +831,6 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
             // The rate limiter is always enabled, so we can safely reconfigure it
             sharedRocksDBRateLimiter.setBytesPerSecond(newSharedRateLimitBytes);
             currentSharedRateLimitBytesPerSec = newSharedRateLimitBytes;
-            kvConfig.update(newConfig);
 
             LOG.info(
                     "Shared RocksDB rate limiter reconfigured: {} bytes/sec ({}) -> {} bytes/sec ({})",
