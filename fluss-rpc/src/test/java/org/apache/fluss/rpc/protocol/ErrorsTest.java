@@ -18,6 +18,7 @@
 package org.apache.fluss.rpc.protocol;
 
 import org.apache.fluss.exception.ApiException;
+import org.apache.fluss.exception.BulkLoadInProgressException;
 import org.apache.fluss.exception.BulkLoadNotFoundException;
 import org.apache.fluss.exception.InvalidBulkLoadRequestException;
 import org.apache.fluss.exception.RetriableException;
@@ -53,6 +54,11 @@ class ErrorsTest {
                 82,
                 InvalidBulkLoadRequestException.class,
                 new InvalidBulkLoadRequestException("reverse-invalid"));
+        assertError(
+                Errors.BULK_LOAD_IN_PROGRESS,
+                83,
+                BulkLoadInProgressException.class,
+                new BulkLoadInProgressException("reverse-in-progress"));
     }
 
     @Test

@@ -34,7 +34,7 @@ import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
-import org.apache.fluss.exception.ApiException;
+import org.apache.fluss.exception.BulkLoadInProgressException;
 import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidBulkLoadRequestException;
 import org.apache.fluss.exception.RetriableException;
@@ -1019,9 +1019,9 @@ final class BulkLoadServerITCase {
         assertThat(response.getTablesRespsCount()).isEqualTo(1);
         assertThat(response.getTablesRespAt(0).getBucketsRespsCount()).isEqualTo(1);
         assertThat(response.getTablesRespAt(0).getBucketsRespAt(0).getErrorCode())
-                .isEqualTo(Errors.UNKNOWN_SERVER_ERROR.code());
+                .isEqualTo(Errors.BULK_LOAD_IN_PROGRESS.code());
         assertThat(response.getTablesRespAt(0).getBucketsRespAt(0).getErrorMessage())
-                .contains("BulkLoad target is LOADING and rejects external access")
+                .contains("BulkLoad is in progress for")
                 .contains(bucket.toString());
     }
 
@@ -1638,10 +1638,7 @@ final class BulkLoadServerITCase {
     }
 
     private static boolean isLoadingAccessRejection(Throwable failure) {
-        return failure instanceof ApiException
-                && failure.getMessage() != null
-                && failure.getMessage()
-                        .contains("BulkLoad target is LOADING and rejects external access");
+        return failure instanceof BulkLoadInProgressException;
     }
 
     private static Throwable rootCause(Throwable failure) {

@@ -22,6 +22,7 @@ import org.apache.fluss.compression.ArrowCompressionInfo;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.ConfigurationUtils;
 import org.apache.fluss.config.TableConfig;
+import org.apache.fluss.exception.BulkLoadInProgressException;
 import org.apache.fluss.exception.FencedLeaderEpochException;
 import org.apache.fluss.exception.InvalidBulkLoadRequestException;
 import org.apache.fluss.exception.InvalidColumnProjectionException;
@@ -2842,8 +2843,10 @@ public final class Replica {
 
     private void ensureExternalAccessAllowed() {
         if (isBulkLoadLoading()) {
-            throw new StaleMetadataException(
-                    "BulkLoad target is LOADING and rejects external access: " + tableBucket);
+            throw new BulkLoadInProgressException(
+                    "BulkLoad is in progress for "
+                            + tableBucket
+                            + "; ordinary reads and writes are unavailable.");
         }
     }
 }

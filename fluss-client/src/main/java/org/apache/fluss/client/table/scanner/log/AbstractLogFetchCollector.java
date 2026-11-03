@@ -230,8 +230,10 @@ abstract class AbstractLogFetchCollector<T, R> {
                             fetchOffset, error.exception(errorMessage)));
         } else if (error == Errors.AUTHORIZATION_EXCEPTION) {
             throw new AuthorizationException(errorMessage);
-        } else if (error == Errors.UNKNOWN_SERVER_ERROR) {
+        } else if (error == Errors.BULK_LOAD_IN_PROGRESS) {
             throw error.exception(errorMessage);
+        } else if (error == Errors.UNKNOWN_SERVER_ERROR) {
+            log.warn("Received unknown server error in fetch for bucket {}: {}", tb, errorMessage);
         } else if (error == Errors.CORRUPT_MESSAGE) {
             throw new FetchException(
                     String.format(

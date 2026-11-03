@@ -23,7 +23,7 @@ import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.compression.ArrowCompressionInfo;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.exception.StaleMetadataException;
+import org.apache.fluss.exception.BulkLoadInProgressException;
 import org.apache.fluss.exception.UnknownServerException;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.TableBucket;
@@ -275,17 +275,38 @@ public class LogFetchCollectorTest {
     }
 
     @Test
-    void testUnknownServerFetchErrorIsPropagated() {
+    void testBulkLoadInProgressFetchErrorIsPropagated() {
         TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
-        String message = "BulkLoad target is LOADING and rejects external access";
+        String message = "BulkLoad is in progress; ordinary reads and writes are unavailable.";
         FetchLogResultForBucket failed =
                 FetchLogResultForBucket.error(
-                        tb, ApiError.fromThrowable(new StaleMetadataException(message)));
+                        tb, ApiError.fromThrowable(new BulkLoadInProgressException(message)));
         logFetchBuffer.add(makeCompletedFetch(tb, failed, 0L));
 
         assertThatThrownBy(() -> logFetchCollector.collectFetch(logFetchBuffer))
-                .isInstanceOf(UnknownServerException.class)
+                .isInstanceOf(BulkLoadInProgressException.class)
                 .hasMessageContaining(message);
+        assertThat(logScannerStatus.getBucketOffset(tb)).isZero();
+    }
+
+    @Test
+    void testUnknownServerFetchErrorPreservesOffsetAndAllowsSubsequentFetch() throws Exception {
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
+        FetchLogResultForBucket failed =
+                FetchLogResultForBucket.error(
+                        tb,
+                        ApiError.fromThrowable(new UnknownServerException("temporary failure")));
+        logFetchBuffer.add(makeCompletedFetch(tb, failed, 0L));
+        assertThat(logFetchCollector.collectFetch(logFetchBuffer).records(tb)).isEmpty();
+        assertThat(logScannerStatus.getBucketOffset(tb)).isZero();
+
+        FetchLogResultForBucket succeeded =
+                FetchLogResultForBucket.records(
+                        tb, genMemoryLogRecordsByObject(DATA1), 10L, -1L, -1L);
+        logFetchBuffer.add(makeCompletedFetch(tb, succeeded, 0L));
+        assertThat(logFetchCollector.collectFetch(logFetchBuffer).records(tb))
+                .hasSize(DATA1.size());
+        assertThat(logScannerStatus.getBucketOffset(tb)).isEqualTo((long) DATA1.size());
     }
 
     private DefaultCompletedFetch makeCompletedFetch(

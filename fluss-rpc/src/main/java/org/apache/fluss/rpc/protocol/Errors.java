@@ -20,6 +20,7 @@ package org.apache.fluss.rpc.protocol;
 import org.apache.fluss.exception.ApiException;
 import org.apache.fluss.exception.AuthenticationException;
 import org.apache.fluss.exception.AuthorizationException;
+import org.apache.fluss.exception.BulkLoadInProgressException;
 import org.apache.fluss.exception.BulkLoadNotFoundException;
 import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.exception.ConsumerGroupIdNotFoundException;
@@ -325,7 +326,11 @@ public enum Errors {
     BULK_LOAD_NOT_FOUND(
             81, "The BulkLoad transaction does not exist.", BulkLoadNotFoundException::new),
     INVALID_BULK_LOAD_REQUEST(
-            82, "The BulkLoad request is invalid.", InvalidBulkLoadRequestException::new);
+            82, "The BulkLoad request is invalid.", InvalidBulkLoadRequestException::new),
+    BULK_LOAD_IN_PROGRESS(
+            83,
+            "BulkLoad is in progress; ordinary reads and writes are unavailable.",
+            BulkLoadInProgressException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 
