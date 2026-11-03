@@ -370,7 +370,7 @@ resources:
   # JVM, and its default JVM memory settings (60% of the container memory limit as
   # heap, plus 512m direct memory) are only predictable when the container is
   # memory-bounded. Override or clear these values like any other chart values.
-  tieringService:
+  embeddedTiering:
     requests:
       cpu: 1
       memory: 1Gi

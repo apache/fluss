@@ -20,7 +20,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "fluss.tiering.name" . }}
+  name: {{ include "fluss.embeddedTiering.name" . }}
   labels:
   {{- include "fluss.labels" . | nindent 4 }}
   {{- with .Values.embeddedTiering.annotations }}
@@ -91,7 +91,7 @@ spec:
           # by default, and the stateless service is restarted by the container supervisor on
           # non-zero exit instead.
           resources:
-            {{- toYaml .Values.resources.tieringService | nindent 12 }}
+            {{- toYaml .Values.resources.embeddedTiering | nindent 12 }}
           volumeMounts:
             - name: tiering-conf
               mountPath: /opt/fluss/conf
@@ -104,7 +104,7 @@ spec:
       volumes:
         - name: tiering-conf
           configMap:
-            name: {{ include "fluss.tiering.configMapName" . }}
+            name: {{ include "fluss.embeddedTiering.configMapName" . }}
         {{- if (include "fluss.secrets.enabled" .) }}
         {{- include "fluss.secrets.volumes" . | trim | nindent 8 }}
         {{- end }}

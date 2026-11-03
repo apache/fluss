@@ -20,7 +20,7 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ include "fluss.tiering.configMapName" . }}
+  name: {{ include "fluss.embeddedTiering.configMapName" . }}
   labels:
   {{- include "fluss.labels" . | nindent 4 }}
 data:
@@ -30,7 +30,7 @@ data:
     {{- end }}
 
     {{- if not (hasKey .Values.embeddedTiering.configurationOverrides "fluss.bootstrap.servers") }}
-    fluss.bootstrap.servers: {{ include "fluss.tiering.defaultBootstrapServers" . }}
+    fluss.bootstrap.servers: {{ include "fluss.embeddedTiering.defaultBootstrapServers" . }}
     {{- end }}
 
     {{- if include "fluss.secrets.enabled" . }}

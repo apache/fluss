@@ -103,7 +103,7 @@ name carries the chart name, so it does not follow "fluss.resourceName".
 {{/*
 Name of the tiering service Deployment.
 */}}
-{{- define "fluss.tiering.name" -}}
+{{- define "fluss.embeddedTiering.name" -}}
 {{- include "fluss.resourceName" (dict "suffix" "tiering-service" "context" .) -}}
 {{- end -}}
 
@@ -111,7 +111,7 @@ Name of the tiering service Deployment.
 Name of the ConfigMap holding the tiering service configuration. Follows the
 "fluss.configMapName" scheme: the bare name carries the chart name.
 */}}
-{{- define "fluss.tiering.configMapName" -}}
+{{- define "fluss.embeddedTiering.configMapName" -}}
 {{- if .Values.uniqueResourceNames -}}
 {{- printf "%s-tiering-conf-file" (include "fluss.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- else -}}

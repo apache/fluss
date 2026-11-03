@@ -27,14 +27,14 @@ APP VERSION: {{ .Chart.AppVersion }}
 
 ### Lake tiering service
 
-The embedded-Flink lake tiering service runs as Deployment {{ include "fluss.tiering.name" . }}
+The embedded-Flink lake tiering service runs as Deployment {{ include "fluss.embeddedTiering.name" . }}
 with {{ .Values.embeddedTiering.numberOfReplicas }} replica(s), tiering Fluss tables to
 {{ index .Values.embeddedTiering.configurationOverrides "datalake.format" }}. It reads its configuration
-from ConfigMap {{ include "fluss.tiering.configMapName" . }} (key tiering.yaml).
+from ConfigMap {{ include "fluss.embeddedTiering.configMapName" . }} (key tiering.yaml).
 
 {{- if not (hasKey .Values.embeddedTiering.configurationOverrides "fluss.bootstrap.servers") }}
 It tiers this release's cluster via the coordinator client listener
-({{ include "fluss.tiering.defaultBootstrapServers" . }}); set
+({{ include "fluss.embeddedTiering.defaultBootstrapServers" . }}); set
 embeddedTiering.configurationOverrides."fluss.bootstrap.servers" to target a different cluster.
 {{- end }}
 
