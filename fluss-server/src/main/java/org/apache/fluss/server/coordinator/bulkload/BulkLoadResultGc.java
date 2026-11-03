@@ -90,7 +90,8 @@ public final class BulkLoadResultGc {
                                                             coordinatorEpochVersion),
                                                     zkOp.deleteOp(candidate.path, -1)));
                                 } else {
-                                    collect(candidate.path, nowMs, coordinatorEpochVersion);
+                                    deleteTransactionResultIfExpired(
+                                            candidate.path, nowMs, coordinatorEpochVersion);
                                 }
                             }
                         } catch (Exception failure) {
@@ -128,7 +129,8 @@ public final class BulkLoadResultGc {
         return result;
     }
 
-    private void collect(String path, long nowMs, int coordinatorEpochVersion) throws Exception {
+    private void deleteTransactionResultIfExpired(
+            String path, long nowMs, int coordinatorEpochVersion) throws Exception {
         Optional<DataWithStat> data = zkClient.getDataWithStatIfExists(path);
         if (!data.isPresent()) {
             return;

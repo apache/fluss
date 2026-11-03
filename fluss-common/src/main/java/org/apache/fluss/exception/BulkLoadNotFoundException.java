@@ -19,7 +19,11 @@ package org.apache.fluss.exception;
 
 import org.apache.fluss.annotation.PublicEvolving;
 
-/** Indicates that the requested BulkLoad transaction is authoritatively absent. */
+/**
+ * Indicates that the requested BulkLoad transaction is authoritatively absent.
+ *
+ * @since 1.1
+ */
 @PublicEvolving
 public class BulkLoadNotFoundException extends ApiException {
 

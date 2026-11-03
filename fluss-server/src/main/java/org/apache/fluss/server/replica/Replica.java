@@ -1383,7 +1383,7 @@ public final class Replica {
         return inReadLock(
                 leaderIsrUpdateLock,
                 () -> {
-                    ensureBulkLoadAccessible();
+                    ensureExternalAccessAllowed();
                     if (!isLeader()) {
                         throw new NotLeaderOrFollowerException(
                                 String.format(
@@ -1450,7 +1450,7 @@ public final class Replica {
         return inReadLock(
                 leaderIsrUpdateLock,
                 () -> {
-                    ensureBulkLoadAccessible();
+                    ensureExternalAccessAllowed();
                     if (!isLeader()) {
                         throw new NotLeaderOrFollowerException(
                                 String.format(
@@ -1641,7 +1641,7 @@ public final class Replica {
             return inReadLock(
                     leaderIsrUpdateLock,
                     () -> {
-                        ensureBulkLoadAccessible();
+                        ensureExternalAccessAllowed();
                         LogTablet localLog = localLogOrThrow(fetchParams.fetchOnlyLeader());
                         return readRecords(fetchParams, localLog);
                     });
@@ -1834,7 +1834,7 @@ public final class Replica {
         return inReadLock(
                 leaderIsrUpdateLock,
                 () -> {
-                    ensureBulkLoadAccessible();
+                    ensureExternalAccessAllowed();
                     try {
                         if (!isLeader()) {
                             throw new NotLeaderOrFollowerException(
@@ -1900,7 +1900,7 @@ public final class Replica {
         return inReadLock(
                 leaderIsrUpdateLock,
                 () -> {
-                    ensureBulkLoadAccessible();
+                    ensureExternalAccessAllowed();
                     try {
                         if (!isLeader()) {
                             throw new NotLeaderOrFollowerException(
@@ -1931,7 +1931,7 @@ public final class Replica {
         return inReadLock(
                 leaderIsrUpdateLock,
                 () -> {
-                    ensureBulkLoadAccessible();
+                    ensureExternalAccessAllowed();
                     try {
                         if (!isLeader()) {
                             throw new NotLeaderOrFollowerException(
@@ -1981,7 +1981,7 @@ public final class Replica {
         return inReadLock(
                 leaderIsrUpdateLock,
                 () -> {
-                    ensureBulkLoadAccessible();
+                    ensureExternalAccessAllowed();
                     if (!isLeader()) {
                         throw new NotLeaderOrFollowerException(
                                 String.format(
@@ -2010,7 +2010,7 @@ public final class Replica {
         return inReadLock(
                 leaderIsrUpdateLock,
                 () -> {
-                    ensureBulkLoadAccessible();
+                    ensureExternalAccessAllowed();
                     try {
                         if (!isLeader()) {
                             throw new NotLeaderOrFollowerException(
@@ -2081,7 +2081,7 @@ public final class Replica {
         return inReadLock(
                 leaderIsrUpdateLock,
                 () -> {
-                    ensureBulkLoadAccessible();
+                    ensureExternalAccessAllowed();
                     KvTablet kv = this.kvTablet;
                     if (kv != null) {
                         // return materialized row count for primary key table
@@ -2111,7 +2111,7 @@ public final class Replica {
                     }
 
                     if (listOffsetsParam.getFollowerServerId() < 0) {
-                        ensureBulkLoadAccessible();
+                        ensureExternalAccessAllowed();
                     }
                     int offsetType = listOffsetsParam.getOffsetType();
                     if (offsetType == ListOffsetsParam.TIMESTAMP_OFFSET_TYPE) {
@@ -2840,7 +2840,7 @@ public final class Replica {
         return target != null && target.isLoading();
     }
 
-    private void ensureBulkLoadAccessible() {
+    private void ensureExternalAccessAllowed() {
         if (isBulkLoadLoading()) {
             throw new StaleMetadataException(
                     "BulkLoad target is LOADING and rejects external access: " + tableBucket);

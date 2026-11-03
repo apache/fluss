@@ -379,7 +379,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
     @Override
     public CompletableFuture<BeginBulkLoadResponse> beginBulkLoad(BeginBulkLoadRequest request) {
-        PhysicalTablePath target = validateTarget(request);
+        PhysicalTablePath target = validateBulkLoadTarget(request);
         authorize(target, OperationType.WRITE);
         FlussPrincipal creator = currentSession().getPrincipal();
         Long timeout = request.hasBuildTimeoutMs() ? request.getBuildTimeoutMs() : null;
@@ -389,7 +389,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     @Override
     public CompletableFuture<GetInProgressBulkLoadResponse> getInProgressBulkLoad(
             GetInProgressBulkLoadRequest request) {
-        PhysicalTablePath target = validateTarget(request);
+        PhysicalTablePath target = validateBulkLoadTarget(request);
         authorize(target, OperationType.WRITE);
         Session session = currentSession();
         FlussPrincipal creator = session.getPrincipal();
@@ -434,18 +434,19 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         return event.getResultFuture();
     }
 
-    private PhysicalTablePath validateTarget(BeginBulkLoadRequest request) {
+    private PhysicalTablePath validateBulkLoadTarget(BeginBulkLoadRequest request) {
         if (request.hasBuildTimeoutMs() && request.getBuildTimeoutMs() <= 0) {
             throw new InvalidBulkLoadRequestException("Invalid BulkLoad Begin request.");
         }
-        return validateTarget(request.hasTarget() ? request.getTarget() : null);
+        return validateBulkLoadTarget(request.hasTarget() ? request.getTarget() : null);
     }
 
-    private PhysicalTablePath validateTarget(GetInProgressBulkLoadRequest request) {
-        return validateTarget(request.hasTarget() ? request.getTarget() : null);
+    private PhysicalTablePath validateBulkLoadTarget(GetInProgressBulkLoadRequest request) {
+        return validateBulkLoadTarget(request.hasTarget() ? request.getTarget() : null);
     }
 
-    private PhysicalTablePath validateTarget(@Nullable PbPhysicalTablePath requestedTarget) {
+    private PhysicalTablePath validateBulkLoadTarget(
+            @Nullable PbPhysicalTablePath requestedTarget) {
         if (requestedTarget == null
                 || !requestedTarget.hasDatabaseName()
                 || !requestedTarget.hasTableName()
@@ -485,7 +486,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         }
         try {
             return new BulkLoadHandle(
-                    validateTarget(handle.getTarget()),
+                    validateBulkLoadTarget(handle.getTarget()),
                     handle.getTableId(),
                     handle.hasPartitionId() ? handle.getPartitionId() : null,
                     handle.getBulkLoadId());

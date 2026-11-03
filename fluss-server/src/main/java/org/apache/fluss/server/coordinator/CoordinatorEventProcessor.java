@@ -1309,7 +1309,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
             if (notifyLeaderAndIsrResultForBucket.failed()) {
                 if (coordinatorContext.isToBeDeleted(tableBucket)
                         || !coordinatorContext.getAssignment(tableBucket).contains(serverId)) {
-                    // A late failure must not recreate a deleted or migrated replica.
+                    // A late activation failure must not reset a deletion state to OfflineReplica
+                    // or recreate a replica that has already been deleted or migrated away.
                     continue;
                 }
                 offlineReplicas.add(new TableBucketReplica(tableBucket, serverId));
@@ -1404,6 +1405,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
         ServerInfo serverInfo = newTabletServerEvent.getServerInfo();
         int tabletServerId = serverInfo.id();
         if (coordinatorContext.getLiveTabletServers().containsKey(tabletServerId)) {
+            // During startup the watcher may queue this arrival before context initialization
+            // reads the same registration. Ignore the event already reflected in the context.
             return;
         }
 
@@ -1416,16 +1419,19 @@ public class CoordinatorEventProcessor implements EventProcessor {
         coordinatorChannelManager.addTabletServer(serverNode);
         bulkLoadManager.bindTabletServerGateway(serverInfo);
 
+        // Update the Coordinator metadata cache to include the newly registered TabletServer.
         serverMetadataCache.updateMetadata(
                 coordinatorContext.getCoordinatorServerInfo(),
                 new HashSet<>(coordinatorContext.getLiveTabletServers().values()),
                 coordinatorContext.getServerTags());
 
+        // Publish the updated server membership to all live TabletServers.
         updateTabletServerMetadataCache(
                 new HashSet<>(coordinatorContext.getLiveTabletServers().values()),
                 null,
                 null,
                 Collections.emptySet());
+        // Initialize the new TabletServer with the current table and partition metadata.
         updateTabletServerMetadataCache(
                 Collections.singleton(serverInfo),
                 null,
@@ -1726,7 +1732,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
             return;
         }
 
-        if (!validateBulkLoadReassignment(tableBucket)) {
+        if (!validateNoBulkLoadForReassignment(tableBucket)) {
             rebalanceManager.finishRebalanceTask(tableBucket, RebalanceStatus.FAILED);
             return;
         }
@@ -1762,7 +1768,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         }
     }
 
-    private boolean validateBulkLoadReassignment(TableBucket tableBucket) {
+    private boolean validateNoBulkLoadForReassignment(TableBucket tableBucket) {
         PhysicalTablePath physicalTablePath;
         if (tableBucket.getPartitionId() == null) {
             TablePath tablePath = coordinatorContext.getTablePathById(tableBucket.getTableId());

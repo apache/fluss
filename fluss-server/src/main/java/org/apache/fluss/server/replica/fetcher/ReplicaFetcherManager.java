@@ -149,6 +149,7 @@ public class ReplicaFetcherManager {
     }
 
     /** Returns whether a replica fetcher currently owns the given table bucket. */
+    @VisibleForTesting
     boolean hasFetcherForBucket(TableBucket tableBucket) {
         synchronized (lock) {
             return fetcherThreadMap.values().stream()

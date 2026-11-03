@@ -68,7 +68,6 @@ final class BulkLoadMetadataStore {
             throws Exception {
         BulkLoadHandle handle = transaction.getHandle();
         List<CuratorOp> operations = beginOperations(coordinatorEpochVersion);
-        operations.add(zkOp.checkOp(registration.getPath(), registration.getVersion()));
         operations.add(zkOp.checkOp(assignment.getPath(), assignment.getVersion()));
         if (!zkClient.pathExists(transactionParentPath(handle))) {
             operations.add(zkOp.createOp(transactionParentPath(handle), new byte[0]));
