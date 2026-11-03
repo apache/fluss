@@ -21,6 +21,8 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.utils.clock.Clock;
+import org.apache.fluss.utils.clock.SystemClock;
 
 import javax.annotation.concurrent.ThreadSafe;
 
@@ -48,13 +50,21 @@ class LookupQueue {
     private final BlockingQueue<AbstractLookupQuery<?>> reEnqueuedLookupQueue;
     private final int maxBatchSize;
     private final long batchTimeoutNanos;
+    // Must be the clock the sender sets retry times with.
+    private final Clock clock;
 
     LookupQueue(Configuration conf) {
+        this(conf, SystemClock.getInstance());
+    }
+
+    @VisibleForTesting
+    LookupQueue(Configuration conf, Clock clock) {
         this.lookupQueue =
                 new ArrayBlockingQueue<>(conf.get(ConfigOptions.CLIENT_LOOKUP_QUEUE_SIZE));
         this.reEnqueuedLookupQueue = new LinkedBlockingQueue<>();
         this.maxBatchSize = conf.get(ConfigOptions.CLIENT_LOOKUP_MAX_BATCH_SIZE);
         this.batchTimeoutNanos = conf.get(ConfigOptions.CLIENT_LOOKUP_BATCH_TIMEOUT).toNanos();
+        this.clock = clock;
         this.closed = false;
     }
 
@@ -106,7 +116,7 @@ class LookupQueue {
                 if (lookup == null) {
                     break;
                 }
-                long retryDelayMs = lookup.nextRetryTimeMs() - System.currentTimeMillis();
+                long retryDelayMs = lookup.nextRetryTimeMs() - clock.milliseconds();
                 if (retryDelayMs <= 0) {
                     lookupOperations.add(lookup);
                     count++;
