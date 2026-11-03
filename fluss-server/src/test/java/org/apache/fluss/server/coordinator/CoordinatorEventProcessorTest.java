@@ -125,6 +125,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -136,6 +137,7 @@ import static org.apache.fluss.server.coordinator.statemachine.BucketState.Offli
 import static org.apache.fluss.server.coordinator.statemachine.BucketState.OnlineBucket;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.OfflineReplica;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.OnlineReplica;
+import static org.apache.fluss.server.metadata.PartitionMetadata.DELETED_PARTITION_ID;
 import static org.apache.fluss.server.testutils.KvTestUtils.mockCompletedSnapshot;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getAdjustIsrResponseData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getUpdateMetadataRequestData;
@@ -736,7 +738,7 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
         }
         assertThat(inFlightGauges).doesNotContainNull();
 
-        failingChannelManager.failNextUpdateMetadata();
+        failingChannelManager.failNextUpdateMetadata(request -> true);
         metadataManager.dropTable(tablePath, false);
         failingChannelManager.awaitFailure();
         fromCtx(context -> null);
@@ -770,6 +772,14 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
         long tableId =
                 metadataManager.createTable(
                         tablePath, remoteDataDir, getPartitionedTable(), null, false);
+        failingChannelManager.failNextUpdateMetadata(
+                request ->
+                        request.getPartitionMetadatasList().stream()
+                                .anyMatch(
+                                        partitionMetadata ->
+                                                partitionMetadata.getTableId() == tableId
+                                                        && partitionMetadata.getPartitionId()
+                                                                == DELETED_PARTITION_ID));
         Map<Integer, BucketAssignment> assignments =
                 generateAssignment(
                                 N_BUCKETS,
@@ -808,7 +818,9 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
         }
         assertThat(inFlightGauges).doesNotContainNull();
 
-        failingChannelManager.failNextUpdateMetadata();
+        assertThat(failingChannelManager.failureObserved.getCount())
+                .as("metadata updates before the drop must not trigger the injected failure")
+                .isOne();
         zookeeperClient.deletePartition(tablePath, partition.partitionName);
         failingChannelManager.awaitFailure();
         fromCtx(context -> null);
@@ -2739,10 +2751,11 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
     private static class FailingUpdateMetadataChannelManager extends TestCoordinatorChannelManager {
 
         private final CountDownLatch failureObserved = new CountDownLatch(1);
-        private volatile boolean failUpdateMetadata;
+        private volatile Predicate<UpdateMetadataRequest> shouldFailUpdateMetadata =
+                request -> false;
 
-        private void failNextUpdateMetadata() {
-            failUpdateMetadata = true;
+        private void failNextUpdateMetadata(Predicate<UpdateMetadataRequest> requestMatcher) {
+            shouldFailUpdateMetadata = requestMatcher;
         }
 
         @Override
@@ -2750,8 +2763,8 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                 int serverId,
                 UpdateMetadataRequest request,
                 BiConsumer<UpdateMetadataResponse, ? super Throwable> responseConsumer) {
-            if (failUpdateMetadata) {
-                failUpdateMetadata = false;
+            if (shouldFailUpdateMetadata.test(request)) {
+                shouldFailUpdateMetadata = ignored -> false;
                 failureObserved.countDown();
                 throw new RuntimeException("Injected update metadata failure");
             }
