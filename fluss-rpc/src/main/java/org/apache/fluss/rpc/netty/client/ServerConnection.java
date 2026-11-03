@@ -237,7 +237,14 @@ final class ServerConnection {
                         ApiKeys.forId(request.apiKey),
                         request.requestStartTime,
                         response.totalSize());
-                request.responseFuture.complete(response);
+                if (request.responseFuture.complete(response)) {
+                    return;
+                }
+            }
+            // A cancelled future cannot take ownership of a lazily parsed response.
+            ByteBuf parsedBuffer = response.getParsedByteBuf();
+            if (parsedBuffer != null) {
+                parsedBuffer.release();
             }
         }
 
