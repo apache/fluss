@@ -854,8 +854,18 @@ mod tests {
     }
 
     fn fail_with_bucket_error(sender: &LookupSender, error_code: i32) -> Error {
+        respond_with_bucket_error(sender, error_code)
+            .try_recv()
+            .expect("lookup completed")
+            .expect_err("lookup failed")
+    }
+
+    fn respond_with_bucket_error(
+        sender: &LookupSender,
+        error_code: i32,
+    ) -> oneshot::Receiver<PrimaryResult> {
         let table_bucket = TableBucket::new(TABLE_ID, 0);
-        let (result_tx, mut result_rx) = oneshot::channel();
+        let (result_tx, result_rx) = oneshot::channel();
         let mut batch = LookupBatch::new(table_bucket.clone());
         batch.add_lookup(LookupQuery::new(
             table_path(),
@@ -879,9 +889,6 @@ mod tests {
             std::slice::from_mut(&mut batch),
         );
         result_rx
-            .try_recv()
-            .expect("lookup completed")
-            .expect_err("lookup failed")
     }
 
     #[test]
@@ -919,6 +926,37 @@ mod tests {
                 .get_cluster()
                 .leader_for(&table_bucket)
                 .is_none()
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_not_leader_error_drops_the_cached_leaders_and_retries_after_the_backoff() {
+        let (mut sender, _lookup_tx, _shutdown_tx) = sender_with_backoff(9092, 3, 100, 100, 1000);
+        let table_bucket = TableBucket::new(TABLE_ID, 0);
+
+        let mut result_rx =
+            respond_with_bucket_error(&sender, FlussError::NotLeaderOrFollower.code());
+
+        assert!(
+            sender
+                .dispatcher
+                .metadata
+                .get_cluster()
+                .leader_for(&table_bucket)
+                .is_none()
+        );
+        assert!(matches!(
+            result_rx.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
+        let Some(QueuedLookup::Primary(retried)) = sender.queue.drain_all().pop() else {
+            panic!("the lookup was not retried");
+        };
+        assert_eq!(retried.retries(), 1);
+        let backoff = retried.retry_at().expect("retry deadline") - Instant::now();
+        assert!(
+            (Duration::from_millis(80)..=Duration::from_millis(120)).contains(&backoff),
+            "should back off 80..=120ms, got {backoff:?}"
         );
     }
 
