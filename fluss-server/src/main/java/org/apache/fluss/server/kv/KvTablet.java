@@ -102,7 +102,6 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
-import java.util.function.BooleanSupplier;
 
 import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
@@ -233,7 +232,7 @@ public final class KvTablet {
             Clock clock,
             boolean rowTtlEnabled,
             boolean skipUnchangedUpsert,
-            BooleanSupplier batchOldValueLookupEnabled) {
+            KvConfig kvConfig) {
         this.physicalPath = physicalPath;
         this.tableBucket = tableBucket;
         this.historicalPartition =
@@ -273,7 +272,7 @@ public final class KvTablet {
                         rowTtlTimestampProvider,
                         clock,
                         skipUnchangedUpsert,
-                        batchOldValueLookupEnabled);
+                        kvConfig);
         this.rocksDBStatistics = rocksDBStatistics;
         this.autoIncrementManager = autoIncrementManager;
         this.flushCompleteListener = flushCompleteListener;
@@ -288,11 +287,8 @@ public final class KvTablet {
 
     /**
      * Creates a kv tablet with a dedicated {@link KvFlushScheduler} that is closed together with
-     * the tablet. Production code must use {@link #create(PhysicalTablePath, TableBucket,
-     * LogTablet, File, Configuration, TabletServerMetricGroup, BufferAllocator, MemorySegmentPool,
-     * KvFormat, RowMerger, ArrowCompressionInfo, SchemaGetter, ChangelogImage, RateLimiter, Cache,
-     * KvFlushScheduler, Runnable, AutoIncrementManager, Clock, TableConfig)} with the shared
-     * scheduler owned by {@link KvManager}.
+     * the tablet. Production code must use the shared scheduler and {@link KvConfig} owned by
+     * {@link KvManager}.
      */
     @VisibleForTesting
     public static KvTablet create(
@@ -336,7 +332,7 @@ public final class KvTablet {
                 autoIncrementManager,
                 SystemClock.getInstance(),
                 new TableConfig(new Configuration()),
-                null);
+                new KvConfig(serverConf));
     }
 
     static KvTablet create(
@@ -362,7 +358,7 @@ public final class KvTablet {
             AutoIncrementManager autoIncrementManager,
             Clock clock,
             TableConfig tableConfig,
-            BooleanSupplier batchOldValueLookupEnabled)
+            KvConfig kvConfig)
             throws IOException {
         return create(
                 tablePath,
@@ -388,7 +384,7 @@ public final class KvTablet {
                 autoIncrementManager,
                 clock,
                 tableConfig,
-                batchOldValueLookupEnabled);
+                kvConfig);
     }
 
     public static KvTablet create(
@@ -437,7 +433,7 @@ public final class KvTablet {
                 autoIncrementManager,
                 clock,
                 tableConfig,
-                null);
+                new KvConfig(serverConf));
     }
 
     private static KvTablet create(
@@ -464,11 +460,10 @@ public final class KvTablet {
             AutoIncrementManager autoIncrementManager,
             Clock clock,
             TableConfig tableConfig,
-            @Nullable BooleanSupplier batchOldValueLookupEnabled)
+            KvConfig kvConfig)
             throws IOException {
         checkNotNull(tableConfig, "tableConfig must not be null.");
-        boolean initialBatchOldValueLookupEnabled =
-                serverConf.get(ConfigOptions.KV_WRITE_BATCH_OLD_VALUE_LOOKUP_ENABLED);
+        checkNotNull(kvConfig, "kvConfig must not be null.");
         boolean historicalPartition =
                 HISTORICAL_PARTITION_VALUE.equals(tablePath.getPartitionName());
         Optional<Duration> rowTtl = tableConfig.getKvTTL();
@@ -551,9 +546,7 @@ public final class KvTablet {
                 clock,
                 rowTtl.isPresent(),
                 tableConfig.isUpsertSkipUnchanged(),
-                batchOldValueLookupEnabled == null
-                        ? () -> initialBatchOldValueLookupEnabled
-                        : batchOldValueLookupEnabled);
+                kvConfig);
     }
 
     public static KvTablet create(
@@ -599,7 +592,7 @@ public final class KvTablet {
                 autoIncrementManager,
                 clock,
                 tableConfig,
-                null);
+                new KvConfig(serverConf));
     }
 
     private static RocksDBKv buildRocksDBKv(

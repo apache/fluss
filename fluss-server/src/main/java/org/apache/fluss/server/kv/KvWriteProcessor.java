@@ -71,9 +71,9 @@ import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
-import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
 /**
@@ -125,7 +125,7 @@ public final class KvWriteProcessor {
     @Nullable private final RowTtlTimestampProvider rowTtlTimestampProvider;
     private final Clock clock;
     private final boolean skipUnchangedUpsert;
-    private final BooleanSupplier batchOldValueLookupEnabled;
+    private final KvConfig kvConfig;
 
     /** Creates a KV write processor. */
     public KvWriteProcessor(
@@ -144,7 +144,7 @@ public final class KvWriteProcessor {
             @Nullable RowTtlTimestampProvider rowTtlTimestampProvider,
             Clock clock,
             boolean skipUnchangedUpsert,
-            BooleanSupplier batchOldValueLookupEnabled) {
+            KvConfig kvConfig) {
         this.tableBucket = tableBucket;
         this.logTablet = logTablet;
         this.arrowWriterProvider = arrowWriterProvider;
@@ -165,7 +165,7 @@ public final class KvWriteProcessor {
         this.rowTtlTimestampProvider = rowTtlTimestampProvider;
         this.clock = clock;
         this.skipUnchangedUpsert = skipUnchangedUpsert;
-        this.batchOldValueLookupEnabled = batchOldValueLookupEnabled;
+        this.kvConfig = checkNotNull(kvConfig, "kvConfig must not be null.");
     }
 
     /** Processes a KV batch against the supplied state and appends its WAL. */
@@ -340,7 +340,7 @@ public final class KvWriteProcessor {
                 KvRecordReadContext.createReadContext(kvFormat, schemaGetter);
 
         boolean prefetchEnabled =
-                batchOldValueLookupEnabled.getAsBoolean()
+                kvConfig.isBatchOldValueLookupEnabled()
                         && originalPartitionName == null
                         && kvRecords.getRecordCount() >= MIN_BATCH_SIZE_FOR_PREFETCH;
         Function<byte[], BinaryValue> previousValueLookup =
