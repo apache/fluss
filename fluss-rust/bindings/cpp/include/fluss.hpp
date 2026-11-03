@@ -2213,8 +2213,9 @@ class Lookuper {
     /// unchanged in the corresponding LookupCompletion.
     Result LookupAsync(const GenericRow& pk_row, uint64_t request_id) const;
 
-    /// Waits up to `timeout_ms` for one completion, then drains completions already available.
-    /// A timeout is successful and leaves unfinished lookups active.
+    /// Waits up to `timeout_ms` (including lock acquisition) for one completion, then drains
+    /// up to 1024 completions already available. A timeout is successful and leaves unfinished
+    /// lookups active.
     Result Poll(int64_t timeout_ms, std::vector<LookupCompletion>& out) const;
 
    private:
@@ -2249,8 +2250,9 @@ class PrefixLookuper {
     /// returned unchanged in the corresponding PrefixLookupCompletion.
     Result PrefixLookupAsync(const GenericRow& prefix_row, uint64_t request_id) const;
 
-    /// Waits up to `timeout_ms` for one completion, then drains completions already available.
-    /// A timeout is successful and leaves unfinished lookups active.
+    /// Waits up to `timeout_ms` (including lock acquisition) for one completion, then drains
+    /// up to 1024 completions already available. A timeout is successful and leaves unfinished
+    /// lookups active.
     Result Poll(int64_t timeout_ms, std::vector<PrefixLookupCompletion>& out) const;
 
    private:

@@ -2128,9 +2128,10 @@ Result Lookuper::Poll(int64_t timeout_ms, std::vector<LookupCompletion>& out) co
     if (!Available()) {
         return utils::make_client_error("Lookuper not available");
     }
+    const auto initial_size = out.size();
     auto poll = [&](int64_t wait_ms) { return lookuper_->poll_lookup(wait_ms); };
     bool first = true;
-    while (first || !out.empty()) {
+    while ((first && out.size() == initial_size) || out.size() < initial_size + 1024) {
         auto ffi_result = poll(first ? timeout_ms : 0);
         auto result = utils::from_ffi_result(ffi_result.result);
         if (!result.Ok()) {
@@ -2275,8 +2276,9 @@ Result PrefixLookuper::Poll(int64_t timeout_ms, std::vector<PrefixLookupCompleti
     if (!Available()) {
         return utils::make_client_error("PrefixLookuper not available");
     }
+    const auto initial_size = out.size();
     bool first = true;
-    while (first || !out.empty()) {
+    while ((first && out.size() == initial_size) || out.size() < initial_size + 1024) {
         auto ffi_result = lookuper_->poll_prefix_lookup(first ? timeout_ms : 0);
         auto result = utils::from_ffi_result(ffi_result.result);
         if (!result.Ok()) {
@@ -2502,9 +2504,8 @@ Result LogScanner::Poll(int64_t timeout_ms, ScanRecords& out) {
 }
 
 ArrowRecordBatch::ArrowRecordBatch(std::shared_ptr<arrow::RecordBatch> batch, int64_t table_id,
-                                   int64_t partition_id, int32_t bucket_id,
-                                   int64_t base_offset, int64_t commit_timestamp,
-                                   int32_t schema_id) noexcept
+                                   int64_t partition_id, int32_t bucket_id, int64_t base_offset,
+                                   int64_t commit_timestamp, int32_t schema_id) noexcept
     : batch_(std::move(batch)),
       table_id_(table_id),
       partition_id_(partition_id),
