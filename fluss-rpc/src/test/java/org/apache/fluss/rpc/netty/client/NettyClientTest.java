@@ -741,6 +741,46 @@ final class NettyClientTest {
         }
     }
 
+    @Test
+    void testTimeoutRetiresRequestBeforeRunningCallerCallback() throws Exception {
+        nettyClient.close();
+        conf.set(ConfigOptions.CLIENT_REQUEST_TIMEOUT, Duration.ofSeconds(1));
+        nettyClient = new NettyClient(conf, clientMetrics);
+        CountDownLatch callbackEntered = new CountDownLatch(1);
+        CountDownLatch releaseCallback = new CountDownLatch(1);
+        try (NetUtils.Port port = getAvailablePort()) {
+            ServerNode node =
+                    new ServerNode(20, "localhost", port.getPort(), ServerType.TABLET_SERVER);
+            DelayedLookupGatewayService delayedService = new DelayedLookupGatewayService();
+            try (NettyServer server = createTabletServer(node, delayedService)) {
+                server.start();
+                CompletableFuture<ApiMessage> response =
+                        nettyClient.sendRequest(node, ApiKeys.LOOKUP, newLookupRequest());
+                assertThat(delayedService.awaitFirstLookup()).isTrue();
+                ServerConnection connection = nettyClient.connections().iterator().next();
+                response.whenComplete(
+                        (value, error) -> {
+                            callbackEntered.countDown();
+                            try {
+                                releaseCallback.await(10, TimeUnit.SECONDS);
+                            } catch (InterruptedException e) {
+                                Thread.currentThread().interrupt();
+                            }
+                        });
+                try {
+                    assertThat(callbackEntered.await(5, TimeUnit.SECONDS)).isTrue();
+                    assertThat(response.isCompletedExceptionally()).isTrue();
+                    assertThat(connection.numInflightRequests()).isZero();
+                } finally {
+                    releaseCallback.countDown();
+                    delayedService.completeFirstLookup();
+                }
+            }
+        } finally {
+            releaseCallback.countDown();
+        }
+    }
+
     private static LookupRequest newLookupRequest() {
         LookupRequest request = new LookupRequest().setTableId(1);
         request.addBucketsReq().setBucketId(1);

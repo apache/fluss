@@ -162,8 +162,8 @@ final class ServerConnection {
         return doSend(apikey, request, newResponseFuture(), false);
     }
 
-    private CompletableFuture<ApiMessage> newResponseFuture() {
-        CompletableFuture<ApiMessage> future = new CompletableFuture<>();
+    private RequestFuture newResponseFuture() {
+        RequestFuture future = new RequestFuture(lock);
         ScheduledFuture<?> timeout =
                 eventLoop.schedule(
                         () ->
@@ -172,7 +172,7 @@ final class ServerConnection {
                                                 "RPC request to " + node + " timed out.")),
                         requestTimeoutMillis,
                         TimeUnit.MILLISECONDS);
-        future.whenComplete((response, error) -> timeout.cancel(false));
+        future.setTimeout(timeout);
         return future;
     }
 
@@ -321,10 +321,10 @@ final class ServerConnection {
     private CompletableFuture<ApiMessage> doSend(
             ApiKeys apiKey,
             ApiMessage rawRequest,
-            CompletableFuture<ApiMessage> responseFuture,
+            RequestFuture responseFuture,
             boolean isInternalRequest) {
         synchronized (lock) {
-            if (responseFuture.isDone()) {
+            if (responseFuture.isDone() || responseFuture.isRetired()) {
                 return responseFuture;
             }
             if (state.isDisconnected()) {
@@ -344,8 +344,8 @@ final class ServerConnection {
                 PendingRequest pending =
                         new PendingRequest(apiKey, rawRequest, isInternalRequest, responseFuture);
                 pendingRequests.add(pending);
-                responseFuture.whenComplete(
-                        (response, error) -> {
+                responseFuture.setRetirementAction(
+                        () -> {
                             synchronized (lock) {
                                 pendingRequests.remove(pending);
                             }
@@ -372,13 +372,6 @@ final class ServerConnection {
                             apiKey.id, version, requestCount++, rawRequest, responseFuture);
             inflightRequests.put(inflight.requestId, inflight);
 
-            responseFuture.whenComplete(
-                    (response, error) -> {
-                        if (inflightRequests.remove(inflight.requestId, inflight)) {
-                            connectionMetrics.updateMetricsAfterGetResponse(
-                                    apiKey, inflight.requestStartTime, 0);
-                        }
-                    });
             ByteBuf byteBuf = null;
             try {
                 byteBuf = inflight.toByteBuf(channel.alloc());
@@ -408,6 +401,17 @@ final class ServerConnection {
                 return responseFuture;
             }
 
+            responseFuture.setRetirementAction(
+                    () -> {
+                        if (inflightRequests.remove(inflight.requestId, inflight)) {
+                            connectionMetrics.updateMetricsAfterGetResponse(
+                                    apiKey, inflight.requestStartTime, 0);
+                        }
+                    });
+            if (responseFuture.isRetired()) {
+                byteBuf.release();
+                return responseFuture;
+            }
             channel.writeAndFlush(byteBuf)
                     .addListener(
                             (ChannelFutureListener)
@@ -643,18 +647,96 @@ final class ServerConnection {
         }
     }
 
+    /** Retires transport state before terminal completion can invoke caller callbacks. */
+    private static final class RequestFuture extends CompletableFuture<ApiMessage> {
+        private final Object lock;
+
+        @GuardedBy("lock")
+        private boolean retired;
+
+        @GuardedBy("lock")
+        private Runnable retirementAction;
+
+        @GuardedBy("lock")
+        private ScheduledFuture<?> timeout;
+
+        private RequestFuture(Object lock) {
+            this.lock = lock;
+        }
+
+        boolean isRetired() {
+            synchronized (lock) {
+                return retired;
+            }
+        }
+
+        void setRetirementAction(Runnable action) {
+            synchronized (lock) {
+                if (!retired) {
+                    retirementAction = action;
+                    return;
+                }
+                action.run();
+            }
+        }
+
+        void setTimeout(ScheduledFuture<?> scheduledTimeout) {
+            synchronized (lock) {
+                if (!retired) {
+                    timeout = scheduledTimeout;
+                    return;
+                }
+            }
+            scheduledTimeout.cancel(false);
+        }
+
+        @Override
+        public boolean complete(ApiMessage response) {
+            retire();
+            return super.complete(response);
+        }
+
+        @Override
+        public boolean completeExceptionally(Throwable error) {
+            retire();
+            return super.completeExceptionally(error);
+        }
+
+        @Override
+        public boolean cancel(boolean mayInterruptIfRunning) {
+            retire();
+            return super.cancel(mayInterruptIfRunning);
+        }
+
+        private void retire() {
+            synchronized (lock) {
+                retired = true;
+                Runnable action = retirementAction;
+                retirementAction = null;
+                ScheduledFuture<?> scheduledTimeout = timeout;
+                timeout = null;
+                if (scheduledTimeout != null) {
+                    scheduledTimeout.cancel(false);
+                }
+                if (action != null) {
+                    action.run();
+                }
+            }
+        }
+    }
+
     /** A pending request that is waiting for the connection to be ready. */
     private static class PendingRequest {
         final ApiKeys apikey;
         final ApiMessage request;
         final boolean isInternalRequest;
-        final CompletableFuture<ApiMessage> responseFuture;
+        final RequestFuture responseFuture;
 
         public PendingRequest(
                 ApiKeys apikey,
                 ApiMessage request,
                 boolean isInternalRequest,
-                CompletableFuture<ApiMessage> responseFuture) {
+                RequestFuture responseFuture) {
             this.apikey = apikey;
             this.request = request;
             this.isInternalRequest = isInternalRequest;
@@ -670,14 +752,14 @@ final class ServerConnection {
         final int requestId;
         final ApiMessage request;
         final long requestStartTime;
-        final CompletableFuture<ApiMessage> responseFuture;
+        final RequestFuture responseFuture;
 
         InflightRequest(
                 short apiKey,
                 short apiVersion,
                 int requestId,
                 ApiMessage request,
-                CompletableFuture<ApiMessage> responseFuture) {
+                RequestFuture responseFuture) {
             this.apiKey = apiKey;
             this.apiVersion = apiVersion;
             this.requestId = requestId;
