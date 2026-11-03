@@ -68,15 +68,11 @@ public interface Lookup {
      * the physical primary key columns (i.e., the primary key columns exclude partition columns).
      *
      * <p>Note: Currently, if you want to lookup with specified lookup columns (i.e., prefix key
-     * lookup), the table you created must both define the primary key and the bucket key, in
-     * addition, the lookup columns needs to be equals with bucket key, and to be a part of the
-     * primary key and must be a prefix of the primary key. For example, if a table has fields
-     * [a,b,c,d], and the primary key is set to [a, b, c], with the bucket key set to [a, b], then
-     * the schema of the lookup columns would also be [a, b]. This pattern can create a Prefix Key
-     * Lookuper lookup rows by prefix of the primary key.
-     *
-     * <p>TODO: currently, the interface only support bucket key as the prefix key to lookup.
-     * Generalize the prefix key lookup to support any prefix keys.
+     * lookup), the table must define a bucket key that is a prefix of the primary key. The lookup
+     * columns must be the bucket key, optionally followed by the next primary key columns, but not
+     * the whole primary key. For example, with the primary key [a, b, c, d] and the bucket key [a],
+     * the lookup columns can be [a], [a, b] or [a, b, c]. Lookups are routed by the bucket key and
+     * return only the rows matching all lookup columns.
      *
      * <p>We also support prefix key lookup for partitioned tables. The schema of the lookup columns
      * should contain partition fields and bucket key. In addition, the schema of the lookup columns

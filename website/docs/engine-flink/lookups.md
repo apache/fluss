@@ -135,8 +135,8 @@ For more details about Fluss partitioned table, see [Partitioned Tables](table-d
 
 ### Instructions
 
-- Use a primary key table as a dimension table, and the join condition must a prefix subset of the primary keys of the dimension table.
-- The bucket key of Fluss dimension table need to set as the join key when creating Fluss table. 
+- Use a primary key table as a dimension table, whose bucket key is a prefix of its primary key.
+- The join keys must include the bucket key, and can also include the primary key columns that directly follow it. See [Examples (Multiple Keys)](#examples-multiple-keys).
 - Fluss prefix lookup join is in asynchronous mode by default for higher throughput. You can change the mode of prefix lookup join as synchronous mode by setting the SQL Hint `'lookup.async' = 'false'`.
 
 
@@ -268,6 +268,35 @@ ON `o`.`o_custkey` = `c`.`c_custkey` AND  `o`.`o_dt` = `c`.`dt`;
 ```
 
 For more details about Fluss partitioned table, see [Partitioned Tables](table-design/data-distribution/partitioning.md).
+
+### Examples (Multiple Keys)
+
+```sql title="Flink SQL"
+-- primary keys are (cs_custkey, cs_orderstatus, cs_date)
+-- bucket key is (cs_custkey)
+CREATE TABLE `fluss_catalog`.`my_db`.`customer_order_stats` (
+  `cs_custkey` INT NOT NULL,
+  `cs_orderstatus` CHAR(1) NOT NULL,
+  `cs_date` DATE NOT NULL,
+  `cs_order_count` BIGINT NOT NULL,
+  PRIMARY KEY (`cs_custkey`, `cs_orderstatus`, `cs_date`) NOT ENFORCED
+) WITH (
+  'bucket.key' = 'cs_custkey'
+);
+```
+
+```sql title="Flink SQL"
+-- join keys are the bucket key followed by the next primary key column.
+SELECT `o`.`o_orderkey`, `s`.`cs_date`, `s`.`cs_order_count`
+FROM
+(SELECT `orders_with_dt`.*, proctime() AS ptime FROM `orders_with_dt`) AS `o`
+LEFT JOIN `customer_order_stats`
+FOR SYSTEM_TIME AS OF `o`.`ptime` AS `s`
+ON `o`.`o_custkey` = `s`.`cs_custkey` AND `o`.`o_orderstatus` = `s`.`cs_orderstatus`;
+```
+
+Fluss looks up by the bucket key and the primary key columns that directly follow it among the join keys. The other join keys are filtered after the lookup, so a join on `cs_custkey` and `cs_date` looks up by `cs_custkey` only.
+On legacy tables (`table.kv.format-version` 1) with Paimon as the lake format, Fluss looks up by the bucket key only, and the other join keys are filtered after the lookup.
 
 ## Lookup Shuffle
 

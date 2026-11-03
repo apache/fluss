@@ -450,29 +450,34 @@ class FlussLookupInputPartitionerTest {
 
     /**
      * A prefix lookup (bucket key is a strict prefix of the primary key) must be shuffled too: the
-     * normalized key row is the bucket keys (+ partition keys), and routing must match the Fluss
-     * bucket assignment for that prefix.
+     * normalized key row is the prefix keys (+ partition keys), and routing must match the Fluss
+     * bucket assignment of the bucket key, also for a prefix of multiple keys.
      */
     @Test
     void testPrefixLookupPartitionMatchesBucket() {
-        // schema: region (bucket key), id, name; primary key (region, id), bucket key (region)
+        // schema: region (bucket key), shop, id, name; primary key (region, shop, id)
         RowType tableSchema =
                 RowType.of(
                         new LogicalType[] {
                             new VarCharType(VarCharType.MAX_LENGTH),
                             new IntType(),
+                            new IntType(),
                             new VarCharType(VarCharType.MAX_LENGTH)
                         },
-                        new String[] {"region", "id", "name"});
-        int[] pkIndexes = {0, 1};
+                        new String[] {"region", "shop", "id", "name"});
+        int[] pkIndexes = {0, 1, 2};
         int[] bucketKeyIndexes = {0};
-        // prefix lookup: only the bucket key (region) is used as the lookup key
-        int[][] lookupKeyIndexes = {{0}};
         int numBuckets = 5;
-
-        FlussLookupInputPartitioner partitioner =
+        FlussLookupInputPartitioner byRegion =
                 buildPartitioner(
-                        tableSchema, lookupKeyIndexes, pkIndexes, bucketKeyIndexes, numBuckets);
+                        tableSchema, new int[][] {{0}}, pkIndexes, bucketKeyIndexes, numBuckets);
+        FlussLookupInputPartitioner byRegionAndShop =
+                buildPartitioner(
+                        tableSchema,
+                        new int[][] {{0}, {1}},
+                        pkIndexes,
+                        bucketKeyIndexes,
+                        numBuckets);
 
         RowType keyRowType =
                 RowType.of(
@@ -481,16 +486,23 @@ class FlussLookupInputPartitionerTest {
         List<String> bucketKeyNames = Collections.singletonList("region");
         int numPartitions = 5;
         for (int i = 0; i < 40; i++) {
-            RowData joinKeys = GenericRowData.of(StringData.fromString("region-" + i));
-            int actual = partitioner.partition(joinKeys, numPartitions);
+            RowData region = GenericRowData.of(StringData.fromString("region-" + i));
             int expected =
                     Math.floorMod(
-                            flussBucketOf(keyRowType, bucketKeyNames, joinKeys, numBuckets),
+                            flussBucketOf(keyRowType, bucketKeyNames, region, numBuckets),
                             numPartitions);
-            assertThat(actual)
+            assertThat(byRegion.partition(region, numPartitions))
                     .as("region-%d", i)
                     .isEqualTo(expected)
                     .isBetween(0, numPartitions - 1);
+            for (int shop : new int[] {1, 129}) {
+                assertThat(
+                                byRegionAndShop.partition(
+                                        GenericRowData.of(region.getString(0), shop),
+                                        numPartitions))
+                        .as("region-%d, shop %d", i, shop)
+                        .isEqualTo(expected);
+            }
         }
     }
 
