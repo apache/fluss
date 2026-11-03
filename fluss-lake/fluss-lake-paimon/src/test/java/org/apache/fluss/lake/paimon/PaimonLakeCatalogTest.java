@@ -19,6 +19,7 @@ package org.apache.fluss.lake.paimon;
 
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidAlterTableException;
+import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.lake.lakestorage.TestingLakeCatalogContext;
 import org.apache.fluss.lake.paimon.utils.PaimonTestUtils.CompactHelper;
@@ -46,6 +47,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.File;
 import java.util.Arrays;
@@ -114,6 +116,46 @@ class PaimonLakeCatalogTest {
                                         TablePath.of("missing_db", "missing_table")))
                 .isInstanceOf(TableNotExistException.class)
                 .hasMessage("Table missing_db.missing_table does not exist in Paimon.");
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testRejectDefaultMergeEngineWithExistingFirstRowTable(boolean creatingFlussTable)
+            throws Exception {
+        TablePath tablePath = TablePath.of("merge_engine_db", "first_row_table");
+        createPaimonTable(
+                tablePath,
+                org.apache.paimon.schema.Schema.newBuilder()
+                        .column("id", org.apache.paimon.types.DataTypes.BIGINT().notNull())
+                        .column("amount", org.apache.paimon.types.DataTypes.INT())
+                        .primaryKey("id")
+                        .option(CoreOptions.BUCKET.key(), "1")
+                        .option(CoreOptions.BUCKET_KEY.key(), "id")
+                        .option(CoreOptions.MERGE_ENGINE.key(), "first-row")
+                        .build());
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.BIGINT())
+                                        .column("amount", DataTypes.INT())
+                                        .primaryKey("id")
+                                        .build())
+                        .distributedBy(1, "id")
+                        .property(TABLE_DATALAKE_ENABLED, true)
+                        .build();
+        TestingLakeCatalogContext context =
+                new TestingLakeCatalogContext(creatingFlussTable ? null : descriptor, descriptor) {
+                    @Override
+                    public boolean isCreatingFlussTable() {
+                        return creatingFlussTable;
+                    }
+                };
+
+        // Both ordinary creation and later enablement must reject the mismatched merge engine.
+        assertThatThrownBy(() -> flussPaimonCatalog.createTable(tablePath, descriptor, context))
+                .isInstanceOf(TableAlreadyExistException.class)
+                .hasMessageContaining("schema is not compatible");
     }
 
     @Test
@@ -497,6 +539,7 @@ class PaimonLakeCatalogTest {
 
     @ParameterizedTest
     @CsvSource({
+        "merge-engine,first-row",
         "merge-engine,aggregation",
         "aggregation.remove-record-on-delete,true",
         "partial-update.remove-record-on-delete,true"
@@ -511,18 +554,20 @@ class PaimonLakeCatalogTest {
         org.apache.paimon.schema.Schema expectedSchema =
                 createPaimonSchemaBuilder(primaryKeys, partitionKeys, "1", "id").build();
 
-        assertThat(isPaimonSchemaCompatible(existingSchema, expectedSchema)).isTrue();
+        assertThat(isPaimonSchemaCompatible(existingSchema, expectedSchema)).isFalse();
 
         assertThat(
                         isPaimonSchemaCompatible(
                                 existingSchema,
                                 createPaimonSchemaBuilder(primaryKeys, partitionKeys, "2", "id")
+                                        .option(key, value)
                                         .build()))
                 .isFalse();
         assertThat(
                         isPaimonSchemaCompatible(
                                 existingSchema,
                                 createPaimonSchemaBuilder(primaryKeys, partitionKeys, "1", "id")
+                                        .option(key, value)
                                         .option(CoreOptions.BUCKET_FUNCTION_TYPE.key(), "mod")
                                         .build()))
                 .isFalse();
@@ -530,6 +575,7 @@ class PaimonLakeCatalogTest {
                         isPaimonSchemaCompatible(
                                 existingSchema,
                                 createPaimonSchemaBuilder(primaryKeys, partitionKeys, "1", "id")
+                                        .option(key, value)
                                         .column("extra", org.apache.paimon.types.DataTypes.INT())
                                         .build()))
                 .isFalse();

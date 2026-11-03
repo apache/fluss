@@ -370,8 +370,7 @@ class PaimonTableToFlussTableDescriptorTest {
         "partial-update, true, false, false, aggregation, ignore",
         "partial-update, false, true, false, aggregation, allow",
         "partial-update, false, true, true, aggregation, allow",
-        "aggregation, false, true, true, aggregation, allow",
-        "aggregation, true, true, false, aggregation, ignore",
+        "aggregation, true, false, true, aggregation, ignore",
         "aggregation, true, false, false, aggregation, ignore"
     })
     void testConvertMergeAndDeleteSemantics(
@@ -393,6 +392,22 @@ class PaimonTableToFlussTableDescriptorTest {
                 CoreOptions.AGGREGATION_REMOVE_RECORD_ON_DELETE.key(),
                 Boolean.toString(removeOnDelete));
         TableDescriptor descriptor = convertPrimaryKeyTable(options);
+        assertThat(descriptor.getCustomProperties())
+                .containsEntry("paimon.merge-engine", engine)
+                .containsEntry(
+                        "paimon.partial-update.remove-record-on-delete",
+                        Boolean.toString(removeOnDelete))
+                .containsEntry(
+                        "paimon.aggregation.remove-record-on-delete",
+                        Boolean.toString(removeOnDelete));
+        assertThat(PaimonConversions.toPaimonSchema(descriptor).options())
+                .containsEntry(CoreOptions.MERGE_ENGINE.key(), engine)
+                .containsEntry(
+                        CoreOptions.PARTIAL_UPDATE_REMOVE_RECORD_ON_DELETE.key(),
+                        Boolean.toString(removeOnDelete))
+                .containsEntry(
+                        CoreOptions.AGGREGATION_REMOVE_RECORD_ON_DELETE.key(),
+                        Boolean.toString(removeOnDelete));
         Configuration configuration = Configuration.fromMap(descriptor.getProperties());
         DeleteBehavior expectedDeleteBehavior = DeleteBehavior.fromString(deleteBehavior);
         if (flussEngine == null && expectedDeleteBehavior == DeleteBehavior.ALLOW) {
@@ -533,8 +548,7 @@ class PaimonTableToFlussTableDescriptorTest {
     void testRejectUnsupportedAggregations(String function) throws Exception {
         Map<String, String> options = new HashMap<>();
         options.put(CoreOptions.MERGE_ENGINE.key(), "aggregation");
-        options.put(CoreOptions.AGGREGATION_REMOVE_RECORD_ON_DELETE.key(), "true");
-        options.put(CoreOptions.IGNORE_UPDATE_BEFORE.key(), "true");
+        options.put(CoreOptions.IGNORE_DELETE.key(), "true");
         options.put(CoreOptions.FIELDS_DEFAULT_AGG_FUNC.key(), "last_value");
         options.put("fields.payload.aggregate-function", function);
         assertInvalidPrimaryKeyOptions(options, "fields.payload.aggregate-function");
@@ -581,17 +595,6 @@ class PaimonTableToFlussTableDescriptorTest {
         TableDescriptor descriptor = convertPrimaryKeyTable(options);
         assertThat(descriptor.getSchema().getAggFunction("version")).contains(AggFunctions.SUM());
         assertThat(descriptor.getSchema().getAggFunction("payload")).contains(AggFunctions.MAX());
-
-        // Whole-row deletion cannot be combined with field-level ignore-retract in Paimon.
-        // Without that field policy, the current tiering path cannot write this mixed changelog.
-        options.put(CoreOptions.IGNORE_DELETE.key(), "false");
-        options.put(CoreOptions.IGNORE_UPDATE_BEFORE.key(), "true");
-        options.put(CoreOptions.AGGREGATION_REMOVE_RECORD_ON_DELETE.key(), "true");
-        options.remove("fields.payload.ignore-retract");
-        assertInvalidPrimaryKeyOptions(
-                options,
-                "fields.payload.ignore-retract",
-                "aggregation.remove-record-on-delete=true");
     }
 
     @ParameterizedTest
@@ -613,26 +616,23 @@ class PaimonTableToFlussTableDescriptorTest {
         assertInvalidPrimaryKeyOptions(options, message);
     }
 
-    @Test
-    void testRejectUnsupportedAggregationRetraction() throws Exception {
+    @ParameterizedTest
+    @CsvSource({
+        "false, false, ignore-delete=true, cannot retract field contributions on DELETE",
+        "false, true, aggregation.remove-record-on-delete, delete/reinsert",
+        "true, true, aggregation.remove-record-on-delete, delete/reinsert"
+    })
+    void testRejectUnsupportedAggregationRetraction(
+            boolean ignoreDelete, boolean removeOnDelete, String option, String message) {
         Map<String, String> options = new HashMap<>();
         options.put(CoreOptions.MERGE_ENGINE.key(), "aggregation");
+        options.put(CoreOptions.IGNORE_DELETE.key(), Boolean.toString(ignoreDelete));
+        options.put(CoreOptions.IGNORE_UPDATE_BEFORE.key(), "true");
+        options.put(
+                CoreOptions.AGGREGATION_REMOVE_RECORD_ON_DELETE.key(),
+                Boolean.toString(removeOnDelete));
         options.put("fields.version.aggregate-function", "sum");
-        assertInvalidPrimaryKeyOptions(
-                options,
-                "merge-engine=aggregation",
-                "ignore-delete=false",
-                "aggregation.remove-record-on-delete=true",
-                "Fluss aggregation supports whole-row DELETE semantics only",
-                "whole-row deletion");
-        options.put(CoreOptions.AGGREGATION_REMOVE_RECORD_ON_DELETE.key(), "true");
-        assertInvalidPrimaryKeyOptions(
-                options,
-                "merge-engine=aggregation",
-                "ignore-delete=false",
-                "ignore-update-before=true",
-                "Fluss aggregation requires UPDATE_BEFORE records to be ignored",
-                "UPDATE_BEFORE");
+        assertInvalidPrimaryKeyOptions(options, option, message);
     }
 
     private static Stream<Arguments> unsupportedPrimaryKeySchemas() {

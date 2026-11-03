@@ -149,12 +149,7 @@ class CreateTableFromLakeITCase {
     }
 
     @ParameterizedTest
-    @CsvSource({
-        "partial-update,true",
-        "partial-update,false",
-        "aggregation,true",
-        "aggregation,false"
-    })
+    @CsvSource({"partial-update,true", "partial-update,false", "aggregation,true"})
     void testCreatePrimaryKeyTableWithMergeSemantics(String engine, boolean ignoreDelete)
             throws Exception {
         TablePath tablePath =
@@ -215,12 +210,14 @@ class CreateTableFromLakeITCase {
         // Partial-update cannot accept tiering retractions with both options disabled.
         "partial-update, false, false, , false, partial-update.remove-record-on-delete",
         // Aggregation's default DELETE retracts field contributions, which Fluss cannot map.
-        "aggregation, false, false, sum, false, aggregation.remove-record-on-delete",
+        "aggregation, false, false, sum, false, ignore-delete=true",
+        // Whole-row DELETE payloads retain the old accumulator on delete/reinsert.
+        "aggregation, false, true, sum, false, aggregation.remove-record-on-delete",
+        "aggregation, true, true, sum, false, aggregation.remove-record-on-delete",
         // SUM must retract the previous aggregate result before accumulating the next one.
         "aggregation, true, false, sum, true, fields.amount.ignore-retract",
-        // MAX must ignore retractions, including when whole-row DELETE is enabled.
-        "aggregation, true, false, max, false, fields.amount.ignore-retract",
-        "aggregation, false, true, max, false, fields.amount.ignore-retract"
+        // MAX must ignore retractions.
+        "aggregation, true, false, max, false, fields.amount.ignore-retract"
     })
     void testRejectUnsafePrimaryKeyMergeSemantics(
             String engine,

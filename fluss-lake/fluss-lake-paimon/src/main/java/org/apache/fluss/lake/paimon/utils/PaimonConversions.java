@@ -385,6 +385,21 @@ public class PaimonConversions {
                         .partitionedBy(table.partitionKeys())
                         .properties(properties)
                         .comment(table.comment().orElse(null));
+        if (!table.primaryKeys().isEmpty()) {
+            // Preserve validated native merge settings so enablement and schema changes can
+            // compare immutable options strictly against the existing Paimon table.
+            for (String option :
+                    new String[] {
+                        CoreOptions.MERGE_ENGINE.key(),
+                        CoreOptions.AGGREGATION_REMOVE_RECORD_ON_DELETE.key(),
+                        CoreOptions.PARTIAL_UPDATE_REMOVE_RECORD_ON_DELETE.key()
+                    }) {
+                String value = table.options().get(option);
+                if (value != null) {
+                    descriptorBuilder.customProperty(PAIMON_CONF_PREFIX + option, value);
+                }
+            }
+        }
         applyDistribution(tablePath, table, descriptorBuilder);
         return descriptorBuilder.build();
     }
@@ -626,22 +641,27 @@ public class PaimonConversions {
             }
         }
         if (options.mergeEngine() == CoreOptions.MergeEngine.AGGREGATE) {
-            // Fluss supports whole-row deletion, but cannot retract a field contribution.
-            if (!options.ignoreDelete() && !options.aggregationRemoveRecordOnDelete()) {
+            // Paimon's AggregateMergeFunction reinitializes its accumulator from the DELETE
+            // payload. With Fluss's old-row payload, SUM produces 13 instead of 3 for
+            // INSERT(10), DELETE(10), INSERT(3) in one flush. Reject this configuration until
+            // delete/reinsert is handled correctly. Tiering also forwards undo DELETEs even
+            // when ignore-delete=true, so that option cannot make this configuration safe.
+            // See https://github.com/apache/paimon/issues/10963.
+            if (options.aggregationRemoveRecordOnDelete()) {
                 throw unsupportedPrimaryKeyDefinition(
                         tablePath,
                         CoreOptions.AGGREGATION_REMOVE_RECORD_ON_DELETE.key(),
-                        "Fluss aggregation supports whole-row DELETE semantics only. "
-                                + "With 'merge-engine=aggregation' and 'ignore-delete=false', "
-                                + "set 'aggregation.remove-record-on-delete=true' to use whole-row deletion.");
+                        "Fluss tiering includes the old row in the DELETE payload. Paimon uses it "
+                                + "to reinitialize the aggregation accumulator, so delete/reinsert "
+                                + "can retain deleted values. Set 'aggregation.remove-record-on-delete=false' "
+                                + "and 'ignore-delete=true'.");
             }
-            if (!options.ignoreDelete() && !options.ignoreUpdateBefore()) {
+            if (!options.ignoreDelete()) {
                 throw unsupportedPrimaryKeyDefinition(
                         tablePath,
-                        CoreOptions.IGNORE_UPDATE_BEFORE.key(),
-                        "Fluss aggregation requires UPDATE_BEFORE records to be ignored. "
-                                + "With 'merge-engine=aggregation' and 'ignore-delete=false', "
-                                + "set 'ignore-update-before=true' to ignore these records.");
+                        CoreOptions.IGNORE_DELETE.key(),
+                        "Fluss aggregation cannot retract field contributions on DELETE. "
+                                + "Set 'ignore-delete=true'.");
             }
         }
         validatePrimaryKeySequenceField(tablePath, table, options);

@@ -607,17 +607,29 @@ class EnableFlussOnLakeTableProcedureITCase extends FlinkPaimonTieringTestBase {
 
     @ParameterizedTest
     @CsvSource({
-        "first-row,true,false,first_row",
-        "partial-update,true,false,aggregation",
-        "partial-update,false,true,aggregation",
-        "aggregation,true,false,aggregation",
-        "aggregation,false,true,aggregation"
+        "first-row,true,false,first_row,",
+        "partial-update,true,false,aggregation,",
+        "partial-update,false,true,aggregation,",
+        "aggregation,true,false,aggregation,",
+        "aggregation,false,true,,aggregation.remove-record-on-delete",
+        "aggregation,true,true,,aggregation.remove-record-on-delete"
     })
     void testEnableNativePrimaryKeyMergeEngine(
-            String engine, boolean ignoreDelete, boolean removeOnDelete, String flussEngine)
+            String engine,
+            boolean ignoreDelete,
+            boolean removeOnDelete,
+            String flussEngine,
+            String expectedError)
             throws Exception {
         TablePath tablePath =
-                TablePath.of(DATABASE, "native_" + engine.replace('-', '_') + "_" + ignoreDelete);
+                TablePath.of(
+                        DATABASE,
+                        "native_"
+                                + engine.replace('-', '_')
+                                + "_"
+                                + ignoreDelete
+                                + "_"
+                                + removeOnDelete);
         Schema.Builder schema =
                 Schema.newBuilder()
                         .column("id", org.apache.paimon.types.DataTypes.BIGINT().notNull())
@@ -640,9 +652,35 @@ class EnableFlussOnLakeTableProcedureITCase extends FlinkPaimonTieringTestBase {
         }
         Map<String, String> nativeOptions = createPaimonTable(tablePath, schema.build()).options();
 
+        if (expectedError != null) {
+            assertThatThrownBy(
+                            () ->
+                                    tableEnvironment
+                                            .executeSql(procedureSql(tablePath, null))
+                                            .await())
+                    .rootCause()
+                    .isInstanceOf(InvalidTableException.class)
+                    .hasMessageContaining(expectedError);
+            assertThat(admin.tableExists(tablePath).get()).isFalse();
+            return;
+        }
+
         TableInfo enabled = assertEnableFlussProcedureSucceeds(tablePath, null);
         assertThat(enabled.getTableConfig().getMergeEngineType())
                 .contains(MergeEngineType.fromString(flussEngine));
+        assertThat(enabled.getCustomProperties().toMap())
+                .containsEntry("paimon.merge-engine", engine);
+        if ("partial-update".equals(engine)) {
+            assertThat(enabled.getCustomProperties().toMap())
+                    .containsEntry(
+                            "paimon.partial-update.remove-record-on-delete",
+                            Boolean.toString(removeOnDelete));
+        } else if ("aggregation".equals(engine)) {
+            assertThat(enabled.getCustomProperties().toMap())
+                    .containsEntry(
+                            "paimon.aggregation.remove-record-on-delete",
+                            Boolean.toString(removeOnDelete));
+        }
 
         // Re-enable and subsequent schema changes must also retain the native merge settings.
         admin.alterTable(
