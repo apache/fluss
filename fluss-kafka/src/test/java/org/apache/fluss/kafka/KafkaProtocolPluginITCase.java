@@ -40,6 +40,7 @@ import org.junit.jupiter.api.Test;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -54,9 +55,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 class KafkaProtocolPluginITCase extends KafkaServerTestBase {
 
     @Test
-    void testKafkaMetricsThroughNettyServer() throws Exception {
+    void testKafkaMetricsAggregateAcrossListeners() throws Exception {
         Configuration conf = new Configuration();
         conf.set(ConfigOptions.KAFKA_ENABLED, true);
+        conf.set(ConfigOptions.KAFKA_LISTENER_NAMES, Arrays.asList("KAFKA", "KAFKA_SECOND"));
         conf.set(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS, 1);
         conf.set(ConfigOptions.NETTY_SERVER_NUM_NETWORK_THREADS, 1);
         Map<String, Metric> produceMetrics = new ConcurrentHashMap<>();
@@ -66,14 +68,16 @@ class KafkaProtocolPluginITCase extends KafkaServerTestBase {
                     @Override
                     public void register(Metric metric, String name, AbstractMetricGroup group) {
                         Map<String, String> variables = group.getAllVariables();
-                        if ("KAFKA".equals(variables.get("listener"))) {
+                        String requestName = variables.get("request");
+                        if (KAFKA_PRODUCE_REQUEST_NAME.equals(requestName)
+                                || KAFKA_DEFAULT_REQUEST_NAME.equals(requestName)) {
                             assertThat(group.getLogicalScope(CharacterFilter.NO_OP_FILTER, '_'))
-                                    .isEqualTo("tabletserver_kafka_listener_request");
-                            assertThat(variables).doesNotContainKeys("database", "table");
-                            if (KAFKA_PRODUCE_REQUEST_NAME.equals(variables.get("request"))) {
+                                    .isEqualTo("tabletserver_kafka_request");
+                            assertThat(variables)
+                                    .doesNotContainKeys("listener", "database", "table");
+                            if (KAFKA_PRODUCE_REQUEST_NAME.equals(requestName)) {
                                 produceMetrics.put(name, metric);
-                            } else if (KAFKA_DEFAULT_REQUEST_NAME.equals(
-                                    variables.get("request"))) {
+                            } else {
                                 defaultMetrics.put(name, metric);
                             }
                         }
@@ -81,18 +85,15 @@ class KafkaProtocolPluginITCase extends KafkaServerTestBase {
                 };
         MetricGroup metricGroup = new GenericMetricGroup(registry, null, "tabletserver");
         try (NettyServer server =
-                        new NettyServer(
-                                conf,
-                                Collections.singletonList(new Endpoint("localhost", 0, "KAFKA")),
-                                createTabletService(),
-                                metricGroup,
-                                RequestsMetrics.createCoordinatorServerRequestMetrics(
-                                        metricGroup));
-                Socket socket = new Socket()) {
+                new NettyServer(
+                        conf,
+                        Arrays.asList(
+                                new Endpoint("localhost", 0, "KAFKA"),
+                                new Endpoint("localhost", 0, "KAFKA_SECOND")),
+                        createTabletService(),
+                        metricGroup,
+                        RequestsMetrics.createCoordinatorServerRequestMetrics(metricGroup))) {
             server.start();
-            Endpoint endpoint = server.getBindEndpoints().get(0);
-            socket.connect(new InetSocketAddress(endpoint.getHost(), endpoint.getPort()), 10_000);
-            socket.setSoTimeout(10_000);
             ProduceRequestData data =
                     new ProduceRequestData().setAcks((short) 1).setTimeoutMs(1000);
             data.topicData()
@@ -104,14 +105,21 @@ class KafkaProtocolPluginITCase extends KafkaServerTestBase {
                                                     new ProduceRequestData.PartitionProduceData()
                                                             .setIndex(0)
                                                             .setRecords(MemoryRecords.EMPTY))));
-            sendRequest(socket, new ApiVersionsRequest.Builder().build((short) 0));
-            // An empty batch is rejected before append and counts as one failed request.
-            sendRequest(socket, new ProduceRequest(data, (short) 3));
+            for (Endpoint endpoint : server.getBindEndpoints()) {
+                try (Socket socket = new Socket()) {
+                    socket.connect(
+                            new InetSocketAddress(endpoint.getHost(), endpoint.getPort()), 10_000);
+                    socket.setSoTimeout(10_000);
+                    sendRequest(socket, new ApiVersionsRequest.Builder().build((short) 0));
+                    // An empty batch is rejected before append and counts as one failed request.
+                    sendRequest(socket, new ProduceRequest(data, (short) 3));
+                }
+            }
             waitUntil(
                     () ->
-                            ((Meter) produceMetrics.get("errorsPerSecond")).getCount() == 1
+                            ((Meter) produceMetrics.get("errorsPerSecond")).getCount() == 2
                                     && ((Meter) defaultMetrics.get("requestsPerSecond")).getCount()
-                                            == 1,
+                                            == 2,
                     Duration.ofSeconds(10),
                     "Kafka request metrics were not updated");
             assertThat(((Meter) defaultMetrics.get("errorsPerSecond")).getCount()).isZero();

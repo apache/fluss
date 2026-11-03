@@ -61,6 +61,7 @@ public class KafkaProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
     private Map<String, Supplier<ServerAuthenticator>> authenticatorSuppliers =
             Collections.emptyMap();
     private Set<String> saslListenerNames = Collections.emptySet();
+    private RequestsMetrics requestMetrics;
 
     @Override
     public String name() {
@@ -93,16 +94,20 @@ public class KafkaProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
                             "No SASL server authenticator is configured for Kafka listener %s.",
                             listenerName);
         }
+        if (requestMetrics == null) {
+            requestMetrics =
+                    new RequestsMetrics(
+                            serverMetricGroup.addGroup("kafka"),
+                            Collections.emptyList(),
+                            Arrays.asList(KAFKA_PRODUCE_REQUEST_NAME, KAFKA_DEFAULT_REQUEST_NAME));
+        }
         return new KafkaChannelInitializer(
                 requestChannels,
                 listenerName,
                 conf.get(ConfigOptions.NETTY_CONNECTION_MAX_IDLE_TIME).getSeconds(),
                 (int) conf.get(ConfigOptions.NETTY_SERVER_MAX_REQUEST_SIZE).getBytes(),
                 authenticatorSupplier,
-                new RequestsMetrics(
-                        serverMetricGroup.addGroup("kafka").addGroup("listener", listenerName),
-                        Collections.emptyList(),
-                        Arrays.asList(KAFKA_PRODUCE_REQUEST_NAME, KAFKA_DEFAULT_REQUEST_NAME)));
+                requestMetrics);
     }
 
     @Override
