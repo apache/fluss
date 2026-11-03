@@ -26,7 +26,6 @@ import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.HistoricalPartitionThrottledException;
 import org.apache.fluss.exception.InvalidMetadataException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
-import org.apache.fluss.exception.NetworkException;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.RetriableException;
@@ -617,7 +616,7 @@ public class Sender implements Runnable {
                                             putKvVersion.get(),
                                             PUT_KV_MIN_VERSION_FOR_V2_FORMAT));
                     for (ReadyWriteBatch batch : v2Batches) {
-                        failBatch(batch, exception, batch.writeBatch().attempts() < retries);
+                        failBatch(batch, exception, true);
                     }
                     return removeAll(batches, v2Batches);
                 }
@@ -626,23 +625,13 @@ public class Sender implements Runnable {
             }
             // Handshake incomplete: postpone the V2 batches until the version is known.
             for (ReadyWriteBatch batch : v2Batches) {
-                if (batch.writeBatch().attempts() < retries) {
-                    reEnqueueBatch(batch);
-                } else {
-                    failBatch(
-                            batch,
-                            new NetworkException(
-                                    "Unable to verify PUT_KV api version of server "
-                                            + destination
-                                            + " for KvRecord V2 format batches: connection not "
-                                            + "ready after retries exhausted."),
-                            false);
-                }
+                accumulator.reEnqueueUnsent(batch);
+                maybeRemoveFromInflightBatches(batch);
             }
         } catch (Exception e) {
             // e.g., UnsupportedVersionException when the server does not support PUT_KV at all
             for (ReadyWriteBatch batch : v2Batches) {
-                failBatch(batch, e, batch.writeBatch().attempts() < retries);
+                failBatch(batch, e, true);
             }
         }
         return removeAll(batches, v2Batches);

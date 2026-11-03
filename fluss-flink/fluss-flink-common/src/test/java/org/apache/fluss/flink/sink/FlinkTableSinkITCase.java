@@ -1524,7 +1524,9 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
     }
 
     @Test
+    @MultiVersionTest
     void testComprehensiveAggregationFunctions() throws Exception {
+        disableSinkRequireOnConflict();
         // Test all 11 aggregate functions (each function tested once with representative data type)
         tEnv.executeSql(
                 "create table comprehensive_agg ("
@@ -1727,7 +1729,9 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
     }
 
     @Test
+    @MultiVersionTest
     void testPartialUpdateOnAggregationMergeEngine() throws Exception {
+        disableSinkRequireOnConflict();
         tEnv.executeSql(
                 "create table agg_partial_update ("
                         + "id int not null primary key not enforced, "
@@ -1769,7 +1773,9 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
      */
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
+    @MultiVersionTest
     void testRetractOnAggregationTableEndToEnd(boolean removeRecordOnDelete) throws Exception {
+        disableSinkRequireOnConflict();
         // The pipeline, changelog reader, and bounded writes run concurrently in a four-slot
         // mini-cluster. Give each job one task so writes can be scheduled while both readers run.
         tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);

@@ -966,6 +966,70 @@ class KvTabletMergeModeTest {
     }
 
     @Test
+    void testDuplicateRetractAfterFollowingBatchDoesNotChangeState() throws Exception {
+        initTablets(SUM_SCHEMA);
+        long writerId = 123L;
+        kvTablet.putAsLeader(
+                kvRecordBatchFactory.ofRecords(
+                        Collections.singletonList(
+                                SUM_KV_RECORD_FACTORY.ofRecord(
+                                        "k1".getBytes(), new Object[] {1, 100L})),
+                        writerId,
+                        0),
+                null,
+                MergeMode.DEFAULT);
+        KvRecordBatch retract =
+                kvRecordBatchFactory.ofV2Records(
+                        Collections.singletonList(
+                                V2RecordEntry.of(
+                                        MutationType.RETRACT,
+                                        SUM_KV_RECORD_FACTORY.ofRecord(
+                                                "k1".getBytes(), new Object[] {1, 30L}))),
+                        writerId,
+                        1);
+        kvTablet.putAsLeader(retract, null, MergeMode.DEFAULT);
+        kvTablet.putAsLeader(
+                kvRecordBatchFactory.ofRecords(
+                        Collections.singletonList(
+                                SUM_KV_RECORD_FACTORY.ofRecord(
+                                        "k1".getBytes(), new Object[] {1, 5L})),
+                        writerId,
+                        2),
+                null,
+                MergeMode.DEFAULT);
+        long endOffset = logTablet.localLogEndOffset();
+        assertThat(kvTablet.putAsLeader(retract, null, MergeMode.DEFAULT).duplicated()).isTrue();
+        assertThat(logTablet.localLogEndOffset()).isEqualTo(endOffset);
+        kvTablet.putAsLeader(
+                kvRecordBatchFactory.ofV2Records(
+                        Collections.singletonList(
+                                V2RecordEntry.of(
+                                        MutationType.RETRACT,
+                                        SUM_KV_RECORD_FACTORY.ofRecord(
+                                                "k1".getBytes(), new Object[] {1, 5L}))),
+                        writerId,
+                        3),
+                null,
+                MergeMode.DEFAULT);
+        assertThatLogRecords(readLogRecords(endOffset))
+                .withSchema(SUM_ROW_TYPE)
+                .assertCheckSum(true)
+                .isEqualTo(
+                        createBasicMemoryLogRecords(
+                                SUM_ROW_TYPE,
+                                SCHEMA_ID,
+                                endOffset,
+                                -1L,
+                                CURRENT_LOG_MAGIC_VALUE,
+                                writerId,
+                                3,
+                                Arrays.asList(ChangeType.UPDATE_BEFORE, ChangeType.UPDATE_AFTER),
+                                Arrays.asList(new Object[] {1, 75L}, new Object[] {1, 70L}),
+                                LogFormat.ARROW,
+                                DEFAULT_COMPRESSION));
+    }
+
+    @Test
     void testRetractThenUpsertRestoresValue() throws Exception {
         // Use a simple SUM schema
         initTablets(SUM_SCHEMA);

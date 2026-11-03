@@ -26,7 +26,7 @@ import javax.annotation.Nullable;
 /**
  * The result of retracting a record ({@link UpsertWriter#retract(InternalRow)}).
  *
- * @since 0.10
+ * @since 1.1
  */
 @PublicEvolving
 public class RetractResult {

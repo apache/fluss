@@ -37,6 +37,7 @@ import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.exception.TimeoutException;
 import org.apache.fluss.exception.TooManyPartitionsException;
 import org.apache.fluss.exception.UnknownWriterIdException;
+import org.apache.fluss.exception.UnsupportedVersionException;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
@@ -56,7 +57,9 @@ import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.ProduceLogResponse;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.messages.PutKvResponse;
+import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.rpc.protocol.Errors;
+import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.server.entity.ProduceLogDataForBucket;
 import org.apache.fluss.server.entity.PutKvDataForBucket;
 import org.apache.fluss.server.tablet.TestTabletServerGateway;
@@ -169,6 +172,105 @@ final class SenderTest {
                                 tableInfo,
                                 now))
                 .isFalse();
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {0, 1})
+    void testRetractWaitsForHandshakeWithoutConsumingRetries(int retries) throws Exception {
+        sender.destroyResources();
+        AtomicBoolean connected = new AtomicBoolean(false);
+        metadataUpdater = retractMetadataUpdater(connected, (short) 4);
+        ManualClock manualClock = new ManualClock();
+        clock = manualClock;
+        IdempotenceManager manager = createIdempotenceManager(true);
+        manager.setWriterId(0L);
+        sender = setupWithIdempotenceState(manager, retries, 0, Duration.ofMillis(100));
+        TableBucket bucket = new TableBucket(DATA1_TABLE_ID_PK, 0);
+        CompletableFuture<Exception> result = appendRetract(bucket);
+
+        sender.runOnce();
+        assertThat(result).isNotDone();
+        assertThat(node1Gateway().pendingRequestSize()).isZero();
+        assertThat(
+                        accumulator
+                                .getReadyDeque(PhysicalTablePath.of(DATA1_TABLE_PATH_PK), 0)
+                                .peek()
+                                .attempts())
+                .isZero();
+        assertThat(accumulator.retriableWriteBackoffRemainingMs(bucket)).isPositive();
+        assertThat(writerMetricGroup.recordsRetryTotal().getCount()).isZero();
+
+        connected.set(true);
+        manualClock.advanceTime(Duration.ofMillis(100));
+        sender.runOnce();
+        assertThat(node1Gateway().pendingRequestSize()).isEqualTo(1);
+        finishRequest(bucket, 0, createPutKvResponse(bucket, 1L));
+        assertThat(result.get()).isNull();
+        assertThat(manager.nextSequence(bucket)).isEqualTo(1);
+    }
+
+    @ParameterizedTest
+    @ValueSource(shorts = {1, 2, 3})
+    void testRejectedRetractDoesNotLeaveSequenceGap(short version) throws Exception {
+        sender.destroyResources();
+        metadataUpdater = retractMetadataUpdater(new AtomicBoolean(true), version);
+        IdempotenceManager manager = createIdempotenceManager(true);
+        manager.setWriterId(0L);
+        sender = setupWithIdempotenceState(manager, 0, 0);
+        TableBucket bucket = new TableBucket(DATA1_TABLE_ID_PK, 0);
+        CompletableFuture<Exception> retract = appendRetract(bucket);
+        sender.runOnce();
+        assertThat(retract.get()).isInstanceOf(UnsupportedVersionException.class);
+        assertThat(node1Gateway().pendingRequestSize()).isZero();
+        assertThat(manager.nextSequence(bucket)).isZero();
+
+        CompletableFuture<Exception> upsert = new CompletableFuture<>();
+        appendKvToAccumulator(
+                bucket,
+                compactedRow(DATA1_ROW_TYPE, new Object[] {1, "a"}),
+                (tb, offset, error) -> upsert.complete(error));
+        sender.runOnce();
+        assertThat(node1Gateway().pendingRequestSize()).isEqualTo(1);
+        finishRequest(bucket, 0, createPutKvResponse(bucket, 1L));
+        assertThat(upsert.get()).isNull();
+        assertThat(manager.nextSequence(bucket)).isEqualTo(1);
+    }
+
+    private TestingMetadataUpdater retractMetadataUpdater(AtomicBoolean connected, short version) {
+        return new TestingMetadataUpdater(
+                Collections.singletonMap(DATA1_TABLE_PATH_PK, DATA1_TABLE_INFO_PK)) {
+            @Override
+            public boolean tryConnect(int serverId) {
+                return connected.get();
+            }
+
+            @Override
+            public Optional<Short> negotiatedMaxApiVersion(int serverId, ApiKeys apiKey) {
+                return Optional.of(version);
+            }
+        };
+    }
+
+    private CompletableFuture<Exception> appendRetract(TableBucket bucket) throws Exception {
+        BinaryRow row = compactedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
+        byte[] key =
+                new CompactedKeyEncoder(DATA1_ROW_TYPE, DATA1_SCHEMA_PK.getPrimaryKeyIndexes())
+                        .encodeKey(row);
+        bucketAssigner.setBucketId(bucket.getBucket());
+        CompletableFuture<Exception> result = new CompletableFuture<>();
+        accumulator.append(
+                WriteRecord.forRetract(
+                        DATA1_TABLE_INFO_PK,
+                        PhysicalTablePath.of(DATA1_TABLE_PATH_PK),
+                        row,
+                        key,
+                        key,
+                        WriteFormat.COMPACTED_KV,
+                        null,
+                        MergeMode.DEFAULT),
+                (tb, offset, error) -> result.complete(error),
+                metadataUpdater.getCluster());
+        return result;
     }
 
     @ParameterizedTest

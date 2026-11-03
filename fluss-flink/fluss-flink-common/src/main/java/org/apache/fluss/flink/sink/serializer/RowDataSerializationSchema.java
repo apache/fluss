@@ -121,6 +121,10 @@ public class RowDataSerializationSchema implements FlussSerializationSchema<RowD
      */
     @Nullable private transient ProjectedRow outputProjection;
 
+    private transient int[] inputIndexes;
+    private transient int lastInputArity = -1;
+    @Nullable private transient int[] retractTargetColumns;
+
     /**
      * Estimator for calculating the size of RowData instances. Maybe null if there is no need to
      * calculate size.
@@ -157,9 +161,14 @@ public class RowDataSerializationSchema implements FlussSerializationSchema<RowD
     @Override
     public void open(InitializationContext context) throws Exception {
         this.converter = new FlinkAsFlussRow();
+        this.lastInputArity = -1;
         List<String> targetFieldNames = context.getRowSchema().getFieldNames();
         List<String> inputFieldNames = context.getInputRowSchema().getFieldNames();
         this.outputPadding = new PaddingRow(inputFieldNames.size());
+        inputIndexes = new int[targetFieldNames.size()];
+        for (int i = 0; i < inputIndexes.length; i++) {
+            inputIndexes[i] = inputFieldNames.indexOf(targetFieldNames.get(i));
+        }
         if (targetFieldNames.size() != inputFieldNames.size()) {
             // there is a schema evolution happens (e.g., ADD COLUMN), need to build index mapping
             int[] indexMapping = new int[targetFieldNames.size()];
@@ -203,6 +212,23 @@ public class RowDataSerializationSchema implements FlussSerializationSchema<RowD
         Long estimatedSizeInBytes = null;
         if (sizeEstimator != null) {
             estimatedSizeInBytes = sizeEstimator.estimateSize(value);
+        }
+        if (opType == OperationType.RETRACT) {
+            // Padding supplies storage nulls, not retract contributions for absent input fields.
+            if (lastInputArity != value.getArity()) {
+                lastInputArity = value.getArity();
+                List<Integer> present = new ArrayList<>();
+                for (int i = 0; i < inputIndexes.length; i++) {
+                    if (inputIndexes[i] >= 0 && inputIndexes[i] < lastInputArity) {
+                        present.add(i);
+                    }
+                }
+                retractTargetColumns =
+                        present.size() == inputIndexes.length
+                                ? null
+                                : present.stream().mapToInt(Integer::intValue).toArray();
+            }
+            return new RowWithOp(row, opType, estimatedSizeInBytes, retractTargetColumns);
         }
         return new RowWithOp(row, opType, estimatedSizeInBytes);
     }

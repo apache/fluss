@@ -840,29 +840,95 @@ class FieldAggregatorParameterizedTest {
                 Arguments.of("BIGINT_negative", DataTypes.BIGINT(), 5L, 10L, -5L));
     }
 
-    @ParameterizedTest(name = "sum retract overflow with {0}")
+    @ParameterizedTest(name = "integer aggregation wraparound with {0}")
+    @MethodSource("integerWraparoundData")
+    void testIntegerAggregationWraparound(
+            String name,
+            DataType type,
+            Object maximum,
+            Object one,
+            Object minimum,
+            Object two,
+            Object product) {
+        FieldSumAgg sum = new FieldSumAgg(type);
+        assertThat(sum.agg(maximum, one)).isEqualTo(minimum);
+        assertThat(new FieldProductAgg(type).agg(maximum, two)).isEqualTo(product);
+        assertThat(sum.retract(null, minimum)).isEqualTo(minimum);
+    }
+
+    static Stream<Arguments> integerWraparoundData() {
+        return Stream.of(
+                Arguments.of(
+                        "TINYINT",
+                        DataTypes.TINYINT(),
+                        Byte.MAX_VALUE,
+                        (byte) 1,
+                        Byte.MIN_VALUE,
+                        (byte) 2,
+                        (byte) -2),
+                Arguments.of(
+                        "SMALLINT",
+                        DataTypes.SMALLINT(),
+                        Short.MAX_VALUE,
+                        (short) 1,
+                        Short.MIN_VALUE,
+                        (short) 2,
+                        (short) -2),
+                Arguments.of(
+                        "INTEGER", DataTypes.INT(), Integer.MAX_VALUE, 1, Integer.MIN_VALUE, 2, -2),
+                Arguments.of(
+                        "BIGINT", DataTypes.BIGINT(), Long.MAX_VALUE, 1L, Long.MIN_VALUE, 2L, -2L));
+    }
+
+    @ParameterizedTest(name = "sum retract wraparound with {0}")
     @MethodSource("sumRetractOverflowTestData")
     void testSumRetractOverflow(
-            String typeName, DataType dataType, Object accumulator, Object retractVal) {
-        FieldSumAgg sumAgg = new FieldSumAgg(dataType);
-        assertThatThrownBy(() -> sumAgg.retract(accumulator, retractVal))
-                .isInstanceOf(ArithmeticException.class);
+            String typeName,
+            DataType dataType,
+            Object accumulator,
+            Object retractVal,
+            Object expected) {
+        assertThat(new FieldSumAgg(dataType).retract(accumulator, retractVal)).isEqualTo(expected);
     }
 
     static Stream<Arguments> sumRetractOverflowTestData() {
         return Stream.of(
-                // Underflow cases
-                Arguments.of("TINYINT_underflow", DataTypes.TINYINT(), Byte.MIN_VALUE, (byte) 1),
                 Arguments.of(
-                        "SMALLINT_underflow", DataTypes.SMALLINT(), Short.MIN_VALUE, (short) 1),
-                Arguments.of("INT_underflow", DataTypes.INT(), Integer.MIN_VALUE, 1),
-                Arguments.of("BIGINT_underflow", DataTypes.BIGINT(), Long.MIN_VALUE, 1L),
-                // Overflow cases (subtracting a negative value)
-                Arguments.of("TINYINT_overflow", DataTypes.TINYINT(), Byte.MAX_VALUE, (byte) -1),
+                        "TINYINT_underflow",
+                        DataTypes.TINYINT(),
+                        Byte.MIN_VALUE,
+                        (byte) 1,
+                        Byte.MAX_VALUE),
                 Arguments.of(
-                        "SMALLINT_overflow", DataTypes.SMALLINT(), Short.MAX_VALUE, (short) -1),
-                Arguments.of("INT_overflow", DataTypes.INT(), Integer.MAX_VALUE, -1),
-                Arguments.of("BIGINT_overflow", DataTypes.BIGINT(), Long.MAX_VALUE, -1L));
+                        "SMALLINT_underflow",
+                        DataTypes.SMALLINT(),
+                        Short.MIN_VALUE,
+                        (short) 1,
+                        Short.MAX_VALUE),
+                Arguments.of(
+                        "INT_underflow", DataTypes.INT(), Integer.MIN_VALUE, 1, Integer.MAX_VALUE),
+                Arguments.of(
+                        "BIGINT_underflow", DataTypes.BIGINT(), Long.MIN_VALUE, 1L, Long.MAX_VALUE),
+                Arguments.of(
+                        "TINYINT_overflow",
+                        DataTypes.TINYINT(),
+                        Byte.MAX_VALUE,
+                        (byte) -1,
+                        Byte.MIN_VALUE),
+                Arguments.of(
+                        "SMALLINT_overflow",
+                        DataTypes.SMALLINT(),
+                        Short.MAX_VALUE,
+                        (short) -1,
+                        Short.MIN_VALUE),
+                Arguments.of(
+                        "INT_overflow", DataTypes.INT(), Integer.MAX_VALUE, -1, Integer.MIN_VALUE),
+                Arguments.of(
+                        "BIGINT_overflow",
+                        DataTypes.BIGINT(),
+                        Long.MAX_VALUE,
+                        -1L,
+                        Long.MIN_VALUE));
     }
 
     @ParameterizedTest(name = "sum retract with null - {0}")

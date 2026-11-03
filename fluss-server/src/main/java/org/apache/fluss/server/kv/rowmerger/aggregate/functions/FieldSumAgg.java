@@ -26,12 +26,6 @@ import org.apache.fluss.row.Decimal;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.utils.DecimalUtils;
 
-import static org.apache.fluss.server.kv.rowmerger.aggregate.functions.NarrowMathUtils.addExactByte;
-import static org.apache.fluss.server.kv.rowmerger.aggregate.functions.NarrowMathUtils.addExactShort;
-import static org.apache.fluss.server.kv.rowmerger.aggregate.functions.NarrowMathUtils.checkDecimalConsistency;
-import static org.apache.fluss.server.kv.rowmerger.aggregate.functions.NarrowMathUtils.subtractExactByte;
-import static org.apache.fluss.server.kv.rowmerger.aggregate.functions.NarrowMathUtils.subtractExactShort;
-
 /** Sum aggregator - computes the sum of numeric values. */
 public class FieldSumAgg extends FieldAggregator {
 
@@ -53,7 +47,10 @@ public class FieldSumAgg extends FieldAggregator {
             case DECIMAL:
                 Decimal mergeFieldDD = (Decimal) accumulator;
                 Decimal inFieldDD = (Decimal) inputField;
-                checkDecimalConsistency(mergeFieldDD, inFieldDD);
+                assert mergeFieldDD.scale() == inFieldDD.scale()
+                        : "Inconsistent scale of aggregate Decimal!";
+                assert mergeFieldDD.precision() == inFieldDD.precision()
+                        : "Inconsistent precision of aggregate Decimal!";
                 sum =
                         DecimalUtils.add(
                                 mergeFieldDD,
@@ -62,16 +59,16 @@ public class FieldSumAgg extends FieldAggregator {
                                 mergeFieldDD.scale());
                 break;
             case TINYINT:
-                sum = addExactByte((byte) accumulator, (byte) inputField);
+                sum = (byte) ((byte) accumulator + (byte) inputField);
                 break;
             case SMALLINT:
-                sum = addExactShort((short) accumulator, (short) inputField);
+                sum = (short) ((short) accumulator + (short) inputField);
                 break;
             case INTEGER:
-                sum = Math.addExact((int) accumulator, (int) inputField);
+                sum = (int) accumulator + (int) inputField;
                 break;
             case BIGINT:
-                sum = Math.addExact((long) accumulator, (long) inputField);
+                sum = (long) accumulator + (long) inputField;
                 break;
             case FLOAT:
                 sum = (float) accumulator + (float) inputField;
@@ -82,8 +79,7 @@ public class FieldSumAgg extends FieldAggregator {
             default:
                 String msg =
                         String.format(
-                                "Type %s is not supported in %s",
-                                typeRoot, this.getClass().getName());
+                                "type %s not support in %s", typeRoot, this.getClass().getName());
                 throw new IllegalArgumentException(msg);
         }
         return sum;
@@ -104,19 +100,7 @@ public class FieldSumAgg extends FieldAggregator {
             return negative(retractField);
         }
 
-        Object result;
-        try {
-            result = subtractByType(accumulator, retractField);
-        } catch (ArithmeticException e) {
-            ArithmeticException wrapped =
-                    new ArithmeticException(
-                            String.format(
-                                    "Overflow in SUM retract (%s): %s - %s",
-                                    typeRoot, accumulator, retractField));
-            wrapped.initCause(e);
-            throw wrapped;
-        }
-        return result;
+        return subtractByType(accumulator, retractField);
     }
 
     private Object subtractByType(Object accumulator, Object retractField) {
@@ -124,16 +108,18 @@ public class FieldSumAgg extends FieldAggregator {
             case DECIMAL:
                 Decimal accDD = (Decimal) accumulator;
                 Decimal retDD = (Decimal) retractField;
-                checkDecimalConsistency(accDD, retDD);
+                assert accDD.scale() == retDD.scale() : "Inconsistent scale of aggregate Decimal!";
+                assert accDD.precision() == retDD.precision()
+                        : "Inconsistent precision of aggregate Decimal!";
                 return DecimalUtils.subtract(accDD, retDD, accDD.precision(), accDD.scale());
             case TINYINT:
-                return subtractExactByte((byte) accumulator, (byte) retractField);
+                return (byte) ((byte) accumulator - (byte) retractField);
             case SMALLINT:
-                return subtractExactShort((short) accumulator, (short) retractField);
+                return (short) ((short) accumulator - (short) retractField);
             case INTEGER:
-                return Math.subtractExact((int) accumulator, (int) retractField);
+                return (int) accumulator - (int) retractField;
             case BIGINT:
-                return Math.subtractExact((long) accumulator, (long) retractField);
+                return (long) accumulator - (long) retractField;
             case FLOAT:
                 return (float) accumulator - (float) retractField;
             case DOUBLE:
@@ -154,13 +140,13 @@ public class FieldSumAgg extends FieldAggregator {
                 return Decimal.fromBigDecimal(
                         decimal.toBigDecimal().negate(), decimal.precision(), decimal.scale());
             case TINYINT:
-                return subtractExactByte((byte) 0, (byte) value);
+                return (byte) -((byte) value);
             case SMALLINT:
-                return subtractExactShort((short) 0, (short) value);
+                return (short) -((short) value);
             case INTEGER:
-                return Math.negateExact((int) value);
+                return -((int) value);
             case BIGINT:
-                return Math.negateExact((long) value);
+                return -((long) value);
             case FLOAT:
                 return -((float) value);
             case DOUBLE:

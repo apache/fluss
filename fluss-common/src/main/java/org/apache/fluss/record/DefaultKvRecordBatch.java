@@ -49,9 +49,9 @@ import java.util.NoSuchElementException;
  * </ul>
  *
  * <p>The CRC covers the data from the schemaId to the end of the batch (i.e. all the bytes that
- * follow the CRC). It is located after the magic byte, which means that servers must parse the
- * magic byte before deciding how to interpret the bytes between the batch length and the magic
- * byte. The CRC-32C (Castagnoli) polynomial is used for the computation.
+ * follow the CRC). Readers must validate the magic byte before decoding the record layout. PUT_KV
+ * version negotiation prevents sending V2 batches to servers that only understand V0. The CRC-32C
+ * (Castagnoli) polynomial is used for the computation.
  *
  * <p>The current attributes are given below:
  *
@@ -119,7 +119,7 @@ public class DefaultKvRecordBatch implements KvRecordBatch {
                             + ")");
         }
         // Reject batches that use attribute bits this version does not understand.
-        // This prevents an old server from silently misreading V2 records as V0.
+        // Reject unrecognized extensions rather than decoding them with this version's layout.
         byte attributes = segment.get(position + ATTRIBUTES_OFFSET);
         byte unknownBits = (byte) (attributes & ~KNOWN_ATTRIBUTES_MASK);
         if (unknownBits != 0) {

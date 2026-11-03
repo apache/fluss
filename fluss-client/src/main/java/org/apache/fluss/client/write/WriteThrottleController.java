@@ -230,6 +230,12 @@ final class WriteThrottleController {
                 retryBackoffDeadlineNanos, tableBucket, retryBackoff.backoff(attempts));
     }
 
+    /** Bounds connection polling even when write retry backoff is disabled. */
+    void backoffForConnection(TableBucket tableBucket) {
+        installNeverShorterBackoff(
+                retryBackoffDeadlineNanos, tableBucket, Math.max(1L, retryBackoff.backoff(0)));
+    }
+
     /** Returns the remaining general retry backoff without changing its deadline. */
     long retryBackoffRemainingMs(TableBucket tableBucket) {
         return remainingBackoffMs(retryBackoffDeadlineNanos, tableBucket);

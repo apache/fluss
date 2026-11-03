@@ -20,17 +20,21 @@ package org.apache.fluss.flink.sink.writer;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.Admin;
+import org.apache.fluss.client.table.Table;
+import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.NetworkException;
 import org.apache.fluss.flink.sink.serializer.RowDataSerializationSchema;
 import org.apache.fluss.flink.sink.serializer.SinkOperationMode;
 import org.apache.fluss.flink.utils.FlinkTestBase;
+import org.apache.fluss.metadata.AggFunctions;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.types.DataTypes;
 
@@ -44,10 +48,12 @@ import org.apache.flink.runtime.metrics.util.InterceptingOperatorMetricGroup;
 import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.data.StringData;
+import org.apache.flink.table.types.logical.BigIntType;
 import org.apache.flink.table.types.logical.CharType;
 import org.apache.flink.table.types.logical.IntType;
 import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.RowType;
+import org.apache.flink.types.RowKind;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -57,6 +63,7 @@ import java.util.Collections;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.BiConsumer;
 
+import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -161,6 +168,72 @@ public class FlinkSinkWriterTest extends FlinkTestBase {
                                             .contains(
                                                     "class org.apache.flink.table.data.binary.BinaryStringData cannot be cast to class java.lang.Integer"));
             writer.flush(false);
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testRetractPreservesAbsentColumnsAfterSchemaEvolution(boolean newPlan) throws Exception {
+        admin.createDatabase(DEFAULT_SINK_DB, DatabaseDescriptor.EMPTY, true).get();
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("total", DataTypes.BIGINT(), AggFunctions.SUM())
+                        .column(
+                                "last",
+                                DataTypes.INT(),
+                                newPlan ? AggFunctions.LAST_VALUE() : AggFunctions.MAX())
+                        .primaryKey("id")
+                        .build();
+        createTable(
+                DEFAULT_SINK_TABLE_PATH,
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .property("table.merge-engine", "aggregation")
+                        .build());
+        RowType planType =
+                newPlan
+                        ? RowType.of(
+                                new LogicalType[] {new IntType(), new BigIntType(), new IntType()},
+                                new String[] {"id", "total", "last"})
+                        : RowType.of(
+                                new LogicalType[] {new IntType(), new BigIntType()},
+                                new String[] {"id", "total"});
+        MockWriterInitContext context =
+                new MockWriterInitContext(new InterceptingOperatorMetricGroup());
+        try (Table table = conn.getTable(DEFAULT_SINK_TABLE_PATH);
+                UpsertSinkWriter<RowData> writer =
+                        new UpsertSinkWriter<>(
+                                DEFAULT_SINK_TABLE_PATH,
+                                FLUSS_CLUSTER_EXTENSION.getClientConfig(),
+                                planType,
+                                null,
+                                context.getMailboxExecutor(),
+                                new RowDataSerializationSchema(
+                                        SinkOperationMode.aggregation(false, true)),
+                                null,
+                                true)) {
+            UpsertWriter seed = table.newUpsert().createWriter();
+            seed.upsert(row(1, 100L, 9)).get();
+            writer.initialize(context.metricGroup());
+            writer.write(
+                    GenericRowData.ofKind(RowKind.UPDATE_BEFORE, 1, 30L),
+                    new MockSinkWriterContext());
+            writer.flush(false);
+            InternalRow actual =
+                    table.newLookup().createLookuper().lookup(row(1)).get().getSingletonRow();
+            assertThat(actual.getLong(1)).isEqualTo(70L);
+            assertThat(actual.isNullAt(2)).isFalse();
+            assertThat(actual.getInt(2)).isEqualTo(9);
+            if (newPlan) {
+                writer.write(
+                        GenericRowData.ofKind(RowKind.UPDATE_BEFORE, 1, 10L, null),
+                        new MockSinkWriterContext());
+                writer.flush(false);
+                actual = table.newLookup().createLookuper().lookup(row(1)).get().getSingletonRow();
+                assertThat(actual.getLong(1)).isEqualTo(60L);
+                assertThat(actual.isNullAt(2)).isTrue();
+            }
         }
     }
 

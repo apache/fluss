@@ -1361,6 +1361,10 @@ Each retract is processed independently in the order received. An adjacent retra
 
 Retract is not idempotent: applying a SUM retract twice subtracts the contribution twice. The client requires `client.writer.enable-idempotence` so transport retries can use writer-batch deduplication. This deduplication applies within a writer session; application replay with a new writer requires a recovery protocol. Flink undo recovery restores checkpoint state using OVERWRITE and is distinct from normal retract processing.
 
+Retract requires PUT_KV API version 4 or later. The client waits for version negotiation before sending a retract batch and rejects servers that do not support this version. Waiting for negotiation does not consume the write retry budget. Existing upsert and delete writes continue to use the compatible record format.
+
+After schema evolution, fields absent from the input row do not participate in retract. This also applies when Flink pads an older input schema to the latest table schema. An explicitly supplied NULL still participates according to the field's aggregation function; for example, LAST_VALUE retract clears that field. Integer SUM uses the same fixed-width arithmetic as forward aggregation, including wraparound at the type boundary.
+
 ## Delete Behavior
 
 The aggregation merge engine provides limited support for delete operations. You can configure the behavior using the `'table.delete.behavior'` option:

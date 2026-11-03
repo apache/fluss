@@ -25,7 +25,7 @@ import org.apache.fluss.annotation.PublicEvolving;
  * <p>This is a per-record field inside the KvRecord body, independent of the batch/request-level
  * {@link org.apache.fluss.rpc.protocol.MergeMode}.
  *
- * @since 0.10
+ * @since 1.1
  */
 @PublicEvolving
 public enum MutationType {
