@@ -168,12 +168,38 @@ public final class BulkLoadManager {
     }
 
     /**
-     * Resumes a transaction from its persisted decision and target metadata.
+     * Resumes a transaction from its persisted decision and target metadata on the event thread. A
+     * target with an outstanding operation is left alone until that operation completes.
      *
-     * <p>This is the only entry point every trigger uses: the Begin, Commit and Abort requests, the
-     * completion of an asynchronous round, a TabletServer coming or going, the maintenance tick,
-     * and Coordinator startup recovery. A transaction with an outstanding operation is left alone,
-     * so a trigger can never start a second round for the same target.
+     * <table>
+     * <caption>Next actions, in priority order</caption>
+     * <tr><th>Current facts</th><th>Action</th><th>Successful outcome</th></tr>
+     * <tr><td>Terminal transaction</td><td>Complete waiters</td><td>Decision unchanged</td></tr>
+     * <tr><td>Persisted abort reason</td><td>Converge ACTIVE replicas and release ownership</td>
+     * <td>ABORTED</td></tr>
+     * <tr><td>BEGUN, cancellation or expired deadline</td><td>Persist abort and ACTIVE target</td>
+     * <td>BEGUN with abort reason; continue convergence</td></tr>
+     * <tr><td>BEGUN, fence not ready</td><td>Fence replicas, prove empty and allocate snapshot IDs</td>
+     * <td>BEGUN with snapshot IDs; complete Begin</td></tr>
+     * <tr><td>BEGUN, fence ready, no input</td><td>Complete Begin and wait for Commit</td>
+     * <td>Commit freezes input without extending the deadline</td></tr>
+     * <tr><td>BEGUN with input</td><td>Validate snapshots, then decide commit</td>
+     * <td>COMMITTING; install snapshots and converge replicas</td></tr>
+     * <tr><td>COMMITTING, target LOADING</td><td>Revalidate, reinstall and converge replicas</td>
+     * <td>COMMITTING with ACTIVE target</td></tr>
+     * <tr><td>COMMITTING, target ACTIVE</td><td>Confirm convergence and release ownership</td>
+     * <td>COMMITTED</td></tr>
+     * </table>
+     *
+     * <p>These actions are derived from existing facts, not additional persisted states. Successful
+     * preparation and validation recheck cancellation before their next write. A durable commit
+     * decision is never aborted because of cancellation or expiry.
+     *
+     * <p>Missing replica observations leave the transaction pending. Async results must pass the
+     * operation, transaction-version and replica-observation checks before any outcome is handled.
+     * Preparation's designated invalid-request failures decide TARGET_NOT_EMPTY; other failures
+     * invalidate the cached transaction and fail current waiters. Later requests, maintenance or
+     * recovery resume from persisted facts, including after an uncertain write outcome.
      */
     void advance(BulkLoadHandle handle) throws Exception {
         PendingBulkLoad work = pending.computeIfAbsent(handle, ignored -> new PendingBulkLoad());
@@ -192,32 +218,68 @@ public final class BulkLoadManager {
             Versioned<BulkLoadTransaction> transaction = read.get();
             recordActiveTransaction(transaction);
             BulkLoadTransaction value = transaction.getValue();
-            if (value.getState().isTerminal()) {
-                completeTerminalWaiters(value);
-            } else if (value.getAbortReason() != null) {
-                startConvergenceRound(transaction);
-            } else if (value.getState() == BulkLoadState.BEGUN) {
-                BulkLoadAbortReason abort = abortDecision(value);
-                if (abort != null) {
-                    startAbortDecision(transaction, abort, null);
-                } else if (!value.isFenceReady()) {
+            BulkLoadAbortReason abort = abortDecision(value);
+            BulkLoadDataState targetState =
+                    value.getState() == BulkLoadState.COMMITTING && value.getAbortReason() == null
+                            ? registrationState(readRegistration(handle)).state
+                            : null;
+            switch (nextAction(value, abort, targetState)) {
+                case COMPLETE:
+                    completeTerminalWaiters(value);
+                    break;
+                case RESTORE_ACCESS:
+                    startConvergenceRound(transaction);
+                    break;
+                case ABORT:
+                    startAbortDecision(transaction, checkNotNull(abort), null);
+                    break;
+                case PREPARE:
                     startFenceRound(transaction);
-                } else if (value.getInputSha256() == null) {
+                    break;
+                case WAIT_FOR_INPUT:
                     completePendingBegin(value);
-                } else {
+                    break;
+                case VALIDATE:
                     startValidateSnapshots(transaction);
-                }
-            } else if (registrationState(readRegistration(handle)).state
-                    == BulkLoadDataState.LOADING) {
-                startValidateSnapshots(transaction);
-            } else {
-                requireControl(transaction, BulkLoadDataState.ACTIVE);
-                startConvergenceRound(transaction);
+                    break;
+                case CONFIRM_ACTIVE:
+                    requireControl(transaction, BulkLoadDataState.ACTIVE);
+                    startConvergenceRound(transaction);
+                    break;
+                default:
+                    throw new IllegalStateException("Unexpected BulkLoad action.");
             }
         } catch (Exception failure) {
             invalidate(handle);
             throw failure;
         }
+    }
+
+    /** Selects the action described by {@link #advance} without reading or modifying metadata. */
+    private static NextAction nextAction(
+            BulkLoadTransaction transaction,
+            @Nullable BulkLoadAbortReason abort,
+            @Nullable BulkLoadDataState targetState) {
+        if (transaction.getState().isTerminal()) {
+            return NextAction.COMPLETE;
+        }
+        if (transaction.getAbortReason() != null) {
+            return NextAction.RESTORE_ACCESS;
+        }
+        if (transaction.getState() == BulkLoadState.BEGUN) {
+            if (abort != null) {
+                return NextAction.ABORT;
+            }
+            if (!transaction.isFenceReady()) {
+                return NextAction.PREPARE;
+            }
+            return transaction.getInputSha256() == null
+                    ? NextAction.WAIT_FOR_INPUT
+                    : NextAction.VALIDATE;
+        }
+        return checkNotNull(targetState) == BulkLoadDataState.LOADING
+                ? NextAction.VALIDATE
+                : NextAction.CONFIRM_ACTIVE;
     }
 
     /** Returns the reason this transaction must abort, or null while it may still commit. */
@@ -413,18 +475,43 @@ public final class BulkLoadManager {
                                                     return allocateSnapshotIds(handle, bucketCount);
                                                 })),
                 round,
-                true,
-                (current, snapshotIds) -> {
-                    Versioned<BulkLoadTransaction> ready =
-                            recordActiveTransaction(
-                                    metadataStore.update(
-                                            current,
-                                            current.getValue().withSnapshotIds(snapshotIds),
-                                            readRegistration(handle),
-                                            round,
-                                            coordinatorEpochVersion()));
-                    completePendingBegin(ready.getValue());
-                });
+                (current, snapshotIds) -> onTargetPrepared(current, round, snapshotIds),
+                this::onPrepareFailed);
+    }
+
+    /** Publishes the prepared snapshot IDs only while the transaction may still commit. */
+    private void onTargetPrepared(
+            Versioned<BulkLoadTransaction> current,
+            ReplicaConvergenceContext round,
+            long[] snapshotIds)
+            throws Exception {
+        if (tryAbortBeforeCommit(current)) {
+            return;
+        }
+        BulkLoadHandle handle = current.getValue().getHandle();
+        Versioned<BulkLoadTransaction> ready =
+                recordActiveTransaction(
+                        metadataStore.update(
+                                current,
+                                current.getValue().withSnapshotIds(snapshotIds),
+                                readRegistration(handle),
+                                round,
+                                coordinatorEpochVersion()));
+        completePendingBegin(ready.getValue());
+    }
+
+    /** Decides TARGET_NOT_EMPTY for the preparation stage's designated invalid-request failures. */
+    private void onPrepareFailed(Versioned<BulkLoadTransaction> current, Throwable failure)
+            throws Exception {
+        if (ExceptionUtils.findThrowable(failure, InvalidBulkLoadRequestException.class)
+                .isPresent()) {
+            startAbortDecision(
+                    current,
+                    BulkLoadAbortReason.TARGET_NOT_EMPTY,
+                    ExceptionUtils.stringifyException(failure));
+        } else {
+            throw new CompletionException(unwrap(failure));
+        }
     }
 
     private void startValidateSnapshots(Versioned<BulkLoadTransaction> transaction)
@@ -448,22 +535,31 @@ public final class BulkLoadManager {
                                                 tableInfo.getTableConfig().getChangelogImage(),
                                                 maxMetadataBytes)),
                 null,
-                false,
-                (current, snapshots) -> {
-                    Versioned<?> registration = readRegistration(handle);
-                    requireControl(current.getValue(), registration, BulkLoadDataState.LOADING);
-                    if (current.getValue().getState() == BulkLoadState.BEGUN) {
-                        current =
-                                recordActiveTransaction(
-                                        metadataStore.update(
-                                                current,
-                                                current.getValue().committing(),
-                                                registration,
-                                                null,
-                                                coordinatorEpochVersion()));
-                    }
-                    installBuckets(current, registration, snapshots);
-                });
+                this::onSnapshotsValidated,
+                null);
+    }
+
+    /** Checks cancellation before deciding commit, or resumes an existing commit decision. */
+    private void onSnapshotsValidated(
+            Versioned<BulkLoadTransaction> current, List<CompletedSnapshot> snapshots)
+            throws Exception {
+        if (tryAbortBeforeCommit(current)) {
+            return;
+        }
+        BulkLoadHandle handle = current.getValue().getHandle();
+        Versioned<?> registration = readRegistration(handle);
+        requireControl(current.getValue(), registration, BulkLoadDataState.LOADING);
+        if (current.getValue().getState() == BulkLoadState.BEGUN) {
+            current =
+                    recordActiveTransaction(
+                            metadataStore.update(
+                                    current,
+                                    current.getValue().committing(),
+                                    registration,
+                                    null,
+                                    coordinatorEpochVersion()));
+        }
+        installBuckets(current, registration, snapshots);
     }
 
     private void installBuckets(
@@ -499,11 +595,14 @@ public final class BulkLoadManager {
                             return null;
                         }),
                 null,
-                false,
-                (current, ignored) -> {
-                    requireControl(current, BulkLoadDataState.LOADING);
-                    startConvergenceRound(current);
-                });
+                (current, ignored) -> onSnapshotsInstalled(current),
+                null);
+    }
+
+    /** Continues replica convergence after snapshot installation. */
+    private void onSnapshotsInstalled(Versioned<BulkLoadTransaction> current) throws Exception {
+        requireControl(current, BulkLoadDataState.LOADING);
+        startConvergenceRound(current);
     }
 
     private void startConvergenceRound(Versioned<BulkLoadTransaction> transaction)
@@ -520,36 +619,50 @@ public final class BulkLoadManager {
                 transaction,
                 convergence.apply(value, confirmation, targetState, false),
                 confirmation,
-                false,
-                (current, ignored) -> {
-                    Versioned<?> registration = readRegistration(handle);
-                    requireControl(current.getValue(), registration, targetState);
-                    BulkLoadTransaction next =
-                            targetState == BulkLoadDataState.LOADING
-                                    ? current.getValue()
-                                            .activated(
-                                                    registration.getVersion() + 1,
-                                                    current.getValue().getAbortReason(),
-                                                    current.getValue().getAbortMessage())
-                                    : current.getValue()
-                                            .released(
-                                                    registration.getVersion() + 1,
-                                                    Math.addExact(
-                                                            System.currentTimeMillis(),
-                                                            configuration
-                                                                    .get(
-                                                                            ConfigOptions
-                                                                                    .BULKLOAD_RESULT_RETENTION)
-                                                                    .toMillis()));
-                    recordActiveTransaction(
-                            metadataStore.update(
-                                    current,
-                                    next,
-                                    registration,
-                                    confirmation,
-                                    coordinatorEpochVersion()));
-                    advance(handle);
-                });
+                (current, ignored) -> onReplicasConverged(current, confirmation, targetState),
+                null);
+    }
+
+    /** Publishes ACTIVE after LOADING convergence, or releases an already ACTIVE target. */
+    private void onReplicasConverged(
+            Versioned<BulkLoadTransaction> current,
+            ReplicaConvergenceContext confirmation,
+            BulkLoadDataState targetState)
+            throws Exception {
+        BulkLoadHandle handle = current.getValue().getHandle();
+        Versioned<?> registration = readRegistration(handle);
+        requireControl(current.getValue(), registration, targetState);
+        BulkLoadTransaction next =
+                targetState == BulkLoadDataState.LOADING
+                        ? current.getValue()
+                                .activated(
+                                        registration.getVersion() + 1,
+                                        current.getValue().getAbortReason(),
+                                        current.getValue().getAbortMessage())
+                        : current.getValue()
+                                .released(
+                                        registration.getVersion() + 1,
+                                        Math.addExact(
+                                                System.currentTimeMillis(),
+                                                configuration
+                                                        .get(
+                                                                ConfigOptions
+                                                                        .BULKLOAD_RESULT_RETENTION)
+                                                        .toMillis()));
+        recordActiveTransaction(
+                metadataStore.update(
+                        current, next, registration, confirmation, coordinatorEpochVersion()));
+        advance(handle);
+    }
+
+    private boolean tryAbortBeforeCommit(Versioned<BulkLoadTransaction> transaction)
+            throws Exception {
+        BulkLoadAbortReason abort = abortDecision(transaction.getValue());
+        if (abort == null) {
+            return false;
+        }
+        startAbortDecision(transaction, abort, null);
+        return true;
     }
 
     /** Persists the abort decision and the rollback to ordinary ACTIVE metadata in one write. */
@@ -608,13 +721,17 @@ public final class BulkLoadManager {
                 ioExecutor);
     }
 
-    /** Rechecks durable state and replica observations before continuing on the event thread. */
+    /**
+     * Dispatches matching async results on the event thread after rechecking the transaction and
+     * replica observations. Stage handlers own transition, cancellation and designated failure
+     * policies; unmatched or stale results never reach either handler.
+     */
     private <T> void await(
             Versioned<BulkLoadTransaction> observed,
             CompletableFuture<T> completion,
             @Nullable ReplicaConvergenceContext confirmation,
-            boolean provingEmpty,
-            Continuation<T> continuation) {
+            Continuation<T> continuation,
+            @Nullable FailureHandler failureHandler) {
         BulkLoadHandle handle = observed.getValue().getHandle();
         Object operation = new Object();
         PendingBulkLoad work = pending.get(handle);
@@ -645,26 +762,12 @@ public final class BulkLoadManager {
                                                     return null;
                                                 }
                                                 if (failure != null) {
-                                                    if (provingEmpty
-                                                            && ExceptionUtils.findThrowable(
-                                                                            failure,
-                                                                            InvalidBulkLoadRequestException
-                                                                                    .class)
-                                                                    .isPresent()) {
-                                                        startAbortDecision(
-                                                                current,
-                                                                BulkLoadAbortReason
-                                                                        .TARGET_NOT_EMPTY,
-                                                                ExceptionUtils.stringifyException(
-                                                                        failure));
-                                                        return null;
+                                                    if (failureHandler != null) {
+                                                        failureHandler.run(current, failure);
+                                                    } else {
+                                                        throw new CompletionException(
+                                                                unwrap(failure));
                                                     }
-                                                    throw new CompletionException(unwrap(failure));
-                                                }
-                                                BulkLoadAbortReason abort =
-                                                        abortDecision(current.getValue());
-                                                if (abort != null) {
-                                                    startAbortDecision(current, abort, null);
                                                 } else {
                                                     continuation.run(current, result);
                                                 }
@@ -679,6 +782,21 @@ public final class BulkLoadManager {
     @FunctionalInterface
     private interface Continuation<T> {
         void run(Versioned<BulkLoadTransaction> transaction, T result) throws Exception;
+    }
+
+    @FunctionalInterface
+    private interface FailureHandler {
+        void run(Versioned<BulkLoadTransaction> transaction, Throwable failure) throws Exception;
+    }
+
+    private enum NextAction {
+        COMPLETE,
+        RESTORE_ACCESS,
+        ABORT,
+        PREPARE,
+        WAIT_FOR_INPUT,
+        VALIDATE,
+        CONFIRM_ACTIVE
     }
 
     private long[] allocateSnapshotIds(BulkLoadHandle handle, int count) throws Exception {
