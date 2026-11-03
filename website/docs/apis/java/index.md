@@ -163,6 +163,12 @@ a load entry without a live node entry. Live servers with no replicas have expli
 A missing load entry means statistics are unavailable; it must not be treated as proof that a
 server has been evacuated.
 
+In a high-availability deployment, `getCoordinatorStandbys()` lists the currently live standby
+coordinators, excluding the active coordinator returned by `getCoordinatorServer()`. A standby is
+listed while it is registered with the cluster, which does not guarantee that it is ready to take
+over leadership. Coordinators have no numeric server ID, so `ServerNode.id()` is not meaningful
+for them.
+
 This API requires `DESCRIBE` permission on the cluster and refreshes metadata and retries once on
 retriable failures, including coordinator address changes. Servers that do not support it return
 `UnsupportedVersionException`. For basic discovery, `Admin.getServerNodes()` continues to return

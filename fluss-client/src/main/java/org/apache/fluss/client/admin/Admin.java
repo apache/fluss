@@ -926,12 +926,14 @@ public interface Admin extends AutoCloseable {
     CompletableFuture<ClusterHealth> getClusterHealth();
 
     /**
-     * Describe the coordinator, live tablet servers and per-server replica loads asynchronously.
+     * Describe the coordinators, live tablet servers and per-server replica loads asynchronously.
      *
      * <p>The returned {@link ClusterDescription} provides node addresses, racks and server tags,
-     * together with replica loads keyed by server ID. Live servers have explicit loads even when
-     * they host no replicas. Loads also include offline servers with assigned replicas. A missing
-     * load means statistics are unavailable and must never be interpreted as zero replicas.
+     * together with replica loads keyed by server ID. Besides the active coordinator, it lists the
+     * currently live standby coordinators of a high-availability deployment. Live servers have
+     * explicit loads even when they host no replicas. Loads also include offline servers with
+     * assigned replicas. A missing load means statistics are unavailable and must never be
+     * interpreted as zero replicas.
      *
      * <p>This API requires DESCRIBE permission on the cluster resource. Retriable failures trigger
      * a metadata refresh and one retry to handle coordinator address changes. Servers that do not

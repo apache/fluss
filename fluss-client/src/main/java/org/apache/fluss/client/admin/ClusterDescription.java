@@ -22,7 +22,9 @@ import org.apache.fluss.cluster.ServerNode;
 
 import javax.annotation.Nullable;
 
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -42,15 +44,19 @@ import java.util.TreeMap;
 public final class ClusterDescription {
 
     @Nullable private final ServerNode coordinatorServer;
+    private final List<ServerNode> coordinatorStandbys;
     private final Map<Integer, ServerNode> tabletServers;
     private final Map<Integer, TabletServerDescription> tabletServerLoads;
 
-    /** Creates a cluster description with defensive copies of the server maps. */
+    /** Creates a cluster description with defensive copies of the server collections. */
     public ClusterDescription(
             @Nullable ServerNode coordinatorServer,
+            List<ServerNode> coordinatorStandbys,
             Map<Integer, ServerNode> tabletServers,
             Map<Integer, TabletServerDescription> tabletServerLoads) {
         this.coordinatorServer = coordinatorServer;
+        this.coordinatorStandbys =
+                Collections.unmodifiableList(new ArrayList<>(coordinatorStandbys));
         this.tabletServers = Collections.unmodifiableMap(new TreeMap<>(tabletServers));
         this.tabletServerLoads = Collections.unmodifiableMap(new TreeMap<>(tabletServerLoads));
     }
@@ -58,6 +64,19 @@ public final class ClusterDescription {
     /** Returns the coordinator, or an empty optional if it was not reported. */
     public Optional<ServerNode> getCoordinatorServer() {
         return Optional.ofNullable(coordinatorServer);
+    }
+
+    /**
+     * Returns the currently live standby coordinators, excluding the active coordinator returned by
+     * {@link #getCoordinatorServer()}, in an immutable list.
+     *
+     * <p>A standby is listed while it is registered with the cluster; this does not guarantee that
+     * it is ready to take over leadership. Coordinators have no numeric server ID, so {@link
+     * ServerNode#id()} is not meaningful for them. The list is empty if there are no standbys or
+     * the server does not report them.
+     */
+    public List<ServerNode> getCoordinatorStandbys() {
+        return coordinatorStandbys;
     }
 
     /** Returns the live tablet servers by server ID, in an immutable map ordered by ID. */
@@ -86,6 +105,7 @@ public final class ClusterDescription {
         }
         ClusterDescription that = (ClusterDescription) o;
         return Objects.equals(coordinatorServer, that.coordinatorServer)
+                && coordinatorStandbys.equals(that.coordinatorStandbys)
                 && tabletServers.equals(that.tabletServers)
                 // ServerNode equality describes node identity and does not compare server tags.
                 && tabletServers.entrySet().stream()
@@ -104,7 +124,8 @@ public final class ClusterDescription {
         for (ServerNode node : tabletServers.values()) {
             tagsHash = 31 * tagsHash + Objects.hashCode(node.serverTag());
         }
-        return Objects.hash(coordinatorServer, tabletServers, tabletServerLoads, tagsHash);
+        return Objects.hash(
+                coordinatorServer, coordinatorStandbys, tabletServers, tabletServerLoads, tagsHash);
     }
 
     @Override
@@ -112,6 +133,8 @@ public final class ClusterDescription {
         return "ClusterDescription{"
                 + "coordinatorServer="
                 + coordinatorServer
+                + ", coordinatorStandbys="
+                + coordinatorStandbys
                 + ", tabletServers="
                 + tabletServers
                 + ", tabletServerLoads="

@@ -18,6 +18,7 @@
 package org.apache.fluss.server.coordinator;
 
 import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.cluster.TabletServerInfo;
 import org.apache.fluss.cluster.rebalance.GoalType;
@@ -190,11 +191,13 @@ import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotJsonSerde;
 import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
 import org.apache.fluss.server.metadata.CoordinatorMetadataProvider;
+import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.metadata.SystemTables;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperClient.TableBucketAndManifest;
 import org.apache.fluss.server.zk.data.BucketAssignment;
+import org.apache.fluss.server.zk.data.CoordinatorAddress;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.TableAssignment;
@@ -1860,6 +1863,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                             DescribeClusterResponse response =
                                     buildDescribeClusterResponse(
                                             metadataCache.getCoordinatorServer(listenerName),
+                                            getCoordinatorStandbys(ctx, listenerName),
                                             metadataCache
                                                     .getAllAliveTabletServersWithTags(listenerName)
                                                     .values());
@@ -1868,6 +1872,24 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                         });
         eventManagerSupplier.get().put(event);
         return event.getResultFuture();
+    }
+
+    /**
+     * Returns the standby coordinators reachable on the given listener, in coordinator id order.
+     * Coordinator ids are not numeric, so like the active coordinator, standbys use node id 0.
+     */
+    private static List<ServerNode> getCoordinatorStandbys(
+            CoordinatorContext ctx, String listenerName) {
+        List<ServerNode> standbys = new ArrayList<>();
+        for (CoordinatorAddress standby : ctx.getCoordinatorStandbys()) {
+            ServerNode node =
+                    new ServerInfo(0, null, standby.getEndpoints(), ServerType.COORDINATOR)
+                            .node(listenerName);
+            if (node != null) {
+                standbys.add(node);
+            }
+        }
+        return standbys;
     }
 
     @Override

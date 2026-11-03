@@ -26,8 +26,10 @@ import org.apache.fluss.rpc.messages.DescribeClusterResponse;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -40,6 +42,8 @@ class ClusterDescriptionTest {
     void testLiveNodesAndOfflineLoads() {
         DescribeClusterResponse response = new DescribeClusterResponse();
         response.setCoordinatorServer().setNodeId(0).setHost("coordinator").setPort(9123);
+        response.addCoordinatorStandby().setNodeId(0).setHost("standby-1").setPort(9123);
+        response.addCoordinatorStandby().setNodeId(0).setHost("standby-2").setPort(9123);
         response.addTabletServer()
                 .setNodeId(2)
                 .setHost("ts-2")
@@ -67,6 +71,10 @@ class ClusterDescriptionTest {
 
         assertThat(description.getCoordinatorServer())
                 .contains(new ServerNode(0, "coordinator", 9123, ServerType.COORDINATOR));
+        assertThat(description.getCoordinatorStandbys())
+                .containsExactly(
+                        new ServerNode(0, "standby-1", 9123, ServerType.COORDINATOR),
+                        new ServerNode(0, "standby-2", 9123, ServerType.COORDINATOR));
         assertThat(description.getTabletServers().keySet()).containsExactly(0, 2, 3);
         ServerNode taggedNode = description.getTabletServers().get(2);
         assertThat(taggedNode.host()).isEqualTo("ts-2");
@@ -91,6 +99,7 @@ class ClusterDescriptionTest {
         ClusterDescription description = ClientRpcMessageUtils.toClusterDescription(response);
 
         assertThat(description.getCoordinatorServer()).isEmpty();
+        assertThat(description.getCoordinatorStandbys()).isEmpty();
         assertThat(description.getTabletServers()).containsOnlyKeys(1);
         assertThat(description.getTabletServerLoads()).isEmpty();
         assertThat(description.getTabletServerLoads().get(1)).isNull();
@@ -102,14 +111,20 @@ class ClusterDescriptionTest {
         nodes.put(1, new ServerNode(1, "ts-1", 9124, ServerType.TABLET_SERVER));
         Map<Integer, TabletServerDescription> loads = new HashMap<>();
         loads.put(1, new TabletServerDescription(1, 0, 0, 0, 0, 0));
-        ClusterDescription description = new ClusterDescription(null, nodes, loads);
-        ClusterDescription sameDescription = new ClusterDescription(null, nodes, loads);
+        List<ServerNode> standbys = new ArrayList<>();
+        standbys.add(new ServerNode(0, "standby", 9123, ServerType.COORDINATOR));
+        ClusterDescription description = new ClusterDescription(null, standbys, nodes, loads);
+        ClusterDescription sameDescription = new ClusterDescription(null, standbys, nodes, loads);
 
+        standbys.clear();
         nodes.clear();
         loads.clear();
 
+        assertThat(description.getCoordinatorStandbys()).hasSize(1);
         assertThat(description.getTabletServers()).hasSize(1);
         assertThat(description.getTabletServerLoads()).hasSize(1);
+        assertThatThrownBy(() -> description.getCoordinatorStandbys().clear())
+                .isInstanceOf(UnsupportedOperationException.class);
         assertThatThrownBy(() -> description.getTabletServers().clear())
                 .isInstanceOf(UnsupportedOperationException.class);
         assertThatThrownBy(() -> description.getTabletServerLoads().clear())
@@ -130,11 +145,37 @@ class ClusterDescriptionTest {
                         ServerTag.PERMANENT_OFFLINE);
         ClusterDescription description =
                 new ClusterDescription(
-                        null, Collections.singletonMap(1, node), Collections.emptyMap());
+                        null,
+                        Collections.emptyList(),
+                        Collections.singletonMap(1, node),
+                        Collections.emptyMap());
         ClusterDescription taggedDescription =
                 new ClusterDescription(
-                        null, Collections.singletonMap(1, taggedNode), Collections.emptyMap());
+                        null,
+                        Collections.emptyList(),
+                        Collections.singletonMap(1, taggedNode),
+                        Collections.emptyMap());
 
         assertThat(description).isNotEqualTo(taggedDescription);
+    }
+
+    @Test
+    void testEqualityIncludesCoordinatorStandbys() {
+        ServerNode standby = new ServerNode(0, "standby", 9123, ServerType.COORDINATOR);
+        ClusterDescription description =
+                new ClusterDescription(
+                        null,
+                        Collections.emptyList(),
+                        Collections.emptyMap(),
+                        Collections.emptyMap());
+        ClusterDescription withStandby =
+                new ClusterDescription(
+                        null,
+                        Collections.singletonList(standby),
+                        Collections.emptyMap(),
+                        Collections.emptyMap());
+
+        assertThat(description).isNotEqualTo(withStandby);
+        assertThat(withStandby.toString()).contains("coordinatorStandbys=");
     }
 }
