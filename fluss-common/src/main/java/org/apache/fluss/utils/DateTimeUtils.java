@@ -24,6 +24,7 @@ import java.time.DateTimeException;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeFormatterBuilder;
 import java.time.temporal.TemporalAccessor;
@@ -410,5 +411,110 @@ public class DateTimeUtils {
             --b;
         }
         return x;
+    }
+
+    // ----------------------------------------------------------------------------------------
+    // Formatting: internal representations to human-readable strings, following the SQL-style
+    // conventions of org.apache.flink.formats.common.TimeFormats
+    // ----------------------------------------------------------------------------------------
+
+    /**
+     * Formats a date, represented as the number of days since epoch, as {@code yyyy-MM-dd}, e.g.
+     * {@code 1970-01-01}.
+     */
+    public static String formatDate(int date) {
+        return toLocalDate(date).toString();
+    }
+
+    /**
+     * Formats a time, represented as the number of milliseconds of the day, as {@code
+     * HH:mm:ss[.fff]}.
+     *
+     * <p>At most {@code precision} fractional second digits are printed, with trailing zeros
+     * trimmed; no fraction is printed if it is zero.
+     *
+     * @param precision the maximum number of fractional second digits, between 0 and 9; values
+     *     outside this range are clamped
+     */
+    public static String formatTime(int time, int precision) {
+        return sqlFormatter(SqlFormatters.TIME, precision).format(toLocalTime(time));
+    }
+
+    /**
+     * Formats a timestamp without time zone in SQL style, e.g. {@code 2026-10-30 13:35:30.123}.
+     *
+     * <p>At most {@code precision} fractional second digits are printed, with trailing zeros
+     * trimmed; no fraction is printed if it is zero.
+     *
+     * @param precision the maximum number of fractional second digits, between 0 and 9; values
+     *     outside this range are clamped
+     */
+    public static String formatTimestampNtz(TimestampNtz timestamp, int precision) {
+        return sqlFormatter(SqlFormatters.TIMESTAMP, precision).format(timestamp.toLocalDateTime());
+    }
+
+    /**
+     * Formats a timestamp with local time zone in UTC, in SQL style with a {@code 'Z'} zone suffix,
+     * e.g. {@code 2026-10-30 05:35:30.123Z}.
+     *
+     * <p>At most {@code precision} fractional second digits are printed, with trailing zeros
+     * trimmed; no fraction is printed if it is zero.
+     *
+     * @param precision the maximum number of fractional second digits, between 0 and 9; values
+     *     outside this range are clamped
+     */
+    public static String formatTimestampLtz(TimestampLtz timestamp, int precision) {
+        return sqlFormatter(SqlFormatters.TIMESTAMP_LTZ, precision)
+                .format(timestamp.toInstant().atOffset(ZoneOffset.UTC));
+    }
+
+    /**
+     * Returns the SQL-style formatter for the given precision, with the precision clamped to the
+     * supported range of fractional second digits (0-9).
+     */
+    private static DateTimeFormatter sqlFormatter(DateTimeFormatter[] formatters, int precision) {
+        return formatters[Math.max(0, Math.min(precision, 9))];
+    }
+
+    /**
+     * Holds the SQL-style formatters indexed by the max number of fractional second digits (0-9).
+     */
+    private static final class SqlFormatters {
+
+        /** SQL-style time formatters ({@code HH:mm:ss[.fff]}). */
+        private static final DateTimeFormatter[] TIME = new DateTimeFormatter[10];
+
+        /** SQL-style timestamp formatters ({@code yyyy-MM-dd HH:mm:ss[.fff]}). */
+        private static final DateTimeFormatter[] TIMESTAMP = new DateTimeFormatter[10];
+
+        /**
+         * SQL-style timestamp-with-local-time-zone formatters ({@code yyyy-MM-dd
+         * HH:mm:ss[.fff]'Z'}), rendered in UTC.
+         */
+        private static final DateTimeFormatter[] TIMESTAMP_LTZ = new DateTimeFormatter[10];
+
+        static {
+            for (int precision = 0; precision <= 9; precision++) {
+                DateTimeFormatterBuilder timeBuilder =
+                        new DateTimeFormatterBuilder().appendPattern("HH:mm:ss");
+                if (precision > 0) {
+                    timeBuilder.appendFraction(NANO_OF_SECOND, 0, precision, true);
+                }
+                TIME[precision] = timeBuilder.toFormatter();
+                TIMESTAMP[precision] =
+                        new DateTimeFormatterBuilder()
+                                .append(DateTimeFormatter.ISO_LOCAL_DATE)
+                                .appendLiteral(' ')
+                                .append(TIME[precision])
+                                .toFormatter();
+                TIMESTAMP_LTZ[precision] =
+                        new DateTimeFormatterBuilder()
+                                .append(DateTimeFormatter.ISO_LOCAL_DATE)
+                                .appendLiteral(' ')
+                                .append(TIME[precision])
+                                .appendLiteral('Z')
+                                .toFormatter();
+            }
+        }
     }
 }
