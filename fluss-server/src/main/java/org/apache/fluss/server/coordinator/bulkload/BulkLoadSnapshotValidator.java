@@ -122,6 +122,9 @@ public final class BulkLoadSnapshotValidator {
                         ? snapshot.getRowCount() != null
                         : snapshot.getRowCount() == null,
                 "Snapshot row-count shape differs from the changelog image.");
+        require(
+                snapshot.getRowCount() == null || snapshot.getRowCount() >= 0,
+                "Snapshot row count must be non-negative.");
         long privateBytes = 0L;
         Set<String> localPaths = new HashSet<>();
         Set<String> remotePaths = new HashSet<>();

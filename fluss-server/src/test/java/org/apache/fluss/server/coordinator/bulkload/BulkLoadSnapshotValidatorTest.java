@@ -29,6 +29,8 @@ import org.apache.fluss.shaded.guava32.com.google.common.hash.HashCode;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -85,6 +87,7 @@ class BulkLoadSnapshotValidatorTest {
                 .containsExactly(0, 1);
         assertThat(parsed).extracting(CompletedSnapshot::getSnapshotID).containsExactly(17L, 18L);
         assertThat(parsed).extracting(CompletedSnapshot::getLogOffset).containsExactly(0L, 2L);
+        assertThat(parsed).extracting(CompletedSnapshot::getRowCount).containsExactly(0L, 2L);
     }
 
     @Test
@@ -104,6 +107,22 @@ class BulkLoadSnapshotValidatorTest {
         assertThatThrownBy(() -> validate(inputSha256, 1024 * 1024))
                 .isInstanceOf(InvalidBulkLoadRequestException.class)
                 .hasMessageContaining("SHA-256");
+    }
+
+    @ParameterizedTest
+    @ValueSource(longs = {-1L, -2L})
+    void testRejectsNegativeRowCount(long rowCount) throws Exception {
+        writeSnapshotMetadata(
+                tempDir.toUri().toString(),
+                handle,
+                new TableBucket(handle.getTableId(), 0),
+                17L,
+                0L,
+                rowCount);
+
+        assertThatThrownBy(() -> validate(digest(metadata), 1024 * 1024))
+                .isInstanceOf(InvalidBulkLoadRequestException.class)
+                .hasMessageContaining("row count must be non-negative");
     }
 
     @Test
