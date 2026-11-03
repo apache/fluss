@@ -1615,8 +1615,9 @@ public class ConfigOptions {
                     .durationType()
                     .defaultValue(Duration.ofSeconds(30))
                     .withDescription(
-                            "The timeout for a request to complete. If user set the write ack to -1, "
-                                    + "this timeout is the max time that delayed write try to complete. "
+                            "The timeout for an RPC request to complete, including waiting for a "
+                                    + "connection to become ready. A timeout does not cancel server-side execution. "
+                                    + "For write ack -1, this also bounds the server's wait for acknowledgements. "
                                     + "The default setting is 30 seconds.");
 
     public static final ConfigOption<Boolean> CLIENT_SCANNER_LOG_CHECK_CRC =
