@@ -18,7 +18,6 @@
 //! Source partition identity shared by preparation and default planning.
 
 use crate::{FlussLakeError, Result};
-use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 pub(crate) fn validate_partition_filter<'a>(
@@ -38,23 +37,19 @@ pub(crate) fn validate_partition_filter<'a>(
 /// Consumers must reject unsupported variants, not skip their log ranges.
 /// Shared historical logs may cover multiple business partitions; support for
 /// them will require a separate variant rather than a synthetic business value.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
-#[serde(tag = "kind", content = "identity")]
 pub enum FlussLakeLogPartition {
     /// A regular Fluss partition, including the root of an unpartitioned table.
-    #[serde(rename = "ordinary")]
     Ordinary(FlussLakePartitionIdentity),
 }
 
 /// Stable partition identity exposed for scheduling and diagnostics.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum FlussLakePartitionIdentity {
     /// Root identity for an unpartitioned table.
-    #[serde(rename = "unpartitioned")]
     Unpartitioned,
     /// Logical partition-key/value pairs in table partition-key order.
-    #[serde(rename = "key_values")]
     KeyValues(Vec<(String, String)>),
 }
 

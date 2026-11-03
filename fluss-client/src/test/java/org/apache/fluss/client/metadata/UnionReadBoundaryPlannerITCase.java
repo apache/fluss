@@ -24,8 +24,6 @@ import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
-import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.Test;
@@ -69,30 +67,21 @@ class UnionReadBoundaryPlannerITCase extends ClientToServerITCaseBase {
                             new TableBucket(tableId, partition.getPartitionId(), bucket));
                 }
             }
-            JsonNode all =
-                    new ObjectMapper()
-                            .readTree(
-                                    UnionReadBoundaryPlanner.captureReadContext(admin, path).get());
-            JsonNode scoped =
-                    new ObjectMapper()
-                            .readTree(
-                                    UnionReadBoundaryPlanner.captureReadContext(
-                                                    admin,
-                                                    path,
-                                                    new PartitionSpec(
-                                                            Collections.singletonMap(
-                                                                    "region", "US")))
-                                            .get());
-            assertThat(all.get("log_ranges")).hasSize(4);
-            assertThat(scoped.get("lake").isNull()).isTrue();
-            assertThat(scoped.get("table_id").longValue()).isEqualTo(tableId);
-            assertThat(scoped.get("log_ranges")).hasSize(2);
-            assertThat(scoped.at("/partition_filter/region").asText()).isEqualTo("US");
-            for (JsonNode range : scoped.get("log_ranges")) {
-                assertThat(range.at("/partition/identity/key_values/0/1").asText()).isEqualTo("US");
-                assertThat(range.get("start_offset").longValue())
-                        .isEqualTo(range.get("earliest_offset").longValue());
-                assertThat(range.get("stop_offset").longValue()).isZero();
+            UnionReadContext all = UnionReadBoundaryPlanner.captureReadContext(admin, path);
+            UnionReadContext scoped =
+                    UnionReadBoundaryPlanner.captureReadContext(
+                            admin,
+                            path,
+                            new PartitionSpec(Collections.singletonMap("region", "US")));
+            assertThat(all.getLogRanges()).hasSize(4);
+            assertThat(scoped.getLakeFormat()).isEmpty();
+            assertThat(scoped.getTableId()).isEqualTo(tableId);
+            assertThat(scoped.getLogRanges()).hasSize(2);
+            assertThat(scoped.getPartitionFilter().get("region")).isEqualTo("US");
+            for (UnionReadContext.LogRange range : scoped.getLogRanges()) {
+                assertThat(range.getPartitionValues().get("region")).isEqualTo("US");
+                assertThat(range.getStartOffset()).isEqualTo(range.getEarliestOffset());
+                assertThat(range.getStopOffset()).isZero();
             }
         } finally {
             admin.dropTable(path, false).get();

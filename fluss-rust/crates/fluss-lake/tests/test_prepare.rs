@@ -67,16 +67,21 @@ async fn prepare_freezes_fluss_only_ranges_and_schema() {
     assert_eq!(plain.log_ranges()[0].start_offset(), 0);
     assert_eq!(plain.log_ranges()[0].stop_offset(), 3);
     plain.log_ranges()[0].validate_available().unwrap();
-    let bytes = plain.to_json().unwrap();
-    let transported = FlussLakeReadContext::from_json(&bytes).unwrap();
-    transported
+    let imported = FlussLakeReadContext::from_boundary(
+        source.get_table_info(),
+        plain.lake_snapshot_id(),
+        plain.log_ranges().to_vec(),
+    )
+    .unwrap();
+    imported
         .validate_table(&admin.get_table_info(&path).await.unwrap())
         .unwrap();
 
     writer.append_arrow_batch(batch(vec![4, 5])).unwrap();
     writer.flush().await.unwrap();
-    assert_eq!(transported.to_json().unwrap(), bytes);
-    assert_eq!(transported.log_ranges()[0].stop_offset(), 3);
+    assert_eq!(imported.log_ranges(), plain.log_ranges());
+    assert_eq!(imported.table_schema(), plain.table_schema());
+    assert_eq!(imported.log_ranges()[0].stop_offset(), 3);
     assert_eq!(
         table.capture_read_context().await.unwrap().log_ranges()[0].stop_offset(),
         5
@@ -101,10 +106,9 @@ async fn prepare_freezes_fluss_only_ranges_and_schema() {
         .await
         .unwrap();
     let evolved = connection.get_table(&path).await.unwrap();
-    transported
-        .validate_table(evolved.get_table_info())
-        .unwrap();
-    assert_eq!(transported.to_json().unwrap(), bytes);
+    imported.validate_table(evolved.get_table_info()).unwrap();
+    assert_eq!(imported.log_ranges(), plain.log_ranges());
+    assert_eq!(imported.table_schema(), plain.table_schema());
     admin.drop_table(&path, false).await.unwrap();
 }
 
@@ -204,7 +208,13 @@ async fn partition_filter_preserves_scope_and_resolved_bucket_counts() {
     assert_eq!(selected.log_ranges().len(), 1);
     assert_eq!(selected.log_ranges()[0].bucket_count(), 1);
     assert_eq!(selected.log_ranges()[0].stop_offset(), 1);
-    let imported = FlussLakeReadContext::from_json(&selected.to_json().unwrap()).unwrap();
+    let imported = FlussLakeReadContext::from_boundary_with_partition_filter(
+        source.get_table_info(),
+        selected.lake_snapshot_id(),
+        selected.log_ranges().to_vec(),
+        &filter,
+    )
+    .unwrap();
     assert_eq!(
         imported
             .partition_filter()

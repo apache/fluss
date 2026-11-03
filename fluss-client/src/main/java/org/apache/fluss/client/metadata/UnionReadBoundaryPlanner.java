@@ -19,7 +19,6 @@ package org.apache.fluss.client.metadata;
 
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.client.admin.Admin;
-import org.apache.fluss.client.admin.ListOffsetsResult;
 import org.apache.fluss.client.admin.OffsetSpec;
 import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
 import org.apache.fluss.metadata.PartitionInfo;
@@ -34,12 +33,10 @@ import javax.annotation.Nullable;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -47,18 +44,18 @@ import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /**
- * Captures bounded UnionRead inputs and encodes them for transport to an execution engine.
+ * Captures structured bounded UnionRead inputs for client or engine planning.
  *
- * <p>Calls use the supplied Admin without closing it or opening lake files. The result fixes a
- * schema, an optional lake snapshot and per-bucket log ranges; it is neither a cross-bucket
- * transactional snapshot nor a retention lease. Without a lake baseline, PK reads reconstruct only
- * keys represented in retained logs. KV snapshot fallback and shared historical logs are not yet
- * supported. Consumers must enforce the captured partition scope on both lake and log inputs.
+ * <p>Calls block the caller and must run on a planning thread, not an Admin RPC callback thread.
+ * They use the supplied Admin without closing it or opening lake files. Request timeouts follow the
+ * client configuration; there is no additional whole-capture timeout. Interrupted waits abort
+ * capture, but do not cancel RPCs already issued. Concurrent calls have independent capture state.
  *
- * <p>Concurrent calls have independent capture state. Synchronous offset request setup runs on the
- * CompletableFuture default async executor, outside the Admin RPC callback thread. Cancelling the
- * returned future does not guarantee cancellation of Admin RPCs already issued or composed by this
- * capture.
+ * <p>The result fixes a schema, an optional lake snapshot and per-bucket log ranges; it is neither
+ * a cross-bucket transactional snapshot nor a retention lease. Without a lake baseline, PK reads
+ * reconstruct only keys represented in retained logs. KV snapshot fallback and shared historical
+ * logs are not yet supported. Consumers must enforce the captured scope on both lake and log
+ * inputs.
  *
  * @since 1.1
  */
@@ -72,10 +69,12 @@ public final class UnionReadBoundaryPlanner {
      *
      * @param admin caller-owned Admin client
      * @param tablePath table whose boundaries should be captured
-     * @return a future containing credential-free UTF-8 context v1 JSON; metadata and lookup
-     *     failures complete it exceptionally
+     * @return captured source metadata and log boundaries; engines own task serialization
+     * @throws InterruptedException if interrupted while waiting for metadata
+     * @throws Exception if metadata capture or boundary validation fails
      */
-    public static CompletableFuture<byte[]> captureReadContext(Admin admin, TablePath tablePath) {
+    public static UnionReadContext captureReadContext(Admin admin, TablePath tablePath)
+            throws Exception {
         return captureReadContext(admin, tablePath, new PartitionSpec(Collections.emptyMap()));
     }
 
@@ -90,202 +89,168 @@ public final class UnionReadBoundaryPlanner {
      * @param tablePath table whose boundaries should be captured
      * @param scope partition keys and metadata-encoded values; an empty spec selects the whole
      *     table
-     * @return a future containing context v1 JSON; invalid scope, changed table identity,
-     *     unavailable metadata or inconsistent offsets complete it exceptionally
-     * @throws NullPointerException if a required argument is null
+     * @return captured source metadata and log boundaries; engines own task serialization
+     * @throws InterruptedException if interrupted while waiting for metadata
+     * @throws Exception if the scope is invalid, metadata capture fails or boundaries are
+     *     inconsistent
      */
-    public static CompletableFuture<byte[]> captureReadContext(
-            Admin admin, TablePath tablePath, PartitionSpec scope) {
+    public static UnionReadContext captureReadContext(
+            Admin admin, TablePath tablePath, PartitionSpec scope) throws Exception {
         checkNotNull(admin, "admin");
         checkNotNull(tablePath, "tablePath");
         checkNotNull(scope, "scope");
         PartitionSpec capturedScope = new PartitionSpec(new HashMap<>(scope.getSpecMap()));
-        return admin.getTableInfo(tablePath)
-                .thenCompose(
-                        table -> {
-                            checkArgument(
-                                    table.getPartitionKeys()
-                                                    .containsAll(
-                                                            capturedScope.getSpecMap().keySet())
-                                            && !capturedScope.getSpecMap().containsValue(null),
-                                    "Scope must reference partition keys with non-null encoded values.");
-                            return readableSnapshot(admin, table)
-                                    .thenCompose(
-                                            snapshot ->
-                                                    capture(admin, table, snapshot, capturedScope));
-                        });
-    }
-
-    private static CompletableFuture<LakeSnapshot> readableSnapshot(Admin admin, TableInfo table) {
-        if (!table.getTableConfig().isDataLakeEnabled()) {
-            return CompletableFuture.completedFuture(null);
-        }
-        return admin.getReadableLakeSnapshot(table.getTablePath())
-                .handle(
-                        (snapshot, error) -> {
-                            if (error == null) {
-                                return snapshot;
-                            }
-                            Throwable cause = ExceptionUtils.stripCompletionException(error);
-                            if (cause instanceof LakeTableSnapshotNotExistException) {
-                                return null;
-                            }
-                            throw new CompletionException(cause);
-                        });
-    }
-
-    private static CompletableFuture<byte[]> capture(
-            Admin admin, TableInfo table, @Nullable LakeSnapshot snapshot, PartitionSpec scope) {
-        CompletableFuture<List<PartitionInfo>> partitions =
+        TableInfo table = admin.getTableInfo(tablePath).get();
+        checkArgument(
+                table.getPartitionKeys().containsAll(capturedScope.getSpecMap().keySet())
+                        && !capturedScope.getSpecMap().containsValue(null),
+                "Scope must reference partition keys with non-null encoded values.");
+        LakeSnapshot snapshot = readableSnapshot(admin, table);
+        List<PartitionInfo> selected =
                 table.isPartitioned()
-                        ? admin.listPartitionInfos(table.getTablePath(), scope)
-                        : CompletableFuture.completedFuture(Collections.singletonList(null));
-        return partitions.thenCompose(
-                selected -> {
-                    CompletableFuture<List<PartitionCapture>> pending =
-                            CompletableFuture.completedFuture(new ArrayList<>());
-                    // Keep one partition in flight per capture.
-                    for (PartitionInfo partition : selected) {
-                        pending =
-                                pending.thenCompose(
-                                        captures ->
-                                                readOffsets(admin, table, partition)
-                                                        .thenApply(
-                                                                capture -> {
-                                                                    captures.add(capture);
-                                                                    return captures;
-                                                                }));
-                    }
-                    return pending.thenCompose(
-                                    captures -> recheckPartitions(admin, table, scope, captures))
-                            .thenCompose(
-                                    retained ->
-                                            finishCapture(admin, table, snapshot, scope, retained));
-                });
+                        ? admin.listPartitionInfos(tablePath, capturedScope).get()
+                        : Collections.singletonList(null);
+        List<PartitionCapture> captures = new ArrayList<>();
+        for (PartitionInfo partition : selected) {
+            captures.add(readOffsets(admin, table, partition));
+        }
+        recheckPartitions(admin, table, capturedScope, captures);
+        validateIdentity(table, admin.getTableInfo(tablePath).get());
+        Map<TableBucket, Long> seams =
+                snapshot == null ? Collections.emptyMap() : snapshot.getTableBucketsOffset();
+        if (snapshot != null) {
+            checkArgument(snapshot.getSnapshotId() >= 0, "Invalid lake snapshot ID.");
+            for (Map.Entry<TableBucket, Long> seam : seams.entrySet()) {
+                checkArgument(
+                        seam.getKey().getTableId() == table.getTableId()
+                                && seam.getValue() != null
+                                && seam.getValue() >= 0,
+                        "Snapshot contains an invalid bucket seam: %s",
+                        seam.getKey());
+            }
+        }
+        List<UnionReadContext.LogRange> ranges = new ArrayList<>();
+        for (PartitionCapture capture : captures) {
+            int count =
+                    PartitionInfo.bucketCountOrDefault(capture.partition, table.getNumBuckets());
+            checkArgument(
+                    capture.earliest.size() == count && capture.stops.size() == count,
+                    "Offset maps must cover exactly the captured buckets.");
+            Map<String, String> values =
+                    capture.partition == null
+                            ? Collections.emptyMap()
+                            : capture.partition.getPartitionSpec().getSpecMap();
+            for (int bucketId = 0; bucketId < count; bucketId++) {
+                TableBucket bucket =
+                        new TableBucket(
+                                table.getTableId(),
+                                capture.partition == null
+                                        ? null
+                                        : capture.partition.getPartitionId(),
+                                bucketId);
+                Long begin = capture.earliest.get(bucket);
+                Long end = capture.stops.get(bucket);
+                Long seam = seams.get(bucket);
+                checkArgument(begin != null && end != null, "Missing log offsets for %s", bucket);
+                long start = seam == null ? begin : seam;
+                checkArgument(
+                        start >= 0 && begin >= 0 && end >= start && end >= begin,
+                        "Invalid concrete log offsets for %s",
+                        bucket);
+                ranges.add(new UnionReadContext.LogRange(bucket, values, count, seam, begin, end));
+            }
+        }
+        return new UnionReadContext(table, snapshot, capturedScope, ranges);
     }
 
-    private static CompletableFuture<byte[]> finishCapture(
-            Admin admin,
-            TableInfo table,
-            @Nullable LakeSnapshot snapshot,
-            PartitionSpec scope,
-            List<PartitionCapture> retained) {
-        return admin.getTableInfo(table.getTablePath())
-                .thenApply(
-                        live -> {
-                            validateIdentity(table, live);
-                            List<PartitionInfo> partitions = new ArrayList<>();
-                            Map<TableBucket, Long> earliest = new HashMap<>();
-                            Map<TableBucket, Long> stops = new HashMap<>();
-                            for (PartitionCapture capture : retained) {
-                                if (capture.partition != null) {
-                                    partitions.add(capture.partition);
-                                }
-                                earliest.putAll(capture.earliest);
-                                stops.putAll(capture.stops);
-                            }
-                            return UnionReadContextEncoder.encode(
-                                    table, snapshot, partitions, earliest, stops, scope);
-                        });
+    @Nullable
+    private static LakeSnapshot readableSnapshot(Admin admin, TableInfo table)
+            throws InterruptedException, ExecutionException {
+        if (!table.getTableConfig().isDataLakeEnabled()) {
+            return null;
+        }
+        try {
+            return admin.getReadableLakeSnapshot(table.getTablePath()).get();
+        } catch (ExecutionException e) {
+            if (ExceptionUtils.stripExecutionException(e)
+                    instanceof LakeTableSnapshotNotExistException) {
+                return null;
+            }
+            throw e;
+        }
     }
 
-    private static CompletableFuture<PartitionCapture> readOffsets(
-            Admin admin, TableInfo table, @Nullable PartitionInfo partition) {
+    private static PartitionCapture readOffsets(
+            Admin admin, TableInfo table, @Nullable PartitionInfo partition)
+            throws InterruptedException {
         PartitionCapture capture = new PartitionCapture(partition);
-        // Capture synchronous request failures too, so the ID recheck can distinguish deletion.
-        return CompletableFuture.completedFuture(null)
-                .thenCompose(
-                        ignored -> {
-                            int count =
-                                    partition == null
-                                            ? table.getNumBuckets()
-                                            : partition.getBucketCount();
-                            checkArgument(count > 0, "Invalid bucket count: %s", count);
-                            List<Integer> buckets =
-                                    IntStream.range(0, count).boxed().collect(Collectors.toList());
-                            return offsets(
-                                            admin,
-                                            table.getTablePath(),
-                                            partition,
-                                            buckets,
-                                            new OffsetSpec.EarliestSpec())
-                                    .thenCompose(
-                                            earliest -> {
-                                                capture.putOffsets(
-                                                        table.getTableId(),
-                                                        earliest,
-                                                        capture.earliest);
-                                                return offsets(
-                                                        admin,
-                                                        table.getTablePath(),
-                                                        partition,
-                                                        buckets,
-                                                        new OffsetSpec.LatestSpec());
-                                            });
-                        })
-                .handle(
-                        (stops, error) -> {
-                            if (error != null) {
-                                capture.error = ExceptionUtils.stripCompletionException(error);
-                            } else {
-                                capture.putOffsets(table.getTableId(), stops, capture.stops);
-                            }
-                            return capture;
-                        });
+        try {
+            int count = partition == null ? table.getNumBuckets() : partition.getBucketCount();
+            checkArgument(count > 0, "Invalid bucket count: %s", count);
+            List<Integer> buckets = IntStream.range(0, count).boxed().collect(Collectors.toList());
+            capture.putOffsets(
+                    table.getTableId(),
+                    offsets(
+                            admin,
+                            table.getTablePath(),
+                            partition,
+                            buckets,
+                            new OffsetSpec.EarliestSpec()),
+                    capture.earliest);
+            capture.putOffsets(
+                    table.getTableId(),
+                    offsets(
+                            admin,
+                            table.getTablePath(),
+                            partition,
+                            buckets,
+                            new OffsetSpec.LatestSpec()),
+                    capture.stops);
+        } catch (ExecutionException | RuntimeException e) {
+            // A failed lookup may be caused by deletion. Only the ID recheck can prove that.
+            capture.error = e;
+        }
+        return capture;
     }
 
-    private static CompletableFuture<Map<Integer, Long>> offsets(
+    private static Map<Integer, Long> offsets(
             Admin admin,
             TablePath path,
             @Nullable PartitionInfo partition,
             List<Integer> buckets,
-            OffsetSpec spec) {
-        // Admin.listOffsets resolves routing with blocking metadata calls. Never invoke it
-        // on the Netty thread completing the previous RPC in this pipeline.
-        return CompletableFuture.supplyAsync(
-                        () ->
-                                partition == null
-                                        ? admin.listOffsets(path, buckets, spec)
-                                        : admin.listOffsets(
-                                                path, partition.getPartitionName(), buckets, spec))
-                .thenCompose(ListOffsetsResult::all);
+            OffsetSpec spec)
+            throws InterruptedException, ExecutionException {
+        return (partition == null
+                        ? admin.listOffsets(path, buckets, spec)
+                        : admin.listOffsets(path, partition.getPartitionName(), buckets, spec))
+                .all()
+                .get();
     }
 
-    private static CompletableFuture<List<PartitionCapture>> recheckPartitions(
-            Admin admin, TableInfo table, PartitionSpec scope, List<PartitionCapture> captures) {
-        CompletableFuture<List<PartitionInfo>> recheck =
-                CompletableFuture.completedFuture(null)
-                        .thenCompose(
-                                ignored ->
-                                        table.isPartitioned()
-                                                ? admin.listPartitionInfos(
-                                                        table.getTablePath(), scope)
-                                                : CompletableFuture.completedFuture(
-                                                        Collections.emptyList()));
-        return recheck.handle(
-                (live, recheckError) -> {
-                    Set<Long> ids = new HashSet<>();
-                    if (recheckError == null) {
-                        live.forEach(partition -> ids.add(partition.getPartitionId()));
-                    }
-                    List<PartitionCapture> retained = new ArrayList<>();
-                    for (PartitionCapture capture : captures) {
-                        if (recheckError == null
-                                && capture.partition != null
-                                && !ids.contains(capture.partition.getPartitionId())) {
-                            continue;
-                        }
-                        if (capture.error != null) {
-                            throw new CompletionException(capture.error);
-                        }
-                        retained.add(capture);
-                    }
-                    if (recheckError != null) {
-                        throw new CompletionException(
-                                ExceptionUtils.stripCompletionException(recheckError));
-                    }
-                    return retained;
-                });
+    private static void recheckPartitions(
+            Admin admin, TableInfo table, PartitionSpec scope, List<PartitionCapture> captures)
+            throws Exception {
+        Exception recheckError = null;
+        if (table.isPartitioned()) {
+            try {
+                Set<Long> liveIds =
+                        admin.listPartitionInfos(table.getTablePath(), scope).get().stream()
+                                .map(PartitionInfo::getPartitionId)
+                                .collect(Collectors.toSet());
+                // Successful name-based lookups can also cross a same-name recreation.
+                captures.removeIf(capture -> !liveIds.contains(capture.partition.getPartitionId()));
+            } catch (ExecutionException | RuntimeException e) {
+                recheckError = e;
+            }
+        }
+        for (PartitionCapture capture : captures) {
+            if (capture.error != null) {
+                throw capture.error;
+            }
+        }
+        if (recheckError != null) {
+            throw recheckError;
+        }
     }
 
     private static void validateIdentity(TableInfo captured, TableInfo live) {
@@ -308,7 +273,7 @@ public final class UnionReadBoundaryPlanner {
         @Nullable private final PartitionInfo partition;
         private final Map<TableBucket, Long> earliest = new HashMap<>();
         private final Map<TableBucket, Long> stops = new HashMap<>();
-        @Nullable private Throwable error;
+        @Nullable private Exception error;
 
         private PartitionCapture(@Nullable PartitionInfo partition) {
             this.partition = partition;

@@ -57,10 +57,6 @@ pub enum FlussLakeError {
     /// Public engine-integration context is malformed or incomplete.
     #[error("invalid UnionRead context: {0}")]
     InvalidReadContext(String),
-
-    /// Public context transport version is not supported.
-    #[error("incompatible UnionRead context version: {0}")]
-    IncompatibleReadContextVersion(String),
 }
 
 pub(crate) fn planning_client_error(action: &str, error: ClientError) -> FlussLakeError {
