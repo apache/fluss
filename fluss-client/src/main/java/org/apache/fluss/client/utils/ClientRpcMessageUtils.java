@@ -272,7 +272,19 @@ public class ClientRpcMessageUtils {
 
     public static PrefixLookupRequest makePrefixLookupRequest(
             long tableId, Collection<PrefixLookupBatch> lookupBatches) {
+        return makePrefixLookupRequest(tableId, lookupBatches, 0, false);
+    }
+
+    /** Builds a request whose limit applies independently to every prefix. */
+    public static PrefixLookupRequest makePrefixLookupRequest(
+            long tableId,
+            Collection<PrefixLookupBatch> lookupBatches,
+            int limit,
+            boolean failOnLimitExceeded) {
         PrefixLookupRequest request = new PrefixLookupRequest().setTableId(tableId);
+        if (limit > 0) {
+            request.setLimit(limit).setFailOnLimitExceeded(failOnLimitExceeded);
+        }
         lookupBatches.forEach(
                 (batch) -> {
                     TableBucket tb = batch.tableBucket();

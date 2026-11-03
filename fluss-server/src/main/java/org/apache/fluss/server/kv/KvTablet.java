@@ -1401,6 +1401,12 @@ public final class KvTablet {
     }
 
     public List<ByteArraySlice> prefixLookup(byte[] prefixKey) throws IOException {
+        return prefixLookup(prefixKey, 0, false);
+    }
+
+    /** Reads a prefix with a candidate limit; zero preserves unlimited reads. */
+    public List<ByteArraySlice> prefixLookup(
+            byte[] prefixKey, int limit, boolean failOnLimitExceeded) throws IOException {
         try (RocksDBKv.PrefixLookup lookup =
                 inReadLock(
                         kvLock,
@@ -1410,7 +1416,7 @@ public final class KvTablet {
                             }
                             return rocksDBKv.openPrefixLookup(prefixKey);
                         })) {
-            return toValueBodySlices(lookup.readAll(), false);
+            return toValueBodySlices(lookup.readAll(limit, failOnLimitExceeded), false);
         }
     }
 

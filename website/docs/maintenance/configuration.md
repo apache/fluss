@@ -302,6 +302,14 @@ This behavior requires upgrading the Java client or the connector that bundles i
 It uses the existing server error code and requires no server protocol upgrade.
 The per-bucket backoff does not impose a cluster-wide bandwidth limit.
 
+## Secondary Index Lookup
+
+| Key | Default | Type | Description |
+|---|---|---|---|
+| `client.lookup.secondary-index.max-candidates` | `1024` | Integer | Maximum first-hop candidates per secondary-index lookup, before deduplication and main-table validation. Must be positive. Overflow fails the query without returning partial results. Ordinary lookups are unaffected. |
+
+Configure this option before creating the Java connection, or set it in Flink table options. It applies to secondary-index lookups made through that connection. Limited queries require TabletServers supporting `PREFIX_LOOKUP` version 2; the client fails the query if an older protocol is negotiated rather than silently dropping the bound.
+
 ## Index Replication
 
 These TabletServer options control maintenance of [secondary indexes](../table-design/secondary-indexes.md).

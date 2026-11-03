@@ -1872,6 +1872,15 @@ public class ConfigOptions {
                                     + "for a bucket's leader or for a retry are outside this limit, so the "
                                     + "total number of pending lookups can grow beyond it.");
 
+    public static final ConfigOption<Integer> CLIENT_LOOKUP_SECONDARY_INDEX_MAX_CANDIDATES =
+            key("client.lookup.secondary-index.max-candidates")
+                    .intType()
+                    .defaultValue(1024)
+                    .withDescription(
+                            "Maximum candidates read by one secondary-index lookup before deduplication and main-table validation. "
+                                    + "Exceeding this limit fails the lookup without returning partial results. "
+                                    + "Only secondary-index lookups are affected. The value must be positive.");
+
     public static final ConfigOption<Integer> CLIENT_LOOKUP_CONTINUATION_THREADS =
             key("client.lookup.continuation-threads")
                     .intType()
