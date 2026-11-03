@@ -880,8 +880,19 @@ class FieldAggregatorParameterizedTest {
 
     static Stream<Arguments> sumRetractNullTestData() {
         return Stream.of(
-                // null accumulator, non-null retract -> null (cannot subtract from nothing)
-                Arguments.of("BIGINT_null_acc", DataTypes.BIGINT(), null, 10L, null),
+                Arguments.of("TINYINT_null_acc", DataTypes.TINYINT(), null, (byte) 10, (byte) -10),
+                Arguments.of(
+                        "SMALLINT_null_acc", DataTypes.SMALLINT(), null, (short) 10, (short) -10),
+                Arguments.of("INTEGER_null_acc", DataTypes.INT(), null, 10, -10),
+                Arguments.of("BIGINT_null_acc", DataTypes.BIGINT(), null, 10L, -10L),
+                Arguments.of("FLOAT_null_acc", DataTypes.FLOAT(), null, 10.0f, -10.0f),
+                Arguments.of("DOUBLE_null_acc", DataTypes.DOUBLE(), null, 10.0, -10.0),
+                Arguments.of(
+                        "DECIMAL_null_acc",
+                        DataTypes.DECIMAL(10, 2),
+                        null,
+                        Decimal.fromBigDecimal(new BigDecimal("10.00"), 10, 2),
+                        Decimal.fromBigDecimal(new BigDecimal("-10.00"), 10, 2)),
                 // non-null accumulator, null retract -> accumulator unchanged
                 Arguments.of("BIGINT_null_retract", DataTypes.BIGINT(), 10L, null, 10L),
                 // both null -> null

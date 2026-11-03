@@ -35,7 +35,9 @@ import org.apache.fluss.record.KvRecord;
 import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.KvRecordTestUtils;
 import org.apache.fluss.record.KvRecordTestUtils.V2RecordEntry;
+import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.record.LogRecordBatch;
+import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.record.MutationType;
@@ -52,6 +54,7 @@ import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
+import org.apache.fluss.utils.CloseableIterator;
 import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.fluss.utils.concurrent.FlussScheduler;
 
@@ -59,6 +62,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import java.io.File;
 import java.util.Arrays;
@@ -558,7 +563,7 @@ class KvTabletMergeModeTest {
     // ==================== Per-Record MutationType RETRACT Tests (V2 format) ====================
 
     @Test
-    void testRetractPairedWithUpsertOnExistingKey() throws Exception {
+    void testRetractThenUpsertOnExistingKey() throws Exception {
         initTablets(RETRACT_SAFE_SCHEMA);
 
         // Insert initial state: key=k1, count=100, name="init"
@@ -585,15 +590,22 @@ class KvTabletMergeModeTest {
         KvRecordBatch batch = kvRecordBatchFactory.ofV2Records(entries);
         kvTablet.putAsLeader(batch, null, MergeMode.DEFAULT);
 
-        // Verify UB(old) + UA(new) CDC entries
+        // Each operation emits its own state transition, including the intermediate value.
         LogRecords actualLogRecords = readLogRecords(endOffset);
         MemoryLogRecords expectedLogs =
                 logRecords(
                         RETRACT_SAFE_ROW_TYPE,
                         endOffset,
-                        Arrays.asList(ChangeType.UPDATE_BEFORE, ChangeType.UPDATE_AFTER),
                         Arrays.asList(
-                                new Object[] {1, 100L, "init"}, new Object[] {1, 110L, "new"}));
+                                ChangeType.UPDATE_BEFORE,
+                                ChangeType.UPDATE_AFTER,
+                                ChangeType.UPDATE_BEFORE,
+                                ChangeType.UPDATE_AFTER),
+                        Arrays.asList(
+                                new Object[] {1, 100L, "init"},
+                                new Object[] {1, 80L, null},
+                                new Object[] {1, 80L, null},
+                                new Object[] {1, 110L, "new"}));
 
         assertThatLogRecords(actualLogRecords)
                 .withSchema(RETRACT_SAFE_ROW_TYPE)
@@ -646,7 +658,7 @@ class KvTabletMergeModeTest {
 
         long startOffset = logTablet.localLogEndOffset();
 
-        // Send V2 batch: RETRACT on a key that doesn't exist — should be skipped
+        // A missing accumulator still participates in the field's retract rule.
         List<V2RecordEntry> entries =
                 Collections.singletonList(
                         V2RecordEntry.of(
@@ -656,27 +668,21 @@ class KvTabletMergeModeTest {
         KvRecordBatch batch = kvRecordBatchFactory.ofV2Records(entries);
         kvTablet.putAsLeader(batch, null, MergeMode.DEFAULT);
 
-        // Verify no CDC records generated
-        LogRecords logRecords = readLogRecords(startOffset);
-        int totalRecordCount = 0;
-        for (LogRecordBatch logBatch : logRecords.batches()) {
-            totalRecordCount += logBatch.getRecordCount();
-        }
-        assertThat(totalRecordCount)
-                .as("No changelog records should be emitted for retract on non-existent key")
-                .isEqualTo(0);
-
-        // Verify the key is still absent from the KV store (no spurious write)
-        assertThat(kvTablet.getKvPreWriteBuffer().get(Key.of("k1".getBytes()))).isNull();
+        MemoryLogRecords expectedLogs =
+                logRecords(
+                        RETRACT_SAFE_ROW_TYPE,
+                        startOffset,
+                        Collections.singletonList(ChangeType.INSERT),
+                        Collections.singletonList(new Object[] {1, -10L, null}));
+        assertThatLogRecords(readLogRecords(startOffset))
+                .withSchema(RETRACT_SAFE_ROW_TYPE)
+                .assertCheckSum(true)
+                .isEqualTo(expectedLogs);
+        assertThat(kvTablet.getKvPreWriteBuffer().get(Key.of("k1".getBytes()))).isNotNull();
     }
 
     @Test
-    void testRetractIndependentLastValueProducesNullIntermediate() throws Exception {
-        // Schema where the only value column is LAST_VALUE.
-        // LAST_VALUE.retract() always returns null for the column value, so an unpaired
-        // RETRACT produces an intermediate row with all non-PK fields null.
-        // With the zombie row fix, this is detected as a fully-retracted row and
-        // treated as a deletion. With DeleteBehavior.ALLOW, it produces a DELETE CDC entry.
+    void testRetractLastValueRetainsRow() throws Exception {
         Schema lastValueOnlySchema =
                 Schema.newBuilder()
                         .column("id", DataTypes.INT())
@@ -700,8 +706,6 @@ class KvTabletMergeModeTest {
 
         long endOffset = logTablet.localLogEndOffset();
 
-        // Send V2 batch: single unpaired RETRACT(k1, "hello")
-        // LAST_VALUE.retract("hello") → null column value → all non-PK fields null → row removed
         List<V2RecordEntry> entries =
                 Collections.singletonList(
                         V2RecordEntry.of(
@@ -711,14 +715,13 @@ class KvTabletMergeModeTest {
         KvRecordBatch batch = kvRecordBatchFactory.ofV2Records(entries);
         kvTablet.putAsLeader(batch, null, MergeMode.DEFAULT);
 
-        // Verify CDC: DELETE(1, "hello") — zombie row is removed
         LogRecords actualLogRecords = readLogRecords(endOffset);
         MemoryLogRecords expectedLogs =
                 logRecords(
                         lastValueRowType,
                         endOffset,
-                        Collections.singletonList(ChangeType.DELETE),
-                        Collections.singletonList(new Object[] {1, "hello"}));
+                        Arrays.asList(ChangeType.UPDATE_BEFORE, ChangeType.UPDATE_AFTER),
+                        Arrays.asList(new Object[] {1, "hello"}, new Object[] {1, null}));
 
         assertThatLogRecords(actualLogRecords)
                 .withSchema(lastValueRowType)
@@ -819,7 +822,7 @@ class KvTabletMergeModeTest {
         KvRecordBatch batch = kvRecordBatchFactory.ofV2Records(entries);
         kvTablet.putAsLeader(batch, null, MergeMode.DEFAULT);
 
-        // Verify: INSERT(k2) + UB(k1,old) + UA(k1,new)
+        // The retract and upsert each emit their own state transition for k1.
         LogRecords actualLogRecords = readLogRecords(endOffset);
         MemoryLogRecords expectedLogs =
                 logRecords(
@@ -828,10 +831,14 @@ class KvTabletMergeModeTest {
                         Arrays.asList(
                                 ChangeType.INSERT,
                                 ChangeType.UPDATE_BEFORE,
+                                ChangeType.UPDATE_AFTER,
+                                ChangeType.UPDATE_BEFORE,
                                 ChangeType.UPDATE_AFTER),
                         Arrays.asList(
                                 new Object[] {2, 50L, "Bob"},
                                 new Object[] {1, 100L, "init"},
+                                new Object[] {1, 80L, null},
+                                new Object[] {1, 80L, null},
                                 new Object[] {1, 110L, "new"}));
 
         assertThatLogRecords(actualLogRecords)
@@ -841,7 +848,7 @@ class KvTabletMergeModeTest {
     }
 
     @Test
-    void testRetractMultiplePairsSameKeyInOneBatch() throws Exception {
+    void testAlternatingRetractsAndUpsertsSameKey() throws Exception {
         initTablets(RETRACT_SAFE_SCHEMA);
 
         // Initial state: key=k1, count=100, name="init"
@@ -853,11 +860,6 @@ class KvTabletMergeModeTest {
 
         long endOffset = logTablet.localLogEndOffset();
 
-        // Send 2 retract+upsert pairs for same key in one V2 batch:
-        // Pair 1: RETRACT(20, "old1") + UPSERT(30, "new1")
-        //   count: 100-20+30=110, name: "new1"
-        // Pair 2: RETRACT(10, "old2") + UPSERT(50, "new2")
-        //   count: 110-10+50=150, name: "new2"
         List<V2RecordEntry> entries =
                 Arrays.asList(
                         V2RecordEntry.of(
@@ -882,8 +884,6 @@ class KvTabletMergeModeTest {
         // Verify changelog shows the transitions
         LogRecords actualLogRecords = readLogRecords(endOffset);
 
-        // Pair 1 produces: UB(100,"init") + UA(110,"new1")
-        // Pair 2 produces: UB(110,"new1") + UA(150,"new2")
         MemoryLogRecords expectedLogs =
                 logRecords(
                         RETRACT_SAFE_ROW_TYPE,
@@ -892,11 +892,19 @@ class KvTabletMergeModeTest {
                                 ChangeType.UPDATE_BEFORE,
                                 ChangeType.UPDATE_AFTER,
                                 ChangeType.UPDATE_BEFORE,
+                                ChangeType.UPDATE_AFTER,
+                                ChangeType.UPDATE_BEFORE,
+                                ChangeType.UPDATE_AFTER,
+                                ChangeType.UPDATE_BEFORE,
                                 ChangeType.UPDATE_AFTER),
                         Arrays.asList(
                                 new Object[] {1, 100L, "init"},
+                                new Object[] {1, 80L, null},
+                                new Object[] {1, 80L, null},
                                 new Object[] {1, 110L, "new1"},
                                 new Object[] {1, 110L, "new1"},
+                                new Object[] {1, 100L, null},
+                                new Object[] {1, 100L, null},
                                 new Object[] {1, 150L, "new2"}));
 
         assertThatLogRecords(actualLogRecords)
@@ -906,7 +914,7 @@ class KvTabletMergeModeTest {
     }
 
     @Test
-    void testRetractToZeroThenRescue() throws Exception {
+    void testRetractToZeroThenUpsert() throws Exception {
         // Schema uses SUM for count. Initial state: key=k1, total=10
         initTablets(SUM_SCHEMA);
 
@@ -940,11 +948,16 @@ class KvTabletMergeModeTest {
                 logRecords(
                         SUM_ROW_TYPE,
                         endOffset,
-                        Arrays.asList(ChangeType.UPDATE_BEFORE, ChangeType.UPDATE_AFTER),
                         Arrays.asList(
-                                new Object[] {1, 10L}, // before
-                                new Object[] {1, 30L} // after: rescued from zero
-                                ));
+                                ChangeType.UPDATE_BEFORE,
+                                ChangeType.UPDATE_AFTER,
+                                ChangeType.UPDATE_BEFORE,
+                                ChangeType.UPDATE_AFTER),
+                        Arrays.asList(
+                                new Object[] {1, 10L},
+                                new Object[] {1, 0L},
+                                new Object[] {1, 0L},
+                                new Object[] {1, 30L}));
 
         assertThatLogRecords(actualLogRecords)
                 .withSchema(SUM_ROW_TYPE)
@@ -953,7 +966,7 @@ class KvTabletMergeModeTest {
     }
 
     @Test
-    void testRetractNoChangeOptimization() throws Exception {
+    void testRetractThenUpsertRestoresValue() throws Exception {
         // Use a simple SUM schema
         initTablets(SUM_SCHEMA);
 
@@ -965,7 +978,7 @@ class KvTabletMergeModeTest {
 
         long endOffset = logTablet.localLogEndOffset();
 
-        // V2 batch: RETRACT(5) + UPSERT(5) → 10-5+5=10 (no change)
+        // Returning to the initial value still has two observable state transitions.
         List<V2RecordEntry> entries =
                 Arrays.asList(
                         V2RecordEntry.of(
@@ -979,22 +992,28 @@ class KvTabletMergeModeTest {
         KvRecordBatch retractBatch = kvRecordBatchFactory.ofV2Records(entries);
         kvTablet.putAsLeader(retractBatch, null, MergeMode.DEFAULT);
 
-        // Verify no changelog is emitted (the newValue.equals(oldValue) optimization).
-        LogRecords logRecords = readLogRecords(endOffset);
-        int totalRecordCount = 0;
-        for (LogRecordBatch logBatch : logRecords.batches()) {
-            totalRecordCount += logBatch.getRecordCount();
-        }
-        assertThat(totalRecordCount)
-                .as("No changelog records should be emitted when retract+upsert produces no change")
-                .isEqualTo(0);
+        MemoryLogRecords expectedLogs =
+                logRecords(
+                        SUM_ROW_TYPE,
+                        endOffset,
+                        Arrays.asList(
+                                ChangeType.UPDATE_BEFORE,
+                                ChangeType.UPDATE_AFTER,
+                                ChangeType.UPDATE_BEFORE,
+                                ChangeType.UPDATE_AFTER),
+                        Arrays.asList(
+                                new Object[] {1, 10L},
+                                new Object[] {1, 5L},
+                                new Object[] {1, 5L},
+                                new Object[] {1, 10L}));
+        assertThatLogRecords(readLogRecords(endOffset))
+                .withSchema(SUM_ROW_TYPE)
+                .assertCheckSum(true)
+                .isEqualTo(expectedLogs);
     }
 
     @Test
-    void testConsecutiveRetractsThenUpsertOptimization() throws Exception {
-        // Verify that when a batch contains RETRACT → RETRACT → UPSERT for the same key,
-        // the second RETRACT gets its own peek-ahead and merges with the UPSERT,
-        // producing fewer CDC entries than fully independent processing.
+    void testConsecutiveRetractsThenUpsert() throws Exception {
         initTablets(SUM_SCHEMA);
 
         // Initial state: key=k1, total=100
@@ -1006,12 +1025,6 @@ class KvTabletMergeModeTest {
         long endOffset = logTablet.localLogEndOffset();
 
         // V2 batch: RETRACT(20) → RETRACT(20) → UPSERT(30) for same key
-        // Expected processing:
-        //   1st RETRACT peeks, sees 2nd RETRACT (not UPSERT) → independent: 100→80
-        //     CDC: UB(100) + UA(80)
-        //   2nd RETRACT peeks, sees UPSERT → merged: 80-20+30=90
-        //     CDC: UB(80) + UA(90)
-        // Total: 4 CDC entries (not 6 as would happen without the optimization)
         List<V2RecordEntry> entries =
                 Arrays.asList(
                         V2RecordEntry.of(
@@ -1029,9 +1042,6 @@ class KvTabletMergeModeTest {
         KvRecordBatch batch = kvRecordBatchFactory.ofV2Records(entries);
         kvTablet.putAsLeader(batch, null, MergeMode.DEFAULT);
 
-        // Verify changelog: 4 entries total
-        // 1st RETRACT (independent): UB(100) + UA(80)
-        // 2nd RETRACT+UPSERT (merged): UB(80) + UA(90)
         LogRecords actualLogRecords = readLogRecords(endOffset);
         MemoryLogRecords expectedLogs =
                 logRecords(
@@ -1041,17 +1051,93 @@ class KvTabletMergeModeTest {
                                 ChangeType.UPDATE_BEFORE,
                                 ChangeType.UPDATE_AFTER,
                                 ChangeType.UPDATE_BEFORE,
+                                ChangeType.UPDATE_AFTER,
+                                ChangeType.UPDATE_BEFORE,
                                 ChangeType.UPDATE_AFTER),
                         Arrays.asList(
                                 new Object[] {1, 100L},
                                 new Object[] {1, 80L},
                                 new Object[] {1, 80L},
+                                new Object[] {1, 60L},
+                                new Object[] {1, 60L},
                                 new Object[] {1, 90L}));
 
         assertThatLogRecords(actualLogRecords)
                 .withSchema(SUM_ROW_TYPE)
                 .assertCheckSum(true)
                 .isEqualTo(expectedLogs);
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+        "0, ignore", "1, ignore", "2, ignore", "3, ignore",
+        "0, allow", "1, allow", "2, allow", "3, allow",
+        "0, disable", "1, disable", "2, disable", "3, disable"
+    })
+    void testRetractStateIndependentOfBatchBoundaries(int boundaries, String deleteBehavior)
+            throws Exception {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("value", DataTypes.INT(), AggFunctions.LAST_VALUE_IGNORE_NULLS())
+                        .primaryKey("id")
+                        .build();
+        initTablets(schema, Collections.singletonMap("table.delete.behavior", deleteBehavior));
+        KvRecordTestUtils.KvRecordFactory factory =
+                KvRecordTestUtils.KvRecordFactory.of(schema.getRowType());
+        List<V2RecordEntry> entries =
+                Arrays.asList(
+                        V2RecordEntry.of(
+                                MutationType.UPSERT,
+                                factory.ofRecord("k1".getBytes(), new Object[] {1, 5})),
+                        V2RecordEntry.of(
+                                MutationType.RETRACT,
+                                factory.ofRecord("k1".getBytes(), new Object[] {1, 5})),
+                        V2RecordEntry.of(
+                                MutationType.UPSERT,
+                                factory.ofRecord("k1".getBytes(), new Object[] {1, null})));
+        long startOffset = logTablet.localLogEndOffset();
+        int start = 0;
+        for (int end = 1; end <= entries.size(); end++) {
+            if (end == entries.size() || (boundaries & (1 << (end - 1))) != 0) {
+                kvTablet.putAsLeader(
+                        kvRecordBatchFactory.ofV2Records(entries.subList(start, end)),
+                        null,
+                        MergeMode.DEFAULT);
+                start = end;
+            }
+        }
+
+        ChangeType[] expectedTypes = {
+            ChangeType.INSERT,
+            ChangeType.UPDATE_BEFORE,
+            ChangeType.UPDATE_AFTER,
+            ChangeType.UPDATE_BEFORE,
+            ChangeType.UPDATE_AFTER
+        };
+        Integer[] expectedValues = {5, 5, null, null, null};
+        int index = 0;
+        try (LogRecordReadContext context =
+                LogRecordReadContext.createArrowReadContext(
+                        schema.getRowType(), SCHEMA_ID, schemaGetter)) {
+            for (LogRecordBatch batch : readLogRecords(startOffset).batches()) {
+                try (CloseableIterator<LogRecord> records = batch.records(context)) {
+                    while (records.hasNext()) {
+                        LogRecord record = records.next();
+                        assertThat(index).isLessThan(expectedTypes.length);
+                        assertThat(record.getChangeType()).isEqualTo(expectedTypes[index]);
+                        assertThat(record.getRow().getInt(0)).isEqualTo(1);
+                        if (expectedValues[index] == null) {
+                            assertThat(record.getRow().isNullAt(1)).isTrue();
+                        } else {
+                            assertThat(record.getRow().getInt(1)).isEqualTo(expectedValues[index]);
+                        }
+                        index++;
+                    }
+                }
+            }
+        }
+        assertThat(index).isEqualTo(expectedTypes.length);
     }
 
     // ==================== Default MergeMode Tests ====================
@@ -1095,6 +1181,21 @@ class KvTabletMergeModeTest {
     }
 
     // ==================== V2 Format Validation Tests ====================
+
+    @Test
+    void testV2DeleteWithRowThrows() throws Exception {
+        List<V2RecordEntry> entries =
+                Collections.singletonList(
+                        V2RecordEntry.of(
+                                MutationType.DELETE,
+                                kvRecordFactory.ofRecord(
+                                        "k1".getBytes(), new Object[] {1, 10L, 100, "Alice"})));
+        KvRecordBatch batch = kvRecordBatchFactory.ofV2Records(entries);
+
+        assertThatThrownBy(() -> kvTablet.putAsLeader(batch, null, MergeMode.DEFAULT))
+                .isInstanceOf(InvalidRecordException.class)
+                .hasMessageContaining("V2 DELETE record must not carry a row value.");
+    }
 
     @Test
     void testV2UpsertWithNullRowThrows() throws Exception {

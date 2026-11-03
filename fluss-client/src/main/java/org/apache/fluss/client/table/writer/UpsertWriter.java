@@ -42,9 +42,14 @@ public interface UpsertWriter extends TableWriter {
      * Retracts a previous aggregation contribution for the given row. The row must contain the
      * primary key fields and the old aggregation values to retract.
      *
-     * <p>This is used when a Flink aggregate operator emits UPDATE_BEFORE (retract old value) for a
-     * key. The retract record is sent independently with {@link
-     * org.apache.fluss.record.MutationType#RETRACT} mutation type.
+     * <p>Each target field applies its aggregate function's retract rule. SUM subtracts the input
+     * (or negates it when the accumulator is null). LAST_VALUE clears the field; it does not
+     * restore earlier values. Retraction also applies to keys without a current row. Zero and
+     * all-null aggregate fields do not delete the record. Primary keys and non-target fields are
+     * preserved. Use {@link #delete(InternalRow)} to request deletion instead.
+     *
+     * <p>Each call is processed in order without inferring an update pair from adjacency or client
+     * batching. Atomicity is not provided across separate requests.
      *
      * <p><b>Retract is NOT idempotent.</b> Applying the same retract twice subtracts the
      * contribution twice (e.g., for SUM). Correctness under retries relies on the server-side
@@ -56,7 +61,7 @@ public interface UpsertWriter extends TableWriter {
      * externally (e.g., the Flink connector restores checkpoint state via undo recovery before
      * replaying).
      *
-     * @param row the old aggregation value to retract (UPDATE_BEFORE).
+     * @param row the input contribution to retract, including primary key fields
      * @return A {@link CompletableFuture} that returns retract result when complete normally.
      */
     default CompletableFuture<RetractResult> retract(InternalRow row) {
@@ -66,6 +71,10 @@ public interface UpsertWriter extends TableWriter {
 
     /**
      * Delete a certain record from the Fluss table. The input must contain the primary key fields.
+     * Full writes request deletion of the record; partial writes clear the target value fields. The
+     * configured table delete behavior determines whether deletion is allowed. Non-key values in
+     * the input are not used as aggregation contributions; use {@link #retract(InternalRow)} for
+     * field-level retraction.
      *
      * @param record the record to delete.
      * @return A {@link CompletableFuture} that always delete result when complete normally.

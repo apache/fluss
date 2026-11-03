@@ -544,23 +544,8 @@ TableDescriptor.builder()
 
 **Key behavior:** Null values overwrite existing values, treating null as a valid value to be stored.
 
-:::warning Retract Behavior Warning
-When using `last_value` with retract semantics (e.g., in Flink streaming aggregations):
-
-- **No history tracking**: `last_value` does not maintain historical values. When a retract (`UPDATE_BEFORE`) is received, it unconditionally clears the accumulator to `null`, regardless of whether the retracted value matches the current state.
-- **Best-effort semantic**: This is a simplified implementation aligned with Paimon. Precise retraction is not possible without full history.
-- **Use case limitation**: Only suitable for scenarios where each key receives exactly one update. If multiple updates occur before a retract, the result may be incorrect (the field becomes `null` instead of reverting to a previous value).
-- **Alternative**: If you need accurate retract behavior, consider using `sum` or other mathematically reversible functions instead.
-
-**Example of incorrect retract scenario:**
-```
-Initial:    INSERT (id=1, status='A')        → status='A'
-Update 1:   UPDATE (id=1, status='B')        → status='B'
-Update 2:   UPDATE (id=1, status='C')        → status='C'
-Retract:    RETRACT (id=1, status='B')       → status=null (WRONG! Expected 'C')
-```
-
-In this example, retracting 'B' when the current value is 'C' results in `null` instead of the expected 'C', because `last_value` has no memory of the intermediate state.
+:::note Retraction
+`last_value` clears the field to null on every retract, regardless of whether the input matches the current value. It neither restores an earlier value nor searches for a matching historical contribution. For example, retracting `'B'` when the current value is `'C'` produces null. This is the field's retract rule, aligned with Paimon aggregation semantics. The row itself remains present. See [Retraction](#retraction) for the operation and row-existence contracts.
 :::
 
 ### last_value_ignore_nulls
@@ -1313,6 +1298,40 @@ TableDescriptor.builder()
 </TabItem>
 </Tabs>
 
+## Retraction
+
+Retraction applies each field's retract rule to an input contribution. It does not restore a previous row or reconstruct the history of values for a key. The field rules follow [Paimon 2.1 aggregation semantics](https://paimon.apache.org/docs/2.1/primary-key-table/merge-engine/aggregation/).
+
+The Java client exposes three distinct operations:
+
+| Operation | Effect |
+| --- | --- |
+| `upsert(row)` | Aggregate the supplied fields into the current state. |
+| `retract(row)` | Apply the supplied fields' retract rules to the current state. The row must include its primary key and the values to retract. |
+| `delete(row)` | Apply the configured delete behavior. Full writes delete the record; partial writes clear the target fields. Non-key values supplied in the input do not become retract contributions. |
+
+For example, after `upsert((1, 10))` on a SUM field, `retract((1, 3))` produces `(1, 7)`. Calling `delete((1, 3))` instead requests deletion according to `table.delete.behavior` and the writer's target columns; it does not subtract `3`.
+
+### Field Rules
+
+| Function | Retract rule |
+| --- | --- |
+| `sum` | Subtract a non-null input. A null input leaves the accumulator unchanged. If the accumulator is null, retracting `x` produces `-x`. |
+| `last_value` | Clear the accumulator to null, including when the input is null. |
+| `last_value_ignore_nulls` | Clear the accumulator when the input is non-null; otherwise retain it. |
+
+These rules do not check whether the input matches a previously written contribution. In particular, the last-value functions do not retain earlier values to restore after a retract. SUM uses the field's numeric representation, so subtraction does not imply an exact inverse for every numeric value.
+
+Primary keys are retained. For partial writes, only target value fields are retracted; other fields retain their state. Retraction also applies when the key has no current row: each targeted field starts with a null accumulator. For example, retracting `(1, 3)` from an absent SUM key creates `(1, -3)`.
+
+Neither zero nor all-null aggregate fields imply that the record should be removed. Retraction retains the row, including a row whose only non-null fields are its primary key. Explicit deletion has separate rules described below.
+
+### Ordering and Recovery
+
+Each retract is processed independently in the order received. An adjacent retract and upsert are two operations with an observable intermediate state; adjacency does not establish an update pair. For a fixed ordered sequence of successful operations, changing the client batch boundaries does not change the resulting aggregate state. This does not provide atomicity across separate requests, and failures are subject to the actual write boundaries.
+
+Retract is not idempotent: applying a SUM retract twice subtracts the contribution twice. The client requires `client.writer.enable-idempotence` so transport retries can use writer-batch deduplication. This deduplication applies within a writer session; application replay with a new writer requires a recovery protocol. Flink undo recovery restores checkpoint state using OVERWRITE and is distinct from normal retract processing.
+
 ## Delete Behavior
 
 The aggregation merge engine provides limited support for delete operations. You can configure the behavior using the `'table.delete.behavior'` option:
@@ -1364,16 +1383,6 @@ UpsertWriter partialWriter = table.newUpsert()
 // - Remove entire record only if count2 and sum2 are both null
 partialWriter.delete(primaryKeyRow);
 ```
-
-:::note
-**Retract Support**: The aggregation merge engine supports retract semantics for aggregate functions that have a retract implementation. Retract quality varies by function — `sum` provides exact inverse (subtraction), while others are best-effort. When using Flink SQL with a retract-compatible aggregation table, `UPDATE_BEFORE` rows are automatically treated as retract operations rather than deletes.
-
-- **Strict inverse**: `sum` — subtraction is mathematically exact.
-- **Best-effort**: `last_value` (unconditionally clears to null), `last_value_ignore_nulls` (clears to null when retracting a non-null value). These do not reconstruct prior history.
-- Retract is only supported when **all** target aggregation fields use retract-capable functions.
-- **Undo vs Retract**: Undo recovery (used during Flink failover) restores exact checkpoint state via OVERWRITE mode. Retract applies inverse aggregation during normal streaming. These are independent mechanisms.
-- **Non-retract-capable functions** (e.g., `max`, `min`, `first_value`, `listagg`, `bool_and`, `bool_or`): These functions throw `UnsupportedOperationException` on retract. They cannot be used in retract-enabled tables.
-:::
 
 ## Limitations
 

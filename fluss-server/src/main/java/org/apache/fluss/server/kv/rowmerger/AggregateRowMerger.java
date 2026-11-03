@@ -24,6 +24,7 @@ import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.record.BinaryValue;
 import org.apache.fluss.row.BinaryRow;
+import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.RowEncoder;
 import org.apache.fluss.server.kv.rowmerger.aggregate.AggregateFieldsProcessor;
 import org.apache.fluss.server.kv.rowmerger.aggregate.AggregationContext;
@@ -115,22 +116,28 @@ public class AggregateRowMerger implements RowMerger {
     }
 
     @Override
-    public BinaryValue retract(BinaryValue oldValue, BinaryValue retractValue) {
-        // No existing row: nothing to retract from.
-        // Returns null to signal the row should be removed (same contract as delete()).
+    public BinaryValue retract(@Nullable BinaryValue oldValue, BinaryValue retractValue) {
         if (oldValue == null || oldValue.row == null) {
-            return null;
+            oldValue = emptyAccumulator(contextCache, retractValue);
         }
-        BinaryValue result =
-                applyAllFields(
-                        oldValue,
-                        retractValue,
-                        AggregateFieldsProcessor::retractAllFieldsWithTargetSchema);
-        // If all non-PK fields are null after retract, the row is fully retracted — remove it.
-        if (isAllNonPkFieldsNull(result.row, contextCache.getContext(result.schemaId))) {
-            return null;
+        // Aggregate nulls and zeros are values, not evidence that the key should be deleted.
+        return applyAllFields(
+                oldValue, retractValue, AggregateFieldsProcessor::retractAllFieldsWithTargetSchema);
+    }
+
+    private static BinaryValue emptyAccumulator(
+            AggregationContextCache contextCache, BinaryValue input) {
+        AggregationContext context = contextCache.getContext(input.schemaId);
+        RowEncoder encoder = context.getRowEncoder();
+        InternalRow.FieldGetter[] fieldGetters = context.getFieldGetters();
+        BitSet primaryKeys = context.getPrimaryKeyColsBitSet();
+        encoder.startNewRow();
+        for (int i = 0; i < context.getFieldCount(); i++) {
+            encoder.encodeField(
+                    i, primaryKeys.get(i) ? fieldGetters[i].getFieldOrNull(input.row) : null);
         }
-        return result;
+        // The retract output may reuse this context's encoder, so its input must own its bytes.
+        return new BinaryValue(input.schemaId, encoder.finishRow().copy());
     }
 
     /** Shared implementation for merge() and retract() on all fields. */
@@ -214,22 +221,6 @@ public class AggregateRowMerger implements RowMerger {
     private static boolean allAggregatorsSupportRetract(AggregationContext context) {
         for (FieldAggregator agg : context.getAggregators()) {
             if (agg != null && !agg.supportsRetract()) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    /**
-     * Checks whether all non-primary-key fields in the given row are null.
-     *
-     * <p>When a retract operation zeroes out every non-PK field, the row is effectively empty and
-     * should be removed rather than kept as a zombie row with only PK values.
-     */
-    private static boolean isAllNonPkFieldsNull(BinaryRow row, AggregationContext context) {
-        BitSet pkBitSet = context.getPrimaryKeyColsBitSet();
-        for (int i = 0; i < context.getFieldCount(); i++) {
-            if (!pkBitSet.get(i) && !row.isNullAt(i)) {
                 return false;
             }
         }
@@ -359,21 +350,14 @@ public class AggregateRowMerger implements RowMerger {
         }
 
         @Override
-        public BinaryValue retract(BinaryValue oldValue, BinaryValue retractValue) {
-            // No existing row: nothing to retract from
+        public BinaryValue retract(@Nullable BinaryValue oldValue, BinaryValue retractValue) {
             if (oldValue == null || oldValue.row == null) {
-                return null;
+                oldValue = emptyAccumulator(contextCache, retractValue);
             }
-            BinaryValue result =
-                    applyTargetFields(
-                            oldValue,
-                            retractValue,
-                            AggregateFieldsProcessor::retractTargetFieldsWithTargetSchema);
-            // If all non-PK fields are null after retract, remove the row.
-            if (isAllNonPkFieldsNull(result.row, contextCache.getContext(result.schemaId))) {
-                return null;
-            }
-            return result;
+            return applyTargetFields(
+                    oldValue,
+                    retractValue,
+                    AggregateFieldsProcessor::retractTargetFieldsWithTargetSchema);
         }
 
         /** Shared implementation for merge() and retract() on target fields. */

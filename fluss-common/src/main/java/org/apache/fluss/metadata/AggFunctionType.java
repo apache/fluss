@@ -265,12 +265,14 @@ public enum AggFunctionType {
     /**
      * Returns whether this aggregation function has a retract implementation.
      *
-     * <p>Retract quality varies by function:
+     * <p>The retract rule is specific to each function and does not reconstruct prior history:
      *
      * <ul>
-     *   <li><b>Strict inverse</b>: {@link #SUM} — subtraction is mathematically exact.
-     *   <li><b>Best-effort</b>: {@link #LAST_VALUE} and {@link #LAST_VALUE_IGNORE_NULLS} —
-     *       unconditionally clear to null without reconstructing prior history.
+     *   <li>{@link #SUM} subtracts the input, or negates it when the accumulator is null, using the
+     *       field's numeric representation.
+     *   <li>{@link #LAST_VALUE} clears to null regardless of the input.
+     *   <li>{@link #LAST_VALUE_IGNORE_NULLS} clears to null for a non-null input and preserves the
+     *       accumulator for a null input.
      * </ul>
      *
      * @return true if this function has a retract implementation, false otherwise

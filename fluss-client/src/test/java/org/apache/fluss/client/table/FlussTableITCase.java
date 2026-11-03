@@ -2177,7 +2177,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
     }
 
     @Test
-    void testRetractAppliesInverseAggregation() throws Exception {
+    void testRetractAppliesSum() throws Exception {
         TablePath tablePath = TablePath.of("test_db_1", "test_retract_sum_table");
         createTable(tablePath, aggSumTableDescriptor(), false);
 
@@ -2193,6 +2193,16 @@ class FlussTableITCase extends ClientToServerITCaseBase {
             InternalRow result = lookupRow(lookuper, row(1));
             assertThat(result).isNotNull();
             assertThat(result.getLong(1)).isEqualTo(10L);
+
+            upsertWriter.retract(row(2, 5L)).get();
+            InternalRow negativeResult = lookupRow(lookuper, row(2));
+            assertThat(negativeResult).isNotNull();
+            assertThat(negativeResult.getLong(1)).isEqualTo(-5L);
+
+            upsertWriter.upsert(row(2, 5L)).get();
+            InternalRow zeroResult = lookupRow(lookuper, row(2));
+            assertThat(zeroResult).isNotNull();
+            assertThat(zeroResult.getLong(1)).isZero();
         }
     }
 

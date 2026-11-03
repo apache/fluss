@@ -96,11 +96,12 @@ public class FieldSumAgg extends FieldAggregator {
 
     @Override
     public Object retract(Object accumulator, Object retractField) {
-        if (accumulator == null) {
-            return null;
-        }
         if (retractField == null) {
             return accumulator;
+        }
+        if (accumulator == null) {
+            // A missing contribution starts at zero; it does not cancel the retract input.
+            return negative(retractField);
         }
 
         Object result;
@@ -143,6 +144,31 @@ public class FieldSumAgg extends FieldAggregator {
                                 "Type %s is not supported in %s",
                                 typeRoot, this.getClass().getName());
                 throw new IllegalArgumentException(msg);
+        }
+    }
+
+    private Object negative(Object value) {
+        switch (typeRoot) {
+            case DECIMAL:
+                Decimal decimal = (Decimal) value;
+                return Decimal.fromBigDecimal(
+                        decimal.toBigDecimal().negate(), decimal.precision(), decimal.scale());
+            case TINYINT:
+                return subtractExactByte((byte) 0, (byte) value);
+            case SMALLINT:
+                return subtractExactShort((short) 0, (short) value);
+            case INTEGER:
+                return Math.negateExact((int) value);
+            case BIGINT:
+                return Math.negateExact((long) value);
+            case FLOAT:
+                return -((float) value);
+            case DOUBLE:
+                return -((double) value);
+            default:
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Type %s is not supported in %s", typeRoot, getClass().getName()));
         }
     }
 }

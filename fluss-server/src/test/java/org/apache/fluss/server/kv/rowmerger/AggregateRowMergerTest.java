@@ -1120,10 +1120,25 @@ class AggregateRowMergerTest {
         AggregateRowMerger merger = createMerger(SCHEMA_SUM, tableConfig);
         merger.configureTargetColumns(null, SCHEMA_ID, SCHEMA_SUM);
 
-        // Retract with no existing row should return null (nothing to retract from)
         BinaryRow retractRow = compactedRow(ROW_TYPE_SUM, new Object[] {1, 30L, 10.5});
         BinaryValue result = merger.retract(null, toBinaryValue(retractRow));
-        assertThat(result).isNull();
+        assertThat(result).isNotNull();
+        assertThat(result.row.getInt(0)).isEqualTo(1);
+        assertThat(result.row.getLong(1)).isEqualTo(-30L);
+        assertThat(result.row.getDouble(2)).isEqualTo(-10.5);
+    }
+
+    @Test
+    void testPartialRetractFirstWrite() {
+        AggregateRowMerger merger = createMerger(SCHEMA_SUM, new TableConfig(new Configuration()));
+        RowMerger partial = merger.configureTargetColumns(new int[] {0, 1}, SCHEMA_ID, SCHEMA_SUM);
+        BinaryValue value = toBinaryValue(compactedRow(ROW_TYPE_SUM, new Object[] {1, 30L, 10.5}));
+
+        BinaryValue result = partial.retract(null, value);
+        assertThat(result).isNotNull();
+        assertThat(result.row.getInt(0)).isEqualTo(1);
+        assertThat(result.row.getLong(1)).isEqualTo(-30L);
+        assertThat(result.row.isNullAt(2)).isTrue();
     }
 
     @Test
@@ -1241,8 +1256,7 @@ class AggregateRowMergerTest {
         assertThat(result.row.getFieldCount()).isEqualTo(3);
         assertThat(result.row.getInt(0)).isEqualTo(1); // id unchanged
         assertThat(result.row.getLong(1)).isEqualTo(70L); // sum_count: 100 - 30
-        // new_sum: old row didn't have this column (null), retract 10 from null -> null
-        assertThat(result.row.isNullAt(2)).isTrue();
+        assertThat(result.row.getLong(2)).isEqualTo(-10L);
     }
 
     @Test
@@ -1422,10 +1436,7 @@ class AggregateRowMergerTest {
     }
 
     @Test
-    void testRetractProducesNullWhenAllNonPkFieldsBecomeNull() {
-        // Schema where all non-PK columns use last_value (retract-safe).
-        // Retracting the exact same values should null out all non-PK fields,
-        // causing the merger to return null (row removal) instead of a zombie row.
+    void testRetractRetainsRowWhenAllNonPkFieldsBecomeNull() {
         Schema schema =
                 Schema.newBuilder()
                         .column("id", DataTypes.INT())
@@ -1446,14 +1457,14 @@ class AggregateRowMergerTest {
 
         BinaryValue result = merger.retract(toBinaryValue(oldRow), toBinaryValue(retractRow));
 
-        // All non-PK fields are null after retract -> row should be removed
-        assertThat(result).isNull();
+        assertThat(result).isNotNull();
+        assertThat(result.row.getInt(0)).isEqualTo(1);
+        assertThat(result.row.isNullAt(1)).isTrue();
+        assertThat(result.row.isNullAt(2)).isTrue();
     }
 
     @Test
-    void testPartialRetractProducesNullWhenAllNonPkFieldsBecomeNull() {
-        // Schema with partial update: retract on target columns that nulls them out,
-        // while non-target columns are already null -> zombie row should be removed.
+    void testPartialRetractRetainsRowWhenAllNonPkFieldsBecomeNull() {
         Schema schema =
                 Schema.newBuilder()
                         .column("id", DataTypes.INT())
@@ -1477,7 +1488,9 @@ class AggregateRowMergerTest {
         BinaryValue result =
                 partialMerger.retract(toBinaryValue(oldRow), toBinaryValue(retractRow));
 
-        // All non-PK fields are null after retract -> row should be removed
-        assertThat(result).isNull();
+        assertThat(result).isNotNull();
+        assertThat(result.row.getInt(0)).isEqualTo(1);
+        assertThat(result.row.isNullAt(1)).isTrue();
+        assertThat(result.row.isNullAt(2)).isTrue();
     }
 }
