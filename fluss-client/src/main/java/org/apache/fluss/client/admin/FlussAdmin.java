@@ -87,6 +87,7 @@ import org.apache.fluss.rpc.messages.GetDatabaseInfoRequest;
 import org.apache.fluss.rpc.messages.GetKvSnapshotMetadataRequest;
 import org.apache.fluss.rpc.messages.GetLakeSnapshotRequest;
 import org.apache.fluss.rpc.messages.GetLatestKvSnapshotsRequest;
+import org.apache.fluss.rpc.messages.GetLatestKvSnapshotsResponse;
 import org.apache.fluss.rpc.messages.GetProducerOffsetsRequest;
 import org.apache.fluss.rpc.messages.GetTableInfoRequest;
 import org.apache.fluss.rpc.messages.GetTableSchemaRequest;
@@ -96,6 +97,7 @@ import org.apache.fluss.rpc.messages.ListAclsRequest;
 import org.apache.fluss.rpc.messages.ListDatabasesRequest;
 import org.apache.fluss.rpc.messages.ListDatabasesResponse;
 import org.apache.fluss.rpc.messages.ListKvSnapshotsRequest;
+import org.apache.fluss.rpc.messages.ListKvSnapshotsResponse;
 import org.apache.fluss.rpc.messages.ListOffsetsRequest;
 import org.apache.fluss.rpc.messages.ListOffsetsResponse;
 import org.apache.fluss.rpc.messages.ListPartitionInfosRequest;
@@ -106,6 +108,7 @@ import org.apache.fluss.rpc.messages.ListTablesRequest;
 import org.apache.fluss.rpc.messages.ListTablesResponse;
 import org.apache.fluss.rpc.messages.PbAlterConfig;
 import org.apache.fluss.rpc.messages.PbKeyValue;
+import org.apache.fluss.rpc.messages.PbKvSnapshot;
 import org.apache.fluss.rpc.messages.PbListOffsetsRespForBucket;
 import org.apache.fluss.rpc.messages.PbPartitionInfo;
 import org.apache.fluss.rpc.messages.PbTableInfo;
@@ -137,6 +140,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.stream.Collectors;
 
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeAlterDatabaseRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeAlterTableRequest;
@@ -176,6 +180,9 @@ public class FlussAdmin implements Admin {
     private final AdminGateway retryableCoordinatorGateway;
 
     private final MetadataUpdater metadataUpdater;
+
+    private final CompletableFuture<KvSnapshots> snapshotSelectionClosed =
+            new CompletableFuture<>();
 
     /**
      * Single-thread executor that runs the metadata-refresh callback for {@link
@@ -631,13 +638,21 @@ public class FlussAdmin implements Admin {
     @Override
     public CompletableFuture<ActiveKvSnapshots> listKvSnapshots(
             long tableId, @Nullable Long partitionId) {
+        return listKvSnapshotMetadata(tableId, partitionId, false)
+                .thenApply(ClientRpcMessageUtils::toActiveKvSnapshots);
+    }
+
+    private CompletableFuture<ListKvSnapshotsResponse> listKvSnapshotMetadata(
+            long tableId, @Nullable Long partitionId, boolean includeLogOffsets) {
         ListKvSnapshotsRequest request = new ListKvSnapshotsRequest();
         request.setTableId(tableId);
         if (partitionId != null) {
             request.setPartitionId(partitionId);
         }
-        return gateway.listKvSnapshots(request)
-                .thenApply(ClientRpcMessageUtils::toActiveKvSnapshots);
+        if (includeLogOffsets) {
+            request.setIncludeLogOffsets(true);
+        }
+        return gateway.listKvSnapshots(request);
     }
 
     @Override
@@ -664,7 +679,7 @@ public class FlussAdmin implements Admin {
                 .setTableName(tablePath.getTableName());
         return readOnlyGateway
                 .getLatestKvSnapshots(request)
-                .thenApply(ClientRpcMessageUtils::toKvSnapshots);
+                .thenCompose(response -> selectReadableKvSnapshots(tablePath, response));
     }
 
     @Override
@@ -678,7 +693,138 @@ public class FlussAdmin implements Admin {
         request.setPartitionName(partitionName);
         return readOnlyGateway
                 .getLatestKvSnapshots(request)
-                .thenApply(ClientRpcMessageUtils::toKvSnapshots);
+                .thenCompose(response -> selectReadableKvSnapshots(tablePath, response));
+    }
+
+    private CompletableFuture<KvSnapshots> selectReadableKvSnapshots(
+            TablePath tablePath, GetLatestKvSnapshotsResponse response) {
+        if (!response.hasHasSyncIndexes() || !response.isHasSyncIndexes()) {
+            return CompletableFuture.completedFuture(ClientRpcMessageUtils.toKvSnapshots(response));
+        }
+        // Routing may refresh metadata synchronously. Keep it off the RPC callback thread and
+        // compose the offset RPCs without blocking the metadata-refresh executor on their results.
+        return CompletableFuture.completedFuture(response)
+                .thenComposeAsync(
+                        snapshots -> {
+                            List<Integer> buckets =
+                                    snapshots.getLatestSnapshotsList().stream()
+                                            .map(PbKvSnapshot::getBucketId)
+                                            .collect(Collectors.toList());
+                            Long partitionId =
+                                    snapshots.hasPartitionId() ? snapshots.getPartitionId() : null;
+                            ListOffsetsResult latest =
+                                    listOffsets(
+                                            snapshots.getTableId(),
+                                            partitionId,
+                                            buckets,
+                                            new OffsetSpec.LatestSpec(),
+                                            tablePath);
+                            ListOffsetsResult earliest =
+                                    listOffsets(
+                                            snapshots.getTableId(),
+                                            partitionId,
+                                            buckets,
+                                            new OffsetSpec.EarliestSpec(),
+                                            tablePath);
+                            return latest.all()
+                                    .thenCombine(
+                                            earliest.all(),
+                                            (visibleOffsets, startOffsets) -> {
+                                                boolean latestReadable =
+                                                        snapshots.getLatestSnapshotsList().stream()
+                                                                .allMatch(
+                                                                        snapshot -> {
+                                                                            int bucket =
+                                                                                    snapshot
+                                                                                            .getBucketId();
+                                                                            long start =
+                                                                                    startOffsets
+                                                                                            .get(
+                                                                                                    bucket);
+                                                                            if (!snapshot
+                                                                                    .hasSnapshotId()) {
+                                                                                return start == 0;
+                                                                            }
+                                                                            return isSnapshotReadable(
+                                                                                    snapshot,
+                                                                                    visibleOffsets
+                                                                                            .get(
+                                                                                                    bucket),
+                                                                                    start);
+                                                                        });
+                                                if (latestReadable) {
+                                                    return CompletableFuture.completedFuture(
+                                                            ClientRpcMessageUtils.toKvSnapshots(
+                                                                    snapshots));
+                                                }
+                                                return listKvSnapshotMetadata(
+                                                                snapshots.getTableId(),
+                                                                partitionId,
+                                                                true)
+                                                        .thenApply(
+                                                                retained ->
+                                                                        selectReadableKvSnapshots(
+                                                                                snapshots,
+                                                                                retained
+                                                                                        .getActiveSnapshotsList(),
+                                                                                visibleOffsets,
+                                                                                startOffsets));
+                                            })
+                                    .thenCompose(selected -> selected);
+                        },
+                        refreshExecutor)
+                .applyToEither(snapshotSelectionClosed, snapshots -> snapshots);
+    }
+
+    private static boolean isSnapshotReadable(
+            PbKvSnapshot snapshot, long visibleOffset, long startOffset) {
+        return snapshot.hasLogOffset()
+                && snapshot.getLogOffset() <= visibleOffset
+                && snapshot.getLogOffset() >= startOffset;
+    }
+
+    private static KvSnapshots selectReadableKvSnapshots(
+            GetLatestKvSnapshotsResponse response,
+            List<PbKvSnapshot> candidates,
+            Map<Integer, Long> visibleOffsets,
+            Map<Integer, Long> startOffsets) {
+        Map<Integer, PbKvSnapshot> selected = new HashMap<>();
+        for (PbKvSnapshot candidate : candidates) {
+            int bucket = candidate.getBucketId();
+            if (isSnapshotReadable(
+                    candidate, visibleOffsets.get(bucket), startOffsets.get(bucket))) {
+                PbKvSnapshot previous = selected.get(bucket);
+                if (previous == null || candidate.getSnapshotId() > previous.getSnapshotId()) {
+                    selected.put(bucket, candidate);
+                }
+            }
+        }
+        Map<Integer, Long> snapshotIds = new HashMap<>();
+        Map<Integer, Long> logOffsets = new HashMap<>();
+        for (PbKvSnapshot bucketSnapshot : response.getLatestSnapshotsList()) {
+            int bucket = bucketSnapshot.getBucketId();
+            PbKvSnapshot snapshot = selected.get(bucket);
+            if (snapshot == null && startOffsets.get(bucket) > 0) {
+                // TODO: Improve this rare case where no visible snapshot can bridge retained WAL.
+                // Increasing kv.snapshot.num-retained and log TTL can keep a usable read history.
+                throw new FlussRuntimeException(
+                        "No readable KV snapshot and complete changelog history for bucket "
+                                + new TableBucket(
+                                        response.getTableId(),
+                                        response.hasPartitionId()
+                                                ? response.getPartitionId()
+                                                : null,
+                                        bucket)
+                                + ". Increase kv.snapshot.num-retained and log TTL to retain a readable history.");
+            }
+            snapshotIds.put(bucket, snapshot == null ? null : snapshot.getSnapshotId());
+            logOffsets.put(bucket, snapshot == null ? null : snapshot.getLogOffset());
+        }
+        return new KvSnapshots(
+                response.getTableId(),
+                response.hasPartitionId() ? response.getPartitionId() : null,
+                snapshotIds,
+                logOffsets);
     }
 
     @Override
@@ -812,14 +958,19 @@ public class FlussAdmin implements Admin {
             metadataUpdater.updatePhysicalTableMetadata(Collections.singleton(physicalTablePath));
             partitionId = metadataUpdater.getPartitionIdOrElseThrow(physicalTablePath);
         }
+        return listOffsets(
+                tableInfo.getTableId(), partitionId, buckets, offsetSpec, tableInfo.getTablePath());
+    }
+
+    private ListOffsetsResult listOffsets(
+            long tableId,
+            @Nullable Long partitionId,
+            Collection<Integer> buckets,
+            OffsetSpec offsetSpec,
+            TablePath tablePath) {
         Map<Integer, ListOffsetsRequest> requestMap =
                 prepareListOffsetsRequests(
-                        metadataUpdater,
-                        tableInfo.getTableId(),
-                        partitionId,
-                        buckets,
-                        offsetSpec,
-                        tableInfo.getTablePath());
+                        metadataUpdater, tableId, partitionId, buckets, offsetSpec, tablePath);
 
         Map<Integer, CompletableFuture<Long>> resultMap = new ConcurrentHashMap<>();
         for (int bucket : buckets) {
@@ -1033,6 +1184,8 @@ public class FlussAdmin implements Admin {
 
     @Override
     public void close() {
+        snapshotSelectionClosed.completeExceptionally(
+                new IllegalStateException("Admin closed during KV snapshot selection."));
         // Stop the metadata-refresh executor; any in-flight refresh will be interrupted, which
         // refreshClusterUntilAvailable handles by surfacing the InterruptedException upward.
         refreshExecutor.shutdownNow();
