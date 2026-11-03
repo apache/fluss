@@ -267,7 +267,7 @@ public class UndoRecoveryExecutor {
         if (LOG.isDebugEnabled()) {
             for (BucketRecoveryContext ctx : contexts) {
                 LOG.debug(
-                        "Bucket {} read {} records, executed {} undo operations",
+                        "Bucket {} processed {} returned records, executed {} undo operations",
                         ctx.getBucket(),
                         ctx.getTotalRecordsProcessed(),
                         ctx.getProcessedKeys().size());
