@@ -209,6 +209,8 @@ writer.flush();
 
 Fluss currently supports the following aggregate functions:
 
+The Behavior and Null Handling entries below describe forward aggregation through `upsert(row)` or Flink INSERT / UPDATE_AFTER. Forward aggregation support does not imply retract support. Each function lists its native retract behavior; setting `fields.<column>.ignore-retract=true` preserves that field instead of applying a retract rule. See [Retract Validation and Paimon Compatibility](#retract-validation-and-paimon-compatibility) for the scope and timing of rejection.
+
 ### count
 
 Counts non-null input values for each primary key.
@@ -234,7 +236,7 @@ INSERT INTO event_counts VALUES (1, 100), (1, 0), (1, NULL);
 
 For the Java API, use `.column("cnt", DataTypes.BIGINT(), AggFunctions.COUNT())`.
 To count every input row, provide a non-null value for this column in every row.
-To accumulate counts already computed upstream, use `sum` instead. Like other aggregation functions, `count` does not support retractions.
+To accumulate counts already computed upstream, use `sum` instead. Native retraction is not implemented for `count`. See [Retract Validation and Paimon Compatibility](#retract-validation-and-paimon-compatibility) for validation timing and the field-level `ignore-retract` option.
 
 When `'table.delete.behavior' = 'allow'`, a partial delete targeting the count column clears it to `NULL` rather than decrementing it. A subsequent targeted update starts the count at `1` for a non-null input or `0` for a null input. If the count column is not targeted by the delete, its value is retained; a count of `0` is non-null and therefore prevents the entire record from being removed when deleting other columns. See [Delete Behavior](#delete-behavior) for the full and partial delete rules.
 
@@ -245,6 +247,7 @@ Aggregates values by computing the sum across multiple rows.
 - **Supported Data Types**: `TINYINT`, `SMALLINT`, `INT`, `BIGINT`, `FLOAT`, `DOUBLE`, `DECIMAL`
 - **Behavior**: Adds incoming values to the accumulator
 - **Null Handling**: Null values are ignored
+- **Retraction**: Supported: subtracts a non-null input; a null input leaves the accumulator unchanged. Retracting from a null accumulator produces the negative input. See [Field Rules](#field-rules) and [validation timing](#retract-validation-and-paimon-compatibility).
 
 **Example:**
 
@@ -301,6 +304,7 @@ Computes the product of values across multiple rows.
 - **Supported Data Types**: `TINYINT`, `SMALLINT`, `INT`, `BIGINT`, `FLOAT`, `DOUBLE`, `DECIMAL`
 - **Behavior**: Multiplies incoming values with the accumulator
 - **Null Handling**: Null values are ignored
+- **Retraction**: Divides a non-null accumulator by a non-null input. A null accumulator remains null; a null input preserves the accumulator. Integer division truncates, integral or decimal division by zero fails, and non-terminating decimal division fails. Decimal results use the field's scale and become null if their precision exceeds the field's precision. Floating-point division follows its Infinity/NaN rules. These rules follow Paimon 2.1.0; they do not reconstruct factors lost through zero or overflow. See [validation timing](#retract-validation-and-paimon-compatibility).
 
 **Example:**
 <Tabs>
@@ -362,6 +366,7 @@ Identifies and retains the maximum value.
 - **Supported Data Types**: `CHAR`, `STRING`, `TINYINT`, `SMALLINT`, `INT`, `BIGINT`, `FLOAT`, `DOUBLE`, `DECIMAL`, `DATE`, `TIME`, `TIMESTAMP`, `TIMESTAMP_LTZ`
 - **Behavior**: Keeps the larger value between accumulator and incoming value
 - **Null Handling**: Null values are ignored
+- **Retraction**: Not implemented; the stored maximum does not retain the other values needed to recompute a maximum after a contribution is removed. See [validation timing](#retract-validation-and-paimon-compatibility).
 
 **Example:**
 <Tabs>
@@ -420,6 +425,7 @@ Identifies and retains the minimum value.
 - **Supported Data Types**: `CHAR`, `STRING`, `TINYINT`, `SMALLINT`, `INT`, `BIGINT`, `FLOAT`, `DOUBLE`, `DECIMAL`, `DATE`, `TIME`, `TIMESTAMP`, `TIMESTAMP_LTZ`
 - **Behavior**: Keeps the smaller value between accumulator and incoming value
 - **Null Handling**: Null values are ignored
+- **Retraction**: Not implemented; the stored minimum does not retain the other values needed to recompute a minimum after a contribution is removed. See [validation timing](#retract-validation-and-paimon-compatibility).
 
 **Example:**
 <Tabs>
@@ -477,6 +483,7 @@ Replaces the previous value with the most recently received value.
 - **Supported Data Types**: All data types
 - **Behavior**: Always uses the latest incoming value
 - **Null Handling**: Null values will overwrite previous values
+- **Retraction**: Supported: clears the field to null, including for a null retract input. It does not restore an earlier value. See [validation timing](#retract-validation-and-paimon-compatibility).
 
 **Example:**
 <Tabs>
@@ -555,6 +562,7 @@ Replaces the previous value with the latest non-null value. This is the **defaul
 - **Supported Data Types**: All data types
 - **Behavior**: Uses the latest incoming value only if it's not null
 - **Null Handling**: Null values are ignored, previous value is retained
+- **Retraction**: Supported: a non-null retract input clears the field to null; a null retract input preserves it. It does not restore an earlier non-null value. See [validation timing](#retract-validation-and-paimon-compatibility).
 
 **Example:**
 <Tabs>
@@ -631,6 +639,7 @@ Retrieves and retains the first non-null value seen for a field.
 - **Supported Data Types**: All data types
 - **Behavior**: Keeps the first received non-null value, ignores all subsequent values
 - **Null Handling**: Null values are treated as unset until a non-null value is received
+- **Retraction**: Not implemented; removing the first contribution does not select the next historical value. See [validation timing](#retract-validation-and-paimon-compatibility).
 
 This function has the same behavior as `first_value_ignore_nulls`. For example,
 `NULL -> 10 -> 20` produces `10`. In partial updates, omitting a field does not
@@ -695,6 +704,7 @@ Selects the first non-null value in a data set.
 - **Supported Data Types**: All data types
 - **Behavior**: Keeps the first received non-null value, ignores all subsequent values
 - **Null Handling**: Null values are ignored until a non-null value is received
+- **Retraction**: Not implemented; removing the first non-null contribution does not select the next historical value. See [validation timing](#retract-validation-and-paimon-compatibility).
 
 **Example:**
 <Tabs>
@@ -758,6 +768,7 @@ Concatenates multiple string values into a single string with a delimiter.
 - **Behavior**: Concatenates values using the specified delimiter
 - **Null Handling**: Null values are skipped
 - **Delimiter**: Specify delimiter directly in the aggregation function (default is comma `,`)
+- **Retraction**: Not implemented; forward concatenation does not remove retracted contributions. See [validation timing](#retract-validation-and-paimon-compatibility).
 
 **Example:**
 <Tabs>
@@ -820,6 +831,7 @@ Alias for `listagg`. Concatenates multiple string values into a single string wi
 - **Behavior**: Same as `listagg` - concatenates values using the specified delimiter
 - **Null Handling**: Null values are skipped
 - **Delimiter**: Specify delimiter directly in the aggregation function (default is comma `,`)
+- **Retraction**: Not implemented, as with `listagg`. See [validation timing](#retract-validation-and-paimon-compatibility).
 
 **Example:**
 <Tabs>
@@ -881,6 +893,7 @@ Aggregates serialized 32-bit RoaringBitmap values by union.
 - **Supported Data Types**: `BYTES`
 - **Behavior**: ORs incoming bitmaps with the accumulator
 - **Null Handling**: Null values are ignored
+- **Retraction**: Not implemented; bitmap union does not retain contribution counts for removing values. See [validation timing](#retract-validation-and-paimon-compatibility).
 
 **Example:**
 <Tabs>
@@ -944,6 +957,7 @@ Aggregates serialized 64-bit RoaringBitmap values by union.
 - **Supported Data Types**: `BYTES`
 - **Behavior**: ORs incoming bitmaps with the accumulator
 - **Null Handling**: Null values are ignored
+- **Retraction**: Not implemented; bitmap union does not retain contribution counts for removing values. See [validation timing](#retract-validation-and-paimon-compatibility).
 
 **Example:**
 <Tabs>
@@ -1015,6 +1029,7 @@ Evaluates whether all boolean values in a set are true (logical AND).
 - **Supported Data Types**: `BOOLEAN`
 - **Behavior**: Returns true only if all values are true
 - **Null Handling**: Null values are ignored
+- **Retraction**: Not implemented; the accumulator does not retain the contribution counts needed to reverse AND. See [validation timing](#retract-validation-and-paimon-compatibility).
 
 **Example:**
 <Tabs>
@@ -1072,6 +1087,7 @@ Checks if at least one boolean value in a set is true (logical OR).
 - **Supported Data Types**: `BOOLEAN`
 - **Behavior**: Returns true if any value is true
 - **Null Handling**: Null values are ignored
+- **Retraction**: Not implemented; the accumulator does not retain the contribution counts needed to reverse OR. See [validation timing](#retract-validation-and-paimon-compatibility).
 
 **Example:**
 <Tabs>
@@ -1131,6 +1147,7 @@ Appends input arrays to the stored array and keeps the last `size` elements.
 - **Ordering**: Elements are kept in the order writes reach the server. With the default `'sink.distribution-mode'`, Flink writes for the same key go through a single sink task, so the order follows the input. Independent clients writing to the same key may interleave
 - **Null Handling**: A null input leaves the column unchanged
 - **Size**: Required, a positive integer. Creating a table without it fails
+- **Retraction**: Not implemented; the bounded array does not retain discarded elements to restore after a retract. Paimon 2.1.0 has no built-in `last_n` counterpart. See [validation timing](#retract-validation-and-paimon-compatibility).
 
 :::note
 Every update rewrites the whole stored array. With the default `'table.changelog.image' = 'full'`, both the old and the new array are also written to the changelog on every update. Keep `size` small.
@@ -1195,6 +1212,7 @@ Collects array elements into a single array.
 - **Ordering**: Elements follow the order writes reach the server. With `distinct=true`, the first occurrence of each element is retained
 - **Null Handling**: Null elements are retained; null inputs are ignored
 - **Parameters**: `distinct` (`true` or `false`, default is `false`)
+- **Retraction**: Removes one matching accumulated occurrence per input element, including null, and preserves the order of the remaining elements. Unmatched elements are ignored. Distinct aggregation does not retain contribution counts, so retracting an element can remove the result of multiple contributions. A retract received before its contribution is not remembered. See [Field Rules](#field-rules) and [validation timing](#retract-validation-and-paimon-compatibility).
 
 :::note
 The collected array has no size limit. Every update rewrites the whole stored array. With the default `'table.changelog.image' = 'full'`, both the old and the new array are also written to the changelog on every update. As the array grows, so do memory usage, write costs, and changelog volume. Use `last_n` when only a bounded number of recent elements is needed.
@@ -1253,6 +1271,7 @@ Merges map values by combining key-value pairs. For duplicate keys, the latest v
 - **Supported Data Types**: `MAP<K, V>`
 - **Behavior**: Merges maps, overriding earlier values for duplicate keys
 - **Null Handling**: Null keys are not allowed; null values are allowed
+- **Retraction**: Removes entries whose keys occur in the retract map, regardless of the supplied values, including null. Overwritten values are not restored. A null input preserves the accumulator, and a retract received before its contribution is not remembered. Binary keys are matched by content. See [Field Rules](#field-rules) and [validation timing](#retract-validation-and-paimon-compatibility).
 
 **Example:**
 <Tabs>
@@ -1300,7 +1319,7 @@ TableDescriptor.builder()
 
 ## Retraction
 
-Retraction applies each field's retract rule to an input contribution. It does not restore a previous row or reconstruct the history of values for a key. The field rules follow [Paimon 2.1 aggregation semantics](https://paimon.apache.org/docs/2.1/primary-key-table/merge-engine/aggregation/).
+Retraction applies each field's retract rule to an input contribution. It does not restore a previous row or reconstruct the history of values for a key. The implemented rules for `sum`, `product`, `collect`, `merge_map`, `last_value`, and `last_value_ignore_nulls` follow [Paimon 2.1.0 aggregation semantics](https://paimon.apache.org/docs/2.1/primary-key-table/merge-engine/aggregation/), where the last function is named `last_non_null_value`. See [Retract Validation and Paimon Compatibility](#retract-validation-and-paimon-compatibility) for the function coverage and validation timing.
 
 The Java client exposes three distinct operations:
 
@@ -1317,6 +1336,9 @@ For example, after `upsert((1, 10))` on a SUM field, `retract((1, 3))` produces 
 | Function | Retract rule |
 | --- | --- |
 | `sum` | Subtract a non-null input. A null input leaves the accumulator unchanged. If the accumulator is null, retracting `x` produces `-x`. |
+| `product` | Divide when both accumulator and input are non-null; otherwise preserve the accumulator. Integer division truncates, integer/decimal division by zero fails, and non-terminating decimal division fails. Floating-point division can produce Infinity/NaN. |
+| `collect` | Remove one accumulated occurrence per matching input element, including null, preserving the remaining order. Null or empty input leaves the accumulator unchanged; a null accumulator stays null. Matching uses logical contents for binary and nested values. |
+| `merge_map` | Remove entries by the input keys, ignoring the input values. Null or empty input leaves the accumulator unchanged; a null accumulator stays null. Removing an overwritten key does not restore its previous value. |
 | `last_value` | Clear the accumulator to null, including when the input is null. |
 | `last_value_ignore_nulls` | Clear the accumulator when the input is non-null; otherwise retain it. |
 
@@ -1324,7 +1346,7 @@ These rules do not check whether the input matches a previously written contribu
 
 Primary keys are retained. For partial writes, only target value fields are retracted; other fields retain their state. Retraction also applies when the key has no current row: each targeted field starts with a null accumulator. For example, retracting `(1, 3)` from an absent SUM key creates `(1, -3)`.
 
-Neither zero nor all-null aggregate fields imply that the record should be removed. Retraction retains the row, including a row whose only non-null fields are its primary key. Explicit deletion has separate rules described below.
+Zero, a product of one, empty arrays or maps, and all-null aggregate fields do not imply that the record should be removed. Retraction retains the row, including a row whose only non-null fields are its primary key. Explicit deletion has separate rules described below.
 
 ### Table Options
 
@@ -1351,15 +1373,63 @@ For an aggregation sink with `sink.enable-retract=true`:
 
 `sink.ignore-delete=true` drops both UPDATE_BEFORE and DELETE before applying these rules. Explicit record deletion remains subject to `table.delete.behavior`: use `allow` to permit deletion; `ignore` or `disable` retain their existing meanings. Field retraction is independent of that deletion policy.
 
-When the input requires retraction, Flink validates the actual target fields after resolving partial writes. Each participating field must support retract or set `ignore-retract=true`. Non-target fields do not prevent a partial retract, and append-only input does not require retract-capable functions.
+When the declared input changelog mode requires retraction, Flink validates the participating target fields after resolving partial writes. Each participating field must support retract or set `ignore-retract=true`. Non-target fields do not prevent a partial retract, and an input mode containing only INSERT / UPDATE_AFTER does not require retract-capable functions. See [Retract Validation and Paimon Compatibility](#retract-validation-and-paimon-compatibility) for the distinction between the declared mode and records observed at runtime.
 
 The sink option does not gate the Java client's explicit `retract(row)` API. DataStream applications with custom serializers choose their operation types explicitly; `FlussSinkBuilder.setOption("sink.enable-retract", "true")` enables their RETRACT operations, while the table's field rules remain authoritative.
+
+### Retract Validation and Paimon Compatibility
+
+The comparison below uses Paimon 2.1.0. Retract capability and validation timing are separate contracts: a function can accept forward contributions without being able to retract them.
+
+#### Fluss Validation
+
+With the default `sink.enable-retract=false`, Flink SQL retains the existing upsert changelog negotiation. A field without retract support does not by itself reject an existing upsert job. Enabling retract is an explicit change to this input contract.
+
+With `sink.enable-retract=true` and `sink.ignore-delete=false`, the Flink SQL sink checks the declared input changelog mode. UPDATE_BEFORE requires field retraction; DELETE also requires it unless `table.aggregation.remove-record-on-delete=true`. After resolving target columns, the sink rejects a required retract with a `ValidationException` if any participating value field lacks native retract support and does not set `ignore-retract=true`.
+
+This check uses the declared mode, not the records observed so far. If a job declares UPDATE_BEFORE but happens to produce only INSERT / UPDATE_AFTER, Fluss can still reject it during planning. Conversely, a declared INSERT / UPDATE_AFTER-only input is allowed to aggregate into a MAX field. Fields outside a partial write's target columns do not participate in this check.
+
+For example, a table with a SUM field and a MAX field accepts forward contributions to both. If both fields participate in a declared retract input, planning fails for MAX. Targeting only the SUM field, or configuring the MAX field with `ignore-retract=true`, permits the retract while preserving MAX. Ignoring retract does not recompute the maximum after a historical maximum is removed.
+
+The planning check applies to Flink SQL. The Java client's explicit `retract(row)` and DataStream custom serializers do not have that SQL planning check. The server validates the fields of an actual RETRACT request against its input schema and target columns, and rejects unsupported fields with `InvalidRecordException`. The Sink option does not gate the Java API.
+
+#### Paimon Validation
+
+Paimon 2.1.0's aggregation [Flink sink](https://github.com/apache/paimon/blob/release-2.1.0/paimon-flink/paimon-flink-common/src/main/java/org/apache/paimon/flink/sink/FlinkTableSinkBase.java) preserves the requested changelog mode without Fluss's per-field planning check. Its [aggregation merge function](https://github.com/apache/paimon/blob/release-2.1.0/paimon-core/src/main/java/org/apache/paimon/mergetree/compact/aggregate/AggregateMergeFunction.java) dispatches an actual field retract to the corresponding aggregator. For a configured function without a retract implementation, the [default implementation](https://github.com/apache/paimon/blob/release-2.1.0/paimon-core/src/main/java/org/apache/paimon/mergetree/compact/aggregate/FieldAggregator.java) throws `UnsupportedOperationException` during merging unless the field ignores retract.
+
+For MAX, this means Paimon can accept a job whose declared mode includes UPDATE_BEFORE and continue processing forward contributions until an actual retract reaches the merge function. Fluss SQL with retract enabled can reject the same declared mode before records are processed. Successful planning in Paimon does not establish that every configured function supports retract. Merge-time failure is not necessarily synchronous with the application's write call.
+
+The following table compares native field retract support, before applying `ignore-retract`. It does not imply that corresponding functions have identical forward aggregation or configuration options.
+
+| Fluss function | Fluss native retract | Paimon 2.1.0 counterpart and native retract |
+| --- | --- | --- |
+| `sum` | Supported; subtraction | `sum`: supported; subtraction |
+| `product` | Supported; division with numeric division constraints | `product`: supported; division with numeric division constraints |
+| `max` | Not implemented | `max`: not implemented |
+| `min` | Not implemented | `min`: not implemented |
+| `last_value` | Supported; clear to null | `last_value`: supported; clear to null |
+| `last_value_ignore_nulls` | Supported; clear on non-null input | `last_non_null_value`: supported; clear on non-null input |
+| `first_value` | Not implemented | `first_value`: not implemented |
+| `first_value_ignore_nulls` | Not implemented | `first_non_null_value`: not implemented |
+| `listagg` | Not implemented | `listagg`: not implemented |
+| `string_agg` | Not implemented | No separate built-in under this name; the related `listagg` does not implement retract |
+| `rbm32` | Not implemented | `rbm32`: not implemented |
+| `rbm64` | Not implemented | `rbm64`: not implemented |
+| `bool_and` | Not implemented | `bool_and`: not implemented |
+| `bool_or` | Not implemented | `bool_or`: not implemented |
+| `last_n` | Not implemented | No built-in counterpart |
+| `collect` | Best-effort removal of matching elements | `collect`: best-effort removal of matching elements |
+| `merge_map` | Best-effort removal by retracted keys; no restoration of overwritten values | `merge_map`: best-effort removal by retracted keys; no restoration of overwritten values |
+
+The [ordering and overlapping-contribution limitations](https://paimon.apache.org/docs/2.1/primary-key-table/merge-engine/aggregation/#retraction) of Paimon's `collect` and `merge_map` also apply to Fluss. For example, collecting the same element from two inputs with `distinct=true` stores one occurrence; retracting one input can remove that stored occurrence. Merging `1 -> A`, then `1 -> B`, and retracting key `1` removes the entry without restoring `A`. A retract processed before its contribution does not cancel a later upsert. These are field rules, not historical restoration guarantees. For fields without native retract support, `ignore-retract=true` preserves the current field value while other fields retract; it does not implement the missing inverse operation.
 
 ### Ordering and Recovery
 
 Each retract is processed independently in the order received. An adjacent retract and upsert are two operations with an observable intermediate state; adjacency does not establish an update pair. For a fixed ordered sequence of successful operations, changing the client batch boundaries does not change the resulting aggregate state. This does not provide atomicity across separate requests, and failures are subject to the actual write boundaries.
 
 Retract is not idempotent: applying a SUM retract twice subtracts the contribution twice. The client requires `client.writer.enable-idempotence` so transport retries can use writer-batch deduplication. This deduplication applies within a writer session; application replay with a new writer requires a recovery protocol. Flink undo recovery restores checkpoint state using OVERWRITE and is distinct from normal retract processing.
+
+Recognized duplicate V2 batches return their original write offsets before field functions are reapplied. A retry therefore does not repeat division or element/key removal for a batch already accepted in the retained duplicate window.
 
 Retract requires PUT_KV API version 4 or later. The client waits for version negotiation before sending a retract batch and rejects servers that do not support this version. Waiting for negotiation does not consume the write retry budget. Existing upsert and delete writes continue to use the compatible record format.
 

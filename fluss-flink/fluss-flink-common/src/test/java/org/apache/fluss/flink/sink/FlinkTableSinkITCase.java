@@ -1854,6 +1854,64 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         }
     }
 
+    @Test
+    @MultiVersionTest
+    void testProductCollectAndMergeMapRetractEndToEnd() throws Exception {
+        disableSinkRequireOnConflict();
+        tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
+        tEnv.executeSql(
+                "CREATE TABLE collection_retract_input ("
+                        + "k INT NOT NULL, factor BIGINT, items ARRAY<INT>, attrs MAP<INT, STRING>, "
+                        + "PRIMARY KEY (k) NOT ENFORCED)");
+        tEnv.executeSql(
+                "CREATE TABLE collection_retract_agg ("
+                        + "k INT NOT NULL, factor BIGINT, items ARRAY<INT>, attrs MAP<INT, STRING>, "
+                        + "PRIMARY KEY (k) NOT ENFORCED) WITH ("
+                        + "'table.merge-engine' = 'aggregation', 'sink.enable-retract' = 'true', "
+                        + "'fields.factor.agg' = 'product', 'fields.items.agg' = 'collect', "
+                        + "'fields.attrs.agg' = 'merge_map')");
+        tEnv.executeSql(
+                        "INSERT INTO collection_retract_agg VALUES (1, 4, ARRAY[7, 7], MAP[2, 'b'])")
+                .await();
+        TableResult pipeline =
+                tEnv.executeSql(
+                        "INSERT INTO collection_retract_agg "
+                                + "SELECT k, factor, items, attrs FROM collection_retract_input");
+        CloseableIterator<Row> rows =
+                tEnv.executeSql(
+                                "SELECT k, factor, CARDINALITY(items), "
+                                        + "items[1], items[2], items[CARDINALITY(items)], CARDINALITY(attrs), "
+                                        + "attrs[1], attrs[2], attrs[3] FROM collection_retract_agg")
+                        .collect();
+        String seeded = "[1, 4, 2, 7, 7, 7, 1, null, b, null]";
+        String initial = "[1, 12, 5, 7, 7, 2, 1, null, a, null]";
+        String retracted = "[1, 4, 2, 7, 7, 7, 0, null, null, null]";
+        String updated = "[1, 24, 4, 7, 7, 3, 2, c, null, d]";
+        try {
+            assertResultsIgnoreOrder(rows, Collections.singletonList("+I" + seeded), false);
+            tEnv.executeSql(
+                            "INSERT INTO collection_retract_input VALUES "
+                                    + "(1, 3, ARRAY[1, 2, 2], MAP[2, 'a'])")
+                    .await();
+            assertResultsIgnoreOrder(rows, Arrays.asList("-U" + seeded, "+U" + initial), false);
+            tEnv.executeSql(
+                            "INSERT INTO collection_retract_input VALUES "
+                                    + "(1, 6, ARRAY[2, 3], MAP[1, 'c', 3, 'd'])")
+                    .await();
+            // Retraction removes the overwritten map key instead of restoring the seeded value.
+            assertResultsIgnoreOrder(
+                    rows,
+                    Arrays.asList(
+                            "-U" + initial, "+U" + retracted, "-U" + retracted, "+U" + updated),
+                    false);
+            tBatchEnv.executeSql("DELETE FROM collection_retract_input WHERE k = 1").await();
+            assertResultsIgnoreOrder(rows, Arrays.asList("-U" + updated, "+U" + retracted), false);
+        } finally {
+            rows.close();
+            pipeline.getJobClient().ifPresent(JobClient::cancel);
+        }
+    }
+
     private InsertAndExpectValues rowsToInsertInto(Collection<String> partitions) {
         List<String> insertValues = new ArrayList<>();
         List<String> expectedValues = new ArrayList<>();

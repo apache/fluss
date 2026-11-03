@@ -154,7 +154,7 @@ class AggregateRowMergerTest {
     }
 
     @Test
-    void testProductAggregationIsNotRetractSafe() {
+    void testProductRetractDividesAccumulator() {
         Schema schema =
                 Schema.newBuilder()
                         .column("id", DataTypes.INT())
@@ -166,7 +166,12 @@ class AggregateRowMergerTest {
         AggregateRowMerger merger = createMerger(schema, tableConfig);
         merger.configureTargetColumns(null, SCHEMA_ID, schema);
 
-        assertThat(merger.supportsRetract()).isFalse();
+        assertThat(merger.supportsRetract()).isTrue();
+        BinaryValue result =
+                merger.retract(
+                        toBinaryValue(compactedRow(schema.getRowType(), new Object[] {1, 12.0})),
+                        toBinaryValue(compactedRow(schema.getRowType(), new Object[] {1, 3.0})));
+        assertThat(result.row.getDouble(1)).isEqualTo(4.0);
     }
 
     @Test

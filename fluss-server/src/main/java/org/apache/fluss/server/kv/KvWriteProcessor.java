@@ -69,6 +69,7 @@ import javax.annotation.Nullable;
 import javax.annotation.concurrent.NotThreadSafe;
 
 import java.util.HashSet;
+import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -163,6 +164,16 @@ public final class KvWriteProcessor {
             @Nullable String originalPartitionName,
             @Nullable HistoricalValueLookup historicalValueLookup)
             throws Exception {
+        if (kvRecords.isV2Format()) {
+            // Replaying an accepted retract can change state or fail (for example, division by
+            // zero after a later upsert). Resolve known duplicates before invoking aggregators.
+            Optional<LogAppendInfo> duplicate =
+                    logTablet.findDuplicateBatch(kvRecords.writerId(), kvRecords.batchSequence());
+            if (duplicate.isPresent()) {
+                kvRecords.ensureValid();
+                return duplicate.get();
+            }
+        }
         WriteContext writeContext = createWriteContext(kvRecords, targetColumns, mergeMode);
         RowType latestRowType = writeContext.latestSchema.getRowType();
         WalBuilder walBuilder = createWalBuilder(writeContext.latestSchemaId, latestRowType);

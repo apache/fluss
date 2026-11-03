@@ -49,6 +49,8 @@ import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.row.BinaryString;
+import org.apache.fluss.row.GenericArray;
+import org.apache.fluss.row.GenericMap;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.ProjectedRow;
@@ -2231,6 +2233,94 @@ class FlussTableITCase extends ClientToServerITCaseBase {
             InternalRow result = lookupRow(table.newLookup().createLookuper(), row(1));
             assertThat(result.getLong(1)).isEqualTo(70L);
             assertThat(result.getInt(2)).isEqualTo(9);
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"compacted", "indexed"})
+    void testProductCollectAndMergeMapRetract(String kvFormat) throws Exception {
+        TablePath tablePath = TablePath.of("test_db_1", "retract_product_collections_" + kvFormat);
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("factor", DataTypes.BIGINT(), AggFunctions.PRODUCT())
+                        .column(
+                                "items",
+                                DataTypes.ARRAY(DataTypes.INT()),
+                                AggFunctions.COLLECT(false))
+                        .column(
+                                "attrs",
+                                DataTypes.MAP(DataTypes.INT(), DataTypes.STRING()),
+                                AggFunctions.MERGE_MAP())
+                        .primaryKey("id")
+                        .build();
+        createTable(
+                tablePath,
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .kvFormat(KvFormat.fromString(kvFormat))
+                        .property("table.merge-engine", "aggregation")
+                        .build(),
+                false);
+        try (Table table = conn.getTable(tablePath)) {
+            UpsertWriter writer = table.newUpsert().createWriter();
+            Lookuper lookuper = table.newLookup().createLookuper();
+            writer.upsert(
+                            row(
+                                    1,
+                                    3L,
+                                    GenericArray.of(1, 2, 2),
+                                    GenericMap.of(1, BinaryString.fromString("old"))))
+                    .get();
+            Map<Integer, Object> attrs = new HashMap<>();
+            attrs.put(1, BinaryString.fromString("new"));
+            attrs.put(2, BinaryString.fromString("kept"));
+            writer.upsert(row(1, 4L, GenericArray.of(3), new GenericMap(attrs))).get();
+            writer.retract(
+                            row(
+                                    1,
+                                    3L,
+                                    GenericArray.of(2),
+                                    GenericMap.of(1, BinaryString.fromString("old"))))
+                    .get();
+            InternalRow actual = lookupRow(lookuper, row(1));
+            assertThat(actual.getLong(1)).isEqualTo(4L);
+            assertThat(actual.getArray(2).toIntArray()).containsExactly(1, 2, 3);
+            assertThat(actual.getMap(3).size()).isEqualTo(1);
+            assertThat(actual.getMap(3).keyArray().getInt(0)).isEqualTo(2);
+            assertThat(actual.getMap(3).valueArray().getString(0).toString()).isEqualTo("kept");
+
+            writer.retract(row(1, 4L, GenericArray.of(1, 2, 3), GenericMap.of(2, null))).get();
+            actual = lookupRow(lookuper, row(1));
+            assertThat(actual).isNotNull();
+            assertThat(actual.getLong(1)).isEqualTo(1L);
+            assertThat(actual.getArray(2).size()).isZero();
+            assertThat(actual.getMap(3).size()).isZero();
+
+            writer.retract(
+                            row(
+                                    2,
+                                    3L,
+                                    GenericArray.of(5),
+                                    GenericMap.of(7, BinaryString.fromString("v"))))
+                    .get();
+            actual = lookupRow(lookuper, row(2));
+            assertThat(actual).isNotNull();
+            assertThat(actual.isNullAt(1)).isTrue();
+            assertThat(actual.isNullAt(2)).isTrue();
+            assertThat(actual.isNullAt(3)).isTrue();
+            writer.upsert(
+                            row(
+                                    2,
+                                    6L,
+                                    GenericArray.of(5),
+                                    GenericMap.of(7, BinaryString.fromString("v"))))
+                    .get();
+            actual = lookupRow(lookuper, row(2));
+            assertThat(actual.getLong(1)).isEqualTo(6L);
+            assertThat(actual.getArray(2).toIntArray()).containsExactly(5);
+            assertThat(actual.getMap(3).keyArray().getInt(0)).isEqualTo(7);
+            assertThat(actual.getMap(3).valueArray().getString(0).toString()).isEqualTo("v");
         }
     }
 

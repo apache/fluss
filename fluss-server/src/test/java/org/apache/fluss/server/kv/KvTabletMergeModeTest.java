@@ -48,6 +48,7 @@ import org.apache.fluss.server.kv.autoinc.TestingSequenceGeneratorFactory;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.Key;
 import org.apache.fluss.server.kv.rowmerger.RowMerger;
 import org.apache.fluss.server.log.FetchIsolation;
+import org.apache.fluss.server.log.LogAppendInfo;
 import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.log.LogTestUtils;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
@@ -1025,6 +1026,79 @@ class KvTabletMergeModeTest {
                                 3,
                                 Arrays.asList(ChangeType.UPDATE_BEFORE, ChangeType.UPDATE_AFTER),
                                 Arrays.asList(new Object[] {1, 75L}, new Object[] {1, 70L}),
+                                LogFormat.ARROW,
+                                DEFAULT_COMPRESSION));
+    }
+
+    @Test
+    void testDuplicateProductRetractDoesNotRepeatDivision() throws Exception {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("factor", DataTypes.BIGINT(), AggFunctions.PRODUCT())
+                        .primaryKey("id")
+                        .build();
+        initTablets(schema);
+        KvRecordTestUtils.KvRecordFactory factory =
+                KvRecordTestUtils.KvRecordFactory.of(schema.getRowType());
+        long writerId = 123L;
+        kvTablet.putAsLeader(
+                kvRecordBatchFactory.ofRecords(
+                        Collections.singletonList(
+                                factory.ofRecord("k1".getBytes(), new Object[] {1, null})),
+                        writerId,
+                        0),
+                null,
+                MergeMode.DEFAULT);
+        KvRecordBatch retract =
+                kvRecordBatchFactory.ofV2Records(
+                        Collections.singletonList(
+                                V2RecordEntry.of(
+                                        MutationType.RETRACT,
+                                        factory.ofRecord("k1".getBytes(), new Object[] {1, 0L}))),
+                        writerId,
+                        1);
+        LogAppendInfo accepted = kvTablet.putAsLeader(retract, null, MergeMode.DEFAULT);
+        kvTablet.putAsLeader(
+                kvRecordBatchFactory.ofRecords(
+                        Collections.singletonList(
+                                factory.ofRecord("k1".getBytes(), new Object[] {1, 6L})),
+                        writerId,
+                        2),
+                null,
+                MergeMode.DEFAULT);
+        long endOffset = logTablet.localLogEndOffset();
+
+        LogAppendInfo duplicate = kvTablet.putAsLeader(retract, null, MergeMode.DEFAULT);
+        assertThat(duplicate.duplicated()).isTrue();
+        assertThat(duplicate.firstOffset()).isEqualTo(accepted.firstOffset());
+        assertThat(duplicate.lastOffset()).isEqualTo(accepted.lastOffset());
+        assertThat(logTablet.localLogEndOffset()).isEqualTo(endOffset);
+
+        kvTablet.putAsLeader(
+                kvRecordBatchFactory.ofV2Records(
+                        Collections.singletonList(
+                                V2RecordEntry.of(
+                                        MutationType.RETRACT,
+                                        factory.ofRecord("k1".getBytes(), new Object[] {1, 2L}))),
+                        writerId,
+                        3),
+                null,
+                MergeMode.DEFAULT);
+        assertThatLogRecords(readLogRecords(endOffset))
+                .withSchema(schema.getRowType())
+                .assertCheckSum(true)
+                .isEqualTo(
+                        createBasicMemoryLogRecords(
+                                schema.getRowType(),
+                                SCHEMA_ID,
+                                endOffset,
+                                -1L,
+                                CURRENT_LOG_MAGIC_VALUE,
+                                writerId,
+                                3,
+                                Arrays.asList(ChangeType.UPDATE_BEFORE, ChangeType.UPDATE_AFTER),
+                                Arrays.asList(new Object[] {1, 6L}, new Object[] {1, 3L}),
                                 LogFormat.ARROW,
                                 DEFAULT_COMPRESSION));
     }

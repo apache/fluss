@@ -270,6 +270,11 @@ public enum AggFunctionType {
      * <ul>
      *   <li>{@link #SUM} subtracts the input, or negates it when the accumulator is null, using the
      *       field's numeric representation.
+     *   <li>{@link #PRODUCT} divides by a non-null input when the accumulator is non-null, using
+     *       the field's numeric division rules.
+     *   <li>{@link #COLLECT} removes one matching occurrence per input element without remembering
+     *       unmatched retracts or contribution counts discarded by distinct aggregation.
+     *   <li>{@link #MERGE_MAP} removes entries by input key without restoring overwritten values.
      *   <li>{@link #LAST_VALUE} clears to null regardless of the input.
      *   <li>{@link #LAST_VALUE_IGNORE_NULLS} clears to null for a non-null input and preserves the
      *       accumulator for a null input.
@@ -280,6 +285,9 @@ public enum AggFunctionType {
     public boolean supportsRetract() {
         switch (this) {
             case SUM:
+            case PRODUCT:
+            case COLLECT:
+            case MERGE_MAP:
             case LAST_VALUE:
             case LAST_VALUE_IGNORE_NULLS:
                 return true;

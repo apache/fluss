@@ -62,6 +62,139 @@ class FieldCollectionAggregatorTest {
 
     @ParameterizedTest
     @EnumSource(KvFormat.class)
+    void testMergeMapRetractRemovesKeysWithoutRestoringValues(KvFormat format) {
+        MapType type = DataTypes.MAP(DataTypes.INT(), DataTypes.STRING());
+        Schema schema = schema(type, AggFunctions.MERGE_MAP());
+        AggregateRowMerger merger = merger(schema, format);
+        Map<Integer, Object> initial = new HashMap<>();
+        initial.put(1, BinaryString.fromString("old"));
+        initial.put(2, BinaryString.fromString("kept"));
+        BinaryValue result =
+                merger.merge(
+                        value(schema, format, new GenericMap(initial)),
+                        value(schema, format, GenericMap.of(1, BinaryString.fromString("new"))));
+        result =
+                merger.retract(
+                        result,
+                        value(schema, format, GenericMap.of(1, BinaryString.fromString("old"))));
+        assertThatMap(result.row.getMap(1))
+                .withMapType(type)
+                .isEqualTo(GenericMap.of(2, BinaryString.fromString("kept")));
+        result = merger.retract(result, value(schema, format, null));
+        assertThatMap(result.row.getMap(1))
+                .withMapType(type)
+                .isEqualTo(GenericMap.of(2, BinaryString.fromString("kept")));
+        result = merger.retract(result, value(schema, format, GenericMap.of(2, null)));
+        assertThat(result.row.isNullAt(1)).isFalse();
+        assertThat(result.row.getMap(1).size()).isZero();
+
+        BinaryValue absent =
+                merger.retract(
+                        null,
+                        value(schema, format, GenericMap.of(1, BinaryString.fromString("old"))));
+        assertThat(absent.row.isNullAt(1)).isTrue();
+        assertThatMap(
+                        merger.merge(
+                                        new BinaryValue(absent.schemaId, absent.row.copy()),
+                                        value(
+                                                schema,
+                                                format,
+                                                GenericMap.of(1, BinaryString.fromString("new"))))
+                                .row
+                                .getMap(1))
+                .withMapType(type)
+                .isEqualTo(GenericMap.of(1, BinaryString.fromString("new")));
+    }
+
+    @ParameterizedTest
+    @MethodSource("binaryTypes")
+    void testMergeMapRetractMatchesBinaryKeysByContent(KvFormat format, DataType keyType) {
+        Schema schema = schema(DataTypes.MAP(keyType, DataTypes.BYTES()), AggFunctions.MERGE_MAP());
+        InternalMap accumulated =
+                new ColumnarMap(
+                        GenericArray.of(new byte[] {1, 2}, new byte[] {1, 2}, new byte[] {3, 4}),
+                        GenericArray.of(new byte[] {10}, new byte[] {11}, new byte[] {20}));
+        BinaryValue result =
+                merger(schema, format)
+                        .retract(
+                                value(schema, format, accumulated),
+                                value(schema, format, GenericMap.of(new byte[] {1, 2}, null)));
+        InternalMap actual = result.row.getMap(1);
+        assertThat(actual.size()).isEqualTo(1);
+        assertThat(
+                        (byte[])
+                                InternalArray.createElementGetter(keyType)
+                                        .getElementOrNull(actual.keyArray(), 0))
+                .containsExactly((byte) 3, (byte) 4);
+        assertThat(actual.valueArray().getBytes(0)).containsExactly((byte) 20);
+    }
+
+    @ParameterizedTest
+    @MethodSource("collectModes")
+    void testCollectRetractsOneOccurrencePerContribution(KvFormat format, boolean distinct) {
+        Schema schema = schema(DataTypes.ARRAY(DataTypes.INT()), AggFunctions.COLLECT(distinct));
+        AggregateRowMerger merger = merger(schema, format);
+        BinaryValue result =
+                merger.merge(null, value(schema, format, GenericArray.of(1, 1, 2, null)));
+        result = merger.retract(result, value(schema, format, GenericArray.of(1, null, 99)));
+        assertCollectedValues(
+                result, DataTypes.INT(), distinct ? new Object[] {2} : new Object[] {1, 2});
+        result = merger.retract(result, value(schema, format, null));
+        assertCollectedValues(
+                result, DataTypes.INT(), distinct ? new Object[] {2} : new Object[] {1, 2});
+        result = merger.retract(result, value(schema, format, GenericArray.of(1, 2)));
+        assertCollectedValues(result, DataTypes.INT());
+
+        BinaryValue absent = merger.retract(null, value(schema, format, GenericArray.of(1)));
+        assertThat(absent.row.isNullAt(1)).isTrue();
+        assertCollectedValues(
+                merger.merge(absent, value(schema, format, GenericArray.of(1))),
+                DataTypes.INT(),
+                1);
+    }
+
+    @ParameterizedTest(name = "{0}, distinct={1}, retract element={2}")
+    @MethodSource("collectElements")
+    void testCollectRetractMatchesGenericAndBinaryElements(
+            KvFormat format,
+            boolean distinct,
+            DataType elementType,
+            Object first,
+            Object second,
+            Object third) {
+        Schema schema = schema(DataTypes.ARRAY(elementType), AggFunctions.COLLECT(distinct));
+        FieldCollectAgg aggregator = new FieldCollectAgg(DataTypes.ARRAY(elementType), distinct);
+        InternalArray encoded =
+                value(schema, format, GenericArray.of(first, null, first)).row.getArray(1);
+        InternalArray result =
+                (InternalArray)
+                        aggregator.retract(
+                                GenericArray.of(first, second, first, null, third, null), encoded);
+        assertCollectedValues(result, elementType, second, third, null);
+    }
+
+    @ParameterizedTest
+    @MethodSource("collectModes")
+    void testCollectRetractMatchesMapContentsRegardlessOfEntryOrder(
+            KvFormat format, boolean distinct) {
+        MapType elementType = DataTypes.MAP(DataTypes.INT(), DataTypes.BYTES());
+        Schema schema = schema(DataTypes.ARRAY(elementType), AggFunctions.COLLECT(distinct));
+        InternalMap left =
+                new ColumnarMap(
+                        GenericArray.of(1, 2), GenericArray.of(new byte[] {3}, new byte[] {4, 5}));
+        InternalMap right =
+                new ColumnarMap(
+                        GenericArray.of(2, 1), GenericArray.of(new byte[] {4, 5}, new byte[] {3}));
+        InternalArray retract = value(schema, format, GenericArray.of(right)).row.getArray(1);
+        InternalArray result =
+                (InternalArray)
+                        new FieldCollectAgg(DataTypes.ARRAY(elementType), distinct)
+                                .retract(GenericArray.of(left), retract);
+        assertThat(result.size()).isZero();
+    }
+
+    @ParameterizedTest
+    @EnumSource(KvFormat.class)
     void testDistinctCollectOnFirstWrite(KvFormat format) {
         Schema schema = schema(DataTypes.ARRAY(DataTypes.INT()), AggFunctions.COLLECT(true));
         AggregateRowMerger merger = merger(schema, format);

@@ -29,6 +29,9 @@ class AggFunctionTypeTest {
     @EnumSource(AggFunctionType.class)
     void testSupportsRetract(AggFunctionType type) {
         if (type == AggFunctionType.SUM
+                || type == AggFunctionType.PRODUCT
+                || type == AggFunctionType.COLLECT
+                || type == AggFunctionType.MERGE_MAP
                 || type == AggFunctionType.LAST_VALUE
                 || type == AggFunctionType.LAST_VALUE_IGNORE_NULLS) {
             assertThat(type.supportsRetract()).as("%s should support retract", type).isTrue();

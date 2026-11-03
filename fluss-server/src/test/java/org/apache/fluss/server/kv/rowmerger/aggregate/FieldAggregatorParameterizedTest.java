@@ -210,6 +210,62 @@ class FieldAggregatorParameterizedTest {
     }
 
     // ===================================================================================
+    // Product Retraction Tests
+    // ===================================================================================
+
+    @ParameterizedTest
+    @MethodSource("productRetractData")
+    void testProductRetract(DataType type, Object accumulator, Object input, Object expected) {
+        assertRetractResult(new FieldProductAgg(type).retract(accumulator, input), expected);
+    }
+
+    static Stream<Arguments> productRetractData() {
+        return Stream.of(
+                Arguments.of(DataTypes.TINYINT(), (byte) 12, (byte) 3, (byte) 4),
+                Arguments.of(DataTypes.SMALLINT(), (short) 120, (short) 3, (short) 40),
+                Arguments.of(DataTypes.INT(), 13, 3, 4),
+                Arguments.of(DataTypes.BIGINT(), -13L, 3L, -4L),
+                Arguments.of(DataTypes.FLOAT(), 10.0f, 4.0f, 2.5f),
+                Arguments.of(DataTypes.DOUBLE(), 10.0, 4.0, 2.5),
+                Arguments.of(
+                        DataTypes.DECIMAL(10, 2),
+                        Decimal.fromBigDecimal(new BigDecimal("10.00"), 10, 2),
+                        Decimal.fromBigDecimal(new BigDecimal("4.00"), 10, 2),
+                        Decimal.fromBigDecimal(new BigDecimal("2.50"), 10, 2)),
+                Arguments.of(DataTypes.INT(), null, 3, null),
+                Arguments.of(
+                        DataTypes.DECIMAL(3, 1),
+                        Decimal.fromBigDecimal(new BigDecimal("99.9"), 3, 1),
+                        Decimal.fromBigDecimal(new BigDecimal("0.1"), 3, 1),
+                        null),
+                Arguments.of(DataTypes.INT(), null, 0, null),
+                Arguments.of(DataTypes.INT(), 12, null, 12),
+                Arguments.of(DataTypes.INT(), null, null, null),
+                Arguments.of(DataTypes.INT(), 0, 3, 0),
+                Arguments.of(DataTypes.TINYINT(), Byte.MIN_VALUE, (byte) -1, Byte.MIN_VALUE),
+                Arguments.of(DataTypes.SMALLINT(), Short.MIN_VALUE, (short) -1, Short.MIN_VALUE),
+                Arguments.of(DataTypes.INT(), Integer.MIN_VALUE, -1, Integer.MIN_VALUE),
+                Arguments.of(DataTypes.BIGINT(), Long.MIN_VALUE, -1L, Long.MIN_VALUE),
+                Arguments.of(DataTypes.FLOAT(), 1.0f, 0.0f, Float.POSITIVE_INFINITY),
+                Arguments.of(DataTypes.DOUBLE(), 0.0, 0.0, Double.NaN));
+    }
+
+    @Test
+    void testProductRetractDivisionFailures() {
+        assertThatThrownBy(() -> new FieldProductAgg(DataTypes.INT()).retract(12, 0))
+                .isInstanceOf(ArithmeticException.class);
+        assertThatThrownBy(
+                        () ->
+                                new FieldProductAgg(DataTypes.DECIMAL(10, 2))
+                                        .retract(
+                                                Decimal.fromBigDecimal(
+                                                        new BigDecimal("1.00"), 10, 2),
+                                                Decimal.fromBigDecimal(
+                                                        new BigDecimal("3.00"), 10, 2)))
+                .isInstanceOf(ArithmeticException.class);
+    }
+
+    // ===================================================================================
     // Max Aggregation Tests
     // ===================================================================================
 
@@ -1027,7 +1083,6 @@ class FieldAggregatorParameterizedTest {
                         new FieldFirstNonNullValueAgg(DataTypes.INT()),
                         10,
                         5),
-                Arguments.of("FieldProductAgg", new FieldProductAgg(DataTypes.INT()), 10, 5),
                 Arguments.of(
                         "FieldListaggAgg", new FieldListaggAgg(new StringType(), ","), "a,b", "a"),
                 Arguments.of(

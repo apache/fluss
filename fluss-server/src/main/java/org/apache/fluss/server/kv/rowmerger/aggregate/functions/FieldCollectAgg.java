@@ -25,12 +25,21 @@ package org.apache.fluss.server.kv.rowmerger.aggregate.functions;
 import org.apache.fluss.row.BinaryArray;
 import org.apache.fluss.row.GenericArray;
 import org.apache.fluss.row.InternalArray;
+import org.apache.fluss.row.InternalMap;
+import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.array.BinaryArraySplicer;
 import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.MapType;
+import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.ByteArrayWrapper;
 
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Iterator;
 import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 
 /** Collects array elements, retaining their first occurrence order when distinct is enabled. */
@@ -115,6 +124,130 @@ public class FieldCollectAgg extends FieldAggregator {
     @Override
     public boolean requiresAggOnFirstWrite() {
         return distinct;
+    }
+
+    @Override
+    public boolean supportsRetract() {
+        return true;
+    }
+
+    /**
+     * Removes one matching accumulated occurrence for each supplied element, including null.
+     * Missing occurrences are ignored; no pending retract or distinct contribution count is kept.
+     */
+    @Override
+    public Object retract(Object accumulator, Object retractField) {
+        if (accumulator == null || retractField == null) {
+            return accumulator;
+        }
+        InternalArray input = (InternalArray) retractField;
+        if (input.size() == 0) {
+            return accumulator;
+        }
+        List<Object> pending = new ArrayList<>(input.size());
+        for (int i = 0; i < input.size(); i++) {
+            pending.add(elementGetter.getElementOrNull(input, i));
+        }
+        InternalArray accumulated = (InternalArray) accumulator;
+        List<Object> result = new ArrayList<>(accumulated.size());
+        for (int i = 0; i < accumulated.size(); i++) {
+            Object element = elementGetter.getElementOrNull(accumulated, i);
+            if (!retractOne(pending, element)) {
+                result.add(element);
+            }
+        }
+        return new GenericArray(result.toArray());
+    }
+
+    private boolean retractOne(List<Object> pending, Object element) {
+        Iterator<Object> iterator = pending.iterator();
+        while (iterator.hasNext()) {
+            if (elementsEqual(iterator.next(), element, elementType)) {
+                iterator.remove();
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean elementsEqual(Object left, Object right, DataType type) {
+        if (left == right) {
+            return true;
+        }
+        if (left == null || right == null) {
+            return false;
+        }
+        // Compare logical contents across generic and binary representations, including binary
+        // values nested in arrays, rows and maps. Object identity is not element equality.
+        switch (type.getTypeRoot()) {
+            case BINARY:
+            case BYTES:
+                return Arrays.equals((byte[]) left, (byte[]) right);
+            case ARRAY:
+                InternalArray a = (InternalArray) left;
+                InternalArray b = (InternalArray) right;
+                if (a.size() != b.size()) {
+                    return false;
+                }
+                DataType nested = ((ArrayType) type).getElementType();
+                InternalArray.ElementGetter getter = InternalArray.createElementGetter(nested);
+                for (int i = 0; i < a.size(); i++) {
+                    if (!elementsEqual(
+                            getter.getElementOrNull(a, i), getter.getElementOrNull(b, i), nested)) {
+                        return false;
+                    }
+                }
+                return true;
+            case ROW:
+                RowType rowType = (RowType) type;
+                for (int i = 0; i < rowType.getFieldCount(); i++) {
+                    DataType fieldType = rowType.getTypeAt(i);
+                    InternalRow.FieldGetter fieldGetter =
+                            InternalRow.createFieldGetter(fieldType, i);
+                    if (!elementsEqual(
+                            fieldGetter.getFieldOrNull((InternalRow) left),
+                            fieldGetter.getFieldOrNull((InternalRow) right),
+                            fieldType)) {
+                        return false;
+                    }
+                }
+                return true;
+            case MAP:
+                InternalMap aMap = (InternalMap) left;
+                InternalMap bMap = (InternalMap) right;
+                if (aMap.size() != bMap.size()) {
+                    return false;
+                }
+                MapType mapType = (MapType) type;
+                InternalArray.ElementGetter keyGetter =
+                        InternalArray.createElementGetter(mapType.getKeyType());
+                InternalArray.ElementGetter valueGetter =
+                        InternalArray.createElementGetter(mapType.getValueType());
+                for (int i = 0; i < aMap.size(); i++) {
+                    boolean matched = false;
+                    for (int j = 0; j < bMap.size(); j++) {
+                        if (elementsEqual(
+                                keyGetter.getElementOrNull(aMap.keyArray(), i),
+                                keyGetter.getElementOrNull(bMap.keyArray(), j),
+                                mapType.getKeyType())) {
+                            if (!elementsEqual(
+                                    valueGetter.getElementOrNull(aMap.valueArray(), i),
+                                    valueGetter.getElementOrNull(bMap.valueArray(), j),
+                                    mapType.getValueType())) {
+                                return false;
+                            }
+                            matched = true;
+                            break;
+                        }
+                    }
+                    if (!matched) {
+                        return false;
+                    }
+                }
+                return true;
+            default:
+                return Objects.equals(left, right);
+        }
     }
 
     private void collectDistinct(Set<Object> elements, InternalArray array) {
