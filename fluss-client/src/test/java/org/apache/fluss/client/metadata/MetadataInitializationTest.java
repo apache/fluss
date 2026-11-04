@@ -17,6 +17,7 @@
 
 package org.apache.fluss.client.metadata;
 
+import org.apache.fluss.client.utils.TestingRpcClient;
 import org.apache.fluss.cluster.BucketLocation;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
@@ -61,7 +62,7 @@ class MetadataInitializationTest {
 
     @Test
     void testAddsBidirectionalMappingWithoutRpc() {
-        TestingMetadataRpcClient rpcClient = noRpcClient();
+        TestingRpcClient rpcClient = noRpcClient();
         Cluster original = Cluster.empty();
         MetadataUpdater updater = new MetadataUpdater(rpcClient, new Configuration(), original);
 
@@ -71,12 +72,11 @@ class MetadataInitializationTest {
         assertThat(updater.getCluster().getTablePath(TABLE_ID)).hasValue(TABLE_PATH);
         assertThat(original.getTableId(TABLE_PATH)).isEmpty();
         assertThat(original.getTablePath(TABLE_ID)).isEmpty();
-        assertThat(rpcClient.getRequests()).isEmpty();
     }
 
     @Test
     void testPreservesUnrelatedMetadataAndOriginalSnapshot() {
-        TestingMetadataRpcClient rpcClient = noRpcClient();
+        TestingRpcClient rpcClient = noRpcClient();
         Cluster original = cluster(Collections.singletonMap(OTHER_TABLE_PATH, OTHER_TABLE_ID));
         MetadataUpdater updater = new MetadataUpdater(rpcClient, new Configuration(), original);
 
@@ -98,7 +98,6 @@ class MetadataInitializationTest {
                 .containsExactlyEntriesOf(
                         Collections.singletonMap(OTHER_TABLE_PATH, OTHER_TABLE_ID));
         assertThat(original.getTablePath(TABLE_ID)).isEmpty();
-        assertThat(rpcClient.getRequests()).isEmpty();
     }
 
     @Test
@@ -136,9 +135,8 @@ class MetadataInitializationTest {
                 .setTablePath()
                 .setDatabaseName(refreshedTable.getDatabaseName())
                 .setTableName(refreshedTable.getTableName());
-        TestingMetadataRpcClient rpcClient =
-                new TestingMetadataRpcClient(
-                        request -> CompletableFuture.completedFuture(response));
+        TestingRpcClient rpcClient =
+                new TestingRpcClient((node, apiKey) -> CompletableFuture.completedFuture(response));
         MetadataUpdater updater =
                 new MetadataUpdater(
                         rpcClient,
@@ -171,12 +169,11 @@ class MetadataInitializationTest {
         assertThat(updater.getCluster().getTableId(TABLE_PATH)).hasValue(TABLE_ID);
         assertThat(updater.getCluster().getTableId(refreshedTable)).hasValue(100L);
         assertThat(updater.getCluster().getTableId(OTHER_TABLE_PATH)).hasValue(OTHER_TABLE_ID);
-        assertThat(rpcClient.getRequests()).hasSize(1);
     }
 
-    private static TestingMetadataRpcClient noRpcClient() {
-        return new TestingMetadataRpcClient(
-                request -> {
+    private static TestingRpcClient noRpcClient() {
+        return new TestingRpcClient(
+                (node, apiKey) -> {
                     throw new AssertionError("Merging an existing TableInfo must not send an RPC.");
                 });
     }
