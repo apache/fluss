@@ -122,5 +122,6 @@ class GetClusterConfigsProcedureTest extends FlussSparkTestBase {
     }
     assert(thrown.getMessage.contains("config_keys"))
     assert(thrown.getMessage.contains("Cannot cast"))
+    assert(thrown.getMessage.contains("ArrayType"))
   }
 }
