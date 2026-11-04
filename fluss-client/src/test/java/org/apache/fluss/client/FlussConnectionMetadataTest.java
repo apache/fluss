@@ -17,11 +17,13 @@
 
 package org.apache.fluss.client;
 
+import org.apache.fluss.client.table.Table;
 import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.AuthorizationException;
 import org.apache.fluss.exception.NetworkException;
-import org.apache.fluss.exception.StaleMetadataException;
+import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
@@ -58,43 +60,60 @@ class FlussConnectionMetadataTest {
                     .build();
 
     @Test
-    void testGetTableWaitsForMetadataRecovery() throws Exception {
+    void testGetTablePopulatesMappingFromTableInfo() throws Exception {
+        TestingMetadataService service = new TestingMetadataService();
+        withConnection(service, connection -> assertTableMapping(connection, service, 1));
+    }
+
+    @Test
+    void testGetTableRetriesTransientAdminFailure() throws Exception {
+        TestingMetadataService service = new TestingMetadataService();
+        service.failures = 1;
+        withConnection(service, connection -> assertTableMapping(connection, service, 2));
+    }
+
+    @Test
+    void testGetTablePropagatesExhaustedAdminFailure() throws Exception {
         TestingMetadataService service = new TestingMetadataService();
         service.failures = 2;
-        withConnection(
-                service,
-                connection -> {
-                    assertThat(connection.getTable(TABLE_PATH).getTableInfo().getTableId())
-                            .isEqualTo(TABLE_ID);
-                    assertThat(service.tableRequests.get()).isEqualTo(3);
-                    assertThat(connection.getMetadataUpdater().getCluster().getTablePath(TABLE_ID))
-                            .hasValue(TABLE_PATH);
-                });
+        withConnection(service, connection -> assertFailedInitialization(connection, service, 2));
     }
 
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
-    void testAdminSuccessCannotMaskIncompleteInitialization(boolean failRequests) throws Exception {
+    void testGetTableDoesNotRetryPermanentAdminFailure(boolean unauthorized) throws Exception {
         TestingMetadataService service = new TestingMetadataService();
-        service.failures = failRequests ? Integer.MAX_VALUE : 0;
-        service.omitMapping = !failRequests;
-        withConnection(
-                service,
-                connection -> {
-                    assertThat(connection.getAdmin().getTableInfo(TABLE_PATH).join().getTableId())
-                            .isEqualTo(TABLE_ID);
-                    assertThatThrownBy(() -> connection.getTable(TABLE_PATH))
-                            .hasRootCauseInstanceOf(
-                                    failRequests
-                                            ? NetworkException.class
-                                            : StaleMetadataException.class);
-                    assertThat(service.tableRequests.get()).isEqualTo(3);
-                    assertThat(connection.getMetadataUpdater().getCluster().getTableId(TABLE_PATH))
-                            .isEmpty();
-                    // Independent Admin queries remain successful even though getTable must fail.
-                    assertThat(connection.getAdmin().getTableInfo(TABLE_PATH).join().getTableId())
-                            .isEqualTo(TABLE_ID);
-                });
+        service.failures = 2;
+        service.failure =
+                unauthorized
+                        ? new AuthorizationException("table access denied")
+                        : new TableNotExistException("table does not exist");
+        withConnection(service, connection -> assertFailedInitialization(connection, service, 1));
+    }
+
+    private void assertTableMapping(
+            FlussConnection connection, TestingMetadataService service, int expectedRequests)
+            throws Exception {
+        try (Table table = connection.getTable(TABLE_PATH)) {
+            assertThat(table.getTableInfo().getTableId()).isEqualTo(TABLE_ID);
+            assertThat(connection.getMetadataUpdater().getCluster().getTableId(TABLE_PATH))
+                    .hasValue(TABLE_ID);
+            assertThat(connection.getMetadataUpdater().getCluster().getTablePath(TABLE_ID))
+                    .hasValue(TABLE_PATH);
+            assertThat(service.tableInfoRequests.get()).isEqualTo(expectedRequests);
+            assertThat(service.metadataTableRequests.get()).isZero();
+        }
+    }
+
+    private void assertFailedInitialization(
+            FlussConnection connection, TestingMetadataService service, int expectedRequests) {
+        assertThatThrownBy(() -> connection.getTable(TABLE_PATH))
+                .hasRootCauseInstanceOf(service.failure.getClass())
+                .hasRootCauseMessage(service.failure.getMessage());
+        assertThat(service.tableInfoRequests.get()).isEqualTo(expectedRequests);
+        assertThat(service.metadataTableRequests.get()).isZero();
+        assertThat(connection.getMetadataUpdater().getCluster().getTableId(TABLE_PATH)).isEmpty();
+        assertThat(connection.getMetadataUpdater().getCluster().getTablePath(TABLE_ID)).isEmpty();
     }
 
     private void withConnection(TestingMetadataService service, ConnectionCheck check)
@@ -128,40 +147,32 @@ class FlussConnectionMetadataTest {
     }
 
     private static class TestingMetadataService extends TestingTabletGatewayService {
-        private final AtomicInteger tableRequests = new AtomicInteger();
+        private final AtomicInteger tableInfoRequests = new AtomicInteger();
+        private final AtomicInteger metadataTableRequests = new AtomicInteger();
         private volatile int port;
         private int failures;
-        private boolean omitMapping;
+        private RuntimeException failure = new NetworkException("table info unavailable");
 
         @Override
         public CompletableFuture<MetadataResponse> metadata(MetadataRequest request) {
-            boolean tableRequested = !request.getTablePathsList().isEmpty();
-            if (tableRequested && tableRequests.incrementAndGet() <= failures) {
-                CompletableFuture<MetadataResponse> result = new CompletableFuture<>();
-                result.completeExceptionally(new NetworkException("table metadata unavailable"));
-                return result;
+            if (!request.getTablePathsList().isEmpty()) {
+                metadataTableRequests.incrementAndGet();
             }
             MetadataResponse response = new MetadataResponse();
             response.setCoordinatorServer().setNodeId(0).setHost("localhost").setPort(port);
             for (int id = 1; id <= 3; id++) {
                 response.addTabletServer().setNodeId(id).setHost("localhost").setPort(port);
             }
-            if (tableRequested && !omitMapping) {
-                response.addTableMetadata()
-                        .setTableId(TABLE_ID)
-                        .setSchemaId(1)
-                        .setTableJson(DESCRIPTOR.toJsonBytes())
-                        .setCreatedTime(0)
-                        .setModifiedTime(0)
-                        .setTablePath()
-                        .setDatabaseName(TABLE_PATH.getDatabaseName())
-                        .setTableName(TABLE_PATH.getTableName());
-            }
             return CompletableFuture.completedFuture(response);
         }
 
         @Override
         public CompletableFuture<GetTableInfoResponse> getTableInfo(GetTableInfoRequest request) {
+            if (tableInfoRequests.incrementAndGet() <= failures) {
+                CompletableFuture<GetTableInfoResponse> result = new CompletableFuture<>();
+                result.completeExceptionally(failure);
+                return result;
+            }
             return CompletableFuture.completedFuture(
                     new GetTableInfoResponse()
                             .setTableId(TABLE_ID)

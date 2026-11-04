@@ -299,6 +299,76 @@ class MetadataUpdaterITCase {
         }
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testFirstWriteWithOnlyTableMapping(boolean partitioned) throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "mapping_only_" + partitioned);
+        TableDescriptor.Builder builder =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.INT())
+                                        .column("region", DataTypes.STRING())
+                                        .build())
+                        .distributedBy(1);
+        if (partitioned) {
+            builder.partitionedBy("region");
+        }
+        try (Connection connection =
+                        ConnectionFactory.createConnection(
+                                FLUSS_CLUSTER_EXTENSION.getClientConfig());
+                Admin admin = connection.getAdmin()) {
+            admin.createTable(tablePath, builder.build().withReplicationFactor(1), false).get();
+            if (partitioned) {
+                admin.createPartition(
+                                tablePath,
+                                new PartitionSpec(Collections.singletonMap("region", "p1")),
+                                false)
+                        .get();
+            }
+            try (Table table = connection.getTable(tablePath)) {
+                MetadataUpdater updater = ((FlussConnection) connection).getMetadataUpdater();
+                assertThat(updater.getCluster().getTableId(tablePath))
+                        .hasValue(table.getTableInfo().getTableId());
+                assertThat(updater.getCluster().getBucketLocationsByPath()).isEmpty();
+                table.newAppend().createWriter().append(row(1, "p1")).get();
+                try (Connection readerConnection =
+                                ConnectionFactory.createConnection(
+                                        FLUSS_CLUSTER_EXTENSION.getClientConfig());
+                        Table readerTable = readerConnection.getTable(tablePath);
+                        LogScanner scanner = readerTable.newScan().createLogScanner()) {
+                    assertThat(
+                                    ((FlussConnection) readerConnection)
+                                            .getMetadataUpdater()
+                                            .getCluster()
+                                            .getBucketLocationsByPath())
+                            .isEmpty();
+                    if (partitioned) {
+                        scanner.subscribeFromBeginning(
+                                updater.getPartitionIdOrElseThrow(
+                                        PhysicalTablePath.of(tablePath, "p1")),
+                                0);
+                    } else {
+                        scanner.subscribeFromBeginning(0);
+                    }
+                    waitUntil(
+                            () -> {
+                                ScanRecords records = scanner.poll(Duration.ofMillis(100));
+                                if (records.isEmpty()) {
+                                    return false;
+                                }
+                                assertThat(records.count()).isEqualTo(1);
+                                assertThat(records.iterator().next().getRow().getInt(0))
+                                        .isEqualTo(1);
+                                return true;
+                            },
+                            Duration.ofSeconds(10),
+                            "Record was not read after loading bucket metadata");
+                }
+            }
+        }
+    }
+
     @Test
     void testUpdateWithEmptyMetadataResponse() throws Exception {
         RpcClient rpcClient = FLUSS_CLUSTER_EXTENSION.getRpcClient();
