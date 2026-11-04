@@ -1754,32 +1754,54 @@ final class SenderTest {
 
     @Test
     void testPutRequestsSeparateMergeModesAcrossBuckets() throws Exception {
-        assertPutRequestGrouping(MergeMode.IGNORE_NULLS, null, MergeMode.DEFAULT, null, 2);
+        assertPutRequestGrouping(
+                MergeMode.OVERWRITE, false, null, MergeMode.DEFAULT, false, null, 2);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testPutRequestsSeparateNullPoliciesAcrossBuckets(boolean ignoreNulls) throws Exception {
+        assertPutRequestGrouping(
+                MergeMode.DEFAULT, ignoreNulls, null, MergeMode.DEFAULT, !ignoreNulls, null, 2);
     }
 
     @ParameterizedTest
     @MethodSource("targetColumnGroups")
     void testPutRequestsGroupByTargetColumns(
-            MergeMode mode, int[] firstTargets, int[] secondTargets, int expectedRequests)
+            boolean ignoreNulls, int[] firstTargets, int[] secondTargets, int expectedRequests)
             throws Exception {
-        assertPutRequestGrouping(mode, firstTargets, mode, secondTargets, expectedRequests);
+        assertPutRequestGrouping(
+                MergeMode.DEFAULT,
+                ignoreNulls,
+                firstTargets,
+                MergeMode.DEFAULT,
+                ignoreNulls,
+                secondTargets,
+                expectedRequests);
     }
 
     private static Stream<Arguments> targetColumnGroups() {
-        return Stream.of(MergeMode.DEFAULT, MergeMode.IGNORE_NULLS)
+        return Stream.of(false, true)
                 .flatMap(
-                        mode ->
+                        ignoreNulls ->
                                 Stream.of(
-                                        Arguments.of(mode, null, new int[] {0, 1}, 2),
-                                        Arguments.of(mode, new int[] {0, 1}, null, 2),
-                                        Arguments.of(mode, new int[] {0, 1}, new int[] {0, 2}, 2),
-                                        Arguments.of(mode, new int[] {0, 1}, new int[] {0, 1}, 1)));
+                                        Arguments.of(ignoreNulls, null, new int[] {0, 1}, 2),
+                                        Arguments.of(ignoreNulls, new int[] {0, 1}, null, 2),
+                                        Arguments.of(
+                                                ignoreNulls, new int[] {0, 1}, new int[] {0, 2}, 2),
+                                        Arguments.of(
+                                                ignoreNulls,
+                                                new int[] {0, 1},
+                                                new int[] {0, 1},
+                                                1)));
     }
 
     private void assertPutRequestGrouping(
             MergeMode firstMode,
+            boolean firstIgnoreNulls,
             int[] firstTargets,
             MergeMode secondMode,
+            boolean secondIgnoreNulls,
             int[] secondTargets,
             int expectedRequests)
             throws Exception {
@@ -1826,7 +1848,8 @@ final class SenderTest {
                             key,
                             WriteFormat.COMPACTED_KV,
                             bucket == 0 ? firstTargets : secondTargets,
-                            bucket == 0 ? firstMode : secondMode),
+                            bucket == 0 ? firstMode : secondMode,
+                            bucket == 0 ? firstIgnoreNulls : secondIgnoreNulls),
                     (tb, offset, error) -> result.complete(error),
                     metadataUpdater.getCluster());
         }
@@ -1846,6 +1869,8 @@ final class SenderTest {
                         .isEqualTo(targets == null ? new int[0] : targets);
                 assertThat(request.getAggMode())
                         .isEqualTo((bucket == 0 ? firstMode : secondMode).getProtoValue());
+                assertThat(request.hasIgnoreNulls() && request.isIgnoreNulls())
+                        .isEqualTo(bucket == 0 ? firstIgnoreNulls : secondIgnoreNulls);
             }
         }
         assertThat(buckets).containsExactlyInAnyOrder(0, 1);
@@ -1866,8 +1891,9 @@ final class SenderTest {
         }
     }
 
-    @Test
-    void testRetryPutKeyWithSchemaNotExistException() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testRetryPutKeyWithSchemaNotExistException(boolean ignoreNulls) throws Exception {
         TableBucket tableBucket = new TableBucket(DATA1_TABLE_ID_PK, 0);
 
         BinaryRow row = compactedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
@@ -1883,15 +1909,21 @@ final class SenderTest {
                         key,
                         key,
                         WriteFormat.COMPACTED_KV,
-                        null),
+                        null,
+                        MergeMode.DEFAULT,
+                        ignoreNulls),
                 (tb, leo, e) -> future.complete(e),
                 metadataUpdater.getCluster());
         sender.runOnce();
+        PutKvRequest request = (PutKvRequest) node1Gateway().getRequest(0);
+        assertThat(request.hasIgnoreNulls() && request.isIgnoreNulls()).isEqualTo(ignoreNulls);
         finishRequest(tableBucket, 0, createPutKvResponse(tableBucket, SCHEMA_NOT_EXIST));
         assertThat(sender.numOfInFlightBatches(tableBucket)).isEqualTo(0);
 
         // retry to put kv request again
         sender.runOnce();
+        PutKvRequest retried = (PutKvRequest) node1Gateway().getRequest(0);
+        assertThat(retried.hasIgnoreNulls() && retried.isIgnoreNulls()).isEqualTo(ignoreNulls);
         assertThat(sender.numOfInFlightBatches(tableBucket)).isEqualTo(1);
         finishRequest(tableBucket, 0, createPutKvResponse(tableBucket, 1));
         assertThat(sender.numOfInFlightBatches(tableBucket)).isEqualTo(0);

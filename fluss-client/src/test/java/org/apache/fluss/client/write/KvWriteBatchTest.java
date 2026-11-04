@@ -40,7 +40,7 @@ import org.apache.fluss.types.DataType;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -303,29 +303,28 @@ class KvWriteBatchTest {
         assertThat(overwriteBatch.tryAppend(defaultRecord, newWriteCallback())).isFalse();
     }
 
-    @Test
-    void testIgnoreNullsDoesNotMixWithDefaultWrites() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testDifferentNullPoliciesRequireSeparateBatches(boolean ignoreNulls) throws Exception {
         KvWriteBatch batch =
-                createKvWriteBatchWithMergeMode(
-                        new TableBucket(DATA1_TABLE_ID_PK, 0), MergeMode.IGNORE_NULLS);
+                createKvWriteBatchWithTargets(
+                        DATA1_TABLE_INFO_PK, 0, null, MergeMode.DEFAULT, ignoreNulls);
         assertThat(
                         batch.tryAppend(
-                                createWriteRecordWithMergeMode(MergeMode.IGNORE_NULLS),
+                                createWriteRecordWithMergeMode(MergeMode.DEFAULT, ignoreNulls),
                                 newWriteCallback()))
                 .isTrue();
         assertThat(
                         batch.tryAppend(
-                                createWriteRecordWithMergeMode(MergeMode.DEFAULT),
+                                createWriteRecordWithMergeMode(MergeMode.DEFAULT, !ignoreNulls),
                                 newWriteCallback()))
                 .isFalse();
         assertThat(batch.getRecordCount()).isEqualTo(1);
     }
 
     @ParameterizedTest
-    @EnumSource(
-            value = MergeMode.class,
-            names = {"DEFAULT", "IGNORE_NULLS"})
-    void testDifferentTargetsRequireSeparateBatches(MergeMode mode) throws Exception {
+    @ValueSource(booleans = {false, true})
+    void testDifferentTargetsRequireSeparateBatches(boolean ignoreNulls) throws Exception {
         int[][] targets = {null, new int[] {0, 1}, new int[] {0, 2}};
         BinaryRow input = compactedRow(DATA2_ROW_TYPE, new Object[] {1, "a", "b"});
         byte[] inputKey =
@@ -333,7 +332,8 @@ class KvWriteBatchTest {
                         .encodeKey(input);
         for (int i = 0; i < targets.length; i++) {
             KvWriteBatch batch =
-                    createKvWriteBatchWithTargets(DATA2_TABLE_INFO, 0, targets[i], mode);
+                    createKvWriteBatchWithTargets(
+                            DATA2_TABLE_INFO, 0, targets[i], MergeMode.DEFAULT, ignoreNulls);
             WriteRecord first =
                     WriteRecord.forUpsert(
                             DATA2_TABLE_INFO,
@@ -343,7 +343,8 @@ class KvWriteBatchTest {
                             inputKey,
                             WriteFormat.COMPACTED_KV,
                             targets[i],
-                            mode);
+                            MergeMode.DEFAULT,
+                            ignoreNulls);
             assertThat(batch.tryAppend(first, newWriteCallback())).isTrue();
             WriteRecord differentTargets =
                     WriteRecord.forUpsert(
@@ -354,19 +355,19 @@ class KvWriteBatchTest {
                             inputKey,
                             WriteFormat.COMPACTED_KV,
                             targets[(i + 1) % targets.length],
-                            mode);
+                            MergeMode.DEFAULT,
+                            ignoreNulls);
             assertThat(batch.tryAppend(differentTargets, newWriteCallback())).isFalse();
             assertThat(batch.getRecordCount()).isEqualTo(1);
         }
     }
 
     @ParameterizedTest
-    @EnumSource(
-            value = MergeMode.class,
-            names = {"DEFAULT", "IGNORE_NULLS"})
-    void testEqualTargetArraysShareBatch(MergeMode mode) throws Exception {
+    @ValueSource(booleans = {false, true})
+    void testEqualTargetArraysShareBatch(boolean ignoreNulls) throws Exception {
         KvWriteBatch batch =
-                createKvWriteBatchWithTargets(DATA1_TABLE_INFO_PK, 0, new int[] {0}, mode);
+                createKvWriteBatchWithTargets(
+                        DATA1_TABLE_INFO_PK, 0, new int[] {0}, MergeMode.DEFAULT, ignoreNulls);
         WriteRecord record =
                 WriteRecord.forUpsert(
                         DATA1_TABLE_INFO_PK,
@@ -376,7 +377,8 @@ class KvWriteBatchTest {
                         key,
                         WriteFormat.COMPACTED_KV,
                         new int[] {0},
-                        mode);
+                        MergeMode.DEFAULT,
+                        ignoreNulls);
         assertThat(batch.tryAppend(record, newWriteCallback())).isTrue();
         assertThat(batch.tryAppend(record, newWriteCallback())).isTrue();
         assertThat(batch.getRecordCount()).isEqualTo(2);
@@ -396,6 +398,16 @@ class KvWriteBatchTest {
     private KvWriteBatch createKvWriteBatchWithTargets(
             TableInfo tableInfo, int bucket, int[] targetColumns, MergeMode mergeMode)
             throws Exception {
+        return createKvWriteBatchWithTargets(tableInfo, bucket, targetColumns, mergeMode, false);
+    }
+
+    private KvWriteBatch createKvWriteBatchWithTargets(
+            TableInfo tableInfo,
+            int bucket,
+            int[] targetColumns,
+            MergeMode mergeMode,
+            boolean ignoreNulls)
+            throws Exception {
         PreAllocatedPagedOutputView outputView =
                 new PreAllocatedPagedOutputView(
                         Collections.singletonList(memoryPool.nextSegment()));
@@ -410,11 +422,16 @@ class KvWriteBatchTest {
                 outputView,
                 targetColumns,
                 mergeMode,
+                ignoreNulls,
                 false,
                 System.currentTimeMillis());
     }
 
     private WriteRecord createWriteRecordWithMergeMode(MergeMode mergeMode) {
+        return createWriteRecordWithMergeMode(mergeMode, false);
+    }
+
+    private WriteRecord createWriteRecordWithMergeMode(MergeMode mergeMode, boolean ignoreNulls) {
         return WriteRecord.forUpsert(
                 DATA1_TABLE_INFO_PK,
                 PhysicalTablePath.of(DATA1_TABLE_PATH_PK),
@@ -423,6 +440,7 @@ class KvWriteBatchTest {
                 key,
                 WriteFormat.COMPACTED_KV,
                 null,
-                mergeMode);
+                mergeMode,
+                ignoreNulls);
     }
 }

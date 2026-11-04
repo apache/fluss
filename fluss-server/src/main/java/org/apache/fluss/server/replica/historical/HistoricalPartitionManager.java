@@ -132,6 +132,17 @@ public final class HistoricalPartitionManager implements AutoCloseable {
             @Nullable int[] targetColumns,
             MergeMode mergeMode,
             int requiredAcks) {
+        return putKv(replica, putData, targetColumns, mergeMode, false, requiredAcks);
+    }
+
+    /** Applies the write with an independent NULL assignment policy. */
+    public CompletableFuture<PutKvResultForBucket> putKv(
+            Replica replica,
+            PutKvDataForBucket putData,
+            @Nullable int[] targetColumns,
+            MergeMode mergeMode,
+            boolean ignoreNulls,
+            int requiredAcks) {
         try {
             String originalPartitionName =
                     checkNotNull(
@@ -147,6 +158,7 @@ public final class HistoricalPartitionManager implements AutoCloseable {
                                             putData,
                                             targetColumns,
                                             mergeMode,
+                                            ignoreNulls,
                                             requiredAcks);
                             return PutKvResultForBucket.historicalSuccess(
                                     putData.tableBucket(),
@@ -223,6 +235,18 @@ public final class HistoricalPartitionManager implements AutoCloseable {
             MergeMode mergeMode,
             int requiredAcks)
             throws Exception {
+        return processPut(replica, putData, targetColumns, mergeMode, false, requiredAcks);
+    }
+
+    /** Applies the write with an independent NULL assignment policy. */
+    LogAppendInfo processPut(
+            Replica replica,
+            PutKvDataForBucket putData,
+            @Nullable int[] targetColumns,
+            MergeMode mergeMode,
+            boolean ignoreNulls,
+            int requiredAcks)
+            throws Exception {
         TableInfo tableInfo = replica.getTableInfo();
         String originalPartitionName =
                 checkNotNull(
@@ -237,6 +261,7 @@ public final class HistoricalPartitionManager implements AutoCloseable {
                 putData.records(),
                 targetColumns,
                 mergeMode,
+                ignoreNulls,
                 originalPartitionName,
                 lakeLookupKeys ->
                         lakeLookupManager.lookup(

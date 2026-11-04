@@ -27,8 +27,8 @@ import javax.annotation.Nullable;
  * Table.
  *
  * <p>{@link Upsert} objects are immutable and can be shared between threads. Refinement methods,
- * like {@link #partialUpdate(int[])} and {@link #mergeMode(MergeMode)}, create new Upsert
- * instances.
+ * like {@link #partialUpdate(int[])}, {@link #ignoreNulls(boolean)}, and {@link
+ * #mergeMode(MergeMode)}, create new Upsert instances.
  *
  * @since 0.6
  */
@@ -73,9 +73,6 @@ public interface Upsert {
      *         <li>For first-row merge engine: retains the first observed row.
      *         <li>For versioned merge engine: keeps the row with the highest version.
      *       </ul>
-     *   <li>{@link MergeMode#IGNORE_NULLS}: For the default merge engine, incoming NULL target
-     *       values preserve existing values. Applies to full and partial upserts without changing
-     *       the table definition or delete behavior.
      *   <li>{@link MergeMode#OVERWRITE}: Data directly overwrites values, bypassing the merge
      *       engine. This is useful for undo/recovery operations to restore exact historical values.
      * </ul>
@@ -101,12 +98,35 @@ public interface Upsert {
     Upsert mergeMode(MergeMode mode);
 
     /**
+     * Returns a new Upsert with incoming NULL target-column values preserved from the existing row
+     * when enabled. The default is false.
+     *
+     * <p>Applies to full-row and partial-column upserts on primary key tables using the default
+     * merge behavior and {@link MergeMode#DEFAULT}. For new keys, missing nullable values remain
+     * NULL. Existing NOT NULL and partial-update constraints apply. Deletes retain their configured
+     * behavior. Requires PUT_KV protocol version 4 or newer.
+     *
+     * <p>This option is supported by {@link #createWriter()}. Typed writers require this option to
+     * be disabled.
+     *
+     * @param ignoreNulls whether incoming NULL target-column values preserve existing values
+     * @return a new Upsert with the specified NULL assignment policy
+     */
+    Upsert ignoreNulls(boolean ignoreNulls);
+
+    /**
      * Create a new {@link UpsertWriter} using {@code InternalRow} with the optional {@link
      * #partialUpdate(String...)} and {@link #mergeMode(MergeMode)} information to upsert and delete
-     * data to a Primary Key Table.
+     * data to a Primary Key Table. The writer also applies the configured {@link
+     * #ignoreNulls(boolean)} policy.
      */
     UpsertWriter createWriter();
 
-    /** Create a new typed {@link UpsertWriter} to write POJOs directly. */
+    /**
+     * Creates a typed writer to write POJOs directly with {@link MergeMode#DEFAULT} and NULL
+     * skipping disabled.
+     *
+     * @throws UnsupportedOperationException if a different merge mode or NULL skipping is enabled
+     */
     <T> TypedUpsertWriter<T> createTypedWriter(Class<T> pojoClass);
 }

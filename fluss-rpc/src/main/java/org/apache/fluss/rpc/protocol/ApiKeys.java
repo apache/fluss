@@ -53,7 +53,7 @@ public enum ApiKeys {
     //            KV storage engine rejects a write under pressure; older versions receive the
     //            retriable KV_STORAGE_EXCEPTION instead.
     // Version 3: Supports original_partition_name in requests and responses for historical writes.
-    // Version 4: Supports request-scoped IGNORE_NULLS merge mode.
+    // Version 4: Supports request-scoped ignore_nulls assignment policy.
     PUT_KV(1016, 0, 4, PUBLIC),
 
     // Version 0: Uses lake's encoder for primary key encoding (legacy behavior).

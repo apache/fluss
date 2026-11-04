@@ -38,9 +38,10 @@ public class TableUpsert implements Upsert {
     private final WriterClient writerClient;
     private final @Nullable int[] targetColumns;
     private final MergeMode mergeMode;
+    private final boolean ignoreNulls;
 
     public TableUpsert(TablePath tablePath, TableInfo tableInfo, WriterClient writerClient) {
-        this(tablePath, tableInfo, writerClient, null, MergeMode.DEFAULT);
+        this(tablePath, tableInfo, writerClient, null, MergeMode.DEFAULT, false);
     }
 
     private TableUpsert(
@@ -48,12 +49,14 @@ public class TableUpsert implements Upsert {
             TableInfo tableInfo,
             WriterClient writerClient,
             @Nullable int[] targetColumns,
-            MergeMode mergeMode) {
+            MergeMode mergeMode,
+            boolean ignoreNulls) {
         this.tablePath = tablePath;
         this.tableInfo = tableInfo;
         this.writerClient = writerClient;
         this.targetColumns = targetColumns;
         this.mergeMode = mergeMode;
+        this.ignoreNulls = ignoreNulls;
     }
 
     @Override
@@ -74,7 +77,8 @@ public class TableUpsert implements Upsert {
                 }
             }
         }
-        return new TableUpsert(tablePath, tableInfo, writerClient, targetColumns, this.mergeMode);
+        return new TableUpsert(
+                tablePath, tableInfo, writerClient, targetColumns, this.mergeMode, ignoreNulls);
     }
 
     @Override
@@ -100,15 +104,23 @@ public class TableUpsert implements Upsert {
     @Override
     public Upsert mergeMode(MergeMode mode) {
         checkNotNull(mode, "merge mode");
-        return new TableUpsert(tablePath, tableInfo, writerClient, this.targetColumns, mode);
+        return new TableUpsert(
+                tablePath, tableInfo, writerClient, this.targetColumns, mode, ignoreNulls);
+    }
+
+    @Override
+    public Upsert ignoreNulls(boolean ignoreNulls) {
+        return new TableUpsert(
+                tablePath, tableInfo, writerClient, targetColumns, mergeMode, ignoreNulls);
     }
 
     @Override
     public UpsertWriter createWriter() {
-        if (mergeMode == MergeMode.IGNORE_NULLS
-                && tableInfo.getTableConfig().getMergeEngineType().isPresent()) {
+        if (ignoreNulls
+                && (mergeMode != MergeMode.DEFAULT
+                        || tableInfo.getTableConfig().getMergeEngineType().isPresent())) {
             throw new IllegalArgumentException(
-                    "MergeMode.IGNORE_NULLS is only supported for the default merge engine.");
+                    "Ignoring NULLs requires MergeMode.DEFAULT and the default merge engine.");
         }
         // Check that OVERWRITE mode is only used with tables that have a merge engine
         if (mergeMode == MergeMode.OVERWRITE) {
@@ -122,11 +134,16 @@ public class TableUpsert implements Upsert {
                                 mergeMode, tablePath));
             }
         }
-        return new UpsertWriterImpl(tablePath, tableInfo, targetColumns, writerClient, mergeMode);
+        return new UpsertWriterImpl(
+                tablePath, tableInfo, targetColumns, writerClient, mergeMode, ignoreNulls);
     }
 
     @Override
     public <T> TypedUpsertWriter<T> createTypedWriter(Class<T> pojoClass) {
+        if (ignoreNulls) {
+            throw new UnsupportedOperationException(
+                    "TypedUpsertWriter does not support ignoring NULLs. Please use createWriter() instead.");
+        }
         // TypedUpsertWriterImpl doesn't support mergeMode yet
         if (mergeMode != MergeMode.DEFAULT) {
             throw new UnsupportedOperationException(

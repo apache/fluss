@@ -29,6 +29,7 @@ import org.apache.fluss.client.table.scanner.log.ScanRecords;
 import org.apache.fluss.client.table.writer.AppendWriter;
 import org.apache.fluss.client.table.writer.DeleteResult;
 import org.apache.fluss.client.table.writer.TableWriter;
+import org.apache.fluss.client.table.writer.Upsert;
 import org.apache.fluss.client.table.writer.UpsertResult;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.ConfigOptions;
@@ -109,16 +110,28 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         TablePath path = TablePath.of("test_db_1", "java_ignore_nulls");
         createTable(path, TableDescriptor.builder().schema(schema).build(), false);
         try (Table table = conn.getTable(path)) {
-            UpsertWriter ordinary = table.newUpsert().createWriter();
-            UpsertWriter preserving =
-                    table.newUpsert().mergeMode(MergeMode.IGNORE_NULLS).createWriter();
+            Upsert base = table.newUpsert();
+            Upsert preservingOptions = base.ignoreNulls(true);
+            UpsertWriter ordinary = base.createWriter();
+            UpsertWriter preserving = preservingOptions.createWriter();
+            assertThatThrownBy(
+                            () -> preservingOptions.mergeMode(MergeMode.OVERWRITE).createWriter())
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("Ignoring NULLs requires MergeMode.DEFAULT");
+            assertThatThrownBy(
+                            () ->
+                                    base.mergeMode(MergeMode.OVERWRITE)
+                                            .ignoreNulls(true)
+                                            .createWriter())
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("Ignoring NULLs requires MergeMode.DEFAULT");
+            assertThatThrownBy(() -> preservingOptions.createTypedWriter(GenericRow.class))
+                    .isInstanceOf(UnsupportedOperationException.class)
+                    .hasMessageContaining("TypedUpsertWriter does not support ignoring NULLs");
             UpsertWriter partialOrdinary =
-                    table.newUpsert().partialUpdate("id", "name").createWriter();
+                    preservingOptions.partialUpdate("id", "name").ignoreNulls(false).createWriter();
             UpsertWriter partialPreserving =
-                    table.newUpsert()
-                            .partialUpdate("id", "name")
-                            .mergeMode(MergeMode.IGNORE_NULLS)
-                            .createWriter();
+                    table.newUpsert().partialUpdate("id", "name").ignoreNulls(true).createWriter();
             Lookuper lookuper = table.newLookup().createLookuper();
             ordinary.upsert(row(1, "value", "city")).get();
             preserving.upsert(row(1, null, null)).get();

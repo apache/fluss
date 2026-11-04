@@ -509,6 +509,7 @@ public class Sender implements Runnable {
         KvWriteBatch firstKv = (KvWriteBatch) first;
         KvWriteBatch nextKv = (KvWriteBatch) next;
         return firstKv.getMergeMode() == nextKv.getMergeMode()
+                && firstKv.isIgnoreNulls() == nextKv.isIgnoreNulls()
                 && Arrays.equals(firstKv.getTargetColumns(), nextKv.getTargetColumns());
     }
 

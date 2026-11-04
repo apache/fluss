@@ -773,11 +773,21 @@ public final class KvTablet {
     public LogAppendInfo putAsLeader(
             KvRecordBatch kvRecords, @Nullable int[] targetColumns, MergeMode mergeMode)
             throws Exception {
+        return putAsLeader(kvRecords, targetColumns, mergeMode, false);
+    }
+
+    /** Applies the write with an independent NULL assignment policy. */
+    public LogAppendInfo putAsLeader(
+            KvRecordBatch kvRecords,
+            @Nullable int[] targetColumns,
+            MergeMode mergeMode,
+            boolean ignoreNulls)
+            throws Exception {
         checkState(
                 !historicalPartition,
                 "putAsLeader is not supported for historical KV tablet %s",
                 tableBucket);
-        return putAsLeader(kvRecords, targetColumns, mergeMode, null, null);
+        return putAsLeader(kvRecords, targetColumns, mergeMode, ignoreNulls, null, null);
     }
 
     /**
@@ -794,11 +804,30 @@ public final class KvTablet {
             String originalPartitionName,
             HistoricalValueLookup historicalValueLookup)
             throws Exception {
+        return putHistoricalAsLeader(
+                kvRecords,
+                targetColumns,
+                mergeMode,
+                false,
+                originalPartitionName,
+                historicalValueLookup);
+    }
+
+    /** Applies the write with an independent NULL assignment policy. */
+    public LogAppendInfo putHistoricalAsLeader(
+            KvRecordBatch kvRecords,
+            @Nullable int[] targetColumns,
+            MergeMode mergeMode,
+            boolean ignoreNulls,
+            String originalPartitionName,
+            HistoricalValueLookup historicalValueLookup)
+            throws Exception {
         checkState(historicalPartition, "%s is not a historical KV tablet", tableBucket);
         return putAsLeader(
                 kvRecords,
                 targetColumns,
                 mergeMode,
+                ignoreNulls,
                 checkNotNull(originalPartitionName, "originalPartitionName must not be null"),
                 checkNotNull(historicalValueLookup, "Historical value lookup must not be null"));
     }
@@ -815,6 +844,18 @@ public final class KvTablet {
             MergeMode mergeMode,
             String originalPartitionName)
             throws Exception {
+        return probeLocalPreviousValues(
+                kvRecords, targetColumns, mergeMode, false, originalPartitionName);
+    }
+
+    /** Probes local previous values using the requested NULL assignment policy. */
+    public LocalValueLookupResult probeLocalPreviousValues(
+            KvRecordBatch kvRecords,
+            @Nullable int[] targetColumns,
+            MergeMode mergeMode,
+            boolean ignoreNulls,
+            String originalPartitionName)
+            throws Exception {
         checkState(historicalPartition, "%s is not a historical KV tablet", tableBucket);
         return inReadLock(
                 kvLock,
@@ -824,6 +865,7 @@ public final class KvTablet {
                             kvRecords,
                             targetColumns,
                             mergeMode,
+                            ignoreNulls,
                             kvStateAccessor,
                             checkNotNull(
                                     originalPartitionName,
@@ -835,6 +877,7 @@ public final class KvTablet {
             KvRecordBatch kvRecords,
             @Nullable int[] targetColumns,
             MergeMode mergeMode,
+            boolean ignoreNulls,
             @Nullable String originalPartitionName,
             @Nullable HistoricalValueLookup historicalValueLookup)
             throws Exception {
@@ -864,6 +907,7 @@ public final class KvTablet {
                                     kvRecords,
                                     targetColumns,
                                     mergeMode,
+                                    ignoreNulls,
                                     kvStateAccessor,
                                     originalPartitionName,
                                     historicalValueLookup);

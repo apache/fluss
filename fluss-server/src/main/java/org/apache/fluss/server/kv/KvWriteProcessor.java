@@ -163,11 +163,13 @@ public final class KvWriteProcessor {
             KvRecordBatch kvRecords,
             @Nullable int[] targetColumns,
             MergeMode mergeMode,
+            boolean ignoreNulls,
             KvStateAccessor stateAccessor,
             @Nullable String originalPartitionName,
             @Nullable HistoricalValueLookup historicalValueLookup)
             throws Exception {
-        WriteContext writeContext = createWriteContext(kvRecords, targetColumns, mergeMode);
+        WriteContext writeContext =
+                createWriteContext(kvRecords, targetColumns, mergeMode, ignoreNulls);
         RowType latestRowType = writeContext.latestSchema.getRowType();
         WalBuilder walBuilder = createWalBuilder(writeContext.latestSchemaId, latestRowType);
         walBuilder.setWriterState(kvRecords.writerId(), kvRecords.batchSequence());
@@ -238,10 +240,12 @@ public final class KvWriteProcessor {
             KvRecordBatch kvRecords,
             @Nullable int[] targetColumns,
             MergeMode mergeMode,
+            boolean ignoreNulls,
             KvStateAccessor stateAccessor,
             String originalPartitionName)
             throws Exception {
-        WriteContext writeContext = createWriteContext(kvRecords, targetColumns, mergeMode);
+        WriteContext writeContext =
+                createWriteContext(kvRecords, targetColumns, mergeMode, ignoreNulls);
 
         LocalValueLookupResult localLookupResult =
                 new LocalValueLookupResult(valueDecoder, lakeValueDecoder);
@@ -275,10 +279,13 @@ public final class KvWriteProcessor {
     }
 
     private WriteContext createWriteContext(
-            KvRecordBatch kvRecords, @Nullable int[] targetColumns, MergeMode mergeMode) {
-        if (mergeMode == MergeMode.IGNORE_NULLS && ignoreNullsRowMerger == null) {
+            KvRecordBatch kvRecords,
+            @Nullable int[] targetColumns,
+            MergeMode mergeMode,
+            boolean ignoreNulls) {
+        if (ignoreNulls && (mergeMode != MergeMode.DEFAULT || ignoreNullsRowMerger == null)) {
             throw new InvalidTableException(
-                    "MergeMode.IGNORE_NULLS is only supported for the default merge engine.");
+                    "Ignoring NULLs requires MergeMode.DEFAULT and the default merge engine.");
         }
         if (skipUnchangedUpsert && mergeMode == MergeMode.OVERWRITE) {
             throw new InvalidTableException(
@@ -297,7 +304,7 @@ public final class KvWriteProcessor {
         RowMerger requestMerger;
         if (mergeMode == MergeMode.OVERWRITE) {
             requestMerger = overwriteRowMerger;
-        } else if (mergeMode == MergeMode.IGNORE_NULLS) {
+        } else if (ignoreNulls) {
             requestMerger = ignoreNullsRowMerger;
         } else {
             requestMerger = rowMerger;

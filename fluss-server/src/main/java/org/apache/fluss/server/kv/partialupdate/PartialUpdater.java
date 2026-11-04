@@ -68,7 +68,8 @@ public class PartialUpdater {
             flussFieldGetters[i] = InternalRow.createFieldGetter(fieldDataTypes[i], i);
         }
         this.rowEncoder = RowEncoder.create(kvFormat, fieldDataTypes);
-        this.updatePrimaryKeyOnly = partialUpdateCols.equals(primaryKeyCols);
+        this.updatePrimaryKeyOnly =
+                targetColumns != null && partialUpdateCols.equals(primaryKeyCols);
     }
 
     private void sanityCheck(Schema schema, int[] targetColumns) {

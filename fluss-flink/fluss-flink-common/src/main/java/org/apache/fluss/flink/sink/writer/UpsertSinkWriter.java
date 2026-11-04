@@ -28,7 +28,6 @@ import org.apache.fluss.flink.sink.serializer.FlussSerializationSchema;
 import org.apache.fluss.flink.sink.undo.ProducerOffsetReporter;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
-import org.apache.fluss.rpc.protocol.MergeMode;
 
 import org.apache.flink.api.common.operators.MailboxExecutor;
 import org.apache.flink.metrics.groups.SinkWriterMetricGroup;
@@ -112,7 +111,7 @@ public class UpsertSinkWriter<InputT> extends FlinkSinkWriter<InputT> {
         super.initialize(metricGroup);
         Upsert upsert = table.newUpsert();
         if (ignoreNulls) {
-            upsert = upsert.mergeMode(MergeMode.IGNORE_NULLS);
+            upsert = upsert.ignoreNulls(true);
         }
         if (targetColumnIndexes != null) {
             upsert = upsert.partialUpdate(targetColumnIndexes);

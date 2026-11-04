@@ -53,6 +53,7 @@ import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.fluss.utils.concurrent.FlussScheduler;
 
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -103,10 +104,15 @@ class KvTabletIgnoreNullsTest {
             KvRecordTestUtils.KvRecordFactory.of(ROW_TYPE);
 
     private void initLogTabletAndKvTablet(Map<String, String> config) throws Exception {
+        initLogTabletAndKvTablet(config, SCHEMA);
+    }
+
+    private void initLogTabletAndKvTablet(Map<String, String> config, Schema schema)
+            throws Exception {
 
         TablePath tablePath = TablePath.of("testDb", "test_ignore_nulls");
         PhysicalTablePath physicalTablePath = PhysicalTablePath.of(tablePath);
-        schemaGetter = new TestingSchemaGetter(new SchemaInfo(SCHEMA, SCHEMA_ID));
+        schemaGetter = new TestingSchemaGetter(new SchemaInfo(schema, SCHEMA_ID));
 
         File logTabletDir =
                 LogTestUtils.makeRandomLogTabletDir(
@@ -174,6 +180,45 @@ class KvTabletIgnoreNullsTest {
 
     @ParameterizedTest
     @ValueSource(strings = {"FULL", "WAL"})
+    void testPrimaryKeyOnlyFullUpsertsEmitUpdates(String image) throws Exception {
+        Schema schema = Schema.newBuilder().column("id", DataTypes.INT()).primaryKey("id").build();
+        Map<String, String> config = new HashMap<>();
+        config.put(ConfigOptions.TABLE_CHANGELOG_IMAGE.key(), image);
+        initLogTabletAndKvTablet(config, schema);
+        KvRecord record =
+                KvRecordTestUtils.KvRecordFactory.of(schema.getRowType())
+                        .ofRecord("k1", new Object[] {1});
+        kvTablet.putAsLeader(kvRecordBatchFactory.ofRecords(record), null);
+        long offset = logTablet.localLogEndOffset();
+        kvTablet.putAsLeader(kvRecordBatchFactory.ofRecords(record), null, MergeMode.DEFAULT, true);
+        List<ChangeType> changes =
+                image.equals("FULL")
+                        ? Arrays.asList(ChangeType.UPDATE_BEFORE, ChangeType.UPDATE_AFTER)
+                        : Collections.singletonList(ChangeType.UPDATE_AFTER);
+        List<Object[]> rows =
+                image.equals("FULL")
+                        ? Arrays.asList(new Object[] {1}, new Object[] {1})
+                        : Collections.singletonList(new Object[] {1});
+        assertThatLogRecords(readLogRecords(offset))
+                .withSchema(schema.getRowType())
+                .withSchemaGetter(schemaGetter)
+                .isEqualTo(
+                        createBasicMemoryLogRecords(
+                                schema.getRowType(),
+                                SCHEMA_ID,
+                                offset,
+                                -1L,
+                                CURRENT_LOG_MAGIC_VALUE,
+                                NO_WRITER_ID,
+                                NO_BATCH_SEQUENCE,
+                                changes,
+                                rows,
+                                LogFormat.ARROW,
+                                DEFAULT_COMPRESSION));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"FULL", "WAL"})
     void testRequestScopedNullSkippingAndDefaultAssignments(String image) throws Exception {
         Map<String, String> config = new HashMap<>();
         config.put("table.changelog.image", image);
@@ -181,7 +226,7 @@ class KvTabletIgnoreNullsTest {
         KvRecord first = kvRecordFactory.ofRecord("k1", new Object[] {1, "value"});
         KvRecord nullValue = kvRecordFactory.ofRecord("k1", new Object[] {1, null});
         kvTablet.putAsLeader(
-                kvRecordBatchFactory.ofRecords(first, nullValue), null, MergeMode.IGNORE_NULLS);
+                kvRecordBatchFactory.ofRecords(first, nullValue), null, MergeMode.DEFAULT, true);
         assertThat(
                         new ValueDecoder(schemaGetter, KvFormat.COMPACTED)
                                 .decodeValue(
@@ -260,7 +305,8 @@ class KvTabletIgnoreNullsTest {
                 kvRecordBatchFactory.ofRecords(
                         kvRecordFactory.ofRecord("k1", new Object[] {1, null})),
                 null,
-                MergeMode.IGNORE_NULLS);
+                MergeMode.DEFAULT,
+                true);
         assertStoredValue("before");
         if (skipUnchanged) {
             assertThat(logTablet.localLogEndOffset()).isEqualTo(beforeUnchanged + 1);
@@ -286,7 +332,8 @@ class KvTabletIgnoreNullsTest {
                 kvRecordBatchFactory.ofRecords(
                         kvRecordFactory.ofRecord("k1", new Object[] {1, "after"})),
                 null,
-                MergeMode.IGNORE_NULLS);
+                MergeMode.DEFAULT,
+                true);
         assertStoredValue("after");
         assertThat(logTablet.localLogEndOffset()).isEqualTo(beforeChanged + 2);
         checkEqual(
@@ -326,10 +373,10 @@ class KvTabletIgnoreNullsTest {
         KvRecordBatch deletion =
                 kvRecordBatchFactory.ofRecords(kvRecordFactory.ofRecord("k1", null));
         if (behavior.equals("disable")) {
-            assertThatThrownBy(() -> kvTablet.putAsLeader(deletion, null, MergeMode.IGNORE_NULLS))
+            assertThatThrownBy(() -> kvTablet.putAsLeader(deletion, null, MergeMode.DEFAULT, true))
                     .isInstanceOf(DeletionDisabledException.class);
         } else {
-            kvTablet.putAsLeader(deletion, null, MergeMode.IGNORE_NULLS);
+            kvTablet.putAsLeader(deletion, null, MergeMode.DEFAULT, true);
         }
         assertThat(
                         new ValueDecoder(schemaGetter, KvFormat.COMPACTED)
@@ -360,9 +407,26 @@ class KvTabletIgnoreNullsTest {
                                                 kvRecordFactory.ofRecord(
                                                         "k1", new Object[] {1, "value"})),
                                         null,
-                                        MergeMode.IGNORE_NULLS))
+                                        MergeMode.DEFAULT,
+                                        true))
                 .isInstanceOf(InvalidTableException.class)
-                .hasMessageContaining("only supported for the default merge engine");
+                .hasMessageContaining("requires MergeMode.DEFAULT and the default merge engine");
+    }
+
+    @Test
+    void testRejectIgnoreNullsWithOverwrite() throws Exception {
+        initLogTabletAndKvTablet(Collections.emptyMap());
+        assertThatThrownBy(
+                        () ->
+                                kvTablet.putAsLeader(
+                                        kvRecordBatchFactory.ofRecords(
+                                                kvRecordFactory.ofRecord(
+                                                        "k1", new Object[] {1, "value"})),
+                                        null,
+                                        MergeMode.OVERWRITE,
+                                        true))
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining("Ignoring NULLs requires MergeMode.DEFAULT");
     }
 
     private void checkEqual(LogRecords actual, List<MemoryLogRecords> expected) {
