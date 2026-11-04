@@ -47,20 +47,8 @@ public final class SinkOperationMode implements Serializable {
             boolean appendOnly,
             boolean ignoreDelete,
             boolean aggregationTable,
-            boolean supportsRetract) {
-        this(appendOnly, ignoreDelete, aggregationTable, supportsRetract, false);
-    }
-
-    private SinkOperationMode(
-            boolean appendOnly,
-            boolean ignoreDelete,
-            boolean aggregationTable,
             boolean supportsRetract,
             boolean removeRecordOnDelete) {
-        if (supportsRetract && !aggregationTable) {
-            throw new IllegalArgumentException(
-                    "supportsRetract requires aggregationTable to be true.");
-        }
         this.appendOnly = appendOnly;
         this.ignoreDelete = ignoreDelete;
         this.aggregationTable = aggregationTable;
@@ -70,17 +58,17 @@ public final class SinkOperationMode implements Serializable {
 
     /** Mode for append-only (log) tables. */
     public static SinkOperationMode appendOnly(boolean ignoreDelete) {
-        return new SinkOperationMode(true, ignoreDelete, false, false);
+        return new SinkOperationMode(true, ignoreDelete, false, false, false);
     }
 
     /** Mode for upsert (primary key) tables without aggregation. */
     public static SinkOperationMode upsert(boolean ignoreDelete) {
-        return new SinkOperationMode(false, ignoreDelete, false, false);
+        return new SinkOperationMode(false, ignoreDelete, false, false, false);
     }
 
     /** Mode for aggregation tables. */
     public static SinkOperationMode aggregation(boolean ignoreDelete, boolean supportsRetract) {
-        return new SinkOperationMode(false, ignoreDelete, true, supportsRetract);
+        return aggregation(ignoreDelete, supportsRetract, false);
     }
 
     /** Mode for field retraction with an explicit policy for changelog DELETE. */

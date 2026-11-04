@@ -49,7 +49,7 @@ class FlinkTableSinkTest {
     void testDefaultModePreservesUpsertChangelog(boolean supportsRetract, boolean ignoreDelete) {
         FlinkTableSink sink =
                 createPkTableSink(MergeEngineType.AGGREGATION, supportsRetract, ignoreDelete);
-        ChangelogMode result = sink.getChangelogMode(allKindsChangelogMode());
+        ChangelogMode result = sink.getChangelogMode(ChangelogMode.all());
         assertThat(result.getContainedKinds())
                 .containsExactlyInAnyOrder(RowKind.INSERT, RowKind.UPDATE_AFTER, RowKind.DELETE);
     }
@@ -57,7 +57,7 @@ class FlinkTableSinkTest {
     @Test
     void testGetChangelogModeExcludesUpdateBeforeForNonAggregationTable() {
         FlinkTableSink sink = createPkTableSink(null, false);
-        assertThat(sink.getChangelogMode(allKindsChangelogMode()).getContainedKinds())
+        assertThat(sink.getChangelogMode(ChangelogMode.all()).getContainedKinds())
                 .containsExactlyInAnyOrder(RowKind.INSERT, RowKind.UPDATE_AFTER, RowKind.DELETE);
     }
 
@@ -65,8 +65,7 @@ class FlinkTableSinkTest {
     void testRetractModeValidatesActualTargetFields() {
         FlinkTableSink sink =
                 createPkTableSink(MergeEngineType.AGGREGATION, false, false, true, false);
-        assertThat(sink.getChangelogMode(allKindsChangelogMode()))
-                .isEqualTo(allKindsChangelogMode());
+        assertThat(sink.getChangelogMode(ChangelogMode.all())).isEqualTo(ChangelogMode.all());
         assertThatCode(() -> sink.getSinkRuntimeProvider(new TargetContext(new int[][] {{0}, {1}})))
                 .doesNotThrowAnyException();
         assertThatThrownBy(() -> sink.getSinkRuntimeProvider(new TargetContext(null)))
@@ -89,7 +88,7 @@ class FlinkTableSinkTest {
     void testIgnoreDeleteRetainsLegacyNegotiationWhenRetractEnabled() {
         FlinkTableSink sink =
                 createPkTableSink(MergeEngineType.AGGREGATION, false, true, true, false);
-        assertThat(sink.getChangelogMode(allKindsChangelogMode()).contains(RowKind.UPDATE_BEFORE))
+        assertThat(sink.getChangelogMode(ChangelogMode.all()).contains(RowKind.UPDATE_BEFORE))
                 .isFalse();
         assertThatCode(() -> sink.getSinkRuntimeProvider(new TargetContext(null)))
                 .doesNotThrowAnyException();
@@ -172,15 +171,5 @@ class FlinkTableSinkTest {
         public Optional<int[][]> getTargetColumns() {
             return Optional.ofNullable(targets);
         }
-    }
-
-    /** Builds a ChangelogMode containing all four RowKinds. */
-    private static ChangelogMode allKindsChangelogMode() {
-        return ChangelogMode.newBuilder()
-                .addContainedKind(RowKind.INSERT)
-                .addContainedKind(RowKind.UPDATE_BEFORE)
-                .addContainedKind(RowKind.UPDATE_AFTER)
-                .addContainedKind(RowKind.DELETE)
-                .build();
     }
 }

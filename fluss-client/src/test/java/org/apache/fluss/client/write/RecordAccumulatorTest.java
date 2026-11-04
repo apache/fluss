@@ -36,6 +36,7 @@ import org.apache.fluss.metrics.Gauge;
 import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.DefaultKvRecord;
+import org.apache.fluss.record.DefaultKvRecordBatch;
 import org.apache.fluss.record.IndexedLogRecord;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.record.LogRecordBatch;
@@ -813,7 +814,8 @@ class RecordAccumulatorTest {
         List<ReadyWriteBatch> batches = drained.get(node1.id());
         assertThat(batches).hasSize(1);
         KvWriteBatch firstBatch = (KvWriteBatch) batches.get(0).writeBatch();
-        assertThat(firstBatch.isV2Format()).isFalse();
+        assertThat(DefaultKvRecordBatch.pointToBytesView(firstBatch.build()).isV2Format())
+                .isFalse();
         assertThat(firstBatch.getRecordCount()).isEqualTo(1);
 
         // drain again to fetch the second batch of the same bucket.
@@ -821,7 +823,8 @@ class RecordAccumulatorTest {
         batches = drained.get(node1.id());
         assertThat(batches).hasSize(1);
         KvWriteBatch secondBatch = (KvWriteBatch) batches.get(0).writeBatch();
-        assertThat(secondBatch.isV2Format()).isTrue();
+        assertThat(DefaultKvRecordBatch.pointToBytesView(secondBatch.build()).isV2Format())
+                .isTrue();
         assertThat(secondBatch.getRecordCount()).isEqualTo(2);
     }
 

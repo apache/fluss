@@ -68,9 +68,4 @@ public class RetractResult {
     public long getLogEndOffset() {
         return logEndOffset;
     }
-
-    /** Creates an empty result (for testing purposes). */
-    public static RetractResult empty() {
-        return new RetractResult(null, -1);
-    }
 }

@@ -32,6 +32,9 @@ import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.NullSource;
 
 import static org.apache.fluss.testutils.DataTestUtils.compactedRow;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -240,61 +243,22 @@ class RowMergerCreateTest {
         assertThat(merger).isInstanceOf(AggregateRowMerger.class);
     }
 
-    @Test
-    void testDefaultRowMergerRetractThrows() {
+    @ParameterizedTest
+    @NullSource
+    @EnumSource(
+            value = MergeEngineType.class,
+            names = {"FIRST_ROW", "VERSIONED"})
+    void testNonAggregationMergerRejectsRetract(MergeEngineType engine) {
         Configuration conf = new Configuration();
-        TableConfig tableConfig = new TableConfig(conf);
-
+        if (engine != null) {
+            conf.setString(ConfigOptions.TABLE_MERGE_ENGINE.key(), engine.name());
+        }
+        conf.setString(ConfigOptions.TABLE_MERGE_ENGINE_VERSION_COLUMN.key(), "value");
         RowMerger merger =
-                RowMerger.create(tableConfig, KvFormat.COMPACTED, createSchemaGetter(TEST_SCHEMA));
-
-        assertThat(merger).isInstanceOf(DefaultRowMerger.class);
-
+                RowMerger.create(
+                        new TableConfig(conf), KvFormat.COMPACTED, createSchemaGetter(TEST_SCHEMA));
+        merger.configureTargetColumns(null, SCHEMA_ID, TEST_SCHEMA);
         BinaryRow row = compactedRow(TEST_SCHEMA.getRowType(), new Object[] {1, 10L});
-        assertThatThrownBy(() -> merger.retract(toBinaryValue(row), toBinaryValue(row)))
-                .isInstanceOf(UnsupportedOperationException.class)
-                .hasMessageContaining("does not support retract");
-    }
-
-    @Test
-    void testFirstRowRowMergerRetractThrows() {
-        Configuration conf = new Configuration();
-        conf.setString(ConfigOptions.TABLE_MERGE_ENGINE.key(), MergeEngineType.FIRST_ROW.name());
-        TableConfig tableConfig = new TableConfig(conf);
-
-        RowMerger merger =
-                RowMerger.create(tableConfig, KvFormat.COMPACTED, createSchemaGetter(TEST_SCHEMA));
-
-        assertThat(merger).isInstanceOf(FirstRowRowMerger.class);
-
-        BinaryRow row = compactedRow(TEST_SCHEMA.getRowType(), new Object[] {1, 10L});
-        assertThatThrownBy(() -> merger.retract(toBinaryValue(row), toBinaryValue(row)))
-                .isInstanceOf(UnsupportedOperationException.class)
-                .hasMessageContaining("does not support retract");
-    }
-
-    @Test
-    void testVersionedRowMergerRetractThrows() {
-        Schema schema =
-                Schema.newBuilder()
-                        .column("id", DataTypes.INT())
-                        .column("version", DataTypes.BIGINT())
-                        .column("value", DataTypes.STRING())
-                        .primaryKey("id")
-                        .build();
-
-        Configuration conf = new Configuration();
-        conf.setString(ConfigOptions.TABLE_MERGE_ENGINE.key(), MergeEngineType.VERSIONED.name());
-        conf.setString(ConfigOptions.TABLE_MERGE_ENGINE_VERSION_COLUMN.key(), "version");
-        TableConfig tableConfig = new TableConfig(conf);
-
-        RowMerger merger =
-                RowMerger.create(tableConfig, KvFormat.COMPACTED, createSchemaGetter(schema));
-        merger.configureTargetColumns(null, SCHEMA_ID, schema);
-
-        assertThat(merger).isInstanceOf(VersionedRowMerger.class);
-
-        BinaryRow row = compactedRow(schema.getRowType(), new Object[] {1, 1L, "hello"});
         assertThatThrownBy(() -> merger.retract(toBinaryValue(row), toBinaryValue(row)))
                 .isInstanceOf(UnsupportedOperationException.class)
                 .hasMessageContaining("does not support retract");

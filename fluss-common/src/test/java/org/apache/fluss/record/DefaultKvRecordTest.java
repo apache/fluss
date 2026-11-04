@@ -28,6 +28,8 @@ import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.RowType;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 import java.util.Random;
 
@@ -71,6 +73,7 @@ class DefaultKvRecordTest extends KvTestBase {
         assertThat(keyToBytes(kvRecord)).isEqualTo(key);
         // check value
         assertThat(kvRecord.getRow()).isEqualTo(row);
+        assertThat(kvRecord.getMutationType()).isEqualTo(MutationType.UPSERT);
 
         // now, check write record with value is null
         key = new byte[] {2, 3};
@@ -90,6 +93,7 @@ class DefaultKvRecordTest extends KvTestBase {
         assertThat(keyToBytes(kvRecord)).isEqualTo(key);
         // check value
         assertThat(kvRecord.getRow()).isNull();
+        assertThat(kvRecord.getMutationType()).isEqualTo(MutationType.DELETE);
     }
 
     @Test
@@ -118,38 +122,11 @@ class DefaultKvRecordTest extends KvTestBase {
         assertThat(kvRecord.getRow()).isEqualTo(row);
     }
 
-    @Test
-    void testV0RecordDefaultMutationType() throws Exception {
-        KvRecordReadContext readContext =
-                KvRecordReadContext.createReadContext(
-                        KvFormat.COMPACTED, new TestingSchemaGetter(1, DATA1_SCHEMA));
-
-        // V0 record with non-null row should return UPSERT.
-        CompactedRow row;
-        try (CompactedRowEncoder writer = new CompactedRowEncoder(baseRowFieldTypes)) {
-            writer.startNewRow();
-            writer.encodeField(0, 42);
-            writer.encodeField(1, BinaryString.fromString("v0"));
-            row = writer.finishRow();
-        }
-        byte[] key = new byte[] {1, 2};
-        DefaultKvRecord.writeTo(outputView, key, row);
-        KvRecord kvRecord =
-                DefaultKvRecord.readFrom(
-                        MemorySegment.wrap(outputView.getCopyOfBuffer()), 0, schemaId, readContext);
-        assertThat(kvRecord.getMutationType()).isEqualTo(MutationType.UPSERT);
-
-        // V0 record with null row should return DELETE.
-        outputView = new MemorySegmentOutputView(100);
-        DefaultKvRecord.writeTo(outputView, key, null);
-        kvRecord =
-                DefaultKvRecord.readFrom(
-                        MemorySegment.wrap(outputView.getCopyOfBuffer()), 0, schemaId, readContext);
-        assertThat(kvRecord.getMutationType()).isEqualTo(MutationType.DELETE);
-    }
-
-    @Test
-    void testV2UpsertRoundTrip() throws Exception {
+    @ParameterizedTest
+    @EnumSource(
+            value = MutationType.class,
+            names = {"UPSERT", "RETRACT"})
+    void testV2RowRoundTrip(MutationType mutation) throws Exception {
         KvRecordReadContext readContext =
                 KvRecordReadContext.createReadContext(
                         KvFormat.COMPACTED, new TestingSchemaGetter(1, DATA1_SCHEMA));
@@ -163,7 +140,7 @@ class DefaultKvRecordTest extends KvTestBase {
         }
 
         byte[] key = new byte[] {1, 2};
-        DefaultKvRecord.writeToV2(outputView, MutationType.UPSERT, key, row);
+        DefaultKvRecord.writeToV2(outputView, mutation, key, row);
 
         KvRecord kvRecord =
                 DefaultKvRecord.readFromV2(
@@ -174,7 +151,7 @@ class DefaultKvRecordTest extends KvTestBase {
         assertThat(kvRecord.getSizeInBytes()).isEqualTo(14);
         assertThat(keyToBytes(kvRecord)).isEqualTo(key);
         assertThat(kvRecord.getRow()).isEqualTo(row);
-        assertThat(kvRecord.getMutationType()).isEqualTo(MutationType.UPSERT);
+        assertThat(kvRecord.getMutationType()).isEqualTo(mutation);
     }
 
     @Test
@@ -195,32 +172,6 @@ class DefaultKvRecordTest extends KvTestBase {
         assertThat(keyToBytes(kvRecord)).isEqualTo(key);
         assertThat(kvRecord.getRow()).isNull();
         assertThat(kvRecord.getMutationType()).isEqualTo(MutationType.DELETE);
-    }
-
-    @Test
-    void testV2RetractRoundTrip() throws Exception {
-        KvRecordReadContext readContext =
-                KvRecordReadContext.createReadContext(
-                        KvFormat.COMPACTED, new TestingSchemaGetter(1, DATA1_SCHEMA));
-
-        CompactedRow row;
-        try (CompactedRowEncoder writer = new CompactedRowEncoder(baseRowFieldTypes)) {
-            writer.startNewRow();
-            writer.encodeField(0, 99);
-            writer.encodeField(1, BinaryString.fromString("old"));
-            row = writer.finishRow();
-        }
-
-        byte[] key = new byte[] {5, 6};
-        DefaultKvRecord.writeToV2(outputView, MutationType.RETRACT, key, row);
-
-        KvRecord kvRecord =
-                DefaultKvRecord.readFromV2(
-                        MemorySegment.wrap(outputView.getCopyOfBuffer()), 0, schemaId, readContext);
-
-        assertThat(keyToBytes(kvRecord)).isEqualTo(key);
-        assertThat(kvRecord.getRow()).isEqualTo(row);
-        assertThat(kvRecord.getMutationType()).isEqualTo(MutationType.RETRACT);
     }
 
     @Test

@@ -171,11 +171,6 @@ public class AggregateRowMerger implements RowMerger {
     }
 
     @Override
-    public boolean supportsRetract() {
-        return supportsRetract(targetSchemaId);
-    }
-
-    @Override
     public boolean supportsRetract(short inputSchemaId) {
         return allAggregatorsSupportRetract(
                 contextCache.getContext(targetSchemaId), contextCache.getContext(inputSchemaId));
@@ -456,11 +451,6 @@ public class AggregateRowMerger implements RowMerger {
         @Override
         public DeleteBehavior deleteBehavior() {
             return deleteBehavior;
-        }
-
-        @Override
-        public boolean supportsRetract() {
-            return supportsRetract(targetSchemaId);
         }
 
         @Override

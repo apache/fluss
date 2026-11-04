@@ -43,8 +43,6 @@ public class TestUpsertWriter implements UpsertWriter {
     private final List<InternalRow> allUpsertedRows = new ArrayList<>();
     private final List<InternalRow> allDeletedRows = new ArrayList<>();
     private int retractCount = 0;
-    private InternalRow lastRetractedRow;
-    private final List<InternalRow> allRetractedRows = new ArrayList<>();
 
     @Override
     public CompletableFuture<UpsertResult> upsert(InternalRow record) {
@@ -67,8 +65,6 @@ public class TestUpsertWriter implements UpsertWriter {
             return future;
         }
         retractCount++;
-        lastRetractedRow = row;
-        allRetractedRows.add(row);
         return CompletableFuture.completedFuture(new RetractResult(new TableBucket(1L, 0), 0L));
     }
 
@@ -122,14 +118,6 @@ public class TestUpsertWriter implements UpsertWriter {
         return retractCount;
     }
 
-    public InternalRow getLastRetractedRow() {
-        return lastRetractedRow;
-    }
-
-    public List<InternalRow> getAllRetractedRows() {
-        return allRetractedRows;
-    }
-
     public void setShouldFail(boolean shouldFail) {
         this.shouldFail = shouldFail;
     }
@@ -142,9 +130,7 @@ public class TestUpsertWriter implements UpsertWriter {
         shouldFail = false;
         lastUpsertedRow = null;
         lastDeletedRow = null;
-        lastRetractedRow = null;
         allUpsertedRows.clear();
         allDeletedRows.clear();
-        allRetractedRows.clear();
     }
 }

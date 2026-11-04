@@ -91,11 +91,6 @@ public class KvWriteBatch extends WriteBatch {
         return false;
     }
 
-    /** Whether this batch uses the KvRecord V2 wire format (requires PUT_KV api version >= 4). */
-    public boolean isV2Format() {
-        return v2Format;
-    }
-
     @Override
     boolean tryAppendRecord(WriteRecord writeRecord, WriteCallback callback) throws Exception {
         // Target columns belong to the batch header. Keep full-row deletes and partial field

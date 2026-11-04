@@ -871,9 +871,22 @@ class FieldAggregatorParameterizedTest {
             Object accumulator,
             Object retractVal,
             Object expected) {
-        FieldSumAgg sumAgg = new FieldSumAgg(dataType);
-        Object result = sumAgg.retract(accumulator, retractVal);
-        assertRetractResult(result, expected);
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("value", dataType, AggFunctions.SUM())
+                        .primaryKey("id")
+                        .build();
+        AggregateRowMerger merger = createMerger(schema, new TableConfig(new Configuration()));
+        BinaryValue result =
+                merger.retract(
+                        toBinaryValue(
+                                compactedRow(schema.getRowType(), new Object[] {1, accumulator})),
+                        toBinaryValue(
+                                compactedRow(schema.getRowType(), new Object[] {1, retractVal})));
+        assertThat(result).isNotNull();
+        assertThat(result.row.getInt(0)).isEqualTo(1);
+        assertAggregatedValue(result.row, 1, dataType, expected);
     }
 
     static Stream<Arguments> sumRetractTestData() {
@@ -884,6 +897,18 @@ class FieldAggregatorParameterizedTest {
                 Arguments.of("INT", DataTypes.INT(), 3000, 1000, 2000),
                 Arguments.of("BIGINT", DataTypes.BIGINT(), 30000L, 10000L, 20000L),
                 Arguments.of("FLOAT", DataTypes.FLOAT(), 4.0f, 1.5f, 2.5f),
+                Arguments.of(
+                        "FLOAT_infinity",
+                        DataTypes.FLOAT(),
+                        -Float.MAX_VALUE,
+                        Float.MAX_VALUE,
+                        Float.NEGATIVE_INFINITY),
+                Arguments.of(
+                        "DOUBLE_infinity",
+                        DataTypes.DOUBLE(),
+                        -Double.MAX_VALUE,
+                        Double.MAX_VALUE,
+                        Double.NEGATIVE_INFINITY),
                 Arguments.of("DOUBLE", DataTypes.DOUBLE(), 31.0, 10.5, 20.5),
                 Arguments.of(
                         "DECIMAL(10,2)",
@@ -1214,47 +1239,6 @@ class FieldAggregatorParameterizedTest {
     // ===================================================================================
     // Retract Overflow / Boundary Tests (M10)
     // ===================================================================================
-
-    @Test
-    void testSumRetractFloatInfinity() {
-        Schema schema =
-                Schema.newBuilder()
-                        .column("id", DataTypes.INT())
-                        .column("val", DataTypes.FLOAT(), AggFunctions.SUM())
-                        .primaryKey("id")
-                        .build();
-
-        AggregateRowMerger merger = createMerger(schema, new TableConfig(new Configuration()));
-
-        // Retract Float.MAX_VALUE from -Float.MAX_VALUE → should produce -Infinity
-        BinaryRow oldRow = compactedRow(schema.getRowType(), new Object[] {1, -Float.MAX_VALUE});
-        BinaryRow retractRow = compactedRow(schema.getRowType(), new Object[] {1, Float.MAX_VALUE});
-
-        BinaryValue result = merger.retract(toBinaryValue(oldRow), toBinaryValue(retractRow));
-        assertThat(result).isNotNull();
-        assertThat(Float.isInfinite(result.row.getFloat(1))).isTrue();
-    }
-
-    @Test
-    void testSumRetractDoubleInfinity() {
-        Schema schema =
-                Schema.newBuilder()
-                        .column("id", DataTypes.INT())
-                        .column("val", DataTypes.DOUBLE(), AggFunctions.SUM())
-                        .primaryKey("id")
-                        .build();
-
-        AggregateRowMerger merger = createMerger(schema, new TableConfig(new Configuration()));
-
-        // Retract Double.MAX_VALUE from -Double.MAX_VALUE → should produce -Infinity
-        BinaryRow oldRow = compactedRow(schema.getRowType(), new Object[] {1, -Double.MAX_VALUE});
-        BinaryRow retractRow =
-                compactedRow(schema.getRowType(), new Object[] {1, Double.MAX_VALUE});
-
-        BinaryValue result = merger.retract(toBinaryValue(oldRow), toBinaryValue(retractRow));
-        assertThat(result).isNotNull();
-        assertThat(Double.isInfinite(result.row.getDouble(1))).isTrue();
-    }
 
     @Test
     void testSumRetractDecimalOverflow() {

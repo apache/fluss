@@ -92,9 +92,6 @@ public class FlinkTableSink
     /** Whether the table needs aggregation undo recovery, independent of retract opt-in. */
     private final boolean isAggregationTable;
 
-    /** Whether all value columns support retract, accounting for field ignore-retract rules. */
-    private final boolean schemaSupportsRetract;
-
     /** Non-PK aggregation columns whose effective aggregation function is not retract-capable. */
     private final Set<String> nonRetractableColumns;
 
@@ -176,7 +173,6 @@ public class FlinkTableSink
         this.producerId = producerId;
         this.isAggregationTable = mergeEngineType == MergeEngineType.AGGREGATION;
         this.nonRetractableColumns = new HashSet<>(nonRetractableColumns);
-        this.schemaSupportsRetract = isAggregationTable && this.nonRetractableColumns.isEmpty();
         this.enableRetract = enableRetract;
         this.removeRecordOnDelete = removeRecordOnDelete;
         if (enableRetract && !isAggregationTable) {
@@ -342,7 +338,7 @@ public class FlinkTableSink
         }
         if (targetColumnIndexes == null
                 || targetColumnIndexes.length == tableRowType.getFieldCount()) {
-            return schemaSupportsRetract;
+            return nonRetractableColumns.isEmpty();
         }
 
         for (String column : columns(targetColumnIndexes)) {

@@ -75,20 +75,9 @@ public interface RowMerger {
                 String.format("%s does not support retract", this.getClass().getSimpleName()));
     }
 
-    /**
-     * Returns whether this merger has a retract implementation.
-     *
-     * <p>When true, {@link #retract(BinaryValue, BinaryValue)} can be called. When false, calling
-     * retract will throw {@link UnsupportedOperationException}. Note that retract quality varies by
-     * function — returning true does not guarantee a mathematically exact inverse.
-     */
-    default boolean supportsRetract() {
-        return false;
-    }
-
     /** Whether the fields present in the given input schema can be retracted. */
     default boolean supportsRetract(short inputSchemaId) {
-        return supportsRetract();
+        return false;
     }
 
     /**

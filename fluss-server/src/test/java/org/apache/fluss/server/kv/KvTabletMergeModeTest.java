@@ -242,7 +242,7 @@ class KvTabletMergeModeTest {
                 kvRecordBatchFactory.ofRecords(
                         kvRecordFactory.ofRecord(
                                 "k1".getBytes(), new Object[] {1, 10L, 100, "Alice"}));
-        kvTablet.putAsLeader(batch1, null, MergeMode.DEFAULT);
+        kvTablet.putAsLeader(batch1, null);
 
         long endOffset = logTablet.localLogEndOffset();
 
@@ -252,7 +252,7 @@ class KvTabletMergeModeTest {
                 kvRecordBatchFactory.ofRecords(
                         kvRecordFactory.ofRecord(
                                 "k1".getBytes(), new Object[] {1, 5L, 150, "Bob"}));
-        kvTablet.putAsLeader(batch2, null, MergeMode.DEFAULT);
+        kvTablet.putAsLeader(batch2, null);
 
         // Verify CDC log shows aggregated values
         LogRecords actualLogRecords = readLogRecords(endOffset);
@@ -863,12 +863,12 @@ class KvTabletMergeModeTest {
                 .isEqualTo(expectedLogs);
     }
 
-    @Test
-    void testRetractToZeroThenUpsert() throws Exception {
-        // Schema uses SUM for count. Initial state: key=k1, total=10
+    @ParameterizedTest
+    @CsvSource({"10, 30, 0, 30", "5, 5, 5, 10"})
+    void testRetractThenUpsertPreservesBothTransitions(
+            long retract, long upsert, long intermediate, long result) throws Exception {
         initTablets(SUM_SCHEMA);
 
-        // Initial state: key=k1, total=10
         KvRecordBatch initBatch =
                 kvRecordBatchFactory.ofRecords(
                         SUM_KV_RECORD_FACTORY.ofRecord("k1".getBytes(), new Object[] {1, 10L}));
@@ -876,23 +876,19 @@ class KvTabletMergeModeTest {
 
         long endOffset = logTablet.localLogEndOffset();
 
-        // V2 batch: RETRACT(10) + UPSERT(30)
-        // Retract: 10-10=0 (intermediate)
-        // Upsert: 0+30=30
         List<V2RecordEntry> entries =
                 Arrays.asList(
                         V2RecordEntry.of(
                                 MutationType.RETRACT,
                                 SUM_KV_RECORD_FACTORY.ofRecord(
-                                        "k1".getBytes(), new Object[] {1, 10L})),
+                                        "k1".getBytes(), new Object[] {1, retract})),
                         V2RecordEntry.of(
                                 MutationType.UPSERT,
                                 SUM_KV_RECORD_FACTORY.ofRecord(
-                                        "k1".getBytes(), new Object[] {1, 30L})));
+                                        "k1".getBytes(), new Object[] {1, upsert})));
         KvRecordBatch batch = kvRecordBatchFactory.ofV2Records(entries);
         kvTablet.putAsLeader(batch, null, MergeMode.DEFAULT);
 
-        // Verify key is NOT deleted and final value is 30
         LogRecords actualLogRecords = readLogRecords(endOffset);
         MemoryLogRecords expectedLogs =
                 logRecords(
@@ -905,9 +901,9 @@ class KvTabletMergeModeTest {
                                 ChangeType.UPDATE_AFTER),
                         Arrays.asList(
                                 new Object[] {1, 10L},
-                                new Object[] {1, 0L},
-                                new Object[] {1, 0L},
-                                new Object[] {1, 30L}));
+                                new Object[] {1, intermediate},
+                                new Object[] {1, intermediate},
+                                new Object[] {1, result}));
 
         assertThatLogRecords(actualLogRecords)
                 .withSchema(SUM_ROW_TYPE)
@@ -1053,53 +1049,6 @@ class KvTabletMergeModeTest {
     }
 
     @Test
-    void testRetractThenUpsertRestoresValue() throws Exception {
-        // Use a simple SUM schema
-        initTablets(SUM_SCHEMA);
-
-        // Initial state: key=k1, total=10
-        KvRecordBatch initBatch =
-                kvRecordBatchFactory.ofRecords(
-                        SUM_KV_RECORD_FACTORY.ofRecord("k1".getBytes(), new Object[] {1, 10L}));
-        kvTablet.putAsLeader(initBatch, null, MergeMode.DEFAULT);
-
-        long endOffset = logTablet.localLogEndOffset();
-
-        // Returning to the initial value still has two observable state transitions.
-        List<V2RecordEntry> entries =
-                Arrays.asList(
-                        V2RecordEntry.of(
-                                MutationType.RETRACT,
-                                SUM_KV_RECORD_FACTORY.ofRecord(
-                                        "k1".getBytes(), new Object[] {1, 5L})),
-                        V2RecordEntry.of(
-                                MutationType.UPSERT,
-                                SUM_KV_RECORD_FACTORY.ofRecord(
-                                        "k1".getBytes(), new Object[] {1, 5L})));
-        KvRecordBatch retractBatch = kvRecordBatchFactory.ofV2Records(entries);
-        kvTablet.putAsLeader(retractBatch, null, MergeMode.DEFAULT);
-
-        MemoryLogRecords expectedLogs =
-                logRecords(
-                        SUM_ROW_TYPE,
-                        endOffset,
-                        Arrays.asList(
-                                ChangeType.UPDATE_BEFORE,
-                                ChangeType.UPDATE_AFTER,
-                                ChangeType.UPDATE_BEFORE,
-                                ChangeType.UPDATE_AFTER),
-                        Arrays.asList(
-                                new Object[] {1, 10L},
-                                new Object[] {1, 5L},
-                                new Object[] {1, 5L},
-                                new Object[] {1, 10L}));
-        assertThatLogRecords(readLogRecords(endOffset))
-                .withSchema(SUM_ROW_TYPE)
-                .assertCheckSum(true)
-                .isEqualTo(expectedLogs);
-    }
-
-    @Test
     void testConsecutiveRetractsThenUpsert() throws Exception {
         initTablets(SUM_SCHEMA);
 
@@ -1225,46 +1174,6 @@ class KvTabletMergeModeTest {
             }
         }
         assertThat(index).isEqualTo(expectedTypes.length);
-    }
-
-    // ==================== Default MergeMode Tests ====================
-
-    @Test
-    void testDefaultMergeModeIsDefault() throws Exception {
-        // Insert initial record using default (no mergeMode parameter)
-        KvRecordBatch batch1 =
-                kvRecordBatchFactory.ofRecords(
-                        kvRecordFactory.ofRecord(
-                                "k1".getBytes(), new Object[] {1, 10L, 100, "Alice"}));
-        kvTablet.putAsLeader(batch1, null); // Using overload without mergeMode
-
-        long endOffset = logTablet.localLogEndOffset();
-
-        // Update using default (should aggregate)
-        KvRecordBatch batch2 =
-                kvRecordBatchFactory.ofRecords(
-                        kvRecordFactory.ofRecord(
-                                "k1".getBytes(), new Object[] {1, 5L, 150, "Bob"}));
-        kvTablet.putAsLeader(batch2, null); // Using overload without mergeMode
-
-        // Verify aggregation happened (proving default is DEFAULT)
-        LogRecords actualLogRecords = readLogRecords(endOffset);
-        MemoryLogRecords expectedLogs =
-                logRecords(
-                        endOffset,
-                        Arrays.asList(ChangeType.UPDATE_BEFORE, ChangeType.UPDATE_AFTER),
-                        Arrays.asList(
-                                new Object[] {1, 10L, 100, "Alice"},
-                                new Object[] {
-                                    1, 15L, 150, "Bob"
-                                } // count=10+5=15, max=max(100,150)=150
-                                ));
-
-        assertThatLogRecords(actualLogRecords)
-                .withSchema(AGG_ROW_TYPE)
-                .withSchemaGetter(schemaGetter)
-                .assertCheckSum(true)
-                .isEqualTo(expectedLogs);
     }
 
     // ==================== V2 Format Validation Tests ====================

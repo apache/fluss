@@ -24,6 +24,11 @@ import org.apache.fluss.row.compacted.CompactedRow;
 import org.apache.fluss.row.encode.CompactedKeyEncoder;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
+
+import java.util.stream.Stream;
 
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA_PK;
@@ -53,7 +58,7 @@ class WriteRecordTest {
                         null);
 
         assertThat(writeRecord.getMutationType()).isEqualTo(MutationType.UPSERT);
-        assertThat(writeRecord.getRow()).isNotNull();
+        assertThat(writeRecord.getRow()).isEqualTo(row);
         assertThat(writeRecord.getKey()).isEqualTo(key);
     }
 
@@ -84,7 +89,7 @@ class WriteRecordTest {
                 WriteRecord.forCompactedAppend(
                         DATA1_TABLE_INFO_PK, PhysicalTablePath.of(DATA1_TABLE_PATH_PK), row, null);
 
-        assertThat(writeRecord.getRow()).isNotNull();
+        assertThat(writeRecord.getRow()).isEqualTo(row);
         assertThat(writeRecord.getKey()).isNull();
     }
 
@@ -106,55 +111,14 @@ class WriteRecordTest {
                         org.apache.fluss.rpc.protocol.MergeMode.DEFAULT);
 
         assertThat(writeRecord.getMutationType()).isEqualTo(MutationType.RETRACT);
-        assertThat(writeRecord.getRow()).isNotNull();
+        assertThat(writeRecord.getRow()).isEqualTo(row);
         assertThat(writeRecord.getKey()).isEqualTo(key);
     }
 
-    @Test
-    void testForRetractNullRowThrows() {
-        BinaryRow row = compactedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
-        byte[] key =
-                new CompactedKeyEncoder(DATA1_ROW_TYPE, DATA1_SCHEMA_PK.getPrimaryKeyIndexes())
-                        .encodeKey(row);
-        assertThatThrownBy(
-                        () ->
-                                WriteRecord.forRetract(
-                                        DATA1_TABLE_INFO_PK,
-                                        PhysicalTablePath.of(DATA1_TABLE_PATH_PK),
-                                        null,
-                                        key,
-                                        key,
-                                        WriteFormat.COMPACTED_KV,
-                                        null,
-                                        org.apache.fluss.rpc.protocol.MergeMode.DEFAULT))
-                .isInstanceOf(NullPointerException.class)
-                .hasMessageContaining("row must not be null");
-    }
-
-    @Test
-    void testForRetractNullKeyThrows() {
-        BinaryRow row = compactedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
-        assertThatThrownBy(
-                        () ->
-                                WriteRecord.forRetract(
-                                        DATA1_TABLE_INFO_PK,
-                                        PhysicalTablePath.of(DATA1_TABLE_PATH_PK),
-                                        row,
-                                        null,
-                                        new byte[] {1},
-                                        WriteFormat.COMPACTED_KV,
-                                        null,
-                                        org.apache.fluss.rpc.protocol.MergeMode.DEFAULT))
-                .isInstanceOf(NullPointerException.class)
-                .hasMessageContaining("key must not be null");
-    }
-
-    @Test
-    void testForRetractNullBucketKeyThrows() {
-        BinaryRow row = compactedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
-        byte[] key =
-                new CompactedKeyEncoder(DATA1_ROW_TYPE, DATA1_SCHEMA_PK.getPrimaryKeyIndexes())
-                        .encodeKey(row);
+    @ParameterizedTest(name = "reject null {3}")
+    @MethodSource("nullRetractArguments")
+    void testForRetractRejectsNullArgument(
+            BinaryRow row, byte[] key, byte[] bucketKey, String parameterName) {
         assertThatThrownBy(
                         () ->
                                 WriteRecord.forRetract(
@@ -162,12 +126,23 @@ class WriteRecordTest {
                                         PhysicalTablePath.of(DATA1_TABLE_PATH_PK),
                                         row,
                                         key,
-                                        null,
+                                        bucketKey,
                                         WriteFormat.COMPACTED_KV,
                                         null,
                                         org.apache.fluss.rpc.protocol.MergeMode.DEFAULT))
                 .isInstanceOf(NullPointerException.class)
-                .hasMessageContaining("bucketKey must not be null");
+                .hasMessageContaining(parameterName + " must not be null");
+    }
+
+    private static Stream<Arguments> nullRetractArguments() {
+        BinaryRow row = compactedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
+        byte[] key =
+                new CompactedKeyEncoder(DATA1_ROW_TYPE, DATA1_SCHEMA_PK.getPrimaryKeyIndexes())
+                        .encodeKey(row);
+        return Stream.of(
+                Arguments.of(null, key, key, "row"),
+                Arguments.of(row, null, key, "key"),
+                Arguments.of(row, key, null, "bucketKey"));
     }
 
     @Test

@@ -760,7 +760,9 @@ public class FlinkConversionsTest {
                                         "attributes",
                                         org.apache.flink.table.api.DataTypes.MAP(
                                                 org.apache.flink.table.api.DataTypes.INT(),
-                                                org.apache.flink.table.api.DataTypes.STRING()))),
+                                                org.apache.flink.table.api.DataTypes.STRING())),
+                                Column.physical(
+                                        "name", org.apache.flink.table.api.DataTypes.STRING())),
                         Collections.emptyList(),
                         UniqueConstraint.primaryKey("PK_id", Collections.singletonList("id")));
         Map<String, String> options = new HashMap<>();
@@ -814,31 +816,6 @@ public class FlinkConversionsTest {
                 FlinkConversions.toFlussTable(new ResolvedCatalogTable(table, schema));
         assertThat(descriptor.getProperties())
                 .containsEntry("fields.min_val.ignore-retract", "true");
-    }
-
-    @Test
-    void testComputeSchemaSupportsRetractImplicitDefault() {
-        // Non-PK column without explicit agg option: the method mirrors the server
-        // default (LAST_VALUE_IGNORE_NULLS) which supports retract, so returns true.
-        ResolvedSchema schema =
-                new ResolvedSchema(
-                        Arrays.asList(
-                                Column.physical(
-                                        "id", org.apache.flink.table.api.DataTypes.INT().notNull()),
-                                Column.physical(
-                                        "name", org.apache.flink.table.api.DataTypes.STRING())),
-                        Collections.emptyList(),
-                        UniqueConstraint.primaryKey("PK_id", Collections.singletonList("id")));
-
-        Map<String, String> options = new HashMap<>();
-        options.put("table.merge-engine", "aggregation");
-        // No fields.name.agg specified — implicit default
-
-        org.apache.flink.configuration.Configuration conf =
-                org.apache.flink.configuration.Configuration.fromMap(options);
-
-        assertThat(FlinkConversions.computeNonRetractableAggregationColumns(schema, conf).isEmpty())
-                .isTrue();
     }
 
     /** Test refresh handler for testing purpose. */

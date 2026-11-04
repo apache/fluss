@@ -66,6 +66,7 @@ class DefaultKvRecordBatchTest extends KvTestBase {
         assertThat(kvRecords.magic()).isEqualTo(magic);
         assertThat(kvRecords.isValid()).isTrue();
         assertThat(kvRecords.schemaId()).isEqualTo(schemaId);
+        assertThat(kvRecords.isV2Format()).isFalse();
 
         // verify record.
         int i = 0;
@@ -75,78 +76,11 @@ class DefaultKvRecordBatchTest extends KvTestBase {
                                 KvFormat.COMPACTED, new TestingSchemaGetter(1, DATA1_SCHEMA)))) {
             assertThat(keyToBytes(record)).isEqualTo(keys.get(i));
             assertThat(record.getRow()).isEqualTo(rows.get(i));
+            assertThat(record.getMutationType())
+                    .isEqualTo(rows.get(i) == null ? MutationType.DELETE : MutationType.UPSERT);
             i++;
         }
-
-        builder.close();
-    }
-
-    @Test
-    void testNullRowIsNormalizedAsDelete() throws Exception {
-        KvRecordBatchBuilder builder =
-                KvRecordBatchBuilder.builder(
-                        schemaId,
-                        Integer.MAX_VALUE,
-                        new UnmanagedPagedOutputView(100),
-                        KvFormat.COMPACTED);
-        byte[] key = new byte[] {1, 2};
-        builder.append(key, null);
-
-        DefaultKvRecordBatch batch = DefaultKvRecordBatch.pointToBytesView(builder.build());
-        batch.ensureValid();
-
-        KvRecord record =
-                batch.records(
-                                KvRecordReadContext.createReadContext(
-                                        KvFormat.COMPACTED,
-                                        new TestingSchemaGetter(1, DATA1_SCHEMA)))
-                        .iterator()
-                        .next();
-        assertThat(record.getRow()).isNull();
-
-        builder.close();
-    }
-
-    @Test
-    void testV0BatchDefaultMutationType() throws Exception {
-        KvRecordBatchBuilder builder =
-                KvRecordBatchBuilder.builder(
-                        schemaId,
-                        Integer.MAX_VALUE,
-                        new UnmanagedPagedOutputView(100),
-                        KvFormat.COMPACTED);
-
-        CompactedRow row;
-        try (CompactedRowEncoder writer = new CompactedRowEncoder(baseRowFieldTypes)) {
-            writer.startNewRow();
-            writer.encodeField(0, 1);
-            writer.encodeField(1, BinaryString.fromString("v0"));
-            row = writer.finishRow();
-        }
-
-        builder.append(new byte[] {1}, row);
-        builder.append(new byte[] {2}, null);
-
-        DefaultKvRecordBatch batch = DefaultKvRecordBatch.pointToBytesView(builder.build());
-        batch.ensureValid();
-
-        // V0 read context (v2Format=false)
-        KvRecordReadContext readContext =
-                KvRecordReadContext.createReadContext(
-                        KvFormat.COMPACTED, new TestingSchemaGetter(1, DATA1_SCHEMA));
-
-        List<KvRecord> records = new ArrayList<>();
-        for (KvRecord record : batch.records(readContext)) {
-            records.add(record);
-        }
-
-        assertThat(records).hasSize(2);
-        // Non-null row -> UPSERT
-        assertThat(records.get(0).getMutationType()).isEqualTo(MutationType.UPSERT);
-        assertThat(records.get(0).getRow()).isNotNull();
-        // Null row -> DELETE
-        assertThat(records.get(1).getMutationType()).isEqualTo(MutationType.DELETE);
-        assertThat(records.get(1).getRow()).isNull();
+        assertThat(i).isEqualTo(recordNumber);
 
         builder.close();
     }
