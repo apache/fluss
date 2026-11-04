@@ -19,8 +19,10 @@
 
 #include <arrow/c/bridge.h>
 
+#include <algorithm>
 #include <cassert>
 #include <ctime>
+#include <functional>
 
 #include "ffi_converter.hpp"
 #include "fluss.hpp"
@@ -80,6 +82,160 @@ int Date::Day() const {
     std::time_t epoch_seconds = static_cast<std::time_t>(days_since_epoch) * kSecondsPerDay;
     std::tm tm = gmtime_utc(epoch_seconds);
     return tm.tm_mday;
+}
+
+PredicateLiteral::PredicateLiteral(bool value)
+    : literal_type_(ffi::FfiPredicateLiteralType::Boolean), boolean_value_(value) {}
+
+PredicateLiteral::PredicateLiteral(int32_t value)
+    : literal_type_(ffi::FfiPredicateLiteralType::Int32), integer_value_(value) {}
+
+PredicateLiteral::PredicateLiteral(int64_t value)
+    : literal_type_(ffi::FfiPredicateLiteralType::Int64), integer_value_(value) {}
+
+PredicateLiteral::PredicateLiteral(float value)
+    : literal_type_(ffi::FfiPredicateLiteralType::Float32), floating_value_(value) {}
+
+PredicateLiteral::PredicateLiteral(double value)
+    : literal_type_(ffi::FfiPredicateLiteralType::Float64), floating_value_(value) {}
+
+PredicateLiteral::PredicateLiteral(const char* value) : PredicateLiteral(std::string(value)) {}
+
+PredicateLiteral::PredicateLiteral(std::string value)
+    : literal_type_(ffi::FfiPredicateLiteralType::String), string_value_(std::move(value)) {}
+
+PredicateLiteral::PredicateLiteral(std::vector<uint8_t> value)
+    : literal_type_(ffi::FfiPredicateLiteralType::Bytes), bytes_value_(std::move(value)) {}
+
+PredicateLiteral::PredicateLiteral(Date value)
+    : literal_type_(ffi::FfiPredicateLiteralType::Date), integer_value_(value.days_since_epoch) {}
+
+PredicateLiteral::PredicateLiteral(Time value)
+    : literal_type_(ffi::FfiPredicateLiteralType::Time),
+      integer_value_(value.millis_since_midnight) {}
+
+PredicateLiteral::PredicateLiteral(ffi::FfiPredicateLiteralType literal_type)
+    : literal_type_(literal_type) {}
+
+PredicateLiteral PredicateLiteral::Null() {
+    return PredicateLiteral(ffi::FfiPredicateLiteralType::Null);
+}
+
+PredicateLiteral PredicateLiteral::Decimal(std::string value) {
+    PredicateLiteral literal(ffi::FfiPredicateLiteralType::Decimal);
+    literal.string_value_ = std::move(value);
+    return literal;
+}
+
+PredicateLiteral PredicateLiteral::TimestampNtz(Timestamp value) {
+    PredicateLiteral literal(ffi::FfiPredicateLiteralType::TimestampNtz);
+    literal.timestamp_value_ = value;
+    return literal;
+}
+
+PredicateLiteral PredicateLiteral::TimestampLtz(Timestamp value) {
+    PredicateLiteral literal(ffi::FfiPredicateLiteralType::TimestampLtz);
+    literal.timestamp_value_ = value;
+    return literal;
+}
+
+struct Predicate::Node {
+    ffi::FfiPredicateNodeType node_type{ffi::FfiPredicateNodeType::Leaf};
+    ffi::FfiPredicateLeafFunction leaf_function{ffi::FfiPredicateLeafFunction::Equal};
+    ffi::FfiPredicateCompoundFunction compound_function{ffi::FfiPredicateCompoundFunction::And};
+    std::string field;
+    std::vector<PredicateLiteral> literals;
+    std::vector<std::shared_ptr<const Node>> children;
+};
+
+Predicate::Predicate(std::shared_ptr<const Node> root) : root_(std::move(root)) {}
+
+Predicate Predicate::And(Predicate other) const {
+    auto node = std::make_shared<Node>();
+    node->node_type = ffi::FfiPredicateNodeType::Compound;
+    node->compound_function = ffi::FfiPredicateCompoundFunction::And;
+    if (root_->node_type == ffi::FfiPredicateNodeType::Compound &&
+        root_->compound_function == node->compound_function) {
+        node->children = root_->children;
+    } else {
+        node->children.push_back(root_);
+    }
+    node->children.push_back(std::move(other.root_));
+    return Predicate(std::move(node));
+}
+
+Predicate Predicate::Or(Predicate other) const {
+    auto node = std::make_shared<Node>();
+    node->node_type = ffi::FfiPredicateNodeType::Compound;
+    node->compound_function = ffi::FfiPredicateCompoundFunction::Or;
+    if (root_->node_type == ffi::FfiPredicateNodeType::Compound &&
+        root_->compound_function == node->compound_function) {
+        node->children = root_->children;
+    } else {
+        node->children.push_back(root_);
+    }
+    node->children.push_back(std::move(other.root_));
+    return Predicate(std::move(node));
+}
+
+Predicate ColumnRef::Leaf(ffi::FfiPredicateLeafFunction function,
+                          std::vector<PredicateLiteral> literals) const {
+    auto node = std::make_shared<Predicate::Node>();
+    node->node_type = ffi::FfiPredicateNodeType::Leaf;
+    node->leaf_function = function;
+    node->field = name_;
+    node->literals = std::move(literals);
+    return Predicate(std::move(node));
+}
+
+Predicate ColumnRef::Equal(PredicateLiteral value) const {
+    return Leaf(ffi::FfiPredicateLeafFunction::Equal, {std::move(value)});
+}
+
+Predicate ColumnRef::NotEqual(PredicateLiteral value) const {
+    return Leaf(ffi::FfiPredicateLeafFunction::NotEqual, {std::move(value)});
+}
+
+Predicate ColumnRef::LessThan(PredicateLiteral value) const {
+    return Leaf(ffi::FfiPredicateLeafFunction::LessThan, {std::move(value)});
+}
+
+Predicate ColumnRef::LessOrEqual(PredicateLiteral value) const {
+    return Leaf(ffi::FfiPredicateLeafFunction::LessOrEqual, {std::move(value)});
+}
+
+Predicate ColumnRef::GreaterThan(PredicateLiteral value) const {
+    return Leaf(ffi::FfiPredicateLeafFunction::GreaterThan, {std::move(value)});
+}
+
+Predicate ColumnRef::GreaterOrEqual(PredicateLiteral value) const {
+    return Leaf(ffi::FfiPredicateLeafFunction::GreaterOrEqual, {std::move(value)});
+}
+
+Predicate ColumnRef::IsNull() const { return Leaf(ffi::FfiPredicateLeafFunction::IsNull, {}); }
+
+Predicate ColumnRef::IsNotNull() const {
+    return Leaf(ffi::FfiPredicateLeafFunction::IsNotNull, {});
+}
+
+Predicate ColumnRef::StartsWith(std::string prefix) const {
+    return Leaf(ffi::FfiPredicateLeafFunction::StartsWith, {PredicateLiteral(std::move(prefix))});
+}
+
+Predicate ColumnRef::Contains(std::string infix) const {
+    return Leaf(ffi::FfiPredicateLeafFunction::Contains, {PredicateLiteral(std::move(infix))});
+}
+
+Predicate ColumnRef::EndsWith(std::string suffix) const {
+    return Leaf(ffi::FfiPredicateLeafFunction::EndsWith, {PredicateLiteral(std::move(suffix))});
+}
+
+Predicate ColumnRef::In(std::vector<PredicateLiteral> values) const {
+    return Leaf(ffi::FfiPredicateLeafFunction::In, std::move(values));
+}
+
+Predicate ColumnRef::NotIn(std::vector<PredicateLiteral> values) const {
+    return Leaf(ffi::FfiPredicateLeafFunction::NotIn, std::move(values));
 }
 
 // NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
@@ -890,6 +1046,16 @@ void LookupResult::Destroy() noexcept {
     }
 }
 
+Result LookupResult::Adopt(ffi::LookupResultInner* inner) {
+    auto owned = rust::Box<ffi::LookupResultInner>::from_raw(inner);
+    if (owned->lv_has_error()) {
+        return utils::make_error(owned->lv_error_code(), std::string(owned->lv_error_message()));
+    }
+    Destroy();
+    inner_ = owned.into_raw();
+    return utils::make_ok();
+}
+
 LookupResult::LookupResult(LookupResult&& other) noexcept
     : inner_(other.inner_), column_map_(std::move(other.column_map_)) {
     other.inner_ = nullptr;
@@ -1082,6 +1248,28 @@ TableInfo Table::GetTableInfo() const {
     return utils::from_ffi_table_info(ffi_info);
 }
 
+Result Table::GetArrowSchema(std::shared_ptr<arrow::Schema>& out) const {
+    if (!Available()) {
+        return utils::make_client_error("Table not available");
+    }
+    // Ours, so no allocation crosses the boundary: Rust fills it in and
+    // ImportSchema releases it.
+    struct ArrowSchema c_schema {};
+    auto result = utils::from_ffi_result(
+        table_->get_arrow_schema(reinterpret_cast<size_t>(&c_schema)));
+    if (!result.Ok()) {
+        return result;
+    }
+
+    auto imported = arrow::ImportSchema(&c_schema);
+    if (!imported.ok()) {
+        return utils::make_client_error("Failed to import Arrow schema: " +
+                                        imported.status().ToString());
+    }
+    out = *imported;
+    return Result{};
+}
+
 TablePath Table::GetTablePath() const {
     if (!Available()) {
         return TablePath{};
@@ -1104,14 +1292,23 @@ bool Table::HasPrimaryKey() const {
 TableAppend::TableAppend(ffi::Table* table) noexcept : table_(table) {}
 
 Result TableAppend::CreateWriter(AppendWriter& out) {
+    return CreateWriter(out, WriteCallbackOptions{});
+}
+
+Result TableAppend::CreateWriter(AppendWriter& out, const WriteCallbackOptions& options) {
+    if (options.max_pending_operations == 0) {
+        return utils::make_client_error("max_pending_operations must be greater than zero");
+    }
     if (table_ == nullptr) {
         return utils::make_client_error("Table not available");
     }
 
+    auto capacity = std::make_shared<ffi::WriteCallbackCapacity>(
+        options.max_pending_operations, table_->writer_buffer_wait_timeout_ms());
     auto ffi_result = table_->new_append_writer();
     auto result = utils::from_ffi_result(ffi_result.result);
     if (result.Ok()) {
-        out = AppendWriter(utils::ptr_from_ffi<ffi::AppendWriter>(ffi_result));
+        out = AppendWriter(utils::ptr_from_ffi<ffi::AppendWriter>(ffi_result), std::move(capacity));
     }
     return result;
 }
@@ -1162,11 +1359,20 @@ std::vector<size_t> TableUpsert::ResolveNameProjection() const {
 }
 
 Result TableUpsert::CreateWriter(UpsertWriter& out) {
+    return CreateWriter(out, WriteCallbackOptions{});
+}
+
+Result TableUpsert::CreateWriter(UpsertWriter& out, const WriteCallbackOptions& options) {
+    if (options.max_pending_operations == 0) {
+        return utils::make_client_error("max_pending_operations must be greater than zero");
+    }
     if (table_ == nullptr) {
         return utils::make_client_error("Table not available");
     }
 
     try {
+        auto capacity = std::make_shared<ffi::WriteCallbackCapacity>(
+            options.max_pending_operations, table_->writer_buffer_wait_timeout_ms());
         auto resolved_indices = !column_names_.empty() ? ResolveNameProjection() : column_indices_;
 
         rust::Vec<size_t> rust_indices;
@@ -1176,7 +1382,8 @@ Result TableUpsert::CreateWriter(UpsertWriter& out) {
         auto ffi_result = table_->create_upsert_writer(std::move(rust_indices));
         auto result = utils::from_ffi_result(ffi_result.result);
         if (result.Ok()) {
-            out = UpsertWriter(utils::ptr_from_ffi<ffi::UpsertWriter>(ffi_result));
+            out = UpsertWriter(utils::ptr_from_ffi<ffi::UpsertWriter>(ffi_result),
+                               std::move(capacity));
         }
         return result;
     } catch (const std::exception& e) {
@@ -1222,6 +1429,11 @@ TableScan& TableScan::ProjectByName(std::vector<std::string> column_names) {
     return *this;
 }
 
+TableScan& TableScan::Filter(Predicate predicate) {
+    predicate_ = std::move(predicate);
+    return *this;
+}
+
 std::vector<size_t> TableScan::ResolveNameProjection() const {
     auto ffi_info = table_->get_table_info_from_table();
     const auto& columns = ffi_info.schema.columns;
@@ -1245,6 +1457,16 @@ std::vector<size_t> TableScan::ResolveNameProjection() const {
 
 Result TableScan::CreateLogScanner(LogScanner& out) { return DoCreateScanner(out, false); }
 
+Result TableScan::CreateRecordBatchLogScanner(RecordBatchLogScanner& out) {
+    LogScanner scanner;
+    auto result = DoCreateScanner(scanner, true);
+    if (result.Ok()) {
+        out = RecordBatchLogScanner(scanner.scanner_);
+        scanner.scanner_ = nullptr;
+    }
+    return result;
+}
+
 Result TableScan::CreateRecordBatchLogScanner(LogScanner& out) {
     return DoCreateScanner(out, true);
 }
@@ -1264,7 +1486,43 @@ Result TableScan::DoCreateScanner(LogScanner& out, bool is_record_batch) {
         for (size_t idx : resolved_indices) {
             rust_indices.push_back(idx);
         }
-        auto ffi_result = table_->create_scanner(std::move(rust_indices), is_record_batch);
+
+        rust::Vec<ffi::FfiPredicateNode> rust_predicate;
+        if (predicate_.has_value()) {
+            std::function<void(const std::shared_ptr<const Predicate::Node>&)> append_node;
+            append_node = [&](const std::shared_ptr<const Predicate::Node>& node) {
+                ffi::FfiPredicateNode ffi_node;
+                ffi_node.node_type = node->node_type;
+                ffi_node.leaf_function = node->leaf_function;
+                ffi_node.compound_function = node->compound_function;
+                ffi_node.field = rust::String(node->field);
+                ffi_node.child_count = static_cast<uint32_t>(node->children.size());
+
+                for (const auto& literal : node->literals) {
+                    ffi::FfiPredicateLiteral ffi_literal;
+                    ffi_literal.literal_type = literal.literal_type_;
+                    ffi_literal.boolean_value = literal.boolean_value_;
+                    ffi_literal.integer_value = literal.integer_value_;
+                    ffi_literal.floating_value = literal.floating_value_;
+                    ffi_literal.string_value = rust::String(literal.string_value_);
+                    for (uint8_t value : literal.bytes_value_) {
+                        ffi_literal.bytes_value.push_back(value);
+                    }
+                    ffi_literal.timestamp_millis = literal.timestamp_value_.epoch_millis;
+                    ffi_literal.timestamp_nanos = literal.timestamp_value_.nano_of_millisecond;
+                    ffi_node.literals.push_back(std::move(ffi_literal));
+                }
+
+                rust_predicate.push_back(std::move(ffi_node));
+                for (const auto& child : node->children) {
+                    append_node(child);
+                }
+            };
+            append_node(predicate_->root_);
+        }
+
+        auto ffi_result = table_->create_scanner(std::move(rust_indices), std::move(rust_predicate),
+                                                 is_record_batch);
         auto result = utils::from_ffi_result(ffi_result.result);
         if (result.Ok()) {
             out.scanner_ = utils::ptr_from_ffi<ffi::LogScanner>(ffi_result);
@@ -1276,6 +1534,28 @@ Result TableScan::DoCreateScanner(LogScanner& out, bool is_record_batch) {
     }
 }
 
+Result TableScan::CreateRecordBatchLogReader(const std::vector<RecordBatchLogReadRange>& ranges,
+                                             RecordBatchLogReader& out) {
+    RecordBatchLogScanner scanner;
+    auto result = CreateRecordBatchLogScanner(scanner);
+    if (!result.Ok()) {
+        return result;
+    }
+    return std::move(scanner).CreateRecordBatchLogReaderFromRanges(ranges, out);
+}
+
+Result TableScan::CreateRecordBatchLogReader(Admin& admin, const std::vector<TableBucket>& buckets,
+                                             const TimestampRange& range,
+                                             RecordBatchLogReader& out) {
+    RecordBatchLogScanner scanner;
+    auto result = CreateRecordBatchLogScanner(scanner);
+    if (!result.Ok()) {
+        return result;
+    }
+    return std::move(scanner).CreateRecordBatchLogReaderBetweenTimestamps(admin, buckets, range,
+                                                                          out);
+}
+
 TableScan& TableScan::Limit(int32_t row_number) {
     limit_ = row_number;
     return *this;
@@ -1284,6 +1564,9 @@ TableScan& TableScan::Limit(int32_t row_number) {
 Result TableScan::CreateBucketBatchScanner(const TableBucket& bucket, BatchScanner& out) {
     if (table_ == nullptr) {
         return utils::make_client_error("Table not available");
+    }
+    if (predicate_.has_value()) {
+        return utils::make_client_error("CreateBucketBatchScanner doesn't support filter pushdown");
     }
     if (!limit_.has_value()) {
         return utils::make_client_error(
@@ -1352,13 +1635,19 @@ Result WriteResult::Wait() {
     return utils::from_ffi_result(ffi_result);
 }
 
+Result WriteResult::Notify(std::unique_ptr<ffi::WriteCallback> callback) {
+    return utils::from_ffi_result(inner_->notify(std::move(callback)));
+}
+
 // ============================================================================
 // AppendWriter
 // ============================================================================
 
 AppendWriter::AppendWriter() noexcept = default;
 
-AppendWriter::AppendWriter(ffi::AppendWriter* writer) noexcept : writer_(writer) {}
+AppendWriter::AppendWriter(ffi::AppendWriter* writer,
+                           std::shared_ptr<ffi::WriteCallbackCapacity> callback_capacity) noexcept
+    : writer_(writer), callback_capacity_(std::move(callback_capacity)) {}
 
 AppendWriter::~AppendWriter() noexcept { Destroy(); }
 
@@ -1369,7 +1658,8 @@ void AppendWriter::Destroy() noexcept {
     }
 }
 
-AppendWriter::AppendWriter(AppendWriter&& other) noexcept : writer_(other.writer_) {
+AppendWriter::AppendWriter(AppendWriter&& other) noexcept
+    : writer_(other.writer_), callback_capacity_(std::move(other.callback_capacity_)) {
     other.writer_ = nullptr;
 }
 
@@ -1377,6 +1667,7 @@ AppendWriter& AppendWriter::operator=(AppendWriter&& other) noexcept {
     if (this != &other) {
         Destroy();
         writer_ = other.writer_;
+        callback_capacity_ = std::move(other.callback_capacity_);
         other.writer_ = nullptr;
     }
     return *this;
@@ -1390,6 +1681,11 @@ Result AppendWriter::Append(const GenericRow& row) {
 }
 
 Result AppendWriter::Append(const GenericRow& row, WriteResult& out) {
+    return AppendWithBudget(row, out, -1);
+}
+
+Result AppendWriter::AppendWithBudget(const GenericRow& row, WriteResult& out,
+                                      int64_t submit_budget_ms) {
     if (!Available()) {
         return utils::make_client_error("AppendWriter not available");
     }
@@ -1397,10 +1693,35 @@ Result AppendWriter::Append(const GenericRow& row, WriteResult& out) {
         return utils::make_client_error("GenericRow not available");
     }
 
-    auto ffi_result = writer_->append(*row.inner_);
+    auto ffi_result = writer_->append(*row.inner_, submit_budget_ms);
     auto result = utils::from_ffi_result(ffi_result.result);
     if (result.Ok()) {
         out = WriteResult(utils::ptr_from_ffi<ffi::WriteResult>(ffi_result));
+    }
+    return result;
+}
+
+Result AppendWriter::Append(const GenericRow& row, WriteCallback callback) {
+    if (!callback) {
+        return utils::make_client_error("Write callback must not be empty");
+    }
+    auto executor_status = utils::from_ffi_result(ffi::ensure_callback_executor());
+    if (!executor_status.Ok()) {
+        return executor_status;
+    }
+    // Allocate before submission so an allocation failure cannot lose an
+    // already accepted write's completion notification.
+    auto completion = std::make_unique<ffi::WriteCallback>(std::move(callback));
+    // Share the capacity and buffer wait budget from client.writer.buffer.wait-timeout.
+    const auto submit_start = std::chrono::steady_clock::now();
+    auto reserved = completion->Reserve(callback_capacity_);
+    if (!reserved.Ok()) {
+        return reserved;
+    }
+    WriteResult pending;
+    auto result = AppendWithBudget(row, pending, callback_capacity_->RemainingBudgetMs(submit_start));
+    if (result.Ok()) {
+        return pending.Notify(std::move(completion));
     }
     return result;
 }
@@ -1412,6 +1733,11 @@ Result AppendWriter::AppendArrowBatch(const std::shared_ptr<arrow::RecordBatch>&
 
 Result AppendWriter::AppendArrowBatch(const std::shared_ptr<arrow::RecordBatch>& batch,
                                       WriteResult& out) {
+    return AppendArrowBatchWithBudget(batch, out, -1);
+}
+
+Result AppendWriter::AppendArrowBatchWithBudget(const std::shared_ptr<arrow::RecordBatch>& batch,
+                                                WriteResult& out, int64_t submit_budget_ms) {
     if (!Available()) {
         return utils::make_client_error("AppendWriter not available");
     }
@@ -1434,7 +1760,8 @@ Result AppendWriter::AppendArrowBatch(const std::shared_ptr<arrow::RecordBatch>&
     // Rust takes ownership of both pointers immediately via Box::from_raw(),
     // so after this call C++ must NOT free them.
     auto ffi_result = writer_->append_arrow_batch(reinterpret_cast<size_t>(array_heap),
-                                                  reinterpret_cast<size_t>(schema_heap));
+                                                  reinterpret_cast<size_t>(schema_heap),
+                                                  submit_budget_ms);
     auto result = utils::from_ffi_result(ffi_result.result);
     if (result.Ok()) {
         out.Destroy();
@@ -1443,13 +1770,44 @@ Result AppendWriter::AppendArrowBatch(const std::shared_ptr<arrow::RecordBatch>&
     return result;
 }
 
+Result AppendWriter::AppendArrowBatch(const std::shared_ptr<arrow::RecordBatch>& batch,
+                                      WriteCallback callback) {
+    if (!callback) {
+        return utils::make_client_error("Write callback must not be empty");
+    }
+    auto executor_status = utils::from_ffi_result(ffi::ensure_callback_executor());
+    if (!executor_status.Ok()) {
+        return executor_status;
+    }
+    auto completion = std::make_unique<ffi::WriteCallback>(std::move(callback));
+    const auto submit_start = std::chrono::steady_clock::now();
+    auto reserved = completion->Reserve(callback_capacity_);
+    if (!reserved.Ok()) {
+        return reserved;
+    }
+    WriteResult pending;
+    auto result =
+        AppendArrowBatchWithBudget(batch, pending, callback_capacity_->RemainingBudgetMs(submit_start));
+    if (result.Ok()) {
+        return pending.Notify(std::move(completion));
+    }
+    return result;
+}
+
 Result AppendWriter::Flush() {
+    if (ffi::WriteCallbackCapacity::InCallback()) {
+        return utils::make_client_error("Flush cannot be called from a write callback");
+    }
     if (!Available()) {
         return utils::make_client_error("AppendWriter not available");
     }
 
     auto ffi_result = writer_->flush();
-    return utils::from_ffi_result(ffi_result);
+    auto result = utils::from_ffi_result(ffi_result);
+    if (!result.Ok()) return result;
+    // Writes are flushed; block until their callbacks drain so Flush is a real barrier.
+    callback_capacity_->AwaitAll();
+    return {};
 }
 
 // ============================================================================
@@ -1458,7 +1816,9 @@ Result AppendWriter::Flush() {
 
 UpsertWriter::UpsertWriter() noexcept = default;
 
-UpsertWriter::UpsertWriter(ffi::UpsertWriter* writer) noexcept : writer_(writer) {}
+UpsertWriter::UpsertWriter(ffi::UpsertWriter* writer,
+                           std::shared_ptr<ffi::WriteCallbackCapacity> callback_capacity) noexcept
+    : writer_(writer), callback_capacity_(std::move(callback_capacity)) {}
 
 UpsertWriter::~UpsertWriter() noexcept { Destroy(); }
 
@@ -1469,7 +1829,8 @@ void UpsertWriter::Destroy() noexcept {
     }
 }
 
-UpsertWriter::UpsertWriter(UpsertWriter&& other) noexcept : writer_(other.writer_) {
+UpsertWriter::UpsertWriter(UpsertWriter&& other) noexcept
+    : writer_(other.writer_), callback_capacity_(std::move(other.callback_capacity_)) {
     other.writer_ = nullptr;
 }
 
@@ -1477,6 +1838,7 @@ UpsertWriter& UpsertWriter::operator=(UpsertWriter&& other) noexcept {
     if (this != &other) {
         Destroy();
         writer_ = other.writer_;
+        callback_capacity_ = std::move(other.callback_capacity_);
         other.writer_ = nullptr;
     }
     return *this;
@@ -1490,6 +1852,11 @@ Result UpsertWriter::Upsert(const GenericRow& row) {
 }
 
 Result UpsertWriter::Upsert(const GenericRow& row, WriteResult& out) {
+    return UpsertWithBudget(row, out, -1);
+}
+
+Result UpsertWriter::UpsertWithBudget(const GenericRow& row, WriteResult& out,
+                                     int64_t submit_budget_ms) {
     if (!Available()) {
         return utils::make_client_error("UpsertWriter not available");
     }
@@ -1497,10 +1864,32 @@ Result UpsertWriter::Upsert(const GenericRow& row, WriteResult& out) {
         return utils::make_client_error("GenericRow not available");
     }
 
-    auto ffi_result = writer_->upsert(*row.inner_);
+    auto ffi_result = writer_->upsert(*row.inner_, submit_budget_ms);
     auto result = utils::from_ffi_result(ffi_result.result);
     if (result.Ok()) {
         out = WriteResult(utils::ptr_from_ffi<ffi::WriteResult>(ffi_result));
+    }
+    return result;
+}
+
+Result UpsertWriter::Upsert(const GenericRow& row, WriteCallback callback) {
+    if (!callback) {
+        return utils::make_client_error("Write callback must not be empty");
+    }
+    auto executor_status = utils::from_ffi_result(ffi::ensure_callback_executor());
+    if (!executor_status.Ok()) {
+        return executor_status;
+    }
+    auto completion = std::make_unique<ffi::WriteCallback>(std::move(callback));
+    const auto submit_start = std::chrono::steady_clock::now();
+    auto reserved = completion->Reserve(callback_capacity_);
+    if (!reserved.Ok()) {
+        return reserved;
+    }
+    WriteResult pending;
+    auto result = UpsertWithBudget(row, pending, callback_capacity_->RemainingBudgetMs(submit_start));
+    if (result.Ok()) {
+        return pending.Notify(std::move(completion));
     }
     return result;
 }
@@ -1511,6 +1900,11 @@ Result UpsertWriter::Delete(const GenericRow& row) {
 }
 
 Result UpsertWriter::Delete(const GenericRow& row, WriteResult& out) {
+    return DeleteWithBudget(row, out, -1);
+}
+
+Result UpsertWriter::DeleteWithBudget(const GenericRow& row, WriteResult& out,
+                                     int64_t submit_budget_ms) {
     if (!Available()) {
         return utils::make_client_error("UpsertWriter not available");
     }
@@ -1518,7 +1912,7 @@ Result UpsertWriter::Delete(const GenericRow& row, WriteResult& out) {
         return utils::make_client_error("GenericRow not available");
     }
 
-    auto ffi_result = writer_->delete_row(*row.inner_);
+    auto ffi_result = writer_->delete_row(*row.inner_, submit_budget_ms);
     auto result = utils::from_ffi_result(ffi_result.result);
     if (result.Ok()) {
         out = WriteResult(utils::ptr_from_ffi<ffi::WriteResult>(ffi_result));
@@ -1526,13 +1920,42 @@ Result UpsertWriter::Delete(const GenericRow& row, WriteResult& out) {
     return result;
 }
 
+Result UpsertWriter::Delete(const GenericRow& row, WriteCallback callback) {
+    if (!callback) {
+        return utils::make_client_error("Write callback must not be empty");
+    }
+    auto executor_status = utils::from_ffi_result(ffi::ensure_callback_executor());
+    if (!executor_status.Ok()) {
+        return executor_status;
+    }
+    auto completion = std::make_unique<ffi::WriteCallback>(std::move(callback));
+    const auto submit_start = std::chrono::steady_clock::now();
+    auto reserved = completion->Reserve(callback_capacity_);
+    if (!reserved.Ok()) {
+        return reserved;
+    }
+    WriteResult pending;
+    auto result = DeleteWithBudget(row, pending, callback_capacity_->RemainingBudgetMs(submit_start));
+    if (result.Ok()) {
+        return pending.Notify(std::move(completion));
+    }
+    return result;
+}
+
 Result UpsertWriter::Flush() {
+    if (ffi::WriteCallbackCapacity::InCallback()) {
+        return utils::make_client_error("Flush cannot be called from a write callback");
+    }
     if (!Available()) {
         return utils::make_client_error("UpsertWriter not available");
     }
 
     auto ffi_result = writer_->upsert_flush();
-    return utils::from_ffi_result(ffi_result);
+    auto result = utils::from_ffi_result(ffi_result);
+    if (!result.Ok()) return result;
+    // Writes are flushed; block until their callbacks drain so Flush is a real barrier.
+    callback_capacity_->AwaitAll();
+    return {};
 }
 
 // ============================================================================
@@ -1567,23 +1990,79 @@ Lookuper& Lookuper::operator=(Lookuper&& other) noexcept {
 
 bool Lookuper::Available() const { return lookuper_ != nullptr; }
 
-Result Lookuper::Lookup(const GenericRow& pk_row, LookupResult& out) {
+Result Lookuper::Lookup(const GenericRow& pk_row, LookupResult& out) const {
     if (!Available()) {
         return utils::make_client_error("Lookuper not available");
     }
     if (!pk_row.Available()) {
         return utils::make_client_error("GenericRow not available");
     }
+    return out.Adopt(lookuper_->lookup(*pk_row.inner_).into_raw());
+}
 
-    auto result_box = lookuper_->lookup(*pk_row.inner_);
-    if (result_box->lv_has_error()) {
-        return utils::make_error(result_box->lv_error_code(),
-                                 std::string(result_box->lv_error_message()));
+Result Lookuper::Lookup(const GenericRow& pk_row, PendingLookup& out) const {
+    if (!Available()) {
+        return utils::make_client_error("Lookuper not available");
     }
+    if (!pk_row.Available()) {
+        return utils::make_client_error("GenericRow not available");
+    }
+    auto ffi_result = lookuper_->lookup_async(*pk_row.inner_);
+    auto result = utils::from_ffi_result(ffi_result.result);
+    if (result.Ok()) {
+        out = PendingLookup(utils::ptr_from_ffi<ffi::PendingLookup>(ffi_result));
+    }
+    return result;
+}
 
-    out.Destroy();
-    out.inner_ = result_box.into_raw();
-    return utils::make_ok();
+// ============================================================================
+// PendingLookup
+// ============================================================================
+
+PendingLookup::PendingLookup() noexcept = default;
+
+PendingLookup::PendingLookup(ffi::PendingLookup* pending) noexcept : pending_(pending) {}
+
+PendingLookup::~PendingLookup() noexcept { Destroy(); }
+
+void PendingLookup::Destroy() noexcept {
+    if (pending_) {
+        ffi::delete_pending_lookup(pending_);
+        pending_ = nullptr;
+    }
+}
+
+PendingLookup::PendingLookup(PendingLookup&& other) noexcept : pending_(other.pending_) {
+    other.pending_ = nullptr;
+}
+
+PendingLookup& PendingLookup::operator=(PendingLookup&& other) noexcept {
+    if (this != &other) {
+        Destroy();
+        pending_ = other.pending_;
+        other.pending_ = nullptr;
+    }
+    return *this;
+}
+
+bool PendingLookup::Available() const { return pending_ != nullptr; }
+
+Result PendingLookup::Wait(LookupResult& out) { return DoWait(out, -1); }
+
+Result PendingLookup::Wait(LookupResult& out, int64_t timeout_ms) {
+    return DoWait(out, std::max<int64_t>(timeout_ms, 0));
+}
+
+Result PendingLookup::DoWait(LookupResult& out, int64_t timeout_ms) {
+    if (!Available()) {
+        return utils::make_client_error("PendingLookup not available");
+    }
+    auto result = out.Adopt(pending_->lookup_wait(timeout_ms).into_raw());
+    // A timeout leaves the lookup running; any other outcome ends it.
+    if (!pending_->lookup_is_pending()) {
+        Destroy();
+    }
+    return result;
 }
 
 // ============================================================================
@@ -1618,32 +2097,101 @@ PrefixLookuper& PrefixLookuper::operator=(PrefixLookuper&& other) noexcept {
 
 bool PrefixLookuper::Available() const { return lookuper_ != nullptr; }
 
-Result PrefixLookuper::PrefixLookup(const GenericRow& prefix_row, PrefixLookupResult& out) {
+Result PrefixLookuper::PrefixLookup(const GenericRow& prefix_row, PrefixLookupResult& out) const {
     if (!Available()) {
         return utils::make_client_error("PrefixLookuper not available");
     }
     if (!prefix_row.Available()) {
         return utils::make_client_error("GenericRow not available");
     }
+    return out.Adopt(lookuper_->prefix_lookup(*prefix_row.inner_).into_raw());
+}
 
-    auto result_box = lookuper_->prefix_lookup(*prefix_row.inner_);
-    if (result_box->plv_has_error()) {
-        return utils::make_error(result_box->plv_error_code(),
-                                 std::string(result_box->plv_error_message()));
+Result PrefixLookuper::PrefixLookup(const GenericRow& prefix_row, PendingPrefixLookup& out) const {
+    if (!Available()) {
+        return utils::make_client_error("PrefixLookuper not available");
+    }
+    if (!prefix_row.Available()) {
+        return utils::make_client_error("GenericRow not available");
+    }
+    auto ffi_result = lookuper_->prefix_lookup_async(*prefix_row.inner_);
+    auto result = utils::from_ffi_result(ffi_result.result);
+    if (result.Ok()) {
+        out = PendingPrefixLookup(utils::ptr_from_ffi<ffi::PendingPrefixLookup>(ffi_result));
+    }
+    return result;
+}
+
+Result PrefixLookupResult::Adopt(ffi::PrefixLookupResultInner* inner) {
+    auto owned = rust::Box<ffi::PrefixLookupResultInner>::from_raw(inner);
+    if (owned->plv_has_error()) {
+        return utils::make_error(owned->plv_error_code(), std::string(owned->plv_error_message()));
     }
 
     // Take ownership of the FFI box first (~PrefixData calls from_raw), so the
     // column-map loop below can't leak it if a string/map allocation throws.
     // The map is built eagerly and shared by all PrefixRowViews.
-    auto data = std::make_shared<detail::PrefixData>(result_box.into_raw(), detail::ColumnMap{});
+    auto data = std::make_shared<detail::PrefixData>(owned.into_raw(), detail::ColumnMap{});
     auto col_count = data->raw->plv_field_count();
     for (size_t i = 0; i < col_count; ++i) {
         auto name = data->raw->plv_column_name(i);
         data->columns[std::string(name.data(), name.size())] = {
             i, static_cast<TypeId>(data->raw->plv_column_type(i))};
     }
-    out.data_ = std::move(data);
+    data_ = std::move(data);
     return utils::make_ok();
+}
+
+// ============================================================================
+// PendingPrefixLookup
+// ============================================================================
+
+PendingPrefixLookup::PendingPrefixLookup() noexcept = default;
+
+PendingPrefixLookup::PendingPrefixLookup(ffi::PendingPrefixLookup* pending) noexcept
+    : pending_(pending) {}
+
+PendingPrefixLookup::~PendingPrefixLookup() noexcept { Destroy(); }
+
+void PendingPrefixLookup::Destroy() noexcept {
+    if (pending_) {
+        ffi::delete_pending_prefix_lookup(pending_);
+        pending_ = nullptr;
+    }
+}
+
+PendingPrefixLookup::PendingPrefixLookup(PendingPrefixLookup&& other) noexcept
+    : pending_(other.pending_) {
+    other.pending_ = nullptr;
+}
+
+PendingPrefixLookup& PendingPrefixLookup::operator=(PendingPrefixLookup&& other) noexcept {
+    if (this != &other) {
+        Destroy();
+        pending_ = other.pending_;
+        other.pending_ = nullptr;
+    }
+    return *this;
+}
+
+bool PendingPrefixLookup::Available() const { return pending_ != nullptr; }
+
+Result PendingPrefixLookup::Wait(PrefixLookupResult& out) { return DoWait(out, -1); }
+
+Result PendingPrefixLookup::Wait(PrefixLookupResult& out, int64_t timeout_ms) {
+    return DoWait(out, std::max<int64_t>(timeout_ms, 0));
+}
+
+Result PendingPrefixLookup::DoWait(PrefixLookupResult& out, int64_t timeout_ms) {
+    if (!Available()) {
+        return utils::make_client_error("PendingPrefixLookup not available");
+    }
+    auto result = out.Adopt(pending_->prefix_lookup_wait(timeout_ms).into_raw());
+    // A timeout leaves the lookup running; any other outcome ends it.
+    if (!pending_->prefix_lookup_is_pending()) {
+        Destroy();
+    }
+    return result;
 }
 
 // ============================================================================
@@ -1777,12 +2325,15 @@ Result LogScanner::Poll(int64_t timeout_ms, ScanRecords& out) {
 
 ArrowRecordBatch::ArrowRecordBatch(std::shared_ptr<arrow::RecordBatch> batch, int64_t table_id,
                                    int64_t partition_id, int32_t bucket_id,
-                                   int64_t base_offset) noexcept
+                                   int64_t base_offset, int64_t commit_timestamp,
+                                   int32_t schema_id) noexcept
     : batch_(std::move(batch)),
       table_id_(table_id),
       partition_id_(partition_id),
       bucket_id_(bucket_id),
-      base_offset_(base_offset) {}
+      base_offset_(base_offset),
+      commit_timestamp_(commit_timestamp),
+      schema_id_(schema_id) {}
 
 bool ArrowRecordBatch::Available() const { return batch_ != nullptr; }
 
@@ -1816,6 +2367,16 @@ int64_t ArrowRecordBatch::GetLastOffset() const {
     return this->base_offset_ + this->NumRows() - 1;
 }
 
+int64_t ArrowRecordBatch::GetCommitTimestamp() const {
+    if (!Available()) return NO_COMMIT_TIMESTAMP;
+    return this->commit_timestamp_;
+}
+
+int32_t ArrowRecordBatch::GetSchemaId() const {
+    if (!Available()) return NO_SCHEMA_ID;
+    return this->schema_id_;
+}
+
 namespace detail {
 // Imports FFI Arrow batches (C Data Interface) into C++ ArrowRecordBatch
 // wrappers. A friend of ArrowRecordBatch so it can build the wrapper's private
@@ -1823,6 +2384,10 @@ namespace detail {
 struct ArrowBatchImporter {
     static Result Import(ffi::FfiArrowRecordBatches& src, ArrowRecordBatches& out) {
         out.batches.clear();
+        return ImportAppend(src, out);
+    }
+
+    static Result ImportAppend(ffi::FfiArrowRecordBatches& src, ArrowRecordBatches& out) {
         for (const auto& ffi_batch : src.batches) {
             auto* c_array = reinterpret_cast<struct ArrowArray*>(ffi_batch.array_ptr);
             auto* c_schema = reinterpret_cast<struct ArrowSchema*>(ffi_batch.schema_ptr);
@@ -1837,8 +2402,23 @@ struct ArrowBatchImporter {
             }
             out.batches.push_back(std::unique_ptr<ArrowRecordBatch>(new ArrowRecordBatch(
                 import_result.ValueOrDie(), ffi_batch.table_id, ffi_batch.partition_id,
-                ffi_batch.bucket_id, ffi_batch.base_offset)));
+                ffi_batch.bucket_id, ffi_batch.base_offset, ffi_batch.commit_timestamp,
+                ffi_batch.schema_id)));
         }
+        return utils::make_ok();
+    }
+
+    static Result ImportOne(ffi::FfiArrowRecordBatches& src,
+                            std::unique_ptr<ArrowRecordBatch>& out) {
+        ArrowRecordBatches batches;
+        auto result = Import(src, batches);
+        if (!result.Ok()) {
+            return result;
+        }
+        if (batches.Size() > 1) {
+            return utils::make_client_error("Bounded reader returned more than one record batch");
+        }
+        out = batches.Empty() ? nullptr : std::move(batches.batches.front());
         return utils::make_ok();
     }
 };
@@ -1855,6 +2435,306 @@ Result LogScanner::PollRecordBatch(int64_t timeout_ms, ArrowRecordBatches& out) 
         return result;
     }
     return detail::ArrowBatchImporter::Import(ffi_result.arrow_batches, out);
+}
+
+// ============================================================================
+// RecordBatchLogScanner
+// ============================================================================
+
+RecordBatchLogScanner::RecordBatchLogScanner() noexcept = default;
+
+RecordBatchLogScanner::RecordBatchLogScanner(ffi::LogScanner* scanner) noexcept
+    : scanner_(scanner) {}
+
+RecordBatchLogScanner::~RecordBatchLogScanner() noexcept = default;
+
+RecordBatchLogScanner::RecordBatchLogScanner(RecordBatchLogScanner&& other) noexcept = default;
+
+RecordBatchLogScanner& RecordBatchLogScanner::operator=(RecordBatchLogScanner&& other) noexcept =
+    default;
+
+bool RecordBatchLogScanner::Available() const { return scanner_.Available(); }
+
+Result RecordBatchLogScanner::Subscribe(int32_t bucket_id, int64_t start_offset) {
+    return scanner_.Subscribe(bucket_id, start_offset);
+}
+
+Result RecordBatchLogScanner::Subscribe(const std::vector<BucketSubscription>& bucket_offsets) {
+    return scanner_.Subscribe(bucket_offsets);
+}
+
+Result RecordBatchLogScanner::SubscribePartitionBuckets(int64_t partition_id, int32_t bucket_id,
+                                                        int64_t start_offset) {
+    return scanner_.SubscribePartitionBuckets(partition_id, bucket_id, start_offset);
+}
+
+Result RecordBatchLogScanner::SubscribePartitionBuckets(
+    const std::vector<PartitionBucketSubscription>& subscriptions) {
+    return scanner_.SubscribePartitionBuckets(subscriptions);
+}
+
+Result RecordBatchLogScanner::Unsubscribe(int32_t bucket_id) {
+    return scanner_.Unsubscribe(bucket_id);
+}
+
+Result RecordBatchLogScanner::UnsubscribePartition(int64_t partition_id, int32_t bucket_id) {
+    return scanner_.UnsubscribePartition(partition_id, bucket_id);
+}
+
+Result RecordBatchLogScanner::Poll(int64_t timeout_ms, ArrowRecordBatches& out) {
+    return scanner_.PollRecordBatch(timeout_ms, out);
+}
+
+Result RecordBatchLogScanner::CreateRecordBatchLogReaderUntilLatest(const Admin& admin,
+                                                                    RecordBatchLogReader& out) && {
+    auto result = scanner_.CreateRecordBatchLogReaderUntilLatest(admin, out);
+    if (result.Ok()) {
+        scanner_ = LogScanner();
+    }
+    return result;
+}
+
+Result RecordBatchLogScanner::CreateRecordBatchLogReaderUntilOffsets(
+    const std::vector<ReaderStopOffset>& offsets, RecordBatchLogReader& out) && {
+    auto result = scanner_.CreateRecordBatchLogReaderUntilOffsets(offsets, out);
+    if (result.Ok()) {
+        scanner_ = LogScanner();
+    }
+    return result;
+}
+
+Result RecordBatchLogScanner::CreateRecordBatchLogReaderFromRanges(
+    const std::vector<RecordBatchLogReadRange>& ranges, RecordBatchLogReader& out) && {
+    auto result = scanner_.CreateRecordBatchLogReaderFromRanges(ranges, out);
+    if (result.Ok()) {
+        scanner_ = LogScanner();
+    }
+    return result;
+}
+
+Result RecordBatchLogScanner::CreateRecordBatchLogReaderBetweenTimestamps(
+    const Admin& admin, const std::vector<TableBucket>& buckets, const TimestampRange& range,
+    RecordBatchLogReader& out) && {
+    auto result =
+        scanner_.CreateRecordBatchLogReaderBetweenTimestamps(admin, buckets, range, out);
+    if (result.Ok()) {
+        scanner_ = LogScanner();
+    }
+    return result;
+}
+
+// ============================================================================
+// RecordBatchLogReader
+// ============================================================================
+
+Result LogScanner::CreateRecordBatchLogReaderUntilLatest(const Admin& admin,
+                                                         RecordBatchLogReader& out) {
+    if (!Available()) {
+        return utils::make_client_error("LogScanner not available");
+    }
+    if (!admin.Available()) {
+        return utils::make_client_error("Admin not available");
+    }
+
+    auto ffi_result = scanner_->create_record_batch_log_reader_until_latest(*admin.admin_);
+    auto result = utils::from_ffi_result(ffi_result.result);
+    if (result.Ok()) {
+        out.Destroy();
+        out.reader_ = utils::ptr_from_ffi<ffi::RecordBatchLogReader>(ffi_result);
+    }
+    return result;
+}
+
+Result LogScanner::CreateRecordBatchLogReaderUntilOffsets(
+    const std::vector<ReaderStopOffset>& offsets, RecordBatchLogReader& out) {
+    if (!Available()) {
+        return utils::make_client_error("LogScanner not available");
+    }
+
+    rust::Vec<ffi::FfiReaderStopOffset> ffi_offsets;
+    for (const auto& offset : offsets) {
+        ffi::FfiReaderStopOffset ffi_offset;
+        ffi_offset.table_id = offset.bucket.table_id;
+        ffi_offset.has_partition_id = offset.bucket.partition_id.has_value();
+        ffi_offset.partition_id = offset.bucket.partition_id.value_or(0);
+        ffi_offset.bucket_id = offset.bucket.bucket_id;
+        ffi_offset.offset = offset.offset;
+        ffi_offsets.push_back(ffi_offset);
+    }
+
+    auto ffi_result =
+        scanner_->create_record_batch_log_reader_until_offsets(std::move(ffi_offsets));
+    auto result = utils::from_ffi_result(ffi_result.result);
+    if (result.Ok()) {
+        out.Destroy();
+        out.reader_ = utils::ptr_from_ffi<ffi::RecordBatchLogReader>(ffi_result);
+    }
+    return result;
+}
+
+Result LogScanner::CreateRecordBatchLogReaderFromRanges(
+    const std::vector<RecordBatchLogReadRange>& ranges, RecordBatchLogReader& out) {
+    if (!Available()) {
+        return utils::make_client_error("LogScanner not available");
+    }
+
+    rust::Vec<ffi::FfiBoundedLogReadRange> ffi_ranges;
+    for (const auto& range : ranges) {
+        ffi::FfiBoundedLogReadRange ffi_range;
+        ffi_range.table_id = range.bucket.table_id;
+        ffi_range.has_partition_id = range.bucket.partition_id.has_value();
+        ffi_range.partition_id = range.bucket.partition_id.value_or(0);
+        ffi_range.bucket_id = range.bucket.bucket_id;
+        ffi_range.starting_offset = range.starting_offset;
+        ffi_range.stopping_offset = range.stopping_offset;
+        ffi_ranges.push_back(ffi_range);
+    }
+
+    auto ffi_result = scanner_->create_record_batch_log_reader_from_ranges(std::move(ffi_ranges));
+    auto result = utils::from_ffi_result(ffi_result.result);
+    if (result.Ok()) {
+        out.Destroy();
+        out.reader_ = utils::ptr_from_ffi<ffi::RecordBatchLogReader>(ffi_result);
+    }
+    return result;
+}
+
+Result LogScanner::CreateRecordBatchLogReaderBetweenTimestamps(
+    const Admin& admin, const std::vector<TableBucket>& buckets, const TimestampRange& range,
+    RecordBatchLogReader& out) {
+    if (!Available()) {
+        return utils::make_client_error("LogScanner not available");
+    }
+    if (!admin.Available()) {
+        return utils::make_client_error("Admin not available");
+    }
+
+    rust::Vec<ffi::FfiReaderBucket> ffi_buckets;
+    for (const auto& bucket : buckets) {
+        ffi::FfiReaderBucket ffi_bucket;
+        ffi_bucket.table_id = bucket.table_id;
+        ffi_bucket.has_partition_id = bucket.partition_id.has_value();
+        ffi_bucket.partition_id = bucket.partition_id.value_or(0);
+        ffi_bucket.bucket_id = bucket.bucket_id;
+        ffi_buckets.push_back(ffi_bucket);
+    }
+
+    auto ffi_result = scanner_->create_record_batch_log_reader_between_timestamps(
+        *admin.admin_, std::move(ffi_buckets), range.starting_timestamp_ms,
+        range.stopping_timestamp_ms);
+    auto result = utils::from_ffi_result(ffi_result.result);
+    if (result.Ok()) {
+        out.Destroy();
+        out.reader_ = utils::ptr_from_ffi<ffi::RecordBatchLogReader>(ffi_result);
+    }
+    return result;
+}
+
+RecordBatchLogReader::RecordBatchLogReader() noexcept = default;
+
+RecordBatchLogReader::RecordBatchLogReader(ffi::RecordBatchLogReader* reader) noexcept
+    : reader_(reader) {}
+
+RecordBatchLogReader::~RecordBatchLogReader() noexcept { Destroy(); }
+
+void RecordBatchLogReader::Destroy() noexcept {
+    if (reader_) {
+        ffi::delete_record_batch_log_reader(reader_);
+        reader_ = nullptr;
+    }
+}
+
+RecordBatchLogReader::RecordBatchLogReader(RecordBatchLogReader&& other) noexcept
+    : reader_(other.reader_) {
+    other.reader_ = nullptr;
+}
+
+RecordBatchLogReader& RecordBatchLogReader::operator=(RecordBatchLogReader&& other) noexcept {
+    if (this != &other) {
+        Destroy();
+        reader_ = other.reader_;
+        other.reader_ = nullptr;
+    }
+    return *this;
+}
+
+bool RecordBatchLogReader::Available() const { return reader_ != nullptr; }
+
+Result RecordBatchLogReader::NextBatch(int64_t timeout_ms, RecordBatchReadResult& out) {
+    // Default to Finished so that a caller which ignores the returned Result
+    // and only inspects out.status still terminates instead of spinning on a
+    // stale TimedOut value. Only a fully successful call writes the real
+    // terminal status back to `out`.
+    out.status = BoundedReadStatus::Finished;
+    out.batch.reset();
+
+    if (!Available()) {
+        return utils::make_client_error("RecordBatchLogReader not available");
+    }
+
+    auto ffi_result = reader_->record_batch_log_reader_next_batch(timeout_ms);
+    auto result = utils::from_ffi_result(ffi_result.result);
+    if (!result.Ok()) {
+        return result;
+    }
+    BoundedReadStatus status;
+    switch (ffi_result.status) {
+        case 0:
+            status = BoundedReadStatus::BatchAvailable;
+            break;
+        case 1:
+            status = BoundedReadStatus::TimedOut;
+            break;
+        case 2:
+            status = BoundedReadStatus::Finished;
+            break;
+        default:
+            return utils::make_client_error("Unknown bounded read status: " +
+                                            std::to_string(ffi_result.status));
+    }
+    std::unique_ptr<ArrowRecordBatch> batch;
+    result = detail::ArrowBatchImporter::ImportOne(ffi_result.arrow_batches, batch);
+    if (!result.Ok()) {
+        return result;
+    }
+    if (status == BoundedReadStatus::BatchAvailable && !batch) {
+        return utils::make_client_error("Bounded reader reported a batch without returning one");
+    }
+    if (status != BoundedReadStatus::BatchAvailable && batch) {
+        return utils::make_client_error("Bounded reader returned a batch for a terminal status");
+    }
+    out.status = status;
+    out.batch = std::move(batch);
+    return utils::make_ok();
+}
+
+Result RecordBatchLogReader::CollectAllBatches(int64_t timeout_ms, ArrowRecordBatches& out) {
+    if (!Available()) {
+        return utils::make_client_error("RecordBatchLogReader not available");
+    }
+
+    auto ffi_result = reader_->record_batch_log_reader_collect_all_batches(timeout_ms);
+    auto result = utils::from_ffi_result(ffi_result.result);
+    if (!result.Ok()) {
+        return result;
+    }
+    // Batches collected before the budget expired are part of the result, so
+    // they are appended even when the collection is incomplete.
+    result = detail::ArrowBatchImporter::ImportAppend(ffi_result.arrow_batches, out);
+    if (!result.Ok()) {
+        return result;
+    }
+    switch (ffi_result.status) {
+        case static_cast<int32_t>(BoundedReadStatus::Finished):
+            return utils::make_ok();
+        case static_cast<int32_t>(BoundedReadStatus::TimedOut):
+            return utils::make_error(
+                ErrorCode::REQUEST_TIME_OUT,
+                "CollectAllBatches timed out before every stopping offset was reached");
+        default:
+            return utils::make_client_error("Unknown bounded read status: " +
+                                           std::to_string(ffi_result.status));
+    }
 }
 
 // ============================================================================

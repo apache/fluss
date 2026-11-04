@@ -25,7 +25,7 @@ import java.util.Arrays;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Unit tests for the six Phase 1 scalar bitmap functions. */
+/** Unit tests for the Phase 1 and Phase 2 scalar bitmap functions. */
 class RbScalarFunctionsTest {
 
     // -------------------------------------------------------------------------
@@ -251,5 +251,119 @@ class RbScalarFunctionsTest {
         assertThat(result).isNotNull();
         RoaringBitmap intersection = BitmapUtils.fromBytes(result);
         assertThat(intersection.isEmpty()).isTrue();
+    }
+
+    // -------------------------------------------------------------------------
+    // rb_xor (scalar)
+    // -------------------------------------------------------------------------
+
+    @Test
+    void testXorBasic() throws IOException {
+        RbXorFunction fn = new RbXorFunction();
+        byte[] left = BitmapUtils.toBytes(RoaringBitmap.bitmapOf(1, 2, 3));
+        byte[] right = BitmapUtils.toBytes(RoaringBitmap.bitmapOf(2, 3, 4));
+        byte[] result = fn.eval(left, right);
+        assertThat(result).isNotNull();
+        RoaringBitmap restored = BitmapUtils.fromBytes(result);
+        assertThat(restored.getLongCardinality()).isEqualTo(2L);
+        assertThat(restored.contains(1)).isTrue();
+        assertThat(restored.contains(4)).isTrue();
+        assertThat(restored.contains(2)).isFalse();
+        assertThat(restored.contains(3)).isFalse();
+    }
+
+    @Test
+    void testXorLeftNull() throws IOException {
+        byte[] right = BitmapUtils.toBytes(RoaringBitmap.bitmapOf(1, 2));
+        assertThat(new RbXorFunction().eval(null, right)).isNull();
+    }
+
+    @Test
+    void testXorRightNull() throws IOException {
+        byte[] left = BitmapUtils.toBytes(RoaringBitmap.bitmapOf(1, 2));
+        assertThat(new RbXorFunction().eval(left, null)).isNull();
+    }
+
+    @Test
+    void testXorBothNull() throws IOException {
+        assertThat(new RbXorFunction().eval(null, null)).isNull();
+    }
+
+    @Test
+    void testXorDisjointSets() throws IOException {
+        RbXorFunction fn = new RbXorFunction();
+        byte[] left = BitmapUtils.toBytes(RoaringBitmap.bitmapOf(1, 2));
+        byte[] right = BitmapUtils.toBytes(RoaringBitmap.bitmapOf(3, 4));
+        // XOR of disjoint sets = union
+        RoaringBitmap result = BitmapUtils.fromBytes(fn.eval(left, right));
+        assertThat(result.getLongCardinality()).isEqualTo(4L);
+    }
+
+    @Test
+    void testXorIdenticalSetsProducesEmpty() throws IOException {
+        RbXorFunction fn = new RbXorFunction();
+        byte[] left = BitmapUtils.toBytes(RoaringBitmap.bitmapOf(1, 2, 3));
+        byte[] right = BitmapUtils.toBytes(RoaringBitmap.bitmapOf(1, 2, 3));
+        // XOR of identical sets = empty bitmap (not null, since both inputs were provided)
+        byte[] result = fn.eval(left, right);
+        assertThat(result).isNotNull();
+        RoaringBitmap restored = BitmapUtils.fromBytes(result);
+        assertThat(restored.isEmpty()).isTrue();
+    }
+
+    // -------------------------------------------------------------------------
+    // rb_andnot (scalar)
+    // -------------------------------------------------------------------------
+
+    @Test
+    void testAndNotBasic() throws IOException {
+        RbAndNotFunction fn = new RbAndNotFunction();
+        byte[] left = BitmapUtils.toBytes(RoaringBitmap.bitmapOf(1, 2, 3, 4));
+        byte[] right = BitmapUtils.toBytes(RoaringBitmap.bitmapOf(3, 4, 5));
+        byte[] result = fn.eval(left, right);
+        assertThat(result).isNotNull();
+        RoaringBitmap restored = BitmapUtils.fromBytes(result);
+        assertThat(restored.getLongCardinality()).isEqualTo(2L);
+        assertThat(restored.contains(1)).isTrue();
+        assertThat(restored.contains(2)).isTrue();
+        assertThat(restored.contains(3)).isFalse();
+        assertThat(restored.contains(4)).isFalse();
+    }
+
+    @Test
+    void testAndNotLeftNull() throws IOException {
+        byte[] right = BitmapUtils.toBytes(RoaringBitmap.bitmapOf(1, 2));
+        assertThat(new RbAndNotFunction().eval(null, right)).isNull();
+    }
+
+    @Test
+    void testAndNotRightNull() throws IOException {
+        byte[] left = BitmapUtils.toBytes(RoaringBitmap.bitmapOf(1, 2));
+        assertThat(new RbAndNotFunction().eval(left, null)).isNull();
+    }
+
+    @Test
+    void testAndNotBothNull() throws IOException {
+        assertThat(new RbAndNotFunction().eval(null, null)).isNull();
+    }
+
+    @Test
+    void testAndNotRightIsSuperset() throws IOException {
+        RbAndNotFunction fn = new RbAndNotFunction();
+        byte[] left = BitmapUtils.toBytes(RoaringBitmap.bitmapOf(1, 2));
+        byte[] right = BitmapUtils.toBytes(RoaringBitmap.bitmapOf(1, 2, 3));
+        RoaringBitmap result = BitmapUtils.fromBytes(fn.eval(left, right));
+        assertThat(result.isEmpty()).isTrue();
+    }
+
+    @Test
+    void testAndNotDisjointSets() throws IOException {
+        RbAndNotFunction fn = new RbAndNotFunction();
+        byte[] left = BitmapUtils.toBytes(RoaringBitmap.bitmapOf(1, 2));
+        byte[] right = BitmapUtils.toBytes(RoaringBitmap.bitmapOf(3, 4));
+        RoaringBitmap result = BitmapUtils.fromBytes(fn.eval(left, right));
+        assertThat(result.getLongCardinality()).isEqualTo(2L);
+        assertThat(result.contains(1)).isTrue();
+        assertThat(result.contains(2)).isTrue();
     }
 }

@@ -20,9 +20,13 @@
 #include <arrow/record_batch.h>
 #include <arrow/type.h>
 
+#include <atomic>
 #include <chrono>
 #include <iostream>
+#include <memory>
+#include <mutex>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "fluss.hpp"
@@ -39,6 +43,10 @@ int main() {
     // 1) Connect
     fluss::Configuration config;
     config.bootstrap_servers = "127.0.0.1:9123";
+    // Callback capacity and buffer waits share this budget. The default UINT64_MAX
+    // waits indefinitely; a finite value allows handling overload instead. Zero fails
+    // fast when either resource is unavailable. This is not a whole-call deadline.
+    config.writer_buffer_wait_timeout_ms = 30000;
 
     fluss::Connection conn;
     check("create", fluss::Connection::Create(config, conn));
@@ -85,6 +93,10 @@ int main() {
 
     // 5) Write rows with scalar and temporal values
     fluss::AppendWriter writer;
+    // Use the default per-writer limit of 262144 outstanding callback operations.
+    // This is independent of config.writer_buffer_memory_size (per Connection).
+    // To tune it, pass WriteCallbackOptions based on measured completion latency
+    // and capture memory; a smaller limit can throttle writes before the buffer fills.
     check("new_append_writer", table.NewAppend().CreateWriter(writer));
 
     struct RowData {
@@ -141,6 +153,75 @@ int main() {
         check("append", writer.Append(row, wr));
         check("wait", wr.Wait());
         std::cout << "Row acknowledged by server" << std::endl;
+    }
+
+    // Callback acknowledgment
+    {
+        // The SDK runs callbacks; no application waiting thread is required.
+        // Callbacks run on one shared worker, so keep them short and
+        // non-blocking: do not Flush/Wait or retry synchronously inside a callback.
+        // This example counts outcomes only. It does not implement durable recovery.
+        struct CallbackState {
+            std::atomic<size_t> succeeded{0};
+            std::atomic<size_t> failed{0};
+            std::mutex mutex;
+            int32_t first_failed_id{0};
+            fluss::Result first_failure;
+        };
+        // Shared ownership also keeps state alive if submission throws or flushing fails.
+        auto state = std::make_shared<CallbackState>();
+        bool submission_failed = false;
+        for (const auto& r : rows) {
+            const int32_t id = 1000 + r.id;
+            fluss::GenericRow row;
+            row.SetInt32(0, id);
+            row.SetString(1, r.name);
+            row.SetFloat32(2, r.score);
+            row.SetInt32(3, r.age);
+            row.SetDate(4, r.date);
+            row.SetTime(5, r.time);
+            row.SetTimestampNtz(6, r.ts_ntz);
+            row.SetTimestampLtz(7, r.ts_ltz);
+            auto submitted = writer.Append(
+                row, [id, state](const fluss::WriteCompletion& notification) {
+                    const auto& result = notification.result;
+                    if (result.Ok()) {
+                        ++state->succeeded;
+                    } else {
+                        // Copy the invocation-scoped result. Do not log, perform I/O,
+                        // or retry here: one slow callback delays every writer.
+                        if (state->failed.fetch_add(1) == 0) {
+                            std::lock_guard<std::mutex> lock(state->mutex);
+                            state->first_failed_id = id;
+                            state->first_failure = result;
+                        }
+                    }
+                });
+            if (!submitted.Ok()) {
+                // No callback will run for this submission; handle this path too.
+                submission_failed = true;
+                std::cerr << "Submission failed for id=" << id << ": " << submitted.error_message
+                          << '\n';
+                break;
+            }
+        }
+        // Stop submissions, then drain accepted callbacks. Flush success alone does
+        // not mean every write succeeded. Writer/Connection destruction is not a drain.
+        check("flush", writer.Flush());
+        std::cout << "Callback writes: succeeded=" << state->succeeded.load()
+                  << " failed=" << state->failed.load() << '\n';
+        if (state->failed.load() != 0) {
+            std::lock_guard<std::mutex> lock(state->mutex);
+            std::cerr << "First failed id=" << state->first_failed_id
+                      << ": " << state->first_failure.error_message << '\n';
+        }
+        // A failed write may have reached the server. Recover outside the callback
+        // using retained input or a replayable source and application-level deduplication.
+        // Advance a source position only after Flush and all relevant writes succeed.
+        // This example reports failure and exits; it does not implement durable recovery.
+        if (submission_failed || state->failed.load() != 0) {
+            return 1;
+        }
     }
 
     // Append a row with all fields null (matches Rust log_table.rs all_supported_datatypes)
@@ -369,11 +450,51 @@ int main() {
         std::cout << "  Bucket " << bucket_id << ": offset=" << offset << std::endl;
     }
 
+    // 8.1) Bounded Arrow record batch scan with explicit stopping offsets
+    std::cout << "\n=== Bounded Arrow Record Batch Scan ===" << std::endl;
+    constexpr int64_t kBoundedReadTimeoutMs = 30000;
+    std::vector<fluss::RecordBatchLogReadRange> bounded_ranges;
+    for (int32_t bucket_id : all_bucket_ids) {
+        const int64_t starting_offset = earliest_offsets.at(bucket_id);
+        const int64_t stopping_offset = latest_offsets.at(bucket_id);
+        bounded_ranges.push_back(
+            {fluss::TableBucket{info.table_id, bucket_id}, starting_offset, stopping_offset});
+    }
+
+    if (!bounded_ranges.empty()) {
+        fluss::RecordBatchLogReader bounded_reader;
+        check("create_bounded_reader",
+              table.NewScan().CreateRecordBatchLogReader(bounded_ranges, bounded_reader));
+
+        fluss::ArrowRecordBatches bounded_batches;
+        auto collect_result =
+            bounded_reader.CollectAllBatches(kBoundedReadTimeoutMs, bounded_batches);
+        if (!collect_result.Ok()) {
+            std::cerr << "collect_bounded_batches failed after collecting "
+                      << bounded_batches.Size()
+                      << " partial batches: code=" << collect_result.error_code
+                      << " msg=" << collect_result.error_message << std::endl;
+            return 1;
+        }
+
+        int64_t bounded_row_count = 0;
+        for (const auto& batch : bounded_batches) {
+            bounded_row_count += batch->NumRows();
+            std::cout << "  bucket=" << batch->GetBucketId()
+                      << " base_offset=" << batch->GetBaseOffset()
+                      << " last_offset=" << batch->GetLastOffset()
+                      << " rows=" << batch->NumRows() << std::endl;
+        }
+        std::cout << "Bounded scan completed with " << bounded_row_count << " rows" << std::endl;
+    }
+
     auto now = std::chrono::system_clock::now();
     auto one_hour_ago = now - std::chrono::hours(1);
     auto timestamp_ms =
         std::chrono::duration_cast<std::chrono::milliseconds>(one_hour_ago.time_since_epoch())
             .count();
+    auto now_ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
 
     std::unordered_map<int32_t, int64_t> timestamp_offsets;
     check("list_timestamp_offsets",
@@ -382,6 +503,32 @@ int main() {
     std::cout << "Offsets for timestamp " << timestamp_ms << " (1 hour ago):" << std::endl;
     for (const auto& [bucket_id, offset] : timestamp_offsets) {
         std::cout << "  Bucket " << bucket_id << ": offset=" << offset << std::endl;
+    }
+
+    // 8.2) Bounded Arrow record batch scan by timestamp range
+    std::vector<fluss::TableBucket> table_buckets;
+    for (int32_t bucket_id : all_bucket_ids) {
+        table_buckets.push_back({info.table_id, bucket_id});
+    }
+
+    fluss::RecordBatchLogReader timestamp_reader;
+    check("create_timestamp_reader",
+          table.NewScan().CreateRecordBatchLogReader(
+              admin, table_buckets, fluss::TimestampRange{timestamp_ms, now_ms}, timestamp_reader));
+
+    fluss::ArrowRecordBatches timestamp_batches;
+    auto timestamp_collect_result =
+        timestamp_reader.CollectAllBatches(kBoundedReadTimeoutMs, timestamp_batches);
+    if (!timestamp_collect_result.Ok()) {
+        std::cerr << "collect_timestamp_batches failed after collecting "
+                  << timestamp_batches.Size()
+                  << " partial batches: code=" << timestamp_collect_result.error_code
+                  << " msg=" << timestamp_collect_result.error_message << std::endl;
+        return 1;
+    }
+    for (const auto& batch : timestamp_batches) {
+        std::cout << "Timestamp range batch: bucket=" << batch->GetBucketId()
+                  << " rows=" << batch->NumRows() << std::endl;
     }
 
     // 9) Batch subscribe
@@ -427,7 +574,7 @@ int main() {
     // 10) Arrow record batch polling
     std::cout << "\n=== Testing Arrow Record Batch Polling ===" << std::endl;
 
-    fluss::LogScanner arrow_scanner;
+    fluss::RecordBatchLogScanner arrow_scanner;
     check("new_record_batch_log_scanner",
           table.NewScan().CreateRecordBatchLogScanner(arrow_scanner));
 
@@ -436,7 +583,7 @@ int main() {
     }
 
     fluss::ArrowRecordBatches arrow_batches;
-    check("poll_record_batch", arrow_scanner.PollRecordBatch(5000, arrow_batches));
+    check("poll_record_batch", arrow_scanner.Poll(5000, arrow_batches));
 
     std::cout << "Polled " << arrow_batches.Size() << " Arrow record batches" << std::endl;
     for (size_t i = 0; i < arrow_batches.Size(); ++i) {
@@ -452,7 +599,7 @@ int main() {
     // 11) Arrow record batch polling with projection
     std::cout << "\n=== Testing Arrow Record Batch Polling with Projection ===" << std::endl;
 
-    fluss::LogScanner projected_arrow_scanner;
+    fluss::RecordBatchLogScanner projected_arrow_scanner;
     check("new_record_batch_log_scanner_with_projection",
           table.NewScan()
               .ProjectByIndex(projected_columns)
@@ -464,7 +611,7 @@ int main() {
 
     fluss::ArrowRecordBatches projected_arrow_batches;
     check("poll_projected_record_batch",
-          projected_arrow_scanner.PollRecordBatch(5000, projected_arrow_batches));
+          projected_arrow_scanner.Poll(5000, projected_arrow_batches));
 
     std::cout << "Polled " << projected_arrow_batches.Size() << " projected Arrow record batches"
               << std::endl;

@@ -26,7 +26,7 @@ import org.apache.fluss.utils.concurrent.FutureUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.annotation.concurrent.NotThreadSafe;
+import javax.annotation.concurrent.ThreadSafe;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -34,7 +34,7 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
 /** A manager to manage the rpc gateways to the servers. */
-@NotThreadSafe
+@ThreadSafe
 public class RpcGatewayManager<T extends RpcGateway> implements AutoCloseable {
 
     private static final Logger LOG = LoggerFactory.getLogger(RpcGatewayManager.class);
@@ -54,14 +54,14 @@ public class RpcGatewayManager<T extends RpcGateway> implements AutoCloseable {
     /**
      * Get the rpc gateway of the server with the given id.
      *
-     * @param serverUid the id of the server
+     * @param serverId the id of the server
      * @return the rpc gateway of the server, empty if the server doesn't exist
      */
-    public Optional<T> getRpcGateway(int serverUid) {
-        if (!serverRpcGateways.containsKey(serverUid)) {
-            return Optional.empty();
-        }
-        return Optional.of(serverRpcGateways.get(serverUid).rpcGateway);
+    public synchronized Optional<T> getRpcGateway(int serverId) {
+        ServerRpcGateway serverRpcGateway = serverRpcGateways.get(serverId);
+        return serverRpcGateway == null
+                ? Optional.empty()
+                : Optional.of(serverRpcGateway.rpcGateway);
     }
 
     /**
@@ -69,7 +69,7 @@ public class RpcGatewayManager<T extends RpcGateway> implements AutoCloseable {
      * manager. If the server has already existed, it'll remove the already existing server before
      * adding the new one.
      */
-    public void addServer(ServerNode serverNode) {
+    public synchronized void addServer(ServerNode serverNode) {
         int serverId = serverNode.id();
         if (serverRpcGateways.containsKey(serverId)) {
             // close the already existing server
@@ -95,8 +95,23 @@ public class RpcGatewayManager<T extends RpcGateway> implements AutoCloseable {
      * @param serverId the id of the server to be removed
      * @return a future to be completed when the disconnection is complete
      */
-    public CompletableFuture<Void> removeServer(int serverId) {
+    public synchronized CompletableFuture<Void> removeServer(int serverId) {
         ServerRpcGateway serverRpcGateway = serverRpcGateways.remove(serverId);
+        if (serverRpcGateway != null) {
+            return rpcClient.disconnect(serverRpcGateway.serverUid);
+        }
+        return FutureUtils.completedVoidFuture();
+    }
+
+    /**
+     * Disconnects the current RPC connection to a server without removing its gateway. A subsequent
+     * request through the gateway will establish a new connection.
+     *
+     * @param serverId the id of the server to disconnect
+     * @return a future completed after the old connection and its in-flight requests are closed
+     */
+    public synchronized CompletableFuture<Void> disconnectServer(int serverId) {
+        ServerRpcGateway serverRpcGateway = serverRpcGateways.get(serverId);
         if (serverRpcGateway != null) {
             return rpcClient.disconnect(serverRpcGateway.serverUid);
         }

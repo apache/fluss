@@ -22,8 +22,11 @@ mod kv_table_test {
         ColumnPlan, array_dt_basics_columns, as_row_type, create_partitions, create_table,
         dt_array_int, dt_map_string_int, dt_row_seq_label, get_shared_cluster, make_int_array,
         make_string_array, map_dt_basics_columns, row_dt_basics_columns, scalar_dt_columns,
+        wait_for_partitions_ready,
     };
-    use fluss::client::TableUpsert;
+    use fluss::client::{FlussConnection, TableUpsert, UpsertWriter};
+    use fluss::config::Config;
+    use fluss::error::FlussError;
     use fluss::metadata::{DataField, DataTypes, Schema, TableDescriptor, TablePath};
     use fluss::row::binary_array::FlussArrayWriter;
     use fluss::row::binary_map::FlussMapWriter;
@@ -32,6 +35,7 @@ mod kv_table_test {
         TimestampLtz, TimestampNtz,
     };
     use futures::stream::{FuturesUnordered, StreamExt};
+    use std::time::Duration;
 
     fn make_key(id: i32) -> GenericRow<'static> {
         make_key_with_field_count(id, 3)
@@ -59,6 +63,7 @@ mod kv_table_test {
                     .column("name", DataTypes::string())
                     .column("age", DataTypes::bigint())
                     .primary_key(vec!["id"])
+                    .unwrap()
                     .build()
                     .expect("Failed to build schema"),
             )
@@ -87,7 +92,7 @@ mod kv_table_test {
         upsert_writer.flush().await.expect("Failed to flush");
 
         // Lookup records
-        let mut lookuper = table
+        let lookuper = table
             .new_lookup()
             .expect("Failed to create lookup")
             .create_lookuper()
@@ -198,6 +203,7 @@ mod kv_table_test {
                     .column("user_id", DataTypes::int())
                     .column("score", DataTypes::bigint())
                     .primary_key(vec!["region", "user_id"])
+                    .unwrap()
                     .build()
                     .expect("Failed to build schema"),
             )
@@ -231,7 +237,7 @@ mod kv_table_test {
         upsert_writer.flush().await.expect("Failed to flush");
 
         // Lookup with composite key
-        let mut lookuper = table
+        let lookuper = table
             .new_lookup()
             .expect("Failed to create lookup")
             .create_lookuper()
@@ -317,6 +323,7 @@ mod kv_table_test {
                     )
                     .column("tags", DataTypes::array(DataTypes::string()))
                     .primary_key(vec!["id"])
+                    .unwrap()
                     .build()
                     .expect("schema"),
             )
@@ -353,7 +360,7 @@ mod kv_table_test {
             .await
             .expect("ack initial");
 
-        let mut lookuper = table
+        let lookuper = table
             .new_lookup()
             .expect("lookup")
             .create_lookuper()
@@ -502,6 +509,7 @@ mod kv_table_test {
                     )
                     .column("tags", DataTypes::array(DataTypes::string()))
                     .primary_key(vec!["region", "user_id"])
+                    .unwrap()
                     .build()
                     .expect("schema"),
             )
@@ -547,7 +555,7 @@ mod kv_table_test {
         }
         upsert_writer.flush().await.expect("flush");
 
-        let mut lookuper = table
+        let lookuper = table
             .new_lookup()
             .expect("lookup")
             .create_lookuper()
@@ -685,6 +693,7 @@ mod kv_table_test {
                     .column("id", DataTypes::int())
                     .column("name", DataTypes::string())
                     .primary_key(vec!["region", "id"])
+                    .unwrap()
                     .build()
                     .expect("Failed to build schema"),
             )
@@ -719,18 +728,15 @@ mod kv_table_test {
         }
         writer.flush().await.expect("Failed to flush");
 
-        let mut lookupers: Vec<_> = (0..regions.len() * 5)
-            .map(|_| {
-                table
-                    .new_lookup()
-                    .expect("Failed to create lookup")
-                    .create_lookuper()
-                    .expect("Failed to create lookuper")
-            })
-            .collect();
+        let lookuper = table
+            .new_lookup()
+            .expect("Failed to create lookup")
+            .create_lookuper()
+            .expect("Failed to create lookuper");
 
         let mut futures = FuturesUnordered::new();
-        for (i, lookuper) in lookupers.iter_mut().enumerate() {
+        for i in 0..regions.len() * 5 {
+            let lookuper = &lookuper;
             let region = regions[i / 5];
             let id = (i % 5) as i32;
 
@@ -799,6 +805,7 @@ mod kv_table_test {
                     .column("c", DataTypes::bigint())
                     .column("d", DataTypes::string())
                     .primary_key(vec!["a", "b", "c"])
+                    .unwrap()
                     .build()
                     .expect("Failed to build schema"),
             )
@@ -834,7 +841,7 @@ mod kv_table_test {
         }
         writer.flush().await.expect("Failed to flush");
 
-        let mut prefix_lookuper = table
+        let prefix_lookuper = table
             .new_lookup()
             .expect("Failed to create lookup")
             .lookup_by(vec!["a".to_string(), "b".to_string()])
@@ -905,6 +912,7 @@ mod kv_table_test {
                     .column("c", DataTypes::bigint())
                     .column("d", DataTypes::string())
                     .primary_key(vec!["region", "a", "b", "c"])
+                    .unwrap()
                     .build()
                     .expect("Failed to build schema"),
             )
@@ -945,7 +953,7 @@ mod kv_table_test {
         }
         writer.flush().await.expect("Failed to flush");
 
-        let mut prefix_lookuper = table
+        let prefix_lookuper = table
             .new_lookup()
             .expect("Failed to create lookup")
             .lookup_by(vec!["region".to_string(), "a".to_string(), "b".to_string()])
@@ -1015,6 +1023,7 @@ mod kv_table_test {
                     .column("b", DataTypes::string())
                     .column("c", DataTypes::bigint())
                     .primary_key(vec!["a", "b", "c"])
+                    .unwrap()
                     .build()
                     .expect("Failed to build schema"),
             )
@@ -1070,6 +1079,7 @@ mod kv_table_test {
                     .column("name", DataTypes::string())
                     .column("value", DataTypes::bigint())
                     .primary_key(vec!["id".to_string()])
+                    .unwrap()
                     .build()
                     .expect("Failed to build schema"),
             )
@@ -1107,21 +1117,17 @@ mod kv_table_test {
         // Wait for all upserts to be acknowledged
         while upsert_futures.next().await.is_some() {}
 
-        // Create multiple lookupers for concurrent lookups
-        let num_lookupers = 50i32;
-        let mut lookupers: Vec<_> = (0..num_lookupers)
-            .map(|_| {
-                table
-                    .new_lookup()
-                    .expect("Failed to create lookup")
-                    .create_lookuper()
-                    .expect("Failed to create lookuper")
-            })
-            .collect();
+        let num_lookups = 50usize;
+        let lookuper = table
+            .new_lookup()
+            .expect("Failed to create lookup")
+            .create_lookuper()
+            .expect("Failed to create lookuper");
 
         // Run concurrent lookups
         let mut futures = FuturesUnordered::new();
-        for (i, lookuper) in lookupers.iter_mut().enumerate() {
+        for i in 0..num_lookups {
+            let lookuper = &lookuper;
             // First 10 lookupers all lookup id=0 (same key multiple times)
             let id = if i < 10 { 0 } else { i as i32 };
             let expects_result = id % 2 == 0; // Even IDs exist
@@ -1154,17 +1160,13 @@ mod kv_table_test {
         }
 
         // Collect all results and verify
-        let mut results = Vec::with_capacity(num_lookupers as usize);
+        let mut results = Vec::with_capacity(num_lookups);
         while let Some(result) = futures.next().await {
             results.push(result);
         }
 
         // Verify all lookups completed successfully
-        assert_eq!(
-            results.len(),
-            num_lookupers as usize,
-            "Not all lookups completed"
-        );
+        assert_eq!(results.len(), num_lookups, "Not all lookups completed");
 
         // Verify we had the expected mix of scenarios
         let same_key_lookups = results.iter().filter(|(id, _)| *id == 0).count();
@@ -1174,6 +1176,106 @@ mod kv_table_test {
         assert!(
             non_existing_lookups > 0,
             "Should have some non-existing key lookups"
+        );
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
+    }
+
+    #[tokio::test]
+    async fn batched_concurrent_prefix_lookups() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("Failed to get admin");
+
+        let table_path = TablePath::new("fluss", "test_batched_concurrent_prefix_lookups");
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("a", DataTypes::int())
+                    .column("b", DataTypes::bigint())
+                    .column("c", DataTypes::string())
+                    .primary_key(vec!["a", "b"])
+                    .unwrap()
+                    .build()
+                    .expect("Failed to build schema"),
+            )
+            .distributed_by(Some(3), vec!["a".to_string()])
+            .build()
+            .expect("Failed to build table");
+        create_table(&admin, &table_path, &table_descriptor).await;
+
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+        let writer = table
+            .new_upsert()
+            .expect("Failed to create upsert")
+            .create_writer()
+            .expect("Failed to create writer");
+        for a in 0..20i32 {
+            for b in 0..3i64 {
+                let mut row = GenericRow::new(3);
+                row.set_field(0, a);
+                row.set_field(1, b);
+                row.set_field(2, format!("{a}-{b}"));
+                writer.upsert(&row).expect("Failed to upsert");
+            }
+        }
+        writer.flush().await.expect("Failed to flush");
+
+        let prefix_lookuper = table
+            .new_lookup()
+            .expect("Failed to create lookup")
+            .lookup_by(vec!["a".to_string()])
+            .create_lookuper()
+            .expect("Failed to create prefix lookuper");
+
+        // Five lookups of the same prefix, then 20 existing and 5 missing prefixes.
+        let prefixes: Vec<i32> = std::iter::repeat_n(0, 5).chain(0..25).collect();
+        let mut futures = FuturesUnordered::new();
+        for a in prefixes.iter().copied() {
+            let prefix_lookuper = &prefix_lookuper;
+            futures.push(async move {
+                let mut prefix = GenericRow::new(1);
+                prefix.set_field(0, a);
+                let result = prefix_lookuper
+                    .lookup(&prefix)
+                    .await
+                    .expect("Failed to prefix lookup");
+                let mut rows: Vec<(i64, String)> = result
+                    .get_rows()
+                    .expect("Failed to decode rows")
+                    .iter()
+                    .map(|row| {
+                        assert_eq!(row.get_int(0).unwrap(), a, "prefix mismatch");
+                        (
+                            row.get_long(1).unwrap(),
+                            row.get_string(2).unwrap().to_string(),
+                        )
+                    })
+                    .collect();
+                rows.sort();
+                let expected: Vec<(i64, String)> = if a < 20 {
+                    (0..3i64).map(|b| (b, format!("{a}-{b}"))).collect()
+                } else {
+                    Vec::new()
+                };
+                assert_eq!(rows, expected, "rows mismatch for prefix {a}");
+            });
+        }
+
+        let mut completed = 0;
+        while futures.next().await.is_some() {
+            completed += 1;
+        }
+        assert_eq!(
+            completed,
+            prefixes.len(),
+            "Not all prefix lookups completed"
         );
 
         admin
@@ -1202,6 +1304,7 @@ mod kv_table_test {
                     .column("b", DataTypes::string())
                     .column("c", DataTypes::string())
                     .primary_key(vec!["a", "b"])
+                    .unwrap()
                     .build()
                     .expect("Failed to build schema"),
             )
@@ -1241,7 +1344,7 @@ mod kv_table_test {
         // prefix lookup
         let mut lookup_row = GenericRow::new(1);
         lookup_row.set_field(0, 1);
-        let mut prefix_lookup = table
+        let prefix_lookup = table
             .new_lookup()
             .expect("Failed to create lookup")
             .lookup_by(vec!["a".to_string()])
@@ -1256,6 +1359,84 @@ mod kv_table_test {
             .unwrap()
             .expect("Row should exist");
         assert_eq!(row.get_string(2).unwrap(), "value1");
+    }
+
+    /// Verifies that Iceberg key encoding and bucketing are wired through KV
+    /// upsert, lookup, and delete operations.
+    #[tokio::test]
+    async fn upsert_delete_and_lookup_with_iceberg_format() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().unwrap();
+        let table_path = TablePath::new("fluss", "test_kv_iceberg_format");
+
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .column("name", DataTypes::string())
+                    .primary_key(vec!["id"])
+                    .unwrap()
+                    .build()
+                    .expect("Failed to build schema"),
+            )
+            .distributed_by(Some(3), vec!["id".to_string()])
+            .property("table.datalake.format", "iceberg")
+            .build()
+            .expect("Failed to build table");
+
+        create_table(&admin, &table_path, &table_descriptor).await;
+
+        let table = connection.get_table(&table_path).await.unwrap();
+        let upsert_writer = table
+            .new_upsert()
+            .expect("Failed to create upsert")
+            .create_writer()
+            .expect("Failed to create Iceberg writer");
+
+        for (id, name) in [(1, "Frost"), (2, "Ember")] {
+            let mut row = GenericRow::new(2);
+            row.set_field(0, id);
+            row.set_field(1, name);
+            upsert_writer
+                .upsert(&row)
+                .expect("Failed to upsert Iceberg row");
+        }
+        upsert_writer.flush().await.expect("Failed to flush");
+
+        let lookuper = table
+            .new_lookup()
+            .expect("Failed to create lookup")
+            .create_lookuper()
+            .expect("Failed to create Iceberg lookuper");
+
+        for (id, expected_name) in [(1, "Frost"), (2, "Ember")] {
+            let result = lookuper
+                .lookup(&make_key_with_field_count(id, 1))
+                .await
+                .expect("Failed to lookup Iceberg row");
+            let row = result.get_single_row().unwrap().expect("Row should exist");
+            assert_eq!(row.get_string(1).unwrap(), expected_name);
+        }
+
+        let mut delete_row = GenericRow::new(2);
+        delete_row.set_field(0, 1);
+        upsert_writer
+            .delete(&delete_row)
+            .expect("Failed to delete Iceberg row")
+            .await
+            .expect("Failed to wait for delete acknowledgment");
+
+        let result = lookuper
+            .lookup(&make_key_with_field_count(1, 1))
+            .await
+            .expect("Failed to lookup deleted Iceberg row");
+        assert!(result.get_single_row().unwrap().is_none());
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
     }
 
     /// Verifies upsert/lookup/update/delete on a KV table whose data lake format
@@ -1303,6 +1484,7 @@ mod kv_table_test {
                     .column("col_bytes", DataTypes::bytes())
                     .column("col_binary", DataTypes::binary(4))
                     .primary_key(vec!["id"])
+                    .unwrap()
                     .build()
                     .expect("Failed to build schema"),
             )
@@ -1388,7 +1570,7 @@ mod kv_table_test {
             .expect("Failed to upsert second paimon row");
         upsert_writer.flush().await.expect("Failed to flush");
 
-        let mut lookuper = table
+        let lookuper = table
             .new_lookup()
             .expect("Failed to create lookup")
             .create_lookuper()
@@ -1788,7 +1970,7 @@ mod kv_table_test {
             .await
             .expect("ack row3");
 
-        let mut lookuper = table
+        let lookuper = table
             .new_lookup()
             .expect("lookup")
             .create_lookuper()
@@ -2043,6 +2225,118 @@ mod kv_table_test {
         assert_eq!(r3.get_int(0).unwrap(), 3);
         for i in 1..column_count {
             assert!(r3.is_null_at(i).unwrap(), "field {i} should be null");
+        }
+
+        admin.drop_table(&table_path, false).await.expect("drop");
+    }
+
+    fn region_row(region: &'static str, id: i32) -> GenericRow<'static> {
+        let mut row = GenericRow::new(2);
+        row.set_field(0, region);
+        row.set_field(1, id);
+        row
+    }
+
+    async fn upsert_writer(connection: &FlussConnection, table_path: &TablePath) -> UpsertWriter {
+        connection
+            .get_table(table_path)
+            .await
+            .expect("table")
+            .new_upsert()
+            .expect("upsert")
+            .create_writer()
+            .expect("writer")
+    }
+
+    #[tokio::test]
+    async fn upsert_to_missing_partition_creates_it_unless_disabled() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("Failed to get admin");
+        let table_path = TablePath::new("fluss", "test_upsert_to_missing_partition");
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("region", DataTypes::string())
+                    .column("id", DataTypes::int())
+                    .primary_key(vec!["region", "id"])
+                    .unwrap()
+                    .build()
+                    .expect("schema"),
+            )
+            .partitioned_by(vec!["region"])
+            .build()
+            .expect("table descriptor");
+        create_table(&admin, &table_path, &table_descriptor).await;
+        create_partitions(&admin, &table_path, "region", &["US"]).await;
+        wait_for_partitions_ready(&admin, &table_path, &["US"]).await;
+
+        let no_create_connection = FlussConnection::new(Config {
+            bootstrap_servers: cluster.plaintext_bootstrap_servers().to_string(),
+            writer_dynamic_create_partition_enabled: false,
+            ..Config::default()
+        })
+        .await
+        .expect("connection");
+        let writer = upsert_writer(&no_create_connection, &table_path).await;
+        let missing = writer.upsert(&region_row("APAC", 1)).expect("upsert");
+        let existing = writer.upsert(&region_row("US", 2)).expect("upsert");
+        tokio::time::timeout(Duration::from_secs(60), async {
+            assert_eq!(
+                missing.await.expect_err("missing partition").api_error(),
+                Some(FlussError::PartitionNotExists)
+            );
+            existing.await.expect("upsert to the existing partition");
+        })
+        .await
+        .expect("upserts must complete instead of retrying");
+
+        let writer = upsert_writer(&connection, &table_path).await;
+        let missing = writer.upsert(&region_row("APAC", 3)).expect("upsert");
+        let invalid = writer.upsert(&region_row("EU West", 4)).expect("upsert");
+        let existing = writer.upsert(&region_row("US", 5)).expect("upsert");
+        tokio::time::timeout(Duration::from_secs(60), async {
+            missing.await.expect("upsert to the created partition");
+            assert_eq!(
+                invalid.await.expect_err("invalid partition").api_error(),
+                Some(FlussError::PartitionSpecInvalidException)
+            );
+            existing.await.expect("upsert to the existing partition");
+        })
+        .await
+        .expect("upserts must complete instead of retrying");
+        let mut partitions: Vec<String> = admin
+            .list_partition_infos(&table_path)
+            .await
+            .expect("list partitions")
+            .iter()
+            .map(|partition| partition.get_partition_name())
+            .collect();
+        partitions.sort();
+        assert_eq!(partitions, ["APAC", "US"]);
+        let lookuper = connection
+            .get_table(&table_path)
+            .await
+            .expect("table")
+            .new_lookup()
+            .expect("lookup")
+            .create_lookuper()
+            .expect("lookuper");
+        for (region, id, written) in [
+            ("APAC", 1, false),
+            ("APAC", 3, true),
+            ("US", 2, true),
+            ("US", 5, true),
+        ] {
+            let result = lookuper
+                .lookup(&region_row(region, id))
+                .await
+                .expect("lookup");
+            assert_eq!(
+                result.get_single_row().expect("get row").is_some(),
+                written,
+                "{region}/{id}"
+            );
         }
 
         admin.drop_table(&table_path, false).await.expect("drop");

@@ -31,29 +31,15 @@ import org.apache.flink.table.data.MapData;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.data.TimestampData;
 
-import static org.apache.fluss.lake.hudi.HudiLakeCatalog.SYSTEM_COLUMNS;
-
 /** Wraps a Hudi/Flink {@link RowData} as a Fluss {@link InternalRow}. */
 public class HudiRowAsFlussRow implements InternalRow {
 
     private RowData rowData;
-    private final boolean stripSystemColumns;
 
-    public HudiRowAsFlussRow() {
-        this(true);
-    }
+    public HudiRowAsFlussRow() {}
 
     public HudiRowAsFlussRow(RowData rowData) {
-        this(rowData, true);
-    }
-
-    HudiRowAsFlussRow(RowData rowData, boolean stripSystemColumns) {
         this.rowData = rowData;
-        this.stripSystemColumns = stripSystemColumns;
-    }
-
-    private HudiRowAsFlussRow(boolean stripSystemColumns) {
-        this.stripSystemColumns = stripSystemColumns;
     }
 
     public HudiRowAsFlussRow replaceRow(RowData rowData) {
@@ -63,7 +49,9 @@ public class HudiRowAsFlussRow implements InternalRow {
 
     @Override
     public int getFieldCount() {
-        return stripSystemColumns ? rowData.getArity() - SYSTEM_COLUMNS.size() : rowData.getArity();
+        // FIP-27: Hudi lake tables contain only user columns; the arity is the business field
+        // count.
+        return rowData.getArity();
     }
 
     @Override
@@ -170,6 +158,6 @@ public class HudiRowAsFlussRow implements InternalRow {
     @Override
     public InternalRow getRow(int pos, int numFields) {
         RowData value = rowData.getRow(pos, numFields);
-        return value == null ? null : new HudiRowAsFlussRow(value, false);
+        return value == null ? null : new HudiRowAsFlussRow(value);
     }
 }

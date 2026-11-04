@@ -93,7 +93,6 @@ impl ApiKey {
             | ApiKey::TableExists
             | ApiKey::GetTableSchema
             | ApiKey::MetaData
-            | ApiKey::ProduceLog
             | ApiKey::FetchLog
             | ApiKey::ListOffsets
             | ApiKey::GetLatestKvSnapshots
@@ -109,7 +108,6 @@ impl ApiKey {
             | ApiKey::CreateAcls
             | ApiKey::ListAcls
             | ApiKey::DropAcls
-            | ApiKey::AlterTable
             | ApiKey::DescribeClusterConfigs
             | ApiKey::AlterClusterConfigs
             | ApiKey::AddServerTag
@@ -129,10 +127,17 @@ impl ApiKey {
             | ApiKey::GetClusterHealth
             | ApiKey::ListRemoteLogManifests
             | ApiKey::ListKvSnapshots => Some(ApiVersionRange::new(ApiVersion(0), ApiVersion(0))),
-            // PutKv / Lookup / PrefixLookup support v0 (legacy key encoding)
-            // and v1 (Paimon BinaryRow key encoding for kv_format_version=2
+            // AlterTable v1 adds modify_bucket_count.
+            ApiKey::AlterTable => Some(ApiVersionRange::new(ApiVersion(0), ApiVersion(1))),
+            // ProduceLog v1 adds historical partition context to requests and responses.
+            ApiKey::ProduceLog => Some(ApiVersionRange::new(ApiVersion(0), ApiVersion(1))),
+            // PutKv v2 adds the storage backpressure error code; v3 adds historical partition
+            // context to requests and responses.
+            ApiKey::PutKv => Some(ApiVersionRange::new(ApiVersion(0), ApiVersion(3))),
+            // Lookup / PrefixLookup support v0 (legacy key encoding) and v1
+            // (Paimon BinaryRow key encoding for kv_format_version=2
             // non-default bucket keys). The Rust client encodes both.
-            ApiKey::PutKv | ApiKey::Lookup | ApiKey::PrefixLookup => {
+            ApiKey::Lookup | ApiKey::PrefixLookup => {
                 Some(ApiVersionRange::new(ApiVersion(0), ApiVersion(1)))
             }
             Unknown(_) => None,

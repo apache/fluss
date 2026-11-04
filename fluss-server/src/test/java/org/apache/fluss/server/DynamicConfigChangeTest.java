@@ -430,6 +430,30 @@ public class DynamicConfigChangeTest {
     }
 
     @Test
+    void testHistoricalLookupConfigsCanBeChangedDynamically() throws Exception {
+        DynamicConfigManager dynamicConfigManager = createManager(new Configuration());
+        dynamicConfigManager.startup();
+
+        dynamicConfigManager.alterConfigs(
+                Arrays.asList(
+                        new AlterConfig(
+                                ConfigOptions.SERVER_HISTORICAL_PARTITION_THREAD_POOL_MAX_SIZE
+                                        .key(),
+                                "12",
+                                AlterConfigOpType.SET),
+                        new AlterConfig(
+                                ConfigOptions.NETTY_SERVER_MAX_QUEUED_HISTORICAL_REQUESTS.key(),
+                                "60",
+                                AlterConfigOpType.SET)));
+
+        assertThat(zookeeperClient.fetchEntityConfig())
+                .containsEntry(
+                        ConfigOptions.SERVER_HISTORICAL_PARTITION_THREAD_POOL_MAX_SIZE.key(), "12")
+                .containsEntry(
+                        ConfigOptions.NETTY_SERVER_MAX_QUEUED_HISTORICAL_REQUESTS.key(), "60");
+    }
+
+    @Test
     void testPreventInvalidConfig() throws Exception {
         // Test that generic type validation prevents invalid config values
         Configuration configuration = new Configuration();
@@ -739,6 +763,41 @@ public class DynamicConfigChangeTest {
 
         // Verify the reconfigurable was notified with the new value
         assertThat(reconfiguredValue.get()).isEqualTo(2);
+    }
+
+    @Test
+    void testDynamicRollActiveSegmentChange() throws Exception {
+        Configuration configuration = new Configuration();
+        configuration.set(ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED, false);
+
+        DynamicConfigManager dynamicConfigManager = createManager(configuration);
+
+        AtomicReference<Boolean> reconfiguredValue = new AtomicReference<>(false);
+        dynamicConfigManager.register(
+                new ServerReconfigurable() {
+                    @Override
+                    public void validate(Configuration newConfig) throws ConfigException {}
+
+                    @Override
+                    public void reconfigure(Configuration newConfig) {
+                        reconfiguredValue.set(
+                                newConfig.get(
+                                        ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED));
+                    }
+                });
+        dynamicConfigManager.startup();
+
+        dynamicConfigManager.alterConfigs(
+                Collections.singletonList(
+                        new AlterConfig(
+                                ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED.key(),
+                                "true",
+                                AlterConfigOpType.SET)));
+
+        Map<String, String> zkConfig = zookeeperClient.fetchEntityConfig();
+        assertThat(zkConfig.get(ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED.key()))
+                .isEqualTo("true");
+        assertThat(reconfiguredValue.get()).isTrue();
     }
 
     @Test

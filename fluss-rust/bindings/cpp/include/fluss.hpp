@@ -21,12 +21,14 @@
 
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -46,11 +48,16 @@ struct Admin;
 struct Table;
 struct AppendWriter;
 struct WriteResult;
+class WriteCallback;
+class WriteCallbackCapacity;
 struct LogScanner;
+struct RecordBatchLogReader;
 struct BatchScanner;
 struct UpsertWriter;
 struct Lookuper;
 struct PrefixLookuper;
+struct PendingLookup;
+struct PendingPrefixLookup;
 struct ScanResultInner;
 struct GenericRowInner;
 struct LookupResultInner;
@@ -58,6 +65,8 @@ struct PrefixLookupResultInner;
 struct ArrayWriterInner;
 struct MapWriterInner;
 struct ValueInner;
+enum class FfiPredicateLiteralType : int32_t;
+enum class FfiPredicateLeafFunction : int32_t;
 }  // namespace ffi
 
 /// Named constants for Fluss API error codes.
@@ -188,6 +197,40 @@ struct ErrorCode {
     static constexpr int INVALID_ALTER_TABLE_EXCEPTION = 56;
     /// Deletion operations are disabled on this table.
     static constexpr int DELETION_DISABLED_EXCEPTION = 57;
+    /// The server does not exist.
+    static constexpr int SERVER_NOT_EXIST_EXCEPTION = 58;
+    /// The server tag already exists.
+    static constexpr int SERVER_TAG_ALREADY_EXIST_EXCEPTION = 59;
+    /// The server tag does not exist.
+    static constexpr int SERVER_TAG_NOT_EXIST_EXCEPTION = 60;
+    /// The rebalance task failed.
+    static constexpr int REBALANCE_FAILURE_EXCEPTION = 61;
+    /// No rebalance task is in progress.
+    static constexpr int NO_REBALANCE_IN_PROGRESS_EXCEPTION = 62;
+    /// The client used an invalid producer ID.
+    static constexpr int INVALID_PRODUCER_ID_EXCEPTION = 63;
+    /// A configuration error occurred.
+    static constexpr int CONFIG_EXCEPTION = 64;
+    /// The coordinator is not the leader and cannot process the request.
+    static constexpr int NOT_COORDINATOR_LEADER_EXCEPTION = 65;
+    /// The scanner session expired due to inactivity.
+    static constexpr int SCANNER_EXPIRED = 66;
+    /// The server does not recognize the scanner id.
+    static constexpr int UNKNOWN_SCANNER_ID = 67;
+    /// The scan request is invalid.
+    static constexpr int INVALID_SCAN_REQUEST = 68;
+    /// The per-bucket or per-server scanner session limit has been reached.
+    static constexpr int TOO_MANY_SCANNERS = 69;
+    /// The tablet server rejected writes because its data disk reached the write-limit ratio.
+    static constexpr int DISK_WRITE_LOCKED = 70;
+    /// The cluster does not have enough KV leader replica capacity.
+    static constexpr int INSUFFICIENT_KV_LEADER_REPLICA_CAPACITY = 71;
+    /// The server rejected a write due to storage backpressure.
+    static constexpr int STORAGE_BACKPRESSURE_EXCEPTION = 72;
+    /// The historical partition request was throttled because too many are in flight.
+    static constexpr int HISTORICAL_PARTITION_THROTTLED = 73;
+    /// The request's bucket routing is missing or stale; refresh metadata and rebuild it.
+    static constexpr int INVALID_BUCKET_ROUTING = 74;
 
     /// Returns true if retrying the request may succeed. Mirrors Java's RetriableException hierarchy.
     static constexpr bool IsRetriable(int32_t code) {
@@ -198,7 +241,9 @@ struct ErrorCode {
                code == UNKNOWN_TABLE_OR_BUCKET_EXCEPTION || code == REQUEST_TIME_OUT ||
                code == STORAGE_EXCEPTION ||
                code == NOT_ENOUGH_REPLICAS_AFTER_APPEND_EXCEPTION ||
-               code == NOT_ENOUGH_REPLICAS_EXCEPTION || code == LEADER_NOT_AVAILABLE_EXCEPTION;
+               code == NOT_ENOUGH_REPLICAS_EXCEPTION || code == LEADER_NOT_AVAILABLE_EXCEPTION ||
+               code == STORAGE_BACKPRESSURE_EXCEPTION || code == DISK_WRITE_LOCKED ||
+               code == HISTORICAL_PARTITION_THROTTLED;
     }
 };
 
@@ -257,6 +302,116 @@ struct Timestamp {
         return {ms, nano_of_ms};
     }
 };
+
+/// Scalar literal used by a log-scan predicate.
+///
+/// Integer literals are coerced to the scanned column's integer type by the
+/// Rust client, with range checks. Decimal and timestamp literals use the
+/// explicit factories below to preserve their Fluss logical type.
+class PredicateLiteral {
+   public:
+    PredicateLiteral(bool value);
+    PredicateLiteral(int32_t value);
+    PredicateLiteral(int64_t value);
+    template <typename T, std::enable_if_t<std::is_integral_v<std::decay_t<T>> &&
+                                               !std::is_same_v<std::decay_t<T>, bool> &&
+                                               !std::is_same_v<std::decay_t<T>, int32_t> &&
+                                               !std::is_same_v<std::decay_t<T>, int64_t>,
+                                           int> = 0>
+    PredicateLiteral(T value) : PredicateLiteral(ToInt64(value)) {}
+    PredicateLiteral(float value);
+    PredicateLiteral(double value);
+    PredicateLiteral(const char* value);
+    PredicateLiteral(std::string value);
+    PredicateLiteral(std::vector<uint8_t> value);
+    PredicateLiteral(Date value);
+    PredicateLiteral(Time value);
+
+    static PredicateLiteral Null();
+    static PredicateLiteral Decimal(std::string value);
+    static PredicateLiteral TimestampNtz(Timestamp value);
+    static PredicateLiteral TimestampLtz(Timestamp value);
+
+   private:
+    explicit PredicateLiteral(ffi::FfiPredicateLiteralType literal_type);
+
+    template <typename T>
+    static int64_t ToInt64(T value) {
+        using ValueType = std::decay_t<T>;
+        static_assert(sizeof(ValueType) <= sizeof(int64_t), "Integer literal is wider than INT64");
+        if constexpr (std::is_unsigned_v<ValueType>) {
+            if (value >
+                static_cast<std::make_unsigned_t<int64_t>>(std::numeric_limits<int64_t>::max())) {
+                throw std::out_of_range("Unsigned predicate literal does not fit INT64");
+            }
+        }
+        return static_cast<int64_t>(value);
+    }
+
+    ffi::FfiPredicateLiteralType literal_type_;
+    bool boolean_value_{false};
+    int64_t integer_value_{0};
+    double floating_value_{0};
+    std::string string_value_;
+    std::vector<uint8_t> bytes_value_;
+    Timestamp timestamp_value_;
+
+    friend class Predicate;
+    friend class TableScan;
+};
+
+/// Filter expression for server-side Arrow log RecordBatch pruning.
+///
+/// Filter pushdown is conservative: a returned RecordBatch may still
+/// contain non-matching rows, so callers must evaluate the predicate again.
+class Predicate {
+   public:
+    Predicate(const Predicate&) = default;
+    Predicate& operator=(const Predicate&) = default;
+    Predicate(Predicate&&) noexcept = default;
+    Predicate& operator=(Predicate&&) noexcept = default;
+
+    Predicate And(Predicate other) const;
+    Predicate Or(Predicate other) const;
+
+   private:
+    struct Node;
+
+    explicit Predicate(std::shared_ptr<const Node> root);
+
+    std::shared_ptr<const Node> root_;
+
+    friend class ColumnRef;
+    friend class TableScan;
+};
+
+/// Column reference used to build a Predicate.
+class ColumnRef {
+   public:
+    explicit ColumnRef(std::string name) : name_(std::move(name)) {}
+
+    Predicate Equal(PredicateLiteral value) const;
+    Predicate NotEqual(PredicateLiteral value) const;
+    Predicate LessThan(PredicateLiteral value) const;
+    Predicate LessOrEqual(PredicateLiteral value) const;
+    Predicate GreaterThan(PredicateLiteral value) const;
+    Predicate GreaterOrEqual(PredicateLiteral value) const;
+    Predicate IsNull() const;
+    Predicate IsNotNull() const;
+    Predicate StartsWith(std::string prefix) const;
+    Predicate Contains(std::string infix) const;
+    Predicate EndsWith(std::string suffix) const;
+    Predicate In(std::vector<PredicateLiteral> values) const;
+    Predicate NotIn(std::vector<PredicateLiteral> values) const;
+
+   private:
+    Predicate Leaf(ffi::FfiPredicateLeafFunction function,
+                   std::vector<PredicateLiteral> literals) const;
+
+    std::string name_;
+};
+
+inline ColumnRef Col(std::string name) { return ColumnRef(std::move(name)); }
 
 enum class ChangeType {
     AppendOnly = 0,
@@ -410,9 +565,61 @@ struct Result {
 
     bool Ok() const { return error_code == 0; }
 
-    /// Returns true if retrying the request may succeed. Client-side errors always return false.
+    /// Returns true if retrying the request may succeed. Does not guarantee that a failed
+    /// write had no effect or that application resubmission is duplicate-safe.
+    /// Client-side errors always return false.
     bool IsRetriable() const { return ErrorCode::IsRetriable(error_code); }
 };
+
+/// Write-specific completion metadata. The reference passed to a callback is valid
+/// only for that invocation; copy the result when retaining it for later work.
+struct WriteCompletion {
+    Result result;
+};
+
+/// Per-writer admission control for callback operations, independent of buffer bytes.
+struct WriteCallbackOptions {
+    // Includes accepted writes awaiting completion and callbacks queued or executing.
+    // Must be greater than zero. This is not a byte limit on callback captures.
+    size_t max_pending_operations{262144};
+};
+
+/// Receives the final outcome of an accepted write. Function pointers and lambdas
+/// are supported. An empty callback is rejected before submitting the write.
+///
+/// During normal operation, the SDK owns the callback until completion and invokes
+/// it exactly once on a shared SDK worker; no caller polling or waiting thread
+/// is needed. Process exit or a crash can prevent delivery. Callbacks never run
+/// inline in the submitting call, but may start before the call returns.
+/// Keep callbacks short and synchronize access to shared state, including writers.
+/// Callback overloads do not make writers safe for concurrent access. Captured
+/// references must remain valid until the callback finishes; capturing shared
+/// ownership is recommended. Keep the connection alive until completion.
+///
+/// Success follows the configured acknowledgment policy. Errors are reported after
+/// internal retry handling, but do not guarantee that no data was written.
+/// Application resubmission is a new operation and can produce duplicates even
+/// with SDK idempotence enabled. Retain input identifiers and recovery state as
+/// needed; one callback invocation is not an exactly-once delivery guarantee.
+///
+/// Callbacks run serially in dispatch order on a single shared worker. There is
+/// no cross-bucket submission-order guarantee; late registrations are queued
+/// when registered. Do not wait for another callback from a callback: it stalls that
+/// worker. Synchronous SDK calls require exclusive writer access. Callback
+/// submissions to a full writer fail immediately when called from a callback,
+/// instead of blocking the worker. Each writer bounds its outstanding callback
+/// operations using WriteCallbackOptions, independently of the write buffer size.
+/// Hand off retries or expensive work without blocking; bound application queues
+/// and handle overflow without silently discarding failed operations.
+///
+/// Exceptions thrown by callbacks are caught and reported to stderr; they do not
+/// change the write outcome or retry the callback. Stop submissions before Flush().
+/// After a successful Rust write flush, Flush() blocks until pending callbacks finish,
+/// acting as a barrier, so a callback that never returns hangs it. On error, referenced
+/// state may still be in use.
+/// Flush() called inside any write callback returns a client error without flushing.
+/// Flush() does not wait for work handed to application workers or retry queues.
+using WriteCallback = std::function<void(const WriteCompletion&)>;
 
 struct TablePath {
     std::string database_name;
@@ -434,6 +641,7 @@ struct Column {
 struct Schema {
     std::vector<Column> columns;
     std::vector<std::string> primary_keys;
+    std::vector<std::string> auto_increment_columns;
 
     class Builder {
        public:
@@ -447,11 +655,20 @@ struct Schema {
             return *this;
         }
 
-        Schema Build() { return Schema{std::move(columns_), std::move(primary_keys_)}; }
+        Builder& SetAutoIncrementColumn(std::string column) {
+            auto_increment_columns_ = {std::move(column)};
+            return *this;
+        }
+
+        Schema Build() {
+            return Schema{std::move(columns_), std::move(primary_keys_),
+                          std::move(auto_increment_columns_)};
+        }
 
        private:
         std::vector<Column> columns_;
         std::vector<std::string> primary_keys_;
+        std::vector<std::string> auto_increment_columns_;
     };
 
     static Builder NewBuilder() { return Builder(); }
@@ -1035,6 +1252,9 @@ class PrefixLookupResult {
 
    private:
     friend class PrefixLookuper;
+    friend class PendingPrefixLookup;
+    /// Takes ownership of `inner`, or returns its error.
+    Result Adopt(ffi::PrefixLookupResultInner* inner);
     std::shared_ptr<const detail::PrefixData> data_;
 };
 
@@ -1177,6 +1397,13 @@ struct ArrowBatchImporter;
 
 class ArrowRecordBatch {
    public:
+    // Reported by GetCommitTimestamp() when the batch carries no single commit
+    // timestamp, which is the case for a limit scan because it merges several
+    // log batches into one Arrow batch.
+    static constexpr int64_t NO_COMMIT_TIMESTAMP = -1;
+    // No single source schema ID, including results of a limit scan.
+    static constexpr int32_t NO_SCHEMA_ID = -1;
+
     std::shared_ptr<arrow::RecordBatch> GetArrowRecordBatch() const { return batch_; }
 
     bool Available() const;
@@ -1190,13 +1417,18 @@ class ArrowRecordBatch {
     int32_t GetBucketId() const;
     int64_t GetBaseOffset() const;
     int64_t GetLastOffset() const;
+    // Epoch milliseconds, or NO_COMMIT_TIMESTAMP when unavailable.
+    int64_t GetCommitTimestamp() const;
+    // Source log batch schema ID, or NO_SCHEMA_ID when unavailable.
+    int32_t GetSchemaId() const;
 
    private:
     friend class LogScanner;
     friend struct detail::ArrowBatchImporter;
     explicit ArrowRecordBatch(std::shared_ptr<arrow::RecordBatch> batch, int64_t table_id,
                               int64_t partition_id, int32_t bucket_id,
-                              int64_t base_offset) noexcept;
+                              int64_t base_offset, int64_t commit_timestamp,
+                              int32_t schema_id) noexcept;
 
     std::shared_ptr<arrow::RecordBatch> batch_{nullptr};
 
@@ -1204,6 +1436,10 @@ class ArrowRecordBatch {
     int64_t partition_id_;
     int32_t bucket_id_;
     int64_t base_offset_;
+    // Defaults to the sentinel so any future construction path that forgets to
+    // set it reports "unknown" rather than an arbitrary value.
+    int64_t commit_timestamp_{NO_COMMIT_TIMESTAMP};
+    int32_t schema_id_{NO_SCHEMA_ID};
 };
 
 struct ArrowRecordBatches {
@@ -1235,6 +1471,46 @@ struct PartitionBucketSubscription {
     int64_t offset;
 };
 
+/// Stopping offset for one bucket subscribed on a record-batch log scanner.
+struct ReaderStopOffset {
+    TableBucket bucket;
+    int64_t offset;
+};
+
+/// One bounded log range. Records are returned for
+/// [starting_offset, stopping_offset). `stopping_offset` must be non-negative,
+/// `starting_offset` must be non-negative or `EARLIEST_OFFSET`, and the bucket
+/// id must be within the table's configured bucket count.
+struct RecordBatchLogReadRange {
+    TableBucket bucket;
+    int64_t starting_offset;
+    int64_t stopping_offset;
+};
+
+/// A half-open log timestamp range [starting_timestamp_ms,
+/// stopping_timestamp_ms) in epoch milliseconds. Each requested bucket
+/// resolves the two timestamps to offsets before the reader is created.
+struct TimestampRange {
+    int64_t starting_timestamp_ms;
+    int64_t stopping_timestamp_ms;
+};
+
+/// Outcome of a bounded record-batch read.
+enum class BoundedReadStatus {
+    BatchAvailable = 0,
+    TimedOut = 1,
+    Finished = 2,
+};
+
+/// Outcome of one bounded record-batch read. Meaningful only when the
+/// accompanying `Result` is `Ok()`; on a non-Ok `Result` the status is reset to
+/// `Finished` so callers that skip the error check terminate instead of
+/// retrying a failed read forever.
+struct RecordBatchReadResult {
+    BoundedReadStatus status{BoundedReadStatus::Finished};
+    std::unique_ptr<ArrowRecordBatch> batch;
+};
+
 struct LakeSnapshot {
     int64_t snapshot_id;
     std::vector<BucketOffset> bucket_offsets;
@@ -1243,6 +1519,7 @@ struct LakeSnapshot {
 struct PartitionInfo {
     int64_t partition_id;
     std::string partition_name;
+    int32_t bucket_count{0};
 };
 
 struct ServerNode {
@@ -1320,12 +1597,15 @@ class LookupResult : public detail::NamedGetters<LookupResult> {
 
    private:
     friend class Lookuper;
+    friend class PendingLookup;
     size_t Resolve(const std::string& name) const {
         if (!column_map_) {
             BuildColumnMap();
         }
         return detail::ResolveColumn(*column_map_, name);
     }
+    /// Takes ownership of `inner`, or returns its error.
+    Result Adopt(ffi::LookupResultInner* inner);
     void Destroy() noexcept;
     void BuildColumnMap() const;
     ffi::LookupResultInner* inner_{nullptr};
@@ -1338,6 +1618,8 @@ class Lookuper;
 class PrefixLookuper;
 class WriteResult;
 class LogScanner;
+class RecordBatchLogScanner;
+class RecordBatchLogReader;
 class BatchScanner;
 class Admin;
 class Table;
@@ -1363,12 +1645,16 @@ struct Configuration {
     int32_t writer_dynamic_batch_size_min{256 * 1024};
     // Bucket assigner for tables without bucket keys: "sticky" or "round_robin"
     std::string writer_bucket_no_key_assigner{"sticky"};
+    // Create a missing partition on write; if false, such writes fail with PARTITION_NOT_EXISTS
+    bool writer_dynamic_create_partition_enabled{true};
     // Number of remote log batches to prefetch during scanning
     size_t scanner_remote_log_prefetch_num{4};
     // Number of threads for downloading remote log data
     size_t remote_file_download_thread_num{3};
     // Remote log read concurrency within one file (streaming read path)
     size_t scanner_remote_log_read_concurrency{4};
+    // Parent directory for downloaded remote logs; empty uses the OS temporary directory plus `/fluss`
+    std::string scanner_io_tmp_dir;
     // Maximum number of records returned in a single call to Poll() for LogScanner
     size_t scanner_log_max_poll_records{500};
     // Maximum bytes per fetch response for LogScanner (16 MB)
@@ -1384,12 +1670,21 @@ struct Configuration {
     bool writer_enable_idempotence{true};
     // Maximum number of in-flight requests per bucket for idempotent writes
     size_t writer_max_inflight_requests_per_bucket{5};
-    // Total memory available for buffering write batches (default 64MB)
+    // Shared write-batch memory budget per Connection, across its tables and writers
+    // (default 64 MiB). Not a process RSS limit or a callback-capture memory budget.
     size_t writer_buffer_memory_size{64 * 1024 * 1024};
-    // Maximum time in milliseconds to block waiting for buffer memory
+    // Shared wait budget in milliseconds for buffer memory and callback capacity.
+    // Does not bound data conversion, scheduling, ACKs, or callback execution.
+    // UINT64_MAX waits indefinitely; zero fails fast when capacity or memory is unavailable.
     uint64_t writer_buffer_wait_timeout_ms{std::numeric_limits<uint64_t>::max()};
+    // Maximum KV backpressure throttle in milliseconds
+    uint64_t writer_kv_backpressure_max_throttle_ms{3000};
+    // Base delay (ms) before resending a batch the server rejected with a retriable error
+    uint64_t writer_retry_backoff_ms{100};
+    // Maximum writer retry backoff (ms) after exponential growth
+    uint64_t writer_retry_max_backoff_ms{1000};
     // Connect timeout in milliseconds for TCP transport connect
-    uint64_t connect_timeout_ms{120000};
+    uint64_t connect_timeout_ms{15000};
     // Security protocol: "PLAINTEXT" (default, no auth) or "sasl" (SASL auth)
     std::string security_protocol{"PLAINTEXT"};
     // SASL mechanism (only "PLAIN" is supported)
@@ -1408,6 +1703,11 @@ struct Configuration {
     size_t lookup_max_inflight_requests{128};
     // Maximum number of lookup retries
     int32_t lookup_max_retries{std::numeric_limits<int32_t>::max()};
+    // Base delay (ms) before resending a lookup that failed with a retriable error
+    uint64_t lookup_retry_backoff_ms{100};
+    // Maximum lookup retry backoff (ms) after exponential growth, before +/-20% jitter;
+    // must be >= lookup_retry_backoff_ms
+    uint64_t lookup_retry_max_backoff_ms{1000};
 };
 
 class Connection {
@@ -1502,6 +1802,7 @@ class Admin {
                          const std::string* partition_name = nullptr);
 
     friend class Connection;
+    friend class LogScanner;
     Admin(ffi::Admin* admin) noexcept;
 
     void Destroy() noexcept;
@@ -1532,6 +1833,12 @@ class Table {
     Result NewPrefixLookup(std::vector<std::string> lookup_columns, PrefixLookuper& out);
 
     TableInfo GetTableInfo() const;
+
+    /// The table's Arrow schema. `AppendWriter::AppendArrowBatch` requires a
+    /// batch whose column types match it, so this is what to build or cast
+    /// against.
+    Result GetArrowSchema(std::shared_ptr<arrow::Schema>& out) const;
+
     TablePath GetTablePath() const;
     bool HasPrimaryKey() const;
 
@@ -1558,6 +1865,8 @@ class TableAppend {
     TableAppend& operator=(TableAppend&&) noexcept = default;
 
     Result CreateWriter(AppendWriter& out);
+    /// Create a writer with an independent, positive callback operation limit.
+    Result CreateWriter(AppendWriter& out, const WriteCallbackOptions& options);
 
    private:
     friend class Table;
@@ -1577,6 +1886,8 @@ class TableUpsert {
     TableUpsert& PartialUpdateByName(std::vector<std::string> column_names);
 
     Result CreateWriter(UpsertWriter& out);
+    /// Create a writer sharing one callback operation limit across upserts and deletes.
+    Result CreateWriter(UpsertWriter& out, const WriteCallbackOptions& options);
 
    private:
     friend class Table;
@@ -1615,6 +1926,12 @@ class TableScan {
     TableScan& ProjectByIndex(std::vector<size_t> column_indices);
     TableScan& ProjectByName(std::vector<std::string> column_names);
 
+    /// Pushes a predicate down for conservative server-side RecordBatch pruning.
+    ///
+    /// Only Arrow log scans support this. Returned batches may contain
+    /// non-matching rows and must be filtered again by the caller.
+    TableScan& Filter(Predicate predicate);
+
     TableScan& Limit(int32_t row_number);
 
     /// Creates a record-mode log scanner, polled for individual `ScanRecord`s.
@@ -1632,7 +1949,25 @@ class TableScan {
     /// path carries no per-record change types; read a primary-key table's
     /// changelog with `CreateLogScanner()` instead. Requires the ARROW log
     /// format.
+    Result CreateRecordBatchLogScanner(RecordBatchLogScanner& out);
+
+    /// Legacy overload. Prefer the strongly typed RecordBatchLogScanner.
     Result CreateRecordBatchLogScanner(LogScanner& out);
+
+    /// Creates a bounded reader directly from per-bucket offset ranges.
+    ///
+    /// This is the preferred API for query engines: it subscribes every bucket
+    /// at its starting offset, installs the corresponding stopping offset, and
+    /// transfers scanner ownership to the returned reader.
+    Result CreateRecordBatchLogReader(const std::vector<RecordBatchLogReadRange>& ranges,
+                                      RecordBatchLogReader& out);
+
+    /// Creates a bounded reader for a timestamp range over requested buckets.
+    ///
+    /// The timestamps are resolved independently for every requested bucket,
+    /// then read with [starting_offset, stopping_offset) semantics.
+    Result CreateRecordBatchLogReader(Admin& admin, const std::vector<TableBucket>& buckets,
+                                      const TimestampRange& range, RecordBatchLogReader& out);
 
     Result CreateBucketBatchScanner(const TableBucket& bucket, BatchScanner& out);
 
@@ -1646,6 +1981,7 @@ class TableScan {
     ffi::Table* table_{nullptr};
     std::vector<size_t> projection_;
     std::vector<std::string> name_projection_;
+    std::optional<Predicate> predicate_;
     std::optional<int32_t> limit_;
 };
 
@@ -1670,6 +2006,7 @@ class WriteResult {
     friend class UpsertWriter;
     WriteResult(ffi::WriteResult* inner) noexcept;
 
+    Result Notify(std::unique_ptr<ffi::WriteCallback> callback);
     void Destroy() noexcept;
     ffi::WriteResult* inner_{nullptr};
 };
@@ -1688,17 +2025,37 @@ class AppendWriter {
 
     Result Append(const GenericRow& row);
     Result Append(const GenericRow& row, WriteResult& out);
+    /// Submit a row and notify callback of its final outcome without waiting for
+    /// acknowledgment. Callback capacity and buffer waits share the budget from
+    /// client.writer.buffer.wait-timeout. Ok means the write was accepted and the
+    /// callback fires exactly once during normal operation; an error means
+    /// submission failed and no callback runs. A zero timeout makes admission
+    /// fail fast when callback capacity or buffer memory is unavailable.
+    Result Append(const GenericRow& row, WriteCallback callback);
     Result AppendArrowBatch(const std::shared_ptr<arrow::RecordBatch>& batch);
     Result AppendArrowBatch(const std::shared_ptr<arrow::RecordBatch>& batch, WriteResult& out);
+    /// Like the callback Append overload, but notifies once for the entire batch.
+    Result AppendArrowBatch(const std::shared_ptr<arrow::RecordBatch>& batch,
+                            WriteCallback callback);
     Result Flush();
 
    private:
     friend class Table;
     friend class TableAppend;
-    AppendWriter(ffi::AppendWriter* writer) noexcept;
+    AppendWriter(ffi::AppendWriter* writer,
+                 std::shared_ptr<ffi::WriteCallbackCapacity> callback_capacity) noexcept;
+
+    // Submit through FFI bounding the buffer-backpressure wait by submit_budget_ms
+    // (Kafka max.block.ms style): negative uses the writer's configured buffer wait
+    // timeout, >= 0 caps the wait at that many ms (0 = fail fast when the buffer is
+    // full). Only the callback path passes a budget; the public overloads pass -1.
+    Result AppendWithBudget(const GenericRow& row, WriteResult& out, int64_t submit_budget_ms);
+    Result AppendArrowBatchWithBudget(const std::shared_ptr<arrow::RecordBatch>& batch,
+                                      WriteResult& out, int64_t submit_budget_ms);
 
     void Destroy() noexcept;
     ffi::AppendWriter* writer_{nullptr};
+    std::shared_ptr<ffi::WriteCallbackCapacity> callback_capacity_;
 };
 
 class UpsertWriter {
@@ -1715,16 +2072,96 @@ class UpsertWriter {
 
     Result Upsert(const GenericRow& row);
     Result Upsert(const GenericRow& row, WriteResult& out);
+    /// Submit an upsert and notify callback of its final outcome without waiting
+    /// for acknowledgment. Callback capacity and buffer waits share the budget from
+    /// client.writer.buffer.wait-timeout. Ok means the write was accepted and the
+    /// callback fires exactly once during normal operation; an error means
+    /// submission failed and no callback runs. A zero timeout makes admission
+    /// fail fast when callback capacity or buffer memory is unavailable.
+    Result Upsert(const GenericRow& row, WriteCallback callback);
     Result Delete(const GenericRow& row);
     Result Delete(const GenericRow& row, WriteResult& out);
+    /// Like the callback Upsert overload, but deletes a row by primary key.
+    Result Delete(const GenericRow& row, WriteCallback callback);
     Result Flush();
 
    private:
     friend class Table;
     friend class TableUpsert;
-    UpsertWriter(ffi::UpsertWriter* writer) noexcept;
+    UpsertWriter(ffi::UpsertWriter* writer,
+                 std::shared_ptr<ffi::WriteCallbackCapacity> callback_capacity) noexcept;
+
+    // See AppendWriter::AppendWithBudget for submit_budget_ms semantics. Only the
+    // callback path passes a budget; the public overloads pass -1.
+    Result UpsertWithBudget(const GenericRow& row, WriteResult& out, int64_t submit_budget_ms);
+    Result DeleteWithBudget(const GenericRow& row, WriteResult& out, int64_t submit_budget_ms);
+
     void Destroy() noexcept;
     ffi::UpsertWriter* writer_{nullptr};
+    std::shared_ptr<ffi::WriteCallbackCapacity> callback_capacity_;
+};
+
+/// A lookup started by Lookuper::Lookup(pk_row, PendingLookup&). Move-only. Destroying it
+/// before Wait() returns abandons the lookup.
+class PendingLookup {
+   public:
+    PendingLookup() noexcept;
+    ~PendingLookup() noexcept;
+
+    PendingLookup(const PendingLookup&) = delete;
+    PendingLookup& operator=(const PendingLookup&) = delete;
+    PendingLookup(PendingLookup&& other) noexcept;
+    PendingLookup& operator=(PendingLookup&& other) noexcept;
+
+    /// True while the lookup is running. False once Wait() has returned its outcome, which can
+    /// be an error with any code, REQUEST_TIME_OUT included.
+    bool Available() const;
+
+    /// Blocks until the row arrives.
+    Result Wait(LookupResult& out);
+
+    /// Blocks for at most `timeout_ms`. If the wait runs out, it returns REQUEST_TIME_OUT and
+    /// the lookup keeps running. The lookup itself can also fail with REQUEST_TIME_OUT, which
+    /// ends it, so check Available() before waiting again.
+    Result Wait(LookupResult& out, int64_t timeout_ms);
+
+   private:
+    friend class Lookuper;
+    explicit PendingLookup(ffi::PendingLookup* pending) noexcept;
+    // A negative timeout_ms waits without limit.
+    Result DoWait(LookupResult& out, int64_t timeout_ms);
+    void Destroy() noexcept;
+    ffi::PendingLookup* pending_{nullptr};
+};
+
+/// A prefix lookup started by PrefixLookuper::PrefixLookup(prefix_row, PendingPrefixLookup&).
+/// Behaves like PendingLookup.
+class PendingPrefixLookup {
+   public:
+    PendingPrefixLookup() noexcept;
+    ~PendingPrefixLookup() noexcept;
+
+    PendingPrefixLookup(const PendingPrefixLookup&) = delete;
+    PendingPrefixLookup& operator=(const PendingPrefixLookup&) = delete;
+    PendingPrefixLookup(PendingPrefixLookup&& other) noexcept;
+    PendingPrefixLookup& operator=(PendingPrefixLookup&& other) noexcept;
+
+    /// True while the lookup is running, like PendingLookup::Available.
+    bool Available() const;
+
+    /// Blocks until the rows arrive.
+    Result Wait(PrefixLookupResult& out);
+
+    /// Blocks for at most `timeout_ms`, like PendingLookup::Wait.
+    Result Wait(PrefixLookupResult& out, int64_t timeout_ms);
+
+   private:
+    friend class PrefixLookuper;
+    explicit PendingPrefixLookup(ffi::PendingPrefixLookup* pending) noexcept;
+    // A negative timeout_ms waits without limit.
+    Result DoWait(PrefixLookupResult& out, int64_t timeout_ms);
+    void Destroy() noexcept;
+    ffi::PendingPrefixLookup* pending_{nullptr};
 };
 
 class Lookuper {
@@ -1739,7 +2176,14 @@ class Lookuper {
 
     bool Available() const;
 
-    Result Lookup(const GenericRow& pk_row, LookupResult& out);
+    /// Looks up the row with the primary key set on `pk_row`, blocking until the result
+    /// arrives. Thread-safe: threads may share one Lookuper, and their concurrent lookups
+    /// go out in the same batches.
+    Result Lookup(const GenericRow& pk_row, LookupResult& out) const;
+
+    /// Starts the lookup without blocking; `out` waits for its row. Lookups started this way
+    /// share batches too, so one thread can keep many in flight.
+    Result Lookup(const GenericRow& pk_row, PendingLookup& out) const;
 
    private:
     friend class Table;
@@ -1762,8 +2206,12 @@ class PrefixLookuper {
 
     bool Available() const;
 
-    /// Looks up all rows matching the prefix columns set on `prefix_row`.
-    Result PrefixLookup(const GenericRow& prefix_row, PrefixLookupResult& out);
+    /// Looks up all rows matching the prefix columns set on `prefix_row`, blocking until the
+    /// result arrives. Thread-safe, like Lookuper::Lookup.
+    Result PrefixLookup(const GenericRow& prefix_row, PrefixLookupResult& out) const;
+
+    /// Starts the lookup without blocking, like Lookuper::Lookup(pk_row, PendingLookup&).
+    Result PrefixLookup(const GenericRow& prefix_row, PendingPrefixLookup& out) const;
 
    private:
     friend class Table;
@@ -1796,10 +2244,137 @@ class LogScanner {
    private:
     friend class Table;
     friend class TableScan;
+    friend class RecordBatchLogScanner;
     LogScanner(ffi::LogScanner* scanner) noexcept;
 
     void Destroy() noexcept;
+
+    /// Creates a bounded reader using the latest offsets observed during this call.
+    /// Subscribe the record-batch scanner at the desired starting offsets before
+    /// calling this method.
+    Result CreateRecordBatchLogReaderUntilLatest(const Admin& admin, RecordBatchLogReader& out);
+
+    /// Creates a bounded reader using explicit stopping offsets.
+    /// Starting offsets come from the scanner subscriptions. Every stopping
+    /// offset must correspond to a bucket already subscribed on this scanner.
+    Result CreateRecordBatchLogReaderUntilOffsets(const std::vector<ReaderStopOffset>& offsets,
+                                                  RecordBatchLogReader& out);
+
+    /// Creates a bounded reader from per-bucket offset ranges, subscribing
+    /// every non-empty range. Range validation happens in the SDK.
+    Result CreateRecordBatchLogReaderFromRanges(const std::vector<RecordBatchLogReadRange>& ranges,
+                                                RecordBatchLogReader& out);
+
+    /// Creates a bounded reader for a timestamp range over the given buckets.
+    /// The SDK resolves both timestamps to per-bucket offsets.
+    Result CreateRecordBatchLogReaderBetweenTimestamps(const Admin& admin,
+                                                       const std::vector<TableBucket>& buckets,
+                                                       const TimestampRange& range,
+                                                       RecordBatchLogReader& out);
+
     ffi::LogScanner* scanner_{nullptr};
+};
+
+/// Strongly typed Arrow record-batch log scanner.
+///
+/// Use this type for unbounded batch polling, or move it into a bounded reader.
+class RecordBatchLogScanner {
+   public:
+    RecordBatchLogScanner() noexcept;
+    ~RecordBatchLogScanner() noexcept;
+
+    RecordBatchLogScanner(const RecordBatchLogScanner&) = delete;
+    RecordBatchLogScanner& operator=(const RecordBatchLogScanner&) = delete;
+    RecordBatchLogScanner(RecordBatchLogScanner&& other) noexcept;
+    RecordBatchLogScanner& operator=(RecordBatchLogScanner&& other) noexcept;
+
+    bool Available() const;
+
+    Result Subscribe(int32_t bucket_id, int64_t start_offset);
+    Result Subscribe(const std::vector<BucketSubscription>& bucket_offsets);
+    Result SubscribePartitionBuckets(int64_t partition_id, int32_t bucket_id, int64_t start_offset);
+    Result SubscribePartitionBuckets(const std::vector<PartitionBucketSubscription>& subscriptions);
+    Result Unsubscribe(int32_t bucket_id);
+    Result UnsubscribePartition(int64_t partition_id, int32_t bucket_id);
+    Result Poll(int64_t timeout_ms, ArrowRecordBatches& out);
+
+    /// Transfers this scanner into a reader bounded by the latest offsets
+    /// observed during the call. The scanner becomes unavailable on success.
+    Result CreateRecordBatchLogReaderUntilLatest(const Admin& admin, RecordBatchLogReader& out) &&;
+
+    /// Transfers this scanner into a reader with explicit stopping offsets.
+    /// The scanner becomes unavailable on success.
+    Result CreateRecordBatchLogReaderUntilOffsets(const std::vector<ReaderStopOffset>& offsets,
+                                                  RecordBatchLogReader& out) &&;
+
+   private:
+    friend class TableScan;
+    explicit RecordBatchLogScanner(ffi::LogScanner* scanner) noexcept;
+
+    /// Transfers this scanner into a reader bounded by per-bucket offset ranges,
+    /// subscribing every non-empty range. The scanner becomes unavailable on
+    /// success.
+    Result CreateRecordBatchLogReaderFromRanges(const std::vector<RecordBatchLogReadRange>& ranges,
+                                                RecordBatchLogReader& out) &&;
+
+    /// Transfers this scanner into a reader bounded by a timestamp range over
+    /// the given buckets. The scanner becomes unavailable on success.
+    Result CreateRecordBatchLogReaderBetweenTimestamps(const Admin& admin,
+                                                       const std::vector<TableBucket>& buckets,
+                                                       const TimestampRange& range,
+                                                       RecordBatchLogReader& out) &&;
+
+    LogScanner scanner_;
+};
+
+/// Bounded Arrow batch reader created from a subscribed record-batch log scanner.
+/// Only one reader or polling operation may consume the scanner at a time.
+class RecordBatchLogReader {
+   public:
+    RecordBatchLogReader() noexcept;
+    ~RecordBatchLogReader() noexcept;
+
+    RecordBatchLogReader(const RecordBatchLogReader&) = delete;
+    RecordBatchLogReader& operator=(const RecordBatchLogReader&) = delete;
+    RecordBatchLogReader(RecordBatchLogReader&& other) noexcept;
+    RecordBatchLogReader& operator=(RecordBatchLogReader&& other) noexcept;
+
+    bool Available() const;
+
+    /// Waits up to timeout_ms for the next batch. With a non-positive
+    /// timeout_ms, the method returns a buffered batch or reports Finished if
+    /// already complete; otherwise it reports TimedOut without polling the
+    /// scanner.
+    /// Read `out.status` only when the returned `Result` is `Ok()`.
+    /// TimedOut leaves the reader valid for a later retry; Finished means every
+    /// subscribed bucket reached its stopping offset.
+    Result NextBatch(int64_t timeout_ms, RecordBatchReadResult& out);
+
+    /// Drains remaining batches using timeout_ms as the total execution budget
+    /// for this invocation. Callers should normally pass the query's remaining
+    /// execution time and invoke this method once.
+    /// Batches are *appended* to `out`. If the budget expires before every
+    /// stopping offset is reached, the method stops collecting and returns a
+    /// retriable REQUEST_TIME_OUT; `out` may then contain a partial set of
+    /// complete batches. Only an `Ok()` result means the bounded result is
+    /// complete. Once the budget is exhausted, the reader does not wait for
+    /// additional scanner data, but it still returns buffered batches and
+    /// observes completion before reporting REQUEST_TIME_OUT. Consequently, a
+    /// non-positive timeout_ms returns Ok for an already-complete reader and
+    /// REQUEST_TIME_OUT when unread work remains.
+    /// The reader remains valid after timeout, but retrying is an explicit caller
+    /// policy rather than part of this operation; callers should not retry
+    /// indefinitely.
+    Result CollectAllBatches(int64_t timeout_ms, ArrowRecordBatches& out);
+
+   private:
+    friend class LogScanner;
+    friend class RecordBatchLogScanner;
+    friend class TableScan;
+    explicit RecordBatchLogReader(ffi::RecordBatchLogReader* reader) noexcept;
+
+    void Destroy() noexcept;
+    ffi::RecordBatchLogReader* reader_{nullptr};
 };
 
 // One-shot bounded scan of a single bucket, from TableScan::CreateBucketBatchScanner.

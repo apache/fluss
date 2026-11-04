@@ -110,6 +110,7 @@ class TableBucketStateMachineTest {
     private CoordinatorMetadataCache serverMetadataCache;
     private KvSnapshotLeaseManager kvSnapshotLeaseManager;
     private Scheduler scheduler;
+    private Configuration conf;
 
     @BeforeAll
     static void baseBeforeAll() throws Exception {
@@ -122,7 +123,7 @@ class TableBucketStateMachineTest {
 
     @BeforeEach
     void beforeEach() {
-        Configuration conf = new Configuration();
+        conf = new Configuration();
         conf.setString(ConfigOptions.COORDINATOR_HOST, "localhost");
         String remoteDir = "/tmp/fluss/remote-data";
         conf.setString(ConfigOptions.REMOTE_DATA_DIR, remoteDir);
@@ -330,13 +331,16 @@ class TableBucketStateMachineTest {
                         new CoordinatorChannelManager(
                                 RpcClient.create(
                                         new Configuration(),
-                                        TestingClientMetricGroup.newInstance())),
+                                        TestingClientMetricGroup.newInstance()),
+                                () -> 0,
+                                new Configuration(),
+                                TestingMetricGroups.COORDINATOR_METRICS),
                         coordinatorContext,
                         replicaCapacityController,
                         autoPartitionManager,
                         lakeTableTieringManager,
                         TestingMetricGroups.COORDINATOR_METRICS,
-                        new Configuration(),
+                        conf,
                         Executors.newFixedThreadPool(
                                 1, new ExecutorThreadFactory("test-coordinator-io")),
                         new MetadataManager(

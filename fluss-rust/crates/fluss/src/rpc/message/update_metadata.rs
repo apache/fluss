@@ -38,23 +38,49 @@ impl UpdateMetadataRequest {
         physical_table_paths: &HashSet<&Arc<PhysicalTablePath>>,
         partition_ids: Vec<i64>,
     ) -> Self {
+        // Table paths destined for the `table_path` field, deduplicated so a
+        // path present both here and as a non-partitioned physical path below
+        // is only sent once.
+        let mut seen_tables: HashSet<(&str, &str)> = HashSet::new();
+        let mut pb_table_paths: Vec<PbTablePath> = Vec::new();
+        for path in table_paths {
+            if seen_tables.insert((path.database(), path.table())) {
+                pb_table_paths.push(PbTablePath {
+                    database_name: path.database().to_string(),
+                    table_name: path.table().to_string(),
+                });
+            }
+        }
+
+        let mut pb_partition_paths: Vec<PbPhysicalTablePath> = Vec::new();
+        for path in physical_table_paths {
+            match path.get_partition_name() {
+                // A real partition path belongs in `partitions_path`.
+                Some(partition_name) => pb_partition_paths.push(PbPhysicalTablePath {
+                    database_name: path.get_database_name().to_string(),
+                    table_name: path.get_table_name().to_string(),
+                    partition_name: Some(partition_name.to_string()),
+                }),
+                // A non-partitioned table has no partition name. Sending it in
+                // `partitions_path` makes the server resolve it as a partition and
+                // hit a NullPointerException in ZooKeeperClient.getPartitionIds,
+                // which fails the whole metadata response. Route it to
+                // `table_path` instead.
+                None => {
+                    if seen_tables.insert((path.get_database_name(), path.get_table_name())) {
+                        pb_table_paths.push(PbTablePath {
+                            database_name: path.get_database_name().to_string(),
+                            table_name: path.get_table_name().to_string(),
+                        });
+                    }
+                }
+            }
+        }
+
         UpdateMetadataRequest {
             inner_request: proto::MetadataRequest {
-                table_path: table_paths
-                    .iter()
-                    .map(|path| PbTablePath {
-                        database_name: path.database().to_string(),
-                        table_name: path.table().to_string(),
-                    })
-                    .collect(),
-                partitions_path: physical_table_paths
-                    .iter()
-                    .map(|path| PbPhysicalTablePath {
-                        database_name: path.get_database_name().to_string(),
-                        table_name: path.get_table_name().to_string(),
-                        partition_name: path.get_partition_name().map(|pn| pn.to_string()),
-                    })
-                    .collect(),
+                table_path: pb_table_paths,
+                partitions_path: pb_partition_paths,
                 partitions_id: partition_ids,
             },
         }
@@ -69,3 +95,61 @@ impl RequestBody for UpdateMetadataRequest {
 
 impl_write_type!(UpdateMetadataRequest);
 impl_read_type!(MetadataResponse);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn non_partitioned_physical_path_is_sent_as_table_not_partition() {
+        let physical = Arc::new(PhysicalTablePath::of(Arc::new(TablePath::new(
+            "db",
+            "non_partitioned",
+        ))));
+        let physical_set: HashSet<&Arc<PhysicalTablePath>> = std::iter::once(&physical).collect();
+
+        let inner =
+            UpdateMetadataRequest::new(&HashSet::new(), &physical_set, vec![]).inner_request;
+
+        assert!(
+            inner.partitions_path.is_empty(),
+            "a non-partitioned path must never be sent as a partition"
+        );
+        assert_eq!(inner.table_path.len(), 1);
+        assert_eq!(inner.table_path[0].database_name, "db");
+        assert_eq!(inner.table_path[0].table_name, "non_partitioned");
+    }
+
+    #[test]
+    fn partitioned_physical_path_is_sent_as_partition() {
+        let physical = Arc::new(PhysicalTablePath::of_with_names(
+            "db",
+            "partitioned",
+            Some("dt=2026"),
+        ));
+        let physical_set: HashSet<&Arc<PhysicalTablePath>> = std::iter::once(&physical).collect();
+
+        let inner =
+            UpdateMetadataRequest::new(&HashSet::new(), &physical_set, vec![]).inner_request;
+
+        assert_eq!(inner.partitions_path.len(), 1);
+        assert_eq!(
+            inner.partitions_path[0].partition_name.as_deref(),
+            Some("dt=2026")
+        );
+        assert!(inner.table_path.is_empty());
+    }
+
+    #[test]
+    fn table_is_not_duplicated_when_present_as_both_table_and_physical() {
+        let table_path = Arc::new(TablePath::new("db", "t"));
+        let table_set: HashSet<&TablePath> = std::iter::once(table_path.as_ref()).collect();
+        let physical = Arc::new(PhysicalTablePath::of(Arc::clone(&table_path)));
+        let physical_set: HashSet<&Arc<PhysicalTablePath>> = std::iter::once(&physical).collect();
+
+        let inner = UpdateMetadataRequest::new(&table_set, &physical_set, vec![]).inner_request;
+
+        assert_eq!(inner.table_path.len(), 1);
+        assert!(inner.partitions_path.is_empty());
+    }
+}

@@ -27,6 +27,8 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 
+import static org.apache.fluss.metadata.TableBucketSnapshot.NO_SNAPSHOT_ID;
+
 /** handler of kv snapshot lease. */
 @NotThreadSafe
 public class KvSnapshotLeaseHandler {
@@ -64,7 +66,8 @@ public class KvSnapshotLeaseHandler {
      * @param tableBucket table bucket
      * @param snapshotId snapshot id
      * @param maxBucketNum the max bucket num
-     * @return the original registered snapshotId. if -1 means the bucket is new registered
+     * @return the original registered snapshotId. if {@code NO_SNAPSHOT_ID} means the bucket is new
+     *     registered
      */
     public long acquireBucket(TableBucket tableBucket, long snapshotId, int maxBucketNum) {
         Long[] bucketSnapshot;
@@ -78,7 +81,7 @@ public class KvSnapshotLeaseHandler {
                             tableId,
                             k -> {
                                 Long[] array = new Long[maxBucketNum];
-                                Arrays.fill(array, -1L);
+                                Arrays.fill(array, NO_SNAPSHOT_ID);
                                 return new KvSnapshotTableLease(tableId, array);
                             });
             bucketSnapshot = tableLease.getBucketSnapshots();
@@ -102,7 +105,7 @@ public class KvSnapshotLeaseHandler {
                             partitionId,
                             k -> {
                                 Long[] array = new Long[maxBucketNum];
-                                Arrays.fill(array, -1L);
+                                Arrays.fill(array, NO_SNAPSHOT_ID);
                                 return array;
                             });
             // Dynamically expand the array if the maxBucketNum exceeds the current array size.
@@ -127,8 +130,8 @@ public class KvSnapshotLeaseHandler {
      * Release a bucket from the lease id.
      *
      * @param tableBucket table bucket
-     * @return the snapshot id of the unregistered bucket, or -1 if the bucket was never registered
-     *     or the bucket id exceeds the current array size
+     * @return the snapshot id of the unregistered bucket, or {@code NO_SNAPSHOT_ID} if the bucket
+     *     was never registered or the bucket id exceeds the current array size
      */
     public long releaseBucket(TableBucket tableBucket) {
         Long[] bucketIndex;
@@ -137,7 +140,7 @@ public class KvSnapshotLeaseHandler {
         int bucketId = tableBucket.getBucket();
         KvSnapshotTableLease tableLease = tableIdToTableLease.get(tableId);
         if (tableLease == null) {
-            return -1L;
+            return NO_SNAPSHOT_ID;
         }
         if (partitionId == null) {
             // For none-partitioned table.
@@ -147,20 +150,20 @@ public class KvSnapshotLeaseHandler {
             bucketIndex = tableLease.getBucketSnapshots(partitionId);
         }
 
-        Long snapshotId = -1L;
+        Long snapshotId = NO_SNAPSHOT_ID;
         if (bucketIndex != null) {
             // The bucket id exceeds the current array size, meaning it was never registered
-            // under this lease. Return -1 directly.
+            // under this lease. Return NO_SNAPSHOT_ID directly.
             if (bucketId >= bucketIndex.length) {
-                return -1L;
+                return NO_SNAPSHOT_ID;
             }
 
             snapshotId = bucketIndex[bucketId];
-            bucketIndex[bucketId] = -1L;
+            bucketIndex[bucketId] = NO_SNAPSHOT_ID;
 
             boolean needRemove = true;
             for (Long bucket : bucketIndex) {
-                if (bucket != -1L) {
+                if (bucket != NO_SNAPSHOT_ID) {
                     needRemove = false;
                     break;
                 }
@@ -186,7 +189,8 @@ public class KvSnapshotLeaseHandler {
     }
 
     /**
-     * Expand the given array to the specified new size, filling new slots with -1L.
+     * Expand the given array to the specified new size, filling new slots with {@link
+     * org.apache.fluss.metadata.TableBucketSnapshot#NO_SNAPSHOT_ID}.
      *
      * @param original the original array
      * @param newSize the desired new size (must be greater than original.length)
@@ -194,7 +198,7 @@ public class KvSnapshotLeaseHandler {
      */
     private Long[] expandArray(Long[] original, int newSize) {
         Long[] expanded = Arrays.copyOf(original, newSize);
-        Arrays.fill(expanded, original.length, newSize, -1L);
+        Arrays.fill(expanded, original.length, newSize, NO_SNAPSHOT_ID);
         return expanded;
     }
 

@@ -54,7 +54,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
-import static org.apache.fluss.lake.hudi.HudiLakeCatalog.SYSTEM_COLUMNS;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
 /** Sorted Hudi record reader for primary key table union read. */
@@ -167,9 +166,6 @@ public class HudiSortedRecordReader implements SortedRecordReader {
         int userFieldPosition = 0;
         for (Schema.UnresolvedColumn column :
                 hudiTableInfo.getHudiTable().getUnresolvedSchema().getColumns()) {
-            if (SYSTEM_COLUMNS.containsKey(column.getName())) {
-                continue;
-            }
             DataType dataType = getDataType(column);
             dataTypesByName.put(column.getName(), dataType);
             userFieldPositionsByName.put(column.getName(), userFieldPosition++);

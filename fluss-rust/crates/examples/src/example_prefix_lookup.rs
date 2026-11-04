@@ -40,7 +40,7 @@ pub async fn main() -> Result<()> {
                 .column("session_id", DataTypes::string())
                 .column("event_seq", DataTypes::bigint())
                 .column("event_data", DataTypes::string())
-                .primary_key(vec!["user_id", "session_id", "event_seq"])
+                .primary_key(vec!["user_id", "session_id", "event_seq"])?
                 .build()?,
         )
         .distributed_by(
@@ -85,7 +85,7 @@ pub async fn main() -> Result<()> {
     println!("\n=== Prefix lookup by (user_id, session_id) ===");
     // `lookup_by` names the prefix columns. The resulting lookuper returns all
     // rows whose primary key starts with the given prefix.
-    let mut prefix_lookuper = table
+    let prefix_lookuper = table
         .new_lookup()?
         .lookup_by(vec!["user_id".to_string(), "session_id".to_string()])
         .create_lookuper()?;

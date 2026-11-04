@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::error::Error;
 use crate::rpc::api_key::ApiKey;
+use crate::rpc::api_version::ApiVersion;
 use crate::rpc::frame::{ReadError, WriteError};
 use bytes::{Buf, BufMut};
 
@@ -136,12 +138,21 @@ pub trait RequestBody {
     type ResponseBody;
 
     const API_KEY: ApiKey;
+
+    /// Fails when this request needs something the negotiated `version` lacks.
+    fn check_version(&self, _version: ApiVersion) -> Result<(), Error> {
+        Ok(())
+    }
 }
 
 impl<T: RequestBody> RequestBody for &T {
     type ResponseBody = T::ResponseBody;
 
     const API_KEY: ApiKey = T::API_KEY;
+
+    fn check_version(&self, version: ApiVersion) -> Result<(), Error> {
+        (**self).check_version(version)
+    }
 }
 
 pub trait WriteType<W>: Sized

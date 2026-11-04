@@ -19,9 +19,10 @@ package org.apache.fluss.flink.tiering.source;
 
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
+import org.apache.fluss.client.tiering.TableBucketWriteResult;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator;
-import org.apache.fluss.flink.tiering.source.split.TieringSplit;
+import org.apache.fluss.flink.tiering.source.split.FlinkTieringSplit;
 import org.apache.fluss.flink.tiering.source.split.TieringSplitSerializer;
 import org.apache.fluss.flink.tiering.source.state.TieringSourceEnumeratorState;
 import org.apache.fluss.flink.tiering.source.state.TieringSourceEnumeratorStateSerializer;
@@ -45,11 +46,9 @@ import org.apache.flink.streaming.api.graph.StreamGraphHasherV2;
 import java.nio.charset.StandardCharsets;
 
 import static org.apache.fluss.config.ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR;
-import static org.apache.fluss.config.ConfigOptions.CLIENT_SCANNER_LOG_READ_PREFERENCE;
 import static org.apache.fluss.flink.tiering.source.TieringSourceOptions.POLL_TIERING_TABLE_INTERVAL;
 import static org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils.getClientScannerIoTmpDir;
 import static org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils.getLakeTieringIoTmpDirs;
-import static org.apache.fluss.rpc.protocol.FetchLogReadPreference.REMOTE_FIRST;
 
 /**
  * The flink source implementation for tiering data from Fluss to downstream lake.
@@ -58,7 +57,9 @@ import static org.apache.fluss.rpc.protocol.FetchLogReadPreference.REMOTE_FIRST;
  */
 public class TieringSource<WriteResult>
         implements Source<
-                TableBucketWriteResult<WriteResult>, TieringSplit, TieringSourceEnumeratorState> {
+                TableBucketWriteResult<WriteResult>,
+                FlinkTieringSplit,
+                TieringSourceEnumeratorState> {
 
     public static final String TIERING_SOURCE_TRANSFORMATION_UID =
             "$$fluss_tiering_source_operator$$";
@@ -87,23 +88,31 @@ public class TieringSource<WriteResult>
     }
 
     @Override
-    public SplitEnumerator<TieringSplit, TieringSourceEnumeratorState> createEnumerator(
-            SplitEnumeratorContext<TieringSplit> splitEnumeratorContext) {
+    public SplitEnumerator<FlinkTieringSplit, TieringSourceEnumeratorState> createEnumerator(
+            SplitEnumeratorContext<FlinkTieringSplit> splitEnumeratorContext) {
         return new TieringSourceEnumerator(
-                flussConf, splitEnumeratorContext, lakeTieringFactory, pollTieringTableIntervalMs);
+                flussConf,
+                lakeTieringConfig,
+                splitEnumeratorContext,
+                lakeTieringFactory,
+                pollTieringTableIntervalMs);
     }
 
     @Override
-    public SplitEnumerator<TieringSplit, TieringSourceEnumeratorState> restoreEnumerator(
-            SplitEnumeratorContext<TieringSplit> splitEnumeratorContext,
+    public SplitEnumerator<FlinkTieringSplit, TieringSourceEnumeratorState> restoreEnumerator(
+            SplitEnumeratorContext<FlinkTieringSplit> splitEnumeratorContext,
             TieringSourceEnumeratorState tieringSourceEnumeratorState) {
         // stateless operator
         return new TieringSourceEnumerator(
-                flussConf, splitEnumeratorContext, lakeTieringFactory, pollTieringTableIntervalMs);
+                flussConf,
+                lakeTieringConfig,
+                splitEnumeratorContext,
+                lakeTieringFactory,
+                pollTieringTableIntervalMs);
     }
 
     @Override
-    public SimpleVersionedSerializer<TieringSplit> getSplitSerializer() {
+    public SimpleVersionedSerializer<FlinkTieringSplit> getSplitSerializer() {
         return TieringSplitSerializer.INSTANCE;
     }
 
@@ -114,12 +123,11 @@ public class TieringSource<WriteResult>
     }
 
     @Override
-    public SourceReader<TableBucketWriteResult<WriteResult>, TieringSplit> createReader(
+    public SourceReader<TableBucketWriteResult<WriteResult>, FlinkTieringSplit> createReader(
             SourceReaderContext sourceReaderContext) {
         FutureCompletingBlockingQueue<RecordsWithSplitIds<TableBucketWriteResult<WriteResult>>>
                 elementsQueue = new FutureCompletingBlockingQueue<>();
         Configuration readerConf = new Configuration(flussConf);
-        readerConf.set(CLIENT_SCANNER_LOG_READ_PREFERENCE, REMOTE_FIRST);
         readerConf.set(
                 CLIENT_SCANNER_IO_TMP_DIR,
                 getClientScannerIoTmpDir(readerConf, sourceReaderContext.getConfiguration()));

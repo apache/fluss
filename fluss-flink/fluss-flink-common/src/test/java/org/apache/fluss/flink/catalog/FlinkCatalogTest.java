@@ -22,10 +22,12 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.IllegalConfigurationException;
 import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.exception.InvalidTableException;
-import org.apache.fluss.flink.adapter.ResolvedCatalogMaterializedTableAdapter;
+import org.apache.fluss.flink.adapter.CatalogMaterializedTableAdapter;
 import org.apache.fluss.flink.lake.LakeFlinkCatalog;
 import org.apache.fluss.flink.utils.FlinkConversionsTest;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.testutils.common.MultiVersionTest;
 import org.apache.fluss.utils.ExceptionUtils;
 
 import org.apache.flink.table.api.DataTypes;
@@ -41,6 +43,7 @@ import org.apache.flink.table.catalog.Column;
 import org.apache.flink.table.catalog.GenericInMemoryCatalog;
 import org.apache.flink.table.catalog.IntervalFreshness;
 import org.apache.flink.table.catalog.ObjectPath;
+import org.apache.flink.table.catalog.ResolvedCatalogMaterializedTable;
 import org.apache.flink.table.catalog.ResolvedCatalogTable;
 import org.apache.flink.table.catalog.ResolvedSchema;
 import org.apache.flink.table.catalog.TableChange;
@@ -51,6 +54,7 @@ import org.apache.flink.table.catalog.exceptions.DatabaseNotEmptyException;
 import org.apache.flink.table.catalog.exceptions.DatabaseNotExistException;
 import org.apache.flink.table.catalog.exceptions.FunctionNotExistException;
 import org.apache.flink.table.catalog.exceptions.PartitionAlreadyExistsException;
+import org.apache.flink.table.catalog.exceptions.PartitionSpecInvalidException;
 import org.apache.flink.table.catalog.exceptions.TableAlreadyExistException;
 import org.apache.flink.table.catalog.exceptions.TableNotExistException;
 import org.apache.flink.table.catalog.exceptions.TableNotPartitionedException;
@@ -74,8 +78,10 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.apache.fluss.config.ConfigOptions.BOOTSTRAP_SERVERS;
+import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_DATABASE_NAME;
 import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_ENABLED;
 import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_FORMAT;
+import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_TABLE_NAME;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_KEY;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_NUMBER;
 import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_STARTUP_MODE;
@@ -144,13 +150,16 @@ class FlinkCatalogTest {
             CatalogMaterializedTable.RefreshMode refreshMode,
             Map<String, String> options) {
         CatalogMaterializedTable origin =
-                CatalogMaterializedTable.newBuilder()
+                CatalogMaterializedTableAdapter.newAdapter()
                         .schema(Schema.newBuilder().fromResolvedSchema(resolvedSchema).build())
                         .comment("test comment")
                         .options(options)
                         .partitionKeys(Collections.emptyList())
                         .definitionQuery("select first, second, third from t")
-                        .freshness(IntervalFreshness.of("5", IntervalFreshness.TimeUnit.SECOND))
+                        // TODO The configuration added in Flink 2.3 currently uses the same SQL.
+                        .originalQuery("select first, second, third from t")
+                        .expandedQuery("select first, second, third from t")
+                        .freshness(IntervalFreshness.ofSecond("5"))
                         .logicalRefreshMode(
                                 refreshMode == CatalogMaterializedTable.RefreshMode.CONTINUOUS
                                         ? CatalogMaterializedTable.LogicalRefreshMode.CONTINUOUS
@@ -158,11 +167,16 @@ class FlinkCatalogTest {
                         .refreshMode(refreshMode)
                         .refreshStatus(CatalogMaterializedTable.RefreshStatus.INITIALIZING)
                         .build();
-        return ResolvedCatalogMaterializedTableAdapter.create(
-                origin,
-                resolvedSchema,
-                refreshMode,
-                IntervalFreshness.of("5", IntervalFreshness.TimeUnit.SECOND));
+        return createResolvedCatalogMaterializedTable(
+                origin, resolvedSchema, refreshMode, IntervalFreshness.ofSecond("5"));
+    }
+
+    protected ResolvedCatalogMaterializedTable createResolvedCatalogMaterializedTable(
+            CatalogMaterializedTable origin,
+            ResolvedSchema resolvedSchema,
+            CatalogMaterializedTable.RefreshMode refreshMode,
+            IntervalFreshness intervalFreshness) {
+        return new ResolvedCatalogMaterializedTable(origin, resolvedSchema);
     }
 
     protected FlinkCatalog initCatalog(
@@ -225,6 +239,7 @@ class FlinkCatalogTest {
     }
 
     @Test
+    @MultiVersionTest
     void testCreateTable() throws Exception {
         Map<String, String> options = new HashMap<>();
         assertThatThrownBy(() -> catalog.getTable(tableInDefaultDb))
@@ -342,6 +357,53 @@ class FlinkCatalogTest {
         assertThat(catalog.tableExists(lakeTablePath)).isFalse();
         // create the table again should be ok, because the existing lake table is matched
         catalog.createTable(lakeTablePath, table, false);
+    }
+
+    @Test
+    void testGetLakeTableWithCustomLakePath() throws Exception {
+        String flussTableName = "fluss_table";
+        TablePath lakeTablePath = TablePath.of("custom_lake_db", "custom_lake_table");
+
+        Map<String, String> options = new HashMap<>();
+        options.put(TABLE_DATALAKE_ENABLED.key(), "true");
+        options.put(TABLE_DATALAKE_FORMAT.key(), PAIMON.name());
+        options.put(TABLE_DATALAKE_DATABASE_NAME.key(), lakeTablePath.getDatabaseName());
+        options.put(TABLE_DATALAKE_TABLE_NAME.key(), lakeTablePath.getTableName());
+
+        ObjectPath flussTablePath = new ObjectPath(DEFAULT_DB, flussTableName);
+        catalog.createTable(flussTablePath, newCatalogTable(options), false);
+
+        CatalogTable lakeTable = newCatalogTable(Collections.emptyMap());
+        mockLakeCatalog.catalog.createDatabase(
+                lakeTablePath.getDatabaseName(),
+                new CatalogDatabaseImpl(Collections.emptyMap(), null),
+                true);
+        mockLakeCatalog.registerLakeTable(
+                new ObjectPath(lakeTablePath.getDatabaseName(), lakeTablePath.getTableName()),
+                lakeTable);
+        CatalogBaseTable gottenLakeTable =
+                catalog.getTable(new ObjectPath(DEFAULT_DB, flussTableName + "$lake"));
+        assertThat(gottenLakeTable.getOptions())
+                .containsAllEntriesOf(lakeTable.getOptions())
+                .containsEntry(
+                        FlinkCatalog.LAKE_TABLE_DATABASE_NAME_OPTION,
+                        lakeTablePath.getDatabaseName())
+                .containsEntry(FlinkCatalog.LAKE_TABLE_NAME_OPTION, lakeTablePath.getTableName());
+
+        CatalogTable snapshotsTable = newCatalogTable(Collections.emptyMap());
+        mockLakeCatalog.registerLakeTable(
+                new ObjectPath(
+                        lakeTablePath.getDatabaseName(),
+                        lakeTablePath.getTableName() + "$snapshots"),
+                snapshotsTable);
+        CatalogBaseTable gottenSnapshotsTable =
+                catalog.getTable(new ObjectPath(DEFAULT_DB, flussTableName + "$lake$snapshots"));
+        assertThat(gottenSnapshotsTable.getOptions())
+                .containsAllEntriesOf(snapshotsTable.getOptions())
+                .containsEntry(
+                        FlinkCatalog.LAKE_TABLE_DATABASE_NAME_OPTION,
+                        lakeTablePath.getDatabaseName())
+                .containsEntry(FlinkCatalog.LAKE_TABLE_NAME_OPTION, lakeTablePath.getTableName());
     }
 
     @Test
@@ -506,6 +568,31 @@ class FlinkCatalogTest {
                 .hasMessage(
                         "Database %s does not exist in Catalog %s.",
                         nonExistDbPath.getDatabaseName(), CATALOG_NAME);
+    }
+
+    @Test
+    @MultiVersionTest
+    void testListMaterializedTables() throws Exception {
+        FlinkCatalog flinkCatalog = (FlinkCatalog) catalog;
+        assertThat(flinkCatalog.listMaterializedTables(DEFAULT_DB)).isEmpty();
+
+        catalog.createTable(tableInDefaultDb, newCatalogTable(Collections.emptyMap()), false);
+        CatalogMaterializedTable materializedTable =
+                newCatalogMaterializedTable(
+                        this.createSchema(),
+                        CatalogMaterializedTable.RefreshMode.CONTINUOUS,
+                        Collections.emptyMap());
+        catalog.createTable(new ObjectPath(DEFAULT_DB, "mt1"), materializedTable, false);
+        catalog.createTable(new ObjectPath(DEFAULT_DB, "mt2"), materializedTable, false);
+
+        assertThat(flinkCatalog.listMaterializedTables(DEFAULT_DB))
+                .containsExactlyInAnyOrder("mt1", "mt2");
+        assertThat(catalog.listTables(DEFAULT_DB)).containsExactlyInAnyOrder("t1", "mt1", "mt2");
+
+        assertThatThrownBy(() -> flinkCatalog.listMaterializedTables("non_exist_db"))
+                .isInstanceOf(DatabaseNotExistException.class)
+                .hasMessage(
+                        "Database %s does not exist in Catalog %s.", "non_exist_db", CATALOG_NAME);
     }
 
     @Test
@@ -781,9 +868,9 @@ class FlinkCatalogTest {
         CatalogPartitionSpec invalidTestSpec =
                 new CatalogPartitionSpec(Collections.singletonMap("second", ""));
         assertThatThrownBy(() -> catalog.listPartitions(path2, invalidTestSpec))
-                .isInstanceOf(CatalogException.class)
-                .hasMessage(
-                        "Failed to list partitions of table fluss.partitioned_t1 in test-catalog, by partitionSpec CatalogPartitionSpec{{second=}}");
+                .isInstanceOf(PartitionSpecInvalidException.class)
+                .hasMessageContaining(
+                        "PartitionSpec CatalogPartitionSpec{{second=}} does not match");
 
         // NEW: Test dropPartition functionality
         CatalogPartitionSpec firstPartSpec = catalogPartitionSpecs.get(0);
@@ -1085,12 +1172,15 @@ class FlinkCatalogTest {
                         "rb_build_agg",
                         "rb_or_agg",
                         "rb_and_agg",
+                        "rb_xor_agg",
                         "rb_cardinality",
                         "rb_build",
                         "rb_contains",
                         "rb_to_array",
                         "rb_or",
-                        "rb_and");
+                        "rb_and",
+                        "rb_xor",
+                        "rb_andnot");
 
         ObjectPath functionPath = new ObjectPath(DEFAULT_DB, "testFunction");
         assertThat(catalog.functionExists(functionPath)).isFalse();
@@ -1191,7 +1281,7 @@ class FlinkCatalogTest {
         List<String> functions = catalog.listFunctions(DEFAULT_DB);
 
         // aggregate functions
-        assertThat(functions).contains("rb_build_agg", "rb_or_agg", "rb_and_agg");
+        assertThat(functions).contains("rb_build_agg", "rb_or_agg", "rb_and_agg", "rb_xor_agg");
         // scalar functions
         assertThat(functions)
                 .contains(
@@ -1200,7 +1290,9 @@ class FlinkCatalogTest {
                         "rb_contains",
                         "rb_to_array",
                         "rb_or",
-                        "rb_and");
+                        "rb_and",
+                        "rb_xor",
+                        "rb_andnot");
 
         // verify each function exists and resolves to the correct class
         assertThat(catalog.functionExists(new ObjectPath(DEFAULT_DB, "rb_cardinality"))).isTrue();
@@ -1209,8 +1301,44 @@ class FlinkCatalogTest {
         assertThat(catalog.functionExists(new ObjectPath(DEFAULT_DB, "rb_to_array"))).isTrue();
         assertThat(catalog.functionExists(new ObjectPath(DEFAULT_DB, "rb_or"))).isTrue();
         assertThat(catalog.functionExists(new ObjectPath(DEFAULT_DB, "rb_and"))).isTrue();
+        assertThat(catalog.functionExists(new ObjectPath(DEFAULT_DB, "rb_xor_agg"))).isTrue();
+        assertThat(catalog.functionExists(new ObjectPath(DEFAULT_DB, "rb_xor"))).isTrue();
+        assertThat(catalog.functionExists(new ObjectPath(DEFAULT_DB, "rb_andnot"))).isTrue();
 
         // verify unknown still returns false
         assertThat(catalog.functionExists(new ObjectPath(DEFAULT_DB, "unknown_fn"))).isFalse();
+    }
+
+    @Test
+    void testBuiltinFunctionsRequireExistingDatabase() throws Exception {
+        String nonexistentDb = "nonexistent_db_for_functions";
+        assertThat(catalog.databaseExists(nonexistentDb)).isFalse();
+
+        // listFunctions on a nonexistent database throws
+        assertThatThrownBy(() -> catalog.listFunctions(nonexistentDb))
+                .isInstanceOf(DatabaseNotExistException.class)
+                .hasMessage(
+                        "Database %s does not exist in Catalog %s.", nonexistentDb, CATALOG_NAME);
+
+        // functionExists on a nonexistent database returns false, not throw
+        ObjectPath qualifiedInNonexistentDb = new ObjectPath(nonexistentDb, "rb_build");
+        assertThat(catalog.functionExists(qualifiedInNonexistentDb)).isFalse();
+
+        // getFunction on a nonexistent database throws FunctionNotExistException
+        assertThatThrownBy(() -> catalog.getFunction(qualifiedInNonexistentDb))
+                .isInstanceOf(FunctionNotExistException.class);
+
+        // built-in functions still resolve from every existing database, not just DEFAULT_DB
+        String secondDb = "second_db_for_functions";
+        catalog.createDatabase(
+                secondDb, new CatalogDatabaseImpl(Collections.emptyMap(), null), true);
+        try {
+            assertThat(catalog.functionExists(new ObjectPath(secondDb, "rb_build"))).isTrue();
+            assertThat(catalog.getFunction(new ObjectPath(secondDb, "rb_build"))).isNotNull();
+            assertThat(catalog.listFunctions(secondDb))
+                    .contains("rb_build_agg", "rb_or_agg", "rb_and_agg", "rb_xor_agg");
+        } finally {
+            catalog.dropDatabase(secondDb, true, true);
+        }
     }
 }

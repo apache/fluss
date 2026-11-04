@@ -175,18 +175,10 @@ async def wait_for_table_ready(admin):
                         table_path, [0], fluss.OffsetSpec.earliest()
                     )
                 return
-            except (fluss.FlussError, Exception) as e:
-                # Catch "No leader found" or other errors that indicate the table/partition is still initializing
-                err_msg = str(e)
-                if any(
-                    msg in err_msg
-                    for msg in [
-                        "No leader found",
-                        "Table not ready",
-                        "Metadata not ready",
-                        "not leader or follower",
-                    ]
-                ):
+            except fluss.FlussError as e:
+                # Retriable means the table or partition is still initializing. A missing leader
+                # is a client-side error, which is never flagged retriable, so match it too.
+                if e.is_retriable or "No leader found" in str(e):
                     await asyncio.sleep(1)
                     continue
                 raise

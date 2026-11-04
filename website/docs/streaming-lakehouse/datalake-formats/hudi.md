@@ -8,7 +8,7 @@ sidebar_position: 4
 ## Introduction
 
 [Apache Hudi](https://hudi.apache.org/) is an open lakehouse table format that provides transactional writes, record-level updates, and incremental processing on data lakes.
-To integrate Fluss with Hudi, you must enable lakehouse storage and configure Hudi as the lakehouse storage. For more details, see [Deploying Streaming Lakehouse](../../install-deploy/deploying-streaming-lakehouse.md).
+To integrate Fluss with Hudi, you must enable lakehouse storage and configure Hudi as the lakehouse storage. For more details, see [Deploying Lakestream](../../install-deploy/deploying-streaming-lakehouse.md).
 
 Fluss tiers data to standard Hudi tables. Primary-key Fluss tables are written as Hudi Merge-On-Read tables, while Fluss log tables are written as Hudi Copy-On-Write tables.
 
@@ -93,7 +93,7 @@ Restart Fluss after changing the plugin directory.
 
 ### Start Tiering Service to Hudi
 
-Then, start the datalake tiering service to tier Fluss data to Hudi. For the general process, see [Deploying Streaming Lakehouse](../../install-deploy/deploying-streaming-lakehouse.md).
+Then, start the datalake tiering service to tier Fluss data to Hudi. For the general process, see [Deploying Lakestream](../../install-deploy/deploying-streaming-lakehouse.md).
 
 For Hudi, prepare the following JARs in `${FLINK_HOME}/lib`:
 
@@ -133,15 +133,13 @@ When a Fluss table is created with the option `'table.datalake.enabled' = 'true'
 For DFS catalog mode, the Hudi table path is `${catalog.path}/${database_name}/${table_name}` unless the Hudi table path is explicitly set by Hudi options.
 For Hive Metastore catalog mode, the table path follows Hudi Hive catalog path inference.
 
-The schema of the Hudi table matches the Fluss table schema, except for three system columns appended by Fluss:
+The schema of the Hudi table matches the Fluss table schema, containing only the user-defined columns. Fluss does not add any system columns to the physical Hudi schema.
 
-| Column        | Type         | Description                                   |
-|---------------|--------------|-----------------------------------------------|
-| `__bucket`    | INT          | Fluss bucket identifier for data distribution |
-| `__offset`    | BIGINT       | Fluss log offset for ordering and seeking     |
-| `__timestamp` | TIMESTAMP(6) | Fluss log timestamp                           |
+The names `__bucket`, `__offset`, and `__timestamp` are reserved for Fluss internal use, so do not use user columns with these names. Hudi metadata column names starting with `_hoodie_` are also reserved.
 
-Do not use user columns named `__bucket`, `__offset`, or `__timestamp`. Hudi metadata column names starting with `_hoodie_` are also reserved.
+:::note
+Unlike Paimon and Iceberg, the Hudi lake storage was never exposed in a publicly released Fluss version, so there are no legacy Hudi tables carrying system columns. Hudi therefore only ever uses the clean layout, and the legacy-table rolling-upgrade considerations in the [Upgrade Notes](../../maintenance/operations/upgrade-notes-1.0.md) do not apply to Hudi.
+:::
 
 ### Primary Key Tables
 
@@ -408,3 +406,4 @@ The Fluss lake snapshot ID corresponds to the committed Hudi instant time. Durin
 - Hudi bucket key fields must be scalar types with deterministic string representations. Composite and binary types such as ARRAY, MAP, ROW, BINARY, and BYTES are not supported as Hudi bucket keys.
 - For composite Hudi bucket keys, values containing `,` or colliding with Hudi's reserved placeholders `__null__` and `__empty__` are rejected to keep Fluss bucket routing aligned with Hudi bucket IDs.
 - Sorted lake reads for primary-key union read are supported only for Hudi Merge-On-Read tables and require the query projection to include all Hudi record key fields.
+- Do not set `hudi.hoodie.allow.empty.commit` to `false`. The tiering service relies on empty commits to persist the tiering progress of buckets that only advanced their offsets over empty WAL batches (e.g. all records of a write batch were filtered by the merge engine). With empty commits disallowed, such offset-only tiering rounds cannot be persisted until new data arrives for those buckets.

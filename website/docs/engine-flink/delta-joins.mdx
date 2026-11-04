@@ -194,9 +194,34 @@ There is a known issue ([FLINK-38399](https://issues.apache.org/jira/browse/FLIN
   - All filters (including non-equi join conditions) must be applied on the upsert key.
 - Filters, projections, and non-equi join conditions must not contain non-deterministic functions.
 
+### Flink 2.3
+
+#### Supported Features
+
+- Cascaded delta joins are now supported. Eligible join nodes in a query are sequentially converted into delta join nodes from source to sink (for example, `A JOIN B JOIN C` where applicable joins in the chain are optimized together).
+- Lookup joins are now supported after a delta join, allowing the result of a delta join to be further enriched via dimension tables.
+- Non-deterministic functions are now allowed in projections and filters placed between the delta join and its downstream operators (e.g., the sink).
+
+#### Limitations
+
+- The primary key or the prefix key of the tables must be included as part of the equivalence conditions in the join.
+- The join must be an INNER join. LEFT JOIN, RIGHT JOIN, and FULL OUTER JOIN are not supported.
+- The downstream node of the join must support idempotent updates, typically it's an upsert sink and should not have a `SinkUpsertMaterializer` node before it.
+  - Flink planner automatically inserts a `SinkUpsertMaterializer` when the sink's primary key does not fully cover the upstream update key.
+  - You can learn more details about `SinkUpsertMaterializer` by reading this [blog](https://www.ververica.com/blog/flink-sql-secrets-mastering-the-art-of-changelog-events).
+- Since delta join does not support to handle update-before messages, it is necessary to ensure that the entire pipeline can safely discard update-before messages. That means when consuming a CDC stream:
+  - The join key used in the delta join must be part of the upsert key.
+  - The sink's primary key must be the same as the upstream update key.
+  - All filters (including non-equi join conditions) must be applied on the upsert key.
+- Non-deterministic functions are not allowed in projections or filters between the source and the delta join.
+
+:::note
+Starting from Flink 2.3, the requirement that "the join key must be part of the primary key" has been relaxed to "the join key must be part of the upsert key". This paves the way for defining table-level **immutable columns** constraints in Fluss, which will allow additional columns to enrich the upsert key in a future release and enable delta join optimization in more scenarios.
+:::
+
 ## Future Plan
 
 The Fluss and Flink community are actively working together on enhancing delta join. Planned improvements include:
 - Support for additional join types, such as LEFT JOIN and FULL OUTER JOIN.
-- Support for multi-way joins involving more than two streams. This also requires Fluss to support defining multiple secondary index keys on a single table.
+- Support for **true multi-way joins** beyond the cascaded delta joins introduced in Flink 2.3. While Flink 2.3 can already optimize the `A JOIN B JOIN C` pattern by sequentially chaining delta joins, true multi-way join optimization (where a single join can be evaluated against multiple secondary indexes at once) still requires Fluss to support defining multiple secondary index keys on a single table.
 - Support for more complex query patterns to optimize a wider range of join scenarios.

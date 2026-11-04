@@ -17,34 +17,34 @@
 
 package org.apache.fluss.lake.paimon.lookup;
 
+import org.apache.fluss.bucketing.BucketingFunction;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.TableConfig;
+import org.apache.fluss.exception.DiskWriteLockedException;
 import org.apache.fluss.exception.KvStorageException;
 import org.apache.fluss.lake.lakestorage.LakeTableLookuper;
 import org.apache.fluss.lake.paimon.utils.PaimonPartitionBucket;
 import org.apache.fluss.lake.paimon.utils.PaimonRowAsFlussRow;
-import org.apache.fluss.metadata.ResolvedPartitionSpec;
+import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.decode.CompactedKeyDecoder;
-import org.apache.fluss.row.encode.RowEncoder;
-import org.apache.fluss.row.encode.ValueEncoder;
 import org.apache.fluss.row.encode.paimon.PaimonKeyEncoder;
 import org.apache.fluss.types.RowType;
+import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.IOUtils;
 
-import org.apache.paimon.CoreOptions;
 import org.apache.paimon.catalog.Catalog;
 import org.apache.paimon.catalog.CatalogContext;
 import org.apache.paimon.catalog.CatalogFactory;
+import org.apache.paimon.disk.BufferFileReader;
+import org.apache.paimon.disk.BufferFileWriter;
+import org.apache.paimon.disk.FileIOChannel;
 import org.apache.paimon.disk.IOManager;
 import org.apache.paimon.io.DataFileMeta;
 import org.apache.paimon.memory.MemorySegment;
-import org.apache.paimon.options.MemorySize;
 import org.apache.paimon.options.Options;
 import org.apache.paimon.table.FileStoreTable;
-import org.apache.paimon.table.query.LocalTableQuery;
 import org.apache.paimon.table.sink.RowPartitionKeyExtractor;
 import org.apache.paimon.table.source.DataSplit;
 import org.apache.paimon.table.source.InnerTableScan;
@@ -54,15 +54,21 @@ import org.apache.paimon.types.DataField;
 import javax.annotation.Nullable;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Supplier;
 
 import static org.apache.fluss.config.ConfigOptions.KV_FORMAT_VERSION_2;
-import static org.apache.fluss.lake.paimon.PaimonLakeCatalog.SYSTEM_COLUMNS;
+import static org.apache.fluss.lake.paimon.PaimonLakeCatalog.LEGACY_SYSTEM_COLUMNS;
+import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toFlussValue;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimonPartition;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -70,99 +76,131 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 /**
  * Paimon implementation of {@link LakeTableLookuper} for primary-key tables.
  *
- * <p>The catalog, table, local query, and I/O manager are initialized lazily on the first lookup.
- * For each partition and bucket, the lookuper scans the latest Paimon snapshot once and registers
- * its data files with {@link LocalTableQuery}. Paimon then creates local lookup files lazily as
+ * <p>The catalog, table, and local query are initialized lazily on the first lookup. The I/O
+ * manager is supplied by the lake storage and may be shared with other table lookupers. For each
+ * partition and bucket, the lookuper scans the latest Paimon snapshot once and registers its data
+ * files with {@link PaimonLocalTableQuery}. Paimon then creates local lookup files lazily as
  * individual remote data files are queried.
  *
  * <p>A cached partition-bucket file set can become stale when Paimon compaction replaces its data
  * files and snapshot expiration physically deletes the old files. Because {@code FileIO}
  * implementations may represent a missing file with different {@link IOException} types, the first
- * lookup I/O failure closes the cached query state, reopens the table from the latest snapshot, and
+ * lookup I/O failure refreshes that partition-bucket with the files from the latest snapshot and
  * retries once.
  *
- * <p>Lookup and close operations are synchronized because they share mutable Paimon query, local
- * cache, and value-encoding state.
+ * <p>An explicit refresh request is applied during the next lookup initialization. It rescans every
+ * registered partition-bucket and updates its file set in place. Paimon keeps lookup files for data
+ * files that remain active and lazily downloads lookup files only for newly added data files.
+ *
+ * <p>Calls to {@link PaimonLocalTableQuery#lookup} can run concurrently across partitions and
+ * buckets.
+ *
+ * <p>Close is expected only after the owner has drained active lookups. It is synchronized with
+ * lazy initialization and file-set updates, but deliberately does not add a lifecycle lock to every
+ * lookup.
  */
 public class PaimonLakeTableLookuper implements LakeTableLookuper {
 
-    // Each TabletServer caches at most ten table lookupers, bounding their retained lookup cache
-    // capacity to 20GB. See HistoricalLakeLookupManager for the follow-up to make this configurable
-    // and use a global Paimon IOManager limit.
-    private static final String LOOKUP_CACHE_MAX_DISK_SIZE = "2gb";
-    private static final MemorySize LOOKUP_CACHE_MAX_DISK_MEMORY_SIZE =
-            MemorySize.parse(LOOKUP_CACHE_MAX_DISK_SIZE);
+    /** Bucketing function the lake data was written with, used to recompute a bucket. */
+    private static final BucketingFunction BUCKETING_FUNCTION =
+            BucketingFunction.of(DataLakeFormat.PAIMON);
 
     private final Configuration paimonConfig;
     private final TablePath tablePath;
-    private final String ioTmpDir;
+    private final IOManager ioManager;
+    private final SharedLookupFileCache lookupFileCache;
+    private final String cacheNamespace;
     private final TableConfig tableConfig;
+    private final Runnable diskWriteGuard;
 
-    private final Set<PaimonPartitionBucket> initializedBuckets;
+    private final ThreadLocal<Boolean> lookupFileDownloaded;
+    // Guards lazy initialization, close, and registered file-set updates.
+    private final Object lookupStateLock;
+    private final Map<PaimonPartitionBucket, List<DataFileMeta>> registeredFiles;
+    // Remains non-zero until a refresh completes without observing another request.
+    private final AtomicLong pendingRefreshRequests;
+
+    /** Bucket count each partition was written with, resolved from the lake metadata. */
+    private final Map<org.apache.paimon.data.BinaryRow, Integer> totalBucketsByPartition;
 
     private @Nullable Catalog catalog;
     private @Nullable FileStoreTable fileStoreTable;
-    private @Nullable IOManager ioManager;
-    private @Nullable LocalTableQuery localTableQuery;
-    private @Nullable RowPartitionKeyExtractor partitionKeyExtractor;
-    private int primaryKeyFieldCount;
+    private @Nullable List<String> trimmedPrimaryKeys;
 
-    // Both encoders are initialized only for a kv-format-v2 table whose bucket key differs from
-    // its physical primary key. They remain null when the incoming Fluss key already uses Paimon's
-    // BinaryRow encoding and no conversion is needed.
+    // CompactedKeyDecoder contains immutable type metadata and creates all decode state per
+    // invocation, so it can be shared by concurrent lookups.
     private @Nullable CompactedKeyDecoder compactedKeyDecoder;
-    private @Nullable PaimonKeyEncoder paimonKeyEncoder;
-    private boolean hasCachedValueEncoder;
-    private short cachedValueSchemaId;
-    private @Nullable RowEncoder cachedValueRowEncoder;
-    private @Nullable InternalRow.FieldGetter[] cachedValueFieldGetters;
-    private boolean closed;
 
+    private volatile @Nullable PaimonLocalTableQuery localTableQuery;
+    // Guarded by lookupStateLock.
+    private volatile boolean closed;
+
+    /** Creates a lookuper using an I/O manager shared with other table lookupers. */
     public PaimonLakeTableLookuper(
             Configuration paimonConfig,
             TablePath tablePath,
-            String ioTmpDir,
-            TableConfig tableConfig) {
+            IOManager ioManager,
+            SharedLookupFileCache lookupFileCache,
+            String cacheNamespace,
+            TableConfig tableConfig,
+            Runnable diskWriteGuard) {
         this.paimonConfig = checkNotNull(paimonConfig, "paimonConfig must not be null.");
         this.tablePath = checkNotNull(tablePath, "tablePath must not be null.");
-        this.ioTmpDir = checkNotNull(ioTmpDir, "ioTmpDir must not be null.");
+        this.lookupFileCache = checkNotNull(lookupFileCache, "lookupFileCache must not be null.");
+        this.cacheNamespace = checkNotNull(cacheNamespace, "cacheNamespace must not be null.");
         this.tableConfig = checkNotNull(tableConfig, "tableConfig must not be null.");
-        this.initializedBuckets = new HashSet<>();
+        this.diskWriteGuard = checkNotNull(diskWriteGuard, "diskWriteGuard must not be null.");
+        this.lookupFileDownloaded = new ThreadLocal<>();
+        this.lookupStateLock = new Object();
+        this.ioManager =
+                new TrackingIOManager(checkNotNull(ioManager, "ioManager must not be null."));
+        this.registeredFiles = new ConcurrentHashMap<>();
+        this.pendingRefreshRequests = new AtomicLong();
+        this.totalBucketsByPartition = new ConcurrentHashMap<>();
     }
 
     @Override
-    public synchronized @Nullable byte[] lookup(byte[] key, LookupContext context)
-            throws Exception {
+    public @Nullable byte[] lookup(byte[] key, LookupContext context) throws Exception {
         checkNotNull(key, "key must not be null.");
         checkNotNull(context, "context must not be null.");
         checkNotClosed();
-        ensureInitialized(context.valueRowType());
+        initialize(context.valueRowType());
 
-        org.apache.paimon.data.BinaryRow partition =
-                convertPartition(context.partitionSpec(), context.valueRowType());
-        org.apache.paimon.data.BinaryRow keyRow = toPaimonLookupKey(key);
-        initializeFilesIfNeeded(partition, context.bucketId());
-
-        org.apache.paimon.data.InternalRow paimonRow =
-                lookupWithFileRefresh(
-                        partition, context.bucketId(), keyRow, context.valueRowType());
-        if (paimonRow == null) {
-            return null;
+        try (TrackingMetrics ignored = new TrackingMetrics(lookupFileDownloaded, context)) {
+            return lookupInternal(key, context);
+        } catch (Exception e) {
+            DiskWriteLockedException diskWriteLockedException =
+                    ExceptionUtils.findThrowable(e, DiskWriteLockedException.class).orElse(null);
+            if (diskWriteLockedException != null) {
+                throw diskWriteLockedException;
+            }
+            throw e;
         }
-        return encodeValue(paimonRow, context.schemaId(), context.valueRowType());
     }
 
     @Override
-    public synchronized void close() {
-        if (closed) {
-            return;
+    public void requestRefresh() {
+        checkNotClosed();
+        pendingRefreshRequests.incrementAndGet();
+    }
+
+    @Override
+    public void close() {
+        synchronized (lookupStateLock) {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            IOUtils.closeQuietly(localTableQuery, "Paimon lookup engine");
+            IOUtils.closeQuietly(catalog, "Paimon catalog");
+            registeredFiles.clear();
+            totalBucketsByPartition.clear();
+            localTableQuery = null;
+            compactedKeyDecoder = null;
+            trimmedPrimaryKeys = null;
+            fileStoreTable = null;
+            catalog = null;
         }
-        closed = true;
-        IOUtils.closeQuietly(cachedValueRowEncoder, "Fluss value row encoder");
-        IOUtils.closeQuietly(localTableQuery, "Paimon local table query");
-        IOUtils.closeQuietly(ioManager, "Paimon lookup IO manager");
-        IOUtils.closeQuietly(catalog, "Paimon catalog");
-        initializedBuckets.clear();
     }
 
     private void checkNotClosed() {
@@ -171,93 +209,94 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
         }
     }
 
-    private void ensureInitialized(RowType valueRowType) throws Exception {
-        if (localTableQuery != null) {
-            return;
+    private void initialize(RowType valueRowType) throws Exception {
+        if (localTableQuery == null || pendingRefreshRequests.get() != 0) {
+            synchronized (lookupStateLock) {
+                if (localTableQuery == null) {
+                    initializeLookupState(valueRowType);
+                }
+                long observedRefreshRequests;
+                while ((observedRefreshRequests = pendingRefreshRequests.get()) != 0) {
+                    // A single scan handles all currently pending refresh requests.
+                    refreshFilesFromLatestSnapshot();
+                    // Clear the whole observed count only if it remained unchanged. If another
+                    // refresh request arrived during the scan, the count was incremented, the CAS
+                    // fails, and the next loop iteration performs another scan for that new
+                    // refresh request.
+                    pendingRefreshRequests.compareAndSet(observedRefreshRequests, 0);
+                }
+            }
         }
+    }
 
+    private void initializeLookupState(RowType valueRowType) throws Exception {
         Catalog newCatalog = null;
-        IOManager newIOManager = null;
-        LocalTableQuery newLocalTableQuery = null;
+        PaimonLocalTableQuery newLocalTableQuery = null;
         boolean initialized = false;
         try {
             newCatalog =
                     CatalogFactory.createCatalog(
                             CatalogContext.create(Options.fromMap(paimonConfig.toMap())));
             FileStoreTable newFileStoreTable =
-                    withLookupCacheOptions(
-                            (FileStoreTable) newCatalog.getTable(toPaimon(tablePath)));
+                    (FileStoreTable) newCatalog.getTable(toPaimon(tablePath));
             if (newFileStoreTable.primaryKeys().isEmpty()) {
                 throw new UnsupportedOperationException(
                         "Point lookup is only supported for primary-key Paimon tables.");
             }
 
-            newIOManager = createIOManager(ioTmpDir);
-            newLocalTableQuery = newFileStoreTable.newLocalTableQuery();
-            newLocalTableQuery.withValueProjection(businessFieldProjection(newFileStoreTable));
-            newLocalTableQuery.withIOManager(newIOManager);
-            RowPartitionKeyExtractor newPartitionKeyExtractor =
-                    new RowPartitionKeyExtractor(newFileStoreTable.schema());
-            List<String> trimmedPrimaryKeys = newFileStoreTable.schema().trimmedPrimaryKeys();
-            int newPrimaryKeyFieldCount = trimmedPrimaryKeys.size();
+            List<String> newTrimmedPrimaryKeys =
+                    Collections.unmodifiableList(
+                            new ArrayList<>(newFileStoreTable.schema().trimmedPrimaryKeys()));
             CompactedKeyDecoder newCompactedKeyDecoder = null;
-            PaimonKeyEncoder newPaimonKeyEncoder = null;
 
             // Legacy/v1 tables and v2 tables with a default bucket key already encode Fluss
             // lookup keys with Paimon's key encoder. Only v2 tables with a non-default bucket
             // key use the compacted key encoding and need conversion before querying Paimon.
             if (tableConfig.getKvFormatVersion().orElse(1) == KV_FORMAT_VERSION_2
-                    && !newFileStoreTable.schema().bucketKeys().equals(trimmedPrimaryKeys)) {
+                    && !newFileStoreTable.schema().bucketKeys().equals(newTrimmedPrimaryKeys)) {
                 // Kv-format-v2 tables with a non-default bucket key store Fluss keys using the
                 // compacted encoding to support prefix lookup. Paimon's LocalTableQuery expects
                 // its own BinaryRow encoding, so convert the key at the lake lookup boundary.
                 newCompactedKeyDecoder =
-                        CompactedKeyDecoder.createKeyDecoder(valueRowType, trimmedPrimaryKeys);
-                RowType keyRowType = valueRowType.project(trimmedPrimaryKeys);
-                newPaimonKeyEncoder = new PaimonKeyEncoder(keyRowType, trimmedPrimaryKeys);
+                        CompactedKeyDecoder.createKeyDecoder(valueRowType, newTrimmedPrimaryKeys);
             }
 
-            // Publish the newly created state only after every initialization step succeeds.
+            newLocalTableQuery =
+                    new PaimonLocalTableQuery(newFileStoreTable, lookupFileCache, cacheNamespace)
+                            .withValueProjection(businessFieldProjection(newFileStoreTable))
+                            .withIOManager(ioManager);
+
             catalog = newCatalog;
             fileStoreTable = newFileStoreTable;
-            ioManager = newIOManager;
-            partitionKeyExtractor = newPartitionKeyExtractor;
-            primaryKeyFieldCount = newPrimaryKeyFieldCount;
+            trimmedPrimaryKeys = newTrimmedPrimaryKeys;
             compactedKeyDecoder = newCompactedKeyDecoder;
-            paimonKeyEncoder = newPaimonKeyEncoder;
-            // localTableQuery is the initialization marker, so publish it last.
+            // Keep this volatile write last to publish all initialized fields together.
             localTableQuery = newLocalTableQuery;
             initialized = true;
         } finally {
             if (!initialized) {
                 IOUtils.closeQuietly(newLocalTableQuery, "Paimon local table query");
-                IOUtils.closeQuietly(newIOManager, "Paimon lookup IO manager");
                 IOUtils.closeQuietly(newCatalog, "Paimon catalog");
             }
         }
     }
 
-    private FileStoreTable withLookupCacheOptions(FileStoreTable table) {
-        String key = CoreOptions.LOOKUP_CACHE_MAX_DISK_SIZE.key();
-        String configuredMaxDiskSize = table.options().get(key);
-        if (configuredMaxDiskSize != null
-                && MemorySize.parse(configuredMaxDiskSize)
-                                .compareTo(LOOKUP_CACHE_MAX_DISK_MEMORY_SIZE)
-                        <= 0) {
-            return table;
-        }
-        return table.copy(Collections.singletonMap(key, LOOKUP_CACHE_MAX_DISK_SIZE));
-    }
-
-    private static IOManager createIOManager(String ioTmpDir) {
-        return IOManager.create(ioTmpDir);
+    private void refreshFilesFromLatestSnapshot() {
+        Map<PaimonPartitionBucket, List<DataFileMeta>> filesBeforeRefresh =
+                new LinkedHashMap<>(registeredFiles);
+        Map<PaimonPartitionBucket, List<DataFileMeta>> latestFiles =
+                scanDataFiles(filesBeforeRefresh.keySet());
+        filesBeforeRefresh.forEach(
+                (partitionBucket, files) ->
+                        refreshFiles(
+                                partitionBucket, files, () -> latestFiles.get(partitionBucket)));
     }
 
     private static int[] businessFieldProjection(FileStoreTable fileStoreTable) {
         List<DataField> fields = fileStoreTable.schema().logicalRowType().getFields();
         List<Integer> projectedFields = new ArrayList<>();
         for (int i = 0; i < fields.size(); i++) {
-            if (!SYSTEM_COLUMNS.containsKey(fields.get(i).name())) {
+            if (!LEGACY_SYSTEM_COLUMNS.containsKey(fields.get(i).name())) {
                 projectedFields.add(i);
             }
         }
@@ -269,171 +308,350 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
         return projection;
     }
 
-    private org.apache.paimon.data.BinaryRow convertPartition(
-            ResolvedPartitionSpec partitionSpec, RowType valueRowType) {
-        // The generated partition projection reuses its mutable output, while lookup caches retain
-        // the returned row as a hash key. Copy it before it escapes to keep those keys stable.
-        return toPaimonPartition(
-                        partitionSpec,
-                        valueRowType,
-                        fileStoreTable().schema().logicalRowType(),
-                        partitionKeyExtractor()::partition)
-                .copy();
+    private org.apache.paimon.data.BinaryRow getPartition(LookupContext context) {
+        // Both generated helpers reuse mutable writers or projections, so keep them confined to
+        // this lookup call.
+        RowPartitionKeyExtractor partitionKeyExtractor =
+                new RowPartitionKeyExtractor(fileStoreTable.schema());
+        org.apache.paimon.data.BinaryRow partition =
+                toPaimonPartition(
+                                context.partitionSpec(),
+                                context.valueRowType(),
+                                fileStoreTable.schema().logicalRowType(),
+                                partitionKeyExtractor::partition)
+                        .copy();
+        return partition;
     }
 
-    private org.apache.paimon.data.BinaryRow toPaimonLookupKey(byte[] key) {
+    private org.apache.paimon.data.BinaryRow getKey(byte[] key, LookupContext context) {
         byte[] paimonKey = key;
         if (compactedKeyDecoder != null) {
-            // A non-null decoder means the Fluss lookup key uses compacted encoding. Decode it
-            // first, then re-encode it as the Paimon BinaryRow expected by LocalTableQuery.
             InternalRow decodedKey = compactedKeyDecoder.decodeKey(key);
-            paimonKey =
-                    checkNotNull(paimonKeyEncoder, "Paimon key encoder must be initialized.")
-                            .encodeKey(decodedKey);
+            RowType keyRowType = context.valueRowType().project(trimmedPrimaryKeys);
+            PaimonKeyEncoder paimonKeyEncoder =
+                    new PaimonKeyEncoder(keyRowType, trimmedPrimaryKeys);
+            paimonKey = paimonKeyEncoder.encodeKey(decodedKey);
         }
 
         org.apache.paimon.data.BinaryRow keyRow =
-                new org.apache.paimon.data.BinaryRow(primaryKeyFieldCount);
+                new org.apache.paimon.data.BinaryRow(trimmedPrimaryKeys.size());
         keyRow.pointTo(MemorySegment.wrap(paimonKey), 0, paimonKey.length);
         return keyRow;
     }
 
-    private void initializeFilesIfNeeded(org.apache.paimon.data.BinaryRow partition, int bucketId) {
-        PaimonPartitionBucket partitionBucket = new PaimonPartitionBucket(partition, bucketId);
-        if (initializedBuckets.contains(partitionBucket)) {
-            return;
+    private @Nullable byte[] lookupInternal(byte[] key, LookupContext context) {
+        org.apache.paimon.data.BinaryRow partition = getPartition(context);
+        Integer bucket = resolveLakeBucket(key, partition, context);
+        if (bucket == null) {
+            return null;
         }
-
-        LinkedHashMap<String, DataFileMeta> beforeFilesByName = new LinkedHashMap<>();
-        LinkedHashMap<String, DataFileMeta> dataFilesByName = new LinkedHashMap<>();
-
-        InnerTableScan tableScan =
-                fileStoreTable()
-                        .newScan()
-                        .withPartitionFilter(Collections.singletonList(partition))
-                        .withBucket(bucketId);
-        for (Split split : tableScan.plan().splits()) {
-            if (!(split instanceof DataSplit)) {
-                continue;
-            }
-            DataSplit dataSplit = (DataSplit) split;
-            addFilesByName(beforeFilesByName, dataSplit.beforeFiles());
-            addFilesByName(dataFilesByName, dataSplit.dataFiles());
+        org.apache.paimon.data.InternalRow paimonRow;
+        try {
+            paimonRow = lookupPaimon(partition, bucket, getKey(key, context));
+        } catch (IOException e) {
+            // Historical Paimon point lookup is part of the Fluss KV lookup path. Expose a
+            // persistent I/O failure as a retriable KV error so the existing KV RPC retry
+            // semantics can handle it consistently.
+            throw new KvStorageException(
+                    "Failed to lookup historical data from Paimon after refreshing files for "
+                            + tablePath
+                            + ".",
+                    e);
         }
-
-        // TODO: Refresh the file set if writes to expired partitions are supported in the future.
-        // Historical lookup is triggered only after the original Fluss partition has expired and
-        // been dropped. This PR does not support writes to expired partitions, so no new rows are
-        // expected and initializing the file set once is sufficient. Compaction-related missing
-        // files are handled by the IOException refresh path below.
-        localTableQuery()
-                .refreshFiles(
-                        partition,
-                        bucketId,
-                        new ArrayList<>(beforeFilesByName.values()),
-                        new ArrayList<>(dataFilesByName.values()));
-        initializedBuckets.add(partitionBucket);
+        if (paimonRow == null) {
+            return null;
+        }
+        return toFlussValue(
+                paimonRow, context.schemaId(), context.valueRowType(), tableConfig.getKvFormat());
     }
 
-    private org.apache.paimon.data.InternalRow lookupWithFileRefresh(
-            org.apache.paimon.data.BinaryRow partition,
-            int bucketId,
-            org.apache.paimon.data.InternalRow keyRow,
-            RowType valueRowType)
-            throws Exception {
-        try {
-            return localTableQuery().lookup(partition, bucketId, keyRow);
-        } catch (IOException e) {
-            // FileIO only guarantees IOException and storage plugins may use different exception
-            // types for a missing file. The missing old file after compaction may therefore
-            // surface as any IOException. Refresh and retry only once so persistent I/O failures
-            // do not repeatedly rebuild Paimon lookup state within one request.
-            try {
-                refreshFiles(partition, bucketId, valueRowType);
-                return localTableQuery().lookup(partition, bucketId, keyRow);
-            } catch (IOException retryError) {
-                retryError.addSuppressed(e);
-                // Historical Paimon point lookup is part of the Fluss KV lookup path. Expose a
-                // persistent I/O failure as a retriable KV error so the existing KV RPC retry
-                // semantics can handle it consistently.
-                throw new KvStorageException(
-                        "Failed to lookup historical data from Paimon after refreshing files for "
-                                + tablePath
-                                + ".",
-                        retryError);
+    /**
+     * Resolves the bucket the key lives in: the caller's bucket id when it matches the lake layout,
+     * otherwise recomputed from the bucket count the partition was written with. Returns null when
+     * the partition holds no data in the lake.
+     */
+    private @Nullable Integer resolveLakeBucket(
+            byte[] key, org.apache.paimon.data.BinaryRow partition, LookupContext context) {
+        if (context.bucketId() != null) {
+            return context.bucketId();
+        }
+        Integer totalBuckets = resolveTotalBuckets(partition);
+        if (totalBuckets == null) {
+            return null;
+        }
+        return BUCKETING_FUNCTION.bucketing(deriveBucketKey(key, context), totalBuckets);
+    }
+
+    /**
+     * Reads the bucket count the given partition was written with from the lake metadata. Fluss
+     * writes each partition with a single bucket count, so more than one value means the lake data
+     * cannot be routed reliably.
+     */
+    private @Nullable Integer resolveTotalBuckets(org.apache.paimon.data.BinaryRow partition) {
+        org.apache.paimon.data.BinaryRow partitionKey = partition.copy();
+        Integer cachedTotalBuckets = totalBucketsByPartition.get(partitionKey);
+        if (cachedTotalBuckets != null) {
+            return cachedTotalBuckets;
+        }
+
+        // Keep metadata I/O outside ConcurrentHashMap's bin lock.
+        Set<Integer> totalBuckets = new HashSet<>();
+        InnerTableScan tableScan =
+                fileStoreTable
+                        .newScan()
+                        .withPartitionFilter(Collections.singletonList(partitionKey));
+        for (Split split : tableScan.plan().splits()) {
+            if (split instanceof DataSplit) {
+                totalBuckets.add(((DataSplit) split).totalBuckets());
             }
+        }
+        if (totalBuckets.isEmpty()) {
+            return null;
+        }
+        if (totalBuckets.size() > 1) {
+            throw new KvStorageException(
+                    "Cannot look up historical data of table "
+                            + tablePath
+                            + " because its lake data reports multiple bucket counts "
+                            + totalBuckets
+                            + " for one partition, so the bucket a key was written to "
+                            + "cannot be determined.");
+        }
+
+        Integer resolvedTotalBuckets = totalBuckets.iterator().next();
+        Integer previousTotalBuckets =
+                totalBucketsByPartition.putIfAbsent(partitionKey, resolvedTotalBuckets);
+        return previousTotalBuckets == null ? resolvedTotalBuckets : previousTotalBuckets;
+    }
+
+    /**
+     * Returns the bucket key bytes the lake bucketing function expects. The lookup key already is
+     * the bucket key when the table uses the default bucket key; otherwise the primary key is
+     * decoded and the bucket key fields are re-encoded with the lake encoder.
+     */
+    private byte[] deriveBucketKey(byte[] key, LookupContext context) {
+        List<String> bucketKeys = fileStoreTable.schema().bucketKeys();
+        if (bucketKeys.equals(trimmedPrimaryKeys)) {
+            return key;
+        }
+        RowType primaryKeyRowType = context.valueRowType().project(trimmedPrimaryKeys);
+        InternalRow primaryKeyRow;
+        if (compactedKeyDecoder != null) {
+            primaryKeyRow = compactedKeyDecoder.decodeKey(key);
+        } else {
+            org.apache.paimon.data.BinaryRow paimonKeyRow =
+                    new org.apache.paimon.data.BinaryRow(trimmedPrimaryKeys.size());
+            paimonKeyRow.pointTo(MemorySegment.wrap(key), 0, key.length);
+            primaryKeyRow = new PaimonRowAsFlussRow(paimonKeyRow);
+        }
+        return new PaimonKeyEncoder(primaryKeyRowType, bucketKeys).encodeKey(primaryKeyRow);
+    }
+
+    private @Nullable org.apache.paimon.data.InternalRow lookupPaimon(
+            org.apache.paimon.data.BinaryRow partition,
+            int bucket,
+            org.apache.paimon.data.InternalRow key)
+            throws IOException {
+        PaimonPartitionBucket partitionBucket = new PaimonPartitionBucket(partition, bucket);
+        List<DataFileMeta> filesBeforeLookup = getOrInitializeFiles(partitionBucket);
+        try {
+            return localTableQuery.lookup(partition, bucket, key);
+        } catch (IOException firstError) {
+            refreshFiles(partitionBucket, filesBeforeLookup, () -> scanDataFiles(partitionBucket));
+            try {
+                return localTableQuery.lookup(partition, bucket, key);
+            } catch (IOException retryError) {
+                retryError.addSuppressed(firstError);
+                throw retryError;
+            }
+        }
+    }
+
+    private List<DataFileMeta> getOrInitializeFiles(PaimonPartitionBucket partitionBucket) {
+        List<DataFileMeta> files = registeredFiles.get(partitionBucket);
+        if (files != null) {
+            return files;
+        }
+        // Coordinate only first registration with bulk refresh; existing entries use the fast path.
+        synchronized (lookupStateLock) {
+            return registeredFiles.computeIfAbsent(
+                    partitionBucket,
+                    ignored -> {
+                        List<DataFileMeta> latestFiles = scanDataFiles(partitionBucket);
+                        return applyFileRefresh(
+                                partitionBucket, Collections.emptyList(), latestFiles);
+                    });
         }
     }
 
     private void refreshFiles(
-            org.apache.paimon.data.BinaryRow partition, int bucketId, RowType valueRowType)
-            throws Exception {
-        IOUtils.closeQuietly(localTableQuery, "Paimon local table query");
-        IOUtils.closeQuietly(ioManager, "Paimon lookup IO manager");
-        IOUtils.closeQuietly(catalog, "Paimon catalog");
-        localTableQuery = null;
-        ioManager = null;
-        catalog = null;
-        fileStoreTable = null;
-        partitionKeyExtractor = null;
-        primaryKeyFieldCount = 0;
-        compactedKeyDecoder = null;
-        paimonKeyEncoder = null;
-        initializedBuckets.clear();
-        ensureInitialized(valueRowType);
-        initializeFilesIfNeeded(partition, bucketId);
-    }
-
-    private static void addFilesByName(
-            LinkedHashMap<String, DataFileMeta> filesByName, List<DataFileMeta> files) {
-        for (DataFileMeta file : files) {
-            filesByName.put(file.fileName(), file);
+            PaimonPartitionBucket partitionBucket,
+            List<DataFileMeta> filesBeforeRefresh,
+            Supplier<List<DataFileMeta>> latestFilesSupplier) {
+        synchronized (lookupStateLock) {
+            registeredFiles.compute(
+                    partitionBucket,
+                    (ignored, currentFiles) -> {
+                        List<DataFileMeta> files =
+                                checkNotNull(
+                                        currentFiles,
+                                        "Partition-bucket files must be initialized.");
+                        // File lists are immutable and replaced on refresh. Identity equality means
+                        // no other refresh has updated this partition-bucket since the caller
+                        // captured it.
+                        return files == filesBeforeRefresh
+                                ? applyFileRefresh(
+                                        partitionBucket,
+                                        filesBeforeRefresh,
+                                        latestFilesSupplier.get())
+                                : files;
+                    });
         }
     }
 
-    private byte[] encodeValue(
-            org.apache.paimon.data.InternalRow paimonRow, short schemaId, RowType valueRowType) {
-        PaimonRowAsFlussRow flussRow = new PaimonRowAsFlussRow(paimonRow);
-        try {
-            ensureValueEncoder(schemaId, valueRowType);
-            RowEncoder rowEncoder =
-                    checkNotNull(cachedValueRowEncoder, "cachedValueRowEncoder must not be null.");
-            InternalRow.FieldGetter[] fieldGetters =
-                    checkNotNull(
-                            cachedValueFieldGetters, "cachedValueFieldGetters must not be null.");
+    private List<DataFileMeta> applyFileRefresh(
+            PaimonPartitionBucket partitionBucket,
+            List<DataFileMeta> filesBeforeRefresh,
+            List<DataFileMeta> latestFiles) {
+        org.apache.paimon.data.BinaryRow partition = partitionBucket.getPartition();
+        int bucket = partitionBucket.getBucket();
+        localTableQuery.refreshFiles(partition, bucket, filesBeforeRefresh, latestFiles);
+        return latestFiles;
+    }
 
-            rowEncoder.startNewRow();
-            for (int i = 0; i < fieldGetters.length; i++) {
-                rowEncoder.encodeField(i, fieldGetters[i].getFieldOrNull(flussRow));
+    private List<DataFileMeta> scanDataFiles(PaimonPartitionBucket partitionBucket) {
+        return scanDataFiles(Collections.singleton(partitionBucket)).get(partitionBucket);
+    }
+
+    private Map<PaimonPartitionBucket, List<DataFileMeta>> scanDataFiles(
+            Set<PaimonPartitionBucket> partitionBuckets) {
+        if (partitionBuckets.isEmpty()) {
+            return Collections.emptyMap();
+        }
+
+        Set<org.apache.paimon.data.BinaryRow> partitions = new HashSet<>();
+        Set<Integer> buckets = new HashSet<>();
+        Map<PaimonPartitionBucket, LinkedHashMap<String, DataFileMeta>> dataFilesByPartitionBucket =
+                new LinkedHashMap<>();
+        for (PaimonPartitionBucket partitionBucket : partitionBuckets) {
+            partitions.add(partitionBucket.getPartition());
+            buckets.add(partitionBucket.getBucket());
+            dataFilesByPartitionBucket.put(partitionBucket, new LinkedHashMap<>());
+        }
+
+        InnerTableScan tableScan =
+                fileStoreTable
+                        .newScan()
+                        .withPartitionFilter(new ArrayList<>(partitions))
+                        .withBucketFilter(buckets::contains);
+        for (Split split : tableScan.plan().splits()) {
+            if (split instanceof DataSplit) {
+                DataSplit dataSplit = (DataSplit) split;
+                LinkedHashMap<String, DataFileMeta> dataFilesByName =
+                        dataFilesByPartitionBucket.get(
+                                new PaimonPartitionBucket(
+                                        dataSplit.partition(), dataSplit.bucket()));
+                if (dataFilesByName != null) {
+                    for (DataFileMeta file : dataSplit.dataFiles()) {
+                        dataFilesByName.put(file.fileName(), file);
+                    }
+                }
             }
-            BinaryRow row = rowEncoder.finishRow();
-            return ValueEncoder.encodeValue(schemaId, row);
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to encode Paimon lookup row as Fluss value.", e);
+        }
+
+        Map<PaimonPartitionBucket, List<DataFileMeta>> latestFiles = new LinkedHashMap<>();
+        dataFilesByPartitionBucket.forEach(
+                (partitionBucket, dataFilesByName) ->
+                        latestFiles.put(
+                                partitionBucket,
+                                Collections.unmodifiableList(
+                                        new ArrayList<>(dataFilesByName.values()))));
+        return latestFiles;
+    }
+
+    /** Tracks creation of Paimon lookup files while delegating all local I/O operations. */
+    private final class TrackingIOManager implements IOManager {
+
+        private final IOManager delegate;
+
+        private TrackingIOManager(IOManager delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public FileIOChannel.ID createChannel() {
+            return delegate.createChannel();
+        }
+
+        @Override
+        public FileIOChannel.ID createChannel(String prefix) {
+            try {
+                diskWriteGuard.run();
+            } catch (DiskWriteLockedException e) {
+                // IOManager does not allow createChannel to declare IOException. Preserve the
+                // I/O boundary here and unwrap the retriable Fluss exception in lookup().
+                throw new UncheckedIOException(new IOException(e));
+            }
+            FileIOChannel.ID channel = delegate.createChannel(prefix);
+            // Paimon creates lookup files synchronously in the lookup thread, so this marks only
+            // the request that caused this channel to be created.
+            if (lookupFileDownloaded.get() != null) {
+                lookupFileDownloaded.set(true);
+            }
+            return channel;
+        }
+
+        @Override
+        public String[] tempDirs() {
+            return delegate.tempDirs();
+        }
+
+        @Override
+        public String pickTempDir() {
+            return delegate.pickTempDir();
+        }
+
+        @Override
+        public FileIOChannel.Enumerator createChannelEnumerator() {
+            return delegate.createChannelEnumerator();
+        }
+
+        @Override
+        public BufferFileWriter createBufferFileWriter(FileIOChannel.ID channelID)
+                throws IOException {
+            return delegate.createBufferFileWriter(channelID);
+        }
+
+        @Override
+        public BufferFileReader createBufferFileReader(FileIOChannel.ID channelID)
+                throws IOException {
+            return delegate.createBufferFileReader(channelID);
+        }
+
+        @Override
+        public void close() {
+            // The shared delegate is owned by PaimonLakeStorage.
         }
     }
 
-    private void ensureValueEncoder(short schemaId, RowType valueRowType) {
-        if (hasCachedValueEncoder && cachedValueSchemaId == schemaId) {
-            return;
+    private static final class TrackingMetrics implements AutoCloseable {
+        private final ThreadLocal<Boolean> lookupFileDownloaded;
+        private final long startNanoTime;
+        private final LookupContext context;
+
+        private TrackingMetrics(ThreadLocal<Boolean> lookupFileDownloaded, LookupContext context) {
+            this.lookupFileDownloaded = lookupFileDownloaded;
+            this.lookupFileDownloaded.set(false);
+            this.startNanoTime = System.nanoTime();
+            this.context = context;
         }
 
-        IOUtils.closeQuietly(cachedValueRowEncoder, "Fluss value row encoder");
-        cachedValueRowEncoder = RowEncoder.create(tableConfig.getKvFormat(), valueRowType);
-        cachedValueFieldGetters = InternalRow.createFieldGetters(valueRowType);
-        cachedValueSchemaId = schemaId;
-        hasCachedValueEncoder = true;
-    }
-
-    private FileStoreTable fileStoreTable() {
-        return checkNotNull(fileStoreTable, "fileStoreTable must be initialized.");
-    }
-
-    private LocalTableQuery localTableQuery() {
-        return checkNotNull(localTableQuery, "localTableQuery must be initialized.");
-    }
-
-    private RowPartitionKeyExtractor partitionKeyExtractor() {
-        return checkNotNull(partitionKeyExtractor, "partitionKeyExtractor must be initialized.");
+        @Override
+        public void close() throws Exception {
+            boolean fileDownloaded = lookupFileDownloaded.get();
+            lookupFileDownloaded.remove();
+            context.lookupMetricRecorder()
+                    .recordLookup(System.nanoTime() - startNanoTime, fileDownloaded);
+        }
     }
 }

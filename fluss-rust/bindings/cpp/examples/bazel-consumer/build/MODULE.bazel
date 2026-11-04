@@ -30,7 +30,6 @@ local_path_override(
 fluss_cpp = use_extension("@fluss-cpp//bindings/cpp/bazel/cpp:deps.bzl", "cpp_sdk")
 fluss_cpp.config(
     mode = "build",
-    protobuf_version = "3.25.5",
     arrow_cpp_version = "19.0.1",
     ep_cmake_ranlib = "/usr/bin/ranlib",
     ep_cmake_ar = "/usr/bin/ar",

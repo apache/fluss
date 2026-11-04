@@ -23,6 +23,7 @@ import org.apache.fluss.record.ArrowBatchData;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.types.RowType;
 
+import org.apache.paimon.data.BinaryRow;
 import org.apache.paimon.data.InternalRow;
 import org.apache.paimon.table.BucketMode;
 import org.apache.paimon.table.FileStoreTable;
@@ -46,28 +47,42 @@ public class AppendOnlyWriter extends RecordWriter<InternalRow> {
      */
     @Nullable private AutoCloseable arrowBatchHelper;
 
+    private final boolean paimonIncludingSystemColumns;
+
     public AppendOnlyWriter(
             FileStoreTable fileStoreTable,
             TableBucket tableBucket,
             @Nullable String partition,
             List<String> partitionKeys,
-            RowType flussRowType) {
+            RowType flussRowType,
+            boolean paimonIncludingSystemColumns,
+            boolean historicalPartition) {
         //noinspection unchecked
         super(
-                (TableWriteImpl<InternalRow>)
-                        // todo: set ioManager to support write-buffer-spillable
-                        fileStoreTable.newWrite(FLUSS_LAKE_TIERING_COMMIT_USER),
+                buildTableWrite(fileStoreTable),
                 fileStoreTable.rowType(),
                 tableBucket,
                 partition,
                 partitionKeys,
-                flussRowType);
+                flussRowType,
+                paimonIncludingSystemColumns,
+                historicalPartition);
         this.fileStoreTable = fileStoreTable;
+        this.paimonIncludingSystemColumns = paimonIncludingSystemColumns;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static TableWriteImpl<InternalRow> buildTableWrite(FileStoreTable fileStoreTable) {
+        TableWriteImpl<InternalRow> tableWrite =
+                (TableWriteImpl<InternalRow>)
+                        // todo: set ioManager to support write-buffer-spillable
+                        fileStoreTable.newWrite(FLUSS_LAKE_TIERING_COMMIT_USER);
+        return tableWrite;
     }
 
     @Override
     public void write(LogRecord record) throws Exception {
-        flussRecordAsPaimonRow.setFlussRecord(record);
+        BinaryRow targetPartition = prepareRecordAndGetPartition(record);
 
         // hacky, call internal method tableWrite.getWrite() to support
         // to write to given partition, otherwise, it'll always extract a partition from Paimon row
@@ -77,7 +92,7 @@ public class AppendOnlyWriter extends RecordWriter<InternalRow> {
         if (fileStoreTable.store().bucketMode() == BucketMode.BUCKET_UNAWARE) {
             writtenBucket = 0;
         }
-        tableWrite.getWrite().write(partition, writtenBucket, flussRecordAsPaimonRow);
+        tableWrite.getWrite().write(targetPartition, writtenBucket, flussRecordAsPaimonRow);
     }
 
     /**
@@ -90,12 +105,16 @@ public class AppendOnlyWriter extends RecordWriter<InternalRow> {
         if (arrowBatchHelper == null) {
             helper =
                     new AppendOnlyArrowBatchHelper(
-                            fileStoreTable, tableWrite, tableRowType, bucket);
+                            fileStoreTable,
+                            tableWrite,
+                            tableRowType,
+                            bucket,
+                            paimonIncludingSystemColumns);
             arrowBatchHelper = helper;
         } else {
             helper = (AppendOnlyArrowBatchHelper) arrowBatchHelper;
         }
-        helper.writeArrowBatch(arrowBatchData, partition);
+        helper.writeArrowBatch(arrowBatchData, fixedPartition, historicalPartition);
     }
 
     @Override

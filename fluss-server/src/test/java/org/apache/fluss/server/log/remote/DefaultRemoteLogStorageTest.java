@@ -36,7 +36,6 @@ import org.junit.jupiter.params.provider.ValueSource;
 import java.io.File;
 import java.io.InputStream;
 import java.nio.file.StandardCopyOption;
-import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -96,7 +95,8 @@ class DefaultRemoteLogStorageTest extends RemoteLogTestBase {
         File[] remoteFiles = remoteLogDir.listFiles();
         assertThat(remoteFiles).hasSize(4);
 
-        remoteLogStorageManager.deleteLogSegmentFiles(remoteLogSegment);
+        remoteLogStorageManager.deleteLogSegmentFiles(
+                FlussPaths.remoteLogDir(conf), remoteLogSegment);
         remoteLogDir = getTestingRemoteLogSegmentDir(remoteLogSegment);
         assertThat(remoteLogDir.exists()).isFalse();
     }
@@ -116,7 +116,8 @@ class DefaultRemoteLogStorageTest extends RemoteLogTestBase {
 
         File tmpIndexFile = new File(tempDir, "tmp-index");
         try (InputStream inputStream =
-                remoteLogStorageManager.fetchIndex(remoteLogSegment, IndexType.OFFSET)) {
+                remoteLogStorageManager.fetchIndex(
+                        FlussPaths.remoteLogDir(conf), remoteLogSegment, IndexType.OFFSET)) {
             java.nio.file.Files.copy(
                     inputStream, tmpIndexFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
         }
@@ -141,14 +142,19 @@ class DefaultRemoteLogStorageTest extends RemoteLogTestBase {
         // do snapshot.
         RemoteLogTablet remoteLogTablet = buildRemoteLogTablet(logTablet);
         List<RemoteLogSegment> remoteLogSegmentList = createRemoteLogSegmentList(logTablet);
-        remoteLogTablet.addAndDeleteLogSegments(remoteLogSegmentList, Collections.emptyList());
+        remoteLogTablet.loadRemoteLogManifest(
+                new RemoteLogManifest(
+                        logTablet.getPhysicalTablePath(),
+                        logTablet.getTableBucket(),
+                        remoteLogSegmentList));
         assertThat(remoteLogTablet.getIdToRemoteLogSegmentMap())
                 .hasSize(remoteLogSegmentList.size());
         RemoteLogManifest manifestSnapshot = remoteLogTablet.currentManifest();
         assertThat(manifestSnapshot.getRemoteLogSegmentList()).isNotEmpty();
 
         FsPath remoteSnapshotDir =
-                remoteLogStorageManager.writeRemoteLogManifestSnapshot(manifestSnapshot);
+                remoteLogStorageManager.writeRemoteLogManifestSnapshot(
+                        FlussPaths.remoteLogDir(conf), manifestSnapshot);
         assertThat(remoteSnapshotDir).isNotNull();
         File snapshotFile = new File(remoteSnapshotDir.getPath());
         assertThat(snapshotFile.exists()).isTrue();
@@ -185,18 +191,21 @@ class DefaultRemoteLogStorageTest extends RemoteLogTestBase {
         File remoteDirForBucket =
                 new File(
                         FlussPaths.remoteLogTabletDir(
-                                        remoteLogStorageManager.getRemoteLogDir(),
+                                        FlussPaths.remoteLogDir(conf),
                                         physicalTablePath,
                                         tableBucket)
                                 .toString());
         assertThat(remoteDirForBucket.exists()).isTrue();
 
-        remoteLogStorageManager.deleteTableBucket(physicalTablePath, tableBucket);
+        remoteLogStorageManager.deleteTableBucket(
+                FlussPaths.remoteLogDir(conf), physicalTablePath, tableBucket);
         assertThat(remoteDirForBucket.exists()).isFalse();
         assertThatThrownBy(
                         () ->
                                 remoteLogStorageManager.fetchIndex(
-                                        remoteLogSegment, IndexType.OFFSET))
+                                        FlussPaths.remoteLogDir(conf),
+                                        remoteLogSegment,
+                                        IndexType.OFFSET))
                 .isInstanceOf(RemoteStorageException.class)
                 .hasMessageContaining("Failed to fetch index file type: OFFSET from path");
     }
@@ -205,7 +214,7 @@ class DefaultRemoteLogStorageTest extends RemoteLogTestBase {
         return new File(
                 FlussPaths.remoteLogSegmentDir(
                                 FlussPaths.remoteLogTabletDir(
-                                        remoteLogStorageManager.getRemoteLogDir(),
+                                        FlussPaths.remoteLogDir(conf),
                                         remoteLogSegment.physicalTablePath(),
                                         remoteLogSegment.tableBucket()),
                                 remoteLogSegment.remoteLogSegmentId())

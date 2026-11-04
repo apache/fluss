@@ -32,9 +32,19 @@ defmodule Fluss.Config do
   """
 
   @enforce_keys [:bootstrap_servers]
+  # One field per core config key; built once per connection, so the field count is harmless.
+  # credo:disable-for-next-line Credo.Check.Warning.StructFieldAmount
   defstruct bootstrap_servers: nil,
             connect_timeout_ms: nil,
+            lookup_batch_timeout_ms: nil,
+            lookup_max_batch_size: nil,
+            lookup_max_inflight_requests: nil,
+            lookup_max_retries: nil,
+            lookup_queue_size: nil,
+            lookup_retry_backoff_ms: nil,
+            lookup_retry_max_backoff_ms: nil,
             remote_file_download_thread_num: nil,
+            scanner_io_tmp_dir: nil,
             scanner_log_fetch_max_bytes: nil,
             scanner_log_fetch_max_bytes_for_bucket: nil,
             scanner_log_fetch_min_bytes: nil,
@@ -52,17 +62,29 @@ defmodule Fluss.Config do
             writer_bucket_no_key_assigner: nil,
             writer_buffer_memory_size: nil,
             writer_buffer_wait_timeout_ms: nil,
+            writer_kv_backpressure_max_throttle_ms: nil,
             writer_dynamic_batch_size_enabled: nil,
             writer_dynamic_batch_size_min: nil,
+            writer_dynamic_create_partition_enabled: nil,
             writer_enable_idempotence: nil,
             writer_max_inflight_requests_per_bucket: nil,
             writer_request_max_size: nil,
-            writer_retries: nil
+            writer_retries: nil,
+            writer_retry_backoff_ms: nil,
+            writer_retry_max_backoff_ms: nil
 
   @type t :: %__MODULE__{
           bootstrap_servers: String.t(),
           connect_timeout_ms: non_neg_integer() | nil,
+          lookup_batch_timeout_ms: non_neg_integer() | nil,
+          lookup_max_batch_size: non_neg_integer() | nil,
+          lookup_max_inflight_requests: non_neg_integer() | nil,
+          lookup_max_retries: non_neg_integer() | nil,
+          lookup_queue_size: non_neg_integer() | nil,
+          lookup_retry_backoff_ms: non_neg_integer() | nil,
+          lookup_retry_max_backoff_ms: non_neg_integer() | nil,
           remote_file_download_thread_num: non_neg_integer() | nil,
+          scanner_io_tmp_dir: String.t() | nil,
           scanner_log_fetch_max_bytes: non_neg_integer() | nil,
           scanner_log_fetch_max_bytes_for_bucket: non_neg_integer() | nil,
           scanner_log_fetch_min_bytes: non_neg_integer() | nil,
@@ -80,12 +102,16 @@ defmodule Fluss.Config do
           writer_bucket_no_key_assigner: :sticky | :round_robin | nil,
           writer_buffer_memory_size: non_neg_integer() | nil,
           writer_buffer_wait_timeout_ms: non_neg_integer() | nil,
+          writer_kv_backpressure_max_throttle_ms: non_neg_integer() | nil,
           writer_dynamic_batch_size_enabled: boolean() | nil,
           writer_dynamic_batch_size_min: non_neg_integer() | nil,
+          writer_dynamic_create_partition_enabled: boolean() | nil,
           writer_enable_idempotence: boolean() | nil,
           writer_max_inflight_requests_per_bucket: non_neg_integer() | nil,
           writer_request_max_size: non_neg_integer() | nil,
-          writer_retries: non_neg_integer() | nil
+          writer_retries: non_neg_integer() | nil,
+          writer_retry_backoff_ms: non_neg_integer() | nil,
+          writer_retry_max_backoff_ms: non_neg_integer() | nil
         }
 
   defguardp is_non_neg_integer(n) when is_integer(n) and n >= 0
@@ -106,10 +132,53 @@ defmodule Fluss.Config do
   def set_connect_timeout_ms(%__MODULE__{} = config, ms) when is_non_neg_integer(ms),
     do: %{config | connect_timeout_ms: ms}
 
+  @spec set_lookup_batch_timeout_ms(t(), non_neg_integer()) :: t()
+  def set_lookup_batch_timeout_ms(%__MODULE__{} = config, ms) when is_non_neg_integer(ms),
+    do: %{config | lookup_batch_timeout_ms: ms}
+
+  @spec set_lookup_max_batch_size(t(), non_neg_integer()) :: t()
+  def set_lookup_max_batch_size(%__MODULE__{} = config, size) when is_non_neg_integer(size),
+    do: %{config | lookup_max_batch_size: size}
+
+  @spec set_lookup_max_inflight_requests(t(), non_neg_integer()) :: t()
+  def set_lookup_max_inflight_requests(%__MODULE__{} = config, n) when is_non_neg_integer(n),
+    do: %{config | lookup_max_inflight_requests: n}
+
+  @spec set_lookup_max_retries(t(), non_neg_integer()) :: t()
+  def set_lookup_max_retries(%__MODULE__{} = config, n) when is_non_neg_integer(n),
+    do: %{config | lookup_max_retries: n}
+
+  @spec set_lookup_queue_size(t(), non_neg_integer()) :: t()
+  def set_lookup_queue_size(%__MODULE__{} = config, size) when is_non_neg_integer(size),
+    do: %{config | lookup_queue_size: size}
+
+  @doc """
+  Sets the initial delay in milliseconds before a lookup that failed with a retriable error is
+  resent. The delay doubles per retry up to `lookup_retry_max_backoff_ms`, with +/-20% jitter.
+  `0` resends immediately. Defaults to `100`.
+  """
+  @spec set_lookup_retry_backoff_ms(t(), non_neg_integer()) :: t()
+  def set_lookup_retry_backoff_ms(%__MODULE__{} = config, ms) when is_non_neg_integer(ms),
+    do: %{config | lookup_retry_backoff_ms: ms}
+
+  @doc """
+  Sets the cap in milliseconds for the exponentially growing lookup retry delay. The +/-20% jitter
+  applies after the cap, so a delay can reach 20% above it. Must not be below
+  `lookup_retry_backoff_ms`. Defaults to `1000`.
+  """
+  @spec set_lookup_retry_max_backoff_ms(t(), non_neg_integer()) :: t()
+  def set_lookup_retry_max_backoff_ms(%__MODULE__{} = config, ms) when is_non_neg_integer(ms),
+    do: %{config | lookup_retry_max_backoff_ms: ms}
+
   @spec set_remote_file_download_thread_num(t(), non_neg_integer()) :: t()
   def set_remote_file_download_thread_num(%__MODULE__{} = config, threads)
       when is_non_neg_integer(threads),
       do: %{config | remote_file_download_thread_num: threads}
+
+  @doc "Sets the parent directory for remote log downloads."
+  @spec set_scanner_io_tmp_dir(t(), String.t()) :: t()
+  def set_scanner_io_tmp_dir(%__MODULE__{} = config, path) when is_binary(path),
+    do: %{config | scanner_io_tmp_dir: path}
 
   @spec set_scanner_log_fetch_max_bytes(t(), non_neg_integer()) :: t()
   def set_scanner_log_fetch_max_bytes(%__MODULE__{} = config, max_bytes)
@@ -186,6 +255,11 @@ defmodule Fluss.Config do
   def set_writer_buffer_wait_timeout_ms(%__MODULE__{} = config, ms) when is_non_neg_integer(ms),
     do: %{config | writer_buffer_wait_timeout_ms: ms}
 
+  @spec set_writer_kv_backpressure_max_throttle_ms(t(), non_neg_integer()) :: t()
+  def set_writer_kv_backpressure_max_throttle_ms(%__MODULE__{} = config, ms)
+      when is_non_neg_integer(ms),
+      do: %{config | writer_kv_backpressure_max_throttle_ms: ms}
+
   @spec set_writer_dynamic_batch_size_enabled(t(), boolean()) :: t()
   def set_writer_dynamic_batch_size_enabled(%__MODULE__{} = config, enabled)
       when is_boolean(enabled),
@@ -195,6 +269,11 @@ defmodule Fluss.Config do
   def set_writer_dynamic_batch_size_min(%__MODULE__{} = config, size)
       when is_non_neg_integer(size),
       do: %{config | writer_dynamic_batch_size_min: size}
+
+  @spec set_writer_dynamic_create_partition_enabled(t(), boolean()) :: t()
+  def set_writer_dynamic_create_partition_enabled(%__MODULE__{} = config, enabled)
+      when is_boolean(enabled),
+      do: %{config | writer_dynamic_create_partition_enabled: enabled}
 
   @spec set_writer_enable_idempotence(t(), boolean()) :: t()
   def set_writer_enable_idempotence(%__MODULE__{} = config, enabled)
@@ -213,6 +292,14 @@ defmodule Fluss.Config do
   @spec set_writer_retries(t(), non_neg_integer()) :: t()
   def set_writer_retries(%__MODULE__{} = config, n) when is_non_neg_integer(n),
     do: %{config | writer_retries: n}
+
+  @spec set_writer_retry_backoff_ms(t(), non_neg_integer()) :: t()
+  def set_writer_retry_backoff_ms(%__MODULE__{} = config, ms) when is_non_neg_integer(ms),
+    do: %{config | writer_retry_backoff_ms: ms}
+
+  @spec set_writer_retry_max_backoff_ms(t(), non_neg_integer()) :: t()
+  def set_writer_retry_max_backoff_ms(%__MODULE__{} = config, ms) when is_non_neg_integer(ms),
+    do: %{config | writer_retry_max_backoff_ms: ms}
 
   @spec get_bootstrap_servers(t()) :: String.t()
   def get_bootstrap_servers(%__MODULE__{bootstrap_servers: servers}), do: servers

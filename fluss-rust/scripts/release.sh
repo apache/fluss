@@ -44,8 +44,32 @@ TARBALL="${PREFIX}.tgz"
 echo "Creating ASF source release for fluss-rust ${VERSION}"
 mkdir -p "$DIST_DIR"
 
+# --add-file reads the proto from the working tree, not from HEAD.
+if ! git diff --quiet HEAD -- ../fluss-rpc/src/main/proto/FlussApi.proto; then
+  echo "Error: fluss-rpc/src/main/proto/FlussApi.proto has uncommitted changes"
+  exit 1
+fi
+
 echo "Creating source archive: ${TARBALL}"
-git archive --format=tar.gz --prefix="${PREFIX}/" -o "${DIST_DIR}/${TARBALL}" HEAD
+git archive --format=tar.gz \
+  --prefix="${PREFIX}/crates/fluss/proto/" --add-file=../fluss-rpc/src/main/proto/FlussApi.proto \
+  --prefix="${PREFIX}/" -o "${DIST_DIR}/${TARBALL}" HEAD
+
+# The archive root is fluss-rust/, not the repo root, so it does not inherit the
+# repo's LICENSE/NOTICE. An ASF source release must carry both.
+# Include the canonical proto so regeneration also works from the source release.
+echo "Verifying LICENSE, NOTICE and FlussApi.proto in the archive"
+ARCHIVE_FILES=$(tar -tzf "${DIST_DIR}/${TARBALL}")
+for f in LICENSE NOTICE crates/fluss/proto/FlussApi.proto; do
+  if ! echo "$ARCHIVE_FILES" | grep -qx "${PREFIX}/${f}"; then
+    echo "Error: ${f} is missing from ${TARBALL}"
+    exit 1
+  fi
+  if [ -z "$(tar -xzOf "${DIST_DIR}/${TARBALL}" "${PREFIX}/${f}")" ]; then
+    echo "Error: ${f} is empty in ${TARBALL}"
+    exit 1
+  fi
+done
 
 echo "Generating SHA-512 checksum: ${TARBALL}.sha512"
 if command -v shasum >/dev/null 2>&1; then

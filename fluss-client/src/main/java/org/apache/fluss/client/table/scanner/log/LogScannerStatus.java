@@ -65,6 +65,14 @@ public class LogScannerStatus {
         bucketStatus(tableBucket).setOffset(offset);
     }
 
+    synchronized long recordsLag() {
+        long recordsLag = 0L;
+        for (BucketScanStatus bucketScanStatus : bucketStatusMap.bucketStatusMap().values()) {
+            recordsLag += bucketScanStatus.recordsLag();
+        }
+        return recordsLag;
+    }
+
     synchronized void assignScanBuckets(Map<TableBucket, Long> scanBucketAndOffsets) {
         for (Map.Entry<TableBucket, Long> entry : scanBucketAndOffsets.entrySet()) {
             TableBucket scanBucket = entry.getKey();

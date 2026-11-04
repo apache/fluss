@@ -512,9 +512,9 @@ public final class LocalDiskManager implements Closeable, ServerReconfigurable {
 
     /**
      * Throws {@link DiskWriteLockedException} when the local data disk usage has crossed the
-     * configured write-limit ratio. Only client-driven writes ({@code appendLog} / {@code putKv})
-     * should call this; follower replication paths must bypass this check to preserve replica
-     * consistency.
+     * configured write-limit ratio. Client-driven writes ({@code appendLog} / {@code putKv}) and
+     * lookup cache file download paths should call this; follower replication paths must bypass
+     * this check to preserve replica consistency.
      */
     public void ensureWritable() {
         if (diskWriteLocked) {

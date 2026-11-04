@@ -20,7 +20,9 @@
 from enum import IntEnum
 from types import TracebackType
 from typing import (
+    Any,
     AsyncIterator,
+    NoReturn,
     Dict,
     Iterator,
     List,
@@ -99,6 +101,22 @@ class RecordBatch:
     @property
     def last_offset(self) -> int:
         """The offset of the last record in this batch."""
+        ...
+    @property
+    def commit_timestamp(self) -> int:
+        """Server-side commit timestamp in epoch milliseconds.
+
+        `NO_COMMIT_TIMESTAMP` when the batch carries no single timestamp, which
+        is the case for a limit scan that merges several log batches.
+        """
+        ...
+    @property
+    def schema_id(self) -> int:
+        """Source log batch schema ID, before projection or schema alignment.
+
+        This does not identify the output Arrow schema. `NO_SCHEMA_ID` is
+        returned when there is no single source schema, including limit scans.
+        """
         ...
     def __str__(self) -> str: ...
     def __repr__(self) -> str: ...
@@ -180,6 +198,10 @@ class Config:
     @writer_bucket_no_key_assigner.setter
     def writer_bucket_no_key_assigner(self, value: str) -> None: ...
     @property
+    def writer_dynamic_create_partition_enabled(self) -> bool: ...
+    @writer_dynamic_create_partition_enabled.setter
+    def writer_dynamic_create_partition_enabled(self, enabled: bool) -> None: ...
+    @property
     def scanner_remote_log_prefetch_num(self) -> int: ...
     @scanner_remote_log_prefetch_num.setter
     def scanner_remote_log_prefetch_num(self, num: int) -> None: ...
@@ -191,6 +213,10 @@ class Config:
     def scanner_remote_log_read_concurrency(self) -> int: ...
     @scanner_remote_log_read_concurrency.setter
     def scanner_remote_log_read_concurrency(self, num: int) -> None: ...
+    @property
+    def scanner_io_tmp_dir(self) -> Optional[str]: ...
+    @scanner_io_tmp_dir.setter
+    def scanner_io_tmp_dir(self, path: Optional[str]) -> None: ...
     @property
     def scanner_log_max_poll_records(self) -> int: ...
     @scanner_log_max_poll_records.setter
@@ -212,6 +238,34 @@ class Config:
     @scanner_log_fetch_max_bytes_for_bucket.setter
     def scanner_log_fetch_max_bytes_for_bucket(self, bytes: int) -> None: ...
     @property
+    def lookup_queue_size(self) -> int: ...
+    @lookup_queue_size.setter
+    def lookup_queue_size(self, value: int) -> None: ...
+    @property
+    def lookup_max_batch_size(self) -> int: ...
+    @lookup_max_batch_size.setter
+    def lookup_max_batch_size(self, value: int) -> None: ...
+    @property
+    def lookup_batch_timeout_ms(self) -> int: ...
+    @lookup_batch_timeout_ms.setter
+    def lookup_batch_timeout_ms(self, value: int) -> None: ...
+    @property
+    def lookup_max_inflight_requests(self) -> int: ...
+    @lookup_max_inflight_requests.setter
+    def lookup_max_inflight_requests(self, value: int) -> None: ...
+    @property
+    def lookup_max_retries(self) -> int: ...
+    @lookup_max_retries.setter
+    def lookup_max_retries(self, value: int) -> None: ...
+    @property
+    def lookup_retry_backoff_ms(self) -> int: ...
+    @lookup_retry_backoff_ms.setter
+    def lookup_retry_backoff_ms(self, backoff: int) -> None: ...
+    @property
+    def lookup_retry_max_backoff_ms(self) -> int: ...
+    @lookup_retry_max_backoff_ms.setter
+    def lookup_retry_max_backoff_ms(self, backoff: int) -> None: ...
+    @property
     def writer_batch_timeout_ms(self) -> int: ...
     @writer_batch_timeout_ms.setter
     def writer_batch_timeout_ms(self, timeout: int) -> None: ...
@@ -231,6 +285,18 @@ class Config:
     def writer_buffer_wait_timeout_ms(self) -> int: ...
     @writer_buffer_wait_timeout_ms.setter
     def writer_buffer_wait_timeout_ms(self, timeout: int) -> None: ...
+    @property
+    def writer_kv_backpressure_max_throttle_ms(self) -> int: ...
+    @writer_kv_backpressure_max_throttle_ms.setter
+    def writer_kv_backpressure_max_throttle_ms(self, timeout: int) -> None: ...
+    @property
+    def writer_retry_backoff_ms(self) -> int: ...
+    @writer_retry_backoff_ms.setter
+    def writer_retry_backoff_ms(self, backoff: int) -> None: ...
+    @property
+    def writer_retry_max_backoff_ms(self) -> int: ...
+    @writer_retry_max_backoff_ms.setter
+    def writer_retry_max_backoff_ms(self, backoff: int) -> None: ...
     @property
     def connect_timeout_ms(self) -> int: ...
     @connect_timeout_ms.setter
@@ -463,6 +529,118 @@ class DatabaseInfo:
     def __repr__(self) -> str: ...
 
 @final
+class Predicate:
+    """A filter expression for a log scan.
+
+    Build one from :func:`col`, then combine with ``&`` and ``|``.
+
+    Example:
+        ```python
+        from fluss import col
+
+        hot = (col("id") >= 200) & col("name").starts_with("high")
+        scanner = await table.new_scan().filter(hot).create_log_scanner()
+        ```
+    """
+
+    def and_(self, other: Predicate) -> Predicate:
+        """Match rows satisfying both predicates."""
+        ...
+    def or_(self, other: Predicate) -> Predicate:
+        """Match rows satisfying either predicate."""
+        ...
+    def __bool__(self) -> NoReturn:
+        """Always raises: use ``&`` and ``|``, since ``and``/``or`` would
+        silently return one side."""
+        ...
+    def __and__(self, other: Predicate, /) -> Predicate: ...
+    def __rand__(self, other: Predicate, /) -> Predicate: ...
+    def __or__(self, other: Predicate, /) -> Predicate: ...
+    def __ror__(self, other: Predicate, /) -> Predicate: ...
+    def __repr__(self) -> str: ...
+
+@final
+class ColumnRef:
+    """A column reference used to build a :class:`Predicate`.
+
+    Comparison operators build predicates, so ``col("id") >= 200`` and
+    ``col("id").greater_or_equal(200)`` are equivalent.
+
+    Literals are plain Python values: ``bool``, ``int``, ``float``, ``str``,
+    ``bytes``, ``decimal.Decimal``,
+    ``datetime.date``, ``datetime.time`` and ``datetime.datetime``. A naive
+    datetime is a wall clock and filters a TIMESTAMP column, an aware one a
+    TIMESTAMP_LTZ column. Nulls are matched with ``is_null()`` and
+    ``is_not_null()`` rather than a comparison against ``None``.
+    """
+
+    def __new__(cls, name: str) -> ColumnRef: ...
+    @property
+    def name(self) -> str:
+        """The column name this reference points at."""
+        ...
+    def __eq__(self, value: Any, /) -> Predicate: ...  # type: ignore[override]
+    def __ne__(self, value: Any, /) -> Predicate: ...  # type: ignore[override]
+    def __lt__(self, value: Any, /) -> Predicate: ...
+    def __le__(self, value: Any, /) -> Predicate: ...
+    def __gt__(self, value: Any, /) -> Predicate: ...
+    def __ge__(self, value: Any, /) -> Predicate: ...
+    def equal(self, value: Any) -> Predicate:
+        """Match rows where the column equals ``value``."""
+        ...
+    def not_equal(self, value: Any) -> Predicate:
+        """Match rows where the column differs from ``value``."""
+        ...
+    def less_than(self, value: Any) -> Predicate:
+        """Match rows where the column is less than ``value``."""
+        ...
+    def less_or_equal(self, value: Any) -> Predicate:
+        """Match rows where the column is less than or equal to ``value``."""
+        ...
+    def greater_than(self, value: Any) -> Predicate:
+        """Match rows where the column is greater than ``value``."""
+        ...
+    def greater_or_equal(self, value: Any) -> Predicate:
+        """Match rows where the column is greater than or equal to ``value``."""
+        ...
+    def is_null(self) -> Predicate:
+        """Match rows where the column is null."""
+        ...
+    def is_not_null(self) -> Predicate:
+        """Match rows where the column is not null."""
+        ...
+    def starts_with(self, prefix: str) -> Predicate:
+        """Match rows where the string column starts with ``prefix``."""
+        ...
+    def ends_with(self, suffix: str) -> Predicate:
+        """Match rows where the string column ends with ``suffix``."""
+        ...
+    def contains(self, infix: str) -> Predicate:
+        """Match rows where the string column contains ``infix``."""
+        ...
+    def __bool__(self) -> NoReturn:
+        """Always raises, like :meth:`Predicate.__bool__`."""
+        ...
+    def is_in(self, values: List[Any]) -> Predicate:
+        """Match rows where the column equals any of ``values``."""
+        ...
+    def not_in(self, values: List[Any]) -> Predicate:
+        """Match rows where the column equals none of ``values``."""
+        ...
+    def __repr__(self) -> str: ...
+
+def col(name: str) -> ColumnRef:
+    """Reference a column by name when building a filter.
+
+    Args:
+        name: Column name as declared in the table schema.
+
+    Returns:
+        A ColumnRef that builds predicates via comparison operators.
+    """
+    ...
+
+@final
 class TableScan:
     """Builder for creating log scanners with flexible configuration.
 
@@ -519,6 +697,20 @@ class TableScan:
 
         Args:
             n: The maximum number of rows to scan. Must be positive.
+
+        Returns:
+            Self for method chaining.
+        """
+        ...
+    def filter(self, predicate: Predicate) -> "TableScan":
+        """Push a filter down to the server for batch pruning.
+
+        Pruning is conservative: a returned batch may still contain
+        non-matching rows, so re-apply the predicate on the results. Only
+        Arrow log scans prune; a filter combined with ``limit()`` is rejected.
+
+        Args:
+            predicate: Predicate built from :func:`col`.
 
         Returns:
             Self for method chaining.
@@ -596,6 +788,8 @@ class FlussTable:
     def new_append(self) -> TableAppend: ...
     def new_upsert(self) -> TableUpsert: ...
     def new_lookup(self) -> TableLookup: ...
+    @property
+    def arrow_schema(self) -> pa.Schema: ...
     def get_table_info(self) -> TableInfo: ...
     def get_table_path(self) -> TablePath: ...
     def has_primary_key(self) -> bool: ...
@@ -1090,12 +1284,16 @@ class BatchScanner:
 @final
 class Schema:
     def __new__(
-        cls, schema: pa.Schema, primary_keys: Optional[List[str]] = None
+        cls,
+        schema: pa.Schema,
+        primary_keys: Optional[List[str]] = None,
+        auto_increment_column: Optional[str] = None,
     ) -> Schema: ...
     def get_column_names(self) -> List[str]: ...
     def get_column_types(self) -> List[str]: ...
     def get_columns(self) -> List[Tuple[str, str]]: ...
     def get_primary_keys(self) -> List[str]: ...
+    def get_auto_increment_columns(self) -> List[str]: ...
     def __str__(self) -> str: ...
 
 @final
@@ -1208,6 +1406,10 @@ class PartitionInfo:
     def partition_name(self) -> str:
         """Get the partition name."""
         ...
+    @property
+    def bucket_count(self) -> int:
+        """Get the partition's bucket count."""
+        ...
     def __repr__(self) -> str: ...
 
 @final
@@ -1280,6 +1482,23 @@ class ErrorCode:
     INELIGIBLE_REPLICA_EXCEPTION: int
     INVALID_ALTER_TABLE_EXCEPTION: int
     DELETION_DISABLED_EXCEPTION: int
+    SERVER_NOT_EXIST_EXCEPTION: int
+    SERVER_TAG_ALREADY_EXIST_EXCEPTION: int
+    SERVER_TAG_NOT_EXIST_EXCEPTION: int
+    REBALANCE_FAILURE_EXCEPTION: int
+    NO_REBALANCE_IN_PROGRESS_EXCEPTION: int
+    INVALID_PRODUCER_ID_EXCEPTION: int
+    CONFIG_EXCEPTION: int
+    NOT_COORDINATOR_LEADER_EXCEPTION: int
+    SCANNER_EXPIRED: int
+    UNKNOWN_SCANNER_ID: int
+    INVALID_SCAN_REQUEST: int
+    TOO_MANY_SCANNERS: int
+    DISK_WRITE_LOCKED: int
+    INSUFFICIENT_KV_LEADER_REPLICA_CAPACITY: int
+    STORAGE_BACKPRESSURE_EXCEPTION: int
+    HISTORICAL_PARTITION_THROTTLED: int
+    INVALID_BUCKET_ROUTING: int
 
 @final
 class OffsetSpec:
@@ -1307,5 +1526,12 @@ class OffsetSpec:
 
 # Constant for earliest offset (-2)
 EARLIEST_OFFSET: int
+
+# Reported by `RecordBatch.commit_timestamp` when the batch carries no single
+# commit timestamp, for example a limit scan that merges several log batches (-1)
+NO_COMMIT_TIMESTAMP: int
+
+# No single source log batch schema ID, including limit scan results.
+NO_SCHEMA_ID: int
 
 __version__: str

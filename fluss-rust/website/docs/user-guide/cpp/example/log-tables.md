@@ -123,7 +123,7 @@ scanner.Unsubscribe(1);
 ```cpp
 #include <arrow/record_batch.h>
 
-fluss::LogScanner arrow_scanner;
+fluss::RecordBatchLogScanner arrow_scanner;
 table.NewScan().CreateRecordBatchLogScanner(arrow_scanner);
 
 for (int b = 0; b < info.num_buckets; ++b) {
@@ -131,7 +131,7 @@ for (int b = 0; b < info.num_buckets; ++b) {
 }
 
 fluss::ArrowRecordBatches batches;
-arrow_scanner.PollRecordBatch(5000, batches);
+arrow_scanner.Poll(5000, batches);
 
 for (size_t i = 0; i < batches.Size(); ++i) {
     const auto& batch = batches[i];
@@ -143,6 +143,171 @@ for (size_t i = 0; i < batches.Size(); ++i) {
     }
 }
 ```
+
+## Filter Pushdown
+
+Configure statistics for columns used by filters:
+
+```cpp
+auto descriptor = fluss::TableDescriptor::NewBuilder()
+    .SetSchema(schema)
+    .SetProperty("table.statistics.columns", "event_id,event_type")
+    .Build();
+```
+
+Then attach a predicate to the scan:
+
+```cpp
+auto predicate =
+    fluss::Col("event_id")
+        .GreaterOrEqual(100)
+        .And(fluss::Col("event_type").StartsWith("user_"));
+
+fluss::RecordBatchLogScanner scanner;
+auto result = table.NewScan()
+                  .Filter(std::move(predicate))
+                  .ProjectByName({"event_id", "event_type"})
+                  .CreateRecordBatchLogScanner(scanner);
+```
+
+Fluss uses RecordBatch statistics to skip batches that cannot match. It does not filter individual
+rows, so consumers must evaluate the predicate again on returned batches. Batches without usable
+statistics are retained conservatively.
+
+## Bounded Arrow RecordBatch Reading
+
+Use `RecordBatchLogReader` when the scan should finish after reaching a fixed offset for every
+bucket. Query engines can pass the complete per-bucket ranges directly:
+
+```cpp
+auto info = table.GetTableInfo();
+
+std::vector<int32_t> bucket_ids;
+for (int32_t bucket_id = 0; bucket_id < info.num_buckets; ++bucket_id) {
+    bucket_ids.push_back(bucket_id);
+}
+
+std::unordered_map<int32_t, int64_t> latest_offsets;
+admin.ListOffsets(table_path, bucket_ids, fluss::OffsetSpec::Latest(), latest_offsets);
+
+std::vector<fluss::RecordBatchLogReadRange> ranges;
+for (int32_t bucket_id : bucket_ids) {
+    ranges.push_back(
+        {fluss::TableBucket{info.table_id, bucket_id}, 0, latest_offsets.at(bucket_id)});
+}
+
+fluss::RecordBatchLogReader reader;
+table.NewScan().CreateRecordBatchLogReader(ranges, reader);
+
+const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+bool finished = false;
+while (std::chrono::steady_clock::now() < deadline) {
+    fluss::RecordBatchReadResult result;
+    auto read_result = reader.NextBatch(1000, result);
+    if (!read_result.Ok()) {
+        if (!read_result.IsRetriable()) {
+            throw std::runtime_error(read_result.error_message);
+        }
+        continue;
+    }
+    if (result.status == fluss::BoundedReadStatus::TimedOut) {
+        continue;
+    }
+    if (result.status == fluss::BoundedReadStatus::Finished) {
+        finished = true;
+        break;
+    }
+
+    std::cout << "bucket=" << result.batch->GetBucketId()
+              << " base_offset=" << result.batch->GetBaseOffset()
+              << " last_offset=" << result.batch->GetLastOffset()
+              << " rows=" << result.batch->NumRows() << std::endl;
+}
+if (!finished) {
+    throw std::runtime_error("Bounded read exceeded its execution deadline");
+}
+```
+
+Inspect `result.status` only when `NextBatch()` returns an `Ok()` result. `TimedOut` does not
+exhaust the reader; it lets a query engine periodically check cancellation or deadlines before
+retrying. `Finished` means all stopping offsets have been reached.
+
+To read a half-open log timestamp range `[starting_timestamp_ms, stopping_timestamp_ms)`, pass the
+assigned buckets and timestamps. Fluss resolves both timestamps with `OffsetSpec::Timestamp` for
+every bucket, then uses the same bounded offset reader:
+
+```cpp
+fluss::RecordBatchLogReader reader;
+table.NewScan().CreateRecordBatchLogReader(
+    admin, assigned_buckets,
+    fluss::TimestampRange{starting_timestamp_ms, stopping_timestamp_ms}, reader);
+
+const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+bool finished = false;
+while (std::chrono::steady_clock::now() < deadline) {
+    fluss::RecordBatchReadResult result;
+    auto read_result = reader.NextBatch(1000, result);
+    if (!read_result.Ok()) {
+        if (!read_result.IsRetriable()) {
+            throw std::runtime_error(read_result.error_message);
+        }
+        continue;
+    }
+    if (result.status == fluss::BoundedReadStatus::TimedOut) {
+        continue;
+    }
+    if (result.status == fluss::BoundedReadStatus::Finished) {
+        finished = true;
+        break;
+    }
+    process(result.batch->GetArrowRecordBatch());
+}
+if (!finished) {
+    throw std::runtime_error("Bounded read exceeded its execution deadline");
+}
+```
+
+For the common case where the client should read everything currently available, let the
+reader query the latest offsets:
+
+```cpp
+fluss::RecordBatchLogScanner latest_scanner;
+table.NewScan().CreateRecordBatchLogScanner(latest_scanner);
+for (int32_t bucket_id : bucket_ids) {
+    latest_scanner.Subscribe(bucket_id, 0);
+}
+
+fluss::RecordBatchLogReader latest_reader;
+std::move(latest_scanner).CreateRecordBatchLogReaderUntilLatest(admin, latest_reader);
+
+fluss::ArrowRecordBatches batches;
+// Use the remaining query execution time as the budget for the whole collection.
+auto collect_result = latest_reader.CollectAllBatches(30000, batches);
+if (!collect_result.Ok()) {
+    // `batches` may be partial. Propagate the timeout/error instead of treating
+    // it as a complete bounded result or retrying unconditionally.
+    throw std::runtime_error(collect_result.error_message);
+}
+```
+
+The scanner-level creation methods transfer ownership on success, so the scanner becomes
+unavailable after it is moved into the reader.
+
+:::caution Partial results on timeout
+
+`CollectAllBatches()` is not all-or-nothing. It appends complete batches to its output while
+reading, so a `REQUEST_TIME_OUT` result may leave `batches` partially populated. Only an `Ok()`
+result means all stopping offsets have been reached.
+
+The supplied timeout is the total execution budget for the whole `CollectAllBatches()` call, not a
+per-batch polling timeout. Once the budget expires, the method stops collecting and returns
+`REQUEST_TIME_OUT` if unread work remains; it does not internally retry with a fresh budget. It
+does not wait for more scanner data after the deadline, but it still drains already-buffered
+batches and reports `Ok()` if every stopping offset has been reached. The reader remains valid
+after timeout, but applications should normally propagate the incomplete result. Resuming with the
+same reader and output should only be done as an explicit higher-level policy with its own deadline.
+
+:::
 
 ## Column Projection
 
@@ -156,7 +321,7 @@ fluss::LogScanner name_projected_scanner;
 table.NewScan().ProjectByName({"event_id", "timestamp"}).CreateLogScanner(name_projected_scanner);
 
 // Arrow RecordBatch with projection
-fluss::LogScanner projected_arrow_scanner;
+fluss::RecordBatchLogScanner projected_arrow_scanner;
 table.NewScan().ProjectByIndex({0, 2}).CreateRecordBatchLogScanner(projected_arrow_scanner);
 ```
 

@@ -19,9 +19,12 @@ defmodule Fluss.AppendWriter do
   @moduledoc """
   Writer for appending records to a log table.
 
-  Values are passed as a list in column order. Use `nil` for null values.
+  Values are passed as a list in column order. Use `nil` for null values, except in a
+  `NOT NULL` column, where `nil` is rejected.
   `append/2` returns a `Fluss.WriteHandle` — drop it for fire-and-forget,
   or call `Fluss.WriteHandle.wait/1` for per-record acknowledgment.
+  When the write buffer is full, a write waits for room, up to the writer buffer wait
+  timeout in `Fluss.Config` (no limit by default).
 
   ## Examples
 
@@ -60,10 +63,7 @@ defmodule Fluss.AppendWriter do
 
   @spec append(t(), list()) :: {:ok, Fluss.WriteHandle.t()} | {:error, Fluss.Error.t()}
   def append(writer, values) when is_list(values) do
-    case Native.append_writer_append(writer, values) do
-      {:error, _} = err -> err
-      handle -> {:ok, handle}
-    end
+    writer |> Native.append_writer_append(values) |> Native.await_queued()
   end
 
   @spec flush(t()) :: :ok | {:error, Fluss.Error.t()}

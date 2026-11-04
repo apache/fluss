@@ -37,14 +37,28 @@ public class RemoteLogManifest {
     private final PhysicalTablePath physicalTablePath;
     private final TableBucket tableBucket;
     private final List<RemoteLogSegment> remoteLogSegmentList;
+    private final long highestCopiedEndOffset;
 
     public RemoteLogManifest(
             PhysicalTablePath physicalTablePath,
             TableBucket tableBucket,
             List<RemoteLogSegment> remoteLogSegmentList) {
+        this(
+                physicalTablePath,
+                tableBucket,
+                remoteLogSegmentList,
+                maxPhysicalEndOffset(remoteLogSegmentList));
+    }
+
+    public RemoteLogManifest(
+            PhysicalTablePath physicalTablePath,
+            TableBucket tableBucket,
+            List<RemoteLogSegment> remoteLogSegmentList,
+            long highestCopiedEndOffset) {
         this.physicalTablePath = physicalTablePath;
         this.tableBucket = tableBucket;
         this.remoteLogSegmentList = Collections.unmodifiableList(remoteLogSegmentList);
+        this.highestCopiedEndOffset = highestCopiedEndOffset;
 
         // sanity check
         for (RemoteLogSegment remoteLogSegment : remoteLogSegmentList) {
@@ -57,6 +71,64 @@ public class RemoteLogManifest {
                         "RemoteLogSegment's tableBucket should be the same as the tableBucket of RemoteLogManifestSnapshot");
             }
         }
+        if (highestCopiedEndOffset < maxPhysicalEndOffset(remoteLogSegmentList)) {
+            throw new IllegalArgumentException(
+                    "Highest copied end offset must cover every persisted remote segment");
+        }
+        if (highestCopiedEndOffset < -1L) {
+            throw new IllegalArgumentException(
+                    "Highest copied end offset must be -1 or non-negative");
+        }
+    }
+
+    /**
+     * Returns an ordered, non-overlapping logical view with the same readable coverage.
+     *
+     * <p>Legacy manifests can contain overlapping physical segments without explicit logical
+     * ranges. Contained ranges are discarded, while a segment extending the covered end replaces
+     * the overlapping suffix, as in {@link #trimAndMerge(List, List)}. Existing logical ranges are
+     * never expanded. Ties are resolved by segment ID so the result is independent of entry order.
+     * Like merging newly copied segments, this assumes overlapping committed records agree; range
+     * metadata cannot reconcile divergent log contents.
+     *
+     * <p>This does not modify the persisted manifest or delete physical files. Deserialization
+     * deliberately preserves all original references for consumers such as orphan file cleanup.
+     * Already ordered, non-overlapping logical views are returned after a linear scan without
+     * copying or sorting the segment list.
+     */
+    public RemoteLogManifest normalizeLogicalRanges() {
+        if (hasNormalizedLogicalRanges()) {
+            return this;
+        }
+
+        List<RemoteLogSegment> sortedSegments = new ArrayList<>(remoteLogSegmentList);
+        sortedSegments.sort(
+                Comparator.comparingLong(RemoteLogSegment::logicalStartOffset)
+                        .thenComparing(
+                                Comparator.comparingLong(RemoteLogSegment::logicalEndOffset)
+                                        .reversed())
+                        .thenComparing(RemoteLogSegment::remoteLogSegmentId));
+
+        List<RemoteLogSegment> normalizedSegments = new ArrayList<>(sortedSegments.size());
+        for (RemoteLogSegment segment : sortedSegments) {
+            if (!normalizedSegments.isEmpty()) {
+                int lastIndex = normalizedSegments.size() - 1;
+                RemoteLogSegment previous = normalizedSegments.get(lastIndex);
+                if (segment.logicalEndOffset() <= previous.logicalEndOffset()) {
+                    continue;
+                }
+                if (segment.logicalStartOffset() < previous.logicalEndOffset()) {
+                    normalizedSegments.set(
+                            lastIndex,
+                            previous.withLogicalRange(
+                                    previous.logicalStartOffset(), segment.logicalStartOffset()));
+                }
+            }
+            normalizedSegments.add(segment);
+        }
+
+        return new RemoteLogManifest(
+                physicalTablePath, tableBucket, normalizedSegments, highestCopiedEndOffset);
     }
 
     public RemoteLogManifest trimAndMerge(
@@ -65,35 +137,97 @@ public class RemoteLogManifest {
                 deletedSegments.stream()
                         .map(RemoteLogSegment::remoteLogSegmentId)
                         .collect(Collectors.toSet());
-        ArrayList<RemoteLogSegment> newSegments = new ArrayList<>(remoteLogSegmentList.size());
-        for (RemoteLogSegment segment : remoteLogSegmentList) {
+        List<RemoteLogSegment> newSegments = new ArrayList<>(remoteLogSegmentList.size());
+        // Normalize before deletion so removing a visible segment cannot restore a hidden range.
+        for (RemoteLogSegment segment : normalizeLogicalRanges().getRemoteLogSegmentList()) {
             if (!deletedIds.contains(segment.remoteLogSegmentId())) {
                 newSegments.add(segment);
             }
         }
-        newSegments.addAll(addedSegments);
-        newSegments.sort(Comparator.comparingLong(RemoteLogSegment::remoteLogStartOffset));
-        return new RemoteLogManifest(physicalTablePath, tableBucket, newSegments);
+        List<RemoteLogSegment> sortedAddedSegments = new ArrayList<>(addedSegments);
+        sortedAddedSegments.sort(Comparator.comparingLong(RemoteLogSegment::remoteLogStartOffset));
+        long newHighestCopiedEndOffset = highestCopiedEndOffset;
+        for (RemoteLogSegment addedSegment : sortedAddedSegments) {
+            newHighestCopiedEndOffset =
+                    Math.max(newHighestCopiedEndOffset, addedSegment.remoteLogEndOffset());
+            if (newSegments.isEmpty()) {
+                newSegments.add(addedSegment);
+                continue;
+            }
+
+            long currentStartOffset = newSegments.get(0).logicalStartOffset();
+            long currentEndOffset = newSegments.get(newSegments.size() - 1).logicalEndOffset();
+            if (addedSegment.remoteLogEndOffset() <= currentEndOffset) {
+                continue;
+            }
+            if (addedSegment.remoteLogStartOffset() > currentEndOffset) {
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Remote log segment [%s, %s) introduces a gap after logical end %s",
+                                addedSegment.remoteLogStartOffset(),
+                                addedSegment.remoteLogEndOffset(),
+                                currentEndOffset));
+            }
+
+            long insertionOffset =
+                    Math.max(addedSegment.remoteLogStartOffset(), currentStartOffset);
+            List<RemoteLogSegment> mergedSegments = new ArrayList<>();
+            for (RemoteLogSegment currentSegment : newSegments) {
+                if (currentSegment.logicalEndOffset() <= insertionOffset) {
+                    mergedSegments.add(currentSegment);
+                } else if (currentSegment.logicalStartOffset() < insertionOffset) {
+                    mergedSegments.add(
+                            currentSegment.withLogicalRange(
+                                    currentSegment.logicalStartOffset(), insertionOffset));
+                }
+            }
+            mergedSegments.add(
+                    addedSegment.withLogicalRange(
+                            insertionOffset, addedSegment.remoteLogEndOffset()));
+            newSegments = mergedSegments;
+        }
+
+        return new RemoteLogManifest(
+                physicalTablePath, tableBucket, newSegments, newHighestCopiedEndOffset);
     }
 
+    /**
+     * Returns the inclusive logical start offset exposed by this manifest, or {@link
+     * Long#MAX_VALUE} if this manifest is empty.
+     *
+     * <p>The returned value is the start of the logical range visible through the manifest, not
+     * necessarily the physical start offset of its first persisted segment.
+     */
     public long getRemoteLogStartOffset() {
         long startOffset = Long.MAX_VALUE;
         for (RemoteLogSegment remoteLogSegment : remoteLogSegmentList) {
-            if (remoteLogSegment.remoteLogStartOffset() < startOffset) {
-                startOffset = remoteLogSegment.remoteLogStartOffset();
+            if (remoteLogSegment.logicalStartOffset() < startOffset) {
+                startOffset = remoteLogSegment.logicalStartOffset();
             }
         }
         return startOffset;
     }
 
+    /**
+     * Returns the exclusive logical end offset exposed by this manifest, or {@code -1} if this
+     * manifest is empty.
+     *
+     * <p>The returned value is the end of the logical range visible through the manifest, rather
+     * than a physical segment boundary.
+     */
     public long getRemoteLogEndOffset() {
         long endOffset = -1;
         for (RemoteLogSegment remoteLogSegment : remoteLogSegmentList) {
-            if (endOffset == -1 || remoteLogSegment.remoteLogEndOffset() > endOffset) {
-                endOffset = remoteLogSegment.remoteLogEndOffset();
+            if (endOffset == -1 || remoteLogSegment.logicalEndOffset() > endOffset) {
+                endOffset = remoteLogSegment.logicalEndOffset();
             }
         }
         return endOffset;
+    }
+
+    /** Returns the highest exclusive end offset successfully copied to remote storage. */
+    public long getHighestCopiedEndOffset() {
+        return highestCopiedEndOffset;
     }
 
     public long getRemoteLogSize() {
@@ -133,16 +267,41 @@ public class RemoteLogManifest {
             return false;
         }
         RemoteLogManifest that = (RemoteLogManifest) o;
-        return Objects.equals(remoteLogSegmentList, that.remoteLogSegmentList);
+        return highestCopiedEndOffset == that.highestCopiedEndOffset
+                && Objects.equals(remoteLogSegmentList, that.remoteLogSegmentList);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(remoteLogSegmentList);
+        return Objects.hash(remoteLogSegmentList, highestCopiedEndOffset);
     }
 
     @Override
     public String toString() {
-        return "RemoteLogManifestSnapshot{" + "remoteLogSegmentList=" + remoteLogSegmentList + '}';
+        return "RemoteLogManifestSnapshot{"
+                + "remoteLogSegmentList="
+                + remoteLogSegmentList
+                + ", highestCopiedEndOffset="
+                + highestCopiedEndOffset
+                + '}';
+    }
+
+    private boolean hasNormalizedLogicalRanges() {
+        long previousEndOffset = Long.MIN_VALUE;
+        for (RemoteLogSegment segment : remoteLogSegmentList) {
+            if (segment.logicalStartOffset() < previousEndOffset) {
+                return false;
+            }
+            previousEndOffset = segment.logicalEndOffset();
+        }
+        return true;
+    }
+
+    private static long maxPhysicalEndOffset(List<RemoteLogSegment> segments) {
+        long maxEndOffset = -1L;
+        for (RemoteLogSegment segment : segments) {
+            maxEndOffset = Math.max(maxEndOffset, segment.remoteLogEndOffset());
+        }
+        return maxEndOffset;
     }
 }

@@ -17,16 +17,21 @@
 
 package org.apache.fluss.metrics.registry;
 
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metrics.Counter;
 import org.apache.fluss.metrics.Metric;
 import org.apache.fluss.metrics.SimpleCounter;
 import org.apache.fluss.metrics.groups.GenericMetricGroup;
 import org.apache.fluss.metrics.groups.MetricGroup;
+import org.apache.fluss.metrics.reporter.MetricReporterPlugin;
 import org.apache.fluss.metrics.reporter.ScheduledMetricReporter;
 import org.apache.fluss.metrics.util.TestReporter;
+import org.apache.fluss.plugin.PluginManager;
 import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
 
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 import javax.annotation.Nullable;
 
@@ -36,6 +41,14 @@ import java.util.Collections;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /** Tests for the {@link MetricRegistryImpl}. */
 class MetricRegistryImplTest {
@@ -79,6 +92,44 @@ class MetricRegistryImplTest {
         assertThat(reporter2.getLastRemovedMetricName()).hasValue("rootCounter");
 
         registry.closeAsync().get();
+    }
+
+    @Test
+    void testReporterFiltersApplyToRegistrationAndRemoval() throws Exception {
+        TestReporter filtered = spy(new TestReporter("filtered"));
+        TestReporter unfiltered = spy(new TestReporter("unfiltered"));
+        PluginManager pluginManager = mock(PluginManager.class);
+        when(pluginManager.load(MetricReporterPlugin.class))
+                .thenReturn(Arrays.<MetricReporterPlugin>asList(filtered, unfiltered).iterator());
+
+        Configuration config = new Configuration();
+        config.set(ConfigOptions.METRICS_REPORTERS, Arrays.asList("filtered", "unfiltered"));
+        config.setString("metrics.reporter.filtered.filter.includes", "test.*:keep*");
+        config.setString("metrics.reporter.filtered.filter.excludes", "*:keepDebug;*.bucket");
+
+        try (MetricRegistry registry = MetricRegistry.create(config, pluginManager)) {
+            GenericMetricGroup root = new GenericMetricGroup(registry, null, "test");
+            MetricGroup table = root.addGroup("table", "orders");
+            Counter kept = table.counter("keep");
+            table.counter("keepDebug");
+            table.counter("other");
+            table.addGroup("bucket", "1").counter("keep");
+
+            ArgumentCaptor<MetricGroup> group = ArgumentCaptor.forClass(MetricGroup.class);
+            verify(filtered).notifyOfAddedMetric(eq(kept), eq("keep"), group.capture());
+            assertThat(group.getValue().getLogicalScope(input -> input, '_'))
+                    .isEqualTo("test_table");
+            verify(filtered, times(1)).notifyOfAddedMetric(any(), anyString(), any());
+            verify(unfiltered, times(4)).notifyOfAddedMetric(any(), anyString(), any());
+
+            root.close();
+
+            verify(filtered).notifyOfRemovedMetric(eq(kept), eq("keep"), any());
+            verify(filtered, times(1)).notifyOfRemovedMetric(any(), anyString(), any());
+            verify(unfiltered, times(4)).notifyOfRemovedMetric(any(), anyString(), any());
+        }
+        verify(filtered).close();
+        verify(unfiltered).close();
     }
 
     /**

@@ -19,14 +19,23 @@ Complete API reference for the Fluss Python client.
 | `writer_dynamic_batch_size_min`       | `writer.dynamic-batch-size-min`       | Get/set the lower bound for the dynamic batch size estimator (default 256 KB; ignored when disabled) |
 | `writer_batch_timeout_ms`             | `writer.batch-timeout-ms`             | Get/set max time in ms to wait for a writer batch to fill up before sending             |
 | `writer_bucket_no_key_assigner`       | `writer.bucket.no-key-assigner`       | Get/set bucket assignment strategy (`"sticky"` or `"round_robin"`)                      |
+| `writer_dynamic_create_partition_enabled` | `writer.dynamic-create-partition.enabled` | Get/set whether a write creates a partition that doesn't exist yet (default `true`); when `false`, such writes fail with `ErrorCode.PARTITION_NOT_EXISTS` |
 | `scanner_remote_log_prefetch_num`     | `scanner.remote-log.prefetch-num`     | Get/set number of remote log segments to prefetch                                       |
 | `remote_file_download_thread_num`     | `remote-file.download-thread-num`     | Get/set number of threads for remote log downloads                                      |
 | `scanner_remote_log_read_concurrency` | `scanner.remote-log.read-concurrency` | Get/set streaming read concurrency within a remote log file                             |
+| `scanner_io_tmp_dir`                  | `scanner.io.tmpdir`                  | Parent for remote log downloads; `None` uses the OS temporary directory plus `/fluss`                |
 | `scanner_log_max_poll_records`        | `scanner.log.max-poll-records`        | Get/set max number of records returned in a single poll()                               |
 | `scanner_log_fetch_max_bytes`         | `scanner.log.fetch.max-bytes`         | Get/set maximum bytes per fetch response for LogScanner                                 |
 | `scanner_log_fetch_min_bytes`         | `scanner.log.fetch.min-bytes`         | Get/set minimum bytes the server must accumulate before returning a fetch response      |
 | `scanner_log_fetch_wait_max_time_ms`  | `scanner.log.fetch.wait-max-time-ms`  | Get/set maximum time (ms) the server may wait to satisfy min-bytes                      |
 | `scanner_log_fetch_max_bytes_for_bucket` | `scanner.log.fetch.max-bytes-for-bucket` | Get/set maximum bytes per fetch response per bucket for LogScanner                |
+| `lookup_queue_size`                   | `lookup.queue-size`                   | Get/set maximum number of pending lookups (default `25600`)                             |
+| `lookup_max_batch_size`               | `lookup.max-batch-size`               | Get/set maximum number of lookups merged into one request (default `128`)               |
+| `lookup_batch_timeout_ms`             | `lookup.batch-timeout-ms`             | Get/set maximum time in ms a lookup waits for its batch to fill (default `100`)         |
+| `lookup_max_inflight_requests`        | `lookup.max-inflight-requests`        | Get/set maximum number of unacknowledged lookup requests (default `128`)                |
+| `lookup_max_retries`                  | `lookup.max-retries`                  | Get/set maximum number of lookup retries (default `2147483647`)                         |
+| `lookup_retry_backoff_ms`             | `lookup.retry-backoff-ms`             | Get/set initial lookup retry backoff in ms, doubling per retry with ±20% jitter; `0` retries immediately (default `100`) |
+| `lookup_retry_max_backoff_ms`         | `lookup.retry-max-backoff-ms`         | Get/set lookup retry backoff cap in ms, applied before jitter; must be >= `lookup_retry_backoff_ms` (default `1000`) |
 | `connect_timeout_ms`                  | `connect-timeout`                     | Get/set TCP connect timeout in milliseconds                                             |
 | `security_protocol`                   | `security.protocol`                   | Get/set security protocol (`"PLAINTEXT"` or `"sasl"`)                                   |
 | `security_sasl_mechanism`             | `security.sasl.mechanism`             | Get/set SASL mechanism (only `"PLAIN"` is supported)                                    |
@@ -90,6 +99,10 @@ Supports `async with` statement (async context manager).
 | `get_table_path() -> TablePath` | Get table path                          |
 | `has_primary_key() -> bool`     | Check if table has a primary key        |
 
+| Property                     |  Description                                 |
+|------------------------------|----------------------------------------------|
+| `.arrow_schema -> pa.Schema` | The Arrow schema `write_arrow_batch` expects |
+
 ## `TableScan`
 
 | Method                                                   |  Description                                                        |
@@ -97,9 +110,52 @@ Supports `async with` statement (async context manager).
 | `.project(indices) -> TableScan`                         | Project columns by index                                            |
 | `.project_by_name(names) -> TableScan`                   | Project columns by name                                             |
 | `.limit(n) -> TableScan`                                 | Set a positive row limit (enables `create_bucket_batch_scanner`; rejected by log scanners) |
+| `.filter(predicate) -> TableScan`                        | Push a filter down for server-side batch pruning (see [`col`](#col)) |
 | `await .create_log_scanner() -> LogScanner`              | Create record-based scanner (for `poll()`); on a primary-key table, subscribes to its CDC changelog (per-record `change_type`) |
 | `await .create_record_batch_log_scanner() -> LogScanner` | Create batch-based scanner (for `poll_arrow()`, `to_arrow()`, etc.); log tables only — no per-record change types |
 | `.create_bucket_batch_scanner(bucket) -> BatchScanner`   | Bounded scan of one bucket (requires `limit`; runs on first `next_batch()`) |
+
+## `col`
+
+`fluss.col(name)` returns a `ColumnRef` used to build a filter for
+`TableScan.filter()`. Pruning is conservative: a returned batch may still hold
+non-matching rows, so apply the predicate again on the results.
+
+| Method                                    |  Description                            |
+|-------------------------------------------|-----------------------------------------|
+| `col(name) >= value` (`>`, `<`, `<=`, `==`, `!=`) | Comparison predicate               |
+| `.equal(v)`, `.not_equal(v)`              | Same as `==` and `!=`                   |
+| `.less_than(v)`, `.less_or_equal(v)`      | Same as `<` and `<=`                    |
+| `.greater_than(v)`, `.greater_or_equal(v)`| Same as `>` and `>=`                    |
+| `.is_null()`, `.is_not_null()`            | Prune on the batch's null count         |
+| `.starts_with(p)`, `.ends_with(s)`, `.contains(i)` | String predicates              |
+| `.is_in(values)`, `.not_in(values)`       | Set membership                          |
+
+Predicates combine with `&` and `|` (or `and_()` and `or_()`).
+
+Literals are plain Python values, and the column's type decides how they are
+encoded, so `col("id") >= 200` works for any integer column and an out-of-range
+literal is rejected when the scanner is created:
+
+| Python type          | Fluss column types                                  |
+|----------------------|-----------------------------------------------------|
+| `bool`               | BOOLEAN                                             |
+| `int`                | TINYINT, SMALLINT, INT, BIGINT (range-checked)       |
+| `float`              | DOUBLE, and FLOAT when exactly representable         |
+| `str`                | CHAR, STRING                                        |
+| `bytes`              | BINARY, BYTES                                       |
+| `None`               | not comparable; use `.is_null()` / `.is_not_null()`  |
+| `decimal.Decimal`    | DECIMAL, rejected if the column's scale cannot hold it exactly |
+| `datetime.date`      | DATE                                                |
+| `datetime.time`      | TIME                                                |
+| `datetime.datetime`  | TIMESTAMP when naive, TIMESTAMP_LTZ when tz-aware    |
+
+```python
+from fluss import col
+
+hot = (col("id") >= 200) & col("name").starts_with("high")
+scanner = await table.new_scan().filter(hot).create_log_scanner()
+```
 
 ## `TableAppend`
 
@@ -142,7 +198,7 @@ Builder for creating a `PrefixLookuper`. Obtain via `TableLookup.lookup_by(colum
 |--------------------------------------------------|-------------------------------------|
 | `.append(row) -> WriteResultHandle`              | Append a row (dict, list, or tuple) |
 | `.write_arrow(table)`                            | Write a PyArrow Table               |
-| `.write_arrow_batch(batch) -> WriteResultHandle` | Write a PyArrow RecordBatch         |
+| `.write_arrow_batch(batch) -> WriteResultHandle` | Write a PyArrow RecordBatch, whose column types must match `table.arrow_schema` |
 | `.write_pandas(df)`                              | Write a Pandas DataFrame            |
 | `await .flush()`                                 | Flush all pending writes            |
 
@@ -267,22 +323,34 @@ for record in scan_records:
 
 ## `RecordBatch`
 
-| Property                   | Description                  |
-|----------------------------|------------------------------|
-| `.batch -> pa.RecordBatch` | Arrow RecordBatch data       |
-| `.bucket -> TableBucket`   | Bucket this batch belongs to |
-| `.base_offset -> int`      | First record offset          |
-| `.last_offset -> int`      | Last record offset           |
+| Property                   | Description                       |
+|----------------------------|-----------------------------------|
+| `.batch -> pa.RecordBatch` | Arrow RecordBatch data            |
+| `.bucket -> TableBucket`   | Bucket this batch belongs to      |
+| `.base_offset -> int`      | First record offset               |
+| `.last_offset -> int`      | Last record offset                |
+| `.commit_timestamp -> int` | Commit time in epoch milliseconds |
+| `.schema_id -> int`        | Schema ID from the source log batch |
+
+`.commit_timestamp` is `fluss.NO_COMMIT_TIMESTAMP` (`-1`) when the batch carries
+no single timestamp, which is the case for a limit scan because it merges several
+log batches into one Arrow batch.
+
+`.schema_id` is the ID of the schema the log batch was written with. It can differ
+from the schema of the batch's columns, because by default the scanner aligns every
+batch to the table schema it was created with. It is `fluss.NO_SCHEMA_ID` (`-1`)
+for a limit scan, which merges several log batches into one.
 
 ## `Schema`
 
 | Method                                         |  Description               |
 |------------------------------------------------|----------------------------|
-| `Schema(schema: pa.Schema, primary_keys=None)` | Create from PyArrow schema. Field nullability (`pa.field(..., nullable=False)`) is preserved. |
+| `Schema(schema: pa.Schema, primary_keys=None, auto_increment_column=None)` | Create from PyArrow schema. Field nullability (`pa.field(..., nullable=False)`) is preserved. `auto_increment_column` must name an `INT` or `BIGINT` column of a primary-key table that is not itself a primary-key column. |
 | `.get_column_names() -> list[str]`             | Get column names           |
 | `.get_column_types() -> list[str]`             | Get column type names. Non-nullable types include a `" NOT NULL"` suffix (e.g., `"int NOT NULL"`). |
 | `.get_columns() -> list[tuple[str, str]]`      | Get `(name, type)` pairs. Type strings follow the same nullability formatting as `.get_column_types()`. |
 | `.get_primary_keys() -> list[str]`             | Get primary key columns    |
+| `.get_auto_increment_columns() -> list[str]`   | Get auto increment columns, empty if none |
 
 ## `TableDescriptor`
 
@@ -323,10 +391,11 @@ for record in scan_records:
 
 ## `PartitionInfo`
 
-| Property                 |  Description   |
-|--------------------------|----------------|
-| `.partition_id -> int`   | Partition ID   |
-| `.partition_name -> str` | Partition name |
+| Property                 |  Description           |
+|--------------------------|------------------------|
+| `.partition_id -> int`   | Partition ID           |
+| `.partition_name -> str` | Partition name         |
+| `.bucket_count -> int`   | Partition bucket count |
 
 ## `DatabaseDescriptor`
 

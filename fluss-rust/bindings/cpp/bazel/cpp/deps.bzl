@@ -127,7 +127,6 @@ _ARROW_BUILD_VERSIONS = {
 _config_tag = tag_class(attrs = {
     "mode": attr.string(default = "build"),
     "arrow_cpp_version": attr.string(default = "19.0.1"),
-    "protobuf_version": attr.string(default = "3.25.5"),
     "ep_cmake_ranlib": attr.string(default = "ranlib"),
     "ep_cmake_ar": attr.string(default = "ar"),
     "ep_cmake_nm": attr.string(default = "nm"),

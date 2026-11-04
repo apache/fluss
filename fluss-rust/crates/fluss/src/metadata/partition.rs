@@ -123,6 +123,25 @@ impl ResolvedPartitionSpec {
         }
     }
 
+    /// Like [`Self::from_partition_name`], but fails when the name doesn't split into one
+    /// value per key, which a value containing the separator causes.
+    pub fn try_from_partition_name(
+        partition_keys: Arc<[String]>,
+        partition_name: &str,
+    ) -> Result<Self> {
+        let spec = Self::from_partition_name(partition_keys, partition_name);
+        if spec.partition_values.len() != spec.partition_keys.len() {
+            return Err(Error::IllegalArgument {
+                message: format!(
+                    "Partition name '{partition_name}' has {} values for the partition keys {:?}. A partition value can't contain '{PARTITION_SPEC_SEPARATOR}'.",
+                    spec.partition_values.len(),
+                    spec.partition_keys
+                ),
+            });
+        }
+        Ok(spec)
+    }
+
     pub fn from_partition_qualified_name(qualified_partition_name: &str) -> Result<Self> {
         let mut keys = Vec::new();
         let mut values = Vec::new();
@@ -268,6 +287,7 @@ impl Display for ResolvedPartitionSpec {
 pub struct PartitionInfo {
     partition_id: PartitionId,
     partition_spec: ResolvedPartitionSpec,
+    bucket_count: i32,
 }
 
 impl PartitionInfo {
@@ -275,7 +295,19 @@ impl PartitionInfo {
         Self {
             partition_id,
             partition_spec,
+            bucket_count: 0,
         }
+    }
+
+    pub fn with_bucket_count(mut self, bucket_count: i32) -> Self {
+        self.bucket_count = bucket_count;
+        self
+    }
+
+    /// Get the partition's bucket count. Listing partitions always sets it; a `PartitionInfo`
+    /// built with [`Self::new`] has 0 until [`Self::with_bucket_count`].
+    pub fn get_bucket_count(&self) -> i32 {
+        self.bucket_count
     }
 
     /// Get the partition id. The id is globally unique in the Fluss cluster.
@@ -301,6 +333,7 @@ impl PartitionInfo {
             partition_id: self.partition_id,
             partition_spec: self.partition_spec.to_pb(),
             remote_data_dir: None,
+            bucket_count: (self.bucket_count > 0).then_some(self.bucket_count),
         }
     }
 
@@ -308,6 +341,7 @@ impl PartitionInfo {
         Self {
             partition_id: pb.partition_id,
             partition_spec: ResolvedPartitionSpec::from_pb(&pb.partition_spec),
+            bucket_count: pb.bucket_count.filter(|count| *count > 0).unwrap_or(0),
         }
     }
 }
@@ -384,6 +418,19 @@ mod tests {
         );
 
         assert_eq!(spec.get_partition_values(), &["2024-01-15", "US"]);
+    }
+
+    #[test]
+    fn test_resolved_partition_spec_try_from_partition_name() {
+        let keys: Arc<[String]> = Arc::from(["date".to_string(), "region".to_string()]);
+        let spec =
+            ResolvedPartitionSpec::try_from_partition_name(Arc::clone(&keys), "2024-01-15$US")
+                .unwrap();
+        assert_eq!(spec.get_partition_values(), &["2024-01-15", "US"]);
+
+        let error =
+            ResolvedPartitionSpec::try_from_partition_name(keys, "2024-01-15$US$EU").unwrap_err();
+        assert!(error.to_string().contains("can't contain '$'"), "{error}");
     }
 
     #[test]

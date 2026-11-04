@@ -45,6 +45,7 @@ import org.apache.flink.types.Row;
 import org.apache.flink.types.RowKind;
 import org.apache.flink.util.CloseableIterator;
 import org.apache.flink.util.CollectionUtil;
+import org.apache.paimon.catalog.Identifier;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -66,10 +67,12 @@ import java.util.Map;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
+import static org.apache.flink.table.api.config.OptimizerConfigOptions.TABLE_OPTIMIZER_REUSE_SOURCE_ENABLED;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertResultsExactOrder;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertRowResultsIgnoreOrder;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.collectBatchRows;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.collectRowsWithTimeout;
+import static org.apache.fluss.lake.paimon.testutils.PaimonTestUtils.adjustToLegacyV1Table;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -123,7 +126,9 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
                 CollectionUtil.iteratorToList(tableResult.collect()).stream()
                         .map(
                                 row -> {
-                                    int userColumnCount = row.getArity() - 3;
+                                    // FIP-27: a clean lake table exposes only user columns via
+                                    // $lake, so there are no trailing system columns to strip.
+                                    int userColumnCount = row.getArity();
                                     Object[] fields = new Object[userColumnCount];
                                     for (int i = 0; i < userColumnCount; i++) {
                                         fields[i] = row.getField(i);
@@ -277,7 +282,9 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
                         .stream()
                         .map(
                                 row -> {
-                                    int columnCount = row.getArity() - 3;
+                                    // FIP-27: a clean lake table exposes only user columns via
+                                    // $lake, so there are no trailing system columns to strip.
+                                    int columnCount = row.getArity();
                                     Object[] fields = new Object[columnCount];
                                     for (int i = 0; i < columnCount; i++) {
                                         fields[i] = row.getField(i);
@@ -544,6 +551,48 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
         List<String> result = toSortedRows(batchTEnv.executeSql("select * from " + tableName));
         assertThat(result.toString())
                 .isEqualTo("[+I[0, v01, v02], +I[1, v11, v12], +I[2, v21, v22], +I[3, v31, v32]]");
+    }
+
+    @Test
+    void testUnionReadLegacyTable() throws Exception {
+        // FIP-27: union read (lake snapshot merged with fresh Fluss log) must still work for a
+        // legacy table that carries the three trailing system columns.
+        String tableName = "pk_table_union_read_legacy";
+        TablePath t1 = TablePath.of(DEFAULT_DB, tableName);
+        int bucketNum = 3;
+        long tableId = createSimplePkTable(t1, bucketNum, false, true);
+
+        // turn the freshly created clean table into a legacy table before any tiering happens
+        adjustToLegacyV1Table(t1, paimonCatalog);
+
+        // tier an initial version of every row into the lake
+        JobClient jobClient = buildTieringJob(execEnv);
+        List<InternalRow> rows = new ArrayList<>();
+        Map<TableBucket, Long> bucketLogEndOffset = new HashMap<>();
+        for (int i = 0; i < bucketNum; i++) {
+            rows.add(
+                    GenericRow.of(
+                            i, BinaryString.fromString("v1_1"), BinaryString.fromString("v1_2")));
+            bucketLogEndOffset.put(new TableBucket(tableId, i), 1L);
+        }
+        writeRows(t1, rows, false);
+        waitUntilBucketsSynced(bucketLogEndOffset.keySet());
+        assertReplicaStatus(bucketLogEndOffset);
+
+        // stop tiering, then overwrite every row so the fresh values only exist in the Fluss log
+        jobClient.cancel().get();
+        rows.clear();
+        for (int i = 0; i < bucketNum; i++) {
+            rows.add(
+                    GenericRow.of(
+                            i, BinaryString.fromString("v2_1"), BinaryString.fromString("v2_2")));
+        }
+        writeRows(t1, rows, false);
+
+        // union read must merge the lake snapshot with the fresh log and return the latest values
+        List<String> result = toSortedRows(batchTEnv.executeSql("select * from " + tableName));
+        assertThat(result.toString())
+                .isEqualTo("[+I[0, v2_1, v2_2], +I[1, v2_1, v2_2], +I[2, v2_1, v2_2]]");
     }
 
     @ParameterizedTest
@@ -915,6 +964,137 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
         // cancel jobs
         insertResult.getJobClient().get().cancel().get();
         jobClient.cancel().get();
+    }
+
+    @Test
+    void testDifferentPushDownFiltersWithSourceReuse() throws Exception {
+        boolean originalReuseSource =
+                streamTEnv.getConfig().get(TABLE_OPTIMIZER_REUSE_SOURCE_ENABLED);
+        JobClient tieringJob = null;
+        String tableName = "stream_union_different_pushdown_filters";
+        TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
+        Map<TableBucket, Long> bucketLogEndOffset = new HashMap<>();
+
+        try {
+            streamTEnv.getConfig().set(TABLE_OPTIMIZER_REUSE_SOURCE_ENABLED, true);
+            tieringJob = buildTieringJob(execEnv);
+            long tableId =
+                    preparePKTableFullType(
+                            tablePath, DEFAULT_BUCKET_NUM, false, bucketLogEndOffset);
+            waitUntilBucketSynced(tablePath, tableId, DEFAULT_BUCKET_NUM, false);
+            assertReplicaStatus(bucketLogEndOffset);
+            tieringJob.cancel().get();
+            tieringJob = null;
+
+            String query =
+                    "SELECT c8 FROM "
+                            + tableName
+                            + " /*+ OPTIONS('scan.startup.mode' = 'full') */"
+                            + " WHERE c8 = 'string' UNION ALL "
+                            + "SELECT CAST(c5 AS STRING) FROM "
+                            + tableName
+                            + " /*+ OPTIONS('scan.startup.mode' = 'full') */"
+                            + " WHERE c5 = 40";
+            CloseableIterator<Row> iterator = streamTEnv.executeSql(query).collect();
+            List<String> actual = collectRowsWithTimeout(iterator, 2, true);
+            assertThat(actual).containsExactlyInAnyOrder("+I[string]", "+I[40]");
+        } finally {
+            streamTEnv.getConfig().set(TABLE_OPTIMIZER_REUSE_SOURCE_ENABLED, originalReuseSource);
+            if (tieringJob != null) {
+                tieringJob.cancel().get();
+            }
+        }
+    }
+
+    @Test
+    void testDifferentProjectionsWithAndWithoutSourceReuse() throws Exception {
+        boolean originalReuseSource =
+                streamTEnv.getConfig().get(TABLE_OPTIMIZER_REUSE_SOURCE_ENABLED);
+        JobClient tieringJob = null;
+        String tableName = "stream_union_different_projections";
+        TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
+        Map<TableBucket, Long> bucketLogEndOffset = new HashMap<>();
+
+        try {
+            streamTEnv.getConfig().set(TABLE_OPTIMIZER_REUSE_SOURCE_ENABLED, false);
+            tieringJob = buildTieringJob(execEnv);
+            long tableId =
+                    preparePKTableFullType(
+                            tablePath, DEFAULT_BUCKET_NUM, false, bucketLogEndOffset);
+            waitUntilBucketSynced(tablePath, tableId, DEFAULT_BUCKET_NUM, false);
+            assertReplicaStatus(bucketLogEndOffset);
+            tieringJob.cancel().get();
+            tieringJob = null;
+
+            String query =
+                    "SELECT c8 FROM "
+                            + tableName
+                            + " /*+ OPTIONS('scan.startup.mode' = 'full') */"
+                            + " UNION ALL SELECT CAST(c5 AS STRING) FROM "
+                            + tableName
+                            + " /*+ OPTIONS('scan.startup.mode' = 'full') */";
+            CloseableIterator<Row> iterator = streamTEnv.executeSql(query).collect();
+            List<String> actual = collectRowsWithTimeout(iterator, 4, true);
+            assertThat(actual)
+                    .containsExactlyInAnyOrder(
+                            "+I[string]", "+I[another_string]", "+I[4]", "+I[40]");
+
+            streamTEnv.getConfig().set(TABLE_OPTIMIZER_REUSE_SOURCE_ENABLED, true);
+            iterator = streamTEnv.executeSql(query).collect();
+            actual = collectRowsWithTimeout(iterator, 4, true);
+            assertThat(actual)
+                    .containsExactlyInAnyOrder(
+                            "+I[string]", "+I[another_string]", "+I[4]", "+I[40]");
+        } finally {
+            streamTEnv.getConfig().set(TABLE_OPTIMIZER_REUSE_SOURCE_ENABLED, originalReuseSource);
+            if (tieringJob != null) {
+                tieringJob.cancel().get();
+            }
+        }
+    }
+
+    @Test
+    void testUnionReadWithCustomLakeTablePath() throws Exception {
+        String tableName = "pk_table_custom_lake_mapping";
+        TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
+        TablePath lakeTablePath = TablePath.of("custom_db", "pk_table_custom_lake_mapping_target");
+        Map<String, String> tableProperties = new HashMap<>();
+        tableProperties.put(
+                ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key(), lakeTablePath.getDatabaseName());
+        tableProperties.put(
+                ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key(), lakeTablePath.getTableName());
+
+        long tableId = createPkTable(tablePath, tableProperties, Collections.emptyMap());
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+
+        List<InternalRow> initialRows = Arrays.asList(row(1, "v1"), row(2, "v2"));
+        writeRows(tablePath, initialRows, false);
+
+        JobClient jobClient = buildTieringJob(execEnv);
+        try {
+            assertReplicaStatus(tableBucket, 2);
+            paimonCatalog.getTable(
+                    Identifier.create(
+                            lakeTablePath.getDatabaseName(), lakeTablePath.getTableName()));
+
+            List<String> lakeRows =
+                    toSortedRows(batchTEnv.executeSql("select a, b from " + tableName + "$lake"));
+            assertThat(lakeRows.toString().replace("+U", "+I")).isEqualTo("[+I[1, v1], +I[2, v2]]");
+
+            List<String> snapshotRows =
+                    toSortedRows(
+                            batchTEnv.executeSql("select * from " + tableName + "$lake$snapshots"));
+            assertThat(snapshotRows).isNotEmpty();
+
+            writeRows(tablePath, Collections.singletonList(row(3, "v3")), false);
+
+            List<String> unionRows =
+                    toSortedRows(batchTEnv.executeSql("select * from " + tableName));
+            assertThat(unionRows.toString().replace("+U", "+I"))
+                    .isEqualTo("[+I[1, v1], +I[2, v2], +I[3, v3]]");
+        } finally {
+            jobClient.cancel().get();
+        }
     }
 
     @Test

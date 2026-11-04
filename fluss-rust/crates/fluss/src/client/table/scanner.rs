@@ -22,19 +22,24 @@ use crate::client::metadata::Metadata;
 use crate::client::table::batch_scanner::LimitBatchScanner;
 use crate::client::table::log_fetch_buffer::{
     CompletedFetch, DefaultCompletedFetch, FetchErrorAction, FetchErrorContext, FetchErrorLogLevel,
-    FetchResult, LogFetchBuffer, RemotePendingFetch,
+    FetchResult, LogFetchBuffer, NO_FILTERED_END_OFFSET, RemotePendingFetch,
 };
 use crate::client::table::read_context_resolver::ReadContextResolver;
-use crate::client::table::remote_log::{RemoteLogDownloader, RemoteLogFetchInfo};
+use crate::client::table::remote_log::{
+    RemoteLogDirectory, RemoteLogDownloader, RemoteLogFetchInfo,
+};
 use crate::config::Config;
 use crate::error::Error::UnsupportedOperation;
 use crate::error::{ApiError, Error, FlussError, Result};
 use crate::metadata::{
-    LogFormat, PhysicalTablePath, RowType, SchemaInfo, TableBucket, TableInfo, TablePath,
+    LogFormat, PhysicalTablePath, RowType, SchemaInfo, TableBucket, TableInfo, TableOrPartition,
+    TablePath,
 };
 use crate::metrics::ScannerMetrics;
+use crate::predicate::{Predicate, to_pb_predicate};
 use crate::proto::{
-    ErrorResponse, FetchLogRequest, FetchLogResponse, PbFetchLogReqForBucket, PbFetchLogReqForTable,
+    ErrorResponse, FetchLogRequest, FetchLogResponse, PbFetchLogReqForBucket,
+    PbFetchLogReqForTable, PbPredicate,
 };
 use crate::record::{
     LogRecordsBatches, ReadContext, ScanBatch, ScanRecord, ScanRecords, to_arrow_schema,
@@ -55,7 +60,6 @@ use std::{
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use tempfile::TempDir;
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 
@@ -69,6 +73,9 @@ pub struct TableScan<'a> {
     fixed_schema: bool,
     /// Optional row limit. When set, callers may construct a [`BatchScanner`] for a one-shot bounded scan.
     limit: Option<i32>,
+    /// Filter pushed down to the server, encoded eagerly so that an unresolvable
+    /// column is reported by [`Self::filter`] rather than at scanner creation.
+    filter: Option<PbPredicate>,
 }
 
 impl<'a> TableScan<'a> {
@@ -80,6 +87,7 @@ impl<'a> TableScan<'a> {
             projected_fields: None,
             fixed_schema: true,
             limit: None,
+            filter: None,
         }
     }
 
@@ -91,7 +99,8 @@ impl<'a> TableScan<'a> {
     /// default for both row and batch log scanners, ensuring that a scan exposes
     /// one stable schema. When explicitly disabled, records and batches keep
     /// their write-time schema and may have different column counts across
-    /// schema changes.
+    /// schema changes. Log-table [`LimitBatchScanner`]s require fixed-schema mode
+    /// because they return all decoded log batches as one `RecordBatch`.
     pub fn with_fixed_schema(mut self, fixed_schema: bool) -> Self {
         self.fixed_schema = fixed_schema;
         self
@@ -109,6 +118,36 @@ impl<'a> TableScan<'a> {
         }
         self.limit = Some(n);
         Ok(self)
+    }
+
+    /// Pushes `predicate` down to the log scanners, which skip whole record
+    /// batches whose statistics cannot match.
+    ///
+    /// This only reduces what is fetched, so a scan still returns a superset of
+    /// the matching rows and callers needing exact results must filter again.
+    ///
+    /// # Errors
+    /// Returns an error if a column is missing from the table, has no schema
+    /// field id, or holds a literal its declared type cannot represent exactly.
+    pub fn filter(mut self, predicate: Predicate) -> Result<Self> {
+        // Resolve against the full row type: the server evaluates the filter
+        // before projection, so projected indices would name the wrong columns.
+        self.filter = Some(to_pb_predicate(&predicate, self.table_info.get_row_type())?);
+        Ok(self)
+    }
+
+    /// Batch scanners have no predicate field in their request; reject a
+    /// configured filter rather than silently ignoring it.
+    fn reject_filter(&self, scanner: &str) -> Result<()> {
+        if self.filter.is_some() {
+            return Err(Error::UnsupportedOperation {
+                message: format!(
+                    "{scanner} doesn't support filter pushdown. Table: {}",
+                    self.table_info.table_path
+                ),
+            });
+        }
+        Ok(())
     }
 
     /// Log scanners don't support limit pushdown; reject a configured limit
@@ -134,10 +173,12 @@ impl<'a> TableScan<'a> {
         self,
         table_bucket: TableBucket,
     ) -> Result<LimitBatchScanner> {
+        self.reject_filter("BatchScanner")?;
         let limit = self.limit.ok_or_else(|| Error::IllegalArgument {
             message: "create_bucket_batch_scanner requires a limit configured via .limit(n)"
                 .to_string(),
         })?;
+        validate_limit_scan_fixed_schema(&self.table_info, self.fixed_schema)?;
         if table_bucket.table_id() != self.table_info.table_id {
             return Err(Error::IllegalArgument {
                 message: format!(
@@ -147,12 +188,21 @@ impl<'a> TableScan<'a> {
                 ),
             });
         }
-        let num_buckets = self.table_info.get_num_buckets();
-        if table_bucket.bucket_id() < 0 || table_bucket.bucket_id() >= num_buckets {
+        // An uncached count is checked by the scan once it fetches the partition's metadata.
+        let bucket_count = self
+            .metadata
+            .get_cluster()
+            .bucket_count(table_bucket.table_or_partition());
+        if table_bucket.bucket_id() < 0
+            || bucket_count.is_some_and(|bucket_count| table_bucket.bucket_id() >= bucket_count)
+        {
             return Err(Error::IllegalArgument {
                 message: format!(
-                    "Bucket id {} out of range for table with {num_buckets} buckets",
-                    table_bucket.bucket_id()
+                    "Bucket id {} out of range{}",
+                    table_bucket.bucket_id(),
+                    bucket_count
+                        .map(|count| format!(" for {count} buckets"))
+                        .unwrap_or_default()
                 ),
             });
         }
@@ -161,8 +211,8 @@ impl<'a> TableScan<'a> {
         if !self.table_info.has_primary_key() {
             validate_scan_support(&self.table_info.table_path, &self.table_info)?;
         }
-        // Pre-seed the current schema; older versions are fetched lazily during
-        // KV decode. Mirrors `Table::new_lookup`.
+        // Pre-seed the current schema; older versions are fetched lazily while
+        // decoding log or KV batches. Mirrors `Table::new_lookup`.
         let latest = SchemaInfo::new(
             self.table_info.get_schema().clone(),
             self.table_info.get_schema_id(),
@@ -352,6 +402,7 @@ impl<'a> TableScan<'a> {
             self.conn.config(),
             self.projected_fields,
             self.fixed_schema,
+            self.filter,
             admin,
         )?;
         Ok(LogScanner {
@@ -376,6 +427,7 @@ impl<'a> TableScan<'a> {
             self.conn.config(),
             self.projected_fields,
             self.fixed_schema,
+            self.filter,
             admin,
         )?;
         Ok(RecordBatchLogScanner {
@@ -408,6 +460,7 @@ pub struct RecordBatchLogScanner {
 struct LogScannerInner {
     table_path: TablePath,
     table_id: TableId,
+    table_info: TableInfo,
     metadata: Arc<Metadata>,
     log_scanner_status: Arc<LogScannerStatus>,
     log_fetcher: LogFetcher,
@@ -416,6 +469,12 @@ struct LogScannerInner {
     /// Guards against subscription changes while a
     /// [`crate::client::RecordBatchLogReader`] is iterating.
     reader_active: std::sync::atomic::AtomicBool,
+    /// Serializes the active-reader transition with subscription mutations.
+    ///
+    /// Public subscribe methods await metadata before changing the status map.
+    /// Without this lock, a subscribe call that passed the initial
+    /// `reader_active` check could finish after a bounded reader became active.
+    subscription_lock: Mutex<()>,
     /// Holds the snapshot fields used by [`PollGuard`] to derive the
     /// scanner poll-timing metrics. The mutex makes the state updates
     /// in `record_poll_start` / `record_poll_end` atomic; metric
@@ -555,6 +614,7 @@ impl Drop for LogScannerInner {
 }
 
 impl LogScannerInner {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         table_info: &TableInfo,
         metadata: Arc<Metadata>,
@@ -562,6 +622,7 @@ impl LogScannerInner {
         config: &Config,
         projected_fields: Option<Vec<usize>>,
         fixed_schema: bool,
+        filter: Option<PbPredicate>,
         admin: Arc<crate::client::admin::FlussAdmin>,
     ) -> Result<Self> {
         let log_scanner_status = Arc::new(LogScannerStatus::new());
@@ -597,6 +658,7 @@ impl LogScannerInner {
         Ok(Self {
             table_path: table_info.table_path.clone(),
             table_id: table_info.table_id,
+            table_info: table_info.clone(),
             is_partitioned_table: table_info.is_partitioned(),
             metadata: metadata.clone(),
             log_scanner_status: log_scanner_status.clone(),
@@ -608,11 +670,13 @@ impl LogScannerInner {
                 config,
                 projected_fields,
                 fixed_schema,
+                filter,
                 Arc::clone(&metrics),
                 schema_getter,
             )?,
             arrow_schema,
             reader_active: std::sync::atomic::AtomicBool::new(false),
+            subscription_lock: Mutex::new(()),
             poll_state: Mutex::new(PollState::default()),
             metrics,
             last_poll_unix_ms,
@@ -649,7 +713,8 @@ impl LogScannerInner {
             if !fetch_result.is_empty() {
                 // We have data, send next round of fetches and return
                 // This enables pipelining while user processes the data
-                self.log_fetcher.send_fetches().await?;
+                self.log_fetcher.refresh_metadata_in_background();
+                self.log_fetcher.send_fetches_without_metadata_refresh();
                 return Ok(ScanRecords::new(fetch_result));
             }
 
@@ -789,13 +854,32 @@ impl LogScannerInner {
         self.metadata
             .check_and_update_table_metadata(from_ref(&self.table_path))
             .await?;
+        let _subscription_guard = self.subscription_lock.lock();
+        self.check_no_active_reader()?;
         self.log_scanner_status
             .assign_scan_bucket(table_bucket, offset);
         Ok(())
     }
 
     async fn subscribe_buckets(&self, bucket_offsets: &HashMap<i32, i64>) -> Result<()> {
-        self.check_no_active_reader()?;
+        self.subscribe_buckets_internal(bucket_offsets, false).await
+    }
+
+    async fn subscribe_buckets_for_reader(&self, bucket_offsets: &HashMap<i32, i64>) -> Result<()> {
+        self.subscribe_buckets_internal(bucket_offsets, true).await
+    }
+
+    /// `reader_is_active` is `false` for subscriptions initiated through the
+    /// scanner API, which must reject an active reader, and `true` during reader
+    /// construction, which already holds the active-reader guard.
+    async fn subscribe_buckets_internal(
+        &self,
+        bucket_offsets: &HashMap<i32, i64>,
+        reader_is_active: bool,
+    ) -> Result<()> {
+        if !reader_is_active {
+            self.check_no_active_reader()?;
+        }
         if self.is_partitioned_table {
             return Err(Error::UnsupportedOperation {
                 message:
@@ -809,7 +893,8 @@ impl LogScannerInner {
             let table_bucket = TableBucket::new(self.table_id, *bucket_id);
             scan_bucket_offsets.insert(table_bucket, *offset);
         }
-        self.do_subscribe_buckets(scan_bucket_offsets).await
+        self.do_subscribe_buckets(scan_bucket_offsets, reader_is_active)
+            .await
     }
 
     async fn subscribe_partition(
@@ -829,8 +914,10 @@ impl LogScannerInner {
         let table_bucket =
             TableBucket::new_with_partition(self.table_id, Some(partition_id), bucket);
         self.metadata
-            .check_and_update_table_metadata(from_ref(&self.table_path))
+            .check_and_update_partition_metadata_by_ids(&self.table_path, &[partition_id])
             .await?;
+        let _subscription_guard = self.subscription_lock.lock();
+        self.check_no_active_reader()?;
         self.log_scanner_status
             .assign_scan_bucket(table_bucket, offset);
         Ok(())
@@ -840,7 +927,29 @@ impl LogScannerInner {
         &self,
         partition_bucket_offsets: &HashMap<(PartitionId, i32), i64>,
     ) -> Result<()> {
-        self.check_no_active_reader()?;
+        self.subscribe_partition_buckets_internal(partition_bucket_offsets, false)
+            .await
+    }
+
+    async fn subscribe_partition_buckets_for_reader(
+        &self,
+        partition_bucket_offsets: &HashMap<(PartitionId, i32), i64>,
+    ) -> Result<()> {
+        self.subscribe_partition_buckets_internal(partition_bucket_offsets, true)
+            .await
+    }
+
+    /// `reader_is_active` is `false` for subscriptions initiated through the
+    /// scanner API, which must reject an active reader, and `true` during reader
+    /// construction, which already holds the active-reader guard.
+    async fn subscribe_partition_buckets_internal(
+        &self,
+        partition_bucket_offsets: &HashMap<(PartitionId, i32), i64>,
+        reader_is_active: bool,
+    ) -> Result<()> {
+        if !reader_is_active {
+            self.check_no_active_reader()?;
+        }
         if !self.is_partitioned_table {
             return Err(UnsupportedOperation {
                 message: "The table is not a partitioned table, please use \"subscribe_buckets\" \
@@ -855,10 +964,15 @@ impl LogScannerInner {
                 TableBucket::new_with_partition(self.table_id, Some(partition_id), bucket_id);
             scan_bucket_offsets.insert(table_bucket, offset);
         }
-        self.do_subscribe_buckets(scan_bucket_offsets).await
+        self.do_subscribe_buckets(scan_bucket_offsets, reader_is_active)
+            .await
     }
 
-    async fn do_subscribe_buckets(&self, bucket_offsets: HashMap<TableBucket, i64>) -> Result<()> {
+    async fn do_subscribe_buckets(
+        &self,
+        bucket_offsets: HashMap<TableBucket, i64>,
+        reader_is_active: bool,
+    ) -> Result<()> {
         if bucket_offsets.is_empty() {
             return Err(Error::UnexpectedError {
                 message: "Bucket offsets are empty.".to_string(),
@@ -866,15 +980,36 @@ impl LogScannerInner {
             });
         }
 
-        self.metadata
-            .check_and_update_table_metadata(from_ref(&self.table_path))
-            .await?;
+        if self.is_partitioned_table {
+            let partition_ids: Vec<PartitionId> = bucket_offsets
+                .keys()
+                .filter_map(TableBucket::partition_id)
+                .collect();
+            self.metadata
+                .check_and_update_partition_metadata_by_ids(&self.table_path, &partition_ids)
+                .await?;
+        } else {
+            self.metadata
+                .check_and_update_table_metadata(from_ref(&self.table_path))
+                .await?;
+        }
 
+        let _subscription_guard = self.subscription_lock.lock();
+        if reader_is_active {
+            debug_assert!(
+                self.reader_active
+                    .load(std::sync::atomic::Ordering::Acquire),
+                "reader-only subscription helper called without an active reader"
+            );
+        } else {
+            self.check_no_active_reader()?;
+        }
         self.log_scanner_status.assign_scan_buckets(bucket_offsets);
         Ok(())
     }
 
     async fn unsubscribe(&self, bucket: i32) -> Result<()> {
+        let _subscription_guard = self.subscription_lock.lock();
         self.check_no_active_reader()?;
         if self.is_partitioned_table {
             return Err(Error::UnsupportedOperation {
@@ -891,6 +1026,7 @@ impl LogScannerInner {
     }
 
     async fn unsubscribe_partition(&self, partition_id: PartitionId, bucket: i32) -> Result<()> {
+        let _subscription_guard = self.subscription_lock.lock();
         self.check_no_active_reader()?;
         if !self.is_partitioned_table {
             return Err(Error::UnsupportedOperation {
@@ -926,7 +1062,9 @@ impl LogScannerInner {
             let batches = self.poll_for_batches().await?;
 
             if !batches.is_empty() {
-                self.log_fetcher.send_fetches().await?;
+                // Pipeline known leaders without awaiting metadata after advancing offsets.
+                self.log_fetcher.refresh_metadata_in_background();
+                self.log_fetcher.send_fetches_without_metadata_refresh();
                 return Ok(batches);
             }
 
@@ -961,6 +1099,8 @@ impl LogScannerInner {
 
 // Implementation for LogScanner (records mode)
 impl LogScanner {
+    /// Poll for records, returning collected records before a later fetch error.
+    /// Deferred errors are discarded if the bucket is unsubscribed or its offset changes.
     pub async fn poll(&self, timeout: Duration) -> Result<ScanRecords> {
         self.inner.poll_records(timeout).await
     }
@@ -1009,6 +1149,9 @@ impl LogScanner {
 // Implementation for RecordBatchLogScanner (batches mode)
 impl RecordBatchLogScanner {
     /// Poll for batches with metadata (bucket and offset information).
+    /// If a later fetch fails to initialize or decode, already decoded batches are returned first.
+    /// The error is reported by the next poll, unless the bucket is unsubscribed
+    /// or its offset is changed before that poll.
     pub async fn poll(&self, timeout: Duration) -> Result<Vec<ScanBatch>> {
         self.inner.poll_batches(timeout).await
     }
@@ -1076,6 +1219,72 @@ impl RecordBatchLogScanner {
         self.inner.table_id
     }
 
+    pub(crate) fn bucket_count(&self, partition_id: Option<PartitionId>) -> Option<i32> {
+        self.inner
+            .metadata
+            .get_cluster()
+            .bucket_count(TableOrPartition::of(
+                self.inner.table_info.table_id,
+                partition_id,
+            ))
+    }
+
+    /// Fetches the metadata of the partitions of `buckets` whose bucket count is not cached.
+    pub(crate) async fn cache_bucket_counts<'a>(
+        &self,
+        buckets: impl IntoIterator<Item = &'a TableBucket>,
+    ) -> Result<()> {
+        let cluster = self.inner.metadata.get_cluster();
+        let partition_ids: Vec<PartitionId> = buckets
+            .into_iter()
+            .filter(|bucket| {
+                bucket.table_id() == self.inner.table_info.table_id
+                    && cluster.bucket_count(bucket.table_or_partition()).is_none()
+            })
+            .filter_map(|bucket| bucket.partition_id())
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+        if partition_ids.is_empty() {
+            return Ok(());
+        }
+        self.inner
+            .metadata
+            .update_tables_metadata(
+                &HashSet::from([&self.inner.table_path]),
+                &HashSet::new(),
+                partition_ids,
+            )
+            .await
+    }
+
+    /// Next fetch offset of `bucket`, which moves past batches the server pruned.
+    pub(crate) fn bucket_offset(&self, bucket: &TableBucket) -> Option<i64> {
+        self.inner.log_scanner_status.get_bucket_offset(bucket)
+    }
+
+    /// Subscribes non-partitioned ranges while the caller holds the active
+    /// reader guard.
+    pub(crate) async fn subscribe_buckets_for_reader(
+        &self,
+        bucket_offsets: &HashMap<i32, i64>,
+    ) -> Result<()> {
+        self.inner
+            .subscribe_buckets_for_reader(bucket_offsets)
+            .await
+    }
+
+    /// Subscribes partitioned ranges while the caller holds the active reader
+    /// guard.
+    pub(crate) async fn subscribe_partition_buckets_for_reader(
+        &self,
+        partition_bucket_offsets: &HashMap<(PartitionId, i32), i64>,
+    ) -> Result<()> {
+        self.inner
+            .subscribe_partition_buckets_for_reader(partition_bucket_offsets)
+            .await
+    }
+
     /// Creates a new handle to the same underlying scanner state.
     ///
     /// Binding layers (Python, C++) that hold the scanner behind shared
@@ -1099,6 +1308,7 @@ impl RecordBatchLogScanner {
     /// `LogScannerImpl.acquire()` single-consumer guard.
     pub(crate) fn try_set_reader_active(&self) -> Result<()> {
         use std::sync::atomic::Ordering;
+        let _subscription_guard = self.inner.subscription_lock.lock();
         self.inner
             .reader_active
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -1112,6 +1322,7 @@ impl RecordBatchLogScanner {
 
     /// Clears the active-reader guard, re-enabling subscription changes.
     pub(crate) fn clear_reader_active(&self) {
+        let _subscription_guard = self.inner.subscription_lock.lock();
         self.inner
             .reader_active
             .store(false, std::sync::atomic::Ordering::Release);
@@ -1129,6 +1340,7 @@ impl RecordBatchLogScanner {
     ///
     /// **Not intended for general use** — prefer the async [`unsubscribe`].
     pub(crate) fn unsubscribe_sync(&self, bucket: i32) {
+        let _subscription_guard = self.inner.subscription_lock.lock();
         if self.inner.is_partitioned_table {
             return;
         }
@@ -1142,6 +1354,7 @@ impl RecordBatchLogScanner {
     /// [`unsubscribe_partition`](Self::unsubscribe_partition). See
     /// [`unsubscribe_sync`](Self::unsubscribe_sync) for rationale.
     pub(crate) fn unsubscribe_partition_sync(&self, partition_id: PartitionId, bucket: i32) {
+        let _subscription_guard = self.inner.subscription_lock.lock();
         if !self.inner.is_partitioned_table {
             return;
         }
@@ -1167,9 +1380,13 @@ struct LogFetcher {
     security_token_manager: Arc<SecurityTokenManager>,
     log_fetch_buffer: Arc<LogFetchBuffer>,
     nodes_with_pending_fetch_requests: Arc<Mutex<HashSet<i32>>>,
+    metadata_refresh_task: Mutex<Option<JoinHandle<()>>>,
     /// Per-table scanner metric handles shared with the owning
     /// `LogScannerInner` and `RemoteLogDownloader`.
     metrics: Arc<ScannerMetrics>,
+    /// Encoded filter sent on every fetch request, paired with the schema id it
+    /// was compiled against so the server can resolve its field ids.
+    filter: Option<(PbPredicate, i32)>,
     max_poll_records: usize,
     fetch_max_bytes: i32,
     fetch_min_bytes: i32,
@@ -1190,6 +1407,14 @@ struct FetchResponseContext {
     request_start_time: Instant,
 }
 
+impl Drop for LogFetcher {
+    fn drop(&mut self) {
+        if let Some(task) = self.metadata_refresh_task.get_mut().take() {
+            task.abort();
+        }
+    }
+}
+
 impl LogFetcher {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -1200,6 +1425,7 @@ impl LogFetcher {
         config: &Config,
         projected_fields: Option<Vec<usize>>,
         fixed_schema: bool,
+        filter: Option<PbPredicate>,
         metrics: Arc<ScannerMetrics>,
         schema_getter: Arc<ClientSchemaGetter>,
     ) -> Result<Self> {
@@ -1241,12 +1467,12 @@ impl LogFetcher {
             projected_fields,
         )
         .with_schema_getter(Arc::clone(&schema_getter));
-        if fixed_schema {
+        if fixed_schema || resolver.projected_fields().is_some() {
             resolver = resolver.with_fixed_schema(table_info.get_schema());
         }
         let resolver = Arc::new(resolver);
 
-        let tmp_dir = TempDir::with_prefix("fluss-remote-logs")?;
+        let tmp_dir = RemoteLogDirectory::new(config);
         let log_fetch_buffer = Arc::new(LogFetchBuffer::new(Arc::clone(&resolver)));
 
         // Create security token manager for background token refresh
@@ -1279,7 +1505,9 @@ impl LogFetcher {
             security_token_manager,
             log_fetch_buffer,
             nodes_with_pending_fetch_requests: Arc::new(Mutex::new(HashSet::new())),
+            metadata_refresh_task: Mutex::new(None),
             metrics,
+            filter: filter.map(|predicate| (predicate, table_info.get_schema_id())),
             max_poll_records: config.scanner_log_max_poll_records,
             fetch_max_bytes: config.scanner_log_fetch_max_bytes,
             fetch_min_bytes: config.scanner_log_fetch_min_bytes,
@@ -1335,6 +1563,13 @@ impl LogFetcher {
                     "Received unknown table or bucket error in fetch for bucket {table_bucket}"
                 ),
             },
+            FlussError::InvalidBucketRouting => FetchErrorContext {
+                action: FetchErrorAction::Ignore,
+                log_level: FetchErrorLogLevel::Warn,
+                log_message: format!(
+                    "Invalid bucket routing in fetch for bucket {table_bucket}, refreshing metadata: {error_message}"
+                ),
+            },
             FlussError::LogOffsetOutOfRangeException => FetchErrorContext {
                 action: FetchErrorAction::LogOffsetOutOfRange,
                 log_level: FetchErrorLogLevel::Debug,
@@ -1373,17 +1608,6 @@ impl LogFetcher {
         }
     }
 
-    fn should_invalidate_table_meta(error: FlussError) -> bool {
-        matches!(
-            error,
-            FlussError::NotLeaderOrFollower
-                | FlussError::LeaderNotAvailableException
-                | FlussError::FencedLeaderEpochException
-                | FlussError::UnknownTableOrBucketException
-                | FlussError::InvalidCoordinatorException
-        )
-    }
-
     async fn check_and_update_metadata(&self, table_buckets: &[TableBucket]) -> Result<()> {
         let mut partition_ids = Vec::new();
         let mut need_update = false;
@@ -1415,25 +1639,72 @@ impl LogFetcher {
             Ok(())
         };
 
-        // TODO: Handle PartitionNotExist error like java side
-        update_result.or_else(|e| {
-            if let Error::RpcError { source, .. } = &e
+        update_result.or_else(|error| {
+            if matches!(error.api_error(), Some(FlussError::PartitionNotExists)) {
+                warn!(
+                    "Received PartitionNotExists while updating scanner metadata; ignoring it: {error}"
+                );
+                Ok(())
+            } else if let Error::RpcError { source, .. } = &error
                 && matches!(source, RpcError::ConnectionError(_) | RpcError::Poisoned(_))
             {
-                warn!("Retrying after encountering error while updating table metadata: {e}");
+                warn!(
+                    "Retrying after encountering error while updating table metadata: {error}"
+                );
                 Ok(())
             } else {
-                Err(e)
+                Err(error)
             }
         })?;
         Ok(())
+    }
+
+    fn refresh_metadata_in_background(&self) {
+        let mut task = self.metadata_refresh_task.lock();
+        if task.as_ref().is_some_and(|task| !task.is_finished()) {
+            return;
+        }
+        let missing: Vec<_> = self
+            .fetchable_buckets()
+            .into_iter()
+            .filter(|bucket| self.get_table_bucket_leader(bucket).is_none())
+            .collect();
+        if missing.is_empty() {
+            return;
+        }
+        let partition_ids = missing
+            .iter()
+            .filter_map(TableBucket::partition_id)
+            .collect();
+        let metadata = self.metadata.clone();
+        let table_path = self.table_path.clone();
+        // Data delivery must not wait for a missing leader, but busy partitions must
+        // not prevent other partitions from discovering their new leaders.
+        *task = Some(tokio::spawn(async move {
+            if let Err(error) = metadata
+                .update_tables_metadata(
+                    &HashSet::from([&table_path]),
+                    &HashSet::new(),
+                    partition_ids,
+                )
+                .await
+            {
+                warn!("Failed to refresh scanner metadata in background: {error}");
+            }
+        }));
     }
 
     /// Send fetch requests asynchronously without waiting for responses
     async fn send_fetches(&self) -> Result<()> {
         self.check_and_update_metadata(self.fetchable_buckets().as_slice())
             .await?;
-        let fetch_request = self.prepare_fetch_log_requests().await;
+        self.send_fetches_without_metadata_refresh();
+        Ok(())
+    }
+
+    // Scheduling with cached metadata cannot suspend or fail after data has been collected.
+    fn send_fetches_without_metadata_refresh(&self) {
+        let fetch_request = self.prepare_fetch_log_requests();
 
         for (leader, fetch_request) in fetch_request {
             debug!("Adding pending request for node id {leader}");
@@ -1517,8 +1788,6 @@ impl LogFetcher {
                 Self::handle_fetch_response(fetch_response, response_context).await;
             });
         }
-
-        Ok(())
     }
 
     async fn handle_fetch_failure(
@@ -1582,15 +1851,34 @@ impl LogFetcher {
                     .into();
 
                     let error = FlussError::for_code(error_code);
-                    if Self::should_invalidate_table_meta(error) {
-                        // TODO: Consider triggering table meta invalidation from sender/lookup paths.
+                    if error.invalidates_metadata() {
                         let table_id = table_bucket.table_id();
                         let cluster = metadata.get_cluster();
                         if let Some(table_path) = cluster.get_table_path_by_id(table_id) {
-                            let physical_tables = HashSet::from([PhysicalTablePath::of(Arc::new(
-                                table_path.clone(),
-                            ))]);
-                            metadata.invalidate_physical_table_meta(&physical_tables);
+                            let physical_table_path = match table_bucket.partition_id() {
+                                Some(partition_id) => {
+                                    match cluster.get_partition_name(partition_id) {
+                                        Some(partition_name) => {
+                                            Some(PhysicalTablePath::of_partitioned(
+                                                Arc::new(table_path.clone()),
+                                                Some(partition_name.clone()),
+                                            ))
+                                        }
+                                        None => {
+                                            warn!(
+                                                "Partition id {partition_id} is missing from partition_name_by_id while invalidating metadata for table {table_path}"
+                                            );
+                                            None
+                                        }
+                                    }
+                                }
+                                None => Some(PhysicalTablePath::of(Arc::new(table_path.clone()))),
+                            };
+                            if let Some(physical_table_path) = physical_table_path {
+                                metadata.invalidate_physical_table_meta(&HashSet::from([
+                                    physical_table_path,
+                                ]));
+                            }
                         } else {
                             warn!(
                                 "Table id {table_id} is missing from table_path_by_id while invalidating table metadata"
@@ -1638,9 +1926,19 @@ impl LogFetcher {
                         fetch_offset,
                         high_watermark,
                     );
-                } else if fetch_log_for_bucket.records.is_some() {
-                    // Handle regular in-memory records - create completed fetch directly
+                } else if fetch_log_for_bucket.records.is_some()
+                    || fetch_log_for_bucket.filtered_end_offset.is_some()
+                {
+                    // Handle regular in-memory records - create completed fetch directly.
+                    // A filtered response may arrive empty, or carry records with a
+                    // pruned tail; either way the end offset is how far the server
+                    // scanned, so the client skips that range instead of re-fetching it.
                     let high_watermark = fetch_log_for_bucket.high_watermark.unwrap_or(-1);
+                    let filtered_end_offset = Self::validate_filtered_end_offset(
+                        fetch_log_for_bucket.filtered_end_offset,
+                        fetch_offset,
+                        &table_bucket,
+                    );
                     let records = fetch_log_for_bucket.records.unwrap_or(vec![]);
                     let size_in_bytes = records.len();
 
@@ -1653,10 +1951,30 @@ impl LogFetcher {
                         false, // is_remote
                         fetch_offset,
                         high_watermark,
-                    );
+                    )
+                    .with_filtered_end_offset(filtered_end_offset);
                     log_fetch_buffer.add(Box::new(completed_fetch));
                 }
             }
+        }
+    }
+
+    /// Drops a filtered end offset that would move the bucket backwards, since
+    /// the server is only ever meant to report a range it has already scanned.
+    fn validate_filtered_end_offset(
+        filtered_end_offset: Option<i64>,
+        fetch_offset: i64,
+        table_bucket: &TableBucket,
+    ) -> i64 {
+        match filtered_end_offset {
+            Some(end) if end >= fetch_offset => end,
+            Some(end) => {
+                warn!(
+                    "Ignoring filtered end offset {end} for bucket {table_bucket} because it precedes the fetch offset {fetch_offset}"
+                );
+                NO_FILTERED_END_OFFSET
+            }
+            None => NO_FILTERED_END_OFFSET,
         }
     }
 
@@ -1719,26 +2037,24 @@ impl LogFetcher {
 
                 if next_in_line.is_none() || next_in_line.as_ref().unwrap().is_consumed() {
                     // Get a new fetch from buffer
-                    if let Some(completed_fetch) = self.log_fetch_buffer.poll() {
+                    if let Some(mut completed_fetch) = self.log_fetch_buffer.poll() {
                         // Initialize the fetch if not already initialized
                         if !completed_fetch.is_initialized() {
-                            let size_in_bytes = completed_fetch.size_in_bytes();
-                            match self.initialize_fetch(completed_fetch) {
+                            match self.initialize_fetch(completed_fetch.as_mut()) {
                                 Ok(initialized) => {
-                                    self.log_fetch_buffer.set_next_in_line_fetch(initialized);
+                                    self.log_fetch_buffer.set_next_in_line_fetch(
+                                        initialized.then_some(completed_fetch),
+                                    );
                                     continue;
                                 }
-                                Err(e) => {
-                                    // Remove a completedFetch upon a parse with exception if
-                                    // (1) it contains no records, and
-                                    // (2) there are no fetched records with actual content preceding this
-                                    // exception.
-                                    if result.is_empty() && size_in_bytes == 0 {
-                                        // todo: do we need to consider it like java ?
-                                        // self.log_fetch_buffer.poll();
-                                    }
-                                    return Err(e);
+                                Err(error) if !result.is_empty() => {
+                                    completed_fetch.defer_error(error);
+                                    completed_fetch.set_initialized();
+                                    self.log_fetch_buffer
+                                        .set_next_in_line_fetch(Some(completed_fetch));
+                                    return Ok(result);
                                 }
+                                Err(error) => return Err(error),
                             }
                         } else {
                             self.log_fetch_buffer
@@ -1752,10 +2068,21 @@ impl LogFetcher {
                 } else {
                     // Fetch records from next_in_line
                     if let Some(mut next_fetch) = next_in_line {
+                        if !result.is_empty() && next_fetch.has_pending_error() {
+                            self.log_fetch_buffer
+                                .set_next_in_line_fetch(Some(next_fetch));
+                            return Ok(result);
+                        }
                         let fetch_result = match self
                             .fetch_records_from_fetch(&mut next_fetch, records_remaining)
                         {
                             Ok(fetch_result) => fetch_result,
+                            Err(error) if !result.is_empty() => {
+                                next_fetch.defer_error(error);
+                                self.log_fetch_buffer
+                                    .set_next_in_line_fetch(Some(next_fetch));
+                                return Ok(result);
+                            }
                             Err(e) => {
                                 if !next_fetch.is_consumed() {
                                     self.log_fetch_buffer
@@ -1819,12 +2146,15 @@ impl LogFetcher {
         }
     }
 
-    /// Initialize a completed fetch, checking offset match and updating high watermark
-    fn initialize_fetch(
-        &self,
-        mut completed_fetch: Box<dyn CompletedFetch>,
-    ) -> Result<Option<Box<dyn CompletedFetch>>> {
+    /// Initialize a completed fetch, checking offset match and updating high watermark.
+    /// Returns false when the fetch should be discarded.
+    fn initialize_fetch(&self, completed_fetch: &mut dyn CompletedFetch) -> Result<bool> {
         if let Some(error) = completed_fetch.take_error() {
+            debug!(
+                "Failed fetch for bucket {} ({} bytes): {error}",
+                completed_fetch.table_bucket(),
+                completed_fetch.size_in_bytes()
+            );
             return Err(error);
         }
 
@@ -1842,7 +2172,7 @@ impl LogFetcher {
                 .unwrap_or(FetchErrorAction::Unexpected);
             match action {
                 FetchErrorAction::Ignore => {
-                    return Ok(None);
+                    return Ok(false);
                 }
                 FetchErrorAction::LogOffsetOutOfRange => {
                     return Err(Error::UnexpectedError {
@@ -1884,7 +2214,7 @@ impl LogFetcher {
             warn!(
                 "Discarding stale fetch response for bucket {table_bucket:?} since the bucket has been unsubscribed"
             );
-            return Ok(None);
+            return Ok(false);
         };
 
         // Check if offset matches
@@ -1892,7 +2222,7 @@ impl LogFetcher {
             warn!(
                 "Discarding stale fetch response for bucket {table_bucket:?} since its offset {fetch_offset} does not match the expected offset {current_offset}"
             );
-            return Ok(None);
+            return Ok(false);
         }
 
         // Update high watermark
@@ -1903,7 +2233,7 @@ impl LogFetcher {
         }
 
         completed_fetch.set_initialized();
-        Ok(Some(completed_fetch))
+        Ok(true)
     }
 
     /// Fetch records from a completed fetch, checking offset match
@@ -1970,8 +2300,29 @@ impl LogFetcher {
 
                 match next_in_line {
                     Some(mut next_fetch) if !next_fetch.is_consumed() => {
-                        let fetch_result =
-                            self.fetch_batches_from_fetch(&mut next_fetch, batches_remaining)?;
+                        if !result.is_empty() && next_fetch.has_pending_error() {
+                            self.log_fetch_buffer
+                                .set_next_in_line_fetch(Some(next_fetch));
+                            return Ok(result);
+                        }
+                        let fetch_result = match self
+                            .fetch_batches_from_fetch(&mut next_fetch, batches_remaining)
+                        {
+                            Ok(fetch_result) => fetch_result,
+                            Err(error) if !result.is_empty() => {
+                                next_fetch.defer_error(error);
+                                self.log_fetch_buffer
+                                    .set_next_in_line_fetch(Some(next_fetch));
+                                return Ok(result);
+                            }
+                            Err(error) => {
+                                if !next_fetch.is_consumed() {
+                                    self.log_fetch_buffer
+                                        .set_next_in_line_fetch(Some(next_fetch));
+                                }
+                                return Err(error);
+                            }
+                        };
                         match fetch_result {
                             FetchResult::Data(scan_batches) => {
                                 let batch_count = scan_batches.len();
@@ -2011,20 +2362,23 @@ impl LogFetcher {
                         }
                     }
                     _ => {
-                        if let Some(completed_fetch) = self.log_fetch_buffer.poll() {
+                        if let Some(mut completed_fetch) = self.log_fetch_buffer.poll() {
                             if !completed_fetch.is_initialized() {
-                                let size_in_bytes = completed_fetch.size_in_bytes();
-                                match self.initialize_fetch(completed_fetch) {
+                                match self.initialize_fetch(completed_fetch.as_mut()) {
                                     Ok(initialized) => {
-                                        self.log_fetch_buffer.set_next_in_line_fetch(initialized);
+                                        self.log_fetch_buffer.set_next_in_line_fetch(
+                                            initialized.then_some(completed_fetch),
+                                        );
                                         continue;
                                     }
-                                    Err(e) => {
-                                        if result.is_empty() && size_in_bytes == 0 {
-                                            continue;
-                                        }
-                                        return Err(e);
+                                    Err(error) if !result.is_empty() => {
+                                        completed_fetch.defer_error(error);
+                                        completed_fetch.set_initialized();
+                                        self.log_fetch_buffer
+                                            .set_next_in_line_fetch(Some(completed_fetch));
+                                        return Ok(result);
                                     }
+                                    Err(error) => return Err(error),
                                 }
                             } else {
                                 self.log_fetch_buffer
@@ -2072,7 +2426,7 @@ impl LogFetcher {
 
         if fetch_offset == current_offset {
             match next_in_line_fetch.fetch_batches(max_batches)? {
-                FetchResult::Data(batches_with_offsets) => {
+                FetchResult::Data(fetched_batches) => {
                     let next_fetch_offset = next_in_line_fetch.next_fetch_offset();
 
                     if next_fetch_offset > current_offset {
@@ -2080,12 +2434,18 @@ impl LogFetcher {
                             .update_offset(&table_bucket, next_fetch_offset);
                     }
 
-                    // Convert to ScanBatch with bucket info
+                    // Convert to ScanBatch with bucket and log-batch metadata.
                     Ok(FetchResult::Data(
-                        batches_with_offsets
+                        fetched_batches
                             .into_iter()
-                            .map(|(batch, base_offset)| {
-                                ScanBatch::new(table_bucket.clone(), batch, base_offset)
+                            .map(|fetched| {
+                                ScanBatch::new(
+                                    table_bucket.clone(),
+                                    fetched.batch,
+                                    fetched.base_offset,
+                                )
+                                .with_commit_timestamp(fetched.commit_timestamp)
+                                .with_schema_id(fetched.schema_id)
                             })
                             .collect(),
                     ))
@@ -2103,7 +2463,7 @@ impl LogFetcher {
         }
     }
 
-    async fn prepare_fetch_log_requests(&self) -> HashMap<i32, FetchLogRequest> {
+    fn prepare_fetch_log_requests(&self) -> HashMap<i32, FetchLogRequest> {
         let mut fetch_log_req_for_buckets = HashMap::new();
         let mut table_id = None;
         let mut ready_for_fetch_count = 0;
@@ -2143,6 +2503,10 @@ impl LogFetcher {
                             bucket_id: bucket.bucket_id(),
                             fetch_offset: offset,
                             max_fetch_bytes: self.fetch_max_bytes_for_bucket,
+                            routing_bucket_count: self
+                                .metadata
+                                .get_cluster()
+                                .bucket_count(bucket.table_or_partition()),
                         };
 
                         fetch_log_req_for_buckets
@@ -2176,8 +2540,9 @@ impl LogFetcher {
                         projection_pushdown_enabled: projection_enabled,
                         projected_fields: projected_fields.clone(),
                         buckets_req: feq_for_buckets,
-                        filter_predicate: None,
-                        filter_schema_id: None,
+                        // The proto requires both filter fields to be set together.
+                        filter_predicate: self.filter.as_ref().map(|(p, _)| p.clone()),
+                        filter_schema_id: self.filter.as_ref().map(|&(_, id)| id),
                     };
 
                     let fetch_log_request = FetchLogRequest {
@@ -2350,6 +2715,16 @@ fn validate_scan_support(table_path: &TablePath, table_info: &TableInfo) -> Resu
     validate_scan_support_inner(table_path, table_info, false)
 }
 
+fn validate_limit_scan_fixed_schema(table_info: &TableInfo, fixed_schema: bool) -> Result<()> {
+    if !fixed_schema && !table_info.has_primary_key() {
+        return Err(Error::IllegalArgument {
+            message: "LimitBatchScanner doesn't support with_fixed_schema(false) for log tables"
+                .to_string(),
+        });
+    }
+    Ok(())
+}
+
 /// Validates that `table_info` can be scanned as a log. ARROW log format is
 /// required; INDEXED is not supported by the client decoder.
 ///
@@ -2389,18 +2764,28 @@ mod tests {
     use crate::client::admin::FlussAdmin;
     use crate::client::metadata::Metadata;
     use crate::client::table::read_context_resolver::ReadContextResolver;
-    use crate::compression::{
-        ArrowCompressionInfo, ArrowCompressionRatioEstimator, ArrowCompressionType,
-        DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
-    };
+    use crate::client::table::remote_log::{RemoteLogDownloadFuture, RemoteLogSegment};
+    use crate::cluster::{Cluster, ServerType};
     use crate::metadata::{DataTypes, PhysicalTablePath, Schema, TableInfo, TablePath};
+    use crate::metadata::{JsonSerde, TableDescriptor};
+    use crate::proto::{
+        ApiVersionsResponse, MetadataRequest, MetadataResponse, PbApiVersion, PbBucketMetadata,
+        PbPartitionMetadata, PbServerNode, PbTableMetadata, PbTablePath,
+    };
     use crate::proto::{PbFetchLogRespForBucket, PbFetchLogRespForTable};
     use crate::record::MemoryLogRecordsArrowBuilder;
+    use crate::record::{RECORDS_OFFSET, SCHEMA_ID_OFFSET};
     use crate::row::{Datum, GenericRow};
+    use crate::rpc::ApiKey;
     use crate::rpc::FlussError;
     use crate::test_utils::{
         assert_scanner_entries_labeled, build_cluster_arc, build_table_info, test_scanner_metrics,
+        uncompressed_arrow_batch_config,
     };
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    use futures::FutureExt;
 
     fn test_admin(metadata: &Arc<Metadata>) -> Arc<FlussAdmin> {
         Arc::new(FlussAdmin::new(
@@ -2443,15 +2828,8 @@ mod tests {
 
     fn build_records(table_info: &TableInfo, table_path: Arc<TablePath>) -> Result<Vec<u8>> {
         let mut builder = MemoryLogRecordsArrowBuilder::new(
-            1,
-            table_info.get_row_type(),
+            uncompressed_arrow_batch_config(1, table_info.get_row_type(), usize::MAX),
             false,
-            ArrowCompressionInfo {
-                compression_type: ArrowCompressionType::None,
-                compression_level: DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
-            },
-            usize::MAX,
-            Arc::new(ArrowCompressionRatioEstimator::default()),
         )?;
         let physical_table_path = Arc::new(PhysicalTablePath::of(table_path));
         let row = GenericRow {
@@ -2461,6 +2839,173 @@ mod tests {
             WriteRecord::for_append(Arc::new(table_info.clone()), physical_table_path, 1, &row);
         builder.append(&record)?;
         builder.build()
+    }
+
+    #[tokio::test]
+    async fn poll_remote_projection_records_in_both_schema_modes() -> Result<()> {
+        check_poll_remote_projection(false).await
+    }
+
+    #[tokio::test]
+    async fn poll_remote_projection_batches_in_both_schema_modes() -> Result<()> {
+        check_poll_remote_projection(true).await
+    }
+
+    async fn check_poll_remote_projection(batch_mode: bool) -> Result<()> {
+        use crate::metadata::DataField;
+        use crate::row::DataGetters;
+        use crate::test_utils::build_table_info_with_columns;
+        use arrow::array::{Array, Int32Array, StringArray};
+
+        let table_path = TablePath::new("db", "projected_history");
+        let source = build_table_info_with_columns(
+            table_path.clone(),
+            1,
+            1,
+            vec![
+                DataField::new("id", DataTypes::int(), None),
+                DataField::new("name", DataTypes::string(), None),
+            ],
+        );
+        let mut target = build_table_info_with_columns(
+            table_path.clone(),
+            1,
+            2,
+            vec![
+                DataField::new("id", DataTypes::int(), None),
+                DataField::new("name", DataTypes::string(), None),
+                DataField::new("added", DataTypes::string(), None),
+            ],
+        );
+        target.schema_id = 2;
+        let mut builder = MemoryLogRecordsArrowBuilder::new(
+            uncompressed_arrow_batch_config(1, source.get_row_type(), usize::MAX),
+            false,
+        )?;
+        for name in [Some("alice"), None] {
+            let mut row = GenericRow::new(2);
+            row.set_field(0, 7_i32);
+            if let Some(name) = name {
+                row.set_field(1, name);
+            }
+            builder.append(&WriteRecord::for_append(
+                Arc::new(source.clone()),
+                Arc::new(PhysicalTablePath::of(Arc::new(table_path.clone()))),
+                1,
+                &row,
+            ))?;
+        }
+        let data = builder.build()?;
+        for fixed_schema in [false, true] {
+            let metadata = Arc::new(Metadata::new_for_test(build_cluster_arc(&table_path, 1, 1)));
+            let mut inner = LogScannerInner::new(
+                &target,
+                Arc::clone(&metadata),
+                Arc::new(RpcClient::new()),
+                &Config::default(),
+                Some(vec![2, 1, 0]),
+                fixed_schema,
+                None,
+                test_admin(&metadata),
+            )?;
+            // Seed the historical schema cache so the real asynchronous schema-resolution path
+            // runs without a coordinator RPC. The resolver starts with only the target context.
+            inner.log_fetcher = LogFetcher::new(
+                target.clone(),
+                Arc::new(RpcClient::new()),
+                Arc::clone(&metadata),
+                Arc::clone(&inner.log_scanner_status),
+                &Config::default(),
+                Some(vec![2, 1, 0]),
+                fixed_schema,
+                None,
+                test_scanner_metrics(&table_path),
+                test_schema_getter(&source, &metadata),
+            )?;
+            let inner = Arc::new(inner);
+            let fetcher = &inner.log_fetcher;
+            assert!(fetcher.resolver.resolve(1, true).is_none());
+            let bucket = TableBucket::new(1, 0);
+            inner
+                .log_scanner_status
+                .assign_scan_bucket(bucket.clone(), 0);
+            // Prevent speculative network fetches after returning the supplied file-backed data.
+            fetcher.nodes_with_pending_fetch_requests.lock().insert(1);
+            let directory = tempfile::tempdir()?;
+            let path = directory.path().join("remote.log");
+            std::fs::write(&path, &data)?;
+            let completed = DefaultCompletedFetch::new(
+                bucket.clone(),
+                LogRecordsBatches::from_file(std::fs::File::open(&path)?, 0, path)?,
+                data.len(),
+                Arc::clone(&fetcher.resolver),
+                true,
+                0,
+                2,
+            );
+            fetcher.log_fetch_buffer.add(Box::new(completed));
+            if batch_mode {
+                let scanner = RecordBatchLogScanner {
+                    inner: Arc::clone(&inner),
+                };
+                let batches = scanner.poll(Duration::ZERO).await?;
+                assert_eq!(batches.len(), 1);
+                let batch = batches[0].batch();
+                assert_eq!(
+                    batch.schema(),
+                    to_arrow_schema(&target.get_row_type().project(&[2, 1, 0])?)?
+                );
+                assert_eq!(batch.num_rows(), 2);
+                assert_eq!(batch.column(0).null_count(), 2);
+                let names = batch
+                    .column(1)
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .unwrap();
+                assert_eq!(names.value(0), "alice");
+                assert!(names.is_null(1));
+                let ids = batch
+                    .column(2)
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .unwrap();
+                assert_eq!(ids.values().as_ref(), &[7, 7]);
+                assert!(scanner.poll(Duration::ZERO).await?.is_empty());
+            } else {
+                let scanner = LogScanner {
+                    inner: Arc::clone(&inner),
+                };
+                let records = scanner.poll(Duration::ZERO).await?;
+                let records = records.records(&bucket);
+                assert_eq!(records.len(), 2);
+                for (index, record) in records.iter().enumerate() {
+                    assert_eq!(record.offset(), index as i64);
+                    assert!(record.row.is_null_at(0)?);
+                    assert_eq!(record.row.is_null_at(1)?, index == 1);
+                    assert_eq!(record.row.get_int(2)?, 7);
+                }
+                assert_eq!(records[0].row.get_string(1)?, "alice");
+                assert!(scanner.poll(Duration::ZERO).await?.is_empty());
+            }
+            assert!(fetcher.resolver.resolve(1, true).is_some());
+            assert_eq!(inner.log_scanner_status.get_bucket_offset(&bucket), Some(2));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn limit_batch_scanner_rejects_dynamic_schema_for_log_table() {
+        let table_info =
+            build_table_info(TablePath::new("db".to_string(), "tbl".to_string()), 1, 1);
+
+        let error = validate_limit_scan_fixed_schema(&table_info, false)
+            .expect_err("dynamic schema must be rejected for a log limit scan");
+
+        assert!(matches!(
+            error,
+            Error::IllegalArgument { message }
+                if message.contains("with_fixed_schema(false)")
+        ));
     }
 
     #[tokio::test]
@@ -2478,6 +3023,7 @@ mod tests {
             &Config::default(),
             None,
             false,
+            None,
             test_scanner_metrics(&table_path),
             test_schema_getter(&table_info, &metadata),
         )?;
@@ -2505,6 +3051,1193 @@ mod tests {
         Ok(())
     }
 
+    fn scanner_fixture(known_leader: bool) -> Result<(Arc<LogScannerInner>, TableInfo, Vec<u8>)> {
+        let path = TablePath::new("db", "tbl");
+        let info = build_table_info(path.clone(), 1, 1);
+        let cluster = if known_leader {
+            build_cluster_arc(&path, 1, 1)
+        } else {
+            Default::default()
+        };
+        let metadata = Arc::new(Metadata::new_for_test(cluster));
+        let inner = Arc::new(LogScannerInner::new(
+            &info,
+            metadata.clone(),
+            Arc::new(RpcClient::new()),
+            &Config::default(),
+            None,
+            false,
+            None,
+            test_admin(&metadata),
+        )?);
+        let data = build_records(&info, Arc::new(path))?;
+        Ok((inner, info, data))
+    }
+
+    fn memory_fetch(
+        fetcher: &LogFetcher,
+        bucket: TableBucket,
+        bytes: Vec<u8>,
+        offset: i64,
+    ) -> Box<dyn CompletedFetch> {
+        let size = bytes.len();
+        Box::new(DefaultCompletedFetch::new(
+            bucket,
+            LogRecordsBatches::new(bytes),
+            size,
+            fetcher.resolver.clone(),
+            false,
+            offset,
+            0,
+        ))
+    }
+
+    async fn change_subscription(
+        inner: &Arc<LogScannerInner>,
+        batch_mode: bool,
+        offset: Option<i64>,
+    ) -> Result<()> {
+        if batch_mode {
+            let scanner = RecordBatchLogScanner {
+                inner: inner.clone(),
+            };
+            match offset {
+                Some(offset) => scanner.subscribe(0, offset).await,
+                None => scanner.unsubscribe(0).await,
+            }
+        } else {
+            let scanner = LogScanner {
+                inner: inner.clone(),
+            };
+            match offset {
+                Some(offset) => scanner.subscribe(0, offset).await,
+                None => scanner.unsubscribe(0).await,
+            }
+        }
+    }
+
+    async fn poll_test_offsets(inner: &Arc<LogScannerInner>, batch_mode: bool) -> Result<Vec<i64>> {
+        if batch_mode {
+            let scanner = RecordBatchLogScanner {
+                inner: inner.clone(),
+            };
+            let batches = scanner.poll(Duration::ZERO).await?;
+            assert!(
+                batches
+                    .iter()
+                    .all(|batch| batch.bucket() == &TableBucket::new(1, 0))
+            );
+            Ok(batches
+                .iter()
+                .flat_map(|b| b.base_offset()..b.base_offset() + b.batch().num_rows() as i64)
+                .collect())
+        } else {
+            let scanner = LogScanner {
+                inner: inner.clone(),
+            };
+            Ok(scanner
+                .poll(Duration::ZERO)
+                .await?
+                .records(&TableBucket::new(1, 0))
+                .iter()
+                .map(|r| r.offset())
+                .collect())
+        }
+    }
+
+    #[tokio::test]
+    async fn public_polls_retain_decode_errors_until_the_subscription_changes() -> Result<()> {
+        for batch_mode in [false, true] {
+            for preceding_data in [false, true] {
+                for same_fetch in [false, true]
+                    .into_iter()
+                    .filter(|same| preceding_data || !same)
+                {
+                    for (unsubscribe, file_backed) in
+                        [(false, false), (true, false), (false, true), (true, true)]
+                    {
+                        let (inner, table_info, data) = scanner_fixture(true)?;
+                        let fetcher = &inner.log_fetcher;
+                        let status = &inner.log_scanner_status;
+                        let bucket = TableBucket::new(1, 0);
+                        status.assign_scan_bucket(bucket.clone(), 0);
+
+                        let bad_offset = i64::from(preceding_data);
+                        let mut bad = data.clone();
+                        bad[..8].copy_from_slice(&bad_offset.to_le_bytes());
+                        bad[RECORDS_OFFSET..].fill(0);
+                        let directory = tempfile::tempdir()?;
+                        let add = |bytes: Vec<u8>, offset| {
+                            let size = bytes.len();
+                            let records = if file_backed {
+                                let path = directory.path().join(format!("{offset}.log"));
+                                std::fs::write(&path, &bytes).unwrap();
+                                LogRecordsBatches::from_file(
+                                    std::fs::File::open(&path).unwrap(),
+                                    0,
+                                    path,
+                                )
+                                .unwrap()
+                            } else {
+                                LogRecordsBatches::new(bytes)
+                            };
+                            fetcher
+                                .log_fetch_buffer
+                                .add(Box::new(DefaultCompletedFetch::new(
+                                    bucket.clone(),
+                                    records,
+                                    size,
+                                    test_resolver(&table_info),
+                                    file_backed,
+                                    offset,
+                                    0,
+                                )));
+                        };
+                        if preceding_data && same_fetch {
+                            add([data.clone(), bad].concat(), 0);
+                        } else {
+                            if preceding_data {
+                                add(data.clone(), 0);
+                            }
+                            add(bad, bad_offset);
+                        }
+                        if preceding_data {
+                            assert_eq!(poll_test_offsets(&inner, batch_mode).await?, vec![0]);
+                        }
+                        let failed_file = directory.path().join(format!(
+                            "{}.log",
+                            if same_fetch && preceding_data {
+                                0
+                            } else {
+                                bad_offset
+                            }
+                        ));
+                        let mut previous_error = None;
+                        for _ in 0..3 {
+                            let error = poll_test_offsets(&inner, batch_mode)
+                                .now_or_never()
+                                .expect("cached error must not await I/O")
+                                .unwrap_err();
+                            assert!(std::error::Error::source(&error).is_some());
+                            let message = error.to_string();
+                            assert!(message.contains("Invalid continuation marker"), "{message}");
+                            assert!(
+                                message.contains(&format!("offset {bad_offset}")),
+                                "{message}"
+                            );
+                            if let Some(previous) = &previous_error {
+                                assert_eq!(&message, previous);
+                            }
+                            previous_error = Some(message);
+                            if file_backed {
+                                assert!(failed_file.exists());
+                            }
+                            assert_eq!(status.get_bucket_offset(&bucket), Some(bad_offset));
+                            assert!(fetcher.fetchable_buckets().is_empty());
+                            assert!(fetcher.nodes_with_pending_fetch_requests.lock().is_empty());
+                        }
+                        if unsubscribe {
+                            change_subscription(&inner, batch_mode, None).await?;
+                            assert!(poll_test_offsets(&inner, batch_mode).await?.is_empty());
+                        }
+                        // The public subscribe API is also how callers seek to another offset.
+                        let recovery_offset = bad_offset + 1;
+                        change_subscription(&inner, batch_mode, Some(recovery_offset)).await?;
+                        let mut recovery = data;
+                        recovery[..8].copy_from_slice(&recovery_offset.to_le_bytes());
+                        add(recovery, recovery_offset);
+                        assert_eq!(
+                            poll_test_offsets(&inner, batch_mode).await?,
+                            vec![recovery_offset]
+                        );
+                        assert_eq!(status.get_bucket_offset(&bucket), Some(recovery_offset + 1));
+                        if file_backed {
+                            assert!(
+                                !failed_file.exists(),
+                                "discarded fetch must release its file"
+                            );
+                        }
+                        assert!(
+                            fetcher
+                                .nodes_with_pending_fetch_requests
+                                .lock()
+                                .contains(&1)
+                        );
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn public_polls_retry_temporary_fetch_errors_at_the_same_offset() -> Result<()> {
+        for batch_mode in [false, true] {
+            for preceding_data in [false, true] {
+                let (inner, table_info, data) = scanner_fixture(true)?;
+                let fetcher = &inner.log_fetcher;
+                let status = &inner.log_scanner_status;
+                let bucket = TableBucket::new(1, 0);
+                status.assign_scan_bucket(bucket.clone(), 0);
+
+                let add = |bytes, offset| {
+                    fetcher.log_fetch_buffer.add(memory_fetch(
+                        fetcher,
+                        bucket.clone(),
+                        bytes,
+                        offset,
+                    ));
+                };
+                if preceding_data {
+                    add(data.clone(), 0);
+                }
+                let offset = i64::from(preceding_data);
+                fetcher
+                    .log_fetch_buffer
+                    .add(Box::new(DefaultCompletedFetch::from_error(
+                        bucket.clone(),
+                        Error::UnexpectedError {
+                            message: "temporary download failure".to_string(),
+                            source: None,
+                        },
+                        offset,
+                        test_resolver(&table_info),
+                    )));
+                if preceding_data {
+                    assert_eq!(poll_test_offsets(&inner, batch_mode).await?, vec![0]);
+                }
+                assert!(
+                    poll_test_offsets(&inner, batch_mode)
+                        .await
+                        .unwrap_err()
+                        .to_string()
+                        .contains("temporary download failure")
+                );
+                assert_eq!(status.get_bucket_offset(&bucket), Some(offset));
+                assert_eq!(fetcher.fetchable_buckets(), vec![bucket.clone()]);
+                // No await: observe scheduling before the background RPC can run.
+                assert!(
+                    poll_test_offsets(&inner, batch_mode)
+                        .now_or_never()
+                        .unwrap()?
+                        .is_empty()
+                );
+                assert!(
+                    fetcher
+                        .nodes_with_pending_fetch_requests
+                        .lock()
+                        .contains(&1)
+                );
+                let mut recovery = data;
+                recovery[..8].copy_from_slice(&offset.to_le_bytes());
+                add(recovery, offset);
+                assert_eq!(poll_test_offsets(&inner, batch_mode).await?, vec![offset]);
+                assert_eq!(status.get_bucket_offset(&bucket), Some(offset + 1));
+            }
+        }
+        Ok(())
+    }
+
+    async fn read_scanner_rpc(stream: &mut tokio::net::TcpStream, api: ApiKey) -> Vec<u8> {
+        let len = stream.read_u32().await.unwrap() as usize;
+        assert!((8..=1024 * 1024).contains(&len));
+        let mut request = vec![0; len];
+        stream.read_exact(&mut request).await.unwrap();
+        assert_eq!(i16::from_be_bytes([request[0], request[1]]), i16::from(api));
+        request
+    }
+
+    async fn reply_scanner_rpc(
+        stream: &mut tokio::net::TcpStream,
+        request: &[u8],
+        response: impl Message,
+        error: bool,
+    ) {
+        let mut reply = vec![u8::from(error)];
+        reply.extend_from_slice(&request[4..8]);
+        response.encode(&mut reply).unwrap();
+        stream.write_u32(reply.len() as u32).await.unwrap();
+        stream.write_all(&reply).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn public_polls_refresh_missing_leaders_while_other_partitions_stay_busy() -> Result<()> {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            for batch_mode in [false, true] {
+                for (fail_first, drop_while_refreshing) in [(false, false), (true, false), (false, true)] {
+                    let listener = TcpListener::bind("127.0.0.1:0").await?;
+                    let path = TablePath::new("db", "tbl");
+                    let descriptor = TableDescriptor::builder()
+                        .schema(build_table_info(path.clone(), 1, 1).schema.clone())
+                        .partitioned_by(vec!["id"])
+                        .distributed_by(Some(1), vec![])
+                        .build()?;
+                    let table_info = TableInfo::of(path.clone(), 1, 1, descriptor.clone(), 0, 0);
+                    let response = MetadataResponse {
+                        tablet_servers: vec![PbServerNode {
+                            node_id: 1,
+                            host: "127.0.0.1".to_string(),
+                            port: i32::from(listener.local_addr()?.port()),
+                            ..Default::default()
+                        }],
+                        table_metadata: vec![PbTableMetadata {
+                            table_path: PbTablePath {
+                                database_name: "db".into(),
+                                table_name: "tbl".into(),
+                            },
+                            table_id: 1,
+                            schema_id: 1,
+                            table_json: serde_json::to_vec(&descriptor.serialize_json()?).unwrap(),
+                            ..Default::default()
+                        }],
+                        partition_metadata: [10, 20]
+                            .into_iter()
+                            .map(|id| PbPartitionMetadata {
+                                table_id: 1,
+                                partition_name: id.to_string(),
+                                partition_id: id,
+                                bucket_count: Some(1),
+                                bucket_metadata: vec![PbBucketMetadata {
+                                    bucket_id: 0,
+                                    leader_id: Some(1),
+                                    ..Default::default()
+                                }],
+                            })
+                            .collect(),
+                        ..Default::default()
+                    };
+                    let metadata = Arc::new(Metadata::new_for_test(Arc::new(
+                        Cluster::from_metadata_response(response.clone(), None)?,
+                    )));
+                    metadata.invalidate_physical_table_meta(&HashSet::from([
+                        PhysicalTablePath::of_partitioned(
+                            Arc::new(path.clone()),
+                            Some("20".into()),
+                        ),
+                    ]));
+                    let inner = Arc::new(LogScannerInner::new(
+                        &table_info,
+                        metadata.clone(),
+                        Arc::new(RpcClient::new()),
+                        &Config::default(),
+                        None,
+                        false,
+                        None,
+                        test_admin(&metadata),
+                    )?);
+                    let fetcher = &inner.log_fetcher;
+                    let busy = TableBucket::new_with_partition(1, Some(10), 0);
+                    let missing = TableBucket::new_with_partition(1, Some(20), 0);
+                    for bucket in [&busy, &missing] {
+                        inner
+                            .log_scanner_status
+                            .assign_scan_bucket(bucket.clone(), 0);
+                    }
+                    assert!(fetcher.get_table_bucket_leader(&missing).is_none());
+                    // Keep the busy leader's fetch in flight while metadata is delayed.
+                    fetcher.nodes_with_pending_fetch_requests.lock().insert(1);
+                    let data = build_records(&table_info, Arc::new(path))?;
+                    let recovered_data = data.clone();
+                    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+                    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+                    let server = tokio::spawn(async move {
+                        let (mut stream, _) = listener.accept().await.unwrap();
+                        let request = read_scanner_rpc(&mut stream, ApiKey::ApiVersion).await;
+                        let versions = ApiVersionsResponse {
+                                api_versions: [ApiKey::MetaData, ApiKey::FetchLog]
+                                    .into_iter()
+                                    .map(|api| PbApiVersion {
+                                        api_key: i32::from(i16::from(api)),
+                                        min_version: 0,
+                                        max_version: 0,
+                                    })
+                                    .collect(),
+                                server_type: Some(ServerType::TabletServer.to_type_id()),
+                            };
+                        reply_scanner_rpc(&mut stream, &request, versions.clone(), false).await;
+                        // Token initialization may open the scanner connection first.
+                        let (mut other, _) = listener.accept().await.unwrap();
+                        let handshake = read_scanner_rpc(&mut other, ApiKey::ApiVersion).await;
+                        reply_scanner_rpc(&mut other, &handshake, versions, false).await;
+                        let (mut stream, mut scanner_stream, request) = tokio::select! {
+                            request = read_scanner_rpc(&mut stream, ApiKey::MetaData) => (stream, other, request),
+                            request = read_scanner_rpc(&mut other, ApiKey::MetaData) => (other, stream, request),
+                        };
+                        let decoded = MetadataRequest::decode(&request[8..]).unwrap();
+                        assert_eq!(decoded.partitions_id, vec![20]);
+                        started_tx.send(()).unwrap();
+                        if release_rx.await.is_err() {
+                            return;
+                        }
+                        if fail_first {
+                            reply_scanner_rpc(
+                                &mut stream,
+                                &request,
+                                ErrorResponse {
+                                    error_code: FlussError::AuthorizationException.code(),
+                                    error_message: Some("temporary metadata failure".into()),
+                                },
+                                true,
+                            )
+                            .await;
+                            let retry = read_scanner_rpc(&mut stream, ApiKey::MetaData).await;
+                            reply_scanner_rpc(&mut stream, &retry, response, false).await;
+                        } else {
+                            reply_scanner_rpc(&mut stream, &request, response, false).await;
+                        }
+                        let stream = &mut scanner_stream;
+                        let request = read_scanner_rpc(stream, ApiKey::FetchLog).await;
+                        let decoded = FetchLogRequest::decode(&request[8..]).unwrap();
+                        assert!(
+                            decoded
+                                .tables_req
+                                .iter()
+                                .flat_map(|t| &t.buckets_req)
+                                .any(|b| b.partition_id == Some(20) && b.fetch_offset == 0)
+                        );
+                        reply_scanner_rpc(
+                            stream,
+                            &request,
+                            FetchLogResponse {
+                                tables_resp: vec![PbFetchLogRespForTable {
+                                    table_id: 1,
+                                    buckets_resp: vec![PbFetchLogRespForBucket {
+                                        partition_id: Some(20),
+                                        bucket_id: 0,
+                                        high_watermark: Some(1),
+                                        records: Some(recovered_data),
+                                        ..Default::default()
+                                    }],
+                                }],
+                            },
+                            false,
+                        )
+                        .await;
+                    });
+                    let poll_busy = |offset: i64| {
+                        let mut bytes = data.clone();
+                        bytes[..8].copy_from_slice(&offset.to_le_bytes());
+                        fetcher.log_fetch_buffer.add(memory_fetch(
+                            fetcher,
+                            busy.clone(),
+                            bytes,
+                            offset,
+                        ));
+                        async {
+                            if batch_mode {
+                                let batches = RecordBatchLogScanner {
+                                    inner: inner.clone(),
+                                }
+                                .poll(Duration::ZERO)
+                                .now_or_never()
+                                .expect("data poll must not await metadata")?;
+                                assert!(batches.iter().any(|b| b.bucket() == &busy));
+                            } else {
+                                let records = LogScanner {
+                                    inner: inner.clone(),
+                                }
+                                .poll(Duration::ZERO)
+                                .now_or_never()
+                                .expect("data poll must not await metadata")?;
+                                assert!(!records.records(&busy).is_empty());
+                            }
+                            Ok::<_, Error>(())
+                        }
+                    };
+                    poll_busy(0).await?;
+                    assert!(fetcher.metadata_refresh_task.lock().is_some(), "missing leader must trigger background refresh");
+                    started_rx.await.unwrap();
+                    let task_id = fetcher.metadata_refresh_task.lock().as_ref().unwrap().id();
+                    for offset in 1..5 {
+                        poll_busy(offset).await?;
+                        assert_eq!(
+                            fetcher.metadata_refresh_task.lock().as_ref().unwrap().id(),
+                            task_id
+                        );
+                        tokio::task::yield_now().await;
+                    }
+                    if drop_while_refreshing {
+                        let refresh = fetcher.metadata_refresh_task.lock().as_ref().unwrap().abort_handle();
+                        drop(inner);
+                        // The server still withholds its response: completion must come from cancellation.
+                        while !refresh.is_finished() {
+                            tokio::task::yield_now().await;
+                        }
+                        drop(release_tx);
+                        server.await.unwrap();
+                        continue;
+                    }
+                    release_tx.send(()).unwrap();
+                    let mut offset = 5;
+                    // Every poll has busy-partition data; recovery cannot rely on an empty poll.
+                    while fetcher.get_table_bucket_leader(&missing).is_none() {
+                        poll_busy(offset).await?;
+                        offset += 1;
+                        tokio::task::yield_now().await;
+                    }
+                    fetcher.nodes_with_pending_fetch_requests.lock().remove(&1);
+                    poll_busy(offset).await?;
+                    server.await.unwrap();
+                    fetcher
+                        .log_fetch_buffer
+                        .await_not_empty(Duration::from_secs(2))
+                        .await?;
+                    poll_busy(offset + 1).await?;
+                    assert_eq!(
+                        inner.log_scanner_status.get_bucket_offset(&missing),
+                        Some(1)
+                    );
+                }
+            }
+            Ok::<_, Error>(())
+        })
+        .await
+        .expect("background metadata recovery timed out")
+    }
+
+    #[tokio::test]
+    async fn public_polls_pipeline_known_leaders_without_waiting_for_missing_metadata() -> Result<()>
+    {
+        for batch_mode in [false, true] {
+            for missing_leader in [false, true] {
+                let (inner, _, data) = scanner_fixture(true)?;
+                let fetcher = &inner.log_fetcher;
+                let status = &inner.log_scanner_status;
+                let bucket = TableBucket::new(1, 0);
+                status.assign_scan_bucket(bucket.clone(), 0);
+                if missing_leader {
+                    status.assign_scan_bucket(TableBucket::new(1, 99), 0);
+                }
+
+                fetcher
+                    .log_fetch_buffer
+                    .add(memory_fetch(fetcher, bucket.clone(), data, 0));
+                // A ready result must not yield to metadata I/O before delivery.
+                let offsets = poll_test_offsets(&inner, batch_mode)
+                    .now_or_never()
+                    .expect("poll must be ready")?;
+                assert_eq!(offsets, vec![0]);
+                assert_eq!(
+                    fetcher.metadata_refresh_task.lock().is_some(),
+                    missing_leader
+                );
+                assert_eq!(status.get_bucket_offset(&bucket), Some(1));
+                assert!(
+                    fetcher
+                        .nodes_with_pending_fetch_requests
+                        .lock()
+                        .contains(&1),
+                    "next request must be scheduled before returning data"
+                );
+                assert!(
+                    fetcher.prepare_fetch_log_requests().is_empty(),
+                    "do not duplicate an in-flight request"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn record_poll_returns_buffered_data_before_metadata_refresh_error() -> Result<()> {
+        check_poll_metadata_error(false).await
+    }
+
+    async fn collect_test_offsets(
+        fetcher: &LogFetcher,
+        batch_mode: bool,
+    ) -> Result<Vec<(TableBucket, i64)>> {
+        if batch_mode {
+            Ok(fetcher
+                .collect_batches()
+                .await?
+                .iter()
+                .flat_map(|b| {
+                    (b.base_offset()..b.base_offset() + b.batch().num_rows() as i64)
+                        .map(|offset| (b.bucket().clone(), offset))
+                })
+                .collect())
+        } else {
+            Ok(fetcher
+                .collect_fetches()
+                .await?
+                .into_iter()
+                .flat_map(|(bucket, records)| {
+                    records
+                        .into_iter()
+                        .map(move |r| (bucket.clone(), r.offset()))
+                })
+                .collect())
+        }
+    }
+
+    #[tokio::test]
+    async fn batch_poll_returns_buffered_data_before_metadata_refresh_error() -> Result<()> {
+        let table_path = TablePath::new("db", "tbl");
+        let table_info = build_table_info(table_path.clone(), 1, 1);
+        // No servers or bootstrap address: refreshing metadata fails without network I/O.
+        let metadata = Arc::new(Metadata::new_for_test(Default::default()));
+        let rpc_client = Arc::new(RpcClient::new());
+        let admin = Arc::new(crate::client::admin::FlussAdmin::new(
+            rpc_client.clone(),
+            metadata.clone(),
+        ));
+        let inner = Arc::new(LogScannerInner::new(
+            &table_info,
+            metadata,
+            rpc_client,
+            &Config::default(),
+            None,
+            false,
+            None,
+            admin,
+        )?);
+        let scanner = RecordBatchLogScanner { inner };
+        let bucket = TableBucket::new(1, 0);
+        scanner
+            .inner
+            .log_scanner_status
+            .assign_scan_bucket(bucket.clone(), 0);
+        let data = build_records(&table_info, Arc::new(table_path))?;
+        let size = data.len();
+        scanner
+            .inner
+            .log_fetcher
+            .log_fetch_buffer
+            .add(Box::new(DefaultCompletedFetch::new(
+                bucket.clone(),
+                LogRecordsBatches::new(data),
+                size,
+                test_resolver(&table_info),
+                false,
+                0,
+                0,
+            )));
+
+        let batches = scanner.poll(Duration::ZERO).await?;
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].bucket(), &bucket);
+        assert_eq!(batches[0].base_offset(), 0);
+        assert_eq!(batches[0].batch().num_rows(), 1);
+        assert_eq!(
+            scanner.inner.log_scanner_status.get_bucket_offset(&bucket),
+            Some(1)
+        );
+
+        // The next poll has no buffered data, so it attempts metadata refresh.
+        let error = scanner.poll(Duration::ZERO).await.unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("No bootstrap servers configured")
+        );
+        assert_eq!(
+            scanner.inner.log_scanner_status.get_bucket_offset(&bucket),
+            Some(1)
+        );
+        scanner.unsubscribe(0).await?;
+        assert!(scanner.poll(Duration::ZERO).await?.is_empty());
+        Ok(())
+    }
+
+    async fn check_poll_metadata_error(batch_mode: bool) -> Result<()> {
+        // Missing servers and bootstrap address make metadata refresh fail without I/O.
+        let (inner, _, data) = scanner_fixture(false)?;
+        let bucket = TableBucket::new(1, 0);
+        inner
+            .log_scanner_status
+            .assign_scan_bucket(bucket.clone(), 0);
+        inner.log_fetcher.log_fetch_buffer.add(memory_fetch(
+            &inner.log_fetcher,
+            bucket.clone(),
+            data,
+            0,
+        ));
+        assert_eq!(poll_test_offsets(&inner, batch_mode).await?, vec![0]);
+        assert_eq!(inner.log_scanner_status.get_bucket_offset(&bucket), Some(1));
+        let error = poll_test_offsets(&inner, batch_mode).await.unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("No bootstrap servers configured")
+        );
+        assert_eq!(inner.log_scanner_status.get_bucket_offset(&bucket), Some(1));
+        change_subscription(&inner, batch_mode, None).await?;
+        assert!(poll_test_offsets(&inner, batch_mode).await?.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn collect_batches_preserves_pending_fetch_errors() -> Result<()> {
+        for (preceding_data, subscription_change) in [(false, 0), (true, 0), (true, 1), (true, 2)] {
+            for same_bucket in [false, true] {
+                for cancelled in [false, true] {
+                    for batch_mode in [false, true] {
+                        check_pending_fetch_error(
+                            preceding_data,
+                            same_bucket,
+                            cancelled,
+                            subscription_change,
+                            batch_mode,
+                        )
+                        .await?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn check_pending_fetch_error(
+        preceding_data: bool,
+        same_bucket: bool,
+        cancelled: bool,
+        subscription_change: u8,
+        batch_mode: bool,
+    ) -> Result<()> {
+        let table_path = TablePath::new("db", "tbl");
+        let table_info = build_table_info(table_path.clone(), 1, 2);
+        let metadata = Arc::new(Metadata::new_for_test(build_cluster_arc(&table_path, 1, 2)));
+        let status = Arc::new(LogScannerStatus::new());
+        let fetcher = LogFetcher::new(
+            table_info.clone(),
+            Arc::new(RpcClient::new()),
+            metadata.clone(),
+            status.clone(),
+            &Config::default(),
+            None,
+            false,
+            None,
+            test_scanner_metrics(&table_path),
+            test_schema_getter(&table_info, &metadata),
+        )?;
+        let data_bucket = TableBucket::new(1, 0);
+        let error_bucket = TableBucket::new(1, i32::from(!same_bucket));
+        let error_offset = if same_bucket {
+            i64::from(preceding_data)
+        } else {
+            5
+        };
+        status.assign_scan_bucket(error_bucket.clone(), error_offset);
+        if preceding_data {
+            status.assign_scan_bucket(data_bucket.clone(), 0);
+            let data = build_records(&table_info, Arc::new(table_path))?;
+            let size = data.len();
+            fetcher
+                .log_fetch_buffer
+                .add(Box::new(DefaultCompletedFetch::new(
+                    data_bucket.clone(),
+                    LogRecordsBatches::new(data),
+                    size,
+                    test_resolver(&table_info),
+                    false,
+                    0,
+                    0,
+                )));
+        }
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let download = RemoteLogDownloadFuture::new(receiver);
+        let completed = Arc::new(tokio::sync::Notify::new());
+        let notification = completed.clone();
+        download.on_complete(move || notification.notify_one());
+        fetcher
+            .log_fetch_buffer
+            .pend(Box::new(RemotePendingFetch::new(
+                RemoteLogSegment {
+                    segment_id: "failed-download".to_string(),
+                    start_offset: 0,
+                    end_offset: 10,
+                    size_in_bytes: 0,
+                    table_bucket: error_bucket.clone(),
+                    max_timestamp: 0,
+                },
+                download,
+                0,
+                error_offset,
+                10,
+                test_resolver(&table_info),
+            )));
+        if cancelled {
+            drop(sender);
+        } else {
+            assert!(
+                sender
+                    .send(Err(Error::UnexpectedError {
+                        message: "download failed".to_string(),
+                        source: None,
+                    }))
+                    .is_ok()
+            );
+        }
+        completed.notified().await;
+        fetcher.log_fetch_buffer.try_complete(&error_bucket);
+
+        if preceding_data {
+            assert_eq!(
+                collect_test_offsets(&fetcher, batch_mode).await?,
+                vec![(data_bucket.clone(), 0)]
+            );
+            assert_eq!(status.get_bucket_offset(&data_bucket), Some(1));
+        }
+        assert_eq!(status.get_bucket_offset(&error_bucket), Some(error_offset));
+        // Subscription changes apply after an error has been deferred.
+        if preceding_data && subscription_change == 1 {
+            status.unassign_scan_buckets(std::slice::from_ref(&error_bucket));
+        } else if preceding_data && subscription_change == 2 {
+            status.update_offset(&error_bucket, error_offset + 1);
+        } else {
+            let error = collect_test_offsets(&fetcher, batch_mode)
+                .await
+                .unwrap_err();
+            let expected = if cancelled {
+                "future cancelled"
+            } else {
+                "download failed"
+            };
+            assert!(matches!(error, Error::IoUnexpectedError { message, .. }
+            if message.contains(expected)));
+            assert_eq!(status.get_bucket_offset(&error_bucket), Some(error_offset));
+        }
+        assert!(collect_test_offsets(&fetcher, batch_mode).await?.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn collect_batches_preserves_data_across_schema_errors() -> Result<()> {
+        for batch_mode in [false, true] {
+            check_schema_errors(batch_mode).await?;
+        }
+        Ok(())
+    }
+
+    async fn check_schema_errors(batch_mode: bool) -> Result<()> {
+        for same_fetch in [false, true] {
+            let table_path = TablePath::new("db", "tbl");
+            let table_info = build_table_info(table_path.clone(), 1, 1);
+            let metadata = Arc::new(Metadata::new_for_test(Default::default()));
+            let status = Arc::new(LogScannerStatus::new());
+            let fetcher = filtering_fetcher(&table_info, &metadata, status.clone(), None)?;
+            let bucket = TableBucket::new(1, 0);
+            status.assign_scan_bucket(bucket.clone(), 0);
+            let data = build_records(&table_info, Arc::new(table_path))?;
+            let mut unknown_schema = data.clone();
+            unknown_schema[..8].copy_from_slice(&1i64.to_le_bytes());
+            let schema_id = table_info.get_schema_id() as i16 + 1;
+            unknown_schema[SCHEMA_ID_OFFSET..SCHEMA_ID_OFFSET + 2]
+                .copy_from_slice(&schema_id.to_le_bytes());
+            let add = |bytes: Vec<u8>, offset| {
+                fetcher
+                    .log_fetch_buffer
+                    .add(Box::new(DefaultCompletedFetch::new(
+                        bucket.clone(),
+                        LogRecordsBatches::new(bytes.clone()),
+                        bytes.len(),
+                        fetcher.resolver.clone(),
+                        false,
+                        offset,
+                        0,
+                    )));
+            };
+            if same_fetch {
+                add([data, unknown_schema].concat(), 0);
+            } else {
+                add(data, 0);
+                add(unknown_schema, 1);
+            }
+            assert_eq!(
+                collect_test_offsets(&fetcher, batch_mode).await?,
+                vec![(bucket.clone(), 0)]
+            );
+            assert_eq!(status.get_bucket_offset(&bucket), Some(1));
+            // Failed schema lookup must retain the unread batch and its offset.
+            for _ in 0..2 {
+                let error = collect_test_offsets(&fetcher, batch_mode)
+                    .await
+                    .unwrap_err();
+                assert!(matches!(error, Error::UnexpectedError { message, .. }
+                if message == "Coordinator server not found in cluster metadata"));
+                assert_eq!(status.get_bucket_offset(&bucket), Some(1));
+            }
+            fetcher
+                .resolver
+                .register_schema(schema_id, table_info.get_schema())?;
+            assert_eq!(
+                collect_test_offsets(&fetcher, batch_mode).await?,
+                vec![(bucket.clone(), 1)]
+            );
+            assert_eq!(status.get_bucket_offset(&bucket), Some(2));
+            assert!(collect_test_offsets(&fetcher, batch_mode).await?.is_empty());
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn collect_batches_returns_data_before_initialization_error() -> Result<()> {
+        for subscription_change in 0..3 {
+            for batch_mode in [false, true] {
+                check_batch_initialization_error(true, subscription_change, batch_mode).await?;
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn collect_batches_propagates_empty_initialization_error() -> Result<()> {
+        for batch_mode in [false, true] {
+            check_batch_initialization_error(false, 0, batch_mode).await?;
+        }
+        Ok(())
+    }
+
+    async fn check_batch_initialization_error(
+        preceding_data: bool,
+        subscription_change: u8,
+        batch_mode: bool,
+    ) -> Result<()> {
+        let table_path = TablePath::new("db", "tbl");
+        let table_info = build_table_info(table_path.clone(), 1, 2);
+        let metadata = Arc::new(Metadata::new_for_test(build_cluster_arc(&table_path, 1, 2)));
+        let status = Arc::new(LogScannerStatus::new());
+        let fetcher = LogFetcher::new(
+            table_info.clone(),
+            Arc::new(RpcClient::new()),
+            metadata.clone(),
+            status.clone(),
+            &Config::default(),
+            None,
+            false,
+            None,
+            test_scanner_metrics(&table_path),
+            test_schema_getter(&table_info, &metadata),
+        )?;
+        let data_bucket = TableBucket::new(1, 0);
+        let error_bucket = TableBucket::new(1, 1);
+        status.assign_scan_bucket(data_bucket.clone(), 0);
+        status.assign_scan_bucket(error_bucket.clone(), 5);
+        if preceding_data {
+            let data = build_records(&table_info, Arc::new(table_path))?;
+            let size = data.len();
+            fetcher
+                .log_fetch_buffer
+                .add(Box::new(DefaultCompletedFetch::new(
+                    data_bucket.clone(),
+                    LogRecordsBatches::new(data),
+                    size,
+                    test_resolver(&table_info),
+                    false,
+                    0,
+                    0,
+                )));
+        }
+        let error_fetch = DefaultCompletedFetch::from_api_error(
+            error_bucket.clone(),
+            ApiError {
+                code: FlussError::AuthorizationException.code(),
+                message: "denied".to_string(),
+            },
+            LogFetcher::describe_fetch_error(
+                FlussError::AuthorizationException,
+                &error_bucket,
+                5,
+                "denied",
+            ),
+            5,
+            test_resolver(&table_info),
+        );
+        assert!(!error_fetch.is_initialized());
+        assert_eq!(error_fetch.size_in_bytes(), 0);
+        fetcher.log_fetch_buffer.add(Box::new(error_fetch));
+
+        if preceding_data {
+            assert_eq!(
+                collect_test_offsets(&fetcher, batch_mode).await?,
+                vec![(data_bucket.clone(), 0)]
+            );
+            assert_eq!(status.get_bucket_offset(&data_bucket), Some(1));
+        }
+        assert_eq!(status.get_bucket_offset(&error_bucket), Some(5));
+        match subscription_change {
+            0 => {
+                let error = collect_test_offsets(&fetcher, batch_mode)
+                    .await
+                    .unwrap_err();
+                assert!(matches!(error, Error::FlussAPIError { api_error }
+                if api_error.code == FlussError::AuthorizationException.code()
+                    && api_error.message == "denied"));
+                assert_eq!(status.get_bucket_offset(&error_bucket), Some(5));
+            }
+            1 => status.unassign_scan_buckets(std::slice::from_ref(&error_bucket)),
+            2 => status.update_offset(&error_bucket, 6),
+            _ => unreachable!(),
+        }
+        // Report the error once, or discard it if the subscription changed.
+        assert!(collect_test_offsets(&fetcher, batch_mode).await?.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn collectors_return_data_before_another_buckets_decode_error() -> Result<()> {
+        // Same-bucket errors and subscription changes are covered by the public poll tests.
+        for batch_mode in [false, true] {
+            let table_path = TablePath::new("db", "tbl");
+            let table_info = build_table_info(table_path.clone(), 1, 2);
+            let metadata = Arc::new(Metadata::new_for_test(build_cluster_arc(&table_path, 1, 2)));
+            let status = Arc::new(LogScannerStatus::new());
+            let fetcher = filtering_fetcher(&table_info, &metadata, status.clone(), None)?;
+            let good_bucket = TableBucket::new(1, 0);
+            let bad_bucket = TableBucket::new(1, 1);
+            status.assign_scan_bucket(good_bucket.clone(), 0);
+            status.assign_scan_bucket(bad_bucket.clone(), 5);
+            let good = build_records(&table_info, Arc::new(table_path))?;
+            let mut bad = good.clone();
+            bad[..8].copy_from_slice(&5_i64.to_le_bytes());
+            bad[RECORDS_OFFSET..].fill(0);
+            for (bucket, bytes, offset) in
+                [(good_bucket.clone(), good, 0), (bad_bucket.clone(), bad, 5)]
+            {
+                fetcher
+                    .log_fetch_buffer
+                    .add(memory_fetch(&fetcher, bucket, bytes, offset));
+            }
+            assert_eq!(
+                collect_test_offsets(&fetcher, batch_mode).await?,
+                vec![(good_bucket.clone(), 0)]
+            );
+            let error = collect_test_offsets(&fetcher, batch_mode)
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(&bad_bucket.to_string()), "{error}");
+            assert!(error.contains("offset 5"), "{error}");
+            assert!(error.contains("Invalid continuation marker"), "{error}");
+            assert_eq!(status.get_bucket_offset(&good_bucket), Some(1));
+            assert_eq!(status.get_bucket_offset(&bad_bucket), Some(5));
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn collect_batches_preserves_partial_results_and_error_order() -> Result<()> {
+        // Cover failures within one fetch and in the next fetch, including no preceding data.
+        let cases = [false, true].into_iter().flat_map(|same_fetch| {
+            [0, 1, 2, 99, 100, 101]
+                .into_iter()
+                .flat_map(move |count| (0..3).map(move |change| (same_fetch, count, change)))
+        });
+        for (same_fetch, good_batches, subscription_change) in cases {
+            let table_path = TablePath::new("db", "tbl");
+            let table_info = build_table_info(table_path.clone(), 1, 1);
+            let metadata = Arc::new(Metadata::new_for_test(build_cluster_arc(&table_path, 1, 1)));
+            let status = Arc::new(LogScannerStatus::new());
+            let fetcher = LogFetcher::new(
+                table_info.clone(),
+                Arc::new(RpcClient::new()),
+                metadata.clone(),
+                status.clone(),
+                &Config::default(),
+                None,
+                false,
+                None,
+                test_scanner_metrics(&table_path),
+                test_schema_getter(&table_info, &metadata),
+            )?;
+            let bucket = TableBucket::new(1, 0);
+            status.assign_scan_bucket(bucket.clone(), 0);
+            let data = build_records(&table_info, Arc::new(table_path))?;
+            let make_fetch = |data: Vec<u8>, offset| {
+                let mut fetch = DefaultCompletedFetch::new(
+                    bucket.clone(),
+                    LogRecordsBatches::new(data.clone()),
+                    data.len(),
+                    test_resolver(&table_info),
+                    false,
+                    offset,
+                    0,
+                );
+                fetch.set_initialized();
+                Box::new(fetch) as Box<dyn CompletedFetch>
+            };
+            let mut combined = Vec::new();
+            for offset in 0..good_batches {
+                let mut good = data.clone();
+                good[..8].copy_from_slice(&(offset as i64).to_le_bytes());
+                if same_fetch {
+                    combined.extend(good);
+                } else {
+                    fetcher
+                        .log_fetch_buffer
+                        .add(make_fetch(good, offset as i64));
+                    // Empty fetches must not change the partial results.
+                    fetcher
+                        .log_fetch_buffer
+                        .add(make_fetch(Vec::new(), offset as i64 + 1));
+                }
+            }
+            let mut corrupted = data.clone();
+            corrupted[..8].copy_from_slice(&(good_batches as i64).to_le_bytes());
+            corrupted[RECORDS_OFFSET..].fill(0);
+            if same_fetch {
+                combined.extend(corrupted);
+                fetcher.log_fetch_buffer.add(make_fetch(combined, 0));
+            } else {
+                fetcher
+                    .log_fetch_buffer
+                    .add(make_fetch(corrupted, good_batches as i64));
+            }
+            let first = fetcher.collect_batches().await;
+            if good_batches == 0 {
+                assert!(first.is_err());
+            } else {
+                let mut batches = first?;
+                assert_eq!(batches.len(), good_batches.min(100));
+                assert_eq!(
+                    status.get_bucket_offset(&bucket),
+                    Some(batches.len() as i64)
+                );
+                if good_batches > 100 {
+                    batches.extend(fetcher.collect_batches().await?);
+                }
+                assert_eq!(batches.len(), good_batches);
+                for (offset, batch) in batches.iter().enumerate() {
+                    assert_eq!(batch.base_offset(), offset as i64);
+                    assert_eq!(batch.batch().num_rows(), 1);
+                }
+            }
+            assert_eq!(status.get_bucket_offset(&bucket), Some(good_batches as i64));
+            match subscription_change {
+                0 => {
+                    for _ in 0..3 {
+                        assert!(fetcher.collect_batches().await.is_err());
+                        assert!(fetcher.fetchable_buckets().is_empty());
+                        assert_eq!(status.get_bucket_offset(&bucket), Some(good_batches as i64));
+                    }
+                    status.update_offset(&bucket, good_batches as i64 + 1);
+                }
+                1 => status.unassign_scan_buckets(std::slice::from_ref(&bucket)),
+                2 => status.update_offset(&bucket, good_batches as i64 + 1),
+                _ => unreachable!(),
+            }
+            // Seeking/unsubscribing discards the deferred error from the old position.
+            // A later fetch must succeed after explicitly moving past the failed position.
+            let recovery_offset = good_batches as i64 + i64::from(subscription_change != 1);
+            let mut recovery = data.clone();
+            recovery[..8].copy_from_slice(&recovery_offset.to_le_bytes());
+            fetcher
+                .log_fetch_buffer
+                .add(make_fetch(recovery, recovery_offset));
+            let recovered = fetcher.collect_batches().await?;
+            if subscription_change == 1 {
+                assert!(recovered.is_empty());
+                assert_eq!(status.get_bucket_offset(&bucket), None);
+            } else {
+                assert_eq!(recovered.len(), 1);
+                assert_eq!(recovered[0].base_offset(), recovery_offset);
+                assert_eq!(status.get_bucket_offset(&bucket), Some(recovery_offset + 1));
+            }
+        }
+        Ok(())
+    }
+
     #[tokio::test]
     async fn fetch_records_from_fetch_drains_unassigned_bucket() -> Result<()> {
         let table_path = TablePath::new("db".to_string(), "tbl".to_string());
@@ -2520,6 +4253,7 @@ mod tests {
             &Config::default(),
             None,
             false,
+            None,
             test_scanner_metrics(&table_path),
             test_schema_getter(&table_info, &metadata),
         )?;
@@ -2560,15 +4294,231 @@ mod tests {
             &Config::default(),
             None,
             false,
+            None,
             test_scanner_metrics(&table_path),
             test_schema_getter(&table_info, &metadata),
         )?;
 
         fetcher.nodes_with_pending_fetch_requests.lock().insert(1);
 
-        let requests = fetcher.prepare_fetch_log_requests().await;
+        let requests = fetcher.prepare_fetch_log_requests();
         assert!(requests.is_empty());
         Ok(())
+    }
+
+    /// Builds the fetcher used by the filter tests, encoding `predicate` the way
+    /// `TableScan::filter` does.
+    fn filtering_fetcher(
+        table_info: &TableInfo,
+        metadata: &Arc<Metadata>,
+        status: Arc<LogScannerStatus>,
+        predicate: Option<Predicate>,
+    ) -> Result<LogFetcher> {
+        let filter = predicate
+            .map(|p| to_pb_predicate(&p, table_info.get_row_type()))
+            .transpose()?;
+        LogFetcher::new(
+            table_info.clone(),
+            Arc::new(RpcClient::new()),
+            metadata.clone(),
+            status,
+            &Config::default(),
+            None,
+            false,
+            filter,
+            test_scanner_metrics(&table_info.table_path),
+            test_schema_getter(table_info, metadata),
+        )
+    }
+
+    #[tokio::test]
+    async fn prepare_fetch_log_requests_carries_the_filter() -> Result<()> {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = build_table_info(table_path.clone(), 1, 1);
+        let cluster = build_cluster_arc(&table_path, 1, 1);
+        let metadata = Arc::new(Metadata::new_for_test(cluster));
+        let status = Arc::new(LogScannerStatus::new());
+        status.assign_scan_bucket(TableBucket::new(1, 0), 0);
+        let fetcher = filtering_fetcher(
+            &table_info,
+            &metadata,
+            status,
+            Some(crate::predicate::col("id").gt(5i32)),
+        )?;
+
+        let requests = fetcher.prepare_fetch_log_requests();
+        let table_req = &requests.get(&1).expect("request for leader").tables_req[0];
+        let predicate = table_req
+            .filter_predicate
+            .as_ref()
+            .expect("filter predicate");
+        assert_eq!(predicate.r#type, 0);
+        assert_eq!(predicate.leaf.as_ref().expect("leaf").field_id, 0);
+        // Both fields must travel together, and the id pins the field ids.
+        assert_eq!(table_req.filter_schema_id, Some(table_info.get_schema_id()));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn prepare_fetch_log_requests_omits_an_absent_filter() -> Result<()> {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = build_table_info(table_path.clone(), 1, 1);
+        let cluster = build_cluster_arc(&table_path, 1, 1);
+        let metadata = Arc::new(Metadata::new_for_test(cluster));
+        let status = Arc::new(LogScannerStatus::new());
+        status.assign_scan_bucket(TableBucket::new(1, 0), 0);
+        let fetcher = filtering_fetcher(&table_info, &metadata, status, None)?;
+
+        let requests = fetcher.prepare_fetch_log_requests();
+        let table_req = &requests.get(&1).expect("request for leader").tables_req[0];
+        assert!(table_req.filter_predicate.is_none());
+        assert!(table_req.filter_schema_id.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn unresolvable_filter_column_is_rejected() {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = build_table_info(table_path.clone(), 1, 1);
+        let cluster = build_cluster_arc(&table_path, 1, 1);
+        let metadata = Arc::new(Metadata::new_for_test(cluster));
+        let result = filtering_fetcher(
+            &table_info,
+            &metadata,
+            Arc::new(LogScannerStatus::new()),
+            Some(crate::predicate::col("nope").gt(5i32)),
+        );
+        assert!(matches!(result.err(), Some(Error::IllegalArgument { .. })));
+    }
+
+    /// Without this the bucket offset never advances and the scanner re-requests
+    /// the same range forever whenever a filter prunes a whole fetch.
+    #[tokio::test]
+    async fn handle_fetch_response_advances_past_a_fully_filtered_range() -> Result<()> {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = build_table_info(table_path.clone(), 1, 1);
+        let cluster = build_cluster_arc(&table_path, 1, 1);
+        let metadata = Arc::new(Metadata::new_for_test(cluster));
+        let status = Arc::new(LogScannerStatus::new());
+        let bucket = TableBucket::new(1, 0);
+        status.assign_scan_bucket(bucket.clone(), 2);
+        let fetcher = filtering_fetcher(
+            &table_info,
+            &metadata,
+            status.clone(),
+            Some(crate::predicate::col("id").gt(5i32)),
+        )?;
+
+        LogFetcher::handle_fetch_response(
+            filtered_response(Some(11), Some(9)),
+            test_response_context(&fetcher, &metadata),
+        )
+        .await;
+
+        let fetched = fetcher.collect_fetches().await?;
+        assert!(fetched.is_empty());
+        assert_eq!(status.get_bucket_offset(&bucket), Some(11));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn handle_fetch_response_ignores_a_filtered_range_behind_the_fetch_offset() -> Result<()>
+    {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = build_table_info(table_path.clone(), 1, 1);
+        let cluster = build_cluster_arc(&table_path, 1, 1);
+        let metadata = Arc::new(Metadata::new_for_test(cluster));
+        let status = Arc::new(LogScannerStatus::new());
+        let bucket = TableBucket::new(1, 0);
+        status.assign_scan_bucket(bucket.clone(), 5);
+        let fetcher = filtering_fetcher(
+            &table_info,
+            &metadata,
+            status.clone(),
+            Some(crate::predicate::col("id").gt(5i32)),
+        )?;
+
+        LogFetcher::handle_fetch_response(
+            filtered_response(Some(3), None),
+            test_response_context(&fetcher, &metadata),
+        )
+        .await;
+
+        let fetched = fetcher.collect_fetches().await?;
+        assert!(fetched.is_empty());
+        assert_eq!(status.get_bucket_offset(&bucket), Some(5));
+        Ok(())
+    }
+
+    /// The server reports a filtered range alongside records when it prunes only
+    /// the tail of what it scanned, so the offset must clear the whole range.
+    #[tokio::test]
+    async fn handle_fetch_response_skips_a_pruned_tail_after_its_records() -> Result<()> {
+        let table_path = TablePath::new("db".to_string(), "tbl".to_string());
+        let table_info = build_table_info(table_path.clone(), 1, 1);
+        let cluster = build_cluster_arc(&table_path, 1, 1);
+        let metadata = Arc::new(Metadata::new_for_test(cluster));
+        let status = Arc::new(LogScannerStatus::new());
+        let bucket = TableBucket::new(1, 0);
+        status.assign_scan_bucket(bucket.clone(), 0);
+        let fetcher = filtering_fetcher(
+            &table_info,
+            &metadata,
+            status.clone(),
+            Some(crate::predicate::col("id").gt(5i32)),
+        )?;
+
+        let mut response = filtered_response(Some(8), Some(9));
+        response.tables_resp[0].buckets_resp[0].records =
+            Some(build_records(&table_info, Arc::new(table_path))?);
+        LogFetcher::handle_fetch_response(response, test_response_context(&fetcher, &metadata))
+            .await;
+
+        let fetched = fetcher.collect_fetches().await?;
+        assert_eq!(fetched.get(&bucket).expect("records").len(), 1);
+        // The single record ends at offset 1, but the server scanned through 8.
+        assert_eq!(status.get_bucket_offset(&bucket), Some(8));
+        Ok(())
+    }
+
+    /// A response for bucket 0 of table 1 that carries no records, standing in
+    /// for a fetch whose batches the server pruned entirely.
+    fn filtered_response(
+        filtered_end_offset: Option<i64>,
+        high_watermark: Option<i64>,
+    ) -> FetchLogResponse {
+        FetchLogResponse {
+            tables_resp: vec![PbFetchLogRespForTable {
+                table_id: 1,
+                buckets_resp: vec![PbFetchLogRespForBucket {
+                    partition_id: None,
+                    bucket_id: 0,
+                    error_code: None,
+                    error_message: None,
+                    high_watermark,
+                    log_start_offset: None,
+                    remote_log_fetch_info: None,
+                    records: None,
+                    filtered_end_offset,
+                    min_retain_offset: None,
+                }],
+            }],
+        }
+    }
+
+    fn test_response_context(
+        fetcher: &LogFetcher,
+        metadata: &Arc<Metadata>,
+    ) -> FetchResponseContext {
+        FetchResponseContext {
+            metadata: metadata.clone(),
+            log_fetch_buffer: fetcher.log_fetch_buffer.clone(),
+            log_scanner_status: fetcher.log_scanner_status.clone(),
+            resolver: Arc::clone(&fetcher.resolver),
+            remote_log_downloader: fetcher.remote_log_downloader.clone(),
+            metrics: Arc::clone(&fetcher.metrics),
+            request_start_time: Instant::now(),
+        }
     }
 
     #[tokio::test]
@@ -2587,6 +4537,7 @@ mod tests {
             &Config::default(),
             None,
             false,
+            None,
             test_scanner_metrics(&table_path),
             test_schema_getter(&table_info, &metadata),
         )?;
@@ -2604,6 +4555,7 @@ mod tests {
                     remote_log_fetch_info: None,
                     records: None,
                     filtered_end_offset: None,
+                    min_retain_offset: None,
                 }],
             }],
         };
@@ -2642,6 +4594,7 @@ mod tests {
             &Config::default(),
             None,
             false,
+            None,
             test_scanner_metrics(&table_path),
             test_schema_getter(&table_info, &metadata),
         )?;
@@ -2662,6 +4615,7 @@ mod tests {
                     remote_log_fetch_info: None,
                     records: None,
                     filtered_end_offset: None,
+                    min_retain_offset: None,
                 }],
             }],
         };
@@ -2691,7 +4645,7 @@ mod tests {
             .column("name", DataTypes::string());
 
         if has_primary_key {
-            schema_builder = schema_builder.primary_key(vec!["id"]);
+            schema_builder = schema_builder.primary_key(vec!["id"]).unwrap();
         }
 
         let schema = schema_builder.build().unwrap();
@@ -2776,11 +4730,12 @@ mod tests {
             &config,
             None,
             false,
+            None,
             test_scanner_metrics(&table_path),
             test_schema_getter(&table_info, &metadata),
         )?;
 
-        let requests = fetcher.prepare_fetch_log_requests().await;
+        let requests = fetcher.prepare_fetch_log_requests();
         // In this test cluster, leader id should exist; but even if it changes,
         // assert over all built requests.
         assert!(!requests.is_empty());
@@ -2823,6 +4778,7 @@ mod tests {
                 &Config::default(),
                 None,
                 false,
+                None,
                 admin,
             )
             .expect("build LogScannerInner");
@@ -2990,6 +4946,7 @@ mod tests {
                     &Config::default(),
                     None,
                     false,
+                    None,
                     test_scanner_metrics(&table_path),
                     test_schema_getter(&table_info, &metadata),
                 )
@@ -3008,6 +4965,7 @@ mod tests {
                             remote_log_fetch_info: None,
                             records: None,
                             filtered_end_offset: None,
+                            min_retain_offset: None,
                         }],
                     }],
                 };
@@ -3339,6 +5297,7 @@ mod tests {
                 &Config::default(),
                 None,
                 false,
+                None,
                 admin,
             )
             .expect("build LogScannerInner");

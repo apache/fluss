@@ -216,6 +216,56 @@ class FlussConfigUtilsTest {
     }
 
     @Test
+    void testValidateCoordinatorRequestDurations() {
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.REMOTE_DATA_DIR, "s3://bucket/path");
+
+        conf.set(ConfigOptions.COORDINATOR_CONTROL_REQUEST_RETRY_BACKOFF, Duration.ZERO);
+        assertThatThrownBy(() -> validateCoordinatorConfigs(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining(ConfigOptions.COORDINATOR_CONTROL_REQUEST_RETRY_BACKOFF.key())
+                .hasMessageContaining("must be greater than or equal 1 ms");
+
+        conf.set(ConfigOptions.COORDINATOR_CONTROL_REQUEST_RETRY_BACKOFF, Duration.ofMillis(1));
+        conf.set(ConfigOptions.COORDINATOR_CONTROL_REQUEST_TIMEOUT, Duration.ZERO);
+        assertThatThrownBy(() -> validateCoordinatorConfigs(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining(ConfigOptions.COORDINATOR_CONTROL_REQUEST_TIMEOUT.key())
+                .hasMessageContaining("must be greater than or equal 1 ms");
+
+        conf.set(ConfigOptions.COORDINATOR_CONTROL_REQUEST_TIMEOUT, Duration.ofMillis(1));
+        validateCoordinatorConfigs(conf);
+    }
+
+    @Test
+    void testValidateHistoricalLookupCacheConfigs() {
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.REMOTE_DATA_DIR, "s3://bucket/path");
+        conf.set(ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO, 0.0);
+
+        assertThatThrownBy(() -> validateCoordinatorConfigs(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining(
+                        ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO.key())
+                .hasMessageContaining("within (0.0, 1.0]");
+
+        conf.set(ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO, 1.01);
+        assertThatThrownBy(() -> validateCoordinatorConfigs(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining("within (0.0, 1.0]");
+
+        conf.set(ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO, 0.1);
+        conf.set(
+                ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUPER_CACHE_EXPIRE_AFTER_ACCESS,
+                Duration.ZERO);
+        assertThatThrownBy(() -> validateCoordinatorConfigs(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining(
+                        ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUPER_CACHE_EXPIRE_AFTER_ACCESS
+                                .key());
+    }
+
+    @Test
     void testValidateClientConfigs() {
         // valid defaults should pass
         Configuration validConf = new Configuration();

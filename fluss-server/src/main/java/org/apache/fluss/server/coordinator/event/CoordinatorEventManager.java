@@ -93,7 +93,8 @@ public final class CoordinatorEventManager implements EventManager {
         eventQueueTime =
                 coordinatorMetricGroup.histogram(
                         MetricNames.EVENT_QUEUE_TIME_MS,
-                        new DescriptiveStatisticsHistogram(WINDOW_SIZE));
+                        new DescriptiveStatisticsHistogram(
+                                WINDOW_SIZE, DescriptiveStatisticsHistogram.DEFAULT_MAX_AGE));
 
         // Register coordinator metrics
         coordinatorMetricGroup.gauge(MetricNames.ACTIVE_COORDINATOR_COUNT, () -> 1);

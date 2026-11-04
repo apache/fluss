@@ -12,18 +12,15 @@
 
 Current tested baselines:
 
-- `protoc`: `3.25.5`
 - `arrow-cpp`: `19.0.1`
 
 Notes:
 
-- CMake currently warns (does not fail) when local `protoc`/Arrow versions differ from the baselines.
-- `protoc` is required because Rust `prost-build` runs during the C++ build.
+- CMake currently warns (does not fail) when the local Arrow version differs from the baseline.
 
 ## Common Prerequisites
 
 - Rust toolchain (`cargo` in `PATH`, or set `CARGO=/path/to/cargo`)
-- `protoc` in `PATH` (required for `system` mode; `build` mode can auto-download via `bindings/cpp/scripts/ensure_protoc.sh`)
 - C++17 compiler
 - CMake 3.22+
 
@@ -56,14 +53,7 @@ cmake --build /tmp/fluss-cpp-cmake-system --target fluss_cpp -j
 
 Use this mode when Arrow C++ is not preinstalled and CMake should fetch/build it.
 
-### Configure (with auto-downloaded `protoc`)
-
-```bash
-PROTOC_BIN="$(bash bindings/cpp/scripts/ensure_protoc.sh --print-path)"
-export PATH="$(dirname "$PROTOC_BIN"):$PATH"
-```
-
-Then configure:
+### Configure
 
 ```bash
 cmake -S bindings/cpp -B /tmp/fluss-cpp-cmake-build \
@@ -74,7 +64,6 @@ Optional overrides:
 
 - `-DFLUSS_CPP_ARROW_VERSION=19.0.1`
 - `-DFLUSS_CPP_ARROW_SOURCE_URL=...` (internal mirror or pinned archive)
-- `-DFLUSS_CPP_PROTOBUF_VERSION=3.25.5` (baseline warning only)
 
 If your environment needs a proxy for CMake/FetchContent downloads, export standard proxy vars before configure/build:
 
@@ -98,8 +87,6 @@ This mode is slower on first build because it compiles Arrow C++ from source.
 ### Validate `system` mode
 
 ```bash
-PROTOC_BIN="$(bash bindings/cpp/scripts/ensure_protoc.sh --print-path)"
-export PATH="$(dirname "$PROTOC_BIN"):$PATH"
 cmake -S bindings/cpp -B /tmp/fluss-cpp-cmake-system \
   -DFLUSS_CPP_DEP_MODE=system \
   -DFLUSS_CPP_ARROW_SYSTEM_ROOT=/tmp/fluss-system-arrow-19.0.1
@@ -109,8 +96,6 @@ cmake --build /tmp/fluss-cpp-cmake-system --target fluss_cpp -j
 ### Validate `build` mode
 
 ```bash
-PROTOC_BIN="$(bash bindings/cpp/scripts/ensure_protoc.sh --print-path)"
-export PATH="$(dirname "$PROTOC_BIN"):$PATH"
 cmake -S bindings/cpp -B /tmp/fluss-cpp-cmake-build \
   -DFLUSS_CPP_DEP_MODE=build
 cmake --build /tmp/fluss-cpp-cmake-build --target fluss_cpp -j
@@ -120,9 +105,6 @@ cmake --build /tmp/fluss-cpp-cmake-build --target fluss_cpp -j
 
 - `cargo not found`
   - Install Rust toolchain or set `CARGO=/path/to/cargo`.
-- `protoc not found`
-  - Install `protoc` and ensure it is in `PATH`.
-  - For `build` mode, use `bindings/cpp/scripts/ensure_protoc.sh` and prepend the returned path to `PATH`.
 - `arrow/c/bridge.h` not found (build mode)
   - Reconfigure after updating to the latest `bindings/cpp/CMakeLists.txt`; build mode now adds Arrow source/build include dirs explicitly.
 - Long first build in `build` mode

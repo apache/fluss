@@ -1129,7 +1129,6 @@ dependencies = [
  "parking_lot",
  "parse-display 0.10.0",
  "prost",
- "prost-build",
  "rand 0.9.3",
  "scopeguard",
  "serde",
@@ -1302,6 +1301,13 @@ dependencies = [
  "memchr",
  "pin-project-lite",
  "slab",
+]
+
+[[package]]
+name = "gen"
+version = "0.1.0"
+dependencies = [
+ "prost-build",
 ]
 
 [[package]]

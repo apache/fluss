@@ -29,17 +29,16 @@ SPARK_LAKE_TEST_TAG="org.apache.fluss.spark.lake.SparkLakeTest"
 
 MODULES_FLINK1="\
 fluss-flink/fluss-flink-1.20,\
+fluss-flink/fluss-flink-1.19,\
 fluss-flink/fluss-flink-1.18\
 "
 
 MODULES_FLINK2="\
 fluss-flink,\
 fluss-flink/fluss-flink-common,\
-fluss-flink/fluss-flink-2.2\
+fluss-flink/fluss-flink-2.2,\
+fluss-flink/fluss-flink-2.3\
 "
-
-# Skip Flink 1.19 to reduce PR CI time; consider covering it in a daily CI run.
-MODULES_EXCLUDED_FROM_TEST="fluss-flink/fluss-flink-1.19"
 
 MODULES_COMMON_SPARK="\
 fluss-spark,\
@@ -58,7 +57,9 @@ fluss-spark/fluss-spark-3.4,\
 MODULES_LAKE="\
 fluss-lake,\
 fluss-lake/fluss-lake-paimon,\
+fluss-lake/fluss-lake-iceberg-common,\
 fluss-lake/fluss-lake-iceberg,\
+fluss-lake/fluss-lake-iceberg-1.12,\
 fluss-lake/fluss-lake-lance,\
 fluss-lake/fluss-lake-hudi
 "
@@ -72,10 +73,9 @@ function get_test_modules_for_stage() {
     local modules_lake=$MODULES_LAKE
     local negated_flink1=\!${MODULES_FLINK1//,/,\!}
     local negated_flink2=\!${MODULES_FLINK2//,/,\!}
-    local negated_excluded=\!${MODULES_EXCLUDED_FROM_TEST//,/,\!}
     local negated_spark=\!${MODULES_COMMON_SPARK//,/,\!}
     local negated_lake=\!${MODULES_LAKE//,/,\!}
-    local modules_core="$negated_flink1,$negated_flink2,$negated_excluded,$negated_spark,$negated_lake"
+    local modules_core="$negated_flink1,$negated_flink2,$negated_spark,$negated_lake"
 
     case ${stage} in
         (${STAGE_CORE})

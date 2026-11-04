@@ -18,7 +18,7 @@
 package org.apache.fluss.spark.lake
 
 import org.apache.fluss.config.{ConfigOptions, Configuration}
-import org.apache.fluss.metadata.DataLakeFormat
+import org.apache.fluss.metadata.{DataLakeFormat, TableBucketSnapshot}
 import org.apache.fluss.spark.SparkConnectorOptions.{BUCKET_NUMBER, PRIMARY_KEY}
 import org.apache.fluss.spark.read.FlussMetrics
 import org.apache.fluss.spark.read.FlussUpsertInputPartition
@@ -122,8 +122,9 @@ abstract class SparkLakePrimaryKeyTableReadTestBase extends SparkLakeTableReadTe
       val df = sql(s"SELECT * FROM $DEFAULT_DATABASE.t_fb_hybrid ORDER BY id")
       val partitions = lakeInputPartitions(df).map(_.asInstanceOf[FlussUpsertInputPartition])
       assert(
-        partitions.exists(_.snapshotId >= 0),
-        s"Expected at least one hybrid partition with snapshotId >= 0, got: ${partitions.mkString(", ")}")
+        partitions.exists(_.snapshotId != TableBucketSnapshot.NO_SNAPSHOT_ID),
+        s"Expected at least one hybrid partition with snapshotId >= 0, got: ${partitions.mkString(", ")}"
+      )
       checkAnswer(
         df,
         Row(1, "alice", 90) :: Row(2, "bob_updated", 100) ::
@@ -162,8 +163,9 @@ abstract class SparkLakePrimaryKeyTableReadTestBase extends SparkLakeTableReadTe
       val df = sql(s"SELECT * FROM $DEFAULT_DATABASE.t_fb_hybrid_partitioned ORDER BY id")
       val partitions = lakeInputPartitions(df).map(_.asInstanceOf[FlussUpsertInputPartition])
       assert(
-        partitions.exists(_.snapshotId >= 0),
-        s"Expected at least one hybrid partition with snapshotId >= 0, got: ${partitions.mkString(", ")}")
+        partitions.exists(_.snapshotId != TableBucketSnapshot.NO_SNAPSHOT_ID),
+        s"Expected at least one hybrid partition with snapshotId >= 0, got: ${partitions.mkString(", ")}"
+      )
       checkAnswer(
         df,
         Row(1, "alice", 90, "2026-01-01") ::

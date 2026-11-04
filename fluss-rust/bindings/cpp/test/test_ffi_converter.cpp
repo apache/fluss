@@ -51,6 +51,59 @@ fluss::ffi::FfiTypeNode Node(int32_t type_id, uint32_t child_count = 0, bool nul
 
 }  // namespace
 
+TEST(FfiConverterTest, KvBackpressureConfiguration) {
+    fluss::Configuration config;
+    EXPECT_EQ(config.writer_kv_backpressure_max_throttle_ms, 3000u);
+
+    config.writer_kv_backpressure_max_throttle_ms = 1500;
+    auto ffi_config = fluss::utils::to_ffi_config(config);
+    EXPECT_EQ(ffi_config.writer_kv_backpressure_max_throttle_ms, 1500u);
+    EXPECT_EQ(fluss::ErrorCode::STORAGE_BACKPRESSURE_EXCEPTION, 72);
+    EXPECT_TRUE(fluss::ErrorCode::IsRetriable(72));
+}
+
+TEST(FfiConverterTest, RemoteLogDirectoryConfiguration) {
+    fluss::Configuration config;
+    EXPECT_TRUE(config.scanner_io_tmp_dir.empty());
+    EXPECT_TRUE(fluss::utils::to_ffi_config(config).scanner_io_tmp_dir.empty());
+    config.scanner_io_tmp_dir = "/tmp/fluss logs";
+    auto ffi_config = fluss::utils::to_ffi_config(config);
+    EXPECT_EQ(std::string(ffi_config.scanner_io_tmp_dir), "/tmp/fluss logs");
+}
+
+TEST(FfiConverterTest, WriterRetryBackoffConfiguration) {
+    fluss::Configuration config;
+    EXPECT_EQ(config.writer_retry_backoff_ms, 100u);
+    EXPECT_EQ(config.writer_retry_max_backoff_ms, 1000u);
+
+    config.writer_retry_backoff_ms = 250;
+    config.writer_retry_max_backoff_ms = 5000;
+    auto ffi_config = fluss::utils::to_ffi_config(config);
+    EXPECT_EQ(ffi_config.writer_retry_backoff_ms, 250u);
+    EXPECT_EQ(ffi_config.writer_retry_max_backoff_ms, 5000u);
+}
+
+TEST(FfiConverterTest, LookupRetryBackoffConfiguration) {
+    fluss::Configuration config;
+    EXPECT_EQ(config.lookup_retry_backoff_ms, 100u);
+    EXPECT_EQ(config.lookup_retry_max_backoff_ms, 1000u);
+
+    config.lookup_retry_backoff_ms = 250;
+    config.lookup_retry_max_backoff_ms = 5000;
+    auto ffi_config = fluss::utils::to_ffi_config(config);
+    EXPECT_EQ(ffi_config.lookup_retry_backoff_ms, 250u);
+    EXPECT_EQ(ffi_config.lookup_retry_max_backoff_ms, 5000u);
+}
+
+TEST(FfiConverterTest, WriterDynamicCreatePartitionConfiguration) {
+    fluss::Configuration config;
+    EXPECT_TRUE(config.writer_dynamic_create_partition_enabled);
+    EXPECT_TRUE(fluss::utils::to_ffi_config(config).writer_dynamic_create_partition_enabled);
+
+    config.writer_dynamic_create_partition_enabled = false;
+    EXPECT_FALSE(fluss::utils::to_ffi_config(config).writer_dynamic_create_partition_enabled);
+}
+
 // --- DataType value semantics ---
 
 TEST(DataTypeTest, DefaultNullable) { EXPECT_TRUE(DataType::Int().nullable()); }
@@ -69,6 +122,33 @@ TEST(DataTypeTest, NotNullPreservesPrecisionScale) {
 }
 
 // --- Node-arena round trips ---
+
+TEST(FfiConverterTest, SchemaAutoIncrementColumnRoundTrip) {
+    auto schema = fluss::Schema::NewBuilder()
+                      .AddColumn("id", DataType::Int())
+                      .AddColumn("seq", DataType::BigInt())
+                      .SetPrimaryKeys({"id"})
+                      .SetAutoIncrementColumn("seq")
+                      .Build();
+    ASSERT_EQ(schema.auto_increment_columns.size(), 1u);
+    EXPECT_EQ(schema.auto_increment_columns[0], "seq");
+
+    auto back = fluss::utils::from_ffi_schema(fluss::utils::to_ffi_schema(schema));
+    ASSERT_EQ(back.auto_increment_columns.size(), 1u);
+    EXPECT_EQ(back.auto_increment_columns[0], "seq");
+    EXPECT_EQ(back.primary_keys, schema.primary_keys);
+}
+
+TEST(FfiConverterTest, SchemaWithoutAutoIncrementColumnRoundTrip) {
+    auto schema = fluss::Schema::NewBuilder()
+                      .AddColumn("id", DataType::Int())
+                      .SetPrimaryKeys({"id"})
+                      .Build();
+    EXPECT_TRUE(schema.auto_increment_columns.empty());
+
+    auto back = fluss::utils::from_ffi_schema(fluss::utils::to_ffi_schema(schema));
+    EXPECT_TRUE(back.auto_increment_columns.empty());
+}
 
 TEST(FfiConverterTest, ScalarRoundTrip) {
     Column col{"id", DataType::Int(), "primary id"};

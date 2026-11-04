@@ -68,6 +68,8 @@ impl LookupClient {
         let batch_timeout_ms = config.lookup_batch_timeout_ms;
         let max_inflight = config.lookup_max_inflight_requests;
         let max_retries = config.lookup_max_retries;
+        let retry_backoff_ms = config.lookup_retry_backoff_ms;
+        let retry_max_backoff_ms = config.lookup_retry_max_backoff_ms;
 
         // Create queue and channels
         let cluster_rx = metadata.subscribe_cluster_changes();
@@ -84,6 +86,8 @@ impl LookupClient {
             re_enqueue_tx,
             max_inflight,
             max_retries,
+            retry_backoff_ms,
+            retry_max_backoff_ms,
             shutdown_rx,
         );
 
@@ -110,6 +114,7 @@ impl LookupClient {
     /// # Arguments
     /// * `table_path` - The table path
     /// * `table_bucket` - The table bucket
+    /// * `routing_bucket_count` - The bucket count `table_bucket` was computed with
     /// * `key_bytes` - The encoded primary key bytes
     ///
     /// # Returns
@@ -120,6 +125,7 @@ impl LookupClient {
         &self,
         table_path: TablePath,
         table_bucket: TableBucket,
+        routing_bucket_count: i32,
         key_bytes: Bytes,
     ) -> Result<Option<Vec<u8>>> {
         if self.closed.load(Ordering::Acquire) {
@@ -133,6 +139,7 @@ impl LookupClient {
         let query = QueuedLookup::Primary(PrimaryLookupQuery::new(
             table_path,
             table_bucket,
+            routing_bucket_count,
             key_bytes,
             result_tx,
         ));
@@ -155,6 +162,7 @@ impl LookupClient {
     /// # Arguments
     /// * `table_path` - The table path
     /// * `table_bucket` - The table bucket computed from the bucket key part of the prefix
+    /// * `routing_bucket_count` - The bucket count `table_bucket` was computed with
     /// * `key_bytes` - The encoded prefix key bytes
     ///
     /// # Returns
@@ -164,6 +172,7 @@ impl LookupClient {
         &self,
         table_path: TablePath,
         table_bucket: TableBucket,
+        routing_bucket_count: i32,
         key_bytes: Bytes,
     ) -> Result<Vec<Vec<u8>>> {
         if self.closed.load(Ordering::Acquire) {
@@ -177,6 +186,7 @@ impl LookupClient {
         let query = QueuedLookup::Prefix(PrefixLookupQuery::new(
             table_path,
             table_bucket,
+            routing_bucket_count,
             key_bytes,
             result_tx,
         ));

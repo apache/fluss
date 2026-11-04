@@ -746,7 +746,7 @@ class CompletedSnapshotStoreTest {
                 tableBucket,
                 id,
                 new FsPath(tempDir.toString(), "test_snapshot"),
-                new KvSnapshotHandle(Collections.emptyList(), Collections.emptyList(), 0));
+                KvSnapshotHandle.create(Collections.emptyList(), Collections.emptyList(), 0));
     }
 
     private CompletedSnapshot getSnapshotWithSharedFiles(
@@ -756,7 +756,7 @@ class CompletedSnapshotStoreTest {
                 tableBucket,
                 id,
                 new FsPath(tempDir.toString(), "snapshot_" + id),
-                new KvSnapshotHandle(sharedFiles, Collections.emptyList(), 0));
+                KvSnapshotHandle.create(sharedFiles, Collections.emptyList(), 0));
     }
 
     private void testSnapshotRetention(
@@ -804,7 +804,7 @@ class CompletedSnapshotStoreTest {
                             new TableBucket(1, 1),
                             i,
                             new FsPath("test_snapshot"),
-                            new KvSnapshotHandle(
+                            KvSnapshotHandle.create(
                                     Collections.emptyList(), Collections.emptyList(), -1));
             final CompletedSnapshotHandle snapshotStateHandle =
                     new TestingCompletedSnapshotHandle(

@@ -47,11 +47,20 @@ public class FlussConfigUtils {
         CLIENT_OPTIONS = extractConfigOptions("client.");
         ALTERABLE_TABLE_OPTIONS =
                 Arrays.asList(
+                        ConfigOptions.TABLE_KAFKA_ENABLED.key(),
+                        ConfigOptions.TABLE_KAFKA_CONVERT_VALUE_TYPE.key(),
+                        ConfigOptions.TABLE_KAFKA_CONVERT_VALUE_LAYOUT.key(),
+                        ConfigOptions.TABLE_KAFKA_CONVERT_KEY_TYPE.key(),
                         ConfigOptions.TABLE_DATALAKE_ENABLED.key(),
                         ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED.key(),
+                        ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_MODE.key(),
+                        ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key(),
+                        ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key(),
                         ConfigOptions.TABLE_DATALAKE_FRESHNESS.key(),
                         ConfigOptions.TABLE_DATALAKE_AUTO_COMPACTION.key(),
+                        ConfigOptions.TABLE_LOG_TTL.key(),
                         ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS.key(),
+                        ConfigOptions.TABLE_LOG_LOCAL_TTL.key(),
                         ConfigOptions.TABLE_AUTO_PARTITION_ENABLED.key(),
                         ConfigOptions.TABLE_AUTO_PARTITION_NUM_RETENTION.key(),
                         ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE.key(),
@@ -120,6 +129,8 @@ public class FlussConfigUtils {
 
     public static void validateCoordinatorConfigs(Configuration conf) {
         validateServerConfigs(conf);
+        validMinDuration(conf, ConfigOptions.COORDINATOR_CONTROL_REQUEST_RETRY_BACKOFF, 1);
+        validMinDuration(conf, ConfigOptions.COORDINATOR_CONTROL_REQUEST_TIMEOUT, 1);
     }
 
     public static void validateTabletConfigs(Configuration conf) {
@@ -222,12 +233,27 @@ public class FlussConfigUtils {
         validMinValue(conf, ConfigOptions.SERVER_IO_POOL_SIZE, 1);
         validMinValue(conf, ConfigOptions.BACKGROUND_THREADS, 1);
         validMinDuration(conf, ConfigOptions.LOG_RETENTION_CHECK_INTERVAL, 1);
+        validMinDuration(
+                conf,
+                ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUPER_CACHE_EXPIRE_AFTER_ACCESS,
+                1);
+        validateHistoricalLookupCacheRatio(conf);
 
         if (conf.get(ConfigOptions.LOG_SEGMENT_FILE_SIZE).getBytes() > Integer.MAX_VALUE) {
             throw new IllegalConfigurationException(
                     String.format(
                             "Invalid configuration for %s, it must be less than or equal %d bytes.",
                             ConfigOptions.LOG_SEGMENT_FILE_SIZE.key(), Integer.MAX_VALUE));
+        }
+    }
+
+    private static void validateHistoricalLookupCacheRatio(Configuration conf) {
+        double historicalLookupCacheMaxRatio =
+                conf.get(ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO);
+        if (!(historicalLookupCacheMaxRatio > 0.0 && historicalLookupCacheMaxRatio <= 1.0)) {
+            throw new IllegalConfigurationException(
+                    "Invalid configuration for %s, it must be within (0.0, 1.0].",
+                    ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO.key());
         }
     }
 

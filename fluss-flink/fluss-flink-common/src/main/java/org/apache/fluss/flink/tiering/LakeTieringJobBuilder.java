@@ -34,8 +34,10 @@ import org.apache.flink.streaming.api.datastream.DataStreamSource;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.sink.v2.DiscardingSink;
 
+import static org.apache.fluss.config.ConfigOptions.CLIENT_SCANNER_LOG_READ_PREFERENCE;
 import static org.apache.fluss.flink.tiering.source.TieringSource.TIERING_SOURCE_TRANSFORMATION_UID;
 import static org.apache.fluss.flink.tiering.source.TieringSourceOptions.POLL_TIERING_TABLE_INTERVAL;
+import static org.apache.fluss.rpc.protocol.FetchLogReadPreference.REMOTE_FIRST;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** The builder to build Flink lake tiering job. */
@@ -81,6 +83,12 @@ public class LakeTieringJobBuilder {
         LakeStorage lakeStorage = checkNotNull(lakeStoragePlugin).createLakeStorage(dataLakeConfig);
 
         LakeTieringFactory lakeTieringFactory = lakeStorage.createLakeTieringFactory();
+
+        // tiering prefers remote-first fetch to offload reads from tablet servers,
+        // unless users explicitly configure the read preference
+        if (!flussConfig.contains(CLIENT_SCANNER_LOG_READ_PREFERENCE)) {
+            flussConfig.set(CLIENT_SCANNER_LOG_READ_PREFERENCE, REMOTE_FIRST);
+        }
 
         // build tiering source
         TieringSource.Builder<?> tieringSourceBuilder =

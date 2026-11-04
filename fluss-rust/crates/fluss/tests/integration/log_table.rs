@@ -23,15 +23,27 @@ mod table_test {
         create_table, dt_array_int, dt_map_string_int, dt_row_seq_label, extract_ids_from_batches,
         get_shared_cluster, make_int_array, make_string_array, map_dt_basics_columns,
         poll_until_count, poll_until_nonempty, row_dt_basics_columns, scalar_dt_columns,
-        wait_for_partitions_ready, wait_for_table_buckets_ready, wait_for_table_ready,
+        server_predates_1_0, wait_for_partitions_ready, wait_for_table_buckets_ready,
+        wait_for_table_ready,
     };
-    use arrow::array::record_batch;
-    use fluss::client::{EARLIEST_OFFSET, FlussTable, TableScan};
+    use arrow::array::{
+        Array, ArrayRef, Int32Array, Int64Array, ListArray, MapArray, RecordBatch, StringArray,
+        StructArray, record_batch,
+    };
+    use arrow::buffer::{NullBuffer, OffsetBuffer};
+    use arrow::datatypes::{DataType as ArrowDataType, Field, Schema as ArrowSchema};
+    use fluss::client::{
+        AppendWriter, EARLIEST_OFFSET, FlussAdmin, FlussConnection, FlussTable,
+        RecordBatchLogScanner, TableScan,
+    };
+    use fluss::config::Config;
+    use fluss::error::FlussError;
     use fluss::metadata::{
-        AddColumn, AlterTableChanges, ColumnPositionType, DataField, DataTypes, JsonSerde, Schema,
-        TableDescriptor, TablePath,
+        AddColumn, AlterTableChanges, ColumnPositionType, DataField, DataTypes, JsonSerde,
+        PartitionSpec, Schema, TableDescriptor, TablePath,
     };
-    use fluss::record::ScanRecord;
+    use fluss::predicate::{Literal, Predicate, col};
+    use fluss::record::{ScanBatch, ScanRecord};
     use fluss::row::binary_array::FlussArrayWriter;
     use fluss::row::binary_map::FlussMapWriter;
     use fluss::row::{
@@ -40,7 +52,16 @@ mod table_test {
     };
     use fluss::rpc::message::OffsetSpec;
     use std::collections::HashMap;
+    use std::sync::Arc;
     use std::time::Duration;
+
+    fn reject_null(err: impl std::fmt::Display) {
+        let text = err.to_string();
+        assert!(
+            text.contains("declared as non-nullable but contains null values"),
+            "unexpected error: {text}"
+        );
+    }
 
     #[tokio::test]
     async fn append_record_batch_and_scan() {
@@ -56,6 +77,7 @@ mod table_test {
                 Schema::builder()
                     .column("c1", DataTypes::int())
                     .column("c2", DataTypes::string())
+                    .column("c3", DataTypes::bigint().as_non_nullable())
                     .build()
                     .expect("Failed to build schema"),
             )
@@ -76,17 +98,78 @@ mod table_test {
             .create_writer()
             .expect("Failed to create writer");
 
-        let batch1 =
-            record_batch!(("c1", Int32, [1, 2, 3]), ("c2", Utf8, ["a1", "a2", "a3"])).unwrap();
+        {
+            // Distinct c1 values hash across buckets; none may be enqueued.
+            let poison_schema = Arc::new(ArrowSchema::new(vec![
+                Field::new("c1", ArrowDataType::Int32, true),
+                Field::new("c2", ArrowDataType::Utf8, true),
+                Field::new("c3", ArrowDataType::Int64, true),
+            ]));
+            let poison = RecordBatch::try_new(
+                poison_schema,
+                vec![
+                    Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6])),
+                    Arc::new(StringArray::from(vec!["a", "b", "c", "d", "e", "f"])),
+                    Arc::new(Int64Array::from(vec![
+                        Some(10),
+                        Some(20),
+                        None,
+                        Some(40),
+                        Some(50),
+                        Some(60),
+                    ])),
+                ],
+            )
+            .expect("poison batch");
+            let err = append_writer
+                .append_arrow_batch(poison)
+                .expect_err("null in NOT NULL column must be rejected before the bucket split");
+            reject_null(err);
+
+            // Offsets only move on flush.
+            append_writer
+                .flush()
+                .await
+                .expect("flush after rejected poison must not send rows");
+            wait_for_table_ready(&admin, &table_path).await;
+            let buckets: Vec<i32> = (0..table.get_table_info().get_num_buckets()).collect();
+            let latest = admin
+                .list_offsets(&table_path, &buckets, OffsetSpec::Latest)
+                .await
+                .expect("list_offsets after poison reject");
+            assert!(
+                latest.values().all(|&offset| offset == 0),
+                "poison batch must not enqueue any bucket, latest={latest:?}"
+            );
+        }
+
+        let batch1 = record_batch!(
+            ("c1", Int32, [1, 2, 3]),
+            ("c2", Utf8, ["a1", "a2", "a3"]),
+            ("c3", Int64, [10, 20, 30])
+        )
+        .unwrap();
         append_writer
             .append_arrow_batch(batch1)
-            .expect("Failed to append batch");
+            .expect("Failed to append batch with mixed nullability");
 
-        let batch2 =
-            record_batch!(("c1", Int32, [4, 5, 6]), ("c2", Utf8, ["a4", "a5", "a6"])).unwrap();
+        let batch2_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("c1", ArrowDataType::Int32, true),
+            Field::new("c2", ArrowDataType::Utf8, true),
+            Field::new("c3", ArrowDataType::Int64, true),
+        ]));
+        let batch2 = RecordBatch::try_new(
+            batch2_schema,
+            vec![
+                Arc::new(Int32Array::from(vec![4, 5, 6])),
+                Arc::new(StringArray::from(vec!["a4", "a5", "a6"])),
+                Arc::new(Int64Array::from(vec![40_i64, 50_i64, 60_i64])),
+            ],
+        )
+        .expect("nullable-metadata batch without nulls");
         append_writer
             .append_arrow_batch(batch2)
-            .expect("Failed to append batch");
+            .expect("Failed to append nullable-metadata batch without null values");
 
         // Flush to ensure all writes are acknowledged
         append_writer.flush().await.expect("Failed to flush");
@@ -124,6 +207,7 @@ mod table_test {
                         (
                             row.get_int(0).unwrap(),
                             row.get_string(1).unwrap().to_string(),
+                            row.get_long(2).unwrap(),
                         )
                     })
                     .collect()
@@ -135,13 +219,13 @@ mod table_test {
 
         // Sort and verify record contents
         collected.sort();
-        let expected: Vec<(i32, String)> = vec![
-            (1, "a1".to_string()),
-            (2, "a2".to_string()),
-            (3, "a3".to_string()),
-            (4, "a4".to_string()),
-            (5, "a5".to_string()),
-            (6, "a6".to_string()),
+        let expected: Vec<(i32, String, i64)> = vec![
+            (1, "a1".to_string(), 10),
+            (2, "a2".to_string(), 20),
+            (3, "a3".to_string(), 30),
+            (4, "a4".to_string(), 40),
+            (5, "a5".to_string(), 50),
+            (6, "a6".to_string(), 60),
         ];
         assert_eq!(collected, expected);
 
@@ -156,6 +240,374 @@ mod table_test {
             log_scanner.unsubscribe_partition(0, 0).await.is_err(),
             "unsubscribe_partition should fail on a non-partitioned table"
         );
+    }
+
+    #[tokio::test]
+    async fn append_arrow_batch_nested_not_null_columns() {
+        fn nested_batch(tags: ArrayRef, attrs: ArrayRef, nested: ArrayRef) -> RecordBatch {
+            RecordBatch::try_new(
+                Arc::new(ArrowSchema::new(vec![
+                    Field::new("tags", tags.data_type().clone(), true),
+                    Field::new("attrs", attrs.data_type().clone(), true),
+                    Field::new("nested", nested.data_type().clone(), true),
+                ])),
+                vec![tags, attrs, nested],
+            )
+            .expect("nested batch")
+        }
+
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("Failed to get admin");
+
+        let table_path = TablePath::new("fluss", "test_append_arrow_batch_nested_not_null");
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("tags", DataTypes::array(DataTypes::int()).as_non_nullable())
+                    .column(
+                        "attrs",
+                        DataTypes::map(DataTypes::string(), DataTypes::int()).as_non_nullable(),
+                    )
+                    .column(
+                        "nested",
+                        DataTypes::row(vec![
+                            DataField::new("seq", DataTypes::int(), None),
+                            DataField::new("label", DataTypes::string(), None),
+                        ])
+                        .as_non_nullable(),
+                    )
+                    .build()
+                    .expect("schema"),
+            )
+            .build()
+            .expect("table descriptor");
+        create_table(&admin, &table_path, &table_descriptor).await;
+
+        let table = connection.get_table(&table_path).await.expect("table");
+        let writer = table
+            .new_append()
+            .expect("append")
+            .create_writer()
+            .expect("writer");
+
+        let item_field = Arc::new(Field::new("item", ArrowDataType::Int32, true));
+        let ok_list: ArrayRef = Arc::new(ListArray::new(
+            Arc::clone(&item_field),
+            OffsetBuffer::new(vec![0_i32, 2].into()),
+            Arc::new(Int32Array::from(vec![10, 20])),
+            None,
+        ));
+        let null_list: ArrayRef = Arc::new(ListArray::new(
+            item_field,
+            OffsetBuffer::new(vec![0_i32, 0].into()),
+            Arc::new(Int32Array::from(Vec::<i32>::new())),
+            Some(NullBuffer::from(vec![false])),
+        ));
+
+        let key_field = Arc::new(Field::new("key", ArrowDataType::Utf8, false));
+        let value_field = Arc::new(Field::new("value", ArrowDataType::Int32, true));
+        let ok_entries = StructArray::from(vec![
+            (
+                Arc::clone(&key_field),
+                Arc::new(StringArray::from(vec!["x", "y"])) as ArrayRef,
+            ),
+            (
+                Arc::clone(&value_field),
+                Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef,
+            ),
+        ]);
+        let ok_map: ArrayRef = Arc::new(MapArray::new(
+            Arc::new(Field::new("entries", ok_entries.data_type().clone(), false)),
+            OffsetBuffer::new(vec![0_i32, 2].into()),
+            ok_entries,
+            None,
+            false,
+        ));
+        let empty_entries = StructArray::from(vec![
+            (
+                key_field,
+                Arc::new(StringArray::from(Vec::<&str>::new())) as ArrayRef,
+            ),
+            (
+                value_field,
+                Arc::new(Int32Array::from(Vec::<i32>::new())) as ArrayRef,
+            ),
+        ]);
+        let null_map: ArrayRef = Arc::new(MapArray::new(
+            Arc::new(Field::new(
+                "entries",
+                empty_entries.data_type().clone(),
+                false,
+            )),
+            OffsetBuffer::new(vec![0_i32, 0].into()),
+            empty_entries,
+            Some(NullBuffer::from(vec![false])),
+            false,
+        ));
+
+        let row_fields = arrow::datatypes::Fields::from(vec![
+            Field::new("seq", ArrowDataType::Int32, true),
+            Field::new("label", ArrowDataType::Utf8, true),
+        ]);
+        let ok_struct: ArrayRef = Arc::new(StructArray::new(
+            row_fields.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![42])) as ArrayRef,
+                Arc::new(StringArray::from(vec!["hello"])) as ArrayRef,
+            ],
+            None,
+        ));
+        let null_struct: ArrayRef = Arc::new(StructArray::new(
+            row_fields,
+            vec![
+                Arc::new(Int32Array::from(vec![None])) as ArrayRef,
+                Arc::new(StringArray::from(vec![None::<&str>])) as ArrayRef,
+            ],
+            Some(NullBuffer::from(vec![false])),
+        ));
+
+        reject_null(
+            writer
+                .append_arrow_batch(nested_batch(
+                    Arc::clone(&null_list),
+                    Arc::clone(&ok_map),
+                    Arc::clone(&ok_struct),
+                ))
+                .expect_err("null ARRAY value in NOT NULL column"),
+        );
+        reject_null(
+            writer
+                .append_arrow_batch(nested_batch(
+                    Arc::clone(&ok_list),
+                    Arc::clone(&null_map),
+                    Arc::clone(&ok_struct),
+                ))
+                .expect_err("null MAP value in NOT NULL column"),
+        );
+        reject_null(
+            writer
+                .append_arrow_batch(nested_batch(
+                    Arc::clone(&ok_list),
+                    Arc::clone(&ok_map),
+                    Arc::clone(&null_struct),
+                ))
+                .expect_err("null ROW value in NOT NULL column"),
+        );
+
+        writer
+            .append_arrow_batch(nested_batch(ok_list, ok_map, ok_struct))
+            .expect("populated nested values must be accepted");
+        writer.flush().await.expect("flush");
+
+        let records = scan_table(&table, |scan| scan).await;
+        assert_eq!(records.len(), 1);
+        let row = records[0].row();
+
+        let tags = row.get_array(0).expect("tags");
+        assert_eq!(tags.size(), 2);
+        assert_eq!(tags.get_int(0).unwrap(), 10);
+        assert_eq!(tags.get_int(1).unwrap(), 20);
+
+        let attrs = row.get_map(1).expect("attrs");
+        assert_eq!(attrs.size(), 2);
+        assert_eq!(attrs.key_array().get_string(0).unwrap(), "x");
+        assert_eq!(attrs.value_array().get_int(0).unwrap(), 1);
+        assert_eq!(attrs.key_array().get_string(1).unwrap(), "y");
+        assert_eq!(attrs.value_array().get_int(1).unwrap(), 2);
+
+        let nested = row.get_row(2).expect("nested");
+        assert_eq!(nested.get_int(0).unwrap(), 42);
+        assert_eq!(nested.get_string(1).unwrap(), "hello");
+    }
+
+    #[tokio::test]
+    async fn append_arrow_batch_rejects_nulls_inside_not_null_nested_fields() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("Failed to get admin");
+        let table_path = TablePath::new("fluss", "test_append_arrow_batch_not_null_inside_nested");
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column(
+                        "tags",
+                        DataTypes::array(DataTypes::int().as_non_nullable()).as_non_nullable(),
+                    )
+                    .column(
+                        "nested",
+                        DataTypes::row(vec![
+                            DataField::new("seq", DataTypes::int().as_non_nullable(), None),
+                            DataField::new("label", DataTypes::string(), None),
+                        ])
+                        .as_non_nullable(),
+                    )
+                    .build()
+                    .expect("schema"),
+            )
+            .build()
+            .expect("table descriptor");
+        create_table(&admin, &table_path, &table_descriptor).await;
+
+        let table = connection.get_table(&table_path).await.expect("table");
+        let writer = table
+            .new_append()
+            .expect("append")
+            .create_writer()
+            .expect("writer");
+
+        let item_field = Arc::new(Field::new("item", ArrowDataType::Int32, true));
+        let ok_list: ArrayRef = Arc::new(ListArray::new(
+            Arc::clone(&item_field),
+            OffsetBuffer::new(vec![0_i32, 3].into()),
+            Arc::new(Int32Array::from(vec![1, 2, 3])),
+            None,
+        ));
+        let poison_list: ArrayRef = Arc::new(ListArray::new(
+            item_field,
+            OffsetBuffer::new(vec![0_i32, 3].into()),
+            Arc::new(Int32Array::from(vec![Some(1), None, Some(3)])),
+            None,
+        ));
+
+        let row_fields = arrow::datatypes::Fields::from(vec![
+            Field::new("seq", ArrowDataType::Int32, true),
+            Field::new("label", ArrowDataType::Utf8, true),
+        ]);
+        let ok_struct: ArrayRef = Arc::new(StructArray::new(
+            row_fields.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![42])) as ArrayRef,
+                Arc::new(StringArray::from(vec!["hello"])) as ArrayRef,
+            ],
+            None,
+        ));
+        let poison_struct: ArrayRef = Arc::new(StructArray::new(
+            row_fields,
+            vec![
+                Arc::new(Int32Array::from(vec![None])) as ArrayRef,
+                Arc::new(StringArray::from(vec![Some("hello")])) as ArrayRef,
+            ],
+            None,
+        ));
+
+        fn batch(tags: ArrayRef, nested: ArrayRef) -> RecordBatch {
+            RecordBatch::try_new(
+                Arc::new(ArrowSchema::new(vec![
+                    Field::new("tags", tags.data_type().clone(), true),
+                    Field::new("nested", nested.data_type().clone(), true),
+                ])),
+                vec![tags, nested],
+            )
+            .expect("batch")
+        }
+
+        reject_null(
+            writer
+                .append_arrow_batch(batch(Arc::clone(&poison_list), Arc::clone(&ok_struct)))
+                .expect_err("null ARRAY element in ARRAY<INT NOT NULL>"),
+        );
+        reject_null(
+            writer
+                .append_arrow_batch(batch(Arc::clone(&ok_list), Arc::clone(&poison_struct)))
+                .expect_err("null ROW field in ROW<seq INT NOT NULL>"),
+        );
+
+        writer
+            .append_arrow_batch(batch(ok_list, ok_struct))
+            .expect("null-free nested values must be accepted");
+        writer.flush().await.expect("flush");
+    }
+
+    #[tokio::test]
+    async fn append_and_scan_with_iceberg_format() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("Failed to get admin");
+        let table_path = TablePath::new("fluss", "test_append_with_iceberg_format");
+
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .column("name", DataTypes::string())
+                    .build()
+                    .expect("Failed to build schema"),
+            )
+            .distributed_by(Some(3), vec!["id".to_string()])
+            .property("table.datalake.format", "iceberg")
+            .build()
+            .expect("Failed to build table");
+
+        create_table(&admin, &table_path, &table_descriptor).await;
+
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+        let append_writer = table
+            .new_append()
+            .expect("Failed to create append")
+            .create_writer()
+            .expect("Failed to create Iceberg writer");
+
+        for (id, name) in [(34, "Frost"), (35, "Ember"), (36, "Gale")] {
+            let mut row = GenericRow::new(2);
+            row.set_field(0, id);
+            row.set_field(1, name);
+            append_writer
+                .append(&row)
+                .expect("Failed to append Iceberg row");
+        }
+        append_writer.flush().await.expect("Failed to flush");
+
+        let log_scanner = table
+            .new_scan()
+            .create_log_scanner()
+            .expect("Failed to create log scanner");
+        for bucket_id in 0..table.get_table_info().get_num_buckets() {
+            log_scanner
+                .subscribe(bucket_id, EARLIEST_OFFSET)
+                .await
+                .expect("Failed to subscribe with EARLIEST_OFFSET");
+        }
+
+        let mut collected = poll_until_count(
+            3,
+            DEFAULT_POLL_TIMEOUT,
+            Duration::from_millis(500),
+            async |d| {
+                log_scanner
+                    .poll(d)
+                    .await
+                    .expect("Failed to poll records")
+                    .into_iter()
+                    .map(|record| {
+                        let row = record.row();
+                        (
+                            row.get_int(0).unwrap(),
+                            row.get_string(1).unwrap().to_string(),
+                        )
+                    })
+                    .collect()
+            },
+        )
+        .await;
+
+        collected.sort();
+        assert_eq!(
+            collected,
+            vec![
+                (34, "Frost".to_string()),
+                (35, "Ember".to_string()),
+                (36, "Gale".to_string()),
+            ]
+        );
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
     }
 
     #[tokio::test]
@@ -439,6 +891,644 @@ mod table_test {
         );
     }
 
+    /// Creates a single-bucket log table with statistics enabled and tiered
+    /// segments kept local, since remotely read segments bypass server-side
+    /// filtering.
+    async fn create_stats_log_table(admin: &FlussAdmin, table_path: &TablePath) {
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .column("name", DataTypes::string())
+                    .build()
+                    .expect("Failed to build schema"),
+            )
+            .property("table.statistics.columns", "*")
+            .property("table.log.tiered.local-segments", "100")
+            .build()
+            .expect("Failed to build table");
+        create_table(admin, table_path, &table_descriptor).await;
+        wait_for_table_ready(admin, table_path).await;
+    }
+
+    async fn poll_ids_and_names(
+        log_scanner: &fluss::client::LogScanner,
+        expected_count: usize,
+    ) -> Vec<(i32, String)> {
+        let mut collected = poll_until_count(
+            expected_count,
+            DEFAULT_POLL_TIMEOUT,
+            Duration::from_millis(500),
+            async |d| {
+                log_scanner
+                    .poll(d)
+                    .await
+                    .expect("Failed to poll records")
+                    .into_iter()
+                    .map(|rec| {
+                        let row = rec.row();
+                        (
+                            row.get_int(0).unwrap(),
+                            row.get_string(1).unwrap().to_string(),
+                        )
+                    })
+                    .collect()
+            },
+        )
+        .await;
+        collected.sort();
+        collected
+    }
+
+    /// Batches whose statistics cannot match the predicate are pruned from the
+    /// fetch, batches that can match are returned whole.
+    #[tokio::test]
+    async fn filter_pushdown_prunes_non_matching_batches() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("Failed to get admin");
+
+        let table_path = TablePath::new("fluss", "test_filter_pushdown_prune");
+        create_stats_log_table(&admin, &table_path).await;
+
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+        let writer = table
+            .new_append()
+            .expect("Failed to create append")
+            .create_writer()
+            .expect("Failed to create writer");
+
+        // Three wire batches with disjoint id ranges, so min/max pruning is
+        // deterministic: a batch either fully matches the filter or cannot match.
+        writer
+            .append_arrow_batch(
+                record_batch!(
+                    ("id", Int32, [1, 2, 3, 4, 5]),
+                    ("name", Utf8, ["v1", "v2", "v3", "v4", "v5"])
+                )
+                .unwrap(),
+            )
+            .expect("Failed to append batch 1");
+        writer
+            .append_arrow_batch(
+                record_batch!(
+                    ("id", Int32, [100, 101, 102, 103, 104]),
+                    ("name", Utf8, ["v100", "v101", "v102", "v103", "v104"])
+                )
+                .unwrap(),
+            )
+            .expect("Failed to append batch 2");
+        writer
+            .append_arrow_batch(
+                record_batch!(
+                    ("id", Int32, [200, 201, 202, 203, 204]),
+                    ("name", Utf8, ["v200", "v201", "v202", "v203", "v204"])
+                )
+                .unwrap(),
+            )
+            .expect("Failed to append batch 3");
+        writer.flush().await.expect("Failed to flush");
+
+        let log_scanner = table
+            .new_scan()
+            .filter(col("id").ge(200))
+            .expect("Failed to set filter")
+            .create_log_scanner()
+            .expect("Failed to create log scanner");
+        log_scanner
+            .subscribe(0, EARLIEST_OFFSET)
+            .await
+            .expect("Failed to subscribe");
+
+        let collected = poll_ids_and_names(&log_scanner, 5).await;
+        let expected: Vec<(i32, String)> = (200..=204).map(|id| (id, format!("v{id}"))).collect();
+        assert_eq!(
+            collected, expected,
+            "Only the batch overlapping the predicate should be fetched; the two \
+             disjoint batches must be pruned server-side"
+        );
+
+        // The filter resolves against the full row type, so filtering on a column
+        // excluded from the projection must still prune correctly.
+        let projected_scanner = table
+            .new_scan()
+            .project_by_name(&["name"])
+            .expect("Failed to project")
+            .filter(col("id").ge(200))
+            .expect("Failed to set filter")
+            .create_log_scanner()
+            .expect("Failed to create projected log scanner");
+        projected_scanner
+            .subscribe(0, EARLIEST_OFFSET)
+            .await
+            .expect("Failed to subscribe");
+
+        let mut names = poll_until_count(
+            5,
+            DEFAULT_POLL_TIMEOUT,
+            Duration::from_millis(500),
+            async |d| {
+                projected_scanner
+                    .poll(d)
+                    .await
+                    .expect("Failed to poll records")
+                    .into_iter()
+                    .map(|rec| rec.row().get_string(0).unwrap().to_string())
+                    .collect()
+            },
+        )
+        .await;
+        names.sort();
+        assert_eq!(
+            names,
+            vec!["v200", "v201", "v202", "v203", "v204"],
+            "Filtering on a non-projected column should still prune correctly"
+        );
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
+    }
+
+    /// Pruning is batch-granular, so a batch whose statistics overlap the
+    /// predicate is returned whole, non-matching rows included.
+    #[tokio::test]
+    async fn filter_with_overlapping_statistics_returns_whole_batch() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("Failed to get admin");
+
+        let table_path = TablePath::new("fluss", "test_filter_overlapping_statistics");
+        create_stats_log_table(&admin, &table_path).await;
+
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+        let writer = table
+            .new_append()
+            .expect("Failed to create append")
+            .create_writer()
+            .expect("Failed to create writer");
+
+        writer
+            .append_arrow_batch(
+                record_batch!(
+                    ("id", Int32, [1, 2, 3, 4, 5]),
+                    ("name", Utf8, ["low1", "low2", "low3", "low4", "low5"])
+                )
+                .unwrap(),
+            )
+            .expect("Failed to append non-matching batch");
+        writer
+            .append_arrow_batch(
+                record_batch!(
+                    ("id", Int32, [1, 6, 3, 8, 2]),
+                    ("name", Utf8, ["m1", "m6", "m3", "m8", "m2"])
+                )
+                .unwrap(),
+            )
+            .expect("Failed to append mixed batch");
+        writer.flush().await.expect("Failed to flush");
+
+        let log_scanner = table
+            .new_scan()
+            .filter(col("id").gt(5))
+            .expect("Failed to set filter")
+            .create_log_scanner()
+            .expect("Failed to create log scanner");
+        log_scanner
+            .subscribe(0, EARLIEST_OFFSET)
+            .await
+            .expect("Failed to subscribe");
+
+        let collected = poll_ids_and_names(&log_scanner, 5).await;
+        let expected: Vec<(i32, String)> = vec![
+            (1, "m1".to_string()),
+            (2, "m2".to_string()),
+            (3, "m3".to_string()),
+            (6, "m6".to_string()),
+            (8, "m8".to_string()),
+        ];
+        assert_eq!(
+            collected, expected,
+            "The mixed batch (min=1, max=8) should be returned whole as a \
+             superset, while the all-low batch is pruned"
+        );
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
+    }
+
+    /// Row appends are buffered through the row-to-Arrow builder rather than
+    /// passed through as a ready-made batch, and the batches it builds must
+    /// still carry prunable statistics.
+    #[tokio::test]
+    async fn filter_pushdown_prunes_row_appended_batches() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("Failed to get admin");
+
+        let table_path = TablePath::new("fluss", "test_filter_pushdown_row_append");
+        create_stats_log_table(&admin, &table_path).await;
+
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+        let writer = table
+            .new_append()
+            .expect("Failed to create append")
+            .create_writer()
+            .expect("Failed to create writer");
+
+        // Flush between the groups so each becomes its own wire batch.
+        for id in 1..=5 {
+            let mut row = GenericRow::new(2);
+            row.set_field(0, id);
+            row.set_field(1, format!("low{id}"));
+            writer.append(&row).expect("Failed to append row");
+        }
+        writer.flush().await.expect("Failed to flush");
+        for id in 200..=204 {
+            let mut row = GenericRow::new(2);
+            row.set_field(0, id);
+            row.set_field(1, format!("v{id}"));
+            writer.append(&row).expect("Failed to append row");
+        }
+        writer.flush().await.expect("Failed to flush");
+
+        let log_scanner = table
+            .new_scan()
+            .filter(col("id").ge(200))
+            .expect("Failed to set filter")
+            .create_log_scanner()
+            .expect("Failed to create log scanner");
+        log_scanner
+            .subscribe(0, EARLIEST_OFFSET)
+            .await
+            .expect("Failed to subscribe");
+
+        let collected = poll_ids_and_names(&log_scanner, 5).await;
+        let expected: Vec<(i32, String)> = (200..=204).map(|id| (id, format!("v{id}"))).collect();
+        assert_eq!(
+            collected, expected,
+            "Row-appended batches must carry statistics, so the low batch is pruned"
+        );
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
+    }
+
+    /// Pruning across the statistics encodings: spilled string bounds, compact
+    /// and non-compact decimals and timestamps, time with seconds-to-millis
+    /// scaling, and null counts.
+    #[tokio::test]
+    async fn filter_pushdown_prunes_across_column_types() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("Failed to get admin");
+
+        let table_path = TablePath::new("fluss", "test_filter_pushdown_column_types");
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .column("name", DataTypes::string())
+                    .column("price", DataTypes::decimal(10, 2))
+                    .column("big", DataTypes::decimal(22, 5))
+                    .column("ts3", DataTypes::timestamp_with_precision(3))
+                    .column("ts6", DataTypes::timestamp_with_precision(6))
+                    .column("t", DataTypes::time_with_precision(0))
+                    .column("opt", DataTypes::int())
+                    .build()
+                    .expect("Failed to build schema"),
+            )
+            .property("table.statistics.columns", "*")
+            .property("table.log.tiered.local-segments", "100")
+            .build()
+            .expect("Failed to build table");
+        create_table(&admin, &table_path, &table_descriptor).await;
+        wait_for_table_ready(&admin, &table_path).await;
+
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+        let writer = table
+            .new_append()
+            .expect("Failed to create append")
+            .create_writer()
+            .expect("Failed to create writer");
+
+        // Names exceed 7 bytes so the string bounds spill to the stats row tail.
+        for id in 1..=3 {
+            let mut row = GenericRow::new(8);
+            row.set_field(0, id);
+            row.set_field(1, format!("aaaaaaaaaaaa-{id}"));
+            row.set_field(
+                2,
+                Decimal::from_unscaled_long(1_000 + id as i64, 10, 2).unwrap(),
+            );
+            row.set_field(
+                3,
+                Decimal::from_unscaled_bytes(&(100_000_i64 + id as i64).to_be_bytes(), 22, 5)
+                    .unwrap(),
+            );
+            row.set_field(
+                4,
+                TimestampNtz::from_millis_nanos(1_600_000_000_000 + id as i64, 0).unwrap(),
+            );
+            row.set_field(
+                5,
+                TimestampNtz::from_millis_nanos(1_600_000_000_000 + id as i64, 123_000).unwrap(),
+            );
+            row.set_field(6, Time::new(32_400_000 + id * 1_000));
+            row.set_field(7, Datum::Null);
+            writer.append(&row).expect("Failed to append low row");
+        }
+        writer.flush().await.expect("Failed to flush");
+        for id in 101..=103 {
+            let mut row = GenericRow::new(8);
+            row.set_field(0, id);
+            row.set_field(1, format!("zzzzzzzzzzzz-{id}"));
+            row.set_field(
+                2,
+                Decimal::from_unscaled_long(99_000 + id as i64, 10, 2).unwrap(),
+            );
+            row.set_field(
+                3,
+                Decimal::from_unscaled_bytes(
+                    &(900_000_000_000_i64 + id as i64).to_be_bytes(),
+                    22,
+                    5,
+                )
+                .unwrap(),
+            );
+            row.set_field(
+                4,
+                TimestampNtz::from_millis_nanos(1_900_000_000_000 + id as i64, 0).unwrap(),
+            );
+            row.set_field(
+                5,
+                TimestampNtz::from_millis_nanos(1_900_000_000_000 + id as i64, 456_000).unwrap(),
+            );
+            row.set_field(6, Time::new(72_000_000 + id * 1_000));
+            row.set_field(7, id);
+            writer.append(&row).expect("Failed to append high row");
+        }
+        writer.flush().await.expect("Failed to flush");
+
+        let low_ids = vec![1, 2, 3];
+        let high_ids = vec![101, 102, 103];
+        let cases: Vec<(&str, Predicate, &Vec<i32>)> = vec![
+            ("string", col("name").gt("mmmmmmmmmmmm"), &high_ids),
+            (
+                "compact decimal",
+                col("price").gt(Decimal::from_unscaled_long(50_000, 10, 2).unwrap()),
+                &high_ids,
+            ),
+            (
+                "non-compact decimal",
+                col("big").gt(Decimal::from_unscaled_bytes(
+                    &500_000_000_000_i64.to_be_bytes(),
+                    22,
+                    5,
+                )
+                .unwrap()),
+                &high_ids,
+            ),
+            (
+                "compact timestamp",
+                col("ts3").gt(TimestampNtz::from_millis_nanos(1_800_000_000_000, 0).unwrap()),
+                &high_ids,
+            ),
+            (
+                "non-compact timestamp",
+                col("ts6").gt(TimestampNtz::from_millis_nanos(1_800_000_000_000, 500_000).unwrap()),
+                &high_ids,
+            ),
+            ("time", col("t").gt(Literal::Time(43_200_000)), &high_ids),
+            ("is_not_null", col("opt").is_not_null(), &high_ids),
+            ("is_null", col("opt").is_null(), &low_ids),
+        ];
+
+        for (label, predicate, expected) in cases {
+            let log_scanner = table
+                .new_scan()
+                .filter(predicate)
+                .expect("Failed to set filter")
+                .create_log_scanner()
+                .expect("Failed to create log scanner");
+            log_scanner
+                .subscribe(0, EARLIEST_OFFSET)
+                .await
+                .expect("Failed to subscribe");
+            let ids: Vec<i32> = poll_ids_and_names(&log_scanner, expected.len())
+                .await
+                .into_iter()
+                .map(|(id, _)| id)
+                .collect();
+            assert_eq!(
+                &ids, expected,
+                "Predicate on {label} should prune the non-matching batch"
+            );
+        }
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
+    }
+
+    /// When every batch is pruned the server returns only a filtered end
+    /// offset, and the scanner must advance across the fully pruned segments
+    /// instead of refetching them forever.
+    #[tokio::test]
+    async fn filter_pushdown_advances_past_fully_pruned_range() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("Failed to get admin");
+
+        let table_path = TablePath::new("fluss", "test_filter_pushdown_fully_pruned");
+        create_stats_log_table(&admin, &table_path).await;
+
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+        let writer = table
+            .new_append()
+            .expect("Failed to create append")
+            .create_writer()
+            .expect("Failed to create writer");
+
+        for (ids, names) in [
+            ([1, 2, 3, 4, 5], ["a1", "a2", "a3", "a4", "a5"]),
+            ([6, 7, 8, 9, 10], ["a6", "a7", "a8", "a9", "a10"]),
+            ([11, 12, 13, 14, 15], ["a11", "a12", "a13", "a14", "a15"]),
+        ] {
+            writer
+                .append_arrow_batch(
+                    record_batch!(("id", Int32, ids.to_vec()), ("name", Utf8, names.to_vec()))
+                        .unwrap(),
+                )
+                .expect("Failed to append batch");
+        }
+        writer.flush().await.expect("Failed to flush");
+
+        // Prove the data is fetchable before asserting the filtered scan sees none.
+        let unfiltered = table
+            .new_scan()
+            .create_log_scanner()
+            .expect("Failed to create unfiltered log scanner");
+        unfiltered
+            .subscribe(0, EARLIEST_OFFSET)
+            .await
+            .expect("Failed to subscribe");
+        let all = poll_ids_and_names(&unfiltered, 15).await;
+        assert_eq!(
+            all.len(),
+            15,
+            "All rows should be visible to an unfiltered scan"
+        );
+
+        let log_scanner = table
+            .new_scan()
+            .filter(col("id").gt(1000))
+            .expect("Failed to set filter")
+            .create_log_scanner()
+            .expect("Failed to create log scanner");
+        log_scanner
+            .subscribe(0, EARLIEST_OFFSET)
+            .await
+            .expect("Failed to subscribe");
+
+        // Every existing batch is pruned, so the poll must come back empty
+        // rather than erroring or returning non-matching rows.
+        let records = log_scanner
+            .poll(Duration::from_secs(3))
+            .await
+            .expect("Failed to poll fully pruned range");
+        let leaked_ids: Vec<i32> = records
+            .into_iter()
+            .map(|rec| rec.row().get_int(0).unwrap())
+            .collect();
+        assert!(
+            leaked_ids.is_empty(),
+            "A fully pruned fetch should return no records, got ids: {leaked_ids:?}"
+        );
+
+        // New matching data appended after the pruned range must be reachable.
+        writer
+            .append_arrow_batch(
+                record_batch!(
+                    ("id", Int32, [2001, 2002, 2003, 2004, 2005]),
+                    ("name", Utf8, ["b1", "b2", "b3", "b4", "b5"])
+                )
+                .unwrap(),
+            )
+            .expect("Failed to append matching batch");
+        writer.flush().await.expect("Failed to flush");
+
+        let collected = poll_ids_and_names(&log_scanner, 5).await;
+        let collected_ids: Vec<i32> = collected.iter().map(|(id, _)| *id).collect();
+        assert_eq!(
+            collected_ids,
+            vec![2001, 2002, 2003, 2004, 2005],
+            "The scanner should advance past the fully pruned range and reach \
+             the new matching batch"
+        );
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
+    }
+
+    /// Without `table.statistics.columns` batches carry no statistics, so the
+    /// server cannot prune and a filtered scan returns every row.
+    #[tokio::test]
+    async fn filter_without_statistics_returns_all_rows() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("Failed to get admin");
+
+        let table_path = TablePath::new("fluss", "test_filter_without_statistics");
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .column("name", DataTypes::string())
+                    .build()
+                    .expect("Failed to build schema"),
+            )
+            .property("table.log.tiered.local-segments", "100")
+            .build()
+            .expect("Failed to build table");
+        create_table(&admin, &table_path, &table_descriptor).await;
+        wait_for_table_ready(&admin, &table_path).await;
+
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+        let writer = table
+            .new_append()
+            .expect("Failed to create append")
+            .create_writer()
+            .expect("Failed to create writer");
+        writer
+            .append_arrow_batch(
+                record_batch!(("id", Int32, [1, 2, 3]), ("name", Utf8, ["x1", "x2", "x3"]))
+                    .unwrap(),
+            )
+            .expect("Failed to append batch 1");
+        writer
+            .append_arrow_batch(
+                record_batch!(
+                    ("id", Int32, [100, 101, 102]),
+                    ("name", Utf8, ["y1", "y2", "y3"])
+                )
+                .unwrap(),
+            )
+            .expect("Failed to append batch 2");
+        writer.flush().await.expect("Failed to flush");
+
+        let log_scanner = table
+            .new_scan()
+            .filter(col("id").ge(100))
+            .expect("Failed to set filter")
+            .create_log_scanner()
+            .expect("Failed to create log scanner");
+        log_scanner
+            .subscribe(0, EARLIEST_OFFSET)
+            .await
+            .expect("Failed to subscribe");
+
+        let collected = poll_ids_and_names(&log_scanner, 6).await;
+        let collected_ids: Vec<i32> = collected.iter().map(|(id, _)| *id).collect();
+        assert_eq!(
+            collected_ids,
+            vec![1, 2, 3, 100, 101, 102],
+            "Without statistics the server cannot prune, so the scan returns a \
+             superset containing every row"
+        );
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
+    }
+
     async fn scan_table<'a>(
         table: &FlussTable<'a>,
         setup_scan: impl FnOnce(TableScan) -> TableScan,
@@ -585,18 +1675,273 @@ mod table_test {
         assert_eq!(proj_batches[0].batch().num_columns(), 1);
     }
 
-    /// Integration test covering produce and scan operations for all supported datatypes
-    /// in log tables.
+    /// Asserts each batch reports exactly the commit timestamp the record path
+    /// reported for every offset that batch covers, and that timestamps never
+    /// move backwards within a bucket.
+    fn assert_batch_timestamps_match_records(
+        batches: &[ScanBatch],
+        timestamps_by_offset: &HashMap<i64, i64>,
+    ) {
+        assert!(!batches.is_empty(), "expected at least one batch to check");
+        let mut previous = i64::MIN;
+        for batch in batches {
+            let timestamp = batch.commit_timestamp();
+            for offset in batch.base_offset()..=batch.last_offset() {
+                let expected = *timestamps_by_offset
+                    .get(&offset)
+                    .unwrap_or_else(|| panic!("the record path never reported offset {offset}"));
+                assert_eq!(
+                    timestamp,
+                    expected,
+                    "batch starting at offset {} reports commit timestamp {timestamp}, but the \
+                     record at offset {offset} reports {expected}",
+                    batch.base_offset()
+                );
+            }
+            // Log batches are appended to a bucket in order, so the leader
+            // never stamps a later batch with an earlier timestamp.
+            assert!(
+                timestamp >= previous,
+                "commit timestamp {timestamp} moved backwards from {previous}"
+            );
+            previous = timestamp;
+        }
+    }
+
+    /// The record and Arrow-batch scan paths read the same `commit_timestamp`
+    /// header field from the same log batch, so the batch API must report
+    /// exactly what the record API reports for the offsets it covers. Comparing
+    /// the two paths pins that invariant without depending on the wall clock,
+    /// and unlike a "looks like a recent timestamp" bound it also catches a
+    /// batch that was handed some other log batch's timestamp.
     #[tokio::test]
-    async fn partitioned_table_append_scan() {
+    async fn record_batch_scanner_agrees_with_record_scanner_on_commit_timestamp() {
         let cluster = get_shared_cluster();
         let connection = cluster.get_fluss_connection().await;
-
         let admin = connection.get_admin().expect("Failed to get admin");
 
-        let table_path = TablePath::new("fluss", "test_partitioned_log_append");
+        let table_path = TablePath::new("fluss", "test_batch_commit_timestamp_parity");
+        let schema = Schema::builder()
+            .column("id", DataTypes::int())
+            .column("name", DataTypes::string())
+            .build()
+            .unwrap();
+        create_table(
+            &admin,
+            &table_path,
+            &TableDescriptor::builder()
+                .schema(schema)
+                // A single bucket keeps every append in one log, so batch
+                // offsets and record offsets line up without interleaving.
+                .distributed_by(Some(1), vec!["id".to_string()])
+                .build()
+                .unwrap(),
+        )
+        .await;
+        wait_for_table_ready(&admin, &table_path).await;
 
-        // Create a partitioned log table
+        let table = connection.get_table(&table_path).await.unwrap();
+        let writer = table.new_append().unwrap().create_writer().unwrap();
+        // Flush between appends so the leader stores three separate log
+        // batches, each stamped with its own commit timestamp.
+        writer
+            .append_arrow_batch(
+                record_batch!(("id", Int32, [1, 2]), ("name", Utf8, ["a", "b"])).unwrap(),
+            )
+            .unwrap();
+        writer.flush().await.unwrap();
+        writer
+            .append_arrow_batch(
+                record_batch!(("id", Int32, [3, 4]), ("name", Utf8, ["c", "d"])).unwrap(),
+            )
+            .unwrap();
+        writer.flush().await.unwrap();
+        writer
+            .append_arrow_batch(
+                record_batch!(("id", Int32, [5, 6]), ("name", Utf8, ["e", "f"])).unwrap(),
+            )
+            .unwrap();
+        writer.flush().await.unwrap();
+
+        // Reference: the timestamp the record path reports for each offset.
+        let record_scanner = table.new_scan().create_log_scanner().unwrap();
+        record_scanner.subscribe(0, EARLIEST_OFFSET).await.unwrap();
+        let timestamps_by_offset: HashMap<i64, i64> =
+            poll_until_count(6, DEFAULT_POLL_TIMEOUT, Duration::from_secs(5), async |d| {
+                record_scanner
+                    .poll(d)
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .map(|record| (record.offset(), record.timestamp()))
+                    .collect()
+            })
+            .await
+            .into_iter()
+            .collect();
+        assert_eq!(
+            timestamps_by_offset.len(),
+            6,
+            "record path should cover offsets 0..=5, got {timestamps_by_offset:?}"
+        );
+
+        // Reading whole batches must agree with the record path.
+        let scanner = table.new_scan().create_record_batch_log_scanner().unwrap();
+        scanner.subscribe(0, 0).await.unwrap();
+        let batches = collect_batches(&scanner, 6).await;
+        assert_batch_timestamps_match_records(&batches, &timestamps_by_offset);
+        for batch in &batches {
+            assert_eq!(batch.schema_id(), table.get_table_info().get_schema_id());
+        }
+
+        // Subscribing mid-batch slices leading rows off the first batch; the
+        // slice must keep the timestamp of the log batch it came from.
+        let sliced_scanner = table.new_scan().create_record_batch_log_scanner().unwrap();
+        sliced_scanner.subscribe(0, 1).await.unwrap();
+        let sliced = collect_batches(&sliced_scanner, 5).await;
+        assert_eq!(
+            sliced[0].base_offset(),
+            1,
+            "first batch should start at the subscribed offset"
+        );
+        assert_batch_timestamps_match_records(&sliced, &timestamps_by_offset);
+        for batch in &sliced {
+            assert_eq!(batch.schema_id(), table.get_table_info().get_schema_id());
+        }
+
+        // Projection prunes columns but must not disturb the metadata.
+        let projected_scanner = table
+            .new_scan()
+            .project_by_name(&["id"])
+            .unwrap()
+            .create_record_batch_log_scanner()
+            .unwrap();
+        projected_scanner.subscribe(0, 0).await.unwrap();
+        let projected = collect_batches(&projected_scanner, 6).await;
+        assert_eq!(projected[0].batch().num_columns(), 1);
+        assert_batch_timestamps_match_records(&projected, &timestamps_by_offset);
+        for batch in &projected {
+            assert_eq!(batch.schema_id(), table.get_table_info().get_schema_id());
+        }
+    }
+
+    /// Each Arrow batch reports the schema ID it was written with, even when a
+    /// fixed-schema scan aligns its columns to a newer schema.
+    #[tokio::test]
+    async fn record_batch_scanner_reports_source_schema_id_after_add_column() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("Failed to get admin");
+
+        let table_path = TablePath::new("fluss", "test_batch_schema_id_after_add_column");
+        create_table(
+            &admin,
+            &table_path,
+            &TableDescriptor::builder()
+                .schema(
+                    Schema::builder()
+                        .column("id", DataTypes::int())
+                        .column("name", DataTypes::string())
+                        .build()
+                        .unwrap(),
+                )
+                .distributed_by(Some(1), vec!["id".to_string()])
+                .build()
+                .unwrap(),
+        )
+        .await;
+        wait_for_table_ready(&admin, &table_path).await;
+
+        let table_v1 = connection.get_table(&table_path).await.unwrap();
+        let writer = table_v1.new_append().unwrap().create_writer().unwrap();
+        writer
+            .append_arrow_batch(
+                record_batch!(("id", Int32, [1, 2]), ("name", Utf8, ["a", "b"])).unwrap(),
+            )
+            .unwrap();
+        writer.flush().await.unwrap();
+
+        let age_type_json =
+            serde_json::to_vec(&DataTypes::int().serialize_json().unwrap()).unwrap();
+        admin
+            .alter_table(
+                &table_path,
+                false,
+                AlterTableChanges {
+                    add_columns: vec![AddColumn {
+                        column_name: "age".to_string(),
+                        data_type_json: age_type_json,
+                        comment: None,
+                        position: ColumnPositionType::Last,
+                    }],
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let table_v2 = connection.get_table(&table_path).await.unwrap();
+        let writer = table_v2.new_append().unwrap().create_writer().unwrap();
+        writer
+            .append_arrow_batch(
+                record_batch!(
+                    ("id", Int32, [3]),
+                    ("name", Utf8, ["c"]),
+                    ("age", Int32, [30])
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        writer.flush().await.unwrap();
+
+        let old_id = table_v1.get_table_info().get_schema_id();
+        let new_id = table_v2.get_table_info().get_schema_id();
+        assert_ne!(old_id, new_id);
+
+        for fixed_schema in [false, true] {
+            let scanner = table_v2
+                .new_scan()
+                .with_fixed_schema(fixed_schema)
+                .create_record_batch_log_scanner()
+                .unwrap();
+            scanner.subscribe(0, EARLIEST_OFFSET).await.unwrap();
+            let batches: Vec<(i64, i32, usize)> = collect_batches(&scanner, 3)
+                .await
+                .iter()
+                .map(|b| (b.base_offset(), b.schema_id(), b.batch().num_columns()))
+                .collect();
+            let old_columns = if fixed_schema { 3 } else { 2 };
+            assert_eq!(
+                batches,
+                vec![(0, old_id, old_columns), (2, new_id, 3)],
+                "fixed_schema={fixed_schema}"
+            );
+        }
+
+        admin.drop_table(&table_path, false).await.unwrap();
+    }
+
+    /// Polls a record-batch scanner until it has yielded `expected_rows` rows.
+    async fn collect_batches(
+        scanner: &RecordBatchLogScanner,
+        expected_rows: usize,
+    ) -> Vec<ScanBatch> {
+        let mut collected: Vec<ScanBatch> = Vec::new();
+        let deadline = tokio::time::Instant::now() + DEFAULT_POLL_TIMEOUT;
+        while collected.iter().map(ScanBatch::num_records).sum::<usize>() < expected_rows
+            && tokio::time::Instant::now() < deadline
+        {
+            collected.extend(scanner.poll(Duration::from_secs(5)).await.unwrap());
+        }
+        assert_eq!(
+            collected.iter().map(ScanBatch::num_records).sum::<usize>(),
+            expected_rows,
+            "scanner did not yield {expected_rows} rows in time"
+        );
+        collected
+    }
+
+    async fn create_region_partitioned_log_table(admin: &FlussAdmin, table_path: &TablePath) {
         let table_descriptor = TableDescriptor::builder()
             .schema(
                 Schema::builder()
@@ -610,13 +1955,23 @@ mod table_test {
             .build()
             .expect("Failed to build table");
 
-        create_table(&admin, &table_path, &table_descriptor).await;
+        create_table(admin, table_path, &table_descriptor).await;
+        create_partitions(admin, table_path, "region", &["US", "EU"]).await;
+        wait_for_partitions_ready(admin, table_path, &["US", "EU"]).await;
+    }
 
-        // Create partitions
-        create_partitions(&admin, &table_path, "region", &["US", "EU"]).await;
+    /// Integration test covering produce and scan operations for all supported datatypes
+    /// in log tables.
+    #[tokio::test]
+    async fn partitioned_table_append_scan() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
 
-        // Wait for partition bucket leaders to be available.
-        wait_for_partitions_ready(&admin, &table_path, &["US", "EU"]).await;
+        let admin = connection.get_admin().expect("Failed to get admin");
+
+        let table_path = TablePath::new("fluss", "test_partitioned_log_append");
+
+        create_region_partitioned_log_table(&admin, &table_path).await;
 
         let table = connection
             .get_table(&table_path)
@@ -711,11 +2066,20 @@ mod table_test {
             .new_scan()
             .create_log_scanner()
             .expect("Failed to create log scanner");
-        let partition_info = admin
+        let partition_infos = admin
             .list_partition_infos(&table_path)
             .await
             .expect("Failed to list partition infos");
-        for partition_info in partition_info {
+        let nonexistent_partition_id = i64::MAX;
+        assert_eq!(
+            log_scanner
+                .subscribe_partition(nonexistent_partition_id, 0, 0)
+                .await
+                .expect_err("Subscribing to a nonexistent partition should fail")
+                .api_error(),
+            Some(FlussError::PartitionNotExists)
+        );
+        for partition_info in &partition_infos {
             log_scanner
                 .subscribe_partition(partition_info.get_partition_id(), 0, 0)
                 .await
@@ -846,6 +2210,18 @@ mod table_test {
             .list_partition_infos(&table_path)
             .await
             .expect("Failed to list partition infos");
+        let invalid_partition_bucket_offsets = HashMap::from([
+            ((partition_infos[0].get_partition_id(), 0), 0),
+            ((nonexistent_partition_id, 0), 0),
+        ]);
+        assert_eq!(
+            log_scanner_batch
+                .subscribe_partition_buckets(&invalid_partition_bucket_offsets)
+                .await
+                .expect_err("Batch subscription containing a nonexistent partition should fail")
+                .api_error(),
+            Some(FlussError::PartitionNotExists)
+        );
         let partition_bucket_offsets: HashMap<(i64, i32), i64> = partition_infos
             .iter()
             .map(|p| ((p.get_partition_id(), 0), 0i64))
@@ -888,6 +2264,125 @@ mod table_test {
         assert_eq!(
             batch_collected, expected_records,
             "subscribe_partition_buckets should receive the same records as subscribe_partition loop"
+        );
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
+    }
+
+    #[tokio::test]
+    async fn partitioned_scanner_continues_after_partition_drop() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("Failed to get admin");
+        let table_path = TablePath::new("fluss", "test_scanner_after_partition_drop");
+        create_region_partitioned_log_table(&admin, &table_path).await;
+
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+        let append_writer = table
+            .new_append()
+            .expect("Failed to create append")
+            .create_writer()
+            .expect("Failed to create writer");
+        let mut row = GenericRow::new(3);
+        row.set_field(0, 1);
+        row.set_field(1, "US");
+        row.set_field(2, 100_i64);
+        append_writer.append(&row).expect("Failed to append row");
+        append_writer.flush().await.expect("Failed to flush");
+
+        let partition_infos = admin
+            .list_partition_infos(&table_path)
+            .await
+            .expect("Failed to list partition infos");
+        let partition_bucket_offsets: HashMap<(i64, i32), i64> = partition_infos
+            .iter()
+            .map(|partition| ((partition.get_partition_id(), 0), 0))
+            .collect();
+        let scanner = table
+            .new_scan()
+            .create_log_scanner()
+            .expect("Failed to create log scanner");
+        scanner
+            .subscribe_partition_buckets(&partition_bucket_offsets)
+            .await
+            .expect("Failed to subscribe to partitions");
+
+        admin
+            .drop_partition(
+                &table_path,
+                &PartitionSpec::new(HashMap::from([("region", "EU")])),
+                false,
+            )
+            .await
+            .expect("Failed to drop EU partition");
+
+        let ids = poll_until_count(
+            1,
+            DEFAULT_POLL_TIMEOUT,
+            Duration::from_millis(500),
+            async |timeout| {
+                scanner
+                    .poll(timeout)
+                    .await
+                    .expect("Failed to poll surviving partition")
+                    .into_iter()
+                    .filter_map(|record| {
+                        let row = record.row();
+                        if row.get_string(1).unwrap() == "US" {
+                            Some(row.get_int(0).unwrap())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            },
+        )
+        .await;
+        assert_eq!(
+            ids,
+            vec![1],
+            "The surviving partition should remain readable"
+        );
+
+        let mut row = GenericRow::new(3);
+        row.set_field(0, 2);
+        row.set_field(1, "US");
+        row.set_field(2, 200_i64);
+        append_writer.append(&row).expect("Failed to append row");
+        append_writer.flush().await.expect("Failed to flush");
+
+        let ids = poll_until_count(
+            1,
+            DEFAULT_POLL_TIMEOUT,
+            Duration::from_millis(500),
+            async |timeout| {
+                scanner
+                    .poll(timeout)
+                    .await
+                    .expect("Failed to poll surviving partition")
+                    .into_iter()
+                    .filter_map(|record| {
+                        let row = record.row();
+                        if row.get_string(1).unwrap() == "US" {
+                            Some(row.get_int(0).unwrap())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            },
+        )
+        .await;
+        assert_eq!(
+            ids,
+            vec![2],
+            "The surviving partition should keep making progress after another partition is dropped"
         );
 
         admin
@@ -2194,6 +3689,7 @@ mod table_test {
                 Schema::builder()
                     .column("c1", DataTypes::int())
                     .column("c2", DataTypes::string())
+                    .column("c3", DataTypes::bigint().as_non_nullable())
                     .build()
                     .expect("schema"),
             )
@@ -2212,10 +3708,13 @@ mod table_test {
 
         let row_count: i32 = 30;
         for id in 1..=row_count {
-            let mut row = GenericRow::new(2);
+            let mut row = GenericRow::new(3);
             row.set_field(0, id);
             row.set_field(1, "x");
-            writer.append(&row).expect("append row");
+            row.set_field(2, id as i64 * 10);
+            writer
+                .append(&row)
+                .expect("append row with mixed nullability");
         }
         writer.flush().await.expect("flush");
 
@@ -2402,6 +3901,356 @@ mod table_test {
             non_empty >= 2,
             "keyed rows must still spread across buckets after an empty first batch, got {offsets:?}"
         );
+
+        admin.drop_table(&table_path, false).await.expect("drop");
+    }
+
+    /// A pending write to a dropped table must complete with TableNotExist
+    /// instead of retrying UnknownTableOrBucketException forever, and the
+    /// stale table metadata must be evicted so later writes fail fast.
+    #[tokio::test]
+    async fn write_after_drop_completes_with_table_not_exist() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("admin");
+
+        let table_path = TablePath::new("fluss", "test_log_write_after_drop");
+        let descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("c1", DataTypes::int())
+                    .build()
+                    .expect("schema"),
+            )
+            .distributed_by(Some(1), vec![])
+            .build()
+            .expect("descriptor");
+        create_table(&admin, &table_path, &descriptor).await;
+        wait_for_table_ready(&admin, &table_path).await;
+
+        let table = connection.get_table(&table_path).await.expect("table");
+        let writer = table
+            .new_append()
+            .expect("append")
+            .create_writer()
+            .expect("writer");
+
+        // Warm the metadata cache with a successful write.
+        let mut row = GenericRow::new(1);
+        row.set_field(0, 1);
+        writer
+            .append(&row)
+            .expect("append")
+            .await
+            .expect("first write");
+
+        admin.drop_table(&table_path, false).await.expect("drop");
+
+        // Append until a write observes the drop, tolerating writes that still
+        // succeed while the drop propagates to the tablet servers. Every write
+        // shares one budget, so a write left retrying trips the timeout instead
+        // of running until the caller's own deadline.
+        let deadline = std::time::Instant::now() + DEFAULT_POLL_TIMEOUT;
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            assert!(
+                !remaining.is_zero(),
+                "writes kept succeeding after the table was dropped"
+            );
+            let result = match writer.append(&row) {
+                Ok(write_future) => tokio::time::timeout(remaining, write_future)
+                    .await
+                    .expect("write must settle promptly instead of retrying until the deadline"),
+                Err(error) => Err(error),
+            };
+            match result {
+                Ok(()) => tokio::time::sleep(Duration::from_millis(500)).await,
+                Err(error) => {
+                    assert_eq!(
+                        error.api_error(),
+                        Some(FlussError::TableNotExist),
+                        "Expected TableNotExist error, got {:?}",
+                        error
+                    );
+                    break;
+                }
+            }
+        }
+
+        // The stale metadata is evicted, so the next append fails fast rather
+        // than hanging or panicking in the bucket assigner, and it reports the
+        // same error as the write that observed the drop.
+        let error = writer
+            .append(&row)
+            .expect_err("append after eviction must fail");
+        assert_eq!(
+            error.api_error(),
+            Some(FlussError::TableNotExist),
+            "Expected TableNotExist error, got {:?}",
+            error
+        );
+    }
+
+    /// Drives real rows through a live cluster across a drop and a recreate of
+    /// the same path, covering both table instance behaviours end to end.
+    #[tokio::test]
+    async fn real_data_survives_drop_and_recreate_of_the_same_path() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("admin");
+
+        let table_path = TablePath::new("fluss", "test_real_data_drop_recreate");
+        let descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("c1", DataTypes::int())
+                    .column("c2", DataTypes::string())
+                    .build()
+                    .expect("schema"),
+            )
+            .distributed_by(Some(3), vec!["c1".to_string()])
+            .build()
+            .expect("descriptor");
+        create_table(&admin, &table_path, &descriptor).await;
+        wait_for_table_buckets_ready(&admin, &table_path, &[0, 1, 2]).await;
+
+        // Real rows across all three buckets must persist before the drop.
+        let table = connection.get_table(&table_path).await.expect("table");
+        let writer = table
+            .new_append()
+            .expect("append")
+            .create_writer()
+            .expect("writer");
+        let batch = record_batch!(
+            ("c1", Int32, [1, 2, 3, 4, 5, 6, 7, 8, 9]),
+            ("c2", Utf8, ["a", "b", "c", "d", "e", "f", "g", "h", "i"])
+        )
+        .unwrap();
+        writer.append_arrow_batch(batch).expect("append batch");
+        writer.flush().await.expect("flush");
+        let offsets = admin
+            .list_offsets(&table_path, &[0, 1, 2], OffsetSpec::Latest)
+            .await
+            .expect("list offsets");
+        let total: i64 = offsets.values().sum();
+        assert_eq!(total, 9, "all rows must persist, got {offsets:?}");
+
+        admin.drop_table(&table_path, false).await.expect("drop");
+
+        // Writes settle with TableNotExist instead of retrying to the deadline.
+        let mut row = GenericRow::new(2);
+        row.set_field(0, 42);
+        row.set_field(1, "after-drop");
+        let deadline = std::time::Instant::now() + DEFAULT_POLL_TIMEOUT;
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            assert!(
+                !remaining.is_zero(),
+                "writes kept succeeding after the drop"
+            );
+            let result = match writer.append(&row) {
+                Ok(write_future) => tokio::time::timeout(remaining, write_future)
+                    .await
+                    .expect("write must settle, not retry to the deadline"),
+                Err(error) => Err(error),
+            };
+            match result {
+                Ok(()) => tokio::time::sleep(Duration::from_millis(500)).await,
+                Err(error) => {
+                    assert_eq!(
+                        error.api_error(),
+                        Some(FlussError::TableNotExist),
+                        "Expected TableNotExist, got {:?}",
+                        error
+                    );
+                    break;
+                }
+            }
+        }
+
+        // The writer sees the drop before the coordinator finishes clearing it,
+        // so wait for the server side to settle before recreating the path.
+        let deadline = std::time::Instant::now() + DEFAULT_POLL_TIMEOUT;
+        while admin.table_exists(&table_path).await.unwrap_or(true) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the dropped table never disappeared server side"
+            );
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+
+        // The recreated path must hold only rows written to the new table instance.
+        create_table(&admin, &table_path, &descriptor).await;
+        wait_for_table_buckets_ready(&admin, &table_path, &[0, 1, 2]).await;
+
+        let fresh_table = connection.get_table(&table_path).await.expect("table");
+        let fresh_writer = fresh_table
+            .new_append()
+            .expect("append")
+            .create_writer()
+            .expect("writer");
+        let batch2 = record_batch!(
+            ("c1", Int32, [10, 11, 12, 13]),
+            ("c2", Utf8, ["j", "k", "l", "m"])
+        )
+        .unwrap();
+        fresh_writer
+            .append_arrow_batch(batch2)
+            .expect("append batch");
+        fresh_writer.flush().await.expect("flush");
+
+        let offsets = admin
+            .list_offsets(&table_path, &[0, 1, 2], OffsetSpec::Latest)
+            .await
+            .expect("list offsets");
+        let total: i64 = offsets.values().sum();
+        assert_eq!(
+            total, 4,
+            "the recreated table must hold only its own rows, got {offsets:?}"
+        );
+
+        admin.drop_table(&table_path, false).await.expect("drop");
+    }
+
+    fn partition_row(id: i32, partition: &'static str) -> GenericRow<'static> {
+        let mut row = GenericRow::new(2);
+        row.set_field(0, id);
+        row.set_field(1, partition);
+        row
+    }
+
+    async fn append_writer(connection: &FlussConnection, table_path: &TablePath) -> AppendWriter {
+        connection
+            .get_table(table_path)
+            .await
+            .expect("table")
+            .new_append()
+            .expect("append")
+            .create_writer()
+            .expect("writer")
+    }
+
+    #[tokio::test]
+    async fn append_to_missing_partition_creates_it_unless_disabled() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("Failed to get admin");
+        let table_path = TablePath::new("fluss", "test_append_to_missing_partition");
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .column("region", DataTypes::string())
+                    .build()
+                    .expect("Failed to build schema"),
+            )
+            .partitioned_by(vec!["region"])
+            .build()
+            .expect("Failed to build table");
+        create_table(&admin, &table_path, &table_descriptor).await;
+        create_partitions(&admin, &table_path, "region", &["US"]).await;
+        wait_for_partitions_ready(&admin, &table_path, &["US"]).await;
+
+        let no_create_connection = FlussConnection::new(Config {
+            bootstrap_servers: cluster.plaintext_bootstrap_servers().to_string(),
+            writer_dynamic_create_partition_enabled: false,
+            ..Config::default()
+        })
+        .await
+        .expect("connection");
+        let writer = append_writer(&no_create_connection, &table_path).await;
+        let missing = writer.append(&partition_row(1, "APAC")).expect("append");
+        let other_missing = writer.append(&partition_row(2, "LATAM")).expect("append");
+        let existing = writer.append(&partition_row(3, "US")).expect("append");
+        tokio::time::timeout(Duration::from_secs(60), async {
+            for write in [missing, other_missing] {
+                assert_eq!(
+                    write.await.expect_err("missing partition").api_error(),
+                    Some(FlussError::PartitionNotExists)
+                );
+            }
+            existing.await.expect("write to the existing partition");
+        })
+        .await
+        .expect("writes must complete instead of retrying");
+        let partitions = admin
+            .list_partition_infos(&table_path)
+            .await
+            .expect("list partitions");
+        assert_eq!(
+            partitions.len(),
+            1,
+            "no partition is created: {partitions:?}"
+        );
+
+        let writer = append_writer(&connection, &table_path).await;
+        let missing = writer.append(&partition_row(4, "APAC")).expect("append");
+        let invalid = writer.append(&partition_row(5, "EU West")).expect("append");
+        let existing = writer.append(&partition_row(6, "US")).expect("append");
+        tokio::time::timeout(Duration::from_secs(60), async {
+            missing.await.expect("write to the created partition");
+            assert_eq!(
+                invalid.await.expect_err("invalid partition").api_error(),
+                Some(FlussError::PartitionSpecInvalidException)
+            );
+            existing.await.expect("write to the existing partition");
+        })
+        .await
+        .expect("writes must complete instead of retrying");
+        let offsets = admin
+            .list_partition_offsets(&table_path, "APAC", &[0], OffsetSpec::Latest)
+            .await
+            .expect("list offsets of the created partition");
+        assert_eq!(offsets.get(&0), Some(&1));
+
+        admin.drop_table(&table_path, false).await.expect("drop");
+    }
+
+    #[tokio::test]
+    async fn append_to_expired_auto_partition_is_rejected_from_1_0_on() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("Failed to get admin");
+        let table_path = TablePath::new("fluss", "test_append_to_expired_auto_partition");
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .column("year", DataTypes::string())
+                    .build()
+                    .expect("Failed to build schema"),
+            )
+            .partitioned_by(vec!["year"])
+            .property("table.auto-partition.enabled", "true")
+            .property("table.auto-partition.key", "year")
+            .property("table.auto-partition.time-unit", "YEAR")
+            .property("table.auto-partition.num-precreate", "0")
+            .build()
+            .expect("Failed to build table");
+        create_table(&admin, &table_path, &table_descriptor).await;
+
+        let writer = append_writer(&connection, &table_path).await;
+        let expired = writer.append(&partition_row(1, "2001")).expect("append");
+        let written = tokio::time::timeout(Duration::from_secs(60), expired)
+            .await
+            .expect("the write must complete instead of retrying");
+
+        if server_predates_1_0() {
+            written.expect("an older server creates the expired partition");
+        } else {
+            assert_eq!(
+                written.expect_err("expired partition").api_error(),
+                Some(FlussError::PartitionSpecInvalidException)
+            );
+            let partitions = admin
+                .list_partition_infos(&table_path)
+                .await
+                .expect("list partitions");
+            assert!(
+                partitions.is_empty(),
+                "no partition is created: {partitions:?}"
+            );
+        }
 
         admin.drop_table(&table_path, false).await.expect("drop");
     }

@@ -71,8 +71,8 @@ public class SeekableLakeSnapshotSplitScanner implements BatchScanner {
             updateCurrentIterator();
         }
 
-        // has no next record in currentIterator, update currentIterator
-        if (currentLakeRecordIterator != null && !currentLakeRecordIterator.hasNext()) {
+        // Empty splits can remain after deletes. Only finish after all splits are exhausted.
+        while (currentLakeRecordIterator != null && !currentLakeRecordIterator.hasNext()) {
             updateCurrentIterator();
         }
 

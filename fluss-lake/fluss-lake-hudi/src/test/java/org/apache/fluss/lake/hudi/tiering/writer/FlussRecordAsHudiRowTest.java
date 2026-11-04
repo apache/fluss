@@ -49,7 +49,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 class FlussRecordAsHudiRowTest {
 
     @Test
-    void testLogRecordFieldsAndSystemColumns() {
+    void testLogRecordFields() {
+        // FIP-27: Hudi lake tables contain only user columns; the row type is the business columns
+        // and no system columns are written.
         RowType rowType =
                 RowType.of(
                         new BooleanType(),
@@ -59,10 +61,7 @@ class FlussRecordAsHudiRowTest {
                         new DecimalType(10, 2),
                         new LocalZonedTimestampType(6),
                         new TimestampType(6),
-                        new BinaryType(),
-                        new IntType(),
-                        new BigIntType(),
-                        new TimestampType(6));
+                        new BinaryType());
         GenericRow row = new GenericRow(8);
         row.setField(0, true);
         row.setField(1, 1);
@@ -73,11 +72,8 @@ class FlussRecordAsHudiRowTest {
         row.setField(6, TimestampNtz.fromMillis(1698235273182L, 5678));
         row.setField(7, new byte[] {1, 2, 3});
 
-        int bucket = 3;
-        long offset = 11L;
-        long timestamp = 1698235273999L;
-        LogRecord logRecord = new GenericRecord(offset, timestamp, APPEND_ONLY, row);
-        FlussRecordAsHudiRow hudiRow = new FlussRecordAsHudiRow(bucket, rowType);
+        LogRecord logRecord = new GenericRecord(11L, 1698235273999L, APPEND_ONLY, row);
+        FlussRecordAsHudiRow hudiRow = new FlussRecordAsHudiRow(rowType);
         hudiRow.setFlussRecord(logRecord);
 
         assertThat(hudiRow.getBoolean(0)).isTrue();
@@ -89,23 +85,17 @@ class FlussRecordAsHudiRowTest {
         assertThat(hudiRow.getTimestamp(5, 6).getNanoOfMillisecond()).isEqualTo(5678);
         assertThat(hudiRow.getTimestamp(6, 6).getMillisecond()).isEqualTo(1698235273182L);
         assertThat(hudiRow.getBinary(7)).containsExactly(1, 2, 3);
-
-        assertThat(hudiRow.getInt(8)).isEqualTo(bucket);
-        assertThat(hudiRow.getLong(9)).isEqualTo(offset);
-        assertThat(hudiRow.getLong(10)).isEqualTo(timestamp);
-        assertThat(hudiRow.getTimestamp(10, 6).getMillisecond()).isEqualTo(timestamp);
-        assertThat(hudiRow.getArity()).isEqualTo(11);
+        // clean tables expose only the business columns; no system columns are appended
+        assertThat(hudiRow.getArity()).isEqualTo(8);
         assertThat(hudiRow.getRowKind()).isEqualTo(RowKind.INSERT);
     }
 
     @Test
     void testChangeTypeToRowKind() {
-        RowType rowType =
-                RowType.of(
-                        new BooleanType(), new IntType(), new BigIntType(), new TimestampType(6));
+        RowType rowType = RowType.of(new BooleanType());
         GenericRow row = new GenericRow(1);
         row.setField(0, true);
-        FlussRecordAsHudiRow hudiRow = new FlussRecordAsHudiRow(0, rowType);
+        FlussRecordAsHudiRow hudiRow = new FlussRecordAsHudiRow(rowType);
 
         hudiRow.setFlussRecord(new GenericRecord(0, 1, UPDATE_BEFORE, row));
         assertThat(hudiRow.getRowKind()).isEqualTo(RowKind.UPDATE_BEFORE);

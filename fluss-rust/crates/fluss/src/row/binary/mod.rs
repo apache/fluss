@@ -16,6 +16,7 @@
 // under the License.
 
 mod binary_writer;
+pub(crate) mod encoding;
 mod iceberg_binary_row_writer;
 
 pub use binary_writer::*;

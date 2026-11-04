@@ -144,6 +144,37 @@ TableInfo tableInfo = admin.getTableInfo(tablePath).get(); // blocking call
 System.out.println(tableInfo);
 ```
 
+## Cluster Inspection
+
+Since Fluss 1.1, `Admin.describeCluster()` returns a `ClusterDescription` containing the coordinator,
+live tablet server nodes (addresses, racks and server tags), and replica loads. Both tablet server
+maps are keyed by server ID:
+
+```java
+ClusterDescription cluster = admin.describeCluster().get();
+int serverId = 1;
+ServerNode node = cluster.getTabletServers().get(serverId);
+TabletServerDescription load = cluster.getTabletServerLoads().get(serverId);
+boolean hasNoAssignedReplicas = load != null && load.getNumReplicas() == 0;
+```
+
+The load map also includes offline servers that still have assigned replicas, so a server may have
+a load entry without a live node entry. Live servers with no replicas have explicit zero counts.
+A missing load entry means statistics are unavailable; it must not be treated as proof that a
+server has been evacuated.
+
+In a high-availability deployment, `getCoordinatorStandbys()` lists the currently live standby
+coordinators, excluding the active coordinator returned by `getCoordinatorServer()`. A standby is
+listed while it is registered with the cluster, which does not guarantee that it is ready to take
+over leadership. Coordinators have no numeric server ID, so `ServerNode.id()` is not meaningful
+for them.
+
+This API requires `DESCRIBE` permission on the cluster and refreshes metadata and retries once on
+retriable failures, including coordinator address changes. Servers that do not support it return
+`UnsupportedVersionException`. For basic discovery, `Admin.getServerNodes()` continues to return
+the coordinator and live tablet servers without requiring cluster `DESCRIBE` permission; it does
+not include server tags or replica loads.
+
 ## Table Statistics
 
 The Admin API provides the `getTableStats` method to retrieve statistics about a table, such as the current row count.
@@ -243,6 +274,47 @@ while (true) {
 }
 ```
 
+#### Filter Pushdown
+
+Filter pushdown can reduce the data read by a `LogScanner`. Fluss evaluates the predicate against
+the column statistics stored in each record batch and skips batches that cannot contain matching
+rows.
+
+Use `PredicateBuilder` with the table's `RowType` to build a predicate, and pass it to
+`Scan#filter(Predicate)` before creating the scanner:
+
+```java
+TableInfo tableInfo = table.getTableInfo();
+PredicateBuilder predicateBuilder = new PredicateBuilder(tableInfo.getRowType());
+
+int ageIndex = predicateBuilder.indexOf("age");
+int activeIndex = predicateBuilder.indexOf("is_active");
+Predicate predicate = PredicateBuilder.and(
+        predicateBuilder.greaterOrEqual(ageIndex, 18),
+        predicateBuilder.equal(activeIndex, true));
+
+LogScanner logScanner = table.newScan()
+        .filter(predicate)
+        .createLogScanner();
+```
+
+The builder supports comparison predicates (`equal`, `notEqual`, `lessThan`, `lessOrEqual`,
+`greaterThan`, and `greaterOrEqual`), null checks, `in`, `notIn`, `between`, string predicates
+(`startsWith`, `endsWith`, and `contains`), and `and`/`or` combinations.
+
+:::note
+
+- Filter pushdown is supported only for Log Tables using the Arrow log format
+  (`'table.log.format' = 'arrow'`).
+- Every filtered column must be configured in the table's `table.statistics.columns` property.
+  Only records written after statistics are enabled benefit from the optimization.
+- Filtering is performed at record-batch granularity and can produce false positives. It does not
+  remove individual non-matching rows, so applications must still evaluate the predicate on each
+  returned row when exact filtering is required (for example, with `predicate.test(row)`).
+- `BatchScanner`, including snapshot scans, does not support filter pushdown.
+
+:::
+
 ### Batch Scan — Full Primary Key Table
 
 For Primary Key tables, `BatchScanner` reads every live row in the table once
@@ -324,6 +396,82 @@ LookupResult prefixLookup = table.newLookup()
         .createLookuper()
         .lookup(rowKey)
         .get();
+```
+
+### Multi-Table Scanner and Writer
+`MultiTable`, obtained from `connection.getMultiTable()`, lets a single scanner or writer work across many tables without creating a `Table` instance for each one.
+Like `Table`, a `MultiTable` instance is lightweight but not thread-safe.
+
+A `MultiTableLogScanner` subscribes to buckets by table path, and each poll returns records from all subscribed tables.
+Every `MultiTableRecord` carries the table path, the schema and schema id it was written with, the change type, and the underlying `ScanRecord`.
+Column projection and filter pushdown are not available on the multi-table scanner; every record carries the full row.
+```java
+MultiTable multiTable = connection.getMultiTable();
+TablePath ordersPath = TablePath.of("my_db", "orders");
+TablePath eventsPath = TablePath.of("my_db", "events");
+
+try (MultiTableLogScanner scanner = multiTable.newMultiTableScan().createLogScanner()) {
+    // non-partitioned table: (tablePath, bucket)
+    scanner.subscribeFromBeginning(ordersPath, 0);
+    // partitioned table: (tablePath, partitionId, bucket); using the wrong overload for a table throws
+    for (PartitionInfo partition : admin.listPartitionInfos(eventsPath).get()) {
+        scanner.subscribeFromBeginning(eventsPath, partition.getPartitionId(), 0);
+    }
+
+    while (true) {
+        MultiTableRecords records = scanner.poll(Duration.ofSeconds(1));
+        for (MultiTableRecord record : records) {
+            TablePath tablePath = record.getTablePath();
+            Schema schema = record.getSchema();
+            InternalRow row = record.getRow();
+            // Process the row
+            ...
+        }
+        // Consumed offsets are available per table and per bucket
+        for (TablePath tablePath : records.tablePaths()) {
+            for (TableBucket bucket : records.buckets(tablePath)) {
+                Long nextOffset = records.consumedUpToOffset(tablePath, bucket);
+                ...
+            }
+        }
+    }
+}
+```
+If a subscribed table is dropped and recreated, further subscriptions to it fail until its stale buckets are unsubscribed.
+
+A `MultiTableWriter` routes each record to the table named in the `MultiTableWriteRecord`.
+Log tables accept `forAppend`, primary key tables accept `forUpsert` and `forDelete`, and each record must carry the schema id the row was encoded against.
+Each writer owns its own buffers and sender thread, so create one per pipeline and always close it; `close()` flushes pending records.
+Rejected records (unknown table, operation not accepted by the table kind, row not matching the schema) are reported only through the returned future, never thrown by `write()` or `flush()`.
+```java
+int ordersSchemaId = admin.getTableInfo(ordersPath).get().getSchemaId();
+int usersSchemaId = admin.getTableInfo(usersPath).get().getSchemaId();
+
+try (MultiTableWriter writer = multiTable.newMultiTableWrite().createWriter()) {
+    // write() buffers the record and returns; the first write to a table blocks on a metadata lookup.
+    // The future completes once the server acknowledges the record, or fails if the record is rejected.
+    CompletableFuture<WriteResult> f1 =
+            writer.write(MultiTableWriteRecord.forAppend(ordersPath, orderRow, ordersSchemaId));
+    CompletableFuture<WriteResult> f2 =
+            writer.write(MultiTableWriteRecord.forUpsert(usersPath, userRow, usersSchemaId));
+    CompletableFuture<WriteResult> f3 =
+            writer.write(MultiTableWriteRecord.forDelete(usersPath, userRow, usersSchemaId));
+
+    // block until all buffered records are acknowledged
+    writer.flush();
+    // surface any rejected or failed records
+    CompletableFuture.allOf(f1, f2, f3).get();
+}
+```
+
+A common pattern is to forward records between log tables, reusing the scanned row and schema id.
+The schema id is resolved against the target table, so reusing `record.getSchemaId()` is only valid when the target shares the source's schema history (the same table, or a mirror created with identical DDL); otherwise pass a target schema id whose layout matches the row.
+When the source is a primary key table, map `record.getChangeType()` to `forUpsert` or `forDelete` and skip `UPDATE_BEFORE` records.
+```java
+for (MultiTableRecord record : scanner.poll(Duration.ofSeconds(1))) {
+    writer.write(MultiTableWriteRecord.forAppend(targetPath, record.getRow(), record.getSchemaId()))
+            .whenComplete((result, error) -> { if (error != null) { /* handle the rejected record */ } });
+}
 ```
 
 ## Java Typed API

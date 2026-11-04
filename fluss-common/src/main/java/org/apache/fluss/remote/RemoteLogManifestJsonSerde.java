@@ -47,8 +47,11 @@ public class RemoteLogManifestJsonSerde
     private static final String REMOTE_LOG_SEGMENT_ID_FIELD = "segment_id";
     private static final String START_OFFSET_FIELD = "start_offset";
     private static final String END_OFFSET_FIELD = "end_offset";
+    private static final String LOGICAL_START_OFFSET_FIELD = "logical_start_offset";
+    private static final String LOGICAL_END_OFFSET_FIELD = "logical_end_offset";
     private static final String MAX_TIMESTAMP_FIELD = "max_timestamp";
     private static final String SEGMENT_SIZE_IN_BYTES_FIELD = "size_in_bytes";
+    private static final String HIGHEST_COPIED_END_OFFSET_FIELD = "highest_copied_end_offset";
     private static final int SNAPSHOT_VERSION = 1;
 
     @Override
@@ -72,6 +75,10 @@ public class RemoteLogManifestJsonSerde
             generator.writeNumberField(PARTITION_ID_FIELD, tb.getPartitionId());
         }
         generator.writeNumberField(BUCKET_ID_FIELD, tb.getBucket());
+        if (manifest.getHighestCopiedEndOffset() != manifest.getRemoteLogEndOffset()) {
+            generator.writeNumberField(
+                    HIGHEST_COPIED_END_OFFSET_FIELD, manifest.getHighestCopiedEndOffset());
+        }
 
         // serialize writer id entries.
         generator.writeArrayFieldStart(MANIFEST_ENTRIES_FILED);
@@ -81,6 +88,14 @@ public class RemoteLogManifestJsonSerde
                     REMOTE_LOG_SEGMENT_ID_FIELD, remoteLogSegment.remoteLogSegmentId().toString());
             generator.writeNumberField(START_OFFSET_FIELD, remoteLogSegment.remoteLogStartOffset());
             generator.writeNumberField(END_OFFSET_FIELD, remoteLogSegment.remoteLogEndOffset());
+            if (remoteLogSegment.logicalStartOffset() != remoteLogSegment.remoteLogStartOffset()) {
+                generator.writeNumberField(
+                        LOGICAL_START_OFFSET_FIELD, remoteLogSegment.logicalStartOffset());
+            }
+            if (remoteLogSegment.logicalEndOffset() != remoteLogSegment.remoteLogEndOffset()) {
+                generator.writeNumberField(
+                        LOGICAL_END_OFFSET_FIELD, remoteLogSegment.logicalEndOffset());
+            }
             generator.writeNumberField(MAX_TIMESTAMP_FIELD, remoteLogSegment.maxTimestamp());
             generator.writeNumberField(
                     SEGMENT_SIZE_IN_BYTES_FIELD, remoteLogSegment.segmentSizeInBytes());
@@ -116,9 +131,11 @@ public class RemoteLogManifestJsonSerde
             String remoteLogSegmentId = entryJson.get(REMOTE_LOG_SEGMENT_ID_FIELD).asText();
             long startOffset = entryJson.get(START_OFFSET_FIELD).asLong();
             long endOffset = entryJson.get(END_OFFSET_FIELD).asLong();
+            JsonNode logicalStartOffsetNode = entryJson.get(LOGICAL_START_OFFSET_FIELD);
+            JsonNode logicalEndOffsetNode = entryJson.get(LOGICAL_END_OFFSET_FIELD);
             long maxTimestamp = entryJson.get(MAX_TIMESTAMP_FIELD).asLong();
             int segmentSizeInBytes = entryJson.get(SEGMENT_SIZE_IN_BYTES_FIELD).asInt();
-            snapshotEntries.add(
+            RemoteLogSegment.Builder segmentBuilder =
                     RemoteLogSegment.Builder.builder()
                             .physicalTablePath(physicalTablePath)
                             .tableBucket(tableBucket)
@@ -126,11 +143,25 @@ public class RemoteLogManifestJsonSerde
                             .remoteLogStartOffset(startOffset)
                             .remoteLogEndOffset(endOffset)
                             .maxTimestamp(maxTimestamp)
-                            .segmentSizeInBytes(segmentSizeInBytes)
-                            .build());
+                            .segmentSizeInBytes(segmentSizeInBytes);
+            if (logicalStartOffsetNode != null) {
+                segmentBuilder.logicalStartOffset(logicalStartOffsetNode.asLong());
+            }
+            if (logicalEndOffsetNode != null) {
+                segmentBuilder.logicalEndOffset(logicalEndOffsetNode.asLong());
+            }
+            snapshotEntries.add(segmentBuilder.build());
         }
 
-        return new RemoteLogManifest(physicalTablePath, tableBucket, snapshotEntries);
+        JsonNode highestCopiedEndOffsetNode = node.get(HIGHEST_COPIED_END_OFFSET_FIELD);
+        if (highestCopiedEndOffsetNode == null) {
+            return new RemoteLogManifest(physicalTablePath, tableBucket, snapshotEntries);
+        }
+        return new RemoteLogManifest(
+                physicalTablePath,
+                tableBucket,
+                snapshotEntries,
+                highestCopiedEndOffsetNode.asLong());
     }
 
     public static RemoteLogManifest fromJson(byte[] json) {

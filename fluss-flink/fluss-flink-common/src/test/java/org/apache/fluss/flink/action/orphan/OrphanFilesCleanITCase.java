@@ -40,6 +40,7 @@ import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
 import org.apache.fluss.server.zk.data.ZkData.BucketSnapshotsZNode;
 import org.apache.fluss.server.zk.data.ZkData.PartitionZNode;
+import org.apache.fluss.testutils.common.MultiVersionTest;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.FlussPaths;
 
@@ -163,6 +164,7 @@ abstract class OrphanFilesCleanITCase extends AbstractTestBase {
     private static final Duration OLD_ENOUGH = Duration.ofDays(2);
 
     @Test
+    @MultiVersionTest
     void mixedOrphanAndActiveFilesInSameBucket() throws Exception {
         String dbName = newDatabaseName("mixed");
         TablePath tablePath = createLogTable(dbName, "mixed_bucket");
@@ -299,8 +301,8 @@ abstract class OrphanFilesCleanITCase extends AbstractTestBase {
                                 .toString());
         String activeSegmentId = UUID.randomUUID().toString();
         Path activeSegment =
-                seedManifestAndSegment(remoteLogTabletDir, manifestPath, activeSegmentId, 0L, 0L);
-        upsertManifest(tableBucket, manifestPath, 0L);
+                seedManifestAndSegment(remoteLogTabletDir, manifestPath, activeSegmentId, 0L, 1L);
+        upsertManifest(tableBucket, manifestPath, 1L);
         return activeSegment;
     }
 
@@ -512,8 +514,8 @@ abstract class OrphanFilesCleanITCase extends AbstractTestBase {
                                 .resolve("metadata/p0.manifest")
                                 .toUri()
                                 .toString());
-        Path oldSegment = seedManifestAndSegment(remoteLogTabletDir, manifest0, segmentId, 0L, 0L);
-        upsertManifest(tableBucket, manifest0, 0L);
+        Path oldSegment = seedManifestAndSegment(remoteLogTabletDir, manifest0, segmentId, 0L, 1L);
+        upsertManifest(tableBucket, manifest0, 1L);
 
         runCleanerForDatabase(false, dbName);
 
@@ -526,8 +528,8 @@ abstract class OrphanFilesCleanITCase extends AbstractTestBase {
                                 .toUri()
                                 .toString());
         Path newSegment =
-                seedManifestAndSegment(remoteLogTabletDir, manifest1, segmentId, 100L, 100L);
-        upsertManifest(tableBucket, manifest1, 100L);
+                seedManifestAndSegment(remoteLogTabletDir, manifest1, segmentId, 100L, 101L);
+        upsertManifest(tableBucket, manifest1, 101L);
 
         runCleanerForDatabase(false, dbName);
 
@@ -580,7 +582,12 @@ abstract class OrphanFilesCleanITCase extends AbstractTestBase {
         TableInfo tableInfo = admin.getTableInfo(tablePath).get();
         TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), 0);
 
-        // Seed a valid KV snapshot in ZK so listBucketSnapshots returns a child to decode.
+        // Seed a log manifest + active segment while the replica still has ordinary empty state.
+        // Updating the manifest can trigger a leader notification, which must complete before the
+        // intentionally synthetic snapshot metadata below is installed for the cleaner test.
+        Path activeLogSegment = seedActiveBucketManifest(tablePath);
+
+        // Seed a KV snapshot in ZK so listBucketSnapshots returns a child to decode.
         FsPath remoteKvTabletDir =
                 FlussPaths.remoteKvTabletDir(
                         new FsPath(remoteDataRoot().resolve("kv").toUri().toString()),
@@ -588,10 +595,6 @@ abstract class OrphanFilesCleanITCase extends AbstractTestBase {
                         tableBucket);
         long activeSnapshotId = 1L;
         seedKvSnapshots(tableBucket, remoteKvTabletDir, new long[] {activeSnapshotId});
-
-        // Seed a log manifest + active segment so the log bucket reaches RESOLVED in the
-        // active-file cleanup.
-        Path activeLogSegment = seedActiveBucketManifest(tablePath);
 
         // -----------------------------------------------------------------
         // Step 1 — baseline (no fault injection)
@@ -1002,6 +1005,9 @@ abstract class OrphanFilesCleanITCase extends AbstractTestBase {
 
     private void upsertManifest(TableBucket tableBucket, FsPath manifestPath, long endOffset)
             throws Exception {
+        // Wait for replica initialization before injecting the manifest, otherwise the remote
+        // log manager can load these synthetic segments and expire them in the background.
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tableBucket);
         FLUSS_CLUSTER_EXTENSION
                 .getZooKeeperClient()
                 .upsertRemoteLogManifestHandle(

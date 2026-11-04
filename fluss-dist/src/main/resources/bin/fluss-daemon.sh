@@ -94,7 +94,7 @@ function guaranteed_kill {
     # enter an unclean shutdown state.
     timeout 120 tail --pid=$to_stop_pid -f /dev/null &> /dev/null
     if [ "$?" -eq 124 ]; then
-      echo "Daemon $daemon didn't stop within 10 seconds. Killing it."
+      echo "Daemon $daemon didn't stop within 120 seconds. Killing it."
       # send sigkill
       kill -9 $to_stop_pid
     fi

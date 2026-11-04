@@ -178,7 +178,9 @@ fn table_descriptor_new(
         schema_builder = schema_builder.column(name, to_fluss_type(dt));
     }
     if !schema.primary_key.is_empty() {
-        schema_builder = schema_builder.primary_key(schema.primary_key);
+        schema_builder = schema_builder
+            .primary_key(schema.primary_key)
+            .map_err(to_nif_err)?;
     }
 
     let built_schema = schema_builder.build().map_err(to_nif_err)?;

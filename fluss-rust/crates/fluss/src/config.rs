@@ -25,6 +25,7 @@ const DEFAULT_WRITER_BATCH_SIZE: i32 = 2 * 1024 * 1024;
 // Mirrors Java's `2 * pageSize` floor with default pageSize = 128 KB.
 const DEFAULT_WRITER_DYNAMIC_BATCH_SIZE_MIN: i32 = 256 * 1024;
 const DEFAULT_WRITER_DYNAMIC_BATCH_SIZE_ENABLED: bool = true;
+const DEFAULT_WRITER_DYNAMIC_CREATE_PARTITION_ENABLED: bool = true;
 const DEFAULT_RETRIES: i32 = i32::MAX;
 const DEFAULT_PREFETCH_NUM: usize = 4;
 const DEFAULT_DOWNLOAD_THREADS: usize = 3;
@@ -38,10 +39,22 @@ const DEFAULT_SCANNER_LOG_FETCH_MAX_BYTES_FOR_BUCKET: i32 = 1024 * 1024;
 const DEFAULT_WRITER_MAX_INFLIGHT_REQUESTS_PER_BUCKET: usize = 5;
 const DEFAULT_WRITER_BUFFER_MEMORY_SIZE: usize = 64 * 1024 * 1024; // 64MB, matching Java
 const DEFAULT_WRITER_BUFFER_WAIT_TIMEOUT_MS: u64 = u64::MAX;
+const DEFAULT_WRITER_KV_BACKPRESSURE_MAX_THROTTLE_MS: u64 = 3000;
 
 const MAX_IN_FLIGHT_REQUESTS_PER_BUCKET_FOR_IDEMPOTENCE: usize = 5;
 const DEFAULT_ACKS: &str = "all";
-const DEFAULT_CONNECT_TIMEOUT_MS: u64 = 120_000;
+const DEFAULT_CONNECT_TIMEOUT_MS: u64 = 15_000;
+// Wait this long before resending a batch the server rejected with a retriable
+// error, doubling up to `DEFAULT_WRITER_RETRY_MAX_BACKOFF_MS`. Shaped like
+// Kafka's `retry.backoff.ms` / `retry.backoff.max.ms`, whose defaults are 100ms
+// and 1s. Without a backoff a transient rejection is resent on every sender poll
+// cycle, which turns one unhealthy leader into a request storm.
+const DEFAULT_WRITER_RETRY_BACKOFF_MS: u64 = 100;
+const DEFAULT_WRITER_RETRY_MAX_BACKOFF_MS: u64 = 1000;
+// Same shape for lookups, with the defaults of Java's `client.lookup.retry-backoff`
+// and `client.lookup.retry-backoff-max`.
+const DEFAULT_LOOKUP_RETRY_BACKOFF_MS: u64 = 100;
+const DEFAULT_LOOKUP_RETRY_MAX_BACKOFF_MS: u64 = 1000;
 const DEFAULT_SECURITY_PROTOCOL: &str = "PLAINTEXT";
 const DEFAULT_SASL_MECHANISM: &str = "PLAIN";
 
@@ -76,6 +89,20 @@ pub struct Config {
     #[arg(long, default_value_t = DEFAULT_RETRIES)]
     pub writer_retries: i32,
 
+    /// Initial delay before a batch rejected with a retriable error is resent.
+    /// The delay doubles per attempt, up to `writer_retry_max_backoff_ms`, and
+    /// carries +/-20% jitter so buckets failing together do not resend in
+    /// lockstep. Mirrors Kafka's `retry.backoff.ms`. 0 resends immediately.
+    /// Default: 100.
+    #[arg(long, default_value_t = DEFAULT_WRITER_RETRY_BACKOFF_MS)]
+    pub writer_retry_backoff_ms: u64,
+
+    /// Ceiling for the exponentially growing retry delay. Mirrors Kafka's
+    /// `retry.backoff.max.ms`. Keeping it low bounds how long a bucket stays
+    /// idle after its leader becomes healthy again. Default: 1000.
+    #[arg(long, default_value_t = DEFAULT_WRITER_RETRY_MAX_BACKOFF_MS)]
+    pub writer_retry_max_backoff_ms: u64,
+
     #[arg(long, default_value_t = DEFAULT_WRITER_BATCH_SIZE)]
     pub writer_batch_size: i32,
 
@@ -93,6 +120,16 @@ pub struct Config {
     #[arg(long, value_enum, default_value_t = NoKeyAssigner::Sticky)]
     pub writer_bucket_no_key_assigner: NoKeyAssigner,
 
+    /// Create a partition that a write targets but that does not exist yet.
+    /// When disabled, such writes fail with `PartitionNotExists`.
+    /// Default: true (matching Java `client.writer.dynamic-create-partition.enabled`).
+    #[arg(
+        long,
+        default_value_t = DEFAULT_WRITER_DYNAMIC_CREATE_PARTITION_ENABLED,
+        action = clap::ArgAction::Set
+    )]
+    pub writer_dynamic_create_partition_enabled: bool,
+
     /// Maximum number of remote log segments to prefetch
     /// Default: 4 (matching Java CLIENT_SCANNER_REMOTE_LOG_PREFETCH_NUM)
     #[arg(long, default_value_t = DEFAULT_PREFETCH_NUM)]
@@ -107,6 +144,11 @@ pub struct Config {
     /// Download path always uses streaming reader.
     #[arg(long, default_value_t = DEFAULT_SCANNER_REMOTE_LOG_READ_CONCURRENCY)]
     pub scanner_remote_log_read_concurrency: usize,
+
+    /// Parent directory for downloaded remote logs. None uses the OS temporary directory plus `/fluss`.
+    /// Missing parent directories are created when a remote file is downloaded.
+    #[arg(long)]
+    pub scanner_io_tmp_dir: Option<String>,
 
     /// Maximum number of records returned in a single call to poll() for LogScanner.
     /// Default: 500 (matching Java CLIENT_SCANNER_LOG_MAX_POLL_RECORDS)
@@ -162,8 +204,14 @@ pub struct Config {
     #[arg(long, default_value_t = DEFAULT_WRITER_BUFFER_WAIT_TIMEOUT_MS)]
     pub writer_buffer_wait_timeout_ms: u64,
 
+    /// Maximum KV backpressure throttle in milliseconds. A pressure `p` delays the bucket by
+    /// `max_throttle * p²`; a hard rejection uses the full window.
+    /// Default: 3000 (matching Java `client.writer.kv-backpressure.max-throttle`)
+    #[arg(long, default_value_t = DEFAULT_WRITER_KV_BACKPRESSURE_MAX_THROTTLE_MS)]
+    pub writer_kv_backpressure_max_throttle_ms: u64,
+
     /// Connect timeout in milliseconds for TCP transport connect.
-    /// Default: 120000 (120 seconds).
+    /// Default: 15000 (15 seconds), matching Java `client.connect-timeout`.
     #[arg(long, default_value_t = DEFAULT_CONNECT_TIMEOUT_MS)]
     pub connect_timeout_ms: u64,
 
@@ -203,6 +251,19 @@ pub struct Config {
     /// Default: i32::MAX (matching Java CLIENT_LOOKUP_MAX_RETRIES)
     #[arg(long, default_value_t = i32::MAX)]
     pub lookup_max_retries: i32,
+
+    /// Initial delay before a lookup that failed with a retriable error is resent.
+    /// The delay doubles per attempt, up to `lookup_retry_max_backoff_ms`, and
+    /// carries +/-20% jitter. 0 resends immediately.
+    /// Default: 100 (matching Java CLIENT_LOOKUP_RETRY_BACKOFF)
+    #[arg(long, default_value_t = DEFAULT_LOOKUP_RETRY_BACKOFF_MS)]
+    pub lookup_retry_backoff_ms: u64,
+
+    /// Ceiling for the exponentially growing lookup retry delay, before jitter,
+    /// so a delay can reach 20% above it. Must be >= `lookup_retry_backoff_ms`.
+    /// Default: 1000 (matching Java CLIENT_LOOKUP_RETRY_BACKOFF_MAX)
+    #[arg(long, default_value_t = DEFAULT_LOOKUP_RETRY_MAX_BACKOFF_MS)]
+    pub lookup_retry_max_backoff_ms: u64,
 }
 
 impl std::fmt::Debug for Config {
@@ -212,6 +273,11 @@ impl std::fmt::Debug for Config {
             .field("writer_request_max_size", &self.writer_request_max_size)
             .field("writer_acks", &self.writer_acks)
             .field("writer_retries", &self.writer_retries)
+            .field("writer_retry_backoff_ms", &self.writer_retry_backoff_ms)
+            .field(
+                "writer_retry_max_backoff_ms",
+                &self.writer_retry_max_backoff_ms,
+            )
             .field("writer_batch_size", &self.writer_batch_size)
             .field(
                 "writer_dynamic_batch_size_enabled",
@@ -226,9 +292,14 @@ impl std::fmt::Debug for Config {
                 &self.writer_bucket_no_key_assigner,
             )
             .field(
+                "writer_dynamic_create_partition_enabled",
+                &self.writer_dynamic_create_partition_enabled,
+            )
+            .field(
                 "scanner_remote_log_prefetch_num",
                 &self.scanner_remote_log_prefetch_num,
             )
+            .field("scanner_io_tmp_dir", &self.scanner_io_tmp_dir)
             .field(
                 "remote_file_download_thread_num",
                 &self.remote_file_download_thread_num,
@@ -264,6 +335,10 @@ impl std::fmt::Debug for Config {
                 "writer_buffer_wait_timeout_ms",
                 &self.writer_buffer_wait_timeout_ms,
             )
+            .field(
+                "writer_kv_backpressure_max_throttle_ms",
+                &self.writer_kv_backpressure_max_throttle_ms,
+            )
             .field("connect_timeout_ms", &self.connect_timeout_ms)
             .field("security_protocol", &self.security_protocol)
             .field("security_sasl_mechanism", &self.security_sasl_mechanism)
@@ -277,6 +352,11 @@ impl std::fmt::Debug for Config {
                 &self.lookup_max_inflight_requests,
             )
             .field("lookup_max_retries", &self.lookup_max_retries)
+            .field("lookup_retry_backoff_ms", &self.lookup_retry_backoff_ms)
+            .field(
+                "lookup_retry_max_backoff_ms",
+                &self.lookup_retry_max_backoff_ms,
+            )
             .finish()
     }
 }
@@ -288,13 +368,18 @@ impl Default for Config {
             writer_request_max_size: DEFAULT_REQUEST_MAX_SIZE,
             writer_acks: String::from(DEFAULT_ACKS),
             writer_retries: i32::MAX,
+            writer_retry_backoff_ms: DEFAULT_WRITER_RETRY_BACKOFF_MS,
+            writer_retry_max_backoff_ms: DEFAULT_WRITER_RETRY_MAX_BACKOFF_MS,
             writer_batch_size: DEFAULT_WRITER_BATCH_SIZE,
             writer_dynamic_batch_size_enabled: DEFAULT_WRITER_DYNAMIC_BATCH_SIZE_ENABLED,
             writer_dynamic_batch_size_min: DEFAULT_WRITER_DYNAMIC_BATCH_SIZE_MIN,
             writer_bucket_no_key_assigner: NoKeyAssigner::Sticky,
+            writer_dynamic_create_partition_enabled:
+                DEFAULT_WRITER_DYNAMIC_CREATE_PARTITION_ENABLED,
             scanner_remote_log_prefetch_num: DEFAULT_PREFETCH_NUM,
             remote_file_download_thread_num: DEFAULT_DOWNLOAD_THREADS,
             scanner_remote_log_read_concurrency: DEFAULT_SCANNER_REMOTE_LOG_READ_CONCURRENCY,
+            scanner_io_tmp_dir: None,
             scanner_log_max_poll_records: DEFAULT_MAX_POLL_RECORDS,
             scanner_log_fetch_max_bytes: DEFAULT_SCANNER_LOG_FETCH_MAX_BYTES,
             scanner_log_fetch_min_bytes: DEFAULT_SCANNER_LOG_FETCH_MIN_BYTES,
@@ -306,6 +391,7 @@ impl Default for Config {
                 DEFAULT_WRITER_MAX_INFLIGHT_REQUESTS_PER_BUCKET,
             writer_buffer_memory_size: DEFAULT_WRITER_BUFFER_MEMORY_SIZE,
             writer_buffer_wait_timeout_ms: DEFAULT_WRITER_BUFFER_WAIT_TIMEOUT_MS,
+            writer_kv_backpressure_max_throttle_ms: DEFAULT_WRITER_KV_BACKPRESSURE_MAX_THROTTLE_MS,
             connect_timeout_ms: DEFAULT_CONNECT_TIMEOUT_MS,
             security_protocol: String::from(DEFAULT_SECURITY_PROTOCOL),
             security_sasl_mechanism: String::from(DEFAULT_SASL_MECHANISM),
@@ -316,6 +402,8 @@ impl Default for Config {
             lookup_batch_timeout_ms: 100,
             lookup_max_inflight_requests: 128,
             lookup_max_retries: i32::MAX,
+            lookup_retry_backoff_ms: DEFAULT_LOOKUP_RETRY_BACKOFF_MS,
+            lookup_retry_max_backoff_ms: DEFAULT_LOOKUP_RETRY_MAX_BACKOFF_MS,
         }
     }
 }
@@ -385,6 +473,15 @@ impl Config {
             return Err(
                 "scanner_log_fetch_max_bytes_for_bucket must be <= scanner_log_fetch_max_bytes"
                     .to_string(),
+            );
+        }
+        Ok(())
+    }
+
+    pub fn validate_lookup(&self) -> Result<(), String> {
+        if self.lookup_retry_backoff_ms > self.lookup_retry_max_backoff_ms {
+            return Err(
+                "lookup_retry_backoff_ms must be <= lookup_retry_max_backoff_ms".to_string(),
             );
         }
         Ok(())
@@ -560,12 +657,40 @@ mod tests {
     }
 
     #[test]
+    fn test_lookup_retry_backoff_bounds() {
+        assert!(Config::default().validate_lookup().is_ok());
+        for (initial_ms, max_ms, valid) in [(0, 0, true), (1000, 1000, true), (100, 10, false)] {
+            let config = Config {
+                lookup_retry_backoff_ms: initial_ms,
+                lookup_retry_max_backoff_ms: max_ms,
+                ..Config::default()
+            };
+            assert_eq!(config.validate_lookup().is_ok(), valid);
+        }
+    }
+
+    #[test]
     fn test_scanner_fetch_negative_wait() {
         let config = Config {
             scanner_log_fetch_wait_max_time_ms: -1,
             ..Config::default()
         };
         assert!(config.validate_scanner().is_err());
+    }
+
+    #[test]
+    fn test_writer_dynamic_create_partition_enabled_from_cli() {
+        let parse = |args: &[&str]| {
+            Config::try_parse_from(std::iter::once("fluss").chain(args.iter().copied()))
+                .expect("parse")
+                .writer_dynamic_create_partition_enabled
+        };
+        assert!(parse(&[]));
+        assert!(!parse(&[
+            "--writer-dynamic-create-partition-enabled",
+            "false"
+        ]));
+        assert!(parse(&["--writer-dynamic-create-partition-enabled=true"]));
     }
 
     #[test]

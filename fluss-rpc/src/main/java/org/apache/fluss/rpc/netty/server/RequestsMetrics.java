@@ -26,6 +26,7 @@ import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.metrics.ThreadSafeSimpleCounter;
 import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.rpc.protocol.ApiKeys;
+import org.apache.fluss.rpc.protocol.Errors;
 
 import java.util.Arrays;
 import java.util.Collection;
@@ -34,6 +35,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * A class wrapping the metrics registered for different request types. It's mainly used to simplify
@@ -51,12 +53,16 @@ public class RequestsMetrics {
         for (ApiKeys apiKey : apiKeys) {
             // we create a metrics group for each type of request, with the request type
             // as variable
+            addMetrics(serverMetricsGroup, toRequestName(apiKey, false, false));
             if (apiKey == ApiKeys.FETCH_LOG) {
-                // if it's fetch, we need two metrics group, one for client, one for follower
-                addMetrics(serverMetricsGroup, toRequestName(apiKey, true));
-                addMetrics(serverMetricsGroup, toRequestName(apiKey, false));
-            } else {
-                addMetrics(serverMetricsGroup, toRequestName(apiKey, false));
+                // For fetch, register separate metric groups for clients and followers.
+                addMetrics(serverMetricsGroup, toRequestName(apiKey, true, false));
+            }
+            if (apiKey == ApiKeys.LOOKUP) {
+                addMetrics(serverMetricsGroup, toRequestName(apiKey, false, true));
+            }
+            if (apiKey == ApiKeys.PUT_KV) {
+                addMetrics(serverMetricsGroup, toRequestName(apiKey, false, true));
             }
         }
         this.requestMetricGroup = serverMetricsGroup.addGroup("request");
@@ -96,14 +102,15 @@ public class RequestsMetrics {
                 requestName, new Metrics(parentMetricGroup.addGroup("request", requestName)));
     }
 
-    private static String toRequestName(ApiKeys apiKeys, boolean isFromFollower) {
+    private static String toRequestName(
+            ApiKeys apiKeys, boolean isFromFollower, boolean isHistorical) {
         switch (apiKeys) {
             case PRODUCE_LOG:
                 return "produceLog";
             case PUT_KV:
-                return "putKv";
+                return isHistorical ? "historicalPutKv" : "putKv";
             case LOOKUP:
-                return "lookup";
+                return isHistorical ? "historicalLookup" : "lookup";
             case PREFIX_LOOKUP:
                 return "prefixLookup";
             case FETCH_LOG:
@@ -115,16 +122,19 @@ public class RequestsMetrics {
         }
     }
 
-    public Optional<Metrics> getMetrics(short apiKey, boolean isFromFollower) {
-        String requestName = toRequestName(ApiKeys.forId(apiKey), isFromFollower);
+    public Optional<Metrics> getMetrics(
+            short apiKey, boolean isFromFollower, boolean isHistorical) {
+        String requestName = toRequestName(ApiKeys.forId(apiKey), isFromFollower, isHistorical);
         return Optional.ofNullable(metricsByRequest.get(requestName));
     }
 
     /** A class wrapping all registered metrics for a given request type. */
     public static final class Metrics {
         private static final int WINDOW_SIZE = 1024;
+        private final MetricGroup metricGroup;
         private final Counter requestsCount;
         private final Counter errorsCount;
+        private final Map<Errors, Counter> errorsCountByError = new ConcurrentHashMap<>();
 
         private final Histogram requestBytes;
 
@@ -134,6 +144,7 @@ public class RequestsMetrics {
         private final Histogram totalTimeMs;
 
         private Metrics(MetricGroup metricGroup) {
+            this.metricGroup = metricGroup;
             requestsCount = new ThreadSafeSimpleCounter();
             metricGroup.meter(MetricNames.REQUESTS_RATE, new MeterView(requestsCount));
             errorsCount = new ThreadSafeSimpleCounter();
@@ -142,23 +153,28 @@ public class RequestsMetrics {
             requestBytes =
                     metricGroup.histogram(
                             MetricNames.REQUEST_BYTES,
-                            new DescriptiveStatisticsHistogram(WINDOW_SIZE));
+                            new DescriptiveStatisticsHistogram(
+                                    WINDOW_SIZE, DescriptiveStatisticsHistogram.DEFAULT_MAX_AGE));
             requestQueueTimeMs =
                     metricGroup.histogram(
                             MetricNames.REQUEST_QUEUE_TIME_MS,
-                            new DescriptiveStatisticsHistogram(WINDOW_SIZE));
+                            new DescriptiveStatisticsHistogram(
+                                    WINDOW_SIZE, DescriptiveStatisticsHistogram.DEFAULT_MAX_AGE));
             requestProcessTimeMs =
                     metricGroup.histogram(
                             MetricNames.REQUEST_PROCESS_TIME_MS,
-                            new DescriptiveStatisticsHistogram(WINDOW_SIZE));
+                            new DescriptiveStatisticsHistogram(
+                                    WINDOW_SIZE, DescriptiveStatisticsHistogram.DEFAULT_MAX_AGE));
             responseSendTimeMs =
                     metricGroup.histogram(
                             MetricNames.RESPONSE_SEND_TIME_MS,
-                            new DescriptiveStatisticsHistogram(WINDOW_SIZE));
+                            new DescriptiveStatisticsHistogram(
+                                    WINDOW_SIZE, DescriptiveStatisticsHistogram.DEFAULT_MAX_AGE));
             totalTimeMs =
                     metricGroup.histogram(
                             MetricNames.REQUEST_TOTAL_TIME_MS,
-                            new DescriptiveStatisticsHistogram(WINDOW_SIZE));
+                            new DescriptiveStatisticsHistogram(
+                                    WINDOW_SIZE, DescriptiveStatisticsHistogram.DEFAULT_MAX_AGE));
         }
 
         public Counter getRequestsCount() {
@@ -167,6 +183,19 @@ public class RequestsMetrics {
 
         public Counter getErrorsCount() {
             return errorsCount;
+        }
+
+        void markError(Errors error) {
+            errorsCount.inc();
+            errorsCountByError.computeIfAbsent(error, this::registerErrorMeter).inc();
+        }
+
+        private Counter registerErrorMeter(Errors error) {
+            Counter perErrorCount = new ThreadSafeSimpleCounter();
+            metricGroup
+                    .addGroup("error", error.name())
+                    .meter(MetricNames.ERRORS_RATE, new MeterView(perErrorCount));
+            return perErrorCount;
         }
 
         public Histogram getRequestBytes() {

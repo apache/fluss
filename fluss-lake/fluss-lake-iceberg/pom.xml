@@ -24,14 +24,25 @@
     <parent>
         <groupId>org.apache.fluss</groupId>
         <artifactId>fluss-lake</artifactId>
-        <version>1.0-SNAPSHOT</version>
+        <version>1.1-SNAPSHOT</version>
     </parent>
 
     <artifactId>fluss-lake-iceberg</artifactId>
     <name>Apache Fluss : Lake : Iceberg</name>
 
+    <!--
+        The default Iceberg lake plugin: bundles fluss-lake-iceberg-common with Iceberg
+        ${iceberg.version}. The code and its tests live in fluss-lake-iceberg-common.
+    -->
+
     <packaging>jar</packaging>
     <dependencies>
+        <dependency>
+            <groupId>org.apache.fluss</groupId>
+            <artifactId>fluss-lake-iceberg-common</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
         <dependency>
             <groupId>org.apache.iceberg</groupId>
             <artifactId>iceberg-api</artifactId>
@@ -82,54 +93,9 @@
             <scope>provided</scope>
         </dependency>
 
-        <!-- test dependency -->
-        <dependency>
-            <groupId>org.apache.fluss</groupId>
-            <artifactId>fluss-flink-common</artifactId>
-            <version>${project.version}</version>
-            <scope>test</scope>
-            <type>test-jar</type>
-        </dependency>
-        <dependency>
-            <groupId>org.apache.fluss</groupId>
-            <artifactId>fluss-server</artifactId>
-            <version>${project.version}</version>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.apache.fluss</groupId>
-            <artifactId>fluss-server</artifactId>
-            <version>${project.version}</version>
-            <type>test-jar</type>
-            <scope>test</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>org.apache.fluss</groupId>
-            <artifactId>fluss-common</artifactId>
-            <version>${project.version}</version>
-            <type>test-jar</type>
-            <scope>test</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>org.apache.fluss</groupId>
-            <artifactId>fluss-test-utils</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>org.apache.hadoop</groupId>
-            <artifactId>hadoop-mapreduce-client-core</artifactId>
-            <version>2.8.5</version>
-            <scope>test</scope>
-            <exclusions>
-                <exclusion>
-                    <artifactId>commons-io</artifactId>
-                    <groupId>commons-io</groupId>
-                </exclusion>
-            </exclusions>
-        </dependency>
-
+        <!-- Hadoop is provided by the runtime. Keep it declared here: it also decides which
+             versions of shared transitive dependencies (e.g. commons-io, commons-codec) are
+             bundled into the plugin jar. -->
         <dependency>
             <groupId>org.apache.hadoop</groupId>
             <artifactId>hadoop-hdfs-client</artifactId>
@@ -191,63 +157,6 @@
                 </exclusion>
             </exclusions>
         </dependency>
-
-        <!-- Flink test dependency -->
-        <dependency>
-            <groupId>org.apache.fluss</groupId>
-            <artifactId>fluss-flink-${flink.major.version}</artifactId>
-            <scope>test</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>org.apache.fluss</groupId>
-            <artifactId>fluss-flink-common</artifactId>
-            <version>${project.version}</version>
-            <scope>test</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>org.apache.flink</groupId>
-            <artifactId>flink-core</artifactId>
-            <scope>test</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>org.apache.flink</groupId>
-            <artifactId>flink-table-common</artifactId>
-            <scope>test</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>org.apache.flink</groupId>
-            <artifactId>flink-table-runtime</artifactId>
-            <scope>test</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>org.apache.flink</groupId>
-            <artifactId>flink-connector-base</artifactId>
-            <scope>test</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>org.apache.flink</groupId>
-            <artifactId>flink-table-test-utils</artifactId>
-            <scope>test</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>org.apache.iceberg</groupId>
-            <artifactId>iceberg-flink-${flink.major.version}</artifactId>
-            <version>${iceberg.version}</version>
-            <scope>test</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>org.apache.flink</groupId>
-            <artifactId>flink-connector-files</artifactId>
-            <scope>test</scope>
-        </dependency>
     </dependencies>
 
     <build>
@@ -261,45 +170,6 @@
                     <!-- compilation of test sources -->
                     <skip>${skip.on.java8}</skip>
                 </configuration>
-            </plugin>
-
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-surefire-plugin</artifactId>
-                <executions>
-                    <!-- Test end with ITCase is e2e test in this module   -->
-                    <execution>
-                        <id>integration-tests</id>
-                        <phase>integration-test</phase>
-                        <inherited>false</inherited>
-                        <goals>
-                            <goal>test</goal>
-                        </goals>
-                        <configuration>
-                            <skip>${skip.on.java8}</skip>
-                            <includes>
-                                <include>**/*ITCase.*</include>
-                            </includes>
-                            <!-- e2e test with flink/zookeeper cluster, we set forkCount=1 -->
-                            <forkCount>1</forkCount>
-                        </configuration>
-                    </execution>
-                    <!-- others unit tests -->
-                    <execution>
-                        <id>default-test</id>
-                        <phase>test</phase>
-                        <inherited>false</inherited>
-                        <goals>
-                            <goal>test</goal>
-                        </goals>
-                        <configuration>
-                            <skip>${skip.on.java8}</skip>
-                            <excludes>
-                                <exclude>**/*ITCase.*</exclude>
-                            </excludes>
-                        </configuration>
-                    </execution>
-                </executions>
             </plugin>
 
             <plugin>

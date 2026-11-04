@@ -8,7 +8,7 @@ sidebar_position: 2
 ## Introduction
 
 [Apache Iceberg](https://iceberg.apache.org/) is an open table format for huge analytic datasets. It provides ACID transactions, schema evolution, and efficient data organization for data lakes.
-To integrate Fluss with Iceberg, you must enable lakehouse storage and configure Iceberg as the lakehouse storage. For more details, see [Deploying Streaming Lakehouse](../../install-deploy/deploying-streaming-lakehouse.md).
+To integrate Fluss with Iceberg, you must enable lakehouse storage and configure Iceberg as the lakehouse storage. For more details, see [Deploying Lakestream](../../install-deploy/deploying-streaming-lakehouse.md).
 
 > **NOTE**: Iceberg requires JDK11 or later. Please ensure that both your Fluss deployment and the Flink cluster used for tiering services are running on JDK11+.
 
@@ -115,15 +115,21 @@ Fluss only bundles catalog implementations included in the `iceberg-core` module
 
 The Iceberg version that Fluss bundles is based on `1.10.1`. Please ensure the JARs you add are compatible with `Iceberg-1.10.1`.
 
+##### 4. Iceberg 1.12
+
+Fluss also provides an Iceberg plugin based on Iceberg `1.12.0`. It requires Java 17 or later in every process that loads it: the CoordinatorServer, and the Flink or Spark clusters that tier data to Iceberg or read Iceberg-backed tables. TabletServers don't load it. To use it, replace `FLUSS_HOME/plugins/iceberg/fluss-lake-iceberg-$FLUSS_VERSION$.jar` with `FLUSS_HOME/opt/iceberg-1.12/fluss-lake-iceberg-1.12-$FLUSS_VERSION$.jar`. Only one Iceberg plugin can be in `FLUSS_HOME/plugins/`. The JARs you add must then be compatible with `Iceberg-1.12.0`.
+
+A Flink job with state written by a Fluss version older than $FLUSS_VERSION$ must first be restored with the Iceberg `1.10.1` plugin of Fluss $FLUSS_VERSION$, and a savepoint taken, before it can be restored with the Iceberg `1.12.0` plugin. A job restored with the Iceberg `1.12.0` plugin cannot be restored with the Iceberg `1.10.1` plugin again.
+
 #### Important Notes
 
-- Ensure all JAR files are compatible with Iceberg 1.10.1
+- Ensure all JAR files are compatible with the Iceberg version of the plugin: `1.10.1` by default, or `1.12.0`
 - If using an existing Hadoop environment, it's recommended to use the `HADOOP_CLASSPATH` environment variable
 - Configuration changes take effect after restarting the Fluss service
 
 ### Start Tiering Service to Iceberg
 
-To tier Fluss's data to Iceberg, you must start the datalake tiering service. For guidance, you can refer to [Deploying Streaming Lakehouse](../../install-deploy/deploying-streaming-lakehouse.md). Although the example uses Paimon, the process is also applicable to Iceberg.
+To tier Fluss's data to Iceberg, you must start the datalake tiering service. For guidance, you can refer to [Deploying Lakestream](../../install-deploy/deploying-streaming-lakehouse.md). Although the example uses Paimon, the process is also applicable to Iceberg.
 
 #### Prerequisites: Hadoop Dependencies
 
@@ -180,6 +186,7 @@ If you are using remote storage, download the corresponding Fluss filesystem JAR
 
 ##### 3. Iceberg Lake Connector
 - **Fluss Lake Iceberg**: Put [fluss-lake-iceberg-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-lake-iceberg/$FLUSS_VERSION$/fluss-lake-iceberg-$FLUSS_VERSION$.jar) into `${FLINK_HOME}/lib`
+- For Iceberg 1.12, put [fluss-lake-iceberg-1.12-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-lake-iceberg-1.12/$FLUSS_VERSION$/fluss-lake-iceberg-1.12-$FLUSS_VERSION$.jar) into `${FLINK_HOME}/lib` instead, and run the Flink cluster on Java 17 or later. Any Iceberg JARs you add, such as `iceberg-flink-runtime` or `iceberg-aws`, must then also be version `1.12.0`.
 
 ##### 4. Iceberg Catalog Dependencies
 Put the JARs required by your Iceberg Catalog into `${FLINK_HOME}/lib`.
@@ -209,17 +216,26 @@ Use Iceberg-specific configurations as parameters when starting the Flink tierin
 
 #### Important Notes
 
-- Ensure all JAR files are compatible with Iceberg 1.10.1
+- Ensure all JAR files are compatible with the Iceberg version of the plugin: `1.10.1` by default, or `1.12.0`
 - Verify that all required dependencies are in the `${FLINK_HOME}/lib` directory
 - Check the Flink job logs for any missing dependency errors
 - Restart the Flink cluster after adding new JAR files
 
 ## Table Mapping Between Fluss and Iceberg
 
-When a Fluss table is created or altered with the option `'table.datalake.enabled' = 'true'` and configured with Iceberg as the datalake format, Fluss will automatically create a corresponding Iceberg table with the same table path.
+When a Fluss table is created or altered with the option `'table.datalake.enabled' = 'true'` and configured with Iceberg as the datalake format, Fluss will automatically create a corresponding Iceberg table. By default, it uses the same database and table name as the Fluss table. To use different names, see [Configure a Custom Iceberg Table Path](#configure-a-custom-iceberg-table-path).
 
-The schema of the Iceberg table matches that of the Fluss table, except for the addition of three system columns at the end: `__bucket`, `__offset`, and `__timestamp`.  
-These system columns help Fluss clients consume data from Iceberg in a streaming fashion, such as seeking by a specific bucket using an offset or timestamp.
+Newly created Iceberg tables (**clean** tables) contain only the user-defined columns of the Fluss table. Fluss no longer appends the `__bucket`, `__offset`, and `__timestamp` system columns to the physical schema, and a clean table therefore has no `__bucket` partitioning or `__offset` sort order.
+
+:::note
+The **Primary Key Tables**, **Log Tables**, and **Partitioned Tables** sections below describe the mapping for the current **clean** layout: only user columns, the bucket transform on the user bucket key (if any), the identity transform on user partition keys, and no sort order.
+
+Iceberg tables created by earlier Fluss versions (**legacy** tables) additionally carry the three trailing `__bucket`/`__offset`/`__timestamp` columns, an `identity(__bucket)` partition for bucket-unaware tables, and an `ASC(__offset)` sort order. These tables are **not** migrated and remain fully readable and writable. Fluss detects the layout from the physical schema — a table is treated as legacy when it carries the system columns, and clean otherwise — so both layouts are supported side by side without any manual migration.
+
+The names `__bucket`, `__offset`, and `__timestamp` remain reserved for Fluss internal use, so user columns must not use these names.
+
+For the rolling-upgrade requirements when moving to a Fluss version that creates clean tables, see [Upgrade Notes](../../maintenance/operations/upgrade-notes-1.0.md).
+:::
 
 ### Basic Configuration
 
@@ -243,6 +259,27 @@ CREATE TABLE fluss_order_with_lake (
 );
 ```
 
+### Configure a Custom Iceberg Table Path
+
+To use a different database or table name for the physical Iceberg table, set the following options when creating the Fluss table:
+
+```sql
+'table.datalake.database-name' = 'iceberg_database',
+'table.datalake.table-name' = 'iceberg_table'
+```
+
+Both options are optional. If either option is omitted, the corresponding Fluss database or table name is used. The mapping does not rename the Fluss table or set the Iceberg table's filesystem location.
+
+For a Fluss table created after datalake was configured for the cluster, the mapping can also be set in the same `ALTER TABLE` statement that enables lake storage for the first time:
+
+```sql
+ALTER TABLE existing_fluss_table SET (
+  'table.datalake.enabled' = 'true',
+  'table.datalake.database-name' = 'iceberg_database',
+  'table.datalake.table-name' = 'iceberg_table'
+);
+```
+
 ### Iceberg Table Properties
 
 You can also specify Iceberg [table properties](https://iceberg.apache.org/docs/latest/configuration/#table-properties) when creating a datalake-enabled Fluss table by using the `iceberg.` prefix within the Fluss table properties clause.
@@ -262,7 +299,6 @@ CREATE TABLE fluss_order_with_lake (
  ) WITH (
      'table.datalake.enabled' = 'true',
      'table.datalake.freshness' = '30s',
-     'table.datalake.auto-compaction' = 'true',
      'iceberg.write.format.default' = 'orc',
      'iceberg.commit.retry.num-retries' = '5'
 );
@@ -274,8 +310,7 @@ Primary key tables in Fluss are mapped to Iceberg tables with:
 
 - **Primary key constraints**: The Iceberg table maintains the same primary key definition
 - **Merge-on-read (MOR) strategy**: Updates and deletes are handled efficiently using Iceberg's MOR capabilities
-- **Bucket partitioning**: Automatically partitioned by the primary key using Iceberg's bucket transform with the bucket num of Fluss to align with Fluss
-- **Sorted by system column `__offset`**: Sorted by the system column `__offset` (which is derived from the Fluss change log) to preserve the data order and facilitate mapping back to the original Fluss change log
+- **Bucket partitioning**: Automatically partitioned by the primary key (the bucket key) using Iceberg's bucket transform with the bucket num of Fluss to align with Fluss
 
 ```sql title="Primary Key Table Example"
 CREATE TABLE user_profiles (
@@ -300,12 +335,8 @@ CREATE TABLE user_profiles (
     email STRING,
     last_login TIMESTAMP,
     profile_data STRING,
-    __bucket INT,
-    __offset BIGINT,
-    __timestamp TIMESTAMP_LTZ,
     PRIMARY KEY (user_id) NOT ENFORCED
-) PARTITIONED BY (bucket(user_id, 4))
-SORTED BY (__offset ASC);
+) PARTITIONED BY (bucket(user_id, 4));
 ```
 
 ### Log Tables
@@ -314,10 +345,7 @@ The table mapping for Fluss log tables varies depending on whether the bucket ke
 
 #### No Bucket Key
 
-Log tables without bucket in Fluss are mapped to Iceberg tables with:
-
-- **Identity partitioning**: Using identity partitioning on the `__bucket` system column, which enables seeking to the data files in Iceberg if a specified Fluss bucket is given
-- **Sorted by system column `__offset`**: Sorted by the system column `__offset` (which is derived from the Fluss log data) to preserve the data order and facilitate mapping back to the original Fluss log data
+Log tables without a bucket key in Fluss are mapped to unpartitioned Iceberg tables containing only the user columns.
 
 ```sql title="Log Table without Bucket Key"
 CREATE TABLE access_logs (
@@ -337,12 +365,8 @@ CREATE TABLE access_logs (
     timestamp TIMESTAMP,
     user_id BIGINT,
     action STRING,
-    ip_address STRING,
-    __bucket INT,
-    __offset BIGINT,
-    __timestamp TIMESTAMP_LTZ
-) PARTITIONED BY (IDENTITY(__bucket))
-SORTED BY (__offset ASC);
+    ip_address STRING
+);
 ```
 
 #### Single Bucket Key
@@ -350,7 +374,6 @@ SORTED BY (__offset ASC);
 Log tables with one bucket key in Fluss are mapped to Iceberg tables with:
 
 - **Bucket partitioning**: Automatically partitioned by the bucket key using Iceberg's bucket transform with the bucket num of Fluss to align with Fluss
-- **Sorted by system column `__offset`**: Sorted by the system column `__offset` (which is derived from the Fluss log data) to preserve the data order and facilitate mapping back to the original Fluss log data
 
 ```sql title="Log Table with Bucket Key"
 CREATE TABLE order_events (
@@ -371,12 +394,8 @@ CREATE TABLE order_events (
     order_id BIGINT,
     item_id BIGINT,
     amount INT,
-    event_time TIMESTAMP,
-    __bucket INT,
-    __offset BIGINT,
-    __timestamp TIMESTAMP_LTZ
-) PARTITIONED BY (bucket(order_id, 5))
-SORTED BY (__offset ASC);
+    event_time TIMESTAMP
+) PARTITIONED BY (bucket(order_id, 5));
 ```
 
 ### Partitioned Tables
@@ -405,17 +424,13 @@ CREATE TABLE daily_sales (
     amount DECIMAL(10,2),
     customer_id BIGINT,
     sale_date STRING,
-    __bucket INT,
-    __offset BIGINT,
-    __timestamp TIMESTAMP_LTZ,
     PRIMARY KEY (sale_id) NOT ENFORCED
-) PARTITIONED BY (IDENTITY(sale_date), bucket(sale_id, 4))
-SORTED BY (__offset ASC);
+) PARTITIONED BY (IDENTITY(sale_date), bucket(sale_id, 4));
 ```
 
 ### System Columns
 
-All Iceberg tables created by Fluss include three system columns:
+**Legacy** Iceberg tables (created by earlier Fluss versions) include three trailing system columns. Newly created **clean** tables do not include them.
 
 | Column        | Type          | Description                                   |
 |---------------|---------------|-----------------------------------------------|
@@ -558,9 +573,15 @@ When integrating with Iceberg, Fluss automatically converts between Fluss data t
 The table option `table.datalake.auto-compaction` (disabled by default) provides per-table control over automatic compaction.
 When enabled for a specific table, compaction is automatically triggered during write operations to that table by the tiering service.
 
+:::note
+Tiering-managed auto compaction is currently only supported for legacy Iceberg lake tables (tables that still carry the `__bucket`/`__offset`/`__timestamp` system columns). Newly created ("clean") Iceberg lake tables contain only user columns and have no `__bucket` column to scope per-bucket compaction, so `table.datalake.auto-compaction` is a no-op for them (a warning is logged by the tiering service). Use external Iceberg compaction to maintain small files for such tables.
+:::
+
 #### Configuration
 
-```sql title="Flink SQL"
+As noted above, `table.datalake.auto-compaction` only takes effect for legacy tables. The following shows the option syntax; it is a no-op on a newly created clean table.
+
+```sql title="Flink SQL (legacy tables only)"
 CREATE TABLE example_table (
     id BIGINT,
     data STRING,

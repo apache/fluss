@@ -50,6 +50,7 @@ import java.util.function.IntPredicate;
 import java.util.stream.Stream;
 
 import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
+import static org.apache.fluss.record.LogRecordBatchFormat.V0_RECORD_BATCH_HEADER_SIZE;
 import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
@@ -102,6 +103,26 @@ final class LogSegmentTest extends LogTestBase {
         LogSegment segment = createSegment(40);
         FetchDataInfo read = segment.read(40, 300, 300, false);
         assertThat(read).isNull();
+    }
+
+    @Test
+    void testReadNextOffsetFromSingleEmptyBatch() throws Exception {
+        long baseOffset = 40L;
+        LogSegment segment = createSegment(baseOffset);
+        MemoryLogRecords emptyBatch =
+                createRecordsWithoutBaseLogOffset(
+                        DATA1_ROW_TYPE,
+                        DEFAULT_SCHEMA_ID,
+                        baseOffset,
+                        System.currentTimeMillis(),
+                        CURRENT_LOG_MAGIC_VALUE,
+                        Collections.emptyList(),
+                        LogFormat.INDEXED);
+
+        assertThat(emptyBatch.sizeInBytes()).isEqualTo(V0_RECORD_BATCH_HEADER_SIZE);
+        segment.append(baseOffset, -1L, -1L, emptyBatch);
+
+        assertThat(segment.readNextOffset()).isEqualTo(baseOffset + 1);
     }
 
     @Test

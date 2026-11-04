@@ -15,6 +15,7 @@ Apache Fluss publishes the following JARs to Maven Central:
 
 | Artifact | Jar |
 |----------|-----|
+| Fluss connector for Flink 2.3 | [fluss-flink-2.3-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-flink-2.3/$FLUSS_VERSION$/fluss-flink-2.3-$FLUSS_VERSION$.jar) |
 | Fluss connector for Flink 2.2 | [fluss-flink-2.2-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-flink-2.2/$FLUSS_VERSION$/fluss-flink-2.2-$FLUSS_VERSION$.jar) |
 | Fluss connector for Flink 1.20 | [fluss-flink-1.20-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-flink-1.20/$FLUSS_VERSION$/fluss-flink-1.20-$FLUSS_VERSION$.jar) |
 | Fluss connector for Flink 1.19 | [fluss-flink-1.19-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-flink-1.19/$FLUSS_VERSION$/fluss-flink-1.19-$FLUSS_VERSION$.jar) |
@@ -36,7 +37,7 @@ Verify downloaded JARs using the [verification instructions](/downloads#verifyin
 ## Supported Flink Versions
 | Fluss Connector Versions | Supported Flink Versions |
 |--------------------------|--------------------------| 
-| $FLUSS_VERSION_SHORT$    | 1.18, 1.19, 1.20         |
+| $FLUSS_VERSION_SHORT$    | 1.18, 1.19, 1.20, 2.2, 2.3 |
 
 
 ## Feature Support
@@ -166,7 +167,7 @@ INSERT INTO pk_table VALUES
   (123456, 123456, 3, 3);
 ```
 
-To update data record with the primary key (1234, 1234) in a Flink streaming job, use the UPDATE statement as follows:
+To update the data record with the primary key `(1234, 1234)`, use the `UPDATE` statement. `UPDATE` and `DELETE FROM` are only supported in batch mode, and the `WHERE` clause can be any condition (see [UPDATE](writes.md#update) and [DELETE FROM](writes.md#delete-from)):
 
 ```sql title="Flink SQL"
 -- should run in batch mode

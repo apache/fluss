@@ -23,6 +23,42 @@ Push-based reporters usually implement the `Scheduled` interface and periodicall
 
 Pull-based reporters are queried from an external system instead.
 
+## Filtering metrics
+
+Each reporter supports two filters:
+
+- `metrics.reporter.<name>.filter.includes`: metrics to export (default: `*:*:*`).
+- `metrics.reporter.<name>.filter.excludes`: metrics to omit (default: empty). Excludes take precedence.
+
+Rules use `<scope>[:<name>[:<type>]]`, with `;` between rules and `,` between names/types.
+Use logical scopes with `.` separators (without `fluss_` or label values) and original metric names.
+Patterns support `*` wildcards and regular expressions. Types are `counter`, `gauge`, `meter`, or
+`histogram`; omitted names/types match all.
+
+For example, exclude bucket metrics (including subgroups) and histograms from PushGateway:
+
+```yaml
+metrics.reporter.prometheus-push.filter.includes: *:*:*
+metrics.reporter.prometheus-push.filter.excludes: *.bucket;*.bucket.*;*:*:histogram
+```
+
+Restart the Fluss process to apply changes.
+
+## Histograms
+
+Built-in histograms compute statistics over the most recent samples (up to a fixed number per
+histogram) recorded in the last five minutes. The histogram `count` is cumulative since registration.
+When no samples were recorded in the last five minutes, the window is empty:
+
+- Prometheus exports `_count` and reports `NaN` for every quantile.
+- InfluxDB writes `count` and `windowCount: 0` without distribution fields. Filter on `windowCount > 0`
+  when querying distribution fields.
+- JMX exposes `WindowCount`. Interpret the other attributes only when `WindowCount > 0`; for an empty
+  window, `Min` and `Max` are `0` and the remaining statistics are `NaN`.
+
+Client histograms registered in Flink jobs are reported through Flink's metric reporters, which do not
+apply these rules: for an empty window they report `NaN` quantiles and mean, and `0` for min and max.
+
 ## Reporters
 
 The following sections list the supported reporters currently.

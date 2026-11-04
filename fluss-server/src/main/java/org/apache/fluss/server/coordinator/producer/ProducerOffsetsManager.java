@@ -21,6 +21,7 @@ package org.apache.fluss.server.coordinator.producer;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.FlussConfigUtils;
 import org.apache.fluss.exception.InvalidProducerIdException;
 import org.apache.fluss.fs.FileStatus;
 import org.apache.fluss.fs.FileSystem;
@@ -77,7 +78,7 @@ public class ProducerOffsetsManager implements AutoCloseable {
 
     public ProducerOffsetsManager(Configuration conf, ZooKeeperClient zkClient) {
         this(
-                new ProducerOffsetsStore(zkClient, conf.getString(ConfigOptions.REMOTE_DATA_DIR)),
+                new ProducerOffsetsStore(zkClient, FlussConfigUtils.getDefaultRemoteDataDir(conf)),
                 conf.get(ConfigOptions.COORDINATOR_PRODUCER_OFFSETS_TTL).toMillis(),
                 conf.get(ConfigOptions.COORDINATOR_PRODUCER_OFFSETS_CLEANUP_INTERVAL).toMillis());
     }

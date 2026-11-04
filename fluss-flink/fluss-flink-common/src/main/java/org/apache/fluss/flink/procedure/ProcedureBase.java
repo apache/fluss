@@ -24,8 +24,10 @@ import org.apache.flink.table.procedures.Procedure;
 /** Base implementation for flink {@link Procedure}. */
 public abstract class ProcedureBase implements Procedure {
     protected Admin admin;
+    protected FlussProcedureContext flussProcedureContext;
 
-    public void withAdmin(Admin admin) {
-        this.admin = admin;
+    void withContext(FlussProcedureContext context) {
+        this.flussProcedureContext = context;
+        this.admin = context.getAdmin();
     }
 }

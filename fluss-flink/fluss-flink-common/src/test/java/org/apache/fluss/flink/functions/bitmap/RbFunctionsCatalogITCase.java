@@ -318,4 +318,91 @@ class RbFunctionsCatalogITCase {
         assertThat(rows).hasSize(1);
         assertThat(rows.get(0).getField(0)).isEqualTo(3L); // duplicate 2 ignored
     }
+
+    @Test
+    void testRbXorAggResolvedFromCatalog() throws Exception {
+        byte[] bitmap1 = BitmapUtils.toBytes(RoaringBitmap.bitmapOf(1, 2, 3));
+        byte[] bitmap2 = BitmapUtils.toBytes(RoaringBitmap.bitmapOf(2, 3, 4));
+
+        Table source =
+                tEnv.fromValues(
+                        DataTypes.ROW(
+                                DataTypes.FIELD("k", DataTypes.INT()),
+                                DataTypes.FIELD("bmap", DataTypes.BYTES())),
+                        Row.of(1, bitmap1),
+                        Row.of(1, bitmap2));
+        tEnv.createTemporaryView("bitmaps", source);
+
+        TableResult result = tEnv.executeSql("SELECT k, rb_xor_agg(bmap) FROM bitmaps GROUP BY k");
+        List<Row> rows = CollectionUtil.iteratorToList(result.collect());
+        assertThat(rows).hasSize(1);
+
+        byte[] resultBytes = (byte[]) rows.get(0).getField(1);
+        RoaringBitmap xor = BitmapUtils.fromBytes(resultBytes);
+        // XOR of {1,2,3} and {2,3,4} = {1,4}
+        assertThat(xor.getLongCardinality()).isEqualTo(2L);
+        assertThat(xor.contains(1)).isTrue();
+        assertThat(xor.contains(4)).isTrue();
+    }
+
+    @Test
+    void testRbXorScalarResolvedFromCatalog() throws Exception {
+        byte[] left = BitmapUtils.toBytes(RoaringBitmap.bitmapOf(1, 2, 3));
+        byte[] right = BitmapUtils.toBytes(RoaringBitmap.bitmapOf(2, 3, 4));
+
+        Table source =
+                tEnv.fromValues(
+                        DataTypes.ROW(
+                                DataTypes.FIELD("l", DataTypes.BYTES()),
+                                DataTypes.FIELD("r", DataTypes.BYTES())),
+                        Row.of(left, right));
+        tEnv.createTemporaryView("bitmaps", source);
+
+        TableResult result = tEnv.executeSql("SELECT rb_cardinality(rb_xor(l, r)) FROM bitmaps");
+        List<Row> rows = CollectionUtil.iteratorToList(result.collect());
+        assertThat(rows).hasSize(1);
+        assertThat(rows.get(0).getField(0)).isEqualTo(2L); // {1, 4}
+    }
+
+    @Test
+    void testRbAndNotResolvedFromCatalog() throws Exception {
+        byte[] left = BitmapUtils.toBytes(RoaringBitmap.bitmapOf(1, 2, 3, 4));
+        byte[] right = BitmapUtils.toBytes(RoaringBitmap.bitmapOf(3, 4, 5));
+
+        Table source =
+                tEnv.fromValues(
+                        DataTypes.ROW(
+                                DataTypes.FIELD("l", DataTypes.BYTES()),
+                                DataTypes.FIELD("r", DataTypes.BYTES())),
+                        Row.of(left, right));
+        tEnv.createTemporaryView("bitmaps", source);
+
+        TableResult result = tEnv.executeSql("SELECT rb_cardinality(rb_andnot(l, r)) FROM bitmaps");
+        List<Row> rows = CollectionUtil.iteratorToList(result.collect());
+        assertThat(rows).hasSize(1);
+        assertThat(rows.get(0).getField(0)).isEqualTo(2L); // {1, 2}
+    }
+
+    @Test
+    void testRbXorAggIdenticalBitmapsReturnsEmptyBitmap() throws Exception {
+        byte[] bitmap = BitmapUtils.toBytes(RoaringBitmap.bitmapOf(1, 2, 3));
+
+        Table source =
+                tEnv.fromValues(
+                        DataTypes.ROW(
+                                DataTypes.FIELD("k", DataTypes.INT()),
+                                DataTypes.FIELD("bmap", DataTypes.BYTES())),
+                        Row.of(1, bitmap),
+                        Row.of(1, bitmap));
+        tEnv.createTemporaryView("identical_bitmaps", source);
+
+        TableResult result =
+                tEnv.executeSql(
+                        "SELECT rb_cardinality(rb_xor_agg(bmap)) "
+                                + "FROM identical_bitmaps GROUP BY k");
+        List<Row> rows = CollectionUtil.iteratorToList(result.collect());
+
+        assertThat(rows).hasSize(1);
+        assertThat(rows.get(0).getField(0)).isEqualTo(0L);
+    }
 }

@@ -40,6 +40,7 @@ import java.util.Set;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 
+import static org.apache.fluss.metadata.TableBucketSnapshot.NO_SNAPSHOT_ID;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
 /** Generates bounded Fluss-only splits for batch scans. */
@@ -85,7 +86,7 @@ final class FlussOnlyBatchSplitGenerator {
         } else {
             return hasPrimaryKey
                     ? getBatchSnapshotAndLogSplits(kvSnapshotsRetriever.get(null), null)
-                    : getLogSplits(null, null);
+                    : getNonPartitionedLogSplits();
         }
     }
 
@@ -104,7 +105,11 @@ final class FlussOnlyBatchSplitGenerator {
     private List<SourceSplitBase> generateLogTableSplits(Collection<PartitionInfo> partitions) {
         List<SourceSplitBase> splits = new ArrayList<>();
         for (PartitionInfo partition : partitions) {
-            splits.addAll(getLogSplits(partition.getPartitionId(), partition.getPartitionName()));
+            splits.addAll(
+                    getLogSplits(
+                            partition.getPartitionId(),
+                            partition.getPartitionName(),
+                            partition.getBucketCount()));
         }
         return splits;
     }
@@ -131,10 +136,7 @@ final class FlussOnlyBatchSplitGenerator {
         for (Integer bucketId : bucketsNeedInitOffset) {
             TableBucket tableBucket = new TableBucket(tableId, partitionId, bucketId);
             OptionalLong snapshotId = snapshots.getSnapshotId(bucketId);
-            long batchSnapshotId =
-                    snapshotId.isPresent()
-                            ? snapshotId.getAsLong()
-                            : HybridSnapshotLogSplit.NO_SNAPSHOT_ID;
+            long batchSnapshotId = snapshotId.isPresent() ? snapshotId.getAsLong() : NO_SNAPSHOT_ID;
             long logStartingOffset;
             if (snapshotId.isPresent()) {
                 OptionalLong logOffset = snapshots.getLogOffset(bucketId);
@@ -165,11 +167,15 @@ final class FlussOnlyBatchSplitGenerator {
         return splits;
     }
 
+    private List<SourceSplitBase> getNonPartitionedLogSplits() {
+        return getLogSplits(null, null, tableInfo.getNumBuckets());
+    }
+
     private List<SourceSplitBase> getLogSplits(
-            @Nullable Long partitionId, @Nullable String partitionName) {
+            @Nullable Long partitionId, @Nullable String partitionName, int bucketCount) {
         List<SourceSplitBase> splits = new ArrayList<>();
         List<Integer> bucketsNeedInitOffset = new ArrayList<>();
-        for (int bucketId = 0; bucketId < tableInfo.getNumBuckets(); bucketId++) {
+        for (int bucketId = 0; bucketId < bucketCount; bucketId++) {
             TableBucket tableBucket =
                     new TableBucket(tableInfo.getTableId(), partitionId, bucketId);
             if (!tableBucketSkipper.test(tableBucket)) {

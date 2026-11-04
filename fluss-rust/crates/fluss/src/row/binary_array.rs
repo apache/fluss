@@ -28,6 +28,9 @@ use crate::error::Error::IllegalArgument;
 use crate::error::Result;
 use crate::metadata::{DataType, RowType};
 use crate::row::Decimal;
+use crate::row::binary::encoding::{
+    append_non_compact_decimal, append_non_compact_timestamp, append_var_len, pack_or_append_bytes,
+};
 use crate::row::binary::{BinaryRowFormat, ValueWriter};
 use crate::row::binary_map::FlussMap;
 use crate::row::compacted::{CompactedRow, CompactedRowWriter, calculate_bit_set_width_in_bytes};
@@ -631,54 +634,25 @@ impl FlussArrayWriter {
         self.data[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
     }
 
-    /// Writes variable-length bytes to the variable part and stores offset+size in the fixed slot.
-    fn write_bytes_to_var_len_part(&mut self, pos: usize, bytes: &[u8]) {
-        let rounded = round_to_nearest_word(bytes.len());
-        let var_offset = self.cursor;
-        self.data.resize(self.data.len() + rounded, 0);
-        self.data[var_offset..var_offset + bytes.len()].copy_from_slice(bytes);
-        self.set_offset_and_size(pos, var_offset, bytes.len());
-        self.cursor += rounded;
+    /// Inlines `bytes` when they fit in the slot and spills them otherwise.
+    fn write_bytes_internal(&mut self, pos: usize, bytes: &[u8]) {
+        let slot = pack_or_append_bytes(&mut self.data, &mut self.cursor, bytes);
+        self.write_long(pos, slot);
     }
 
-    fn set_offset_and_size(&mut self, pos: usize, offset: usize, size: usize) {
-        let packed = ((offset as i64) << 32) | (size as i64);
-        self.write_long(pos, packed);
-    }
-
-    fn write_bytes_to_fix_len_part(&mut self, pos: usize, bytes: &[u8]) {
-        let len = bytes.len();
-        debug_assert!(len <= MAX_FIX_PART_DATA_SIZE);
-        let first_byte = (len as u64) | 0x80;
-        let mut seven_bytes = 0_u64;
-        if cfg!(target_endian = "little") {
-            for (i, b) in bytes.iter().enumerate() {
-                seven_bytes |= ((*b as u64) & 0xFF) << (i * 8);
-            }
-        } else {
-            for (i, b) in bytes.iter().enumerate() {
-                seven_bytes |= ((*b as u64) & 0xFF) << ((6 - i) * 8);
-            }
-        }
-        let packed = ((first_byte << 56) | seven_bytes) as i64;
-        self.write_long(pos, packed);
+    /// Spills `bytes` unconditionally, as Java's `writeArray` and `writeMap` do:
+    /// a nested value belongs in the variable-length part whatever its size.
+    fn write_nested(&mut self, pos: usize, bytes: &[u8]) {
+        let slot = append_var_len(&mut self.data, &mut self.cursor, bytes);
+        self.write_long(pos, slot);
     }
 
     pub fn write_string(&mut self, pos: usize, value: &str) {
-        let bytes = value.as_bytes();
-        if bytes.len() <= MAX_FIX_PART_DATA_SIZE {
-            self.write_bytes_to_fix_len_part(pos, bytes);
-        } else {
-            self.write_bytes_to_var_len_part(pos, bytes);
-        }
+        self.write_bytes_internal(pos, value.as_bytes());
     }
 
     pub fn write_binary_bytes(&mut self, pos: usize, value: &[u8]) {
-        if value.len() <= MAX_FIX_PART_DATA_SIZE {
-            self.write_bytes_to_fix_len_part(pos, value);
-        } else {
-            self.write_bytes_to_var_len_part(pos, value);
-        }
+        self.write_bytes_internal(pos, value);
     }
 
     pub fn write_decimal(&mut self, pos: usize, value: &Decimal, precision: u32) {
@@ -690,8 +664,14 @@ impl FlussArrayWriter {
                     .expect("Decimal should fit in i64 for compact precision"),
             );
         } else {
-            let bytes = value.to_unscaled_bytes();
-            self.write_bytes_to_var_len_part(pos, &bytes);
+            // Java reserves a fixed 16 bytes here for both rows and arrays, so
+            // matching it keeps our arrays byte-identical to Java's.
+            let slot = append_non_compact_decimal(
+                &mut self.data,
+                &mut self.cursor,
+                &value.to_unscaled_bytes(),
+            );
+            self.write_long(pos, slot);
         }
     }
 
@@ -707,13 +687,13 @@ impl FlussArrayWriter {
         if TimestampNtz::is_compact(precision) {
             self.write_long(pos, value.get_millisecond());
         } else {
-            let millis_bytes = value.get_millisecond().to_le_bytes();
-            let var_offset = self.cursor;
-            let rounded = round_to_nearest_word(8);
-            self.data.resize(self.data.len() + rounded, 0);
-            self.data[var_offset..var_offset + 8].copy_from_slice(&millis_bytes);
-            self.set_offset_and_size(pos, var_offset, value.get_nano_of_millisecond() as usize);
-            self.cursor += rounded;
+            let slot = append_non_compact_timestamp(
+                &mut self.data,
+                &mut self.cursor,
+                value.get_millisecond(),
+                value.get_nano_of_millisecond(),
+            );
+            self.write_long(pos, slot);
         }
     }
 
@@ -721,24 +701,24 @@ impl FlussArrayWriter {
         if TimestampLtz::is_compact(precision) {
             self.write_long(pos, value.get_epoch_millisecond());
         } else {
-            let millis_bytes = value.get_epoch_millisecond().to_le_bytes();
-            let var_offset = self.cursor;
-            let rounded = round_to_nearest_word(8);
-            self.data.resize(self.data.len() + rounded, 0);
-            self.data[var_offset..var_offset + 8].copy_from_slice(&millis_bytes);
-            self.set_offset_and_size(pos, var_offset, value.get_nano_of_millisecond() as usize);
-            self.cursor += rounded;
+            let slot = append_non_compact_timestamp(
+                &mut self.data,
+                &mut self.cursor,
+                value.get_epoch_millisecond(),
+                value.get_nano_of_millisecond(),
+            );
+            self.write_long(pos, slot);
         }
     }
 
     /// Writes a nested FlussArray into this array at position `pos`.
     pub fn write_array(&mut self, pos: usize, value: &FlussArray) {
-        self.write_bytes_to_var_len_part(pos, value.as_bytes());
+        self.write_nested(pos, value.as_bytes());
     }
 
     /// Writes a nested FlussMap into this array at position `pos`.
     pub fn write_map(&mut self, pos: usize, value: &FlussMap) {
-        self.write_bytes_to_var_len_part(pos, value.as_bytes());
+        self.write_nested(pos, value.as_bytes());
     }
 
     /// Writes a nested row at `pos`. Requires the writer to have been
@@ -757,7 +737,7 @@ impl FlussArrayWriter {
             let datum = accessor.getter.get_field(row)?;
             accessor.writer.write_value(&mut nested, i, &datum)?;
         }
-        self.write_bytes_to_var_len_part(pos, nested.buffer());
+        self.write_nested(pos, nested.buffer());
         Ok(())
     }
 
@@ -856,6 +836,44 @@ mod tests {
     use crate::row::binary::BinaryWriter as BinaryWriterTrait;
     use crate::row::compacted::CompactedRowWriter;
     use crate::row::{Datum, GenericRow};
+
+    /// Java reserves a fixed 16 bytes per non-compact decimal in arrays as well
+    /// as rows, so a short unscaled value must not shorten the stride.
+    #[test]
+    fn non_compact_decimals_take_a_fixed_sixteen_byte_stride() {
+        use bigdecimal::BigDecimal;
+        use std::str::FromStr;
+
+        let decimal_type = DataTypes::decimal(22, 5);
+        let mut writer = FlussArrayWriter::new(2, &decimal_type);
+        for pos in 0..2 {
+            let value = Decimal::from_big_decimal(BigDecimal::from_str("1.5").unwrap(), 22, 5)
+                .expect("decimal");
+            writer.write_decimal(pos, &value, 22);
+        }
+        let array = writer.complete().expect("array");
+
+        // Both values round-trip, and the second sits 16 bytes after the first.
+        assert_eq!(
+            array
+                .get_decimal(0, 22, 5)
+                .expect("first")
+                .to_big_decimal()
+                .to_string(),
+            "1.50000"
+        );
+        assert_eq!(
+            array
+                .get_decimal(1, 22, 5)
+                .expect("second")
+                .to_big_decimal()
+                .to_string(),
+            "1.50000"
+        );
+        let (first, _) = array.get_offset_and_size(0).expect("first slot");
+        let (second, _) = array.get_offset_and_size(1).expect("second slot");
+        assert_eq!(second - first, 16);
+    }
 
     #[test]
     fn fluss_array_dispatches_through_internal_array_trait() {

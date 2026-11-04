@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.TableConfig;
+import org.apache.fluss.config.cluster.ServerReconfigurable;
 import org.apache.fluss.exception.FlussException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.LogStorageException;
@@ -42,6 +43,7 @@ import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.concurrent.Scheduler;
+import org.apache.fluss.utils.function.SupplierWithException;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.slf4j.Logger;
@@ -67,10 +69,8 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.locks.ReentrantLock;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
-
-import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -82,7 +82,7 @@ import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
  * log instances.
  */
 @ThreadSafe
-public final class LogManager extends TabletManagerBase {
+public final class LogManager extends TabletManagerBase implements ServerReconfigurable {
     private static final Logger LOG = LoggerFactory.getLogger(LogManager.class);
 
     @VisibleForTesting
@@ -103,13 +103,14 @@ public final class LogManager extends TabletManagerBase {
     private final Clock clock;
     private final TabletServerMetricGroup serverMetricGroup;
     private final LocalDiskManager localDiskManager;
-    private final ReentrantLock logCreationOrDeletionLock = new ReentrantLock();
 
     private final Map<TableBucket, LogTablet> currentLogs = new ConcurrentHashMap<>();
+    private final Map<TableBucket, Object> logLocks = new ConcurrentHashMap<>();
 
     private volatile Map<File, OffsetCheckpointFile> recoveryPointCheckpoints;
     private volatile ScheduledFuture<?> recoveryPointCheckpointTask;
     private volatile ScheduledFuture<?> localLogRetentionTask;
+    private final AtomicBoolean rollExpiredActiveSegmentEnabled;
     private boolean loadLogsCompletedFlag = false;
 
     private LogManager(
@@ -127,6 +128,9 @@ public final class LogManager extends TabletManagerBase {
         this.clock = clock;
         this.serverMetricGroup = serverMetricGroup;
         this.localDiskManager = localDiskManager;
+        this.rollExpiredActiveSegmentEnabled =
+                new AtomicBoolean(
+                        conf.get(ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED));
 
         initializeCheckpointMaps();
     }
@@ -290,22 +294,18 @@ public final class LogManager extends TabletManagerBase {
      * @param dataDir the local data directory chosen for the bucket
      * @param tablePath the table path of the bucket belongs to
      * @param tableBucket the table bucket
-     * @param logFormat the log format
-     * @param tieredLogLocalSegments the number of segments to retain in local for tiered log
-     * @param logTtlMs the log TTL in milliseconds from table configuration
+     * @param tableConfig the table configuration
      * @param isChangelog whether the log is a changelog of primary key table
      */
     public LogTablet getOrCreateLog(
             File dataDir,
             PhysicalTablePath tablePath,
             TableBucket tableBucket,
-            LogFormat logFormat,
-            int tieredLogLocalSegments,
-            long logTtlMs,
+            TableConfig tableConfig,
             boolean isChangelog)
             throws Exception {
-        return inLock(
-                logCreationOrDeletionLock,
+        return inLogLock(
+                tableBucket,
                 () -> {
                     if (currentLogs.containsKey(tableBucket)) {
                         return currentLogs.get(tableBucket);
@@ -319,12 +319,11 @@ public final class LogManager extends TabletManagerBase {
                                     tablePath,
                                     tabletDir,
                                     conf,
+                                    rollExpiredActiveSegmentEnabled,
                                     serverMetricGroup,
                                     0L,
                                     scheduler,
-                                    logFormat,
-                                    tieredLogLocalSegments,
-                                    logTtlMs,
+                                    tableConfig,
                                     isChangelog,
                                     clock,
                                     true);
@@ -348,15 +347,11 @@ public final class LogManager extends TabletManagerBase {
             int tieredLogLocalSegments,
             boolean isChangelog)
             throws Exception {
-        TableConfig tableConfig = new TableConfig(new Configuration());
+        Configuration tableProperties = new Configuration();
+        tableProperties.set(ConfigOptions.TABLE_LOG_FORMAT, logFormat);
+        tableProperties.set(ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS, tieredLogLocalSegments);
         return getOrCreateLog(
-                dataDir,
-                tablePath,
-                tableBucket,
-                logFormat,
-                tieredLogLocalSegments,
-                tableConfig.getLogTTLMs(),
-                isChangelog);
+                dataDir, tablePath, tableBucket, new TableConfig(tableProperties), isChangelog);
     }
 
     public Optional<LogTablet> getLog(TableBucket tableBucket) {
@@ -364,9 +359,16 @@ public final class LogManager extends TabletManagerBase {
     }
 
     public void dropLog(TableBucket tableBucket) {
-        LogTablet dropLogTablet =
-                inLock(logCreationOrDeletionLock, () -> currentLogs.remove(tableBucket));
+        inLogLock(
+                tableBucket,
+                () -> {
+                    doDropLog(tableBucket);
+                    return null;
+                });
+    }
 
+    private void doDropLog(TableBucket tableBucket) {
+        LogTablet dropLogTablet = currentLogs.remove(tableBucket);
         if (dropLogTablet != null) {
             TablePath tablePath = dropLogTablet.getTablePath();
             try {
@@ -424,6 +426,22 @@ public final class LogManager extends TabletManagerBase {
         }
     }
 
+    /** Durably initializes an empty local log at the given snapshot offset. */
+    public void initializeEmptyLocalTail(TableBucket tableBucket, long endOffset) {
+        LogTablet logTablet = currentLogs.get(tableBucket);
+        if (logTablet == null) {
+            throw new LogStorageException("Log tablet does not exist for " + tableBucket + ".");
+        }
+        logTablet.initializeEmptyLocalTail(endOffset);
+        try {
+            logTablet.flush(true);
+        } catch (IOException e) {
+            throw new LogStorageException(
+                    "Failed to durably initialize the local tail for " + tableBucket + ".", e);
+        }
+        checkpointRecoveryOffsets(logTablet.getDataDir());
+    }
+
     private LogTablet loadLog(
             File dataDir,
             File tabletDir,
@@ -434,9 +452,46 @@ public final class LogManager extends TabletManagerBase {
             throws Exception {
         Tuple2<PhysicalTablePath, TableBucket> pathAndBucket = FlussPaths.parseTabletDir(tabletDir);
         TableBucket tableBucket = pathAndBucket.f1;
+        return inLogLock(
+                tableBucket,
+                () ->
+                        doLoadLog(
+                                dataDir,
+                                tabletDir,
+                                pathAndBucket.f0,
+                                tableBucket,
+                                isCleanShutdown,
+                                recoveryPoints,
+                                conf,
+                                clock));
+    }
+
+    private LogTablet doLoadLog(
+            File dataDir,
+            File tabletDir,
+            PhysicalTablePath physicalTablePath,
+            TableBucket tableBucket,
+            boolean isCleanShutdown,
+            Map<TableBucket, Long> recoveryPoints,
+            Configuration conf,
+            Clock clock)
+            throws Exception {
+        LogTablet currentLog = currentLogs.get(tableBucket);
+        if (currentLog != null) {
+            throw new IllegalStateException(
+                    String.format(
+                            "Duplicate log tablet directories for bucket %s are found in both %s and %s. "
+                                    + "It is likely because tablet directory failure happened while server was "
+                                    + "replacing current replica with future replica. Recover server from this "
+                                    + "failure by manually deleting one of the two log directories for this bucket. "
+                                    + "It is recommended to delete the bucket in the log tablet directory that is "
+                                    + "known to have failed recently.",
+                            tableBucket,
+                            tabletDir.getAbsolutePath(),
+                            currentLog.getLogDir().getAbsolutePath()));
+        }
         long logRecoveryPoint = recoveryPoints.getOrDefault(tableBucket, 0L);
 
-        PhysicalTablePath physicalTablePath = pathAndBucket.f0;
         TablePath tablePath = physicalTablePath.getTablePath();
         TableInfo tableInfo = getTableInfo(zkClient, tablePath);
 
@@ -464,30 +519,15 @@ public final class LogManager extends TabletManagerBase {
                         physicalTablePath,
                         tabletDir,
                         conf,
+                        rollExpiredActiveSegmentEnabled,
                         serverMetricGroup,
                         logRecoveryPoint,
                         scheduler,
-                        tableInfo.getTableConfig().getLogFormat(),
-                        tableInfo.getTableConfig().getTieredLogLocalSegments(),
-                        tableInfo.getTableConfig().getLogTTLMs(),
+                        tableInfo.getTableConfig(),
                         tableInfo.hasPrimaryKey(),
                         clock,
                         isCleanShutdown);
-        logTablet.updateIsDataLakeEnabled(tableInfo.getTableConfig().isDataLakeEnabled());
 
-        if (currentLogs.containsKey(tableBucket)) {
-            throw new IllegalStateException(
-                    String.format(
-                            "Duplicate log tablet directories for bucket %s are found in both %s and %s. "
-                                    + "It is likely because tablet directory failure happened while server was "
-                                    + "replacing current replica with future replica. Recover server from this "
-                                    + "failure by manually deleting one of the two log directories for this bucket. "
-                                    + "It is recommended to delete the bucket in the log tablet directory that is "
-                                    + "known to have failed recently.",
-                            tableBucket,
-                            tabletDir.getAbsolutePath(),
-                            currentLogs.get(tableBucket).getLogDir().getAbsolutePath()));
-        }
         currentLogs.put(tableBucket, logTablet);
         localDiskManager.recordReplicaLoad(dataDir, tableInfo.hasPrimaryKey());
 
@@ -562,6 +602,34 @@ public final class LogManager extends TabletManagerBase {
                         e);
             }
         }
+    }
+
+    // ============ ServerReconfigurable Implementation ============
+
+    @Override
+    public void validate(Configuration newConfig) {
+        // Type validation is handled by DynamicServerConfig.
+    }
+
+    @Override
+    public void reconfigure(Configuration newConfig) {
+        boolean newRollExpiredActiveSegmentEnabled =
+                newConfig.get(ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED);
+        boolean oldRollExpiredActiveSegmentEnabled =
+                rollExpiredActiveSegmentEnabled.getAndSet(newRollExpiredActiveSegmentEnabled);
+        if (newRollExpiredActiveSegmentEnabled == oldRollExpiredActiveSegmentEnabled) {
+            LOG.debug(
+                    "{} unchanged: {}",
+                    ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED.key(),
+                    newRollExpiredActiveSegmentEnabled);
+            return;
+        }
+
+        LOG.info(
+                "{} reconfigured: {} -> {}",
+                ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED.key(),
+                oldRollExpiredActiveSegmentEnabled,
+                newRollExpiredActiveSegmentEnabled);
     }
 
     private void waitForShutdownLogsInDir(
@@ -705,6 +773,16 @@ public final class LogManager extends TabletManagerBase {
             throw new LogStorageException(
                     "Disk error while writing recovery offsets checkpoint", e);
         }
+    }
+
+    @VisibleForTesting
+    boolean hasLogLock(TableBucket tableBucket) {
+        return logLocks.containsKey(tableBucket);
+    }
+
+    private <T, E extends Exception> T inLogLock(
+            TableBucket tableBucket, SupplierWithException<T, E> action) throws E {
+        return inTabletLock(tableBucket, logLocks, currentLogs, action);
     }
 
     private static final class LogRecoveryTask {

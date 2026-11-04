@@ -220,9 +220,12 @@ inline ffi::FfiConfig to_ffi_config(const Configuration& config) {
     ffi_config.writer_dynamic_batch_size_enabled = config.writer_dynamic_batch_size_enabled;
     ffi_config.writer_dynamic_batch_size_min = config.writer_dynamic_batch_size_min;
     ffi_config.writer_bucket_no_key_assigner = rust::String(config.writer_bucket_no_key_assigner);
+    ffi_config.writer_dynamic_create_partition_enabled =
+        config.writer_dynamic_create_partition_enabled;
     ffi_config.scanner_remote_log_prefetch_num = config.scanner_remote_log_prefetch_num;
     ffi_config.remote_file_download_thread_num = config.remote_file_download_thread_num;
     ffi_config.scanner_remote_log_read_concurrency = config.scanner_remote_log_read_concurrency;
+    ffi_config.scanner_io_tmp_dir = rust::String(config.scanner_io_tmp_dir);
     ffi_config.scanner_log_max_poll_records = config.scanner_log_max_poll_records;
     ffi_config.scanner_log_fetch_max_bytes = config.scanner_log_fetch_max_bytes;
     ffi_config.scanner_log_fetch_min_bytes = config.scanner_log_fetch_min_bytes;
@@ -234,6 +237,10 @@ inline ffi::FfiConfig to_ffi_config(const Configuration& config) {
         config.writer_max_inflight_requests_per_bucket;
     ffi_config.writer_buffer_memory_size = config.writer_buffer_memory_size;
     ffi_config.writer_buffer_wait_timeout_ms = config.writer_buffer_wait_timeout_ms;
+    ffi_config.writer_kv_backpressure_max_throttle_ms =
+        config.writer_kv_backpressure_max_throttle_ms;
+    ffi_config.writer_retry_backoff_ms = config.writer_retry_backoff_ms;
+    ffi_config.writer_retry_max_backoff_ms = config.writer_retry_max_backoff_ms;
     ffi_config.connect_timeout_ms = config.connect_timeout_ms;
     ffi_config.security_protocol = rust::String(config.security_protocol);
     ffi_config.security_sasl_mechanism = rust::String(config.security_sasl_mechanism);
@@ -244,6 +251,8 @@ inline ffi::FfiConfig to_ffi_config(const Configuration& config) {
     ffi_config.lookup_batch_timeout_ms = config.lookup_batch_timeout_ms;
     ffi_config.lookup_max_inflight_requests = config.lookup_max_inflight_requests;
     ffi_config.lookup_max_retries = config.lookup_max_retries;
+    ffi_config.lookup_retry_backoff_ms = config.lookup_retry_backoff_ms;
+    ffi_config.lookup_retry_max_backoff_ms = config.lookup_retry_max_backoff_ms;
     return ffi_config;
 }
 
@@ -269,6 +278,12 @@ inline ffi::FfiSchema to_ffi_schema(const Schema& schema) {
         pks.push_back(rust::String(pk));
     }
     ffi_schema.primary_keys = std::move(pks);
+
+    rust::Vec<rust::String> auto_increment_columns;
+    for (const auto& column : schema.auto_increment_columns) {
+        auto_increment_columns.push_back(rust::String(column));
+    }
+    ffi_schema.auto_increment_columns = std::move(auto_increment_columns);
 
     return ffi_schema;
 }
@@ -334,6 +349,10 @@ inline Schema from_ffi_schema(const ffi::FfiSchema& ffi_schema) {
 
     for (const auto& pk : ffi_schema.primary_keys) {
         schema.primary_keys.push_back(std::string(pk));
+    }
+
+    for (const auto& column : ffi_schema.auto_increment_columns) {
+        schema.auto_increment_columns.push_back(std::string(column));
     }
 
     return schema;

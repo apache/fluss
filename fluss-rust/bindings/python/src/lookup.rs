@@ -19,7 +19,6 @@ use crate::table::{internal_row_to_dict, python_to_dense_generic_row};
 use crate::*;
 use pyo3_async_runtimes::tokio::future_into_py;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 
 /// Lookuper for performing primary key lookups on a Fluss table.
 ///
@@ -32,7 +31,7 @@ use tokio::sync::Mutex;
 ///     result2 = await lookuper.lookup({"user_id": 2})  # Reuses cached encoders
 #[pyclass]
 pub struct Lookuper {
-    inner: Arc<Mutex<fcore::client::Lookuper>>,
+    inner: Arc<fcore::client::Lookuper>,
     table_info: Arc<fcore::metadata::TableInfo>,
 }
 
@@ -59,13 +58,10 @@ impl Lookuper {
 
         future_into_py(py, async move {
             // Perform async lookup
-            let result = {
-                let mut lookuper = inner.lock().await;
-                lookuper
-                    .lookup(&generic_row)
-                    .await
-                    .map_err(|e| FlussError::from_core_error(&e))?
-            };
+            let result = inner
+                .lookup(&generic_row)
+                .await
+                .map_err(|e| FlussError::from_core_error(&e))?;
 
             // Extract row data
             let row_opt = result
@@ -108,7 +104,7 @@ impl Lookuper {
         })?;
 
         Ok(Self {
-            inner: Arc::new(Mutex::new(lookuper)),
+            inner: Arc::new(lookuper),
             table_info: Arc::new(table_info),
         })
     }
@@ -121,7 +117,7 @@ impl Lookuper {
 /// and reuse for multiple lookups.
 #[pyclass]
 pub struct PrefixLookuper {
-    inner: Arc<Mutex<fcore::client::PrefixKeyLookuper>>,
+    inner: Arc<fcore::client::PrefixKeyLookuper>,
     table_info: Arc<fcore::metadata::TableInfo>,
     lookup_column_indices: Vec<usize>,
 }
@@ -149,13 +145,10 @@ impl PrefixLookuper {
         let table_info = self.table_info.clone();
 
         future_into_py(py, async move {
-            let result = {
-                let mut lookuper = inner.lock().await;
-                lookuper
-                    .lookup(&generic_row)
-                    .await
-                    .map_err(|e| FlussError::from_core_error(&e))?
-            };
+            let result = inner
+                .lookup(&generic_row)
+                .await
+                .map_err(|e| FlussError::from_core_error(&e))?;
 
             let rows = result
                 .get_rows()
@@ -206,7 +199,7 @@ impl PrefixLookuper {
         })?;
 
         Ok(Self {
-            inner: Arc::new(Mutex::new(lookuper)),
+            inner: Arc::new(lookuper),
             table_info: Arc::new(table_info),
             lookup_column_indices,
         })

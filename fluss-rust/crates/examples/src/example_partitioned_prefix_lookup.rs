@@ -45,7 +45,7 @@ pub async fn main() -> Result<()> {
                 .column("session_id", DataTypes::string())
                 .column("event_seq", DataTypes::bigint())
                 .column("event_data", DataTypes::string())
-                .primary_key(vec!["region", "user_id", "session_id", "event_seq"])
+                .primary_key(vec!["region", "user_id", "session_id", "event_seq"])?
                 .build()?,
         )
         .partitioned_by(vec!["region"])
@@ -93,7 +93,7 @@ pub async fn main() -> Result<()> {
     upsert_writer.flush().await?;
 
     println!("\n=== Prefix lookup by (region, user_id, session_id) ===");
-    let mut prefix_lookuper = table
+    let prefix_lookuper = table
         .new_lookup()?
         .lookup_by(vec![
             "region".to_string(),

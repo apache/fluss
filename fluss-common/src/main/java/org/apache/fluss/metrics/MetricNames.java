@@ -47,6 +47,12 @@ public class MetricNames {
     public static final String KV_LEADER_REPLICA_CAPACITY = "kvLeaderReplicaCapacity";
     public static final String REPLICAS_TO_DELETE_COUNT = "replicasToDeleteCount";
     public static final String PENDING_LEADER_ACTIVATION_COUNT = "pendingLeaderActivationCount";
+    // for coordinator sender (per-tablet-server control request sender threads)
+    public static final String SENDER_QUEUE_SIZE = "senderQueueSize";
+    public static final String SENDER_QUEUE_TIME_MS = "senderQueueTimeMs";
+    public static final String SENDER_RETRY_COUNT = "senderRetryCount";
+    public static final String SENDER_STALE_DROP_COUNT = "senderStaleDropCount";
+    public static final String SENDER_ALIVE = "senderAlive";
 
     // for coordinator event processor
     public static final String EVENT_QUEUE_SIZE = "eventQueueSize";
@@ -92,6 +98,7 @@ public class MetricNames {
             "delayedFetchFromFollowerExpiresPerSecond";
     public static final String DELAYED_FETCH_FROM_CLIENT_EXPIRES_RATE =
             "delayedFetchFromClientExpiresPerSecond";
+    public static final String HISTORICAL_INFLIGHT_REQUESTS = "inflightRequests";
 
     public static final String SERVER_LOGICAL_STORAGE_LOG_SIZE = "logSize";
     public static final String SERVER_LOGICAL_STORAGE_KV_SIZE = "kvSize";
@@ -101,6 +108,12 @@ public class MetricNames {
     // for tablet server data disk write protection
     public static final String DISK_USAGE_RATIO = "diskUsageRatio";
     public static final String DISK_WRITE_LOCKED = "diskWriteLocked";
+
+    // for historical lookup cache
+    public static final String HISTORICAL_LOOKUP_CACHE_DISK_SIZE = "lookupCacheDiskSize";
+    public static final String HISTORICAL_LOOKUP_CACHE_TABLE_COUNT = "lookupCacheTableCount";
+    public static final String HISTORICAL_LOOKUP_CACHE_FILE_CAPACITY_EVICTIONS =
+            "lookupCacheFileCapacityEvictions";
 
     // --------------------------------------------------------------------------------------------
     // metrics for user
@@ -122,6 +135,8 @@ public class MetricNames {
     public static final String FAILED_PRODUCE_FETCH_LOG_REQUESTS_RATE =
             "failedProduceLogRequestsPerSecond";
 
+    public static final String REMOTE_KV_COPY_BYTES_RATE = "remoteKvCopyBytesPerSecond";
+
     public static final String REMOTE_LOG_COPY_BYTES_RATE = "remoteLogCopyBytesPerSecond";
     public static final String REMOTE_LOG_COPY_REQUESTS_RATE = "remoteLogCopyRequestsPerSecond";
     public static final String REMOTE_LOG_COPY_ERROR_RATE = "remoteLogCopyErrorPerSecond";
@@ -130,6 +145,8 @@ public class MetricNames {
 
     public static final String TOTAL_LOOKUP_REQUESTS_RATE = "totalLookupRequestsPerSecond";
     public static final String FAILED_LOOKUP_REQUESTS_RATE = "failedLookupRequestsPerSecond";
+    public static final String LAKE_LOOKUPS_RATE = "lakeLookupsPerSecond";
+    public static final String LAKE_LOOKUP_TIME_MS = "lakeLookupTimeMs";
     public static final String TOTAL_PUT_KV_REQUESTS_RATE = "totalPutKvRequestsPerSecond";
     public static final String FAILED_PUT_KV_REQUESTS_RATE = "failedPutKvRequestsPerSecond";
     public static final String TOTAL_LIMIT_SCAN_REQUESTS_RATE = "totalLimitScanRequestsPerSecond";
@@ -162,14 +179,35 @@ public class MetricNames {
     // --------------------------------------------------------------------------------------------
     // RocksDB metrics
     // --------------------------------------------------------------------------------------------
-    // Table-level RocksDB metrics (aggregated from all buckets of a table, Max aggregation)
-    /** Maximum write stall duration across all buckets of this table (Max aggregation). */
+    // Table-level native statistics and RocksDB instance properties.
+    /** Cumulative write stall time for a table on one TabletServer. */
+    public static final String ROCKSDB_WRITE_STALL_MICROS_TOTAL = "rocksdbWriteStallMicrosTotal";
+
+    /**
+     * @deprecated Since 1.1, use {@link #ROCKSDB_WRITE_STALL_MICROS_TOTAL}. This alias uses the
+     *     shared table statistic, rather than the maximum bucket value, and will be removed in 2.0.
+     */
+    @Deprecated
     public static final String ROCKSDB_WRITE_STALL_MICROS_MAX = "rocksdbWriteStallMicrosMax";
 
-    /** Maximum get latency across all buckets of this table (Max aggregation). */
+    /** Combined Get P99 for a table on one TabletServer. */
+    public static final String ROCKSDB_GET_LATENCY_MICROS_P99 = "rocksdbGetLatencyMicrosP99";
+
+    /**
+     * @deprecated Since 1.1, use {@link #ROCKSDB_GET_LATENCY_MICROS_P99}. This alias uses the
+     *     shared table statistic, rather than the maximum bucket value, and will be removed in 2.0.
+     */
+    @Deprecated
     public static final String ROCKSDB_GET_LATENCY_MICROS_MAX = "rocksdbGetLatencyMicrosMax";
 
-    /** Maximum write latency across all buckets of this table (Max aggregation). */
+    /** Combined Write P99 for a table on one TabletServer. */
+    public static final String ROCKSDB_WRITE_LATENCY_MICROS_P99 = "rocksdbWriteLatencyMicrosP99";
+
+    /**
+     * @deprecated Since 1.1, use {@link #ROCKSDB_WRITE_LATENCY_MICROS_P99}. This alias uses the
+     *     shared table statistic, rather than the maximum bucket value, and will be removed in 2.0.
+     */
+    @Deprecated
     public static final String ROCKSDB_WRITE_LATENCY_MICROS_MAX = "rocksdbWriteLatencyMicrosMax";
 
     /** Maximum number of L0 files across all buckets of this table (Max aggregation). */
@@ -181,7 +219,15 @@ public class MetricNames {
     /** Maximum compaction pending indicator across all buckets of this table (Max aggregation). */
     public static final String ROCKSDB_COMPACTION_PENDING_MAX = "rocksdbCompactionPendingMax";
 
-    /** Maximum compaction time across all buckets of this table (Max aggregation). */
+    /** Combined compaction P99 for a table on one TabletServer. */
+    public static final String ROCKSDB_COMPACTION_TIME_MICROS_P99 =
+            "rocksdbCompactionTimeMicrosP99";
+
+    /**
+     * @deprecated Since 1.1, use {@link #ROCKSDB_COMPACTION_TIME_MICROS_P99}. This alias uses the
+     *     shared table statistic, rather than the maximum bucket value, and will be removed in 2.0.
+     */
+    @Deprecated
     public static final String ROCKSDB_COMPACTION_TIME_MICROS_MAX =
             "rocksdbCompactionTimeMicrosMax";
 
@@ -223,6 +269,24 @@ public class MetricNames {
     /** Total memory usage across all RocksDB instances in this server (Sum aggregation). */
     public static final String ROCKSDB_MEMORY_USAGE_TOTAL = "rocksdbMemoryUsageTotal";
 
+    /** Memory usage of the shared RocksDB block cache in this server. */
+    public static final String ROCKSDB_SHARED_BLOCK_CACHE_USAGE = "rocksdbSharedBlockCacheUsage";
+
+    /** Configured capacity of the shared RocksDB block cache in this server. */
+    public static final String ROCKSDB_SHARED_BLOCK_CACHE_CAPACITY =
+            "rocksdbSharedBlockCacheCapacity";
+
+    /** Pinned memory usage of the shared RocksDB block cache in this server. */
+    public static final String ROCKSDB_SHARED_BLOCK_CACHE_PINNED_USAGE =
+            "rocksdbSharedBlockCachePinnedUsage";
+
+    /** Approximate memory charged to the shared RocksDB write buffer manager in this server. */
+    public static final String ROCKSDB_SHARED_WRITE_BUFFER_USAGE = "rocksdbSharedWriteBufferUsage";
+
+    /** Configured soft capacity of the shared RocksDB write buffer manager in this server. */
+    public static final String ROCKSDB_SHARED_WRITE_BUFFER_CAPACITY =
+            "rocksdbSharedWriteBufferCapacity";
+
     // Table-level RocksDB memory metrics (Sum aggregation)
     /** Total memtable memory usage across all buckets of this table. */
     public static final String ROCKSDB_MEMTABLE_MEMORY_USAGE_TOTAL =
@@ -244,6 +308,13 @@ public class MetricNames {
     public static final String ROCKSDB_BLOCK_CACHE_PINNED_USAGE_TOTAL =
             "rocksdbBlockCachePinnedUsageTotal";
 
+    // Server-level KV WAL memory pool metrics for primary key tables
+    /** Memory used by the KV WAL memory pool for primary key tables in this server (bytes). */
+    public static final String KV_WAL_MEMORY_POOL_USAGE = "kvWalMemoryPoolUsage";
+
+    /** Total capacity of the KV WAL memory pool for primary key tables in this server (bytes). */
+    public static final String KV_WAL_MEMORY_POOL_CAPACITY = "kvWalMemoryPoolCapacity";
+
     // --------------------------------------------------------------------------------------------
     // metrics for table bucket
     // --------------------------------------------------------------------------------------------
@@ -258,6 +329,9 @@ public class MetricNames {
     public static final String LOG_END_OFFSET = "endOffset";
     public static final String REMOTE_LOG_SIZE = "size";
     public static final String LOG_LAKE_TIMESTAMP_LAG = "timestampLag";
+
+    // for physical storage
+    public static final String BUCKET_PHYSICAL_STORAGE_LOCAL_LOG_SIZE = "localLogSize";
 
     // for logic storage
     public static final String LOCAL_STORAGE_LOG_SIZE = "logSize";
@@ -294,6 +368,14 @@ public class MetricNames {
     public static final String WRITER_RECORDS_PER_BATCH = "recordsPerBatch";
     public static final String WRITER_SEND_LATENCY_MS = "sendLatencyMs";
 
+    // for record accumulator memory
+    public static final String WRITER_ACCUMULATOR_HEAP_MEMORY_USED_BYTES =
+            "accumulatorHeapMemoryUsedBytes";
+    public static final String WRITER_ACCUMULATOR_ARROW_MEMORY_USED_BYTES =
+            "accumulatorArrowMemoryUsedBytes";
+    public static final String WRITER_ACCUMULATOR_DIRECT_MEMORY_ALLOCATED_BYTES =
+            "accumulatorDirectMemoryAllocatedBytes";
+
     // for scanner
     public static final String SCANNER_TIME_MS_BETWEEN_POLL = "timeMsBetweenPoll";
     public static final String SCANNER_LAST_POLL_SECONDS_AGO = "lastPollSecondsAgo";
@@ -301,6 +383,7 @@ public class MetricNames {
     public static final String SCANNER_FETCH_LATENCY_MS = "fetchLatencyMs";
     public static final String SCANNER_FETCH_RATE = "fetchRequestsPerSecond";
     public static final String SCANNER_BYTES_PER_REQUEST = "bytesPerRequest";
+    public static final String SCANNER_RECORDS_LAG = "recordsLag";
     public static final String SCANNER_REMOTE_FETCH_BYTES_RATE = "remoteFetchBytesPerSecond";
     public static final String SCANNER_REMOTE_FETCH_RATE = "remoteFetchRequestsPerSecond";
     public static final String SCANNER_REMOTE_FETCH_ERROR_RATE = "remoteFetchErrorPerSecond";
@@ -319,4 +402,8 @@ public class MetricNames {
     // for lake tiering metrics - operator level
     public static final String TIERING_SERVICE_READ_BYTES = "readBytes";
     public static final String TIERING_SERVICE_READ_BYTES_RATE = "readBytesPerSecond";
+
+    // for lake tiering metrics - enumerator level
+    public static final String TIERING_SERVICE_READERS_AWAITING_SPLIT_RATIO =
+            "readersAwaitingSplitRatio";
 }

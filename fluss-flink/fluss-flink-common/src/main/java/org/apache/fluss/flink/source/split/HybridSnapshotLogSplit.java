@@ -36,12 +36,6 @@ import static org.apache.fluss.utils.Preconditions.checkArgument;
  */
 public class HybridSnapshotLogSplit extends SnapshotSplit {
 
-    /**
-     * Snapshot id sentinel for a split that has no snapshot phase and should read only the bounded
-     * log range.
-     */
-    public static final long NO_SNAPSHOT_ID = -1L;
-
     private static final String HYBRID_SPLIT_PREFIX = "hybrid-snapshot-log-";
     private final boolean isSnapshotFinished;
     private final long logStartingOffset;

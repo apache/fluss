@@ -15,6 +15,10 @@ For partitioned tables, Fluss supports three strategies of managing partitions.
    
 These three strategies are orthogonal and can coexist on the same table.
 
+:::note
+Each partition's bucket count is fixed at the moment the partition is created: no matter which of the three strategies above creates the partition, it takes the table's current `bucket.num` as its own bucket count and keeps it for its entire lifetime. Changing `bucket.num` with `ALTER TABLE ... SET ('bucket.num' = ...)` only affects partitions created afterwards — existing partitions, including partitions pre-created for future dates, keep their original bucket count. See [Rescaling Bucket Count for Future Partitions](bucketing.md#rescaling-bucket-count-for-future-partitions).
+:::
+
 ### Multi-Field Partitioned Tables
 
 Partitioned tables (either primary-key table or log table) support configuring partition keys based on multiple fields. This allows users to segment data using combinations of field values, enabling more granular data organization, management, and query optimization.
@@ -64,6 +68,55 @@ In this case, when automatic partitioning occurs (Fluss will periodically operat
 | table.auto-partition.num-precreate | Integer | no       | 2                    | The number of partitions to pre-create for auto created partitions in each check for auto partition. For example, if the current check time is 2024-11-11 and the value is configured as 3, then partitions 20241111, 20241112, 20241113 will be pre-created. If any one partition exists, it'll skip creating the partition. The default value is 2, which means 2 partitions will be pre-created. If the 'table.auto-partition.time-unit' is 'DAY'(default), one precreated partition is for today and another one is for tomorrow. For a partition table with multiple partition keys, pre-create is unsupported and will be set to 0 automatically when creating table if it is not explicitly specified. This option can be modified after table creation by `ALTER TABLE ... SET` or `ALTER TABLE ... RESET`. |
 | table.auto-partition.num-retention | Integer | no       | 7                    | The number of history partitions to retain for auto created partitions in each check for auto partition. For example, if the current check time is 2024-11-11, time-unit is DAY, and the value is configured as 3, then the history partitions 20241108, 20241109, 20241110 will be retained. The partitions earlier than 20241108 will be deleted. The default value is 7. This option can be modified after table creation by `ALTER TABLE ... SET` or `ALTER TABLE ... RESET`.                                                                                                                                                                                                                                       |
 | table.auto-partition.time-zone     | String  | no       | the system time zone | The time zone for auto partitions, which is by default the same as the system time zone.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+
+### Historical Partition Access
+
+Before using historical partition access, make sure the [Paimon server-side setup](../../streaming-lakehouse/datalake-formats/paimon.md#historical-partition-access-setup) is completed.
+
+Auto partitioning eventually removes partitions that fall outside the configured retention window.
+After an original Fluss partition is removed, late records cannot be written to it and primary-key
+lookups cannot find its rows in Fluss, even when the existing data has already been tiered to
+Paimon. Historical partition access provides read and write access without recreating the expired
+partition. This is a table-level capability and is independent of the compute engine used to access
+the table.
+
+Enable the capability on an eligible table:
+
+```sql
+ALTER TABLE my_partitioned_table SET (
+  'table.datalake.historical-partition.enabled' = 'true'
+);
+```
+
+:::warning
+After enabling or disabling `table.datalake.historical-partition.enabled`, restart any existing
+writer and lookup jobs that require historical partition access so that their clients reload the
+updated table configuration.
+:::
+
+When enabled, the Coordinator creates and retains an internal `__historical__` system partition:
+
+- **Writes:** Log tables and primary-key tables route records for expired partitions through the
+  system partition while preserving each record's original partition name. The tiering service
+  writes the records back to their original Paimon partitions.
+- **Reads:** Primary-key point lookups continue to resolve rows after the original Fluss partition
+  no longer exists. Historical reads currently support only primary-key point lookups.
+
+For primary-key tables, `table.datalake.historical-partition.lookup-mode` selects how historical
+partition lookups read Paimon when `table.datalake.historical-partition.enabled` is `true`.
+`SST`, the default, creates and caches local lookup files. `SCAN` applies primary-key filters while
+scanning Paimon and does not create local lookup files. Change the mode with `ALTER TABLE SET`
+or reset it to `SST` with `ALTER TABLE RESET`; subsequent historical lookups use the new mode.
+
+The option is disabled by default and currently has the following requirements and limitations:
+
+- The table must use Paimon lakehouse storage, with `table.datalake.enabled` and
+  `table.auto-partition.enabled` set to `true`.
+- The table must have exactly one partition key.
+- The bucket count cannot be rescaled while historical partition access is enabled, and the option
+  cannot be enabled after the table's bucket count has been rescaled.
+
+Disabling the option removes the internal system partition.
 
 ### Partition Generation Rules
 The time unit for the automatic partition table `auto-partition.time-unit` can take values of HOUR, DAY, MONTH, QUARTER, or YEAR. Automatic partitioning will use the following format to create partitions.

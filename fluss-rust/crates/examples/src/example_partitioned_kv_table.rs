@@ -38,7 +38,7 @@ pub async fn main() -> Result<()> {
                 .column("region", DataTypes::string())
                 .column("zone", DataTypes::bigint())
                 .column("score", DataTypes::bigint())
-                .primary_key(vec!["id", "region", "zone"])
+                .primary_key(vec!["id", "region", "zone"])?
                 .build()?,
         )
         .partitioned_by(vec!["region", "zone"])
@@ -80,7 +80,7 @@ pub async fn main() -> Result<()> {
     upsert_writer.flush().await?;
 
     println!("\n=== Looking up ===");
-    let mut lookuper = table.new_lookup()?.create_lookuper()?;
+    let lookuper = table.new_lookup()?.create_lookuper()?;
 
     for (id, region, zone) in [(1001, "APAC", 1i64), (1002, "EMEA", 2), (1003, "US", 3)] {
         let result = lookuper

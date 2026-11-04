@@ -28,7 +28,7 @@ keywords = ["fluss", "streaming-storage", "datalake"]
 
 [workspace]
 resolver = "2"
-members = ["crates/fluss", "crates/fluss-test-cluster", "crates/examples", "bindings/python", "bindings/cpp", "bindings/elixir/native/fluss_nif"]
+members = ["crates/fluss", "crates/fluss/gen", "crates/fluss-test-cluster", "crates/examples", "bindings/python", "bindings/cpp", "bindings/elixir/native/fluss_nif"]
 
 [workspace.dependencies]
 fluss = { package = "fluss-rs", version = "1.0.0", path = "crates/fluss", features = ["storage-all"] }

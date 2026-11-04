@@ -26,6 +26,7 @@ import org.apache.fluss.cluster.BucketLocation;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.ApiException;
+import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.InvalidMetadataException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.exception.PartitionNotExistException;
@@ -34,9 +35,11 @@ import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TableOrPartition;
 import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.predicate.Predicate;
+import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
@@ -75,6 +78,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.BiPredicate;
 
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.getFetchLogResultForBucket;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -200,6 +204,10 @@ public class LogFetcher implements Closeable {
         return logFetchCollector.collectFetch(logFetchBuffer);
     }
 
+    void setRecordFilter(@Nullable BiPredicate<TableBucket, LogRecord> recordFilter) {
+        logFetchCollector.setRecordFilter(recordFilter);
+    }
+
     public ArrowScanRecords collectArrowFetch() {
         return arrowLogFetchCollector.collectFetch(logFetchBuffer);
     }
@@ -209,12 +217,12 @@ public class LogFetcher implements Closeable {
      * have an in-flight fetch or pending fetch data.
      */
     public void sendFetches() {
-        List<TableBucket> fetchable = fetchableBuckets();
-        checkAndUpdateMetadata(fetchable);
+        checkAndUpdateMetadata(fetchableBuckets());
         synchronized (this) {
-            // NOTE: Don't perform heavy I/O operations or synchronous waits inside this lock to
-            // avoid blocking the future complete of FetchLogResponse.
-            Map<Integer, FetchLogRequest> fetchRequestMap = prepareFetchLogRequests(fetchable);
+            // Recompute after metadata update because response callbacks can populate the buffer.
+            // Don't perform heavy I/O operations or synchronous waits here.
+            Map<Integer, FetchLogRequest> fetchRequestMap =
+                    prepareFetchLogRequests(fetchableBuckets());
             fetchRequestMap.forEach(
                     (nodeId, fetchLogRequest) -> {
                         LOG.debug("Adding pending request for node id {}", nodeId);
@@ -507,9 +515,10 @@ public class LogFetcher implements Closeable {
     private void handleFetchLogExceptionForBucket(TableBucket tb, int destination, ApiError error) {
         ApiException exception = error.error().exception();
         LOG.error("Failed to fetch log from node {} for bucket {}", destination, tb, exception);
-        if (exception instanceof InvalidMetadataException) {
+        if (exception instanceof InvalidMetadataException
+                || exception instanceof InvalidBucketRoutingException) {
             LOG.warn(
-                    "Invalid metadata error in fetch log request. "
+                    "Metadata or bucket routing error in fetch log request. "
                             + "Going to request metadata update.",
                     exception);
             long tableId = tb.getTableId();
@@ -557,7 +566,8 @@ public class LogFetcher implements Closeable {
                             logScannerStatus,
                             isCheckCrcs);
             logFetchBuffer.pend(pendingFetch);
-            downloadFuture.onComplete(() -> logFetchBuffer.tryComplete(segment.tableBucket()));
+            downloadFuture.whenComplete(
+                    (throwable) -> logFetchBuffer.tryComplete(segment.tableBucket(), throwable));
         }
     }
 
@@ -599,6 +609,10 @@ public class LogFetcher implements Closeable {
                 if (tb.getPartitionId() != null) {
                     fetchLogReqForBucket.setPartitionId(tb.getPartitionId());
                 }
+                metadataUpdater
+                        .getCluster()
+                        .getBucketCount(TableOrPartition.of(tb.getTableId(), tb.getPartitionId()))
+                        .ifPresent(fetchLogReqForBucket::setRoutingBucketCount);
                 fetchReqsByLeaderAndTable
                         .computeIfAbsent(leader, k -> new HashMap<>())
                         .computeIfAbsent(tb.getTableId(), k -> new ArrayList<>())

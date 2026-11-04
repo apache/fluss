@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.replica;
 
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.rpc.messages.NotifyLakeTableOffsetResponse;
@@ -35,7 +36,6 @@ import java.util.concurrent.CompletableFuture;
 import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
 import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
-import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
 import static org.apache.fluss.testutils.DataTestUtils.createRecordsWithoutBaseLogOffset;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -62,7 +62,7 @@ class NotifyReplicaLakeTableOffsetTest extends ReplicaTestBase {
         TableBucket tb = makeTableBucket(false);
         makeLogTableAsLeader(tb, false);
         Replica replica = replicaManager.getReplicaOrException(tb);
-        replica.updateIsDataLakeEnabled(true);
+        updateTableConfig(replica, ConfigOptions.TABLE_DATALAKE_ENABLED, "true");
 
         long initialTimestamp = manualClock.milliseconds();
         MemoryLogRecords records =
@@ -114,18 +114,6 @@ class NotifyReplicaLakeTableOffsetTest extends ReplicaTestBase {
                 .isEqualTo(endOffset);
         AssertionsForClassTypes.assertThat(replica.getLogTablet().getLakeMaxTimestamp())
                 .isEqualTo(maxTimestamp);
-    }
-
-    private TableBucket makeTableBucket(boolean partitionTable) {
-        return makeTableBucket(DATA1_TABLE_ID, partitionTable);
-    }
-
-    private TableBucket makeTableBucket(long tableId, boolean partitionTable) {
-        if (partitionTable) {
-            return new TableBucket(tableId, 0L, 0);
-        } else {
-            return new TableBucket(tableId, 0);
-        }
     }
 
     private NotifyLakeTableOffsetData getNotifyLakeTableOffset(

@@ -19,7 +19,7 @@ package org.apache.fluss.spark
 
 import org.apache.fluss.client.initializer.{BucketOffsetsRetrieverImpl, OffsetsInitializer}
 import org.apache.fluss.config.{ConfigOptions, Configuration}
-import org.apache.fluss.metadata.{TableBucket, TablePath}
+import org.apache.fluss.metadata.{TableBucket, TableBucketSnapshot, TablePath}
 import org.apache.fluss.spark.read.{FlussMetrics, FlussScan, FlussUpsertInputPartition, FlussUpsertScan}
 
 import org.apache.spark.sql.{DataFrame, Row}
@@ -316,7 +316,8 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
     bucketIds.asScala.map {
       bucketId =>
         val tableBucket = new TableBucket(tableId, partitionId, bucketId)
-        val snapshotId = kvSnapshots.getSnapshotId(bucketId).orElse(-1L)
+        val snapshotId =
+          kvSnapshots.getSnapshotId(bucketId).orElse(TableBucketSnapshot.NO_SNAPSHOT_ID)
         val logStartingOffset = kvSnapshots.getLogOffset(bucketId).orElse(-2L)
         val logEndingOffset = bucketIdToLogOffset.get(bucketId)
 
@@ -329,7 +330,7 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
   }
 
   private def hasSnapshotData(inputPartition: FlussUpsertInputPartition): Boolean = {
-    inputPartition.snapshotId >= 0
+    inputPartition.snapshotId != TableBucketSnapshot.NO_SNAPSHOT_ID
   }
 
   test("Spark Read: primary key table scan metrics") {

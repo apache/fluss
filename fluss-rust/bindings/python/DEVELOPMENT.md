@@ -71,6 +71,7 @@ cluster at `127.0.0.1:9123`; override with `FLUSS_BOOTSTRAP_SERVERS`.
 ```bash
 uv run python example/log_table.py
 uv run python example/pk_table.py
+uv run python example/prefix_lookup.py
 uv run python example/complex_types.py
 uv run python example/partitioned_table.py
 uv run python example/partitioned_kv_table.py
@@ -91,6 +92,13 @@ uv run pdoc fluss
 ```
 
 ## Release
+
+The tag-triggered Python release workflow publishes each release candidate to
+TestPyPI with its own PEP 440 version: `v1.0.0-rc3` builds `pyfluss==1.0.0rc3`.
+Before building both the sdist and wheels, it sets the Python package version in
+`pyproject.toml`; Rust workspace versions and lockfiles remain unchanged. The
+sdist retains this version when rebuilt. Final tags such as `v1.0.0` keep the
+Cargo-derived `1.0.0` version and publish to PyPI.
 
 ```bash
 # Build wheel
@@ -123,6 +131,7 @@ bindings/python/
 ├── example/                       # Standalone, CI-checked examples
 │   ├── log_table.py
 │   ├── pk_table.py
+│   ├── prefix_lookup.py
 │   ├── complex_types.py
 │   ├── partitioned_table.py
 │   └── partitioned_kv_table.py
@@ -133,3 +142,22 @@ bindings/python/
 ## License
 
 Apache 2.0 License
+
+## Binary license files
+
+The wheel statically links Rust dependencies, so `LICENSE-bin` and `NOTICE-bin`
+are generated separately from the source `LICENSE` and `NOTICE`. From the
+repository checkout, regenerate the union of supported release targets with:
+
+```bash
+python3 generate_binary_license.py
+python3 generate_binary_license.py --check
+```
+
+After updating `Cargo.lock`, review these generated files, including licenses of
+native code and data incorporated into crates. The generator excludes build,
+development and procedural-macro dependencies and uses the shared Rust license
+collector in `tools/releasing/generate_rust_license.py`. For a wheel for one
+platform, use `--target <Rust target triple>` before `maturin build --locked`;
+the release workflow does this for each platform and verifies the wheel contents.
+All four legal files are included in both wheels and the source distribution.

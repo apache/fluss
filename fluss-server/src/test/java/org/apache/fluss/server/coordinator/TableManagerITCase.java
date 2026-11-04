@@ -42,6 +42,7 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.registry.MetricRegistry;
+import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.rpc.GatewayClientProxy;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.AdminGateway;
@@ -305,6 +306,9 @@ class TableManagerITCase {
         properties.put(
                 ConfigOptions.TABLE_KV_FORMAT_VERSION.key(),
                 String.valueOf(CURRENT_KV_FORMAT_VERSION));
+        properties.put(
+                ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION.key(),
+                String.valueOf(KvValueLayout.PLAIN.version()));
         assertThat(gottenTable)
                 .isEqualTo(tableDescriptor.withProperties(properties).withReplicationFactor(1));
 
@@ -503,11 +507,13 @@ class TableManagerITCase {
         properties.put(
                 ConfigOptions.TABLE_KV_FORMAT_VERSION.key(),
                 String.valueOf(CURRENT_KV_FORMAT_VERSION));
+        properties.put(
+                ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION.key(),
+                String.valueOf(KvValueLayout.PLAIN.version()));
         tableDescriptor = tableDescriptor.withProperties(properties);
 
         assertThat(TableDescriptor.fromJsonBytes(tableMetadata.getTableJson()))
-                .isEqualTo(
-                        tableDescriptor.withReplicationFactor(1).withStandbyReplicaEnabled(true));
+                .isEqualTo(tableDescriptor.withReplicationFactor(1));
 
         // now, check the table buckets metadata
         assertThat(tableMetadata.getBucketMetadatasCount()).isEqualTo(expectBucketCount);
@@ -587,7 +593,7 @@ class TableManagerITCase {
     void testMetadataWithPartition(boolean isCoordinatorServer) throws Exception {
         AdminReadOnlyGateway gateway = getAdminOnlyGateway(isCoordinatorServer);
         AdminGateway adminGateway = getAdminGateway();
-        String db1 = "db1";
+        String db1 = "db1_" + (isCoordinatorServer ? "coordinator" : "tablet");
         String tb1 = "tb1";
         // create a partitioned table, and request a not exist partition, should throw partition not
         // exist exception
@@ -645,7 +651,9 @@ class TableManagerITCase {
                 .cause()
                 .isInstanceOf(PartitionNotExistException.class)
                 .hasMessage(
-                        "Table partition 'db1.partitioned_tb(p=not_exist_partition)' does not exist.");
+                        String.format(
+                                "Table partition '%s.partitioned_tb(p=not_exist_partition)' does not exist.",
+                                db1));
     }
 
     @ParameterizedTest
@@ -686,6 +694,114 @@ class TableManagerITCase {
         assertThat(tsNodes)
                 .containsExactlyInAnyOrderElementsOf(
                         FLUSS_CLUSTER_EXTENSION.getTabletServerNodes());
+    }
+
+    @Test
+    void testCreatePersistsServerOwnedKvValueLayouts() throws Exception {
+        AdminReadOnlyGateway gateway = getAdminOnlyGateway(true);
+        AdminGateway adminGateway = getAdminGateway();
+
+        String databaseName = "db_value_layout";
+        TablePath plainTablePath = TablePath.of(databaseName, "plain_pk");
+        TablePath ttlTablePath = TablePath.of(databaseName, "ttl_pk");
+        TablePath logTablePath = TablePath.of(databaseName, "log_table");
+        adminGateway.createDatabase(newCreateDatabaseRequest(databaseName, false)).get();
+
+        adminGateway.createTable(newCreateTableRequest(plainTablePath, newPkTable(), false)).get();
+        TableDescriptor ttlDescriptor =
+                newPkTable()
+                        .withProperties(
+                                Collections.singletonMap(ConfigOptions.TABLE_KV_TTL.key(), "1 h"));
+        adminGateway.createTable(newCreateTableRequest(ttlTablePath, ttlDescriptor, false)).get();
+        adminGateway.createTable(newCreateTableRequest(logTablePath, newLogTable(), false)).get();
+
+        TableDescriptor plainTable =
+                TableDescriptor.fromJsonBytes(
+                        gateway.getTableInfo(newGetTableInfoRequest(plainTablePath))
+                                .get()
+                                .getTableJson());
+        TableDescriptor ttlTable =
+                TableDescriptor.fromJsonBytes(
+                        gateway.getTableInfo(newGetTableInfoRequest(ttlTablePath))
+                                .get()
+                                .getTableJson());
+        TableDescriptor logTable =
+                TableDescriptor.fromJsonBytes(
+                        gateway.getTableInfo(newGetTableInfoRequest(logTablePath))
+                                .get()
+                                .getTableJson());
+
+        assertThat(plainTable.getProperties())
+                .containsEntry(
+                        ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION.key(),
+                        String.valueOf(KvValueLayout.PLAIN.version()));
+        assertThat(ttlTable.getProperties())
+                .containsEntry(
+                        ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION.key(),
+                        String.valueOf(KvValueLayout.TAGGED.version()));
+        assertThat(logTable.getProperties())
+                .doesNotContainKey(ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION.key());
+    }
+
+    @Test
+    void testCreateOverridesClientSuppliedValueLayoutVersion() throws Exception {
+        AdminReadOnlyGateway gateway = getAdminOnlyGateway(true);
+        AdminGateway adminGateway = getAdminGateway();
+
+        String db1 = "db_event_time_row_ttl";
+        String tb1 = "tb_event_time_row_ttl";
+        TablePath tablePath = TablePath.of(db1, tb1);
+        adminGateway.createDatabase(newCreateDatabaseRequest(db1, false)).get();
+
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("event_time", DataTypes.BIGINT())
+                        .column("name", DataTypes.STRING())
+                        .primaryKey("id")
+                        .build();
+        Map<String, String> properties = new HashMap<>();
+        properties.put(ConfigOptions.TABLE_KV_TTL.key(), "1 h");
+        properties.put(ConfigOptions.TABLE_KV_TTL_TIME_COLUMN.key(), "event_time");
+        properties.put(ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION.key(), "1");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .distributedBy(3, "id")
+                        .properties(properties)
+                        .build();
+        adminGateway.createTable(newCreateTableRequest(tablePath, tableDescriptor, false)).get();
+
+        GetTableInfoResponse response =
+                gateway.getTableInfo(newGetTableInfoRequest(tablePath)).get();
+        TableDescriptor gottenTable = TableDescriptor.fromJsonBytes(response.getTableJson());
+
+        assertThat(gottenTable.getProperties())
+                .containsEntry(
+                        ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION.key(),
+                        String.valueOf(KvValueLayout.TAGGED.version()));
+
+        String layoutVersion =
+                gottenTable.getProperties().get(ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION.key());
+        adminGateway
+                .alterTable(
+                        newAlterTableRequest(
+                                tablePath,
+                                Collections.singletonMap(
+                                        ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key(),
+                                        "false"),
+                                Collections.emptyList(),
+                                Collections.emptyList(),
+                                false))
+                .get();
+
+        TableDescriptor alteredTable =
+                TableDescriptor.fromJsonBytes(
+                        gateway.getTableInfo(newGetTableInfoRequest(tablePath))
+                                .get()
+                                .getTableJson());
+        assertThat(alteredTable.getProperties())
+                .containsEntry(ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION.key(), layoutVersion);
     }
 
     @Test

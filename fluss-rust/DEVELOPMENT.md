@@ -4,15 +4,15 @@ Welcome to the development guide of `fluss-rust`! This project builds `fluss-rus
 
 ## Pre-requisites
 
-- protobuf
 - rust
 
 You can install these using your favourite package / version manager. Example installation using mise:
 
 ```bash
-mise install protobuf
 mise install rust
 ```
+
+`protobuf` (the `protoc` compiler) is only needed when regenerating the protobuf code after the canonical `FlussApi.proto` changes (see `crates/fluss/regen.sh`). Regular builds use the checked-in `crates/fluss/src/proto/fluss.rs`.
 
 ## IDE Setup
 

@@ -53,7 +53,9 @@ import java.io.Serializable;
 import java.util.List;
 
 import static org.apache.fluss.flink.sink.FlinkStreamPartitioner.partition;
+import static org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils.validateDistributionModeForUndoRecovery;
 import static org.apache.fluss.flink.utils.FlinkConversions.toFlussRowType;
+import static org.apache.fluss.utils.Preconditions.checkState;
 
 /**
  * Flink sink for Fluss.
@@ -78,8 +80,9 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
 
     @Override
     protected SinkWriter<InputT> createWriter(
-            MailboxExecutor mailboxExecutor, SinkWriterMetricGroup metricGroup) {
-        FlinkSinkWriter<InputT> flinkSinkWriter = builder.createWriter(mailboxExecutor);
+            MailboxExecutor mailboxExecutor, SinkWriterMetricGroup metricGroup, int subtaskIndex) {
+        FlinkSinkWriter<InputT> flinkSinkWriter =
+                builder.createWriter(mailboxExecutor, subtaskIndex);
         flinkSinkWriter.initialize(metricGroup);
         return flinkSinkWriter;
     }
@@ -104,7 +107,7 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
 
     @Internal
     interface SinkWriterBuilder<W extends FlinkSinkWriter<InputT>, InputT> extends Serializable {
-        W createWriter(MailboxExecutor mailboxExecutor);
+        W createWriter(MailboxExecutor mailboxExecutor, int subtaskIndex);
 
         DataStream<InputT> addPreWriteTopology(DataStream<InputT> input);
     }
@@ -147,7 +150,8 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
         }
 
         @Override
-        public AppendSinkWriter<InputT> createWriter(MailboxExecutor mailboxExecutor) {
+        public AppendSinkWriter<InputT> createWriter(
+                MailboxExecutor mailboxExecutor, int subtaskIndex) {
             return new AppendSinkWriter<>(
                     tablePath,
                     flussConfig,
@@ -170,6 +174,12 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
                     }
                     throw new UnsupportedOperationException(
                             "BUCKET mode is only supported for log tables with bucket keys");
+                case BUCKET_BALANCE:
+                    if (!bucketKeys.isEmpty()) {
+                        return bucketBalanceShuffle(input);
+                    }
+                    throw new UnsupportedOperationException(
+                            "BUCKET_BALANCE mode is only supported for log tables with bucket keys");
                 case PARTITION_DYNAMIC:
                     if (partitionKeys.isEmpty()) {
                         throw new UnsupportedOperationException(
@@ -231,6 +241,18 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
                             flussSerializationSchema),
                     input.getParallelism());
         }
+
+        private DataStream<InputT> bucketBalanceShuffle(DataStream<InputT> input) {
+            return partition(
+                    input,
+                    new BucketBalanceChannelComputer<>(
+                            toFlussRowType(tableRowType),
+                            bucketKeys,
+                            lakeFormat,
+                            numBucket,
+                            flussSerializationSchema),
+                    input.getParallelism());
+        }
     }
 
     @Internal
@@ -253,16 +275,16 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
         @Nullable private final String producerId;
 
         /**
-         * Optional context for reporting offsets to the upstream UndoRecoveryOperator.
+         * Optional factory for reporting offsets to the upstream UndoRecoveryOperator.
          *
          * <p>This is set internally by {@link #addPreWriteTopology} when UndoRecoveryOperator is
-         * added to the pipeline. The context is then passed to the UpsertSinkWriter during
-         * creation.
+         * added to the pipeline. An independently serialized copy creates a reporter bound to the
+         * runtime Sink Writer subtask.
          *
-         * <p>Note: This field is NOT transient because the ProducerOffsetReporterHolder is
-         * serializable and needs to survive job serialization to be passed to the TaskManager.
+         * <p>The factory keeps its reporter group ID private; callers only provide the runtime
+         * subtask index.
          */
-        @Nullable private ProducerOffsetReporter offsetReporter;
+        @Nullable private UndoRecoveryOperatorFactory<InputT> undoRecoveryOperatorFactory;
 
         UpsertSinkWriterBuilder(
                 TablePath tablePath,
@@ -292,7 +314,16 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
         }
 
         @Override
-        public UpsertSinkWriter<InputT> createWriter(MailboxExecutor mailboxExecutor) {
+        public UpsertSinkWriter<InputT> createWriter(
+                MailboxExecutor mailboxExecutor, int subtaskIndex) {
+            checkState(
+                    !enableUndoRecovery || undoRecoveryOperatorFactory != null,
+                    "Undo Recovery operator factory must be initialized before creating an upsert sink writer with Undo Recovery enabled");
+            ProducerOffsetReporter offsetReporter =
+                    undoRecoveryOperatorFactory == null
+                            ? null
+                            : undoRecoveryOperatorFactory.createProducerOffsetReporter(
+                                    subtaskIndex);
             return new UpsertSinkWriter<>(
                     tablePath,
                     flussConfig,
@@ -305,6 +336,11 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
 
         @Override
         public DataStream<InputT> addPreWriteTopology(DataStream<InputT> input) {
+            // Defense in depth: the entry points (FlinkTableFactory and FlussSinkBuilder)
+            // validate the distribution mode via validateDistributionModeForMergeEngine before
+            // constructing this builder, but the builder can also be constructed directly, so
+            // re-validate the Undo Recovery constraint here.
+            validateDistributionModeForUndoRecovery(enableUndoRecovery, distributionMode);
             DataStream<InputT> stream;
             switch (distributionMode) {
                 case NONE:
@@ -324,6 +360,18 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
                                             flussSerializationSchema),
                                     input.getParallelism());
                     break;
+                case BUCKET_BALANCE:
+                    stream =
+                            partition(
+                                    input,
+                                    new BucketBalanceChannelComputer<>(
+                                            toFlussRowType(tableRowType),
+                                            bucketKeys,
+                                            lakeFormat,
+                                            numBucket,
+                                            flussSerializationSchema),
+                                    input.getParallelism());
+                    break;
                 default:
                     throw new UnsupportedOperationException(
                             String.format(
@@ -333,6 +381,9 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
 
             // Add UndoRecoveryOperator for aggregation tables
             if (enableUndoRecovery) {
+                checkState(
+                        undoRecoveryOperatorFactory == null,
+                        "A Fluss sink with Undo Recovery cannot be added to multiple topologies");
                 UndoRecoveryOperatorFactory<InputT> operatorFactory =
                         new UndoRecoveryOperatorFactory<>(
                                 tablePath,
@@ -350,7 +401,7 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
                                         operatorFactory)
                                 .setParallelism(stream.getParallelism());
 
-                offsetReporter = operatorFactory.getProducerOffsetReporter();
+                undoRecoveryOperatorFactory = operatorFactory;
             }
 
             return stream;

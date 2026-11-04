@@ -15,7 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+mod lookup;
 mod types;
+mod write_callback;
+use lookup::{
+    PendingLookup, PendingPrefixLookup, delete_pending_lookup, delete_pending_prefix_lookup,
+};
+use write_callback::ensure_callback_executor;
 
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -28,6 +34,7 @@ use fluss::PartitionId;
 use fluss::client::PrefixKeyLookuper;
 use fluss::error::Error;
 use fluss::metadata::{Column, DataType, TableInfo};
+use fluss::record::to_arrow_schema;
 use fluss::row::{Datum, GenericRow};
 use fluss::rpc::FlussError as CoreFlussError;
 use fluss::rpc::message::OffsetSpec;
@@ -41,6 +48,15 @@ static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
 
 #[cxx::bridge(namespace = "fluss::ffi")]
 mod ffi {
+    unsafe extern "C++" {
+        include!("write_callback.hpp");
+
+        type WriteCallback;
+
+        #[cxx_name = "Complete"]
+        fn complete(self: Pin<&mut WriteCallback>, error_code: i32, error_message: &str);
+    }
+
     struct HashMapValue {
         key: String,
         value: String,
@@ -55,9 +71,11 @@ mod ffi {
         writer_dynamic_batch_size_enabled: bool,
         writer_dynamic_batch_size_min: i32,
         writer_bucket_no_key_assigner: String,
+        writer_dynamic_create_partition_enabled: bool,
         scanner_remote_log_prefetch_num: usize,
         remote_file_download_thread_num: usize,
         scanner_remote_log_read_concurrency: usize,
+        scanner_io_tmp_dir: String,
         scanner_log_max_poll_records: usize,
         scanner_log_fetch_max_bytes: i32,
         scanner_log_fetch_min_bytes: i32,
@@ -68,6 +86,9 @@ mod ffi {
         writer_max_inflight_requests_per_bucket: usize,
         writer_buffer_memory_size: usize,
         writer_buffer_wait_timeout_ms: u64,
+        writer_kv_backpressure_max_throttle_ms: u64,
+        writer_retry_backoff_ms: u64,
+        writer_retry_max_backoff_ms: u64,
         connect_timeout_ms: u64,
         security_protocol: String,
         security_sasl_mechanism: String,
@@ -78,6 +99,8 @@ mod ffi {
         lookup_batch_timeout_ms: u64,
         lookup_max_inflight_requests: usize,
         lookup_max_retries: i32,
+        lookup_retry_backoff_ms: u64,
+        lookup_retry_max_backoff_ms: u64,
     }
 
     struct FfiResult {
@@ -109,6 +132,77 @@ mod ffi {
         child_count: u32,
     }
 
+    #[repr(i32)]
+    enum FfiPredicateNodeType {
+        Leaf = 0,
+        Compound = 1,
+    }
+
+    #[repr(i32)]
+    enum FfiPredicateLeafFunction {
+        Equal = 0,
+        NotEqual = 1,
+        LessThan = 2,
+        LessOrEqual = 3,
+        GreaterThan = 4,
+        GreaterOrEqual = 5,
+        IsNull = 6,
+        IsNotNull = 7,
+        StartsWith = 8,
+        Contains = 9,
+        EndsWith = 10,
+        In = 11,
+        NotIn = 12,
+    }
+
+    #[repr(i32)]
+    enum FfiPredicateCompoundFunction {
+        And = 0,
+        Or = 1,
+    }
+
+    #[repr(i32)]
+    enum FfiPredicateLiteralType {
+        Null = 0,
+        Boolean = 1,
+        Int32 = 2,
+        Int64 = 3,
+        Float32 = 4,
+        Float64 = 5,
+        String = 6,
+        Bytes = 7,
+        Decimal = 8,
+        Date = 9,
+        Time = 10,
+        TimestampNtz = 11,
+        TimestampLtz = 12,
+    }
+
+    // One scalar literal in a predicate leaf. `literal_type` is private to the
+    // C++ binding and decoded into fluss::predicate::Literal before the scan is
+    // created.
+    struct FfiPredicateLiteral {
+        literal_type: FfiPredicateLiteralType,
+        boolean_value: bool,
+        integer_value: i64,
+        floating_value: f64,
+        string_value: String,
+        bytes_value: Vec<u8>,
+        timestamp_millis: i64,
+        timestamp_nanos: i32,
+    }
+
+    // Predicate tree serialized in preorder. A leaf has child_count == 0 and
+    // carries field/literals; a compound node is followed by child_count nodes.
+    struct FfiPredicateNode {
+        node_type: FfiPredicateNodeType,
+        leaf_function: FfiPredicateLeafFunction,
+        compound_function: FfiPredicateCompoundFunction,
+        field: String,
+        literals: Vec<FfiPredicateLiteral>,
+        child_count: u32,
+    }
+
     struct FfiColumn {
         name: String,
         comment: String,
@@ -118,6 +212,7 @@ mod ffi {
     struct FfiSchema {
         columns: Vec<FfiColumn>,
         primary_keys: Vec<String>,
+        auto_increment_columns: Vec<String>,
     }
 
     struct FfiTableDescriptor {
@@ -163,6 +258,8 @@ mod ffi {
         partition_id: i64,
         bucket_id: i32,
         base_offset: i64,
+        commit_timestamp: i64,
+        schema_id: i32,
     }
 
     struct FfiArrowRecordBatches {
@@ -172,6 +269,36 @@ mod ffi {
     struct FfiArrowRecordBatchesResult {
         result: FfiResult,
         arrow_batches: FfiArrowRecordBatches,
+    }
+
+    struct FfiBoundedReadResult {
+        result: FfiResult,
+        arrow_batches: FfiArrowRecordBatches,
+        status: i32,
+    }
+
+    struct FfiReaderStopOffset {
+        table_id: i64,
+        has_partition_id: bool,
+        partition_id: i64,
+        bucket_id: i32,
+        offset: i64,
+    }
+
+    struct FfiReaderBucket {
+        table_id: i64,
+        has_partition_id: bool,
+        partition_id: i64,
+        bucket_id: i32,
+    }
+
+    struct FfiBoundedLogReadRange {
+        table_id: i64,
+        has_partition_id: bool,
+        partition_id: i64,
+        bucket_id: i32,
+        starting_offset: i64,
+        stopping_offset: i64,
     }
 
     struct FfiLakeSnapshot {
@@ -235,6 +362,7 @@ mod ffi {
     struct FfiPartitionInfo {
         partition_id: i64,
         partition_name: String,
+        bucket_count: i32,
     }
 
     struct FfiListPartitionInfosResult {
@@ -300,10 +428,13 @@ mod ffi {
         type AppendWriter;
         type WriteResult;
         type LogScanner;
+        type RecordBatchLogReader;
         type BatchScanner;
         type UpsertWriter;
         type Lookuper;
         type PrefixLookuper;
+        type PendingLookup;
+        type PendingPrefixLookup;
 
         // Opaque types for optimized FFI
         type ScanResultInner;
@@ -394,7 +525,12 @@ mod ffi {
         // Table
         unsafe fn delete_table(table: *mut Table);
         fn new_append_writer(self: &Table) -> FfiPtrResult;
-        fn create_scanner(self: &Table, column_indices: Vec<usize>, batch: bool) -> FfiPtrResult;
+        fn create_scanner(
+            self: &Table,
+            column_indices: Vec<usize>,
+            predicate_nodes: Vec<FfiPredicateNode>,
+            batch: bool,
+        ) -> FfiPtrResult;
         fn create_bucket_batch_scanner(
             self: &Table,
             column_indices: Vec<usize>,
@@ -404,8 +540,13 @@ mod ffi {
             bucket_id: i32,
         ) -> FfiPtrResult;
         fn get_table_info_from_table(self: &Table) -> FfiTableInfo;
+        // Writes the table's Arrow schema into the `ArrowSchema` C++ owns at
+        // `out_ptr`, so neither side frees memory the other allocated.
+        unsafe fn get_arrow_schema(self: &Table, out_ptr: usize) -> FfiResult;
         fn get_table_path(self: &Table) -> FfiTablePath;
         fn has_primary_key(self: &Table) -> bool;
+        fn writer_buffer_wait_timeout_ms(self: &Table) -> u64;
+        fn ensure_callback_executor() -> FfiResult;
         fn create_upsert_writer(self: &Table, column_indices: Vec<usize>) -> FfiPtrResult;
         fn new_lookuper(self: &Table) -> FfiPtrResult;
         fn new_prefix_lookuper(self: &Table, lookup_column_names: Vec<String>) -> FfiPtrResult;
@@ -542,29 +683,44 @@ mod ffi {
 
         // AppendWriter
         unsafe fn delete_append_writer(writer: *mut AppendWriter);
-        fn append(self: &mut AppendWriter, row: &GenericRowInner) -> FfiPtrResult;
+        // budget_ms bounds the buffer-memory wait: negative uses the writer's
+        // configured buffer wait timeout, >= 0 caps the wait at that many ms
+        // (0 = non-blocking), letting callers keep a submit within a fixed budget.
+        fn append(self: &mut AppendWriter, row: &GenericRowInner, budget_ms: i64) -> FfiPtrResult;
         // Partition (if partitioned) comes from the first row, so all rows must
         // share one partition; rows are distributed across buckets by key.
         fn append_arrow_batch(
             self: &mut AppendWriter,
             array_ptr: usize,
             schema_ptr: usize,
+            budget_ms: i64,
         ) -> FfiPtrResult;
         fn flush(self: &mut AppendWriter) -> FfiResult;
 
         // WriteResult
         unsafe fn delete_write_result(wr: *mut WriteResult);
         fn wait(self: &mut WriteResult) -> FfiResult;
+        fn notify(self: &mut WriteResult, callback: UniquePtr<WriteCallback>) -> FfiResult;
 
         // UpsertWriter
         unsafe fn delete_upsert_writer(writer: *mut UpsertWriter);
-        fn upsert(self: &mut UpsertWriter, row: &GenericRowInner) -> FfiPtrResult;
-        fn delete_row(self: &mut UpsertWriter, row: &GenericRowInner) -> FfiPtrResult;
+        fn upsert(self: &mut UpsertWriter, row: &GenericRowInner, budget_ms: i64) -> FfiPtrResult;
+        fn delete_row(
+            self: &mut UpsertWriter,
+            row: &GenericRowInner,
+            budget_ms: i64,
+        ) -> FfiPtrResult;
         fn upsert_flush(self: &mut UpsertWriter) -> FfiResult;
 
         // Lookuper
         unsafe fn delete_lookuper(lookuper: *mut Lookuper);
-        fn lookup(self: &mut Lookuper, pk_row: &GenericRowInner) -> Box<LookupResultInner>;
+        fn lookup(self: &Lookuper, pk_row: &GenericRowInner) -> Box<LookupResultInner>;
+        fn lookup_async(self: &Lookuper, pk_row: &GenericRowInner) -> FfiPtrResult;
+
+        // PendingLookup. A negative timeout_ms waits without limit.
+        unsafe fn delete_pending_lookup(pending: *mut PendingLookup);
+        fn lookup_wait(self: &mut PendingLookup, timeout_ms: i64) -> Box<LookupResultInner>;
+        fn lookup_is_pending(self: &PendingLookup) -> bool;
 
         // LookupResultInner accessors
         fn lv_has_error(self: &LookupResultInner) -> bool;
@@ -622,9 +778,19 @@ mod ffi {
         // PrefixLookuper
         unsafe fn delete_prefix_lookuper(lookuper: *mut PrefixLookuper);
         fn prefix_lookup(
-            self: &mut PrefixLookuper,
+            self: &PrefixLookuper,
             prefix_row: &GenericRowInner,
         ) -> Box<PrefixLookupResultInner>;
+        fn prefix_lookup_async(self: &PrefixLookuper, prefix_row: &GenericRowInner)
+        -> FfiPtrResult;
+
+        // PendingPrefixLookup. A negative timeout_ms waits without limit.
+        unsafe fn delete_pending_prefix_lookup(pending: *mut PendingPrefixLookup);
+        fn prefix_lookup_wait(
+            self: &mut PendingPrefixLookup,
+            timeout_ms: i64,
+        ) -> Box<PrefixLookupResultInner>;
+        fn prefix_lookup_is_pending(self: &PendingPrefixLookup) -> bool;
 
         // PrefixLookupResultInner accessors — like LookupResultInner but indexed
         // by record, since a prefix lookup returns zero-or-more rows.
@@ -699,7 +865,37 @@ mod ffi {
         -> FfiResult;
         fn poll(self: &LogScanner, timeout_ms: i64) -> Box<ScanResultInner>;
         fn poll_record_batch(self: &LogScanner, timeout_ms: i64) -> FfiArrowRecordBatchesResult;
+        fn create_record_batch_log_reader_until_latest(
+            self: &LogScanner,
+            admin: &Admin,
+        ) -> FfiPtrResult;
+        fn create_record_batch_log_reader_until_offsets(
+            self: &LogScanner,
+            offsets: Vec<FfiReaderStopOffset>,
+        ) -> FfiPtrResult;
+        fn create_record_batch_log_reader_from_ranges(
+            self: &LogScanner,
+            ranges: Vec<FfiBoundedLogReadRange>,
+        ) -> FfiPtrResult;
+        fn create_record_batch_log_reader_between_timestamps(
+            self: &LogScanner,
+            admin: &Admin,
+            buckets: Vec<FfiReaderBucket>,
+            starting_timestamp_ms: i64,
+            stopping_timestamp_ms: i64,
+        ) -> FfiPtrResult;
         fn free_arrow_ffi_structures(array_ptr: usize, schema_ptr: usize);
+
+        // RecordBatchLogReader
+        unsafe fn delete_record_batch_log_reader(reader: *mut RecordBatchLogReader);
+        fn record_batch_log_reader_next_batch(
+            self: &RecordBatchLogReader,
+            timeout_ms: i64,
+        ) -> FfiBoundedReadResult;
+        fn record_batch_log_reader_collect_all_batches(
+            self: &RecordBatchLogReader,
+            timeout_ms: i64,
+        ) -> FfiBoundedReadResult;
 
         // BatchScanner
         unsafe fn delete_batch_scanner(scanner: *mut BatchScanner);
@@ -844,6 +1040,10 @@ pub struct LogScanner {
     projected_columns: Vec<fcore::metadata::Column>,
 }
 
+pub struct RecordBatchLogReader {
+    inner: Mutex<fcore::client::RecordBatchLogReader>,
+}
+
 pub struct BatchScanner {
     inner: Mutex<fcore::client::LimitBatchScanner>,
 }
@@ -854,16 +1054,23 @@ pub struct UpsertWriter {
 }
 
 pub struct Lookuper {
-    inner: fcore::client::Lookuper,
-    table_info: fcore::metadata::TableInfo,
+    inner: Arc<fcore::client::Lookuper>,
+    table_info: Arc<TableInfo>,
 }
 
 pub struct PrefixLookuper {
-    inner: PrefixKeyLookuper,
-    table_info: TableInfo,
+    inner: Arc<PrefixKeyLookuper>,
+    table_info: Arc<TableInfo>,
     /// Full-schema indices of the lookup columns, used to compact the input row.
     lookup_column_indices: Vec<usize>,
 }
+
+// C++ callers may share one lookuper across threads.
+const _: () = {
+    const fn assert_sync<T: Sync>() {}
+    assert_sync::<Lookuper>();
+    assert_sync::<PrefixLookuper>();
+};
 
 /// Error code for client-side errors that did not originate from the server API protocol.
 /// Must be non-zero so that CPP `Result::Ok()` (which checks `error_code == 0`) correctly
@@ -943,6 +1150,32 @@ fn arrow_batches_result(
     }
 }
 
+fn bounded_read_result(
+    converted: Result<ffi::FfiArrowRecordBatches, String>,
+    status: i32,
+) -> ffi::FfiBoundedReadResult {
+    match converted {
+        Ok(arrow_batches) => ffi::FfiBoundedReadResult {
+            result: ok_result(),
+            arrow_batches,
+            status,
+        },
+        Err(e) => ffi::FfiBoundedReadResult {
+            result: client_err(e),
+            arrow_batches: ffi::FfiArrowRecordBatches { batches: vec![] },
+            status,
+        },
+    }
+}
+
+fn empty_bounded_read_result(result: ffi::FfiResult, status: i32) -> ffi::FfiBoundedReadResult {
+    ffi::FfiBoundedReadResult {
+        result,
+        arrow_batches: ffi::FfiArrowRecordBatches { batches: vec![] },
+        status,
+    }
+}
+
 // Connection implementation
 fn new_connection(config: &ffi::FfiConfig) -> ffi::FfiPtrResult {
     let assigner_type = match config
@@ -962,9 +1195,12 @@ fn new_connection(config: &ffi::FfiConfig) -> ffi::FfiPtrResult {
         writer_dynamic_batch_size_min: config.writer_dynamic_batch_size_min,
         writer_batch_timeout_ms: config.writer_batch_timeout_ms,
         writer_bucket_no_key_assigner: assigner_type,
+        writer_dynamic_create_partition_enabled: config.writer_dynamic_create_partition_enabled,
         scanner_remote_log_prefetch_num: config.scanner_remote_log_prefetch_num,
         remote_file_download_thread_num: config.remote_file_download_thread_num,
         scanner_remote_log_read_concurrency: config.scanner_remote_log_read_concurrency,
+        scanner_io_tmp_dir: (!config.scanner_io_tmp_dir.is_empty())
+            .then(|| config.scanner_io_tmp_dir.to_string()),
         scanner_log_max_poll_records: config.scanner_log_max_poll_records,
         scanner_log_fetch_max_bytes: config.scanner_log_fetch_max_bytes,
         scanner_log_fetch_min_bytes: config.scanner_log_fetch_min_bytes,
@@ -974,6 +1210,9 @@ fn new_connection(config: &ffi::FfiConfig) -> ffi::FfiPtrResult {
         writer_max_inflight_requests_per_bucket: config.writer_max_inflight_requests_per_bucket,
         writer_buffer_memory_size: config.writer_buffer_memory_size,
         writer_buffer_wait_timeout_ms: config.writer_buffer_wait_timeout_ms,
+        writer_kv_backpressure_max_throttle_ms: config.writer_kv_backpressure_max_throttle_ms,
+        writer_retry_backoff_ms: config.writer_retry_backoff_ms,
+        writer_retry_max_backoff_ms: config.writer_retry_max_backoff_ms,
         connect_timeout_ms: config.connect_timeout_ms,
         security_protocol: config.security_protocol.to_string(),
         security_sasl_mechanism: config.security_sasl_mechanism.to_string(),
@@ -984,6 +1223,8 @@ fn new_connection(config: &ffi::FfiConfig) -> ffi::FfiPtrResult {
         lookup_batch_timeout_ms: config.lookup_batch_timeout_ms,
         lookup_max_inflight_requests: config.lookup_max_inflight_requests,
         lookup_max_retries: config.lookup_max_retries,
+        lookup_retry_backoff_ms: config.lookup_retry_backoff_ms,
+        lookup_retry_max_backoff_ms: config.lookup_retry_max_backoff_ms,
     };
 
     let conn = RUNTIME.block_on(async { fcore::client::FlussConnection::new(config_core).await });
@@ -1442,6 +1683,7 @@ impl Admin {
                     .map(|info| ffi::FfiPartitionInfo {
                         partition_id: info.get_partition_id(),
                         partition_name: info.get_partition_name(),
+                        bucket_count: info.get_bucket_count(),
                     })
                     .collect();
                 ffi::FfiListPartitionInfosResult {
@@ -1481,6 +1723,224 @@ impl Admin {
                 server_nodes: vec![],
             },
         }
+    }
+}
+
+fn predicate_from_ffi_nodes(
+    nodes: &[ffi::FfiPredicateNode],
+    row_type: &fcore::metadata::RowType,
+) -> Result<Option<fcore::predicate::Predicate>, String> {
+    if nodes.is_empty() {
+        return Ok(None);
+    }
+
+    let mut next = 0;
+    let predicate = predicate_from_ffi_node(nodes, &mut next, row_type)?;
+    if next != nodes.len() {
+        return Err(format!(
+            "Predicate contains {} trailing node(s)",
+            nodes.len() - next
+        ));
+    }
+    Ok(Some(predicate))
+}
+
+fn predicate_from_ffi_node(
+    nodes: &[ffi::FfiPredicateNode],
+    next: &mut usize,
+    row_type: &fcore::metadata::RowType,
+) -> Result<fcore::predicate::Predicate, String> {
+    let node_index = *next;
+    let node = nodes
+        .get(node_index)
+        .ok_or_else(|| "Predicate tree ended before all children were decoded".to_string())?;
+    *next += 1;
+
+    match node.node_type {
+        ffi::FfiPredicateNodeType::Leaf => {
+            if node.child_count != 0 {
+                return Err(format!(
+                    "Predicate leaf at node {node_index} has {} child nodes",
+                    node.child_count
+                ));
+            }
+            if node.field.is_empty() {
+                return Err(format!(
+                    "Predicate leaf at node {node_index} has an empty field name"
+                ));
+            }
+
+            let field = row_type
+                .fields()
+                .iter()
+                .find(|field| field.name() == node.field)
+                .ok_or_else(|| {
+                    format!(
+                        "Filter column '{}' does not exist in the table schema",
+                        node.field
+                    )
+                })?;
+            let function = match node.leaf_function {
+                ffi::FfiPredicateLeafFunction::Equal => fcore::predicate::LeafFunction::Equal,
+                ffi::FfiPredicateLeafFunction::NotEqual => fcore::predicate::LeafFunction::NotEqual,
+                ffi::FfiPredicateLeafFunction::LessThan => fcore::predicate::LeafFunction::LessThan,
+                ffi::FfiPredicateLeafFunction::LessOrEqual => {
+                    fcore::predicate::LeafFunction::LessOrEqual
+                }
+                ffi::FfiPredicateLeafFunction::GreaterThan => {
+                    fcore::predicate::LeafFunction::GreaterThan
+                }
+                ffi::FfiPredicateLeafFunction::GreaterOrEqual => {
+                    fcore::predicate::LeafFunction::GreaterOrEqual
+                }
+                ffi::FfiPredicateLeafFunction::IsNull => fcore::predicate::LeafFunction::IsNull,
+                ffi::FfiPredicateLeafFunction::IsNotNull => {
+                    fcore::predicate::LeafFunction::IsNotNull
+                }
+                ffi::FfiPredicateLeafFunction::StartsWith => {
+                    fcore::predicate::LeafFunction::StartsWith
+                }
+                ffi::FfiPredicateLeafFunction::Contains => fcore::predicate::LeafFunction::Contains,
+                ffi::FfiPredicateLeafFunction::EndsWith => fcore::predicate::LeafFunction::EndsWith,
+                ffi::FfiPredicateLeafFunction::In => fcore::predicate::LeafFunction::In,
+                ffi::FfiPredicateLeafFunction::NotIn => fcore::predicate::LeafFunction::NotIn,
+                other => {
+                    return Err(format!(
+                        "Predicate leaf at node {node_index} has unknown function {}",
+                        other.repr
+                    ));
+                }
+            };
+            let literals = node
+                .literals
+                .iter()
+                .map(|literal| predicate_literal_from_ffi(literal, field))
+                .collect::<Result<Vec<_>, _>>()?;
+
+            Ok(fcore::predicate::Predicate::Leaf {
+                field: node.field.to_string(),
+                function,
+                literals,
+            })
+        }
+        ffi::FfiPredicateNodeType::Compound => {
+            if !node.field.is_empty() || !node.literals.is_empty() {
+                return Err(format!(
+                    "Predicate compound node {node_index} unexpectedly carries leaf data"
+                ));
+            }
+            let function = match node.compound_function {
+                ffi::FfiPredicateCompoundFunction::And => fcore::predicate::CompoundFunction::And,
+                ffi::FfiPredicateCompoundFunction::Or => fcore::predicate::CompoundFunction::Or,
+                other => {
+                    return Err(format!(
+                        "Predicate compound node {node_index} has unknown function {}",
+                        other.repr
+                    ));
+                }
+            };
+            let mut children = Vec::with_capacity(node.child_count as usize);
+            for _ in 0..node.child_count {
+                children.push(predicate_from_ffi_node(nodes, next, row_type)?);
+            }
+            Ok(fcore::predicate::Predicate::Compound { function, children })
+        }
+        other => Err(format!(
+            "Predicate node {node_index} has unknown node type {}",
+            other.repr
+        )),
+    }
+}
+
+fn predicate_literal_from_ffi(
+    literal: &ffi::FfiPredicateLiteral,
+    field: &fcore::metadata::DataField,
+) -> Result<fcore::predicate::Literal, String> {
+    use fcore::predicate::Literal;
+
+    match literal.literal_type {
+        ffi::FfiPredicateLiteralType::Null => Ok(Literal::Null),
+        ffi::FfiPredicateLiteralType::Boolean => Ok(Literal::Bool(literal.boolean_value)),
+        ffi::FfiPredicateLiteralType::Int32 => {
+            let value = i32::try_from(literal.integer_value).map_err(|_| {
+                format!(
+                    "Filter literal {} does not fit INT32",
+                    literal.integer_value
+                )
+            })?;
+            Ok(Literal::Int32(value))
+        }
+        ffi::FfiPredicateLiteralType::Int64 => Ok(Literal::Int64(literal.integer_value)),
+        ffi::FfiPredicateLiteralType::Float32 => {
+            Ok(Literal::Float32(literal.floating_value as f32))
+        }
+        ffi::FfiPredicateLiteralType::Float64 => Ok(Literal::Float64(literal.floating_value)),
+        ffi::FfiPredicateLiteralType::String => {
+            Ok(Literal::String(literal.string_value.to_string()))
+        }
+        ffi::FfiPredicateLiteralType::Bytes => Ok(Literal::Bytes(literal.bytes_value.clone())),
+        ffi::FfiPredicateLiteralType::Decimal => {
+            let decimal_type = match field.data_type() {
+                fcore::metadata::DataType::Decimal(decimal_type) => decimal_type,
+                other => {
+                    return Err(format!(
+                        "Decimal predicate literal cannot be used with column '{}' of type {other}",
+                        field.name()
+                    ));
+                }
+            };
+            let value = bigdecimal::BigDecimal::from_str(&literal.string_value)
+                .map_err(|e| format!("Invalid decimal predicate literal: {e}"))?;
+            let decimal = fcore::row::Decimal::from_big_decimal(
+                value.clone(),
+                decimal_type.precision(),
+                decimal_type.scale(),
+            )
+            .map_err(|e| e.to_string())?;
+            if decimal.to_big_decimal() != value {
+                return Err(format!(
+                    "Decimal predicate literal '{}' cannot be represented exactly by column '{}'",
+                    literal.string_value,
+                    field.name()
+                ));
+            }
+            Ok(Literal::Decimal(decimal))
+        }
+        ffi::FfiPredicateLiteralType::Date => {
+            let days = i32::try_from(literal.integer_value).map_err(|_| {
+                format!(
+                    "Date predicate literal {} does not fit INT32",
+                    literal.integer_value
+                )
+            })?;
+            Ok(Literal::Date(days))
+        }
+        ffi::FfiPredicateLiteralType::Time => {
+            let millis = i32::try_from(literal.integer_value).map_err(|_| {
+                format!(
+                    "Time predicate literal {} does not fit INT32",
+                    literal.integer_value
+                )
+            })?;
+            Ok(Literal::Time(millis))
+        }
+        ffi::FfiPredicateLiteralType::TimestampNtz => {
+            let timestamp = fcore::row::TimestampNtz::from_millis_nanos(
+                literal.timestamp_millis,
+                literal.timestamp_nanos,
+            )
+            .map_err(|e| e.to_string())?;
+            Ok(Literal::TimestampNtz(timestamp))
+        }
+        ffi::FfiPredicateLiteralType::TimestampLtz => {
+            let timestamp = fcore::row::TimestampLtz::from_millis_nanos(
+                literal.timestamp_millis,
+                literal.timestamp_nanos,
+            )
+            .map_err(|e| e.to_string())?;
+            Ok(Literal::TimestampLtz(timestamp))
+        }
+        other => Err(format!("Unknown predicate literal type {}", other.repr)),
     }
 }
 
@@ -1540,10 +2000,24 @@ impl Table {
         ok_ptr(ptr as usize)
     }
 
-    fn create_scanner(&self, column_indices: Vec<usize>, batch: bool) -> ffi::FfiPtrResult {
+    fn create_scanner(
+        &self,
+        column_indices: Vec<usize>,
+        predicate_nodes: Vec<ffi::FfiPredicateNode>,
+        batch: bool,
+    ) -> ffi::FfiPtrResult {
         RUNTIME.block_on(async {
             let fluss_table = self.fluss_table();
             let scan = fluss_table.new_scan();
+            let scan =
+                match predicate_from_ffi_nodes(&predicate_nodes, self.table_info.get_row_type()) {
+                    Ok(Some(predicate)) => match scan.filter(predicate) {
+                        Ok(scan) => scan,
+                        Err(e) => return err_ptr_from_core(&e),
+                    },
+                    Ok(None) => scan,
+                    Err(e) => return client_err_ptr(e),
+                };
 
             let (projected_columns, scan) = if column_indices.is_empty() {
                 (self.table_info.get_schema().columns().to_vec(), scan)
@@ -1626,6 +2100,24 @@ impl Table {
         types::core_table_info_to_ffi(&self.table_info)
     }
 
+    /// # Safety
+    /// `out_ptr` must point to an `ArrowSchema` C++ owns and has not populated.
+    unsafe fn get_arrow_schema(&self, out_ptr: usize) -> ffi::FfiResult {
+        let schema = match to_arrow_schema(self.table_info.get_row_type()) {
+            Ok(s) => s,
+            Err(e) => return err_from_core_error(&e),
+        };
+        let ffi_schema = match FFI_ArrowSchema::try_from(schema.as_ref()) {
+            Ok(s) => s,
+            Err(e) => {
+                return client_err(format!("Failed to export Arrow schema: {e}"));
+            }
+        };
+        // Moves the exported schema into the caller's struct; C++ releases it.
+        unsafe { std::ptr::write(out_ptr as *mut FFI_ArrowSchema, ffi_schema) };
+        ok_result()
+    }
+
     fn get_table_path(&self) -> ffi::FfiTablePath {
         ffi::FfiTablePath {
             database_name: self.table_path.database().to_string(),
@@ -1635,6 +2127,12 @@ impl Table {
 
     fn has_primary_key(&self) -> bool {
         self.has_pk
+    }
+
+    /// The connection's configured write-buffer wait timeout (client.writer.buffer.wait-timeout),
+    /// shared by callback admission and buffer waits. UINT64_MAX means unbounded.
+    fn writer_buffer_wait_timeout_ms(&self) -> u64 {
+        self.connection.config().writer_buffer_wait_timeout_ms
     }
 
     fn create_upsert_writer(&self, column_indices: Vec<usize>) -> ffi::FfiPtrResult {
@@ -1680,8 +2178,8 @@ impl Table {
         };
 
         let ptr = Box::into_raw(Box::new(Lookuper {
-            inner: lookuper,
-            table_info: self.table_info.clone(),
+            inner: Arc::new(lookuper),
+            table_info: Arc::new(self.table_info.clone()),
         }));
         ok_ptr(ptr as usize)
     }
@@ -1711,8 +2209,8 @@ impl Table {
         };
 
         let ptr = Box::into_raw(Box::new(PrefixLookuper {
-            inner: lookuper,
-            table_info: self.table_info.clone(),
+            inner: Arc::new(lookuper),
+            table_info: Arc::new(self.table_info.clone()),
             lookup_column_indices,
         }));
         ok_ptr(ptr as usize)
@@ -1728,15 +2226,29 @@ unsafe fn delete_append_writer(writer: *mut AppendWriter) {
     }
 }
 
+/// Convert a C++ submit budget (milliseconds) into an optional buffer-wait deadline.
+/// Negative means "no caller budget": fall back to the writer's configured buffer
+/// wait timeout. `>= 0` caps the wait (0 makes it non-blocking / fail fast).
+fn budget_deadline(budget_ms: i64) -> Option<std::time::Instant> {
+    if budget_ms < 0 {
+        None
+    } else {
+        Some(std::time::Instant::now() + std::time::Duration::from_millis(budget_ms as u64))
+    }
+}
+
 impl AppendWriter {
-    fn append(&mut self, row: &GenericRowInner) -> ffi::FfiPtrResult {
+    fn append(&mut self, row: &GenericRowInner, budget_ms: i64) -> ffi::FfiPtrResult {
         let schema = self.table_info.get_schema();
-        let generic_row = match types::resolve_row_types(&row.row, Some(schema)) {
+        let generic_row = match types::resolve_row_types(&row.row, Some(schema), 0) {
             Ok(r) => r,
             Err(e) => return client_err_ptr(e.to_string()),
         };
 
-        let result_future = match self.inner.append(&generic_row) {
+        let result_future = match self
+            .inner
+            .append_with_deadline(generic_row.as_ref(), budget_deadline(budget_ms))
+        {
             Ok(f) => f,
             Err(e) => return err_ptr_from_core(&e),
         };
@@ -1747,7 +2259,12 @@ impl AppendWriter {
         ok_ptr(ptr as usize)
     }
 
-    fn append_arrow_batch(&mut self, array_ptr: usize, schema_ptr: usize) -> ffi::FfiPtrResult {
+    fn append_arrow_batch(
+        &mut self,
+        array_ptr: usize,
+        schema_ptr: usize,
+        budget_ms: i64,
+    ) -> ffi::FfiPtrResult {
         // Safety: C++ allocates these via `new ArrowArray/ArrowSchema` after a
         // successful `ExportRecordBatch`, so both pointers are valid heap
         // allocations that we take ownership of here.
@@ -1766,7 +2283,10 @@ impl AppendWriter {
         let struct_array = arrow::array::StructArray::from(array_data);
         let batch = arrow::record_batch::RecordBatch::from(struct_array);
 
-        let result_future = match self.inner.append_arrow_batch(batch) {
+        let result_future = match self
+            .inner
+            .append_arrow_batch_with_deadline(batch, budget_deadline(budget_ms))
+        {
             Ok(f) => f,
             Err(e) => return err_ptr_from_core(&e),
         };
@@ -1819,25 +2339,20 @@ unsafe fn delete_upsert_writer(writer: *mut UpsertWriter) {
 }
 
 impl UpsertWriter {
-    /// Pad row with Null to full schema width.
-    /// This allows callers to only set the fields they care about.
-    fn pad_row<'a>(&self, mut row: fcore::row::GenericRow<'a>) -> fcore::row::GenericRow<'a> {
-        let num_columns = self.table_info.get_schema().columns().len();
-        if row.values.len() < num_columns {
-            row.values.resize(num_columns, fcore::row::Datum::Null);
-        }
-        row
-    }
-
-    fn upsert(&mut self, row: &GenericRowInner) -> ffi::FfiPtrResult {
+    fn upsert(&mut self, row: &GenericRowInner, budget_ms: i64) -> ffi::FfiPtrResult {
         let schema = self.table_info.get_schema();
-        let generic_row = match types::resolve_row_types(&row.row, Some(schema)) {
-            Ok(r) => r,
-            Err(e) => return client_err_ptr(e.to_string()),
-        };
-        let generic_row = self.pad_row(generic_row);
+        // Resolve types and pad to full schema width, so callers may set only
+        // the fields they care about.
+        let generic_row =
+            match types::resolve_row_types(&row.row, Some(schema), schema.columns().len()) {
+                Ok(r) => r,
+                Err(e) => return client_err_ptr(e.to_string()),
+            };
 
-        let result_future = match self.inner.upsert(&generic_row) {
+        let result_future = match self
+            .inner
+            .upsert_with_deadline(generic_row.as_ref(), budget_deadline(budget_ms))
+        {
             Ok(f) => f,
             Err(e) => return err_ptr_from_core(&e),
         };
@@ -1848,15 +2363,20 @@ impl UpsertWriter {
         ok_ptr(ptr as usize)
     }
 
-    fn delete_row(&mut self, row: &GenericRowInner) -> ffi::FfiPtrResult {
+    fn delete_row(&mut self, row: &GenericRowInner, budget_ms: i64) -> ffi::FfiPtrResult {
         let schema = self.table_info.get_schema();
-        let generic_row = match types::resolve_row_types(&row.row, Some(schema)) {
-            Ok(r) => r,
-            Err(e) => return client_err_ptr(e.to_string()),
-        };
-        let generic_row = self.pad_row(generic_row);
+        // Resolve types and pad to full schema width, so callers may set only
+        // the fields they care about.
+        let generic_row =
+            match types::resolve_row_types(&row.row, Some(schema), schema.columns().len()) {
+                Ok(r) => r,
+                Err(e) => return client_err_ptr(e.to_string()),
+            };
 
-        let result_future = match self.inner.delete(&generic_row) {
+        let result_future = match self
+            .inner
+            .delete_with_deadline(generic_row.as_ref(), budget_deadline(budget_ms))
+        {
             Ok(f) => f,
             Err(e) => return err_ptr_from_core(&e),
         };
@@ -1886,153 +2406,12 @@ unsafe fn delete_lookuper(lookuper: *mut Lookuper) {
     }
 }
 
-impl Lookuper {
-    /// Build a dense PK-only row from a (possibly sparse) input row.
-    /// The user may set PK values at their full schema positions (e.g. [0, 2])
-    /// via name-based Set(). We compact them into [0, 1, …] to match
-    /// the lookup_row_type the core KeyEncoder expects.
-    fn dense_pk_row<'a>(&self, mut row: fcore::row::GenericRow<'a>) -> fcore::row::GenericRow<'a> {
-        let pk_indices = self.table_info.get_schema().primary_key_indexes();
-        let mut dense = fcore::row::GenericRow::new(pk_indices.len());
-        for (dense_idx, &schema_idx) in pk_indices.iter().enumerate() {
-            if schema_idx < row.values.len() {
-                dense.values[dense_idx] =
-                    std::mem::replace(&mut row.values[schema_idx], fcore::row::Datum::Null);
-            }
-        }
-        dense
-    }
-
-    fn lookup(&mut self, pk_row: &GenericRowInner) -> Box<LookupResultInner> {
-        let schema = self.table_info.get_schema();
-        let generic_row = match types::resolve_row_types(&pk_row.row, Some(schema)) {
-            Ok(r) => self.dense_pk_row(r),
-            Err(e) => {
-                return Box::new(LookupResultInner::from_error(
-                    CLIENT_ERROR_CODE,
-                    e.to_string(),
-                ));
-            }
-        };
-
-        let lookup_result = match RUNTIME.block_on(self.inner.lookup(&generic_row)) {
-            Ok(r) => r,
-            Err(e) => {
-                let ffi_err = err_from_core_error(&e);
-                return Box::new(LookupResultInner::from_error(
-                    ffi_err.error_code,
-                    ffi_err.error_message,
-                ));
-            }
-        };
-
-        let columns = self.table_info.get_schema().columns().to_vec();
-        match lookup_result.get_single_row() {
-            Ok(Some(row)) => match types::compacted_row_to_owned(&row, &self.table_info) {
-                Ok(owned_row) => Box::new(LookupResultInner {
-                    error: None,
-                    found: true,
-                    row: Some(owned_row),
-                    columns,
-                }),
-                Err(e) => Box::new(LookupResultInner::from_error(
-                    CLIENT_ERROR_CODE,
-                    e.to_string(),
-                )),
-            },
-            Ok(None) => Box::new(LookupResultInner {
-                error: None,
-                found: false,
-                row: None,
-                columns,
-            }),
-            Err(e) => {
-                let ffi_err = err_from_core_error(&e);
-                Box::new(LookupResultInner::from_error(
-                    ffi_err.error_code,
-                    ffi_err.error_message,
-                ))
-            }
-        }
-    }
-}
-
 // PrefixLookuper implementation
 unsafe fn delete_prefix_lookuper(lookuper: *mut PrefixLookuper) {
     if !lookuper.is_null() {
         unsafe {
             drop(Box::from_raw(lookuper));
         }
-    }
-}
-
-impl PrefixLookuper {
-    /// Compact a sparse input row (prefix columns set at their schema positions)
-    /// into the dense, lookup-column-ordered row the core prefix encoder expects.
-    fn dense_prefix_row<'a>(&self, mut row: GenericRow<'a>) -> GenericRow<'a> {
-        let mut dense = GenericRow::new(self.lookup_column_indices.len());
-        for (dense_idx, &schema_idx) in self.lookup_column_indices.iter().enumerate() {
-            if schema_idx < row.values.len() {
-                dense.values[dense_idx] =
-                    std::mem::replace(&mut row.values[schema_idx], Datum::Null);
-            }
-        }
-        dense
-    }
-
-    fn prefix_lookup(&mut self, prefix_row: &GenericRowInner) -> Box<PrefixLookupResultInner> {
-        let schema = self.table_info.get_schema();
-        let generic_row = match types::resolve_row_types(&prefix_row.row, Some(schema)) {
-            Ok(r) => self.dense_prefix_row(r),
-            Err(e) => {
-                return Box::new(PrefixLookupResultInner::from_error(
-                    CLIENT_ERROR_CODE,
-                    e.to_string(),
-                ));
-            }
-        };
-
-        let lookup_result = match RUNTIME.block_on(self.inner.lookup(&generic_row)) {
-            Ok(r) => r,
-            Err(e) => {
-                let ffi_err = err_from_core_error(&e);
-                return Box::new(PrefixLookupResultInner::from_error(
-                    ffi_err.error_code,
-                    ffi_err.error_message,
-                ));
-            }
-        };
-
-        let lookup_rows = match lookup_result.get_rows() {
-            Ok(rows) => rows,
-            Err(e) => {
-                let ffi_err = err_from_core_error(&e);
-                return Box::new(PrefixLookupResultInner::from_error(
-                    ffi_err.error_code,
-                    ffi_err.error_message,
-                ));
-            }
-        };
-
-        let mut rows = Vec::with_capacity(lookup_rows.len());
-        for row in &lookup_rows {
-            match types::compacted_row_to_owned(row, &self.table_info) {
-                Ok(owned_row) => rows.push(owned_row),
-                Err(e) => {
-                    return Box::new(PrefixLookupResultInner::from_error(
-                        CLIENT_ERROR_CODE,
-                        e.to_string(),
-                    ));
-                }
-            }
-        }
-
-        let columns = self.table_info.get_schema().columns().to_vec();
-        Box::new(PrefixLookupResultInner {
-            error: None,
-            rows,
-            columns,
-        })
     }
 }
 
@@ -2176,6 +2555,218 @@ impl LogScanner {
         match result {
             Ok(batches) => arrow_batches_result(types::core_scan_batches_to_ffi(&batches)),
             Err(e) => empty_arrow_batches_result(err_from_core_error(&e)),
+        }
+    }
+
+    fn create_record_batch_log_reader_until_latest(&self, admin: &Admin) -> ffi::FfiPtrResult {
+        let ScannerKind::Batch(ref scanner) = self.scanner else {
+            return client_err_ptr("Batch-based scanner not available".to_string());
+        };
+
+        let reader_result = RUNTIME.block_on(async {
+            fcore::client::RecordBatchLogReader::new_until_latest(
+                scanner.new_shared_handle(),
+                admin.inner.as_ref(),
+            )
+            .await
+        });
+
+        match reader_result {
+            Ok(reader) => {
+                let ptr = Box::into_raw(Box::new(RecordBatchLogReader {
+                    inner: Mutex::new(reader),
+                }));
+                ok_ptr(ptr as usize)
+            }
+            Err(e) => err_ptr_from_core(&e),
+        }
+    }
+
+    fn create_record_batch_log_reader_until_offsets(
+        &self,
+        offsets: Vec<ffi::FfiReaderStopOffset>,
+    ) -> ffi::FfiPtrResult {
+        let ScannerKind::Batch(ref scanner) = self.scanner else {
+            return client_err_ptr("Batch-based scanner not available".to_string());
+        };
+
+        let mut stopping_offsets = HashMap::with_capacity(offsets.len());
+        for offset in offsets {
+            let partition_id = offset.has_partition_id.then_some(offset.partition_id);
+            let bucket = fcore::metadata::TableBucket::new_with_partition(
+                offset.table_id,
+                partition_id,
+                offset.bucket_id,
+            );
+            if stopping_offsets.insert(bucket, offset.offset).is_some() {
+                return client_err_ptr(
+                    "Duplicate bucket in bounded reader stopping offsets".to_string(),
+                );
+            }
+        }
+
+        match fcore::client::RecordBatchLogReader::new_until_offsets(
+            scanner.new_shared_handle(),
+            stopping_offsets,
+        ) {
+            Ok(reader) => {
+                let ptr = Box::into_raw(Box::new(RecordBatchLogReader {
+                    inner: Mutex::new(reader),
+                }));
+                ok_ptr(ptr as usize)
+            }
+            Err(e) => err_ptr_from_core(&e),
+        }
+    }
+
+    fn create_record_batch_log_reader_from_ranges(
+        &self,
+        ranges: Vec<ffi::FfiBoundedLogReadRange>,
+    ) -> ffi::FfiPtrResult {
+        let ScannerKind::Batch(ref scanner) = self.scanner else {
+            return client_err_ptr("Batch-based scanner not available".to_string());
+        };
+
+        let ranges: Vec<fcore::client::BoundedLogReadRange> = ranges
+            .into_iter()
+            .map(|range| fcore::client::BoundedLogReadRange {
+                bucket: reader_bucket_to_core(
+                    range.table_id,
+                    range.has_partition_id,
+                    range.partition_id,
+                    range.bucket_id,
+                ),
+                starting_offset: range.starting_offset,
+                stopping_offset: range.stopping_offset,
+            })
+            .collect();
+
+        let reader_result = RUNTIME.block_on(fcore::client::RecordBatchLogReader::new_from_ranges(
+            scanner.new_shared_handle(),
+            ranges,
+        ));
+
+        match reader_result {
+            Ok(reader) => {
+                let ptr = Box::into_raw(Box::new(RecordBatchLogReader {
+                    inner: Mutex::new(reader),
+                }));
+                ok_ptr(ptr as usize)
+            }
+            Err(e) => err_ptr_from_core(&e),
+        }
+    }
+
+    fn create_record_batch_log_reader_between_timestamps(
+        &self,
+        admin: &Admin,
+        buckets: Vec<ffi::FfiReaderBucket>,
+        starting_timestamp_ms: i64,
+        stopping_timestamp_ms: i64,
+    ) -> ffi::FfiPtrResult {
+        let ScannerKind::Batch(ref scanner) = self.scanner else {
+            return client_err_ptr("Batch-based scanner not available".to_string());
+        };
+
+        let buckets: Vec<fcore::metadata::TableBucket> = buckets
+            .into_iter()
+            .map(|bucket| {
+                reader_bucket_to_core(
+                    bucket.table_id,
+                    bucket.has_partition_id,
+                    bucket.partition_id,
+                    bucket.bucket_id,
+                )
+            })
+            .collect();
+
+        let reader_result =
+            RUNTIME.block_on(fcore::client::RecordBatchLogReader::new_between_timestamps(
+                scanner.new_shared_handle(),
+                admin.inner.as_ref(),
+                &buckets,
+                starting_timestamp_ms,
+                stopping_timestamp_ms,
+            ));
+
+        match reader_result {
+            Ok(reader) => {
+                let ptr = Box::into_raw(Box::new(RecordBatchLogReader {
+                    inner: Mutex::new(reader),
+                }));
+                ok_ptr(ptr as usize)
+            }
+            Err(e) => err_ptr_from_core(&e),
+        }
+    }
+}
+
+fn reader_bucket_to_core(
+    table_id: i64,
+    has_partition_id: bool,
+    partition_id: i64,
+    bucket_id: i32,
+) -> fcore::metadata::TableBucket {
+    fcore::metadata::TableBucket::new_with_partition(
+        table_id,
+        has_partition_id.then_some(partition_id),
+        bucket_id,
+    )
+}
+
+// RecordBatchLogReader implementation
+
+/// Bounded read statuses shared with the C++ `BoundedReadStatus` enum.
+const BATCH_AVAILABLE: i32 = 0;
+const TIMED_OUT: i32 = 1;
+const FINISHED: i32 = 2;
+
+unsafe fn delete_record_batch_log_reader(reader: *mut RecordBatchLogReader) {
+    if !reader.is_null() {
+        unsafe {
+            drop(Box::from_raw(reader));
+        }
+    }
+}
+
+impl RecordBatchLogReader {
+    fn record_batch_log_reader_next_batch(&self, timeout_ms: i64) -> ffi::FfiBoundedReadResult {
+        let mut reader = self.inner.lock().unwrap();
+        let timeout = Duration::from_millis(timeout_ms.max(0) as u64);
+        match RUNTIME.block_on(reader.next_batch_with_timeout(timeout)) {
+            Ok(fcore::client::RecordBatchReadOutcome::Batch(batch)) => bounded_read_result(
+                types::core_scan_batches_to_ffi(std::slice::from_ref(&batch)),
+                BATCH_AVAILABLE,
+            ),
+            Ok(fcore::client::RecordBatchReadOutcome::TimedOut) => {
+                empty_bounded_read_result(ok_result(), TIMED_OUT)
+            }
+            Ok(fcore::client::RecordBatchReadOutcome::Finished) => {
+                empty_bounded_read_result(ok_result(), FINISHED)
+            }
+            Err(e) => empty_bounded_read_result(err_from_core_error(&e), FINISHED),
+        }
+    }
+
+    /// Drains the reader under a total time budget. `FINISHED` means the whole
+    /// bounded result was collected; `TIMED_OUT` means the budget expired and
+    /// the returned batches are a partial result.
+    fn record_batch_log_reader_collect_all_batches(
+        &self,
+        timeout_ms: i64,
+    ) -> ffi::FfiBoundedReadResult {
+        let mut reader = self.inner.lock().unwrap();
+        let timeout = Duration::from_millis(timeout_ms.max(0) as u64);
+        match RUNTIME.block_on(reader.collect_all_batches_with_timeout(timeout)) {
+            Ok(outcome) => bounded_read_result(
+                types::core_scan_batches_to_ffi(&outcome.batches),
+                if outcome.complete {
+                    FINISHED
+                } else {
+                    TIMED_OUT
+                },
+            ),
+            Err(e) => empty_bounded_read_result(err_from_core_error(&e), FINISHED),
         }
     }
 }

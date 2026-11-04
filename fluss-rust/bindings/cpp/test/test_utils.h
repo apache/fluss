@@ -224,13 +224,23 @@ void PollRecords(fluss::LogScanner& scanner, size_t expected_count, ExtractFn ex
     }
 }
 
-template <typename T, typename ExtractFn>
-void PollRecordBatches(fluss::LogScanner& scanner, size_t expected_count, ExtractFn extract_fn,
+inline fluss::Result PollRecordBatch(fluss::LogScanner& scanner, int64_t timeout_ms,
+                                     fluss::ArrowRecordBatches& out) {
+    return scanner.PollRecordBatch(timeout_ms, out);
+}
+
+inline fluss::Result PollRecordBatch(fluss::RecordBatchLogScanner& scanner, int64_t timeout_ms,
+                                     fluss::ArrowRecordBatches& out) {
+    return scanner.Poll(timeout_ms, out);
+}
+
+template <typename Scanner, typename T, typename ExtractFn>
+void PollRecordBatches(Scanner& scanner, size_t expected_count, ExtractFn extract_fn,
                        std::vector<T>& out) {
     auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
     while (out.size() < expected_count && std::chrono::steady_clock::now() < deadline) {
         fluss::ArrowRecordBatches batches;
-        ASSERT_OK(scanner.PollRecordBatch(1000, batches));
+        ASSERT_OK(PollRecordBatch(scanner, 1000, batches));
         auto items = extract_fn(batches);
         out.insert(out.end(), items.begin(), items.end());
     }

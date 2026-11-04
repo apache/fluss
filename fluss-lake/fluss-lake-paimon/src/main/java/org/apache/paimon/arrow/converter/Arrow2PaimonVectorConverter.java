@@ -64,6 +64,7 @@ import org.apache.paimon.data.columnar.VectorizedColumnBatch;
 import org.apache.paimon.types.ArrayType;
 import org.apache.paimon.types.BigIntType;
 import org.apache.paimon.types.BinaryType;
+import org.apache.paimon.types.BlobType;
 import org.apache.paimon.types.BooleanType;
 import org.apache.paimon.types.CharType;
 import org.apache.paimon.types.DataField;
@@ -85,6 +86,7 @@ import org.apache.paimon.types.TinyIntType;
 import org.apache.paimon.types.VarBinaryType;
 import org.apache.paimon.types.VarCharType;
 import org.apache.paimon.types.VariantType;
+import org.apache.paimon.types.VectorType;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -479,6 +481,11 @@ public interface Arrow2PaimonVectorConverter {
         }
 
         @Override
+        public Arrow2PaimonVectorConverter visit(BlobType blobType) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
         public Arrow2PaimonVectorConverter visit(ArrayType arrayType) {
             final Arrow2PaimonVectorConverter arrowVectorConvertor =
                     arrayType.getElementType().accept(this);
@@ -517,6 +524,11 @@ public interface Arrow2PaimonVectorConverter {
                             return columnVector;
                         }
                     };
+        }
+
+        @Override
+        public Arrow2PaimonVectorConverter visit(VectorType vectorType) {
+            throw new UnsupportedOperationException();
         }
 
         @Override

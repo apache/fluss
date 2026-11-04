@@ -295,12 +295,50 @@ Usage:
 {{- $errMessages := list -}}
 {{- $errMessages = append $errMessages (include "fluss.security.sasl.validateMechanisms" .) -}}
 {{- $errMessages = append $errMessages (include "fluss.security.sasl.validateClientPlainUsers" .) -}}
+{{- $errMessages = append $errMessages (include "fluss.security.sasl.validateHealthCheckAuth" .) -}}
 {{- $errMessages = append $errMessages (include "fluss.security.zookeeper.sasl.validateMechanism" .) -}}
 {{- $errMessages = append $errMessages (include "fluss.security.zookeeper.sasl.validateLoginModuleClass" .) -}}
 {{- $errMessages = append $errMessages (include "fluss.security.zookeeper.sasl.validateUsername" .) -}}
 {{- $errMessages = append $errMessages (include "fluss.security.zookeeper.sasl.validatePassword" .) -}}
 {{- $errMessages = without $errMessages "" -}}
 {{- join "\n" $errMessages -}}
+{{- end -}}
+
+{{/*
+Validates that the readiness probes can authenticate. Both probes call servers on
+the client listener (the coordinator probe of a standby also calls the other
+coordinators); with client SASL enabled and no healthCheckAuth,
+the probe fails authentication and the pod stays NotReady for the whole
+healthCheckTimeoutSeconds budget (20 minutes by default), stalling a rollout.
+The credential can also come from a Secret as a READINESS_HEALTH_CHECK_AUTH
+container env var, through secrets.env (both components) or <component>.extraEnv.
+The exec probe inherits the container environment. envFrom cannot be inspected
+at render time, so it does not count.
+Usage:
+  include "fluss.security.sasl.validateHealthCheckAuth" .
+*/}}
+{{- define "fluss.security.sasl.validateHealthCheckAuth" -}}
+{{- $client := include "fluss.security.listener.mechanism" (dict "context" .Values "listener" "client") -}}
+{{- if ne $client "" -}}
+  {{- $sharedEnv := false -}}
+  {{- range (.Values.secrets | default (dict)).env -}}
+    {{- if eq .name "READINESS_HEALTH_CHECK_AUTH" -}}{{- $sharedEnv = true -}}{{- end -}}
+  {{- end -}}
+  {{- $missing := list -}}
+  {{- range $component := list "coordinator" "tablet" -}}
+    {{- $values := index $.Values $component -}}
+    {{- $set := or $sharedEnv (($values.readinessProbe | default (dict)).healthCheckAuth) -}}
+    {{- range $values.extraEnv -}}
+      {{- if eq .name "READINESS_HEALTH_CHECK_AUTH" -}}{{- $set = true -}}{{- end -}}
+    {{- end -}}
+    {{- if not $set -}}
+      {{- $missing = append $missing (printf "%s.readinessProbe.healthCheckAuth" $component) -}}
+    {{- end -}}
+  {{- end -}}
+  {{- if $missing -}}
+    {{- printf "security.client.sasl.mechanism is set, so %s must be set for the readiness probe to authenticate against the client listener. To keep the credential in a Secret, add a READINESS_HEALTH_CHECK_AUTH entry to secrets.env instead" (join " and " $missing) -}}
+  {{- end -}}
+{{- end -}}
 {{- end -}}
 
 {{/*

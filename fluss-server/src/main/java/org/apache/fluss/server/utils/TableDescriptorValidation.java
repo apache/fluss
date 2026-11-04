@@ -32,12 +32,15 @@ import org.apache.fluss.metadata.AggFunction;
 import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DeleteBehavior;
+import org.apache.fluss.metadata.KafkaTableSchema;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypeRoot;
 import org.apache.fluss.types.RowType;
@@ -46,6 +49,7 @@ import org.apache.fluss.utils.StringUtils;
 
 import javax.annotation.Nullable;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -56,6 +60,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import static org.apache.fluss.config.ConfigOptions.CURRENT_KV_FORMAT_VERSION;
 import static org.apache.fluss.config.FlussConfigUtils.TABLE_OPTIONS;
 import static org.apache.fluss.config.FlussConfigUtils.isAlterableTableOption;
 import static org.apache.fluss.config.FlussConfigUtils.isTableStorageConfig;
@@ -98,24 +103,27 @@ public class TableDescriptorValidation {
         // check properties should only contain table.* options,
         // and this cluster know it, and value is valid
         for (String key : tableConf.keySet()) {
-
-            if (!TABLE_OPTIONS.containsKey(key)) {
-                if (isTableStorageConfig(key)) {
-                    throw new InvalidConfigException(
-                            String.format(
-                                    "'%s' is not a recognized Fluss table property in the current cluster version. "
-                                            + "You may be using an older Fluss cluster that does not support this property.",
-                                    key));
-                } else {
-                    throw new InvalidConfigException(
-                            String.format(
-                                    "'%s' is not a Fluss table property. Please use '.customProperty(..)' to set custom properties.",
-                                    key));
-                }
-            }
             ConfigOption<?> option = TABLE_OPTIONS.get(key);
-            validateOptionValue(tableConf, option);
+            if (option != null) {
+                validateOptionValue(tableConf, option);
+                continue;
+            }
+
+            if (isTableStorageConfig(key)) {
+                throw new InvalidConfigException(
+                        String.format(
+                                "'%s' is not a recognized Fluss table property in the current cluster version. "
+                                        + "You may be using an older Fluss cluster that does not support this property.",
+                                key));
+            } else {
+                throw new InvalidConfigException(
+                        String.format(
+                                "'%s' is not a Fluss table property. Please use '.customProperty(..)' to set custom properties.",
+                                key));
+            }
         }
+
+        KafkaTableSchema.validate(tableDescriptor);
 
         // check distribution
         checkDistribution(tableDescriptor, maxBucketNum);
@@ -125,18 +133,24 @@ public class TableDescriptorValidation {
         checkLogFormat(tableConf, hasPrimaryKey);
         checkArrowCompression(tableConf);
         checkMergeEngine(tableConf, hasPrimaryKey, schema);
+        checkUpsertSkipUnchanged(tableConf, hasPrimaryKey);
         checkDeleteBehavior(tableConf, hasPrimaryKey);
         checkTieredLog(tableConf);
         checkHistoricalPartition(tableDescriptor, tableConf);
+        checkKvTTL(tableConf, schema, hasPrimaryKey);
+        checkKvFormatVersion(tableConf);
+        checkKvValueLayout(tableConf, hasPrimaryKey);
         checkPartition(tableConf, tableDescriptor.getPartitionKeys(), schema.getRowType());
         checkSystemColumns(schema.getRowType());
         validateStatisticsConfig(tableDescriptor);
         checkTableLakeFormatMatchesCluster(tableConf, clusterDataLakeFormat);
+        checkCustomLakePathSupported(tableConf, clusterDataLakeFormat);
     }
 
     /** Validates the schema after altering table columns. */
     @Internal
     public static void validateAlterTableSchema(TableInfo table, Schema newSchema) {
+        checkSystemColumns(newSchema.getRowType());
         if (table.getTableConfig()
                 .getMergeEngineType()
                 .map(MergeEngineType.AGGREGATION::equals)
@@ -145,6 +159,10 @@ public class TableDescriptorValidation {
         } else {
             validateNoAggregationFunctions(newSchema);
         }
+        TableDescriptor updated =
+                TableDescriptor.builder(table.toTableDescriptor()).schema(newSchema).build();
+        KafkaTableSchema.validate(updated);
+        KafkaTableSchema.validateTablePath(table.getTablePath(), updated);
     }
 
     private static void checkTableLakeFormatMatchesCluster(
@@ -153,21 +171,16 @@ public class TableDescriptorValidation {
             return;
         }
 
-        if (!tableConf.get(ConfigOptions.TABLE_DATALAKE_ENABLED)) {
-            return;
-        }
-
         Optional<DataLakeFormat> tableDataLakeFormat =
                 tableConf.getOptional(ConfigOptions.TABLE_DATALAKE_FORMAT);
         if (tableDataLakeFormat.isPresent() && tableDataLakeFormat.get() != clusterDataLakeFormat) {
             throw new InvalidConfigException(
                     String.format(
-                            "'%s' ('%s') must match cluster '%s' ('%s') when '%s' is enabled.",
+                            "'%s' ('%s') must match cluster '%s' ('%s').",
                             ConfigOptions.TABLE_DATALAKE_FORMAT.key(),
                             tableDataLakeFormat.get(),
                             ConfigOptions.DATALAKE_FORMAT.key(),
-                            clusterDataLakeFormat,
-                            ConfigOptions.TABLE_DATALAKE_ENABLED.key()));
+                            clusterDataLakeFormat));
         }
     }
 
@@ -206,10 +219,6 @@ public class TableDescriptorValidation {
                             DataLakeFormat.PAIMON,
                             dataLakeFormat.get()));
         }
-        if (!tableDescriptor.hasPrimaryKey()) {
-            unmetRequirements.add("the table must define a primary key");
-        }
-
         int partitionKeyCount = tableDescriptor.getPartitionKeys().size();
         if (partitionKeyCount != 1) {
             unmetRequirements.add(
@@ -224,6 +233,32 @@ public class TableDescriptorValidation {
                             "'%s' has unmet requirements: %s.",
                             ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED.key(),
                             String.join("; ", unmetRequirements)));
+        }
+    }
+
+    private static void checkCustomLakePathSupported(
+            Configuration tableConf, @Nullable DataLakeFormat clusterDataLakeFormat) {
+        boolean hasLakePathOption =
+                tableConf.contains(ConfigOptions.TABLE_DATALAKE_DATABASE_NAME)
+                        || tableConf.contains(ConfigOptions.TABLE_DATALAKE_TABLE_NAME);
+        if (!hasLakePathOption) {
+            return;
+        }
+
+        tableConf
+                .getOptional(ConfigOptions.TABLE_DATALAKE_DATABASE_NAME)
+                .ifPresent(TablePath::validateDatabaseName);
+        tableConf
+                .getOptional(ConfigOptions.TABLE_DATALAKE_TABLE_NAME)
+                .ifPresent(TablePath::validateTableName);
+
+        DataLakeFormat dataLakeFormat =
+                tableConf
+                        .getOptional(ConfigOptions.TABLE_DATALAKE_FORMAT)
+                        .orElse(clusterDataLakeFormat);
+        if (dataLakeFormat != DataLakeFormat.PAIMON && dataLakeFormat != DataLakeFormat.ICEBERG) {
+            throw new InvalidConfigException(
+                    "Custom lake table path is only supported for Paimon and Iceberg.");
         }
     }
 
@@ -302,6 +337,124 @@ public class TableDescriptorValidation {
         }
     }
 
+    private static void checkKvTTL(Configuration tableConf, Schema schema, boolean hasPrimaryKey) {
+        Optional<Duration> rowTTL = tableConf.getOptional(ConfigOptions.TABLE_KV_TTL);
+        Optional<String> timeColumn = tableConf.getOptional(ConfigOptions.TABLE_KV_TTL_TIME_COLUMN);
+        if (timeColumn.isPresent() && !rowTTL.isPresent()) {
+            throw new InvalidConfigException(
+                    String.format(
+                            "'%s' requires '%s' to be set.",
+                            ConfigOptions.TABLE_KV_TTL_TIME_COLUMN.key(),
+                            ConfigOptions.TABLE_KV_TTL.key()));
+        }
+
+        if (!rowTTL.isPresent()) {
+            return;
+        }
+
+        if (!hasPrimaryKey) {
+            throw new InvalidTableException(
+                    String.format(
+                            "'%s' is only supported for primary key tables.",
+                            ConfigOptions.TABLE_KV_TTL.key()));
+        }
+
+        validateKvTTLDuration(rowTTL.get());
+
+        if (timeColumn.isPresent()) {
+            Schema.Column column = getKvTTLTimeColumn(schema, timeColumn.get());
+            validateKvTTLTimeColumnType(column.getDataType());
+        }
+    }
+
+    private static Schema.Column getKvTTLTimeColumn(Schema schema, String timeColumn) {
+        for (Schema.Column column : schema.getColumns()) {
+            if (column.getName().equals(timeColumn)) {
+                return column;
+            }
+        }
+        throw new InvalidConfigException(
+                String.format(
+                        "'%s' refers to unknown column '%s'.",
+                        ConfigOptions.TABLE_KV_TTL_TIME_COLUMN.key(), timeColumn));
+    }
+
+    private static void validateKvTTLTimeColumnType(DataType dataType) {
+        if (dataType.is(DataTypeRoot.BIGINT)
+                || dataType.is(DataTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE)
+                || dataType.is(DataTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE)) {
+            return;
+        }
+        throw new InvalidConfigException(
+                String.format(
+                        "'%s' only supports BIGINT, TIMESTAMP, or TIMESTAMP_LTZ columns, but was %s.",
+                        ConfigOptions.TABLE_KV_TTL_TIME_COLUMN.key(), dataType));
+    }
+
+    private static void validateKvTTLDuration(Duration ttl) {
+        try {
+            RowTtlUtils.validateAndConvertTtlDurationToMillis(ttl);
+        } catch (IllegalArgumentException e) {
+            throw new InvalidConfigException(
+                    String.format(
+                            "Invalid value for '%s': %s",
+                            ConfigOptions.TABLE_KV_TTL.key(), e.getMessage()));
+        }
+    }
+
+    private static void checkKvFormatVersion(Configuration tableConf) {
+        Optional<Integer> kvFormatVersion =
+                tableConf.getOptional(ConfigOptions.TABLE_KV_FORMAT_VERSION);
+        if (kvFormatVersion.isPresent() && kvFormatVersion.get() > CURRENT_KV_FORMAT_VERSION) {
+            throw new InvalidConfigException(
+                    String.format(
+                            "Unsupported kv format version %d. The maximum supported version is %d.",
+                            kvFormatVersion.get(), CURRENT_KV_FORMAT_VERSION));
+        }
+    }
+
+    private static void checkKvValueLayout(Configuration tableConf, boolean hasPrimaryKey) {
+        boolean rowTtlEnabled = tableConf.getOptional(ConfigOptions.TABLE_KV_TTL).isPresent();
+        Optional<Integer> layoutVersion =
+                tableConf.getOptional(ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION);
+        if (!layoutVersion.isPresent()) {
+            if (rowTtlEnabled) {
+                throw new InvalidConfigException(
+                        String.format(
+                                "'%s' must be set when '%s' is set.",
+                                ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION.key(),
+                                ConfigOptions.TABLE_KV_TTL.key()));
+            }
+            return;
+        }
+        if (!hasPrimaryKey) {
+            throw new InvalidConfigException(
+                    String.format(
+                            "'%s' is only supported for primary key tables.",
+                            ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION.key()));
+        }
+
+        KvValueLayout layout;
+        try {
+            layout = KvValueLayout.fromVersion(layoutVersion.get());
+        } catch (IllegalArgumentException e) {
+            throw new InvalidConfigException(
+                    String.format(
+                            "Invalid value for '%s': %s.",
+                            ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION.key(),
+                            layoutVersion.get()));
+        }
+
+        if (layout.hasValueTag() != rowTtlEnabled) {
+            throw new InvalidConfigException(
+                    String.format(
+                            "'%s' version %d is incompatible with '%s'.",
+                            ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION.key(),
+                            layout.version(),
+                            ConfigOptions.TABLE_KV_TTL.key()));
+        }
+    }
+
     private static void checkDistribution(TableDescriptor tableDescriptor, int maxBucketNum) {
         if (!tableDescriptor.getTableDistribution().isPresent()) {
             throw new InvalidTableException("Table distribution is required.");
@@ -310,6 +463,10 @@ public class TableDescriptorValidation {
             throw new InvalidTableException("Bucket number must be set.");
         }
         int bucketCount = tableDescriptor.getTableDistribution().get().getBucketCount().get();
+        if (bucketCount <= 0) {
+            throw new InvalidTableException(
+                    String.format("Bucket count must be greater than 0, but is %s.", bucketCount));
+        }
         if (bucketCount > maxBucketNum) {
             throw new TooManyBucketsException(
                     String.format(
@@ -454,6 +611,35 @@ public class TableDescriptorValidation {
         }
     }
 
+    private static void checkUpsertSkipUnchanged(Configuration tableConf, boolean hasPrimaryKey) {
+        if (!tableConf.get(ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED)) {
+            return;
+        }
+        String option = ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED.key();
+        if (!hasPrimaryKey) {
+            throw new InvalidConfigException(
+                    String.format("'%s' is only supported for primary key tables.", option));
+        }
+        if (tableConf.getOptional(ConfigOptions.TABLE_MERGE_ENGINE).isPresent()) {
+            throw new InvalidConfigException(
+                    String.format(
+                            "'%s' cannot be combined with '%s'.",
+                            option, ConfigOptions.TABLE_MERGE_ENGINE.key()));
+        }
+        if (tableConf.get(ConfigOptions.TABLE_CHANGELOG_IMAGE) == ChangelogImage.WAL) {
+            throw new InvalidConfigException(
+                    String.format(
+                            "'%s' requires '%s' to be FULL.",
+                            option, ConfigOptions.TABLE_CHANGELOG_IMAGE.key()));
+        }
+        if (tableConf.getOptional(ConfigOptions.TABLE_KV_TTL).isPresent()) {
+            throw new InvalidConfigException(
+                    String.format(
+                            "'%s' cannot be combined with '%s'.",
+                            option, ConfigOptions.TABLE_KV_TTL.key()));
+        }
+    }
+
     /** Validates that the schema doesn't contain any aggregation functions. */
     private static void validateNoAggregationFunctions(Schema schema) {
         for (Schema.Column column : schema.getColumns()) {
@@ -514,6 +700,23 @@ public class TableDescriptorValidation {
                     String.format(
                             "'%s' must be greater than 0.",
                             ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS.key()));
+        }
+
+        Optional<Duration> localTtl = tableConf.getOptional(ConfigOptions.TABLE_LOG_LOCAL_TTL);
+        if (!localTtl.isPresent()) {
+            return;
+        }
+        Duration logTtl = tableConf.get(ConfigOptions.TABLE_LOG_TTL);
+        if (!localTtl.get().isZero()
+                && !localTtl.get().isNegative()
+                && !logTtl.isZero()
+                && !logTtl.isNegative()
+                && localTtl.get().compareTo(logTtl) > 0) {
+            throw new InvalidConfigException(
+                    String.format(
+                            "'%s' must be less than or equal to '%s'.",
+                            ConfigOptions.TABLE_LOG_LOCAL_TTL.key(),
+                            ConfigOptions.TABLE_LOG_TTL.key()));
         }
     }
 

@@ -121,8 +121,10 @@ helm uninstall fluss
 # Uninstall ZooKeeper
 helm uninstall zk
 
-# Delete PVCs
-kubectl delete pvc -l app.kubernetes.io/name=fluss
+# Delete PVCs belonging to this release. Scope by instance: the
+# app.kubernetes.io/name label is shared by every Fluss release in the
+# namespace, and carries nameOverride when one is set.
+kubectl delete pvc -l app.kubernetes.io/instance=fluss
 
 # Stop Minikube
 minikube stop
@@ -165,6 +167,7 @@ The following table lists the configurable parameters of the Fluss chart, and th
 |-----------|-------------|---------|
 | `nameOverride` | Override the name of the chart | `""` |
 | `fullnameOverride` | Override the full name of the resources | `""` |
+| `uniqueResourceNames` | Give every resource a name unique to the release, and scope the ZooKeeper root path to the namespace and release, so that several Fluss clusters can share a namespace. See [Running several Fluss clusters in one namespace](#running-several-fluss-clusters-in-one-namespace). | `false` |
 
 ### Image Parameters
 
@@ -377,7 +380,7 @@ The same pattern works with Sealed Secrets, HashiCorp Vault Agent Injector (prod
 |-----------|-------------|---------|
 | `configurationOverrides.default.bucket.number` | Default number of buckets for tables | `3` |
 | `configurationOverrides.default.replication.factor` | Default replication factor | `3` |
-| `configurationOverrides.zookeeper.path.root` | ZooKeeper root path for Fluss | `/fluss` |
+| `configurationOverrides.zookeeper.path.root` | ZooKeeper root path for Fluss. Becomes `/fluss-<namespace>/<release>` when `uniqueResourceNames` is enabled | `/fluss` |
 | `configurationOverrides.zookeeper.address` | ZooKeeper ensemble address | `zk-zookeeper.{{ .Release.Namespace }}.svc.cluster.local:2181` |
 | `configurationOverrides.remote.data.dir` | Remote data directory for snapshots | `/tmp/fluss/remote-data` |
 | `configurationOverrides.data.dir` | Local data directory | `/tmp/fluss/data` |
@@ -442,6 +445,12 @@ making rotation fully hands-off.
 |-----------|-------------|---------|
 | `tablet.numberOfReplicas` | Number of TabletServer replicas to deploy | `3` |
 
+### Coordinator Server Parameters
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `coordinator.numberOfReplicas` | Number of CoordinatorServer replicas to deploy. One replica is the elected leader and the others run as warm standbys. See [Coordinator High Availability](#coordinator-high-availability) | `1` |
+
 ### Scheduling Parameters
 
 | Parameter | Description | Default |
@@ -485,6 +494,7 @@ making rotation fully hands-off.
 |-----------|-------------|---------|
 | `coordinator.annotations` | Annotations to add to the CoordinatorServer StatefulSet | `{}` |
 | `coordinator.service.annotations` | Annotations to add to the CoordinatorServer headless Service | `{}` |
+| `coordinator.service.publishNotReadyAddresses` | Publish DNS records for CoordinatorServer pods before they are Ready, so a restarting server stays resolvable by its advertised hostname | `true` |
 | `coordinator.extraVolumes` | Extra volumes to add to the CoordinatorServer pod spec | `[]` |
 | `coordinator.extraVolumeMounts` | Extra volume mounts to add to the coordinator container | `[]` |
 | `coordinator.initContainers` | Init containers to run before the coordinator container starts | `[]` |
@@ -497,6 +507,7 @@ making rotation fully hands-off.
 | `coordinator.podDisruptionBudget.maxUnavailable` | Maximum unavailable coordinator pods during disruption | Not set |
 | `tablet.annotations` | Annotations to add to the TabletServer StatefulSet | `{}` |
 | `tablet.service.annotations` | Annotations to add to the TabletServer headless Service | `{}` |
+| `tablet.service.publishNotReadyAddresses` | Publish DNS records for TabletServer pods before they are Ready, so a restarting server stays resolvable by its advertised hostname | `true` |
 | `tablet.extraVolumes` | Extra volumes to add to TabletServer pod specs | `[]` |
 | `tablet.extraVolumeMounts` | Extra volume mounts to add to the tablet container | `[]` |
 | `tablet.initContainers` | Init containers to run before the tablet container starts | `[]` |
@@ -561,6 +572,53 @@ configurationOverrides:
   zookeeper.address: "zk1.example.com:2181,zk2.example.com:2181,zk3.example.com:2181"
   zookeeper.path.root: "/my-fluss-cluster"
 ```
+
+### Running several Fluss clusters in one namespace
+
+By default the chart gives each resource a fixed name (`coordinator-server`,
+`tablet-server`, `fluss-conf-file`, and the matching headless Services — the
+metrics Services already carry the release name) and puts every cluster on the
+ZooKeeper root path `/fluss`. Two releases in the
+same namespace would therefore collide on both.
+
+Set `uniqueResourceNames` to give every resource a name unique to the release
+and move the ZooKeeper root path to `/fluss-<namespace>/<release>`:
+
+```bash
+helm install orders ./helm --set uniqueResourceNames=true
+helm install payments ./helm --set uniqueResourceNames=true
+```
+
+This gives you `orders-fluss-coordinator-server` alongside
+`payments-fluss-coordinator-server`, on ZooKeeper roots
+`/fluss-<namespace>/orders` and `/fluss-<namespace>/payments`. The root
+carries the namespace because release names are only unique within one, so two
+`orders` releases in different namespaces can share a ZooKeeper ensemble. It is
+useful when namespace creation is restricted and one
+team needs more than one cluster.
+
+Two things still need attention:
+
+- `configurationOverrides.remote.data.dir` holds kv snapshots and tiered log
+  segments. Whenever it points at a real remote filesystem, such as
+  `s3://bucket/fluss` or an HDFS path, both releases write to the same place,
+  so give each one its own path. The chart default,
+  `/tmp/fluss/remote-data`, is a path inside each pod's own container
+  filesystem and is not shared.
+- The release name becomes part of every generated name through
+  `fluss.fullname`, which is the release name plus `-fluss`, or the release
+  name on its own when it already contains `fluss`. That prefix has to stay
+  within 33 characters — a StatefulSet name cannot exceed 52, because each pod
+  labels itself with the StatefulSet name plus a 10 character revision hash —
+  so a release name without `fluss` in it is limited to 27. Set
+  `fullnameOverride` for anything longer. The chart fails the render
+  with an explicit message when the prefix is too long. That check covers the
+  resources named after `fluss.fullname`; the metrics Services are named from
+  the release name alone and are not covered by it.
+
+To enable the option on a cluster that already exists, read
+[Enabling unique resource names on an existing release](#enabling-unique-resource-names-on-an-existing-release)
+first.
 
 ### Network Configuration
 
@@ -837,6 +895,203 @@ helm upgrade fluss ./helm
 helm upgrade fluss ./helm -f values-new.yaml
 ```
 
+### Enabling unique resource names on an existing release
+
+Turning on `uniqueResourceNames` renames the StatefulSets, and a StatefulSet
+cannot be renamed in place. Helm creates the new one and deletes the old one,
+so the pods are replaced rather than rolled and the cluster restarts.
+
+The headless Services are renamed too. Anything that reaches the cluster through
+`coordinator-server-hs`, such as `bootstrap.servers` in clients and Flink jobs,
+needs the new name afterwards: the coordinator StatefulSet name from the render
+below, plus `-hs`.
+
+Pin the ZooKeeper root path the release uses today, so the new pods inherit the
+existing cluster metadata. Read it from the running configuration:
+
+```bash
+kubectl get configmap fluss-conf-file -n <namespace> \
+  -o jsonpath='{.data.server\.yaml}' | grep zookeeper.path.root
+```
+
+```yaml
+uniqueResourceNames: true
+configurationOverrides:
+  zookeeper.path.root: /fluss   # or the root the release already uses
+```
+
+Without the pin they start against an empty `/fluss-<namespace>/<release>` and
+the old cluster's metadata is left behind.
+
+The pin is permanent: this release keeps its current root for good. That is
+safe to leave alongside others, because the scoped roots sit under
+`/fluss-<namespace>`, a sibling of `/fluss` rather than a child. Fluss uses the
+root as a ZooKeeper namespace, so a release nested under this one would sit
+among its data.
+
+The claims created from `volumeClaimTemplates` are named
+`data-<statefulset>-<ordinal>`, so renaming the StatefulSets renames every
+claim. Left alone, the new pods start on fresh empty volumes and the old claims
+are orphaned.
+
+Read the new StatefulSet names off a render rather than assuming a prefix:
+`fluss.fullname` collapses to the release name on its own when that already
+contains `fluss`, and `fullnameOverride` replaces it outright.
+
+```bash
+helm template <release> ./helm -n <namespace> --set uniqueResourceNames=true -f <your-values> \
+  | awk '/^kind: StatefulSet/{f=1} f&&/^  name:/{print $2; f=0}'
+```
+
+A release called `prod` prints `prod-fluss-coordinator-server` and
+`prod-fluss-tablet-server`, so its claims are `data-prod-fluss-tablet-server-0`
+and so on. A release called `fluss` prints `fluss-tablet-server`, and its claim
+is `data-fluss-tablet-server-0` — not `data-fluss-fluss-tablet-server-0`.
+
+The volumes can be carried over. A StatefulSet creates a claim only when one of
+that name is missing, so **the job is to make sure each new claim binds to the
+volume its predecessor used.** You do that from the volume: a PersistentVolume
+whose `claimRef` names a claim is
+[reserved](https://kubernetes.io/docs/concepts/storage/persistent-volumes/#reserving-a-persistentvolume)
+for it, even before that claim exists. Reserve each volume for the claim the new
+StatefulSet is going to create, and the rest happens on its own.
+
+:::warning
+The cluster is down for the whole procedure, not just for the upgrade at the
+end. Any `helm upgrade` that enables this option replaces the pods rather than
+rolling them, but here the outage also covers the manual steps in between, so
+plan a maintenance window. If a GitOps controller syncs this release, suspend
+it first, or it will recreate the StatefulSets you delete in step 2.
+:::
+
+Test this on a non-production cluster first. Binding behaviour varies by
+storage class: reserving a volume under `WaitForFirstConsumer` — the default on
+EKS and GKE — takes a different path through the scheduler than immediate
+binding does.
+
+Do not change `storage.size` in this upgrade. Each new claim has to fit the
+volume you reserve for it, and one that asks for more will not bind at all: the
+pod never starts and the data is never picked up.
+
+Back up or snapshot the volumes before you start. Pass `-n <namespace>` to
+every command below: the old names are the same in every namespace, so a
+command run against the wrong one acts on another cluster. Then:
+
+1. Write down which volume backs which claim. You need this mapping in step 4,
+   and it is gone once the claims are deleted.
+
+   ```bash
+   kubectl get pvc -n <namespace> -l app.kubernetes.io/instance=<release> \
+     -o custom-columns=CLAIM:.metadata.name,VOLUME:.spec.volumeName
+   ```
+
+   Select on `instance`, not on `app.kubernetes.io/name`: the `name` label
+   changes with `nameOverride`, and every release in the namespace shares it.
+
+   ```
+   CLAIM                      VOLUME
+   data-coordinator-server-0  pvc-8f3a1c02-...
+   data-tablet-server-0       pvc-b71e4d55-...
+   data-tablet-server-1       pvc-2c9f0ab8-...
+   data-tablet-server-2       pvc-5d84e719-...
+   ```
+
+   Then make each volume survive its claim being deleted:
+
+   ```bash
+   kubectl patch pv <volume> -p '{"spec":{"persistentVolumeReclaimPolicy":"Retain"}}'
+   ```
+
+2. Delete the old StatefulSets, then wait for their pods to go. Nothing
+   recreates them: a StatefulSet is a top-level object, and Helm only acts on
+   the release when you run a command against it. The release is simply
+   without them until step 5.
+
+   ```bash
+   kubectl delete statefulset -n <namespace> coordinator-server tablet-server
+   kubectl wait --for=delete pod -n <namespace> -l app.kubernetes.io/instance=<release> --timeout=5m
+   ```
+
+   Do not skip the wait: a claim cannot be deleted while a pod still refers to
+   it, and one left stuck in `Terminating` fails the upgrade at step 5.
+
+3. Delete every old claim listed in step 1. Each volume becomes `Released`.
+
+   ```bash
+   kubectl delete pvc -n <namespace> data-coordinator-server-0 \
+     data-tablet-server-0 data-tablet-server-1 data-tablet-server-2
+   ```
+
+4. Point each volume at the claim the new StatefulSet will create, using the
+   names from the render above and keeping the ordinal the same. The volume
+   that backed `data-tablet-server-1` is reserved for the new tablet claim
+   ending `-1`, and so on for every claim including the coordinator's. Ordinals
+   matter because a tablet server takes its id from its pod ordinal: cross two
+   of them over and a server boots on another server's data, with nothing to
+   warn you.
+
+   The claim need not exist yet. What matters is that the reference carries no
+   `uid` — a stale one leaves the volume `Released` rather than reserved. So
+   replace the whole `claimRef`, or null the `uid` explicitly; setting only
+   `name` keeps it.
+
+   ```bash
+   kubectl patch pv <volume> --type json -p '[{
+     "op": "replace",
+     "path": "/spec/claimRef",
+     "value": {
+       "namespace": "<namespace>",
+       "name": "data-<new-statefulset>-<ordinal>"
+     }
+   }]'
+   ```
+
+   Check the result before going on. Every volume should read `Available`
+   with this namespace and its new claim name against it:
+
+   ```bash
+   kubectl get pv -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,NAMESPACE:.spec.claimRef.namespace,CLAIM:.spec.claimRef.name
+   ```
+
+5. Run the upgrade, repeating every `-f` and `--set` the release already had
+   alongside the settings above:
+
+   ```bash
+   helm upgrade <release> ./helm -n <namespace> -f <your-values> -f <the-settings-above>
+   ```
+
+   Do not use `--reuse-values`: it replaces the new chart's defaults with the
+   old release's values. Pass every value explicitly, or use
+   `--reset-then-reuse-values` (Helm 3.14 or later). The new StatefulSets create
+   their claims, each binds to the volume reserved for it, and the pods come up
+   on the original disks.
+
+If it goes wrong, the way back is the way in. The volumes are on `Retain`, so
+patch each `claimRef` to the old claim name instead and upgrade again without
+`uniqueResourceNames`.
+
+Restore each volume's original reclaim policy afterwards if it was not
+`Retain`.
+
+This needs no upkeep afterwards. The claims are created and labelled by the
+StatefulSet controller, exactly as they would have been on a fresh install, so
+you are not left owning extra objects. Later upgrades do not revisit them:
+`volumeClaimTemplates` is immutable once a StatefulSet exists, the controller
+only creates claims that are missing, and nothing deletes them — the claims are
+not part of the Helm release, and the StatefulSet's claim retention policy
+defaults to keeping them on both deletion and scale-down. Each `claimRef`
+becomes an ordinary binding once its claim appears and stays that way.
+
+With `storage.enabled: false`, the default, the pods use `emptyDir` and there
+is nothing to preserve: run the upgrade and let the pods come back empty.
+
+Delete the old StatefulSets first even then, and wait for their pods. Helm
+creates the new resources before deleting the old ones, so the two generations
+overlap and collide on their ZooKeeper identities. The server that arrives
+second retries for 60 seconds and then crash-loops until a later attempt wins.
+An ungraceful exit holds the old identity until its session expires, which
+`zookeeper.client.session-timeout` also defaults to 60 seconds.
+
 ### Rolling Updates
 
 The StatefulSets support rolling updates. When you update the configuration, pods will be restarted one by one to maintain availability.
@@ -870,13 +1125,103 @@ tablet:
 | Parameter          | Default | Description                                                                                                                                    |
 |--------------------|---------|------------------------------------------------------------------------------------------------------------------------------------------------|
 | `rpcTimeoutMs`     | `5000`  | Timeout in milliseconds for the RPC call to the Coordinator.                                                                                   |
-| `failureThreshold` | `200`   | Max consecutive probe failures before marking the pod as unready. With `periodSeconds=5`, this allows up to ~16 minutes for recovery.          |
+| `failureThreshold` | `360`   | Max consecutive probe failures before marking the pod as unready. With `periodSeconds=5`, this allows up to ~30 minutes for recovery.          |
 | `periodSeconds`    | `5`     | How often the probe runs.                                                                                                                      |
 
 :::note
-The CoordinatorServer does not need the Cluster Health API probe — it does not host data replicas, so a simple TCP check is sufficient.
 The Coordinator should be upgraded **after** all TabletServers are fully upgraded and recovered.
 :::
+
+### Coordinator High Availability
+
+Set `coordinator.numberOfReplicas` above `1` to run the CoordinatorServer with high availability.
+One replica is elected leader. The others run as warm standbys and take over through leader
+election when the leader fails. The default is `1`, so high availability is opt-in.
+
+```yaml
+coordinator:
+  numberOfReplicas: 3
+  podDisruptionBudget:
+    enabled: true
+    maxUnavailable: 1
+```
+
+#### Coordinator Readiness Probe
+
+A standby coordinator binds the same client port as the leader, so a TCP check cannot tell a
+healthy standby from a hung one. The coordinator readiness probe instead sends a cluster health
+request to the local server, and the answer tells the probe the server's role:
+
+- The **leader** answers. It is Ready with any cluster health status, so a coordinator rollout
+  does not depend on TabletServer health. The TabletServer probes already hold a rolling upgrade
+  until the cluster has recovered.
+- A **standby** rejects the request, which shows that it handles requests. The probe then asks
+  the other coordinator pods, through their headless Service DNS names, for the cluster
+  description. The standby becomes Ready once the leader lists the pod's advertised address
+  among the standby coordinators. The leader lists a coordinator while its ZooKeeper
+  registration exists. A rolling update therefore stops at a restarted pod when no leader
+  answers, or when the leader does not see the pod. The probe asks all other coordinators at
+  once, so a hung coordinator cannot use up the probe timeout before the leader is asked.
+  After an unclean exit, the old registration stays until its ZooKeeper session expires
+  (`zookeeper.client.session-timeout`, 60 seconds by default). A pod that restarts within that
+  time can become Ready on the old registration.
+
+The role check runs only while a pod starts. Once it passes, or once the
+`healthCheckTimeoutSeconds` budget (20 minutes by default) runs out, the probe switches to a
+TCP-only check for the rest of the pod's life. A later ZooKeeper outage therefore cannot mark
+every coordinator NotReady at the same time. The probe parameters are the same as the
+TabletServer ones, under `coordinator.readinessProbe.*`.
+
+When the client listener enforces SASL, both readiness probes need a credential. The chart
+fails to render if either one has none. Set `healthCheckAuth` on both
+`coordinator.readinessProbe` and `tablet.readinessProbe`, or keep the credential out of the
+StatefulSet spec by reading it from a Secret into the `READINESS_HEALTH_CHECK_AUTH` env var,
+which the probe reads:
+
+```yaml
+secrets:
+  env:
+    - name: READINESS_HEALTH_CHECK_AUTH
+      secretName: fluss-probe-auth
+      key: health-check-auth  # e.g. client.security.protocol:SASL;client.sasl.mechanism:PLAIN;...
+```
+
+An entry in `secrets.env` reaches both components. A `READINESS_HEALTH_CHECK_AUTH` entry in
+`coordinator.extraEnv` or `tablet.extraEnv` covers that component only. The chart cannot see
+variables loaded through `envFrom`, so they do not satisfy this check.
+
+The probe script ships inside the Fluss image, so this chart version needs an image whose
+`readiness-check.sh` supports the coordinator role (Fluss 1.1 or later). A standby probe that
+finds no leader that lists it, while another coordinator runs a version without the cluster
+description API, falls back to the TCP-only check at once.
+An older image ships a `readiness-check.sh`
+that ignores the role and runs the TabletServer check against the coordinator. That check
+expects a TabletServer at the probed address and fails on any coordinator, leader or standby.
+Every coordinator pod then stays NotReady until the `healthCheckTimeoutSeconds` budget expires
+and the probe falls back to the TCP-only check. The rollout completes, but each coordinator pod
+waits out the full budget, one after another. Images without
+`readiness-check.sh` never become Ready under this chart. Upgrade the chart and the image
+together, or lower `healthCheckTimeoutSeconds` for the transition rollout. An older chart with a
+newer image keeps its TCP-only coordinator probe and is not affected.
+
+#### Running More Than One Replica
+
+- **Client bootstrap:** list every coordinator replica in `bootstrap.servers`, for example
+  `coordinator-server-0.coordinator-server-hs.<ns>:9124,coordinator-server-1.coordinator-server-hs.<ns>:9124,coordinator-server-2.coordinator-server-hs.<ns>:9124`.
+  A standby answers client requests with `NotCoordinatorLeaderException` and clients retry the
+  other bootstrap addresses, so any live replica in the list keeps bootstrap working during a
+  failover.
+- **Checking the replicas:** `Admin.describeCluster()` returns the leader as
+  `getCoordinatorServer()` and the other registered replicas as `getCoordinatorStandbys()` (see
+  [Cluster Inspection](../apis/java/index.md#cluster-inspection)). A listed standby is registered
+  with ZooKeeper. Whether it is also serving requests is what its readiness probe reports.
+- **PodDisruptionBudget:** enable `coordinator.podDisruptionBudget` with `maxUnavailable: 1` so
+  voluntary disruptions (node drains) never take down more than one coordinator at a time.
+- **Rolling updates:** the StatefulSet updates one pod at a time, from the highest ordinal down.
+  When the leader restarts, a standby takes over through leader election. The restarted pod
+  rejoins as a standby and becomes Ready once the new leader lists it.
+- **Spreading:** use `coordinator.affinity` or `coordinator.topologySpreadConstraints` to keep
+  replicas on separate nodes or zones. Replicas on the same node share its failure domain.
 
 ## Custom Container Images
 
@@ -912,7 +1257,7 @@ image:
 
 ### Health Checks
 
-The chart includes liveness and readiness probes. By default, both use TCP socket checks:
+The chart includes liveness and readiness probes. Liveness uses a TCP socket check:
 
 ```yaml
 livenessProbe:
@@ -921,17 +1266,13 @@ livenessProbe:
   initialDelaySeconds: 10
   periodSeconds: 3
   failureThreshold: 100
-
-readinessProbe:
-  tcpSocket:
-    port: 9124
-  initialDelaySeconds: 10
-  periodSeconds: 3
-  failureThreshold: 100
 ```
 
-For TabletServers, you can enable the Cluster Health readiness probe for safe rolling upgrades.
-See [Cluster Health Readiness Probe](#cluster-health-readiness-probe) for details.
+Readiness depends on the server role. TabletServers check cluster health before reporting
+Ready, so a rolling upgrade waits for recovery (see
+[Cluster Health Readiness Probe](#cluster-health-readiness-probe)). CoordinatorServers check
+whether they are the leader or a standby that the leader lists (see
+[Coordinator Readiness Probe](#coordinator-readiness-probe)).
 
 ### Logs
 

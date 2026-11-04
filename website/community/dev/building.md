@@ -11,6 +11,13 @@ In order to build Fluss you need to get the source code by [cloning the git repo
 
 In addition, you need **Maven 3.8.6** and a **JDK** (Java Development Kit). Fluss requires **Java 11** to build.
 
+The Iceberg 1.12 lake plugin (`fluss-lake-iceberg-1.12`) also needs a **JDK 17** installation, which it uses as a
+[Maven toolchain](https://maven.apache.org/guides/mini/guide-using-toolchains.html) while Maven itself keeps running on Java 11.
+The JDK 17 is found automatically in `~/.m2/toolchains.xml`, through `JAVA<version>_HOME` environment variables
+(e.g. `JAVA17_HOME`), or in common install locations such as SDKMAN! and `/Library/Java/JavaVirtualMachines`.
+To build without it, skip the plugin, which also leaves it out of the binary distribution: `mvn clean install -DskipTests -Dskip.iceberg-1.12`.
+If the build fails with `Non-existing JDK home configuration`, remove the entry for that JDK from `~/.m2/toolchains.xml`.
+
 To clone from git, enter:
 
 ```bash
@@ -56,13 +63,9 @@ mvn clean install -DskipTests -T 1C
 
 ## Building the Rust client (fluss-rust)
 
-The Rust client, language bindings, and examples live under `fluss-rust/` and build with Cargo. You need **Rust** (the toolchain pinned in `fluss-rust/rust-toolchain.toml`, currently 1.85+) and **protoc**, the Protobuf compiler — `build.rs` compiles the canonical `fluss-rpc/src/main/proto/FlussApi.proto`.
+The Rust client, language bindings, and examples live under `fluss-rust/` and build with Cargo. You need **Rust** (the toolchain pinned in `fluss-rust/rust-toolchain.toml`, currently 1.85+). The code generated from the canonical `fluss-rpc/src/main/proto/FlussApi.proto` is checked in, so **protoc** is only needed when the proto changes — run `fluss-rust/crates/fluss/regen.sh` and commit the result.
 
 ```bash
-# protoc (pick one)
-brew install protobuf                    # macOS
-sudo apt-get install protobuf-compiler   # Debian/Ubuntu
-
 cd fluss-rust
 cargo build --workspace --all-targets    # build everything
 cargo test --workspace                    # unit tests

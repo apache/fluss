@@ -128,6 +128,50 @@ scanner = await table.new_scan().project([0, 2]).create_record_batch_log_scanner
 scanner = await table.new_scan().project_by_name(["id", "score"]).create_record_batch_log_scanner()
 ```
 
+## Filter Pushdown
+
+A filter is pushed to the server, which uses each batch's statistics to skip
+batches that cannot match. Enable statistics on the table first:
+
+```python
+descriptor = fluss.TableDescriptor(
+    fluss.Schema(schema),
+    properties={"table.statistics.columns": "*"},
+)
+```
+
+Then build a predicate with `fluss.col(...)` and pass it to the scan:
+
+```python
+from fluss import col
+
+predicate = (col("id") >= 200) & col("name").starts_with("high")
+scanner = await table.new_scan().filter(predicate).create_log_scanner()
+scanner.subscribe_buckets({0: fluss.EARLIEST_OFFSET})
+
+records = await scanner.poll(1000)
+# Pruning is batch-granular, so a kept batch can still contain rows that do
+# not match. Re-apply the predicate on the rows you receive.
+matching = [r.row for r in records if r.row["id"] >= 200]
+```
+
+Filters work with projection, including on a column that is not projected:
+
+```python
+scanner = await (
+    table.new_scan()
+    .project_by_name(["name"])
+    .filter(col("id") >= 200)
+    .create_log_scanner()
+)
+```
+
+Null counts drive `is_null()` and `is_not_null()` (a comparison against `None`
+is rejected), and `decimal.Decimal`,
+`datetime.date`, `datetime.time` and `datetime.datetime` filter their matching
+column types. See the [`col` reference](../api-reference.md#col) for the full
+literal mapping.
+
 ## Limit Scan
 
 For a bounded read of up to `n` rows from a single bucket, use a batch scanner instead of subscribing. It issues one request; poll it with `next_batch()` until it returns `None`.

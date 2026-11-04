@@ -126,6 +126,12 @@ pub struct RecordBatch {
     base_offset: i64,
     #[pyo3(get)]
     last_offset: i64,
+    /// Server-side commit timestamp in epoch milliseconds, or -1 if unavailable.
+    #[pyo3(get)]
+    commit_timestamp: i64,
+    /// Source log batch schema ID, or -1 when there is no single source schema.
+    #[pyo3(get)]
+    schema_id: i32,
 }
 
 #[pymethods]
@@ -143,10 +149,12 @@ impl RecordBatch {
 
     fn __str__(&self) -> String {
         format!(
-            "RecordBatch(bucket={}, base_offset={}, last_offset={}, rows={})",
+            "RecordBatch(bucket={}, base_offset={}, last_offset={}, commit_timestamp={}, schema_id={}, rows={})",
             self.bucket.__str__(),
             self.base_offset,
             self.last_offset,
+            self.commit_timestamp,
+            self.schema_id,
             self.batch.num_rows()
         )
     }
@@ -159,10 +167,14 @@ impl RecordBatch {
 impl RecordBatch {
     /// Create a RecordBatch from core ScanBatch
     pub fn from_scan_batch(scan_batch: fcore::record::ScanBatch) -> Self {
+        let commit_timestamp = scan_batch.commit_timestamp();
+        let schema_id = scan_batch.schema_id();
         RecordBatch {
             bucket: TableBucket::from_core(scan_batch.bucket().clone()),
             base_offset: scan_batch.base_offset(),
             last_offset: scan_batch.last_offset(),
+            commit_timestamp,
+            schema_id,
             batch: Arc::new(scan_batch.into_batch()),
         }
     }
@@ -431,6 +443,7 @@ pub struct TableScan {
     projection: Option<ProjectionType>,
     fixed_schema: bool,
     limit: Option<i32>,
+    filter: Option<Predicate>,
 }
 
 /// Scanner type for internal use
@@ -495,6 +508,21 @@ impl TableScan {
         Ok(slf)
     }
 
+    /// Push a filter down for server-side batch pruning.
+    ///
+    /// A returned batch may still contain non-matching rows, so re-apply the
+    /// predicate on the results.
+    ///
+    /// Args:
+    ///     predicate: Predicate built from `fluss.col(...)`.
+    ///
+    /// Returns:
+    ///     Self for method chaining.
+    pub fn filter(mut slf: PyRefMut<'_, Self>, predicate: Predicate) -> PyRefMut<'_, Self> {
+        slf.filter = Some(predicate);
+        slf
+    }
+
     /// Create a one-shot bounded scanner over a single bucket.
     ///
     /// Requires a limit set via `limit()`; the scan runs on the first
@@ -517,9 +545,12 @@ impl TableScan {
 
         let projection = self.projection.clone();
         let projection_indices = resolve_projection_indices(&projection, &self.table_info)?;
-        let scan = apply_projection(table.new_scan(), projection)?
-            .limit(limit)
-            .map_err(|e| FlussError::from_core_error(&e))?;
+        let scan = apply_filter(
+            apply_projection(table.new_scan(), projection)?,
+            &self.filter,
+        )?
+        .limit(limit)
+        .map_err(|e| FlussError::from_core_error(&e))?;
         let scanner = scan
             .create_bucket_batch_scanner(bucket.to_core())
             .map_err(|e| FlussError::from_core_error(&e))?;
@@ -581,13 +612,17 @@ impl TableScan {
         let table_info = self.table_info.clone();
         let projection = self.projection.clone();
         let fixed_schema = self.fixed_schema;
+        let filter = self.filter.clone();
 
         future_into_py(py, async move {
             let fluss_table = fcore::client::FlussTable::new(&conn, metadata, table_info.clone());
 
             let projection_indices = resolve_projection_indices(&projection, &table_info)?;
-            let table_scan = apply_projection(fluss_table.new_scan(), projection)?
-                .with_fixed_schema(fixed_schema);
+            let table_scan = apply_filter(
+                apply_projection(fluss_table.new_scan(), projection)?,
+                &filter,
+            )?
+            .with_fixed_schema(fixed_schema);
 
             let admin = conn
                 .get_admin()
@@ -655,6 +690,19 @@ fn resolve_projection_indices(
     }
 }
 
+/// Applies the filter, if one was set.
+fn apply_filter<'a>(
+    table_scan: fcore::client::TableScan<'a>,
+    filter: &Option<Predicate>,
+) -> PyResult<fcore::client::TableScan<'a>> {
+    match filter {
+        Some(predicate) => table_scan
+            .filter(predicate.to_core())
+            .map_err(|e| FlussError::from_core_error(&e)),
+        None => Ok(table_scan),
+    }
+}
+
 /// Apply projection to table scan
 fn apply_projection(
     table_scan: fcore::client::TableScan,
@@ -717,6 +765,7 @@ impl FlussTable {
             projection: None,
             fixed_schema: false,
             limit: None,
+            filter: None,
         }
     }
 
@@ -745,6 +794,19 @@ impl FlussTable {
     /// Get table information
     pub fn get_table_info(&self) -> TableInfo {
         TableInfo::from_core(self.table_info.clone())
+    }
+
+    /// The table's schema as a PyArrow schema. `write_arrow_batch` requires a
+    /// batch whose column types match it, so this is what to cast against.
+    #[getter]
+    pub fn arrow_schema(&self, py: Python) -> PyResult<Py<PyAny>> {
+        let schema = to_arrow_schema(self.table_info.get_row_type())
+            .map_err(|e| FlussError::from_core_error(&e))?;
+        Ok(schema
+            .as_ref()
+            .to_pyarrow(py)
+            .map_err(|e| FlussError::new_err(format!("Failed to convert schema: {e}")))?
+            .unbind())
     }
 
     /// Get table path
@@ -2989,5 +3051,29 @@ mod tests {
 
         // Negative with sub-millisecond part
         assert_eq!(nanos_to_millis_and_submillis(-500_000), (-1, 500_000));
+    }
+    #[test]
+    fn record_batch_conversion_preserves_source_schema_id() {
+        use arrow::datatypes::{DataType as ArrowType, Field, Schema as ArrowSchema};
+        let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "id",
+            ArrowType::Int32,
+            true,
+        )]));
+        for schema_id in [fcore::record::NO_SCHEMA_ID, 0, i32::from(i16::MAX)] {
+            let batch = fcore::record::ScanBatch::new(
+                fcore::metadata::TableBucket::new(1, 0),
+                ArrowRecordBatch::new_empty(schema.clone()),
+                0,
+            )
+            .with_schema_id(schema_id);
+            let converted = RecordBatch::from_scan_batch(batch);
+            assert_eq!(converted.schema_id, schema_id);
+            assert!(
+                converted
+                    .__str__()
+                    .contains(&format!("schema_id={schema_id}"))
+            );
+        }
     }
 }

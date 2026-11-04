@@ -126,7 +126,7 @@ impl RenameColumn {
     }
 }
 
-/// Bundle of column-level changes for a single `alter_table` call. Empty `Vec`s
+/// Bundle of changes for a single `alter_table` call. Empty `Vec`s and `None`
 /// mean "no change of that kind"; pass `Default::default()` to send only
 /// config changes.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -136,6 +136,35 @@ pub struct AlterTableChanges {
     pub drop_columns: Vec<DropColumn>,
     pub rename_columns: Vec<RenameColumn>,
     pub modify_columns: Vec<ModifyColumn>,
+    /// A new default bucket count for a partitioned table. Existing partitions keep their
+    /// bucket counts; partitions created afterwards use this one.
+    pub new_bucket_count: Option<i32>,
+}
+
+impl AlterTableChanges {
+    /// Rejects changes the server would reject or silently ignore, before sending them.
+    pub fn validate(&self) -> Result<()> {
+        // The server stores it as a custom property and keeps the bucket count.
+        if self
+            .config_changes
+            .iter()
+            .any(|change| change.config_key == "bucket.num")
+        {
+            return Err(Error::IllegalArgument {
+                message: "'bucket.num' is not a table property; set new_bucket_count to change \
+                          the bucket count."
+                    .to_string(),
+            });
+        }
+        if let Some(bucket_count) = self.new_bucket_count {
+            if bucket_count <= 0 {
+                return Err(Error::IllegalArgument {
+                    message: format!("Bucket count must be positive, but was {bucket_count}."),
+                });
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Modify a column's type/comment/position. Mirrors the `ModifyColumn` variant of
@@ -175,6 +204,41 @@ impl ModifyColumn {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::metadata::AlterConfigOpType;
+
+    #[test]
+    fn bucket_num_is_not_a_config_change() {
+        for op_type in [AlterConfigOpType::Set, AlterConfigOpType::Delete] {
+            let changes = AlterTableChanges {
+                config_changes: vec![AlterConfig::new(
+                    "bucket.num",
+                    Some("8".to_string()),
+                    op_type,
+                )],
+                ..Default::default()
+            };
+            assert!(matches!(
+                changes.validate(),
+                Err(Error::IllegalArgument { message }) if message.contains("new_bucket_count")
+            ));
+        }
+    }
+
+    #[test]
+    fn a_bucket_count_change_must_be_positive() {
+        let changes = |new_bucket_count| AlterTableChanges {
+            new_bucket_count,
+            ..Default::default()
+        };
+        assert!(changes(Some(4)).validate().is_ok());
+        assert!(changes(None).validate().is_ok());
+        for bucket_count in [0, -1] {
+            assert!(matches!(
+                changes(Some(bucket_count)).validate(),
+                Err(Error::IllegalArgument { .. })
+            ));
+        }
+    }
 
     #[test]
     fn test_column_position_type_roundtrip() {

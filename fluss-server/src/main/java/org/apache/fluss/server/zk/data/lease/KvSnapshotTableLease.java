@@ -17,6 +17,8 @@
 
 package org.apache.fluss.server.zk.data.lease;
 
+import org.apache.fluss.metadata.TableBucketSnapshot;
+
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.NotThreadSafe;
 
@@ -82,14 +84,14 @@ public class KvSnapshotTableLease {
         int count = 0;
         if (bucketSnapshots != null) {
             for (Long snapshot : bucketSnapshots) {
-                if (snapshot != -1L) {
+                if (snapshot != TableBucketSnapshot.NO_SNAPSHOT_ID) {
                     count++;
                 }
             }
         } else {
             for (Long[] snapshots : partitionSnapshots.values()) {
                 for (Long snapshot : snapshots) {
-                    if (snapshot != -1L) {
+                    if (snapshot != TableBucketSnapshot.NO_SNAPSHOT_ID) {
                         count++;
                     }
                 }
