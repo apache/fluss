@@ -42,6 +42,7 @@ import org.apache.fluss.record.DefaultLogRecordBatch;
 import org.apache.fluss.record.IndexedLogRecord;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.record.LogRecordBatch;
+import org.apache.fluss.record.LogRecordBatchFormat;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.record.TestingSchemaGetter;
@@ -353,7 +354,7 @@ class RecordAccumulatorTest {
         MemoryLogRecords records = MemoryLogRecords.pointToBytesView(writeBatch.build());
         DefaultLogRecordBatch batch = (DefaultLogRecordBatch) records.batches().iterator().next();
         batch.ensureValid();
-        assertThat(batch.magic()).isEqualTo(LogRecordBatch.CURRENT_LOG_MAGIC_VALUE);
+        assertThat(batch.magic()).isEqualTo(LogRecordBatchFormat.LOG_MAGIC_VALUE_V3);
         assertThat(batch.compressionType()).isEqualTo(LogCompressionType.ZSTD);
         assertThat(batch.getRecordCount()).isEqualTo(rowCount);
         assertThat(batch.sizeInBytes()).isLessThan(writeBatch.estimatedSizeInBytes());

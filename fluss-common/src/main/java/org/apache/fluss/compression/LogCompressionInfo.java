@@ -17,33 +17,46 @@
 
 package org.apache.fluss.compression;
 
+import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.memory.MemorySegment;
 
 import com.github.luben.zstd.Zstd;
+import com.github.luben.zstd.ZstdException;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
-import java.util.Arrays;
 import java.util.Objects;
 
-/** Compression information for batch-level compression of row-based log record batches. */
+/**
+ * Compression codec and level of batch-level compression of row-based log record batches (e.g.
+ * COMPACTED), with the methods to compress and decompress a batch's records section.
+ */
+@Internal
 public class LogCompressionInfo {
 
+    /** Batches are not compressed. */
     public static final LogCompressionInfo NO_COMPRESSION =
             new LogCompressionInfo(LogCompressionType.NONE, -1);
 
     private final LogCompressionType compressionType;
     private final int compressionLevel;
 
+    /**
+     * Creates a compression info.
+     *
+     * @param compressionType the compression codec
+     * @param compressionLevel the compression level, or -1 if the codec has no level
+     */
     public LogCompressionInfo(LogCompressionType compressionType, int compressionLevel) {
         this.compressionType = compressionType;
         this.compressionLevel = compressionLevel;
     }
 
+    /** Returns the compression codec. */
     public LogCompressionType getCompressionType() {
         return compressionType;
     }
@@ -72,26 +85,41 @@ public class LogCompressionInfo {
         }
     }
 
-    /** Compresses {@code length} bytes of {@code src} starting at {@code offset}. */
-    public byte[] compress(byte[] src, int offset, int length) {
+    /**
+     * Compresses {@code length} bytes of {@code src} starting at {@code srcOffset} into {@code dst}
+     * starting at {@code dstOffset}, writing at most {@code maxLength} bytes.
+     *
+     * @return the number of compressed bytes, or -1 if they don't fit into {@code maxLength} bytes
+     */
+    public int compress(
+            byte[] src, int srcOffset, int length, byte[] dst, int dstOffset, int maxLength) {
         switch (compressionType) {
             case ZSTD:
-                byte[] dst = new byte[(int) Zstd.compressBound(length)];
-                long written =
-                        Zstd.compressByteArray(
-                                dst, 0, dst.length, src, offset, length, compressionLevel);
-                if (Zstd.isError(written)) {
-                    throw new IllegalStateException(
-                            "ZSTD compression failed: " + Zstd.getErrorName(written));
-                }
-                return Arrays.copyOf(dst, (int) written);
-            case LZ4_FRAME:
                 try {
-                    ByteArrayOutputStream out = new ByteArrayOutputStream(length / 2 + 64);
-                    try (FlussLZ4BlockOutputStream lz4 = new FlussLZ4BlockOutputStream(out)) {
-                        lz4.write(src, offset, length);
+                    return (int)
+                            Zstd.compressByteArray(
+                                    dst,
+                                    dstOffset,
+                                    maxLength,
+                                    src,
+                                    srcOffset,
+                                    length,
+                                    compressionLevel);
+                } catch (ZstdException e) {
+                    if (e.getErrorCode() == Zstd.errDstSizeTooSmall()) {
+                        return -1;
                     }
-                    return out.toByteArray();
+                    throw e;
+                }
+            case LZ4_FRAME:
+                BoundedOutputStream out = new BoundedOutputStream(dst, dstOffset, maxLength);
+                try {
+                    FlussLZ4BlockOutputStream lz4 = new FlussLZ4BlockOutputStream(out);
+                    lz4.write(src, srcOffset, length);
+                    lz4.close();
+                    return out.written;
+                } catch (OutputFullException e) {
+                    return -1;
                 } catch (IOException e) {
                     throw new UncheckedIOException("LZ4 compression failed", e);
                 }
@@ -111,12 +139,26 @@ public class LogCompressionInfo {
             int offset,
             int length,
             int uncompressedSize) {
-        byte[] src = new byte[length];
-        segment.get(offset, src, 0, length);
+        ByteBuffer src = segment.wrap(offset, length);
         byte[] dst = new byte[uncompressedSize];
         switch (type) {
             case ZSTD:
-                long read = Zstd.decompressByteArray(dst, 0, dst.length, src, 0, length);
+                long read;
+                if (src.hasArray()) {
+                    read =
+                            Zstd.decompressByteArray(
+                                    dst,
+                                    0,
+                                    dst.length,
+                                    src.array(),
+                                    src.arrayOffset() + src.position(),
+                                    length);
+                } else {
+                    // zstd-jni only decompresses a direct buffer into a direct buffer
+                    byte[] heapSrc = new byte[length];
+                    src.get(heapSrc);
+                    read = Zstd.decompressByteArray(dst, 0, dst.length, heapSrc, 0, length);
+                }
                 if (Zstd.isError(read) || read != uncompressedSize) {
                     throw new IllegalStateException(
                             "ZSTD decompression failed: "
@@ -124,8 +166,7 @@ public class LogCompressionInfo {
                 }
                 return dst;
             case LZ4_FRAME:
-                try (FlussLZ4BlockInputStream lz4 =
-                        new FlussLZ4BlockInputStream(ByteBuffer.wrap(src))) {
+                try (FlussLZ4BlockInputStream lz4 = new FlussLZ4BlockInputStream(src)) {
                     int pos = 0;
                     while (pos < uncompressedSize) {
                         int n = lz4.read(dst, pos, uncompressedSize - pos);
@@ -166,5 +207,45 @@ public class LogCompressionInfo {
         return compressionLevel == -1
                 ? compressionType.toString()
                 : compressionType + "-" + compressionLevel;
+    }
+
+    /** An {@link OutputStream} writing into a fixed region of an array. */
+    private static final class BoundedOutputStream extends OutputStream {
+        private final byte[] buffer;
+        private final int offset;
+        private final int capacity;
+        private int written;
+
+        private BoundedOutputStream(byte[] buffer, int offset, int capacity) {
+            this.buffer = buffer;
+            this.offset = offset;
+            this.capacity = capacity;
+        }
+
+        @Override
+        public void write(int b) throws IOException {
+            if (written == capacity) {
+                throw new OutputFullException();
+            }
+            buffer[offset + written++] = (byte) b;
+        }
+
+        @Override
+        public void write(byte[] b, int off, int len) throws IOException {
+            if (len > capacity - written) {
+                throw new OutputFullException();
+            }
+            System.arraycopy(b, off, buffer, offset + written, len);
+            written += len;
+        }
+    }
+
+    /** Thrown when the compressed bytes don't fit into the output region. */
+    private static final class OutputFullException extends IOException {
+        private static final long serialVersionUID = 1L;
+
+        private OutputFullException() {
+            super("Compressed output exceeds the available space");
+        }
     }
 }

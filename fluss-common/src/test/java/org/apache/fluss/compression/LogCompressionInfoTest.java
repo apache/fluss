@@ -25,7 +25,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.util.Random;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -70,19 +72,44 @@ class LogCompressionInfoTest {
         LogCompressionInfo info =
                 new LogCompressionInfo(type, type == LogCompressionType.ZSTD ? 3 : -1);
 
-        // compress a slice of a larger array
+        // compress a slice of a larger array into the middle of another array
         byte[] padded = new byte[raw.length + 10];
         System.arraycopy(raw, 0, padded, 5, raw.length);
-        byte[] compressed = info.compress(padded, 5, raw.length);
-        assertThat(compressed.length).isLessThan(raw.length);
+        byte[] out = new byte[raw.length + 8];
+        int compressedLength = info.compress(padded, 5, raw.length, out, 8, raw.length);
+        assertThat(compressedLength).isPositive().isLessThan(raw.length);
 
-        // decompress from an offset in a segment
-        byte[] segmentBytes = new byte[compressed.length + 8];
-        System.arraycopy(compressed, 0, segmentBytes, 8, compressed.length);
+        // decompress from an offset in a heap segment
         byte[] decompressed =
                 LogCompressionInfo.decompress(
-                        type, MemorySegment.wrap(segmentBytes), 8, compressed.length, raw.length);
+                        type, MemorySegment.wrap(out), 8, compressedLength, raw.length);
         assertThat(decompressed).isEqualTo(raw);
+
+        // decompress from an offset in an off-heap segment
+        ByteBuffer direct = ByteBuffer.allocateDirect(out.length);
+        direct.put(out).flip();
+        decompressed =
+                LogCompressionInfo.decompress(
+                        type,
+                        MemorySegment.wrapOffHeapMemory(direct),
+                        8,
+                        compressedLength,
+                        raw.length);
+        assertThat(decompressed).isEqualTo(raw);
+    }
+
+    @ParameterizedTest
+    @EnumSource(
+            value = LogCompressionType.class,
+            names = {"LZ4_FRAME", "ZSTD"})
+    void testCompressIntoTooSmallOutput(LogCompressionType type) {
+        byte[] raw = new byte[4096];
+        new Random(42).nextBytes(raw);
+        LogCompressionInfo info =
+                new LogCompressionInfo(type, type == LogCompressionType.ZSTD ? 3 : -1);
+        byte[] out = new byte[raw.length];
+        // random bytes don't compress, so the output can't fit into fewer bytes than the input
+        assertThat(info.compress(raw, 0, raw.length, out, 0, raw.length - 1)).isEqualTo(-1);
     }
 
     @Test

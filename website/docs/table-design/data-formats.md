@@ -115,10 +115,11 @@ CREATE TABLE kv_table (
   'table.changelog.image' = 'WAL'
 );
 ```
+
 ### COMPACTED with Compression
 
 COMPACTED log batches are not compressed by default. Set `table.log.compacted.compression.type` to `LZ4_FRAME` or `ZSTD` to compress each log batch as a whole. For `ZSTD`, the level is set with `table.log.compacted.compression.zstd.level` (1 to 22, default 3).
-Compression is applied by the writer on the client side, and by the server for the changelog of primary key tables.
+Compression is applied by the writer on the client side, and by the server for the changelog of primary key tables. For primary key tables, the changelog is compressed while the tablet holds its write lock, which adds to the write latency. A batch that doesn't get smaller is stored uncompressed. Setting the compression type on a table whose log format is not `COMPACTED` is rejected.
 
 ```sql
 CREATE TABLE compressed_table (
@@ -134,7 +135,7 @@ CREATE TABLE compressed_table (
 `ZSTD` with the default level 3 gives a good balance of compression ratio and CPU cost. `LZ4_FRAME` compresses less but is cheaper to compress and decompress.
 
 :::warning
-All clients reading a compressed table (e.g., Flink jobs) must be running Fluss v1.1 or later. Older clients can't detect the compression and may return a corrupted record before failing, so upgrade all consumers before creating tables with compression. The compression options can only be set when the table is created.
+Compressed batches use log batch format V3, which Fluss versions before 1.1 can't read: older clients and tablet servers fail with an `Unsupported magic value` error instead of returning records. Upgrade all tablet servers and consumers (e.g., Flink jobs) before creating tables with compression. The compression options can only be set when the table is created.
 :::
 
 ### COMPACTED Trade-offs

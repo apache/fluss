@@ -39,6 +39,7 @@ import java.util.Iterator;
 import java.util.List;
 
 import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
+import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V3;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
 import static org.apache.fluss.record.TestData.TEST_SCHEMA_GETTER;
@@ -84,7 +85,11 @@ class CompactedWalBuilderTest {
         assertThat(batches.hasNext()).isFalse();
         batch.ensureValid();
         assertThat(batch.compressionType()).isEqualTo(compression.getCompressionType());
-        assertThat(batch.magic()).isEqualTo(CURRENT_LOG_MAGIC_VALUE);
+        assertThat(batch.magic())
+                .isEqualTo(
+                        compression.getCompressionType() == LogCompressionType.NONE
+                                ? CURRENT_LOG_MAGIC_VALUE
+                                : LOG_MAGIC_VALUE_V3);
         assertThat(batch.writerId()).isEqualTo(5L);
         assertThat(batch.batchSequence()).isEqualTo(9);
         assertThat(batch.getRecordCount()).isEqualTo(expectedValues.size());

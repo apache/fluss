@@ -85,6 +85,7 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
 import static org.apache.fluss.client.table.scanner.batch.BatchScanUtils.collectRows;
+import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V3;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA_PK;
@@ -1232,11 +1233,14 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                 // readInto flips the buffer
                 fileRecords.readInto(buffer, 0);
                 for (LogRecordBatch batch : MemoryLogRecords.pointToByteBuffer(buffer).batches()) {
-                    assertThat(batch.magic()).isEqualTo(LogRecordBatch.CURRENT_LOG_MAGIC_VALUE);
                     LogCompressionType stored = ((DefaultLogRecordBatch) batch).compressionType();
                     assertThat(stored).isIn(compressionType, LogCompressionType.NONE);
                     if (stored == compressionType) {
+                        // only compressed batches use the new magic
+                        assertThat(batch.magic()).isEqualTo(LOG_MAGIC_VALUE_V3);
                         compressedBatches++;
+                    } else {
+                        assertThat(batch.magic()).isEqualTo(LogRecordBatch.CURRENT_LOG_MAGIC_VALUE);
                     }
                 }
             }

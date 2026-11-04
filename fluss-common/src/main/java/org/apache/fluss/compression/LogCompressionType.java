@@ -22,6 +22,11 @@ import org.apache.fluss.annotation.PublicEvolving;
 /**
  * Batch-level compression codec of row-based log record batches (e.g. COMPACTED). The id is stored
  * in the attribute byte of the batch header.
+ *
+ * <p>This is separate from {@link ArrowCompressionType}: Arrow compresses each buffer inside the
+ * Arrow IPC body and records the codec in the Arrow metadata, while this codec compresses the whole
+ * records section of a batch and its id is part of the on-disk batch format. Keeping a separate
+ * enum keeps these ids stable regardless of changes to {@link ArrowCompressionType}.
  */
 @PublicEvolving
 public enum LogCompressionType {
@@ -35,10 +40,16 @@ public enum LogCompressionType {
         this.id = id;
     }
 
+    /** Returns the id of this codec that is stored in the batch attributes. */
     public byte id() {
         return id;
     }
 
+    /**
+     * Returns the codec of the given id.
+     *
+     * @throws IllegalArgumentException if the id is unknown
+     */
     public static LogCompressionType fromId(int id) {
         for (LogCompressionType type : values()) {
             if (type.id == id) {

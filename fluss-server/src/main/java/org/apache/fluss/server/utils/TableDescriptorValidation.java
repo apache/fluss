@@ -18,6 +18,7 @@
 package org.apache.fluss.server.utils;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.compression.LogCompressionType;
 import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOption;
 import org.apache.fluss.config.ConfigOptions;
@@ -544,6 +545,17 @@ public class TableDescriptorValidation {
     }
 
     private static void checkCompactedCompression(Configuration tableConf) {
+        if (tableConf.get(ConfigOptions.TABLE_LOG_COMPACTED_COMPRESSION_TYPE)
+                        != LogCompressionType.NONE
+                && tableConf.get(ConfigOptions.TABLE_LOG_FORMAT) != LogFormat.COMPACTED) {
+            throw new InvalidConfigException(
+                    String.format(
+                            "'%s' is only supported for tables with '%s' = '%s', but the log format is '%s'.",
+                            ConfigOptions.TABLE_LOG_COMPACTED_COMPRESSION_TYPE.key(),
+                            ConfigOptions.TABLE_LOG_FORMAT.key(),
+                            LogFormat.COMPACTED,
+                            tableConf.get(ConfigOptions.TABLE_LOG_FORMAT)));
+        }
         checkZstdCompressionLevel(
                 tableConf, ConfigOptions.TABLE_LOG_COMPACTED_COMPRESSION_ZSTD_LEVEL);
     }

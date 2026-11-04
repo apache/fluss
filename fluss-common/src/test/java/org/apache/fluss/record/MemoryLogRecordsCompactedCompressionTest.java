@@ -19,30 +19,39 @@ package org.apache.fluss.record;
 
 import org.apache.fluss.compression.LogCompressionInfo;
 import org.apache.fluss.compression.LogCompressionType;
+import org.apache.fluss.exception.CorruptMessageException;
 import org.apache.fluss.memory.ManagedPagedOutputView;
+import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.memory.TestingMemorySegmentPool;
 import org.apache.fluss.row.compacted.CompactedRow;
 import org.apache.fluss.utils.CloseableIterator;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
+import java.util.stream.Stream;
 
 import static org.apache.fluss.record.ChangeType.APPEND_ONLY;
 import static org.apache.fluss.record.ChangeType.DELETE;
 import static org.apache.fluss.record.ChangeType.INSERT;
 import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
+import static org.apache.fluss.record.LogRecordBatchFormat.COMPRESSION_CODEC_MASK;
+import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V3;
+import static org.apache.fluss.record.LogRecordBatchFormat.NO_LEADER_EPOCH;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
 import static org.apache.fluss.record.TestData.TEST_SCHEMA_GETTER;
 import static org.apache.fluss.testutils.DataTestUtils.compactedRow;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for batch-level compression of {@link MemoryLogRecordsCompactedBuilder}. */
 class MemoryLogRecordsCompactedCompressionTest {
@@ -54,12 +63,17 @@ class MemoryLogRecordsCompactedCompressionTest {
                 new LogCompressionInfo(LogCompressionType.ZSTD, 3));
     }
 
+    static Stream<Arguments> compressionsAndPageSizes() {
+        // small pages so that the records span many segments, and a page that holds all records
+        return compressions().stream()
+                .flatMap(c -> Stream.of(Arguments.of(c, 256), Arguments.of(c, 1024 * 1024)));
+    }
+
     @ParameterizedTest
-    @MethodSource("compressions")
-    void testCompressedRoundTrip(LogCompressionInfo compression) throws Exception {
+    @MethodSource("compressionsAndPageSizes")
+    void testCompressedRoundTrip(LogCompressionInfo compression, int pageSize) throws Exception {
         List<CompactedRow> rows = repetitiveRows(500);
-        // small pages so that the records span many segments
-        MemoryLogRecordsCompactedBuilder builder = createBuilder(false, compression, 256);
+        MemoryLogRecordsCompactedBuilder builder = createBuilder(false, compression, pageSize);
         List<ChangeType> changeTypes = new ArrayList<>();
         for (int i = 0; i < rows.size(); i++) {
             ChangeType changeType = i % 3 == 0 ? DELETE : INSERT;
@@ -72,8 +86,10 @@ class MemoryLogRecordsCompactedCompressionTest {
 
         DefaultLogRecordBatch batch = singleBatch(builder);
         batch.ensureValid();
-        assertThat(batch.magic()).isEqualTo(CURRENT_LOG_MAGIC_VALUE);
+        // only compressed batches use the new magic
+        assertThat(batch.magic()).isEqualTo(LOG_MAGIC_VALUE_V3);
         assertThat(batch.compressionType()).isEqualTo(compression.getCompressionType());
+        assertThat(batch.leaderEpoch()).isEqualTo(NO_LEADER_EPOCH);
         assertThat(batch.sizeInBytes()).isLessThan(uncompressedSize / 2);
         assertThat(batch.getRecordCount()).isEqualTo(rows.size());
         assertThat(batch.writerId()).isEqualTo(7L);
@@ -100,6 +116,7 @@ class MemoryLogRecordsCompactedCompressionTest {
 
         DefaultLogRecordBatch batch = singleBatch(builder);
         batch.ensureValid();
+        assertThat(batch.magic()).isEqualTo(CURRENT_LOG_MAGIC_VALUE);
         assertThat(batch.compressionType()).isEqualTo(LogCompressionType.NONE);
         assertThat(batch.sizeInBytes()).isEqualTo(builder.getSizeInBytes());
         assertRows(batch, Arrays.asList(row), Arrays.asList(APPEND_ONLY));
@@ -113,6 +130,7 @@ class MemoryLogRecordsCompactedCompressionTest {
 
         DefaultLogRecordBatch batch = singleBatch(builder);
         batch.ensureValid();
+        assertThat(batch.magic()).isEqualTo(CURRENT_LOG_MAGIC_VALUE);
         assertThat(batch.compressionType()).isEqualTo(LogCompressionType.NONE);
         assertThat(batch.getRecordCount()).isEqualTo(0);
         assertThat(batch.sizeInBytes())
@@ -141,6 +159,59 @@ class MemoryLogRecordsCompactedCompressionTest {
             // the same attribute byte as before compression support was added
             assertThat(attributes).isEqualTo((byte) (appendOnly ? 1 : 0));
         }
+    }
+
+    @Test
+    void testServerSetsLeaderEpochOfCompressedBatch() throws Exception {
+        DefaultLogRecordBatch batch = singleBatch(compressedBuilder());
+        batch.setLeaderEpoch(5);
+        assertThat(batch.leaderEpoch()).isEqualTo(5);
+        batch.ensureValid();
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {0, -1, Integer.MIN_VALUE, (1 << 30) + 1, Integer.MAX_VALUE})
+    void testCorruptUncompressedSize(int uncompressedSize) throws Exception {
+        byte[] bytes = batchBytes(compressedBuilder());
+        MemorySegment.wrap(bytes)
+                .putInt(
+                        LogRecordBatchFormat.recordBatchHeaderSize(LOG_MAGIC_VALUE_V3),
+                        uncompressedSize);
+        LogRecordBatch batch = MemoryLogRecords.pointToBytes(bytes).batches().iterator().next();
+        assertThatThrownBy(() -> assertRows(batch, new ArrayList<>(), new ArrayList<>()))
+                .isInstanceOf(CorruptMessageException.class)
+                .hasMessageContaining("invalid uncompressed records size " + uncompressedSize);
+    }
+
+    @Test
+    void testUnknownCompressionCodec() throws Exception {
+        byte[] bytes = batchBytes(compressedBuilder());
+        int attributeOffset = LogRecordBatchFormat.attributeOffset(LOG_MAGIC_VALUE_V3);
+        // codec id 3 is not a known LogCompressionType
+        bytes[attributeOffset] = (byte) (bytes[attributeOffset] | COMPRESSION_CODEC_MASK);
+        DefaultLogRecordBatch batch =
+                (DefaultLogRecordBatch)
+                        MemoryLogRecords.pointToBytes(bytes).batches().iterator().next();
+        assertThatThrownBy(batch::compressionType)
+                .isInstanceOf(CorruptMessageException.class)
+                .hasMessageContaining("unknown compression codec id 3");
+    }
+
+    private static MemoryLogRecordsCompactedBuilder compressedBuilder() throws Exception {
+        MemoryLogRecordsCompactedBuilder builder =
+                createBuilder(false, new LogCompressionInfo(LogCompressionType.ZSTD, 3), 1024);
+        for (CompactedRow row : repetitiveRows(100)) {
+            builder.append(INSERT, row);
+        }
+        builder.close();
+        return builder;
+    }
+
+    private static byte[] batchBytes(MemoryLogRecordsCompactedBuilder builder) throws Exception {
+        MemoryLogRecords records = MemoryLogRecords.pointToBytesView(builder.build());
+        byte[] bytes = new byte[records.sizeInBytes()];
+        records.getMemorySegment().get(records.getPosition(), bytes, 0, bytes.length);
+        return bytes;
     }
 
     private static List<CompactedRow> repetitiveRows(int count) {

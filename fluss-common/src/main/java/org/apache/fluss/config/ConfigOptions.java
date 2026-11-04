@@ -1972,10 +1972,9 @@ public class ConfigOptions {
                             "The compression type of the log record batches if the log format is set to `COMPACTED`. "
                                     + "The candidate compression type is "
                                     + Arrays.toString(LogCompressionType.values())
-                                    + ". Downstream consumers (e.g., Flink jobs) must be running Fluss v1.1 or later "
-                                    + "to read compressed batches. Older consumers can't detect the compression, "
-                                    + "they may return a corrupted record before failing, so upgrade all consumers "
-                                    + "before enabling compression.");
+                                    + ". Compressed batches use log batch format V3, which Fluss versions before 1.1 "
+                                    + "can't read: older clients and tablet servers fail with an 'Unsupported magic value' error. "
+                                    + "Upgrade all tablet servers and consumers (e.g., Flink jobs) before enabling compression.");
 
     public static final ConfigOption<Integer> TABLE_LOG_COMPACTED_COMPRESSION_ZSTD_LEVEL =
             key("table.log.compacted.compression.zstd.level")
