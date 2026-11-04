@@ -241,27 +241,23 @@ class KvTabletIgnoreNullsTest {
         if (image.equals("FULL")) {
             checkEqual(
                     readLogRecords(0),
-                    Collections.singletonList(
-                            logRecords(
-                                    0L,
-                                    Arrays.asList(
-                                            ChangeType.INSERT,
-                                            ChangeType.UPDATE_BEFORE,
-                                            ChangeType.UPDATE_AFTER),
-                                    Arrays.asList(
-                                            new Object[] {1, "value"},
-                                            new Object[] {1, "value"},
-                                            new Object[] {1, "value"}))));
+                    logRecords(
+                            0L,
+                            Arrays.asList(
+                                    ChangeType.INSERT,
+                                    ChangeType.UPDATE_BEFORE,
+                                    ChangeType.UPDATE_AFTER),
+                            Arrays.asList(
+                                    new Object[] {1, "value"},
+                                    new Object[] {1, "value"},
+                                    new Object[] {1, "value"})));
         } else {
             checkEqual(
                     readLogRecords(0),
-                    Collections.singletonList(
-                            logRecords(
-                                    0L,
-                                    Arrays.asList(ChangeType.INSERT, ChangeType.UPDATE_AFTER),
-                                    Arrays.asList(
-                                            new Object[] {1, "value"},
-                                            new Object[] {1, "value"}))));
+                    logRecords(
+                            0L,
+                            Arrays.asList(ChangeType.INSERT, ChangeType.UPDATE_AFTER),
+                            Arrays.asList(new Object[] {1, "value"}, new Object[] {1, "value"})));
         }
         long offset = logTablet.localLogEndOffset();
         kvTablet.putAsLeader(kvRecordBatchFactory.ofRecords(nullValue), null, MergeMode.DEFAULT);
@@ -283,9 +279,7 @@ class KvTabletIgnoreNullsTest {
                 image.equals("FULL")
                         ? Arrays.asList(new Object[] {1, "value"}, new Object[] {1, null})
                         : Collections.singletonList(new Object[] {1, null});
-        checkEqual(
-                readLogRecords(offset),
-                Collections.singletonList(logRecords(offset, changes, rows)));
+        checkEqual(readLogRecords(offset), logRecords(offset, changes, rows));
     }
 
     @ParameterizedTest
@@ -317,14 +311,10 @@ class KvTabletIgnoreNullsTest {
             assertThat(logTablet.localLogEndOffset()).isEqualTo(beforeUnchanged + 2);
             checkEqual(
                     readLogRecords(beforeUnchanged),
-                    Collections.singletonList(
-                            logRecords(
-                                    beforeUnchanged,
-                                    Arrays.asList(
-                                            ChangeType.UPDATE_BEFORE, ChangeType.UPDATE_AFTER),
-                                    Arrays.asList(
-                                            new Object[] {1, "before"},
-                                            new Object[] {1, "before"}))));
+                    logRecords(
+                            beforeUnchanged,
+                            Arrays.asList(ChangeType.UPDATE_BEFORE, ChangeType.UPDATE_AFTER),
+                            Arrays.asList(new Object[] {1, "before"}, new Object[] {1, "before"})));
         }
 
         long beforeChanged = logTablet.localLogEndOffset();
@@ -338,12 +328,10 @@ class KvTabletIgnoreNullsTest {
         assertThat(logTablet.localLogEndOffset()).isEqualTo(beforeChanged + 2);
         checkEqual(
                 readLogRecords(beforeChanged),
-                Collections.singletonList(
-                        logRecords(
-                                beforeChanged,
-                                Arrays.asList(ChangeType.UPDATE_BEFORE, ChangeType.UPDATE_AFTER),
-                                Arrays.asList(
-                                        new Object[] {1, "before"}, new Object[] {1, "after"}))));
+                logRecords(
+                        beforeChanged,
+                        Arrays.asList(ChangeType.UPDATE_BEFORE, ChangeType.UPDATE_AFTER),
+                        Arrays.asList(new Object[] {1, "before"}, new Object[] {1, "after"})));
     }
 
     private void assertStoredValue(String expected) throws Exception {
@@ -429,12 +417,12 @@ class KvTabletIgnoreNullsTest {
                 .hasMessageContaining("Ignoring NULLs requires MergeMode.DEFAULT");
     }
 
-    private void checkEqual(LogRecords actual, List<MemoryLogRecords> expected) {
+    private void checkEqual(LogRecords actual, MemoryLogRecords expected) {
         assertThatLogRecords(actual)
                 .withSchema(ROW_TYPE)
                 .withSchemaGetter(schemaGetter)
                 .assertCheckSum(true)
-                .isEqualTo(expected.get(0));
+                .isEqualTo(expected);
     }
 
     // ==================== Helper Methods ====================
