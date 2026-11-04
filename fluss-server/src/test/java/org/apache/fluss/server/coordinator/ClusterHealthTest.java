@@ -32,6 +32,7 @@ import org.junit.jupiter.api.Test;
 import java.util.Arrays;
 import java.util.Collections;
 
+import static org.apache.fluss.server.coordinator.statemachine.BucketState.OnlineBucket;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Tests for {@link CoordinatorService#computeClusterHealth}. */
@@ -60,6 +61,7 @@ class ClusterHealthTest {
     @Test
     void testGreenAllInSyncAllLeadersActive() {
         TableBucket tb = new TableBucket(1L, 0);
+        ctx.putBucketState(tb, OnlineBucket);
         ctx.updateBucketReplicaAssignment(tb, Arrays.asList(0, 1, 2));
         ctx.putBucketLeaderAndIsr(
                 tb, new LeaderAndIsr(0, 1, Arrays.asList(0, 1, 2), Collections.emptyList(), 0, 1));
@@ -76,6 +78,7 @@ class ClusterHealthTest {
     @Test
     void testYellowIsrIncompleteButLeadersActive() {
         TableBucket tb = new TableBucket(1L, 0);
+        ctx.putBucketState(tb, OnlineBucket);
         ctx.updateBucketReplicaAssignment(tb, Arrays.asList(0, 1, 2));
         ctx.putBucketLeaderAndIsr(
                 tb, new LeaderAndIsr(0, 1, Arrays.asList(0, 1), Collections.emptyList(), 0, 1));
@@ -92,6 +95,7 @@ class ClusterHealthTest {
     @Test
     void testRedLeaderInactive() {
         TableBucket tb = new TableBucket(1L, 0);
+        ctx.putBucketState(tb, OnlineBucket);
         ctx.updateBucketReplicaAssignment(tb, Arrays.asList(0, 1, 2));
         ctx.putBucketLeaderAndIsr(
                 tb, new LeaderAndIsr(0, 1, Arrays.asList(0, 1, 2), Collections.emptyList(), 0, 1));
@@ -109,6 +113,7 @@ class ClusterHealthTest {
     @Test
     void testRedNoLeader() {
         TableBucket tb = new TableBucket(1L, 0);
+        ctx.putBucketState(tb, OnlineBucket);
         ctx.updateBucketReplicaAssignment(tb, Arrays.asList(0, 1));
         ctx.putBucketLeaderAndIsr(
                 tb,
@@ -129,6 +134,7 @@ class ClusterHealthTest {
     @Test
     void testRedLeaderOnDeadServer() {
         TableBucket tb = new TableBucket(1L, 0);
+        ctx.putBucketState(tb, OnlineBucket);
         ctx.updateBucketReplicaAssignment(tb, Arrays.asList(0, 1, 5));
         ctx.putBucketLeaderAndIsr(
                 tb, new LeaderAndIsr(5, 1, Arrays.asList(0, 1, 5), Collections.emptyList(), 0, 1));
@@ -142,6 +148,7 @@ class ClusterHealthTest {
     @Test
     void testNoLeaderAndIsrCountsAsRedAndZeroIsr() {
         TableBucket tb = new TableBucket(1L, 0);
+        ctx.putBucketState(tb, OnlineBucket);
         ctx.updateBucketReplicaAssignment(tb, Arrays.asList(0, 1));
 
         GetClusterHealthResponse resp = CoordinatorService.computeClusterHealth(ctx);
@@ -156,6 +163,7 @@ class ClusterHealthTest {
     @Test
     void testTransitionRedToGreenAfterMarkActive() {
         TableBucket tb = new TableBucket(1L, 0);
+        ctx.putBucketState(tb, OnlineBucket);
         ctx.updateBucketReplicaAssignment(tb, Arrays.asList(0, 1));
         ctx.putBucketLeaderAndIsr(
                 tb, new LeaderAndIsr(0, 1, Arrays.asList(0, 1), Collections.emptyList(), 0, 1));
@@ -175,8 +183,11 @@ class ClusterHealthTest {
         TableBucket tb2 = new TableBucket(1L, 1);
         TableBucket tb3 = new TableBucket(2L, 0);
 
+        ctx.putBucketState(tb1, OnlineBucket);
         ctx.updateBucketReplicaAssignment(tb1, Arrays.asList(0, 1));
+        ctx.putBucketState(tb2, OnlineBucket);
         ctx.updateBucketReplicaAssignment(tb2, Arrays.asList(1, 2));
+        ctx.putBucketState(tb3, OnlineBucket);
         ctx.updateBucketReplicaAssignment(tb3, Arrays.asList(0, 2));
 
         ctx.putBucketLeaderAndIsr(
@@ -200,6 +211,7 @@ class ClusterHealthTest {
     @Test
     void testPartitionedTableBucket() {
         TableBucket tb = new TableBucket(1L, 100L, 0);
+        ctx.putBucketState(tb, OnlineBucket);
         ctx.updateBucketReplicaAssignment(tb, Arrays.asList(0, 1));
         ctx.putBucketLeaderAndIsr(
                 tb,
@@ -218,6 +230,7 @@ class ClusterHealthTest {
     @Test
     void testInactiveLeaderClearedOnTableRemoval() {
         TableBucket tb = new TableBucket(1L, 0);
+        ctx.putBucketState(tb, OnlineBucket);
         ctx.updateBucketReplicaAssignment(tb, Arrays.asList(0, 1));
         ctx.putBucketLeaderAndIsr(
                 tb, new LeaderAndIsr(0, 1, Arrays.asList(0, 1), Collections.emptyList(), 0, 1));
@@ -235,7 +248,9 @@ class ClusterHealthTest {
         TableBucket tb1 = new TableBucket(1L, 0);
         TableBucket tb2 = new TableBucket(1L, 1);
 
+        ctx.putBucketState(tb1, OnlineBucket);
         ctx.updateBucketReplicaAssignment(tb1, Arrays.asList(0, 1));
+        ctx.putBucketState(tb2, OnlineBucket);
         ctx.updateBucketReplicaAssignment(tb2, Arrays.asList(0, 1));
 
         ctx.putBucketLeaderAndIsr(
@@ -258,6 +273,7 @@ class ClusterHealthTest {
     @Test
     void testInactiveLeaderClearedOnPartitionRemoval() {
         TableBucket tb = new TableBucket(1L, 100L, 0);
+        ctx.putBucketState(tb, OnlineBucket);
         ctx.updateBucketReplicaAssignment(tb, Arrays.asList(0, 1));
         ctx.putBucketLeaderAndIsr(
                 tb, new LeaderAndIsr(0, 1, Arrays.asList(0, 1), Collections.emptyList(), 0, 1));
@@ -276,6 +292,7 @@ class ClusterHealthTest {
         // to a server for a bucket where it is a follower, the bucket should NOT
         // be marked inactive. Only the server that is the leader gets marked.
         TableBucket tb = new TableBucket(1L, 0);
+        ctx.putBucketState(tb, OnlineBucket);
         ctx.updateBucketReplicaAssignment(tb, Arrays.asList(0, 1));
         ctx.putBucketLeaderAndIsr(
                 tb, new LeaderAndIsr(0, 1, Arrays.asList(0, 1), Collections.emptyList(), 0, 1));
@@ -295,6 +312,7 @@ class ClusterHealthTest {
     @Test
     void testLeaderChangeRequiresCurrentRequestCompletion() {
         TableBucket tb = new TableBucket(1L, 0);
+        ctx.putBucketState(tb, OnlineBucket);
         ctx.updateBucketReplicaAssignment(tb, Arrays.asList(0, 1, 2));
         ctx.putBucketLeaderAndIsr(
                 tb, new LeaderAndIsr(0, 1, Arrays.asList(0, 1, 2), Collections.emptyList(), 0, 1));

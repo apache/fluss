@@ -39,11 +39,16 @@ import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.rpc.messages.UpdateMetadataResponse;
+import org.apache.fluss.rpc.protocol.ApiError;
+import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.coordinator.event.BulkLoadMaintenanceEvent;
 import org.apache.fluss.server.coordinator.event.CommitKvSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitRemoteLogManifestEvent;
+import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrResponseReceivedEvent;
+import org.apache.fluss.server.coordinator.event.RetryOfflineLeaderEvent;
 import org.apache.fluss.server.entity.CommitKvSnapshotData;
 import org.apache.fluss.server.entity.CommitRemoteLogManifestData;
+import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.ZooKeeperCompletedSnapshotHandleStore;
 import org.apache.fluss.server.metadata.TabletServerResource;
@@ -91,13 +96,19 @@ import java.util.stream.Collectors;
 
 import static org.apache.fluss.config.ConfigOptions.DEFAULT_LISTENER_NAME;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
+import static org.apache.fluss.server.coordinator.statemachine.BucketState.OfflineBucket;
 import static org.apache.fluss.server.coordinator.statemachine.BucketState.OnlineBucket;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.OnlineReplica;
 import static org.apache.fluss.server.testutils.KvTestUtils.mockCompletedSnapshot;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
+import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitValue;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doCallRealMethod;
 import static org.mockito.Mockito.doThrow;
@@ -226,6 +237,115 @@ class CoordinatorBulkLoadEventProcessorTest extends CoordinatorEventProcessorTes
                 .isEqualTo(oldMetadataVersion);
 
         assertSnapshotAndManifestCommitRejected(tempDir, tableBucket, 99);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testFailedLeaderStaysInactiveWhenZooKeeperUpdateFails(boolean retryUpdateFails)
+            throws Exception {
+        eventProcessor.shutdown();
+        ZooKeeperClient client = spy(zookeeperClient);
+        eventProcessor = buildCoordinatorEventProcessor(client);
+        initCoordinatorChannel();
+        eventProcessor.startup();
+        TablePath tablePath =
+                TablePath.of(defaultDatabase, "failed_activation_" + retryUpdateFails);
+        TableAssignment assignment =
+                TableAssignment.builder()
+                        .add(0, BucketAssignment.of(0))
+                        .add(1, BucketAssignment.of(0))
+                        .add(2, BucketAssignment.of(0))
+                        .build();
+        long tableId =
+                metadataManager.createTable(
+                        tablePath,
+                        remoteDataDir,
+                        TEST_TABLE.withReplicationFactor(1),
+                        assignment,
+                        false);
+        TableBucket bucket = new TableBucket(tableId, 0);
+        waitUntil(
+                () ->
+                        fromCtx(
+                                context ->
+                                        context.isLeaderActive(bucket)
+                                                && CoordinatorService.computeClusterHealth(context)
+                                                                .getActiveLeaderReplicas()
+                                                        == 3),
+                Duration.ofMinutes(1),
+                "Initial leader did not become active");
+        LeaderAndIsr leaderAndIsr = fromCtx(context -> context.getBucketLeaderAndIsr(bucket).get());
+        doThrow(new KeeperException.ConnectionLossException())
+                .when(client)
+                .updateLeaderAndIsr(eq(bucket), any(LeaderAndIsr.class), anyInt());
+        doThrow(new KeeperException.ConnectionLossException())
+                .when(client)
+                .batchUpdateLeaderAndIsr(anyMap(), anyInt());
+        long activationId = fromCtx(context -> context.addPendingLeaderActivationAndGetId(bucket));
+        eventProcessor
+                .getCoordinatorEventManager()
+                .put(
+                        new NotifyLeaderAndIsrResponseReceivedEvent(
+                                Collections.singletonList(
+                                        new NotifyLeaderAndIsrResultForBucket(
+                                                bucket,
+                                                new ApiError(
+                                                        Errors.DISK_WRITE_LOCKED,
+                                                        "disk write locked"))),
+                                leaderAndIsr.leader(),
+                                Collections.singletonMap(bucket, activationId)));
+
+        fromCtx(
+                context -> {
+                    assertThat(context.getPendingLeaderActivationBuckets()).doesNotContain(bucket);
+                    assertThat(context.getBucketLeaderAndIsr(bucket)).contains(leaderAndIsr);
+                    assertThat(context.getBucketState(bucket)).isEqualTo(OfflineBucket);
+                    assertThat(context.isReplicaOnline(leaderAndIsr.leader(), bucket)).isFalse();
+                    assertThat(context.isLeaderActive(bucket)).isFalse();
+                    assertThat(
+                                    CoordinatorService.computeClusterHealth(context)
+                                            .getActiveLeaderReplicas())
+                            .isEqualTo(2);
+                    return null;
+                });
+        verify(client, atLeastOnce()).batchUpdateLeaderAndIsr(anyMap(), anyInt());
+        if (!retryUpdateFails) {
+            doCallRealMethod()
+                    .when(client)
+                    .updateLeaderAndIsr(eq(bucket), any(LeaderAndIsr.class), anyInt());
+            doCallRealMethod().when(client).batchUpdateLeaderAndIsr(anyMap(), anyInt());
+        }
+        eventProcessor.getCoordinatorEventManager().put(new RetryOfflineLeaderEvent());
+
+        waitUntil(
+                () ->
+                        fromCtx(
+                                context ->
+                                        !context.getPendingLeaderActivationBuckets()
+                                                        .contains(bucket)
+                                                && context.isReplicaOnline(
+                                                        leaderAndIsr.leader(), bucket)
+                                                && context.getBucketState(bucket)
+                                                        == (retryUpdateFails
+                                                                ? OfflineBucket
+                                                                : OnlineBucket)),
+                Duration.ofMinutes(1),
+                "Leader retry did not finish");
+        fromCtx(
+                context -> {
+                    assertThat(context.getPendingLeaderActivationBuckets()).doesNotContain(bucket);
+                    assertThat(context.isReplicaOnline(leaderAndIsr.leader(), bucket)).isTrue();
+                    assertThat(context.getBucketState(bucket))
+                            .isEqualTo(retryUpdateFails ? OfflineBucket : OnlineBucket);
+                    assertThat(context.isLeaderActive(bucket)).isEqualTo(!retryUpdateFails);
+                    assertThat(
+                                    CoordinatorService.computeClusterHealth(context)
+                                            .getActiveLeaderReplicas())
+                            .isEqualTo(retryUpdateFails ? 2 : 3);
+                    return null;
+                });
+        verify(client, atLeastOnce())
+                .updateLeaderAndIsr(eq(bucket), any(LeaderAndIsr.class), anyInt());
     }
 
     @ParameterizedTest

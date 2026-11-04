@@ -41,6 +41,8 @@ import java.util.Set;
 
 import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_ENABLED;
 import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
+import static org.apache.fluss.server.coordinator.statemachine.BucketState.OfflineBucket;
+import static org.apache.fluss.server.coordinator.statemachine.BucketState.OnlineBucket;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link CoordinatorContext}. */
@@ -223,6 +225,15 @@ class CoordinatorContextTest {
                         0, 1, Collections.singletonList(0), Collections.emptyList(), 0, 1));
 
         // Active leader on live server, not pending → active
+        context.putBucketState(tb, OnlineBucket);
+        assertThat(context.isLeaderActive(tb)).isTrue();
+
+        context.addOfflineBucketInServer(tb, 0);
+        assertThat(context.isLeaderActive(tb)).isFalse();
+        context.putBucketState(tb, OfflineBucket);
+        context.removeOfflineBucketInServer(tb, 0);
+        assertThat(context.isLeaderActive(tb)).isFalse();
+        context.putBucketState(tb, OnlineBucket);
         assertThat(context.isLeaderActive(tb)).isTrue();
 
         // Add to pending → not active

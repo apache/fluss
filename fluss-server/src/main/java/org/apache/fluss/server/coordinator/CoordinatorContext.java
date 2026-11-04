@@ -231,7 +231,8 @@ public class CoordinatorContext {
     }
 
     public boolean isReplicaOnline(int serverId, TableBucket tableBucket) {
-        return liveTabletServerSet().contains(serverId)
+        return liveTabletServers.containsKey(serverId)
+                && !shuttingDownTabletServers.contains(serverId)
                 && !replicasOnOffline
                         .getOrDefault(serverId, Collections.emptySet())
                         .contains(tableBucket);
@@ -318,9 +319,10 @@ public class CoordinatorContext {
      * Returns whether the given bucket has an active leader. A leader is considered active when:
      *
      * <ul>
+     *   <li>The bucket is in {@link BucketState#OnlineBucket}
      *   <li>A LeaderAndIsr record exists for the bucket
      *   <li>The leader is not {@link LeaderAndIsr#NO_LEADER}
-     *   <li>The leader's tablet server is alive
+     *   <li>The leader replica is online according to {@link #isReplicaOnline(int, TableBucket)}
      *   <li>The bucket is not pending leader activation confirmation
      * </ul>
      */
@@ -328,8 +330,9 @@ public class CoordinatorContext {
         return getBucketLeaderAndIsr(bucket)
                 .map(
                         lai ->
-                                lai.leader() != LeaderAndIsr.NO_LEADER
-                                        && liveTabletServers.containsKey(lai.leader())
+                                getBucketState(bucket) == BucketState.OnlineBucket
+                                        && lai.leader() != LeaderAndIsr.NO_LEADER
+                                        && isReplicaOnline(lai.leader(), bucket)
                                         && !pendingLeaderActivations.containsKey(bucket))
                 .orElse(false);
     }
