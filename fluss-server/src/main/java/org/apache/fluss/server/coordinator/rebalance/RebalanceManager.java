@@ -113,6 +113,7 @@ public class RebalanceManager {
      */
     private final Map<TableBucket, Integer> awaitedLeaderAckBucketEpochs =
             new ConcurrentHashMap<>();
+
     private final Map<RebalanceStatus, AtomicLong> finishedBucketCounts = newFinishedBucketCounts();
 
     private final GoalOptimizer goalOptimizer;

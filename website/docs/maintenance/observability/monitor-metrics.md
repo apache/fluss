@@ -468,6 +468,8 @@ rebalance is counted by the coordinator that observes its completion.
 <table class="table table-bordered">
   <thead>
     <tr>
+      <th class="text-left" style={{width: '30pt'}}>Scope</th>
+      <th class="text-left" style={{width: '150pt'}}>Infix</th>
       <th class="text-left" style={{width: '80pt'}}>Metrics</th>
       <th class="text-left" style={{width: '300pt'}}>Description</th>
       <th class="text-left" style={{width: '40pt'}}>Type</th>
@@ -475,6 +477,8 @@ rebalance is counted by the coordinator that observes its completion.
   </thead>
   <tbody>
     <tr>
+      <th rowspan="10"><strong>coordinator</strong></th>
+      <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="10">-</td>
       <td>rebalanceInProgress</td>
       <td>1 while a rebalance is running; otherwise 0.</td>
       <td>Gauge</td>

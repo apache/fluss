@@ -27,6 +27,7 @@ import org.apache.fluss.metrics.Counter;
 import org.apache.fluss.metrics.Gauge;
 import org.apache.fluss.metrics.Metric;
 import org.apache.fluss.metrics.MetricNames;
+import org.apache.fluss.metrics.groups.AbstractMetricGroup;
 import org.apache.fluss.metrics.registry.MetricRegistry;
 import org.apache.fluss.metrics.registry.NOPMetricRegistry;
 import org.apache.fluss.server.coordinator.AutoPartitionManager;
@@ -73,6 +74,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 
@@ -82,13 +84,6 @@ import static org.apache.fluss.cluster.rebalance.RebalanceStatus.NOT_STARTED;
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.TIMEOUT;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
-import static org.mockito.Mockito.verify;
 
 /** Test for {@link RebalanceManager}. */
 public class RebalanceManagerTest {
@@ -108,7 +103,7 @@ public class RebalanceManagerTest {
     private LakeTableTieringManager lakeTableTieringManager;
     private RebalanceManager rebalanceManager;
     private CoordinatorMetricGroup coordinatorMetricGroup;
-    private MetricRegistry metricRegistry;
+    private RecordingMetricRegistry metricRegistry;
     private ManualClock metricClock;
     private KvSnapshotLeaseManager kvSnapshotLeaseManager;
     private Scheduler scheduler;
@@ -157,7 +152,7 @@ public class RebalanceManagerTest {
                 new LakeTableTieringManager(TestingMetricGroups.LAKE_TIERING_METRICS);
         CoordinatorEventProcessor eventProcessor = buildCoordinatorEventProcessor();
         RecordingEventManager recordingEventManager = new RecordingEventManager();
-        metricRegistry = mock(MetricRegistry.class);
+        metricRegistry = new RecordingMetricRegistry();
         coordinatorMetricGroup =
                 new CoordinatorMetricGroup(metricRegistry, "cluster", "host", "coordinator");
         metricClock = new ManualClock(0L);
@@ -580,7 +575,7 @@ public class RebalanceManagerTest {
         RecordingEventManager eventManager = new RecordingEventManager();
         rebalanceManager =
                 new RebalanceManager(
-                        mock(CoordinatorEventProcessor.class),
+                        buildCoordinatorEventProcessor(),
                         zookeeperClient,
                         eventManager,
                         metricClock,
@@ -644,7 +639,7 @@ public class RebalanceManagerTest {
         RecordingEventManager eventManager = new RecordingEventManager();
         rebalanceManager =
                 new RebalanceManager(
-                        mock(CoordinatorEventProcessor.class),
+                        buildCoordinatorEventProcessor(),
                         zookeeperClient,
                         eventManager,
                         metricClock,
@@ -669,13 +664,12 @@ public class RebalanceManagerTest {
         registeredMetrics.forEach(
                 (name, metric) ->
                         assertThat(coordinatorMetricGroup.getMetrics().get(name)).isSameAs(metric));
-        verify(metricRegistry, times(10)).register(any(), anyString(), eq(coordinatorMetricGroup));
-        verify(metricRegistry, never()).unregister(any(), anyString(), eq(coordinatorMetricGroup));
+        assertThat(metricRegistry.registerCounts).containsEntry(coordinatorMetricGroup, 10);
+        assertThat(metricRegistry.unregisteredCounts).doesNotContainKey(coordinatorMetricGroup);
 
         coordinatorMetricGroup.close();
         assertThat(coordinatorMetricGroup.getMetrics()).isEmpty();
-        verify(metricRegistry, times(10))
-                .unregister(any(), anyString(), eq(coordinatorMetricGroup));
+        assertThat(metricRegistry.unregisteredCounts).containsEntry(coordinatorMetricGroup, 10);
 
         rebalanceManager.close();
         coordinatorMetricGroup = createCoordinatorMetricGroup();
@@ -703,7 +697,7 @@ public class RebalanceManagerTest {
                                     assertThat(((Counter) metric).getCount()).isZero();
                                 }
                             });
-            verify(metricRegistry, times(10)).register(any(), anyString(), eq(standbyGroup));
+            assertThat(metricRegistry.registerCounts).containsEntry(standbyGroup, 10);
         } finally {
             standbyGroup.close();
         }
@@ -714,7 +708,7 @@ public class RebalanceManagerTest {
         rebalanceManager.registerRebalance("current", createRebalancePlan(1), NOT_STARTED);
         RebalanceManager unstartedManager =
                 new RebalanceManager(
-                        mock(CoordinatorEventProcessor.class),
+                        buildCoordinatorEventProcessor(),
                         zookeeperClient,
                         new RecordingEventManager(),
                         metricClock,
@@ -731,7 +725,7 @@ public class RebalanceManagerTest {
     @Test
     void testFailedProcessorConstructionDoesNotReplaceCurrentManager() {
         rebalanceManager.registerRebalance("current", createRebalancePlan(1), NOT_STARTED);
-        Configuration conf = new Configuration();
+        Configuration conf = new Configuration(this.conf);
         conf.set(ConfigOptions.COORDINATOR_OFFLINE_LEADER_RETRY_DELAY, Duration.ZERO);
 
         assertThatThrownBy(() -> buildCoordinatorEventProcessor(conf, coordinatorMetricGroup))
@@ -768,8 +762,12 @@ public class RebalanceManagerTest {
         return new CoordinatorMetricGroup(NOPMetricRegistry.INSTANCE, "cluster", "host", "0");
     }
 
-
     private CoordinatorEventProcessor buildCoordinatorEventProcessor() {
+        return buildCoordinatorEventProcessor(conf, createCoordinatorMetricGroup());
+    }
+
+    private CoordinatorEventProcessor buildCoordinatorEventProcessor(
+            Configuration conf, CoordinatorMetricGroup metricGroup) {
         return new CoordinatorEventProcessor(
                 zookeeperClient,
                 serverMetadataCache,
@@ -794,6 +792,36 @@ public class RebalanceManagerTest {
         @Override
         public void put(CoordinatorEvent event) {
             events.add(event);
+        }
+    }
+
+    /**
+     * A minimal {@link MetricRegistry} that records register/unregister calls per metric group, so
+     * tests can verify registration behavior without a mocking framework.
+     */
+    private static final class RecordingMetricRegistry implements MetricRegistry {
+
+        final Map<AbstractMetricGroup, Integer> registerCounts = new HashMap<>();
+        final Map<AbstractMetricGroup, Integer> unregisteredCounts = new HashMap<>();
+
+        @Override
+        public int getNumberReporters() {
+            return 0;
+        }
+
+        @Override
+        public void register(Metric metric, String metricName, AbstractMetricGroup group) {
+            registerCounts.merge(group, 1, Integer::sum);
+        }
+
+        @Override
+        public void unregister(Metric metric, String metricName, AbstractMetricGroup group) {
+            unregisteredCounts.merge(group, 1, Integer::sum);
+        }
+
+        @Override
+        public CompletableFuture<Void> closeAsync() {
+            return CompletableFuture.completedFuture(null);
         }
     }
 

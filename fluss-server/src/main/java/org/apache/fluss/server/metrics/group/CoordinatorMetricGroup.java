@@ -93,27 +93,6 @@ public class CoordinatorMetricGroup extends AbstractMetricGroup {
             }
         };
     }
-    /**
-     * Returns the leader-scoped rebalance metric group, retaining the coordinator metric scope. The
-     * rebalance manager closes this group on leadership loss so a new leader term can register
-     * fresh gauges and counters without replacing the server metric group.
-     */
-    public synchronized AbstractMetricGroup getOrAddRebalanceMetricGroup() {
-        if (rebalanceMetricGroup == null || rebalanceMetricGroup.isClosed()) {
-            rebalanceMetricGroup = new RebalanceMetricGroup(registry, this);
-            if (isClosed()) {
-                rebalanceMetricGroup.close();
-            }
-        }
-        return rebalanceMetricGroup;
-    }
-
-    @Override
-    public synchronized void close() {
-        if (rebalanceMetricGroup != null) {
-            rebalanceMetricGroup.close();
-        }
-        super.close();
 
     /** Returns the rebalance metrics for this coordinator server. */
     public RebalanceMetrics getRebalanceMetrics() {
