@@ -210,21 +210,29 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
         committedOffsets.remove(bucket1);
         committedOffsets.remove(bucket2);
         lakeSnapshot.set(new LakeSnapshot(2, committedOffsets));
+        TieringLogSplit bucket1LogSplit =
+                new TieringLogSplit(
+                        DEFAULT_TABLE_PATH, bucket1, partitionName, EARLIEST_OFFSET, 10, 0);
+        TieringLogSplit bucket2LogSplit =
+                new TieringLogSplit(
+                        DEFAULT_TABLE_PATH, bucket2, partitionName, EARLIEST_OFFSET, 10, 0);
         TieringSplit untieredBucketSplit =
                 historicalPartition
-                        ? new TieringLogSplit(
-                                DEFAULT_TABLE_PATH, bucket2, partitionName, EARLIEST_OFFSET, 10, 0)
+                        ? bucket2LogSplit
                         : new TieringSnapshotSplit(
                                 DEFAULT_TABLE_PATH, bucket2, partitionName, 1, 6, 0);
 
         assertThat(generator.generateTableSplits(tableInfo, partitions))
-                .containsExactly(
-                        logSplit,
-                        new TieringLogSplit(
-                                DEFAULT_TABLE_PATH, bucket1, partitionName, EARLIEST_OFFSET, 10, 0),
-                        untieredBucketSplit);
+                .containsExactly(logSplit, bucket1LogSplit, untieredBucketSplit);
         assertThat(kvSnapshotRequests).hasValue(historicalPartition ? 0 : 1);
         if (!historicalPartition) {
+            kvSnapshots.set(
+                    new KvSnapshots(
+                            tableId, partitionId, Collections.emptyMap(), Collections.emptyMap()));
+            assertThat(generator.generateTableSplits(tableInfo, partitions))
+                    .containsExactly(logSplit, bucket1LogSplit, bucket2LogSplit);
+            assertThat(kvSnapshotRequests).hasValue(2);
+
             kvSnapshots.set(null);
             assertThatThrownBy(() -> generator.generateTableSplits(tableInfo, partitions))
                     .isInstanceOf(IllegalStateException.class);
