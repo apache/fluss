@@ -25,6 +25,7 @@ import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.BaseVariableWidthVe
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.FieldVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.complex.ListVector;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.complex.MapVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.complex.StructVector;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.ArrowUtils;
@@ -105,6 +106,13 @@ public class ShadedArrowBatchWriter implements AutoCloseable {
             ListVector listVector = (ListVector) fieldVector;
             listVector.allocateNew();
             FieldVector dataVector = listVector.getDataVector();
+            if (dataVector != null) {
+                initFieldVector(dataVector);
+            }
+        } else if (fieldVector instanceof MapVector) {
+            MapVector mapVector = (MapVector) fieldVector;
+            mapVector.allocateNew();
+            FieldVector dataVector = mapVector.getDataVector();
             if (dataVector != null) {
                 initFieldVector(dataVector);
             }
