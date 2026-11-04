@@ -316,7 +316,7 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
                         testCoordinatorGateway,
                         "CLIENT",
                         GroupManager.from(
-                                conf, TABLET_SERVER_ID, replicaManager, metadataManager, zkClient));
+                                conf, TABLET_SERVER_ID, replicaManager, serverMetadataCache));
         try (RpcServer server =
                 RpcServer.create(
                         conf,

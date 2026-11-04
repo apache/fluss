@@ -33,8 +33,6 @@ import org.apache.fluss.rpc.gateway.AdminGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerRequest;
 import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerResponse;
-import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
-import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.metadata.SystemTables;
 import org.apache.fluss.server.tablet.TabletServer;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
@@ -94,22 +92,14 @@ class ConsumerOffsetTableITCase {
                                 ConsumerOffsetSchema.encodeGroupPrefix(groupId),
                                 tableRegistration.bucketCount);
         TabletServer tabletServer = FLUSS_CLUSTER_EXTENSION.getTabletServers().iterator().next();
-        Configuration conf = clusterConfiguration();
-        try (LakeCatalogDynamicLoader lakeCatalogLoader =
-                new LakeCatalogDynamicLoader(conf, null, true)) {
-            GroupManager groupManager =
-                    GroupManager.from(
-                            conf,
-                            tabletServer.getServerId(),
-                            tabletServer.getReplicaManager(),
-                            new MetadataManager(
-                                    FLUSS_CLUSTER_EXTENSION.getZooKeeperClient(),
-                                    conf,
-                                    lakeCatalogLoader),
-                            FLUSS_CLUSTER_EXTENSION.getZooKeeperClient());
-            assertThat(groupManager.bucketFor(groupId, tableRegistration.bucketCount))
-                    .isEqualTo(standardBucket);
-        }
+        GroupManager groupManager =
+                GroupManager.from(
+                        clusterConfiguration(),
+                        tabletServer.getServerId(),
+                        tabletServer.getReplicaManager(),
+                        tabletServer.getMetadataCache());
+        assertThat(groupManager.bucketFor(groupId, tableRegistration.bucketCount))
+                .isEqualTo(standardBucket);
     }
 
     @Test

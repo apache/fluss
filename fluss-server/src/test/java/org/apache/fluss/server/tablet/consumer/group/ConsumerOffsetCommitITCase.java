@@ -134,8 +134,16 @@ class ConsumerOffsetCommitITCase {
         FLUSS_CLUSTER_EXTENSION.waitAndGetFollowerReplica(offsetTableBucket, oldOwner);
 
         // The old owner stays online and must reject the request instead of accepting a write.
-        assertCommitResult(
-                oldGateway, sourceBucket, 999L, "rejected", Errors.NOT_CONSUMER_GROUP_OWNER);
+        // Cached ownership may lag the local transition to follower.
+        retry(
+                WAIT_TIMEOUT,
+                () ->
+                        assertCommitResult(
+                                oldGateway,
+                                sourceBucket,
+                                999L,
+                                "rejected",
+                                Errors.NOT_CONSUMER_GROUP_OWNER));
         retry(WAIT_TIMEOUT, () -> assertThat(findOwner(oldGateway)).isEqualTo(newOwner));
         TabletServerGateway newGateway =
                 FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(newOwner);

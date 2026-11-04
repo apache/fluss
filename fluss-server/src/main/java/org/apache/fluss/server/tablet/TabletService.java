@@ -17,12 +17,12 @@
 
 package org.apache.fluss.server.tablet;
 
-import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.exception.ApiException;
 import org.apache.fluss.exception.AuthorizationException;
 import org.apache.fluss.exception.InvalidBucketRoutingException;
+import org.apache.fluss.exception.InvalidConsumerGroupIdException;
 import org.apache.fluss.exception.InvalidScanRequestException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
@@ -82,10 +82,6 @@ import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsRequest;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsResponse;
-import org.apache.fluss.rpc.messages.PbCommitConsumerOffsetsRequestBucket;
-import org.apache.fluss.rpc.messages.PbCommitConsumerOffsetsRequestTable;
-import org.apache.fluss.rpc.messages.PbCommitConsumerOffsetsResponseBucket;
-import org.apache.fluss.rpc.messages.PbCommitConsumerOffsetsResponseTable;
 import org.apache.fluss.rpc.messages.PbFetchLogReqForTable;
 import org.apache.fluss.rpc.messages.PbScanReqForBucket;
 import org.apache.fluss.rpc.messages.PbServerNode;
@@ -144,12 +140,12 @@ import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import javax.annotation.Nullable;
+import javax.annotation.concurrent.GuardedBy;
 
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -170,6 +166,7 @@ import static org.apache.fluss.security.acl.OperationType.READ;
 import static org.apache.fluss.security.acl.OperationType.WRITE;
 import static org.apache.fluss.server.coordinator.CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
 import static org.apache.fluss.server.log.FetchParams.DEFAULT_MAX_WAIT_MS_WHEN_MIN_BYTES_ENABLE;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.decodeCommitConsumerOffsetsRequest;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getFetchLogData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getListOffsetsData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getNotifyLakeTableOffset;
@@ -181,6 +178,7 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getTableFilter
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getTableStatsRequestData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getTargetColumns;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getUpdateMetadataRequestData;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeCommitConsumerOffsetsResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeFetchLogResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeGetTableStatsResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeInitWriterResponse;
@@ -213,6 +211,10 @@ public final class TabletService extends RpcServiceBase
     private final ExecutorService ioExecutor;
     private final GroupManager groupManager;
     private final ConsumerOffsetTableManager consumerOffsetTableManager;
+    private final Object consumerOffsetCommitsLock = new Object();
+
+    @GuardedBy("consumerOffsetCommitsLock")
+    private final Map<String, CompletableFuture<Void>> consumerOffsetCommitTails = new HashMap<>();
 
     public TabletService(
             int serverId,
@@ -829,8 +831,9 @@ public final class TabletService extends RpcServiceBase
         return consumerOffsetTableManager
                 .ensureTableAsync()
                 .thenCompose(
-                        bucketCount -> {
-                            int bucketId = groupManager.bucketFor(groupId, bucketCount);
+                        tableInfo -> {
+                            int bucketId =
+                                    groupManager.bucketFor(groupId, tableInfo.getNumBuckets());
                             return consumerOffsetTableManager.resolveOwnerAsync(
                                     bucketId, listenerName);
                         })
@@ -850,85 +853,67 @@ public final class TabletService extends RpcServiceBase
     @Override
     public CompletableFuture<CommitConsumerOffsetsResponse> commitConsumerOffsets(
             CommitConsumerOffsetsRequest request) {
-        if (authorizer != null) {
-            authorizer.authorize(currentSession(), OperationType.ALTER, Resource.cluster());
-        }
-
         // Copy request values before returning: the RPC request buffer is released afterward.
         final String groupId = request.getGroupId();
         final Map<TableBucket, ConsumerOffsetAndMetadata> offsets;
         try {
             offsets = decodeCommitConsumerOffsetsRequest(request);
-        } catch (InvalidBucketRoutingException e) {
+            if (offsets.isEmpty()) {
+                return CompletableFuture.completedFuture(
+                        makeCommitConsumerOffsetsResponse(Collections.emptyMap()));
+            }
+            groupManager.validateGroupId(groupId);
+        } catch (InvalidBucketRoutingException | InvalidConsumerGroupIdException e) {
             return FutureUtils.completedExceptionally(e);
         }
-        if (offsets.isEmpty()) {
-            return CompletableFuture.completedFuture(
-                    buildCommitConsumerOffsetsResponse(Collections.emptyMap()));
+
+        // The session is bound to the RPC thread; authorize all sources before starting any write.
+        if (authorizer != null) {
+            offsets.keySet().stream()
+                    .map(TableBucket::getTableId)
+                    .distinct()
+                    .forEach(tableId -> authorizeTable(READ, tableId));
         }
 
-        return consumerOffsetTableManager
-                .ensureTableAsync()
-                .thenComposeAsync(
-                        bucketCount -> {
-                            CompletableFuture<Map<TableBucket, Errors>> commitResult =
-                                    new CompletableFuture<>();
-                            groupManager.handleCommitConsumerOffsets(
-                                    groupId, offsets, bucketCount, commitResult::complete);
-                            return commitResult;
-                        },
-                        ioExecutor)
-                .thenApply(TabletService::buildCommitConsumerOffsetsResponse);
-    }
-
-    @VisibleForTesting
-    static Map<TableBucket, ConsumerOffsetAndMetadata> decodeCommitConsumerOffsetsRequest(
-            CommitConsumerOffsetsRequest request) {
-        Map<TableBucket, ConsumerOffsetAndMetadata> offsets = new LinkedHashMap<>();
-        for (PbCommitConsumerOffsetsRequestTable table : request.getTablesList()) {
-            for (PbCommitConsumerOffsetsRequestBucket bucket : table.getBucketsList()) {
-                Long partitionId = bucket.hasPartitionId() ? bucket.getPartitionId() : null;
-                TableBucket tableBucket =
-                        new TableBucket(table.getTableId(), partitionId, bucket.getBucketId());
-                if (offsets.containsKey(tableBucket)) {
-                    throw new InvalidBucketRoutingException(
-                            "Duplicate table bucket in CommitConsumerOffsets request: "
-                                    + tableBucket);
-                }
-                offsets.put(
-                        tableBucket,
-                        new ConsumerOffsetAndMetadata(
-                                bucket.getOffset(),
-                                bucket.hasMetadata() ? bucket.getMetadata() : ""));
-            }
+        CompletableFuture<Void> start = new CompletableFuture<>();
+        CompletableFuture<Map<TableBucket, Errors>> commitResult = new CompletableFuture<>();
+        CompletableFuture<Void> tail;
+        synchronized (consumerOffsetCommitsLock) {
+            CompletableFuture<Void> previousTail =
+                    consumerOffsetCommitTails.getOrDefault(
+                            groupId, FutureUtils.completedVoidFuture());
+            CompletableFuture<Void> appendFuture =
+                    start.thenCompose(ignored -> previousTail)
+                            .thenCompose(ignored -> consumerOffsetTableManager.ensureTableAsync())
+                            .thenAcceptAsync(
+                                    tableInfo ->
+                                            groupManager.handleCommitConsumerOffsets(
+                                                    groupId,
+                                                    offsets,
+                                                    tableInfo,
+                                                    commitResult::complete),
+                                    ioExecutor);
+            // The handler returns after the local append. Replication acknowledgements can
+            // overlap without reordering appends or letting response cancellation release them.
+            tail =
+                    appendFuture.handle(
+                            (ignored, error) -> {
+                                if (error != null) {
+                                    commitResult.completeExceptionally(error);
+                                }
+                                return null;
+                            });
+            consumerOffsetCommitTails.put(groupId, tail);
         }
-        return offsets;
-    }
-
-    @VisibleForTesting
-    static CommitConsumerOffsetsResponse buildCommitConsumerOffsetsResponse(
-            Map<TableBucket, Errors> results) {
-        CommitConsumerOffsetsResponse response = new CommitConsumerOffsetsResponse();
-        Map<Long, PbCommitConsumerOffsetsResponseTable> tablesById = new HashMap<>();
-        results.forEach(
-                (tableBucket, error) -> {
-                    PbCommitConsumerOffsetsResponseTable table =
-                            tablesById.computeIfAbsent(
-                                    tableBucket.getTableId(),
-                                    tableId -> response.addTable().setTableId(tableId));
-                    PbCommitConsumerOffsetsResponseBucket bucket =
-                            table.addBucket().setBucketId(tableBucket.getBucket());
-                    if (tableBucket.getPartitionId() != null) {
-                        bucket.setPartitionId(tableBucket.getPartitionId());
-                    }
-                    if (error != Errors.NONE) {
-                        bucket.setErrorCode(error.code());
-                        if (error.message() != null) {
-                            bucket.setErrorMessage(error.message());
-                        }
+        tail.whenComplete(
+                (ignored, error) -> {
+                    synchronized (consumerOffsetCommitsLock) {
+                        consumerOffsetCommitTails.remove(groupId, tail);
                     }
                 });
-        return response;
+        // Register the chain before starting any work, and keep inline callbacks outside the lock.
+        start.complete(null);
+        return commitResult.thenApply(ServerRpcMessageUtils::makeCommitConsumerOffsetsResponse);
     }
 
     @Override

@@ -30,12 +30,6 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 @Internal
 public final class ConsumerOffsetTableConfig {
 
-    /** Sentinel indicating that the table id has not been resolved. */
-    public static final long UNRESOLVED_TABLE_ID = -1L;
-
-    /** Sentinel indicating that the schema id has not been resolved. */
-    public static final int UNRESOLVED_SCHEMA_ID = -1;
-
     /**
      * Offset commits always require the full ISR to acknowledge the write. A successful commit must
      * be durably persisted, so this value is intentionally not configurable.

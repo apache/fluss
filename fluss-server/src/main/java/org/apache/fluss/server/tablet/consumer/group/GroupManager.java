@@ -26,28 +26,26 @@ import org.apache.fluss.exception.DiskWriteLockedException;
 import org.apache.fluss.exception.InvalidConsumerGroupIdException;
 import org.apache.fluss.exception.NotConsumerGroupOwnerException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
-import org.apache.fluss.exception.SchemaNotExistException;
 import org.apache.fluss.exception.StorageBackpressureException;
-import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.memory.UnmanagedPagedOutputView;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.record.DefaultKvRecordBatch;
 import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.KvRecordBatchBuilder;
 import org.apache.fluss.row.compacted.CompactedRow;
 import org.apache.fluss.row.encode.KeyEncoder;
 import org.apache.fluss.rpc.entity.PutKvResultForBucket;
+import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.protocol.MergeMode;
-import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.metadata.SystemTables;
+import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.replica.ReplicaManager;
 import org.apache.fluss.server.replica.ReplicaManager.HostedReplica;
 import org.apache.fluss.server.replica.ReplicaManager.OnlineReplica;
-import org.apache.fluss.server.zk.ZooKeeperClient;
-import org.apache.fluss.server.zk.data.LeaderAndIsr;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -57,13 +55,11 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.function.Consumer;
 
 import static org.apache.fluss.server.tablet.consumer.group.ConsumerOffsetSchema.OFFSET_COMMIT_RECORD_TYPE;
 import static org.apache.fluss.server.tablet.consumer.group.ConsumerOffsetTableConfig.OFFSET_COMMIT_REQUIRED_ACKS;
-import static org.apache.fluss.server.tablet.consumer.group.ConsumerOffsetTableConfig.UNRESOLVED_SCHEMA_ID;
-import static org.apache.fluss.server.tablet.consumer.group.ConsumerOffsetTableConfig.UNRESOLVED_TABLE_ID;
+import static org.apache.fluss.server.zk.data.LeaderAndIsr.NO_LEADER;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** Validates, routes, and commits consumer-group offsets. */
@@ -77,41 +73,39 @@ public final class GroupManager {
     private final int serverId;
     private final ConsumerOffsetTableConfig consumerOffsetTableConfig;
     private final ReplicaManager replicaManager;
-    private final MetadataManager metadataManager;
-    private final ZooKeeperClient zkClient;
+    private final TabletServerMetadataCache metadataCache;
 
-    private volatile long consumerOffsetTableId = UNRESOLVED_TABLE_ID;
-    private volatile int consumerOffsetSchemaId = UNRESOLVED_SCHEMA_ID;
-
+    /**
+     * Creates a manager that writes through local replicas and uses cached metadata to classify
+     * ownership errors.
+     */
     public GroupManager(
             int serverId,
             ConsumerOffsetTableConfig consumerOffsetTableConfig,
             ReplicaManager replicaManager,
-            MetadataManager metadataManager,
-            ZooKeeperClient zkClient) {
+            TabletServerMetadataCache metadataCache) {
         this.serverId = serverId;
         this.consumerOffsetTableConfig =
                 checkNotNull(
                         consumerOffsetTableConfig, "consumerOffsetTableConfig must not be null");
         this.replicaManager = checkNotNull(replicaManager, "replicaManager must not be null");
-        this.metadataManager = checkNotNull(metadataManager, "metadataManager must not be null");
-        this.zkClient = checkNotNull(zkClient, "zkClient must not be null");
+        this.metadataCache = checkNotNull(metadataCache, "metadataCache must not be null");
     }
 
+    /** Creates a manager for this tablet server using the supplied server configuration. */
     public static GroupManager from(
             Configuration configuration,
             int serverId,
             ReplicaManager replicaManager,
-            MetadataManager metadataManager,
-            ZooKeeperClient zkClient) {
+            TabletServerMetadataCache metadataCache) {
         return new GroupManager(
                 serverId,
                 ConsumerOffsetTableConfig.from(configuration),
                 replicaManager,
-                metadataManager,
-                zkClient);
+                metadataCache);
     }
 
+    /** Returns the system-table and commit settings used by this manager. */
     public ConsumerOffsetTableConfig consumerOffsetTableConfig() {
         return consumerOffsetTableConfig;
     }
@@ -131,17 +125,26 @@ public final class GroupManager {
         }
     }
 
-    /** Commits offsets and completes the callback exactly once with per-bucket results. */
+    /**
+     * Commits offsets using resolved system-table metadata and completes the callback exactly once
+     * with per-bucket results.
+     *
+     * <p>Any local log append finishes before this method returns. The callback may run before or
+     * after the method returns, depending on replication acknowledgement or failure.
+     *
+     * @throws Error if synchronous processing encounters an error; callers must handle exceptional
+     *     completion rather than relying on the callback
+     */
     public void handleCommitConsumerOffsets(
             String groupId,
             Map<TableBucket, ConsumerOffsetAndMetadata> requestedOffsets,
-            int bucketCount,
+            TableInfo offsetsTableInfo,
             Consumer<Map<TableBucket, Errors>> callback) {
         Map<TableBucket, ConsumerOffsetAndMetadata> offsets =
                 new LinkedHashMap<>(
                         checkNotNull(requestedOffsets, "requestedOffsets must not be null"));
         try {
-            doCommitConsumerOffsets(groupId, offsets, bucketCount, callback);
+            doCommitConsumerOffsets(groupId, offsets, offsetsTableInfo, callback);
         } catch (Exception e) {
             logCommitFailure(groupId, e);
             completeCallback(
@@ -154,11 +157,11 @@ public final class GroupManager {
     private void doCommitConsumerOffsets(
             String groupId,
             Map<TableBucket, ConsumerOffsetAndMetadata> offsets,
-            int bucketCount,
+            TableInfo offsetsTableInfo,
             Consumer<Map<TableBucket, Errors>> callback)
             throws Exception {
-        int bucketId = bucketFor(groupId, bucketCount);
-        TableBucket offsetTableBucket = new TableBucket(consumerOffsetTableId(), bucketId);
+        int bucketId = bucketFor(groupId, offsetsTableInfo.getNumBuckets());
+        TableBucket offsetTableBucket = new TableBucket(offsetsTableInfo.getTableId(), bucketId);
 
         Errors ownershipError = checkOwnership(offsetTableBucket);
         if (ownershipError != Errors.NONE) {
@@ -187,7 +190,8 @@ public final class GroupManager {
         }
 
         try {
-            KvRecordBatch batch = buildUpsertBatch(groupId, validOffsets);
+            KvRecordBatch batch =
+                    buildUpsertBatch(groupId, validOffsets, offsetsTableInfo.getSchemaId());
             Map<TableBucket, KvRecordBatch> batchByBucket =
                     Collections.singletonMap(offsetTableBucket, batch);
             replicaManager.putRecordsToKv(
@@ -196,7 +200,7 @@ public final class GroupManager {
                     batchByBucket,
                     null,
                     MergeMode.DEFAULT,
-                    (short) 1,
+                    ApiKeys.PUT_KV.highestSupportedVersion,
                     writeResults ->
                             handleWriteCompletion(
                                     groupId, offsets, validationErrors, writeResults, callback));
@@ -223,14 +227,8 @@ public final class GroupManager {
     }
 
     private boolean isExpectedCommitFailure(Exception exception) {
-        Throwable cause = exception.getCause();
-        if (cause != null) {
-            // Metadata lookup wraps all failures as owner unavailable. Only a missing table or
-            // schema is expected; keep infrastructure failures and programming errors visible.
-            return exception instanceof ConsumerGroupOwnerNotAvailableException
-                    && cause.getCause() == null
-                    && (cause instanceof TableNotExistException
-                            || cause instanceof SchemaNotExistException);
+        if (exception.getCause() != null) {
+            return false;
         }
         return exception instanceof InvalidConsumerGroupIdException
                 || exception instanceof ConsumerGroupOwnerNotAvailableException
@@ -277,11 +275,12 @@ public final class GroupManager {
     }
 
     private KvRecordBatch buildUpsertBatch(
-            String groupId, Map<TableBucket, ConsumerOffsetAndMetadata> offsets) throws Exception {
+            String groupId, Map<TableBucket, ConsumerOffsetAndMetadata> offsets, int schemaId)
+            throws Exception {
         KeyEncoder keyEncoder = ConsumerOffsetSchema.createOffsetKeyEncoder();
         KvRecordBatchBuilder builder =
                 KvRecordBatchBuilder.builder(
-                        consumerOffsetSchemaId(),
+                        schemaId,
                         Integer.MAX_VALUE,
                         new UnmanagedPagedOutputView(OFFSET_COMMIT_PAGE_SIZE),
                         KvFormat.COMPACTED);
@@ -308,59 +307,19 @@ public final class GroupManager {
             return Errors.NONE;
         }
 
-        try {
-            Optional<LeaderAndIsr> leaderAndIsr = zkClient.getLeaderAndIsr(offsetTableBucket);
-            if (!leaderAndIsr.isPresent()) {
-                return Errors.CONSUMER_GROUP_OWNER_NOT_AVAILABLE;
-            }
-            return leaderAndIsr.get().leader() == serverId
-                    ? Errors.CONSUMER_GROUP_OWNER_LOADING
-                    : Errors.NOT_CONSUMER_GROUP_OWNER;
-        } catch (Exception e) {
-            LOG.warn(
-                    "Failed to resolve consumer group owner for bucket {}.",
-                    offsetTableBucket.getBucket(),
-                    e);
+        // Cached ownership only determines the rejection reason, never whether writes are allowed.
+        int leaderId =
+                metadataCache
+                        .getCachedBucketMetadata(
+                                SystemTables.CONSUMER_OFFSETS, offsetTableBucket.getBucket())
+                        .map(bucket -> bucket.getLeaderId().orElse(NO_LEADER))
+                        .orElse(NO_LEADER);
+        if (leaderId == NO_LEADER) {
             return Errors.CONSUMER_GROUP_OWNER_NOT_AVAILABLE;
         }
-    }
-
-    private long consumerOffsetTableId() {
-        if (consumerOffsetTableId == UNRESOLVED_TABLE_ID) {
-            synchronized (this) {
-                if (consumerOffsetTableId == UNRESOLVED_TABLE_ID) {
-                    try {
-                        consumerOffsetTableId =
-                                metadataManager
-                                        .getTable(SystemTables.CONSUMER_OFFSETS)
-                                        .getTableId();
-                    } catch (Exception e) {
-                        throw new ConsumerGroupOwnerNotAvailableException(
-                                "Consumer offset table id is not available.", e);
-                    }
-                }
-            }
-        }
-        return consumerOffsetTableId;
-    }
-
-    private int consumerOffsetSchemaId() {
-        if (consumerOffsetSchemaId == UNRESOLVED_SCHEMA_ID) {
-            synchronized (this) {
-                if (consumerOffsetSchemaId == UNRESOLVED_SCHEMA_ID) {
-                    try {
-                        consumerOffsetSchemaId =
-                                metadataManager
-                                        .getLatestSchema(SystemTables.CONSUMER_OFFSETS)
-                                        .getSchemaId();
-                    } catch (Exception e) {
-                        throw new ConsumerGroupOwnerNotAvailableException(
-                                "Consumer offset table schema is not available.", e);
-                    }
-                }
-            }
-        }
-        return consumerOffsetSchemaId;
+        return leaderId == serverId
+                ? Errors.CONSUMER_GROUP_OWNER_LOADING
+                : Errors.NOT_CONSUMER_GROUP_OWNER;
     }
 
     static boolean isOffsetMetadataSizeValid(String metadata, long maxMetadataSizeBytes) {
@@ -378,9 +337,7 @@ public final class GroupManager {
                         tableBucket ->
                                 result.put(
                                         tableBucket,
-                                        bucketErrors.containsKey(tableBucket)
-                                                ? bucketErrors.get(tableBucket)
-                                                : defaultError));
+                                        bucketErrors.getOrDefault(tableBucket, defaultError)));
         return result;
     }
 

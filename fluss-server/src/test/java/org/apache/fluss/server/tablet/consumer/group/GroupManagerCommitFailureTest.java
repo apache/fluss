@@ -20,6 +20,7 @@ package org.apache.fluss.server.tablet.consumer.group;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
@@ -52,13 +53,11 @@ class GroupManagerCommitFailureTest extends ReplicaTestBase {
 
         try (LakeCatalogDynamicLoader lakeCatalogLoader =
                 new LakeCatalogDynamicLoader(conf, null, true)) {
+            TableInfo offsetsTableInfo =
+                    new MetadataManager(zkClient, conf, lakeCatalogLoader)
+                            .getTable(SystemTables.CONSUMER_OFFSETS);
             GroupManager groupManager =
-                    GroupManager.from(
-                            conf,
-                            TABLET_SERVER_ID,
-                            replicaManager,
-                            new MetadataManager(zkClient, conf, lakeCatalogLoader),
-                            zkClient);
+                    GroupManager.from(conf, TABLET_SERVER_ID, replicaManager, serverMetadataCache);
             String groupId = "group-with-locked-disk";
             int bucketId = groupManager.bucketFor(groupId, TEST_ROUTING_BUCKET_COUNT);
             makeKvTableAsLeader(offsetsTableId, SystemTables.CONSUMER_OFFSETS, bucketId);
@@ -77,7 +76,7 @@ class GroupManagerCommitFailureTest extends ReplicaTestBase {
             List<Map<TableBucket, Errors>> responses = new ArrayList<>();
 
             groupManager.handleCommitConsumerOffsets(
-                    groupId, offsets, TEST_ROUTING_BUCKET_COUNT, responses::add);
+                    groupId, offsets, offsetsTableInfo, responses::add);
 
             assertThat(responses).hasSize(1);
             assertThat(responses.get(0).keySet()).containsExactly(validBucket, invalidBucket);
