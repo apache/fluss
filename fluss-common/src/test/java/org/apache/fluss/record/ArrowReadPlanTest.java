@@ -53,10 +53,10 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
-import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.channels.Channels;
@@ -68,17 +68,11 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Random;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Stream;
 
 import static org.apache.fluss.compression.ArrowCompressionFactory.toArrowCompressionCodecType;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.Mockito.doAnswer;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 /** Tests for {@link ArrowReadPlan}. */
 class ArrowReadPlanTest {
@@ -118,46 +112,26 @@ class ArrowReadPlanTest {
                         });
             }
         }
-        AtomicLong bytesRead = new AtomicLong();
-        try (FileChannel source = FileChannel.open(file);
+        try (TestingFileChannel channel = new TestingFileChannel(FileChannel.open(file));
                 BufferAllocator allocator = new RootAllocator(16 * 1024);
                 ArrowReadPlan plan =
                         new ArrowReadPlan(ROW_TYPE, null, new int[] {2, 0}, allocator)) {
-            source.position(11);
-            FileChannel channel = mock(FileChannel.class);
-            when(channel.size()).thenReturn(source.size());
-            doAnswer(
-                            invocation -> {
-                                ByteBuffer target = invocation.getArgument(0);
-                                long position = invocation.getArgument(1);
-                                long end = position + target.remaining();
-                                assertThat(
-                                                ranges.stream()
-                                                        .anyMatch(
-                                                                range ->
-                                                                        position >= range[0]
-                                                                                && end <= range[1]))
-                                        .as(
-                                                "read [%s, %s) must be metadata or a selected buffer",
-                                                position, end)
-                                        .isTrue();
-                                if (position >= ranges.get(0)[1]) {
-                                    assertThat(target.isDirect()).isTrue();
-                                }
-                                int limit = target.limit();
-                                target.limit(Math.min(limit, target.position() + 31));
-                                int read = source.read(target, position);
-                                target.limit(limit);
-                                bytesRead.addAndGet(read);
-                                return read;
-                            })
-                    .when(channel)
-                    .read(any(ByteBuffer.class), anyLong());
+            channel.position(11);
+            channel.setMaxBytesPerRead(31);
             ArrowReader reader = plan.load(channel, arrowOffset, bytes.length);
+            channel.assertReadsWithin(0, ranges);
+            for (TestingFileChannel.ReadRange read : channel.getReads()) {
+                assertThat(read.end - read.start).isLessThanOrEqualTo(31);
+                if (read.start >= ranges.get(0)[1]) {
+                    assertThat(read.direct).isTrue();
+                }
+            }
             long expectedBytes = ranges.stream().mapToLong(range -> range[1] - range[0]).sum();
-            assertThat(bytesRead.get()).isEqualTo(expectedBytes).isLessThan(bytes.length / 10);
-            assertThat(source.position()).isEqualTo(11);
-            assertThat(source.isOpen()).isTrue();
+            assertThat(channel.getBytesRead())
+                    .isEqualTo(expectedBytes)
+                    .isLessThan(bytes.length / 10);
+            assertThat(channel.position()).isEqualTo(11);
+            assertThat(channel.isOpen()).isTrue();
             assertThat(reader.getRowCount()).isEqualTo(64);
             for (int i = 0; i < 64; i++) {
                 assertThat(reader.read(i).getInt(0)).isEqualTo(i);
@@ -168,31 +142,57 @@ class ArrowReadPlanTest {
         }
     }
 
-    @Test
-    void testFileReadFailureReleasesBuffersAndCanRetry() throws Exception {
+    @ParameterizedTest
+    @ValueSource(ints = {1, 7})
+    void testFileReadFailureReleasesBuffersAndCanRetry(int failingBufferIndex) throws Exception {
         byte[] bytes = serializedWideBatch(ArrowCompressionType.NONE, false);
         Path file = Files.write(tempDir.resolve("retry.arrow"), bytes);
-        try (FileChannel source = FileChannel.open(file);
+        long failurePosition;
+        long completedBufferStart;
+        long completedBufferEnd;
+        try (ReadChannel metadataChannel =
+                new ReadChannel(Channels.newChannel(new ByteArrayInputStream(bytes)))) {
+            MessageMetadataResult metadata = MessageSerializer.readMessage(metadataChannel);
+            RecordBatch batch = (RecordBatch) metadata.getMessage().header(new RecordBatch());
+            long bodyOffset = metadataChannel.bytesRead();
+            // Buffer 1 holds id data; buffer 7 holds value data, after the selected id and value
+            // offsets have been read. Fail partway through each to exercise partial-read cleanup.
+            assertThat(batch.buffers(failingBufferIndex).length()).isGreaterThan(31);
+            failurePosition = bodyOffset + batch.buffers(failingBufferIndex).offset() + 31;
+            completedBufferStart = bodyOffset + batch.buffers(failingBufferIndex - 1).offset();
+            completedBufferEnd =
+                    completedBufferStart + batch.buffers(failingBufferIndex - 1).length();
+        }
+        try (TestingFileChannel channel = new TestingFileChannel(FileChannel.open(file));
                 BufferAllocator allocator = new RootAllocator();
                 ArrowReadPlan plan =
                         new ArrowReadPlan(ROW_TYPE, null, new int[] {0, 2}, allocator)) {
-            FileChannel channel = mock(FileChannel.class);
-            when(channel.size()).thenReturn(source.size());
-            doAnswer(
-                            invocation -> {
-                                ByteBuffer target = invocation.getArgument(0);
-                                if (target.isDirect()) {
-                                    throw new IOException("buffer read failed");
-                                }
-                                return source.read(target, invocation.getArgument(1));
-                            })
-                    .when(channel)
-                    .read(any(ByteBuffer.class), anyLong());
+            channel.setMaxBytesPerRead(31);
+            channel.failReadsAt(failurePosition);
             assertThatThrownBy(() -> plan.load(channel, 0, bytes.length))
                     .isInstanceOf(FlussRuntimeException.class)
                     .hasRootCauseMessage("buffer read failed");
+            assertThat(channel.getReads())
+                    .anySatisfy(read -> assertThat(read.end).isEqualTo(failurePosition));
+            long completedBufferBytes =
+                    channel.getReads().stream()
+                            .filter(
+                                    read ->
+                                            read.start >= completedBufferStart
+                                                    && read.end <= completedBufferEnd)
+                            .mapToLong(read -> read.end - read.start)
+                            .sum();
+            assertThat(completedBufferBytes)
+                    .isPositive()
+                    .isEqualTo(completedBufferEnd - completedBufferStart);
             assertThat(allocator.getAllocatedMemory()).isZero();
-            assertThat(plan.load(source, 0, bytes.length).read(63).getInt(0)).isEqualTo(63);
+            channel.clearReadFailure();
+            ArrowReader reader = plan.load(channel, 0, bytes.length);
+            assertThat(reader.getRowCount()).isEqualTo(64);
+            for (int i = 0; i < reader.getRowCount(); i++) {
+                assertThat(reader.read(i).getInt(0)).isEqualTo(i);
+                assertThat(reader.read(i).getString(1).toString()).isEqualTo("value-" + i);
+            }
             plan.clear();
             assertThat(allocator.getAllocatedMemory()).isZero();
         }

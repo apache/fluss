@@ -139,6 +139,10 @@ public final class ArrowReadPlan implements AutoCloseable {
      * Loads a projected batch from a file, reading only IPC metadata and selected buffers. The
      * channel remains open and its position is unchanged. Whole-batch CRC validation, if required,
      * must happen before calling this method.
+     *
+     * <p>This method requires a projected plan: {@link #isProjected()} must return {@code true}.
+     *
+     * @throws IllegalArgumentException if this plan is not projected
      */
     public ArrowReader load(FileChannel channel, long arrowOffset, int arrowLength) {
         try (ArrowRecordBatch batch =
@@ -160,8 +164,8 @@ public final class ArrowReadPlan implements AutoCloseable {
     }
 
     /**
-     * Deserializes the Arrow batch and loads only the selected fields; buffers of unselected fields
-     * are neither copied nor decompressed. Buffers of a previously loaded batch are replaced.
+     * Deserializes the Arrow batch, skipping vector loading and decompression for unselected
+     * columns. Buffers of a previously loaded batch are replaced.
      */
     public ArrowReader load(MemorySegment segment, int arrowOffset, int arrowLength) {
         try (ArrowRecordBatch batch =

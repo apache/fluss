@@ -234,7 +234,7 @@ public class ArrowUtils {
             checkArgument(metadata != null, "Missing Arrow record batch metadata.");
             long bodyLength = metadata.getMessageBodyLength();
             RecordBatch batch =
-                    projectedBatchMetadata(
+                    validateRecordBatchMetadata(
                             metadata.getMessage(), input.remaining(), nodeCount, bufferCount);
             int bodyOffset = input.position();
             return copySelectedBuffers(
@@ -298,7 +298,7 @@ public class ArrowUtils {
             metadataBuffer.flip();
             Message metadata = Message.getRootAsMessage(metadataBuffer);
             RecordBatch batch =
-                    projectedBatchMetadata(
+                    validateRecordBatchMetadata(
                             metadata,
                             arrowLength - prefixLength - metadataLength,
                             nodeCount,
@@ -398,17 +398,17 @@ public class ArrowUtils {
 
     // ------------------------------------------------------------------------------------------
 
-    private static RecordBatch projectedBatchMetadata(
-            Message metadata, int remaining, int nodeCount, int bufferCount) {
+    private static RecordBatch validateRecordBatchMetadata(
+            Message metadata, int availableBodyBytes, int nodeCount, int bufferCount) {
         checkArgument(
                 metadata.headerType() == MessageHeader.RecordBatch,
                 "Expected Arrow record batch, but found message type %s.",
                 metadata.headerType());
         checkArgument(
-                metadata.bodyLength() >= 0 && metadata.bodyLength() <= remaining,
+                metadata.bodyLength() >= 0 && metadata.bodyLength() <= availableBodyBytes,
                 "Invalid Arrow body length %s: only %s bytes available.",
                 metadata.bodyLength(),
-                remaining);
+                availableBodyBytes);
         RecordBatch batch = (RecordBatch) metadata.header(new RecordBatch());
         checkArgument(
                 batch.nodesLength() == nodeCount,

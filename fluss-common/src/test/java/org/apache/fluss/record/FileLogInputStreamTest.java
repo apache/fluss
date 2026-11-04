@@ -20,6 +20,11 @@ package org.apache.fluss.record;
 import org.apache.fluss.compression.ArrowCompressionInfo;
 import org.apache.fluss.compression.ArrowCompressionType;
 import org.apache.fluss.metadata.LogFormat;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.flatbuf.RecordBatch;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.ReadChannel;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.MessageMetadataResult;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.MessageSerializer;
+import org.apache.fluss.utils.ByteBufferReadableChannel;
 import org.apache.fluss.utils.CloseableIterator;
 import org.apache.fluss.utils.Projection;
 
@@ -33,6 +38,9 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.File;
+import java.io.IOException;
+import java.nio.channels.FileChannel;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -43,6 +51,9 @@ import java.util.stream.Stream;
 import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V0;
 import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V1;
 import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V2;
+import static org.apache.fluss.record.LogRecordBatchFormat.recordBatchHeaderSize;
+import static org.apache.fluss.record.LogRecordBatchFormat.recordsCountOffset;
+import static org.apache.fluss.record.LogRecordBatchFormat.statisticsLengthOffset;
 import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
@@ -52,9 +63,7 @@ import static org.apache.fluss.record.TestData.TEST_SCHEMA_GETTER;
 import static org.apache.fluss.testutils.DataTestUtils.createBasicMemoryLogRecords;
 import static org.apache.fluss.testutils.DataTestUtils.createRecordsWithoutBaseLogOffset;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.spy;
-import static org.mockito.Mockito.verify;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link FileLogInputStream}. */
 public class FileLogInputStreamTest extends LogTestBase {
@@ -69,21 +78,46 @@ public class FileLogInputStreamTest extends LogTestBase {
                 appendOnly
                         ? Arrays.asList(ChangeType.APPEND_ONLY, ChangeType.APPEND_ONLY)
                         : Arrays.asList(ChangeType.UPDATE_BEFORE, ChangeType.UPDATE_AFTER);
-        MemoryLogRecords memory =
-                createBasicMemoryLogRecords(
-                        DATA1_ROW_TYPE,
-                        DEFAULT_SCHEMA_ID,
-                        42L,
-                        1234L,
-                        magic,
-                        7L,
-                        3,
-                        changeTypes,
+        List<List<Object[]>> data =
+                Arrays.asList(
                         Arrays.asList(new Object[] {10, "before"}, new Object[] {20, "after"}),
-                        LogFormat.ARROW,
-                        new ArrowCompressionInfo(compression, -1),
-                        appendOnly);
-        try (FileLogRecords file = FileLogRecords.open(new File(tempDir, "projected.log"));
+                        Arrays.asList(
+                                new Object[] {
+                                    110, "The second batch has a longer value before the update."
+                                },
+                                new Object[] {
+                                    220,
+                                    "Its updated value also differs in content and serialized length."
+                                }));
+        long[] baseOffsets = {42L, 100L};
+        MemoryLogRecords[] batches = new MemoryLogRecords[data.size()];
+        for (int batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+            batches[batchIndex] =
+                    createBasicMemoryLogRecords(
+                            DATA1_ROW_TYPE,
+                            DEFAULT_SCHEMA_ID,
+                            baseOffsets[batchIndex],
+                            1234L + batchIndex,
+                            magic,
+                            7L,
+                            3 + batchIndex,
+                            changeTypes,
+                            data.get(batchIndex),
+                            LogFormat.ARROW,
+                            new ArrowCompressionInfo(compression, -1),
+                            appendOnly);
+        }
+        assertThat(batches[1].sizeInBytes()).isNotEqualTo(batches[0].sizeInBytes());
+        File path = new File(tempDir, "projected.log");
+        try (TestingFileChannel channel =
+                        new TestingFileChannel(
+                                FileChannel.open(
+                                        path.toPath(),
+                                        StandardOpenOption.CREATE,
+                                        StandardOpenOption.READ,
+                                        StandardOpenOption.WRITE));
+                FileLogRecords file =
+                        new FileLogRecords(path, channel, 0, Integer.MAX_VALUE, false);
                 LogRecordReadContext context =
                         LogRecordReadContext.createReadContext(
                                 DATA1_TABLE_INFO,
@@ -92,36 +126,52 @@ public class FileLogInputStreamTest extends LogTestBase {
                                 Projection.of(new int[] {0}),
                                 TEST_SCHEMA_GETTER,
                                 null)) {
-            file.append(memory);
-            file.append(memory);
+            for (MemoryLogRecords memory : batches) {
+                file.append(memory);
+            }
             FileLogInputStream stream = new FileLogInputStream(file, 0, file.sizeInBytes());
-            for (int batchIndex = 0; batchIndex < 2; batchIndex++) {
-                FileLogInputStream.FileChannelLogRecordBatch batch = spy(stream.nextBatch());
+            int batchPosition = 0;
+            for (int batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+                MemoryLogRecords memory = batches[batchIndex];
+                List<Object[]> expectedRows = data.get(batchIndex);
+                channel.resetReadTracking();
+                FileLogInputStream.FileChannelLogRecordBatch batch = stream.nextBatch();
+                assertThat(batch).isNotNull();
+                assertThat(batch.position()).isEqualTo(batchPosition);
+                assertThat(batch.sizeInBytes()).isEqualTo(memory.sizeInBytes());
+                assertThat(batch.baseLogOffset()).isEqualTo(baseOffsets[batchIndex]);
                 if (checkCrc) {
                     batch.ensureValid();
                 }
                 try (CloseableIterator<LogRecord> records = batch.records(context)) {
-                    for (int i = 0; i < 2; i++) {
+                    for (int i = 0; i < expectedRows.size(); i++) {
                         assertThat(records.hasNext()).isTrue();
                         LogRecord record = records.next();
-                        assertThat(record.logOffset()).isEqualTo(42L + i);
-                        assertThat(record.timestamp()).isEqualTo(1234L);
+                        assertThat(record.logOffset()).isEqualTo(baseOffsets[batchIndex] + i);
+                        assertThat(record.timestamp()).isEqualTo(1234L + batchIndex);
                         assertThat(record.getChangeType()).isEqualTo(changeTypes.get(i));
-                        assertThat(record.getRow().getInt(0)).isEqualTo((i + 1) * 10);
+                        assertThat(record.getRow().getInt(0)).isEqualTo(expectedRows.get(i)[0]);
                         assertThat(record.getRow().isNullAt(1)).isTrue();
                     }
                     assertThat(records.hasNext()).isFalse();
                 }
                 if (!checkCrc) {
-                    verify(batch, never()).loadFullBatch();
+                    channel.assertReadsWithin(batchPosition, projectedReadRanges(memory, 0, 1));
+                } else {
+                    channel.assertReadsWithin(
+                            batchPosition,
+                            Collections.singletonList(new long[] {0, memory.sizeInBytes()}));
+                    assertThat(channel.getBytesRead()).isGreaterThanOrEqualTo(memory.sizeInBytes());
                 }
                 assertThat(context.getBufferAllocator().getAllocatedMemory()).isZero();
                 // Header access and a later explicit CRC validation still refer to the original
                 // batch.
                 assertThat(batch.writerId()).isEqualTo(7L);
-                assertThat(batch.batchSequence()).isEqualTo(3);
+                assertThat(batch.batchSequence()).isEqualTo(3 + batchIndex);
                 batch.ensureValid();
+                batchPosition += memory.sizeInBytes();
             }
+            assertThat(stream.nextBatch()).isNull();
         }
     }
 
@@ -130,7 +180,17 @@ public class FileLogInputStreamTest extends LogTestBase {
         MemoryLogRecords memory =
                 LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
                         DATA1, DATA1_ROW_TYPE, 100L, DEFAULT_SCHEMA_ID);
-        try (FileLogRecords file = FileLogRecords.open(new File(tempDir, "statistics.log"));
+        List<long[]> ranges = projectedReadRanges(memory, 2, 3, 4);
+        File path = new File(tempDir, "statistics.log");
+        try (TestingFileChannel channel =
+                        new TestingFileChannel(
+                                FileChannel.open(
+                                        path.toPath(),
+                                        StandardOpenOption.CREATE,
+                                        StandardOpenOption.READ,
+                                        StandardOpenOption.WRITE));
+                FileLogRecords file =
+                        new FileLogRecords(path, channel, 0, Integer.MAX_VALUE, false);
                 LogRecordReadContext context =
                         LogRecordReadContext.createReadContext(
                                 DATA1_TABLE_INFO,
@@ -141,7 +201,7 @@ public class FileLogInputStreamTest extends LogTestBase {
                                 null)) {
             file.append(memory);
             FileLogInputStream.FileChannelLogRecordBatch batch =
-                    spy(new FileLogInputStream(file, 0, file.sizeInBytes()).nextBatch());
+                    new FileLogInputStream(file, 0, file.sizeInBytes()).nextBatch();
             assertThat(batch.getStatistics(context)).isPresent();
             try (CloseableIterator<LogRecord> records = batch.records(context)) {
                 for (int i = 0; i < DATA1.size(); i++) {
@@ -151,8 +211,103 @@ public class FileLogInputStreamTest extends LogTestBase {
                 }
                 assertThat(records.hasNext()).isFalse();
             }
-            verify(batch, never()).loadFullBatch();
+            channel.assertReadsWithin(0, ranges);
             assertThat(context.getBufferAllocator().getAllocatedMemory()).isZero();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {-1, Integer.MAX_VALUE})
+    void testProjectedFileRecordsRejectInvalidStatisticsLength(int statisticsLength)
+            throws Exception {
+        MemoryLogRecords memory = createProjectedTestBatch(LOG_MAGIC_VALUE_V2, true);
+        memory.getMemorySegment()
+                .putInt(
+                        memory.getPosition() + statisticsLengthOffset(LOG_MAGIC_VALUE_V2),
+                        statisticsLength);
+        try (FileLogRecords file =
+                        FileLogRecords.open(new File(tempDir, "invalid-statistics.log"));
+                LogRecordReadContext context = createProjectedReadContext()) {
+            file.append(memory);
+            FileLogInputStream.FileChannelLogRecordBatch batch =
+                    new FileLogInputStream(file, 0, file.sizeInBytes()).nextBatch();
+            assertThatThrownBy(() -> batch.records(context))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessage("Invalid statistics length: %s.", statisticsLength);
+            assertThat(context.getBufferAllocator().getAllocatedMemory()).isZero();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(bytes = {LOG_MAGIC_VALUE_V0, LOG_MAGIC_VALUE_V1, LOG_MAGIC_VALUE_V2})
+    void testProjectedFileRecordsRejectOversizedChangeTypeVector(byte magic) throws Exception {
+        MemoryLogRecords memory = createProjectedTestBatch(magic, false);
+        int recordCount = memory.sizeInBytes() - recordBatchHeaderSize(magic) + 1;
+        memory.getMemorySegment()
+                .putInt(memory.getPosition() + recordsCountOffset(magic), recordCount);
+        try (FileLogRecords file =
+                        FileLogRecords.open(new File(tempDir, "invalid-change-types.log"));
+                LogRecordReadContext context = createProjectedReadContext()) {
+            file.append(memory);
+            FileLogInputStream.FileChannelLogRecordBatch batch =
+                    new FileLogInputStream(file, 0, file.sizeInBytes()).nextBatch();
+            assertThatThrownBy(() -> batch.records(context))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessage("Change type vector exceeds batch size.");
+            assertThat(context.getBufferAllocator().getAllocatedMemory()).isZero();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {-1, 1})
+    void testProjectedFileRowCountMismatchReleasesBuffersAndContextCanRetry(int rowCountDelta)
+            throws Exception {
+        // Append-only batches keep the IPC start fixed when the header count is corrupted.
+        MemoryLogRecords invalid = createProjectedTestBatch(LOG_MAGIC_VALUE_V2, true);
+        invalid.getMemorySegment()
+                .putInt(
+                        invalid.getPosition() + recordsCountOffset(LOG_MAGIC_VALUE_V2),
+                        DATA1.size() + rowCountDelta);
+        List<Object[]> validRows =
+                Arrays.asList(
+                        new Object[] {110, "valid-before"}, new Object[] {220, "valid-after"});
+        MemoryLogRecords valid =
+                createRecordsWithoutBaseLogOffset(
+                        DATA1_ROW_TYPE,
+                        DEFAULT_SCHEMA_ID,
+                        100L,
+                        5678L,
+                        LOG_MAGIC_VALUE_V2,
+                        validRows,
+                        LogFormat.ARROW,
+                        true);
+        try (FileLogRecords file =
+                        FileLogRecords.open(new File(tempDir, "mismatched-row-count.log"));
+                LogRecordReadContext context = createProjectedReadContext()) {
+            file.append(invalid);
+            file.append(valid);
+            FileLogInputStream stream = new FileLogInputStream(file, 0, file.sizeInBytes());
+            FileLogInputStream.FileChannelLogRecordBatch invalidBatch = stream.nextBatch();
+            assertThatThrownBy(() -> invalidBatch.records(context))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessage("Arrow row count does not match log batch record count.");
+            assertThat(context.getBufferAllocator().getAllocatedMemory()).isZero();
+
+            FileLogInputStream.FileChannelLogRecordBatch validBatch = stream.nextBatch();
+            try (CloseableIterator<LogRecord> records = validBatch.records(context)) {
+                assertThat(context.getBufferAllocator().getAllocatedMemory()).isPositive();
+                for (int i = 0; i < validRows.size(); i++) {
+                    assertThat(records.hasNext()).isTrue();
+                    LogRecord record = records.next();
+                    assertThat(record.logOffset()).isEqualTo(100L + i);
+                    assertThat(record.timestamp()).isEqualTo(5678L);
+                    assertThat(record.getRow().getInt(0)).isEqualTo(validRows.get(i)[0]);
+                    assertThat(record.getRow().isNullAt(1)).isTrue();
+                }
+                assertThat(records.hasNext()).isFalse();
+            }
+            assertThat(context.getBufferAllocator().getAllocatedMemory()).isZero();
+            assertThat(stream.nextBatch()).isNull();
         }
     }
 
@@ -414,6 +569,57 @@ public class FileLogInputStreamTest extends LogTestBase {
                     }
                 }
             }
+        }
+    }
+
+    private static MemoryLogRecords createProjectedTestBatch(byte magic, boolean appendOnly)
+            throws Exception {
+        return createRecordsWithoutBaseLogOffset(
+                DATA1_ROW_TYPE,
+                DEFAULT_SCHEMA_ID,
+                42L,
+                1234L,
+                magic,
+                DATA1,
+                LogFormat.ARROW,
+                appendOnly);
+    }
+
+    private static LogRecordReadContext createProjectedReadContext() {
+        return LogRecordReadContext.createReadContext(
+                DATA1_TABLE_INFO,
+                true,
+                LogRecordReadContext.SchemaResolution.TARGET,
+                Projection.of(new int[] {0}),
+                TEST_SCHEMA_GETTER,
+                null);
+    }
+
+    private static List<long[]> projectedReadRanges(MemoryLogRecords memory, int... bufferIndexes)
+            throws IOException {
+        DefaultLogRecordBatch batch = (DefaultLogRecordBatch) memory.batches().iterator().next();
+        int arrowOffset = recordBatchHeaderSize(batch.magic()) + batch.getStatisticsLength();
+        if (!batch.isAppendOnly()) {
+            arrowOffset += batch.getRecordCount();
+        }
+        try (ReadChannel metadataChannel =
+                new ReadChannel(
+                        new ByteBufferReadableChannel(
+                                memory.getMemorySegment()
+                                        .wrap(
+                                                memory.getPosition() + arrowOffset,
+                                                memory.sizeInBytes() - arrowOffset)))) {
+            MessageMetadataResult metadata = MessageSerializer.readMessage(metadataChannel);
+            long bodyOffset = arrowOffset + metadataChannel.bytesRead();
+            RecordBatch arrowBatch = (RecordBatch) metadata.getMessage().header(new RecordBatch());
+            List<long[]> ranges = new ArrayList<>();
+            // Log headers, statistics, change types and IPC metadata precede the column buffers.
+            ranges.add(new long[] {0, bodyOffset});
+            for (int index : bufferIndexes) {
+                long start = bodyOffset + arrowBatch.buffers(index).offset();
+                ranges.add(new long[] {start, start + arrowBatch.buffers(index).length()});
+            }
+            return ranges;
         }
     }
 
