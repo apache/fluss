@@ -76,6 +76,7 @@ import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.as
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.collectRowsWithTimeout;
 import static org.apache.fluss.flink.utils.FlinkTestBase.waitUntilPartitions;
 import static org.apache.fluss.server.testutils.FlussClusterExtension.BUILTIN_DATABASE;
+import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -1812,10 +1813,9 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                         "INSERT INTO retract_agg (k, total) SELECT k, SUM(b) FROM retract_input GROUP BY k");
 
         // Step 4: Start reading changelog from the aggregation table
-        CloseableIterator<Row> rowIter =
-                tEnv.executeSql("SELECT k, total FROM retract_agg").collect();
+        TableResult queryResult = tEnv.executeSql("SELECT k, total FROM retract_agg");
 
-        try {
+        try (CloseableIterator<Row> rowIter = queryResult.collect()) {
             // Consume the seeded state before changing the input, establishing the read boundary.
             assertResultsIgnoreOrder(rowIter, Arrays.asList("+I[1, 0]", "+I[2, 0]"), false);
             // Step 5: Insert initial data into the input table
@@ -1849,8 +1849,10 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                             : Arrays.asList("-U[1, 30]", "+U[1, 0]"),
                     false);
         } finally {
-            rowIter.close();
-            pipelineResult.getJobClient().ifPresent(JobClient::cancel);
+            JobClient pipelineJob = pipelineResult.getJobClient().get();
+            pipelineJob.cancel().get();
+            waitForJobTermination(pipelineJob);
+            waitForJobTermination(queryResult.getJobClient().get());
         }
     }
 
@@ -1877,17 +1879,16 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                 tEnv.executeSql(
                         "INSERT INTO collection_retract_agg "
                                 + "SELECT k, factor, items, attrs FROM collection_retract_input");
-        CloseableIterator<Row> rows =
+        TableResult queryResult =
                 tEnv.executeSql(
-                                "SELECT k, factor, CARDINALITY(items), "
-                                        + "items[1], items[2], items[CARDINALITY(items)], CARDINALITY(attrs), "
-                                        + "attrs[1], attrs[2], attrs[3] FROM collection_retract_agg")
-                        .collect();
+                        "SELECT k, factor, CARDINALITY(items), "
+                                + "items[1], items[2], items[CARDINALITY(items)], CARDINALITY(attrs), "
+                                + "attrs[1], attrs[2], attrs[3] FROM collection_retract_agg");
         String seeded = "[1, 4, 2, 7, 7, 7, 1, null, b, null]";
         String initial = "[1, 12, 5, 7, 7, 2, 1, null, a, null]";
         String retracted = "[1, 4, 2, 7, 7, 7, 0, null, null, null]";
         String updated = "[1, 24, 4, 7, 7, 3, 2, c, null, d]";
-        try {
+        try (CloseableIterator<Row> rows = queryResult.collect()) {
             assertResultsIgnoreOrder(rows, Collections.singletonList("+I" + seeded), false);
             tEnv.executeSql(
                             "INSERT INTO collection_retract_input VALUES "
@@ -1907,9 +1908,20 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
             tBatchEnv.executeSql("DELETE FROM collection_retract_input WHERE k = 1").await();
             assertResultsIgnoreOrder(rows, Arrays.asList("-U" + updated, "+U" + retracted), false);
         } finally {
-            rows.close();
-            pipeline.getJobClient().ifPresent(JobClient::cancel);
+            JobClient pipelineJob = pipeline.getJobClient().get();
+            pipelineJob.cancel().get();
+            waitForJobTermination(pipelineJob);
+            waitForJobTermination(queryResult.getJobClient().get());
         }
+    }
+
+    private static void waitForJobTermination(JobClient jobClient) {
+        // Subsequent tests share the mini-cluster and need the cancelled job's slots.
+        waitUntil(
+                () -> jobClient.getJobStatus().get().isTerminalState(),
+                Duration.ofSeconds(30),
+                Duration.ofMillis(100),
+                "Timed out waiting for Flink job termination");
     }
 
     private InsertAndExpectValues rowsToInsertInto(Collection<String> partitions) {

@@ -409,14 +409,14 @@ class TableDescriptorTest {
 
     @Test
     void testRetractSafeAggFunctionSubset() {
-        // SUM, LAST_VALUE, LAST_VALUE_IGNORE_NULLS support retract
         assertThat(AggFunctions.SUM().getType().supportsRetract()).isTrue();
         assertThat(AggFunctions.SUM().supportsRetract()).isTrue();
-        assertThat(AggFunctions.PRODUCT().getType().supportsRetract()).isFalse();
+        assertThat(AggFunctions.PRODUCT().getType().supportsRetract()).isTrue();
+        assertThat(AggFunctions.COLLECT().getType().supportsRetract()).isTrue();
+        assertThat(AggFunctions.MERGE_MAP().getType().supportsRetract()).isTrue();
         assertThat(AggFunctions.LAST_VALUE().getType().supportsRetract()).isTrue();
         assertThat(AggFunctions.LAST_VALUE_IGNORE_NULLS().getType().supportsRetract()).isTrue();
 
-        // All other functions must NOT support retract
         assertThat(AggFunctions.MAX().getType().supportsRetract()).isFalse();
         assertThat(AggFunctions.MIN().getType().supportsRetract()).isFalse();
         assertThat(AggFunctions.FIRST_VALUE().getType().supportsRetract()).isFalse();
