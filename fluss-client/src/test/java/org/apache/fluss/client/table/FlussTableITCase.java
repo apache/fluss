@@ -53,6 +53,7 @@ import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.ProjectedRow;
 import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.row.indexed.IndexedRow;
+import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.types.BigIntType;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
@@ -95,6 +96,53 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** IT case for {@link FlussTable}. */
 class FlussTableITCase extends ClientToServerITCaseBase {
+
+    @Test
+    void testJavaRequestScopedNullSkipping() throws Exception {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("name", DataTypes.STRING())
+                        .column("city", DataTypes.STRING())
+                        .primaryKey("id")
+                        .build();
+        TablePath path = TablePath.of("test_db_1", "java_ignore_nulls");
+        createTable(path, TableDescriptor.builder().schema(schema).build(), false);
+        try (Table table = conn.getTable(path)) {
+            UpsertWriter ordinary = table.newUpsert().createWriter();
+            UpsertWriter preserving =
+                    table.newUpsert().mergeMode(MergeMode.IGNORE_NULLS).createWriter();
+            UpsertWriter partialOrdinary =
+                    table.newUpsert().partialUpdate("id", "name").createWriter();
+            UpsertWriter partialPreserving =
+                    table.newUpsert()
+                            .partialUpdate("id", "name")
+                            .mergeMode(MergeMode.IGNORE_NULLS)
+                            .createWriter();
+            Lookuper lookuper = table.newLookup().createLookuper();
+            ordinary.upsert(row(1, "value", "city")).get();
+            preserving.upsert(row(1, null, null)).get();
+            assertThatRow(lookuper.lookup(row(1)).get().getSingletonRow())
+                    .withSchema(schema.getRowType())
+                    .isEqualTo(row(1, "value", "city"));
+
+            CompletableFuture<?> fullWrite = preserving.upsert(row(1, null, null));
+            CompletableFuture<?> partialWrite = partialOrdinary.upsert(row(1, null, "ignored"));
+            fullWrite.get();
+            partialWrite.get();
+            assertThatRow(lookuper.lookup(row(1)).get().getSingletonRow())
+                    .withSchema(schema.getRowType())
+                    .isEqualTo(row(1, null, "city"));
+
+            partialWrite = partialPreserving.upsert(row(1, null, "ignored"));
+            fullWrite = ordinary.upsert(row(1, "next", null));
+            partialWrite.get();
+            fullWrite.get();
+            assertThatRow(lookuper.lookup(row(1)).get().getSingletonRow())
+                    .withSchema(schema.getRowType())
+                    .isEqualTo(row(1, "next", null));
+        }
+    }
 
     @Test
     void testGetDescriptor() throws Exception {

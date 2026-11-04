@@ -26,6 +26,7 @@ import org.apache.fluss.memory.PreAllocatedPagedOutputView;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.record.DefaultKvRecord;
 import org.apache.fluss.record.DefaultKvRecordBatch;
 import org.apache.fluss.record.KvRecord;
@@ -38,6 +39,8 @@ import org.apache.fluss.types.DataType;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -51,6 +54,9 @@ import static org.apache.fluss.record.TestData.DATA1_SCHEMA_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH_PK;
+import static org.apache.fluss.record.TestData.DATA2_ROW_TYPE;
+import static org.apache.fluss.record.TestData.DATA2_SCHEMA;
+import static org.apache.fluss.record.TestData.DATA2_TABLE_INFO;
 import static org.apache.fluss.testutils.DataTestUtils.compactedRow;
 import static org.apache.fluss.utils.BytesUtils.toArray;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -315,28 +321,65 @@ class KvWriteBatchTest {
         assertThat(batch.getRecordCount()).isEqualTo(1);
     }
 
-    @Test
-    void testDifferentTargetsAndModesRequireSeparateBatches() throws Exception {
-        for (MergeMode mode : new MergeMode[] {MergeMode.DEFAULT, MergeMode.IGNORE_NULLS}) {
+    @ParameterizedTest
+    @EnumSource(
+            value = MergeMode.class,
+            names = {"DEFAULT", "IGNORE_NULLS"})
+    void testDifferentTargetsRequireSeparateBatches(MergeMode mode) throws Exception {
+        int[][] targets = {null, new int[] {0, 1}, new int[] {0, 2}};
+        BinaryRow input = compactedRow(DATA2_ROW_TYPE, new Object[] {1, "a", "b"});
+        byte[] inputKey =
+                new CompactedKeyEncoder(DATA2_ROW_TYPE, DATA2_SCHEMA.getPrimaryKeyIndexes())
+                        .encodeKey(input);
+        for (int i = 0; i < targets.length; i++) {
             KvWriteBatch batch =
-                    createKvWriteBatchWithMergeMode(new TableBucket(DATA1_TABLE_ID_PK, 0), mode);
-            assertThat(batch.tryAppend(createWriteRecordWithMergeMode(mode), newWriteCallback()))
-                    .isTrue();
-            MergeMode other =
-                    mode == MergeMode.DEFAULT ? MergeMode.IGNORE_NULLS : MergeMode.DEFAULT;
-            WriteRecord partial =
+                    createKvWriteBatchWithTargets(DATA2_TABLE_INFO, 0, targets[i], mode);
+            WriteRecord first =
                     WriteRecord.forUpsert(
-                            DATA1_TABLE_INFO_PK,
-                            PhysicalTablePath.of(DATA1_TABLE_PATH_PK),
-                            row,
-                            key,
-                            key,
+                            DATA2_TABLE_INFO,
+                            PhysicalTablePath.of(DATA2_TABLE_INFO.getTablePath()),
+                            input,
+                            inputKey,
+                            inputKey,
                             WriteFormat.COMPACTED_KV,
-                            new int[] {0},
-                            other);
-            assertThat(batch.tryAppend(partial, newWriteCallback())).isFalse();
+                            targets[i],
+                            mode);
+            assertThat(batch.tryAppend(first, newWriteCallback())).isTrue();
+            WriteRecord differentTargets =
+                    WriteRecord.forUpsert(
+                            DATA2_TABLE_INFO,
+                            PhysicalTablePath.of(DATA2_TABLE_INFO.getTablePath()),
+                            input,
+                            inputKey,
+                            inputKey,
+                            WriteFormat.COMPACTED_KV,
+                            targets[(i + 1) % targets.length],
+                            mode);
+            assertThat(batch.tryAppend(differentTargets, newWriteCallback())).isFalse();
             assertThat(batch.getRecordCount()).isEqualTo(1);
         }
+    }
+
+    @ParameterizedTest
+    @EnumSource(
+            value = MergeMode.class,
+            names = {"DEFAULT", "IGNORE_NULLS"})
+    void testEqualTargetArraysShareBatch(MergeMode mode) throws Exception {
+        KvWriteBatch batch =
+                createKvWriteBatchWithTargets(DATA1_TABLE_INFO_PK, 0, new int[] {0}, mode);
+        WriteRecord record =
+                WriteRecord.forUpsert(
+                        DATA1_TABLE_INFO_PK,
+                        PhysicalTablePath.of(DATA1_TABLE_PATH_PK),
+                        row,
+                        key,
+                        key,
+                        WriteFormat.COMPACTED_KV,
+                        new int[] {0},
+                        mode);
+        assertThat(batch.tryAppend(record, newWriteCallback())).isTrue();
+        assertThat(batch.tryAppend(record, newWriteCallback())).isTrue();
+        assertThat(batch.getRecordCount()).isEqualTo(2);
     }
 
     @Test
@@ -347,19 +390,25 @@ class KvWriteBatchTest {
 
     private KvWriteBatch createKvWriteBatchWithMergeMode(TableBucket tb, MergeMode mergeMode)
             throws Exception {
+        return createKvWriteBatchWithTargets(DATA1_TABLE_INFO_PK, tb.getBucket(), null, mergeMode);
+    }
+
+    private KvWriteBatch createKvWriteBatchWithTargets(
+            TableInfo tableInfo, int bucket, int[] targetColumns, MergeMode mergeMode)
+            throws Exception {
         PreAllocatedPagedOutputView outputView =
                 new PreAllocatedPagedOutputView(
                         Collections.singletonList(memoryPool.nextSegment()));
         return new KvWriteBatch(
-                tb.getTableId(),
-                tb.getBucket(),
-                DATA1_TABLE_INFO_PK.getNumBuckets(),
-                PhysicalTablePath.of(DATA1_TABLE_PATH_PK),
-                DATA1_TABLE_INFO_PK.getSchemaId(),
+                tableInfo.getTableId(),
+                bucket,
+                tableInfo.getNumBuckets(),
+                PhysicalTablePath.of(tableInfo.getTablePath()),
+                tableInfo.getSchemaId(),
                 KvFormat.COMPACTED,
                 Integer.MAX_VALUE,
                 outputView,
-                null,
+                targetColumns,
                 mergeMode,
                 false,
                 System.currentTimeMillis());

@@ -157,7 +157,9 @@ class KvTabletIgnoreNullsTest {
                         schemaGetter,
                         tableConf.getChangelogImage(),
                         KvManager.getDefaultRateLimiter(),
-                        autoIncrementManager);
+                        autoIncrementManager,
+                        SystemClock.getInstance(),
+                        tableConf);
     }
 
     @AfterEach
@@ -239,6 +241,76 @@ class KvTabletIgnoreNullsTest {
         checkEqual(
                 readLogRecords(offset),
                 Collections.singletonList(logRecords(offset, changes, rows)));
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testIgnoreNullsWithSkipUnchangedUpserts(boolean skipUnchanged) throws Exception {
+        Map<String, String> config = new HashMap<>();
+        config.put(ConfigOptions.TABLE_CHANGELOG_IMAGE.key(), "FULL");
+        config.put(ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED.key(), String.valueOf(skipUnchanged));
+        initLogTabletAndKvTablet(config);
+        kvTablet.putAsLeader(
+                kvRecordBatchFactory.ofRecords(
+                        kvRecordFactory.ofRecord("k1", new Object[] {1, "before"})),
+                null);
+
+        long beforeUnchanged = logTablet.localLogEndOffset();
+        kvTablet.putAsLeader(
+                kvRecordBatchFactory.ofRecords(
+                        kvRecordFactory.ofRecord("k1", new Object[] {1, null})),
+                null,
+                MergeMode.IGNORE_NULLS);
+        assertStoredValue("before");
+        if (skipUnchanged) {
+            assertThat(logTablet.localLogEndOffset()).isEqualTo(beforeUnchanged + 1);
+            assertThat(readLogRecords(beforeUnchanged).batches())
+                    .hasSize(1)
+                    .allSatisfy(batch -> assertThat(batch.getRecordCount()).isZero());
+        } else {
+            assertThat(logTablet.localLogEndOffset()).isEqualTo(beforeUnchanged + 2);
+            checkEqual(
+                    readLogRecords(beforeUnchanged),
+                    Collections.singletonList(
+                            logRecords(
+                                    beforeUnchanged,
+                                    Arrays.asList(
+                                            ChangeType.UPDATE_BEFORE, ChangeType.UPDATE_AFTER),
+                                    Arrays.asList(
+                                            new Object[] {1, "before"},
+                                            new Object[] {1, "before"}))));
+        }
+
+        long beforeChanged = logTablet.localLogEndOffset();
+        kvTablet.putAsLeader(
+                kvRecordBatchFactory.ofRecords(
+                        kvRecordFactory.ofRecord("k1", new Object[] {1, "after"})),
+                null,
+                MergeMode.IGNORE_NULLS);
+        assertStoredValue("after");
+        assertThat(logTablet.localLogEndOffset()).isEqualTo(beforeChanged + 2);
+        checkEqual(
+                readLogRecords(beforeChanged),
+                Collections.singletonList(
+                        logRecords(
+                                beforeChanged,
+                                Arrays.asList(ChangeType.UPDATE_BEFORE, ChangeType.UPDATE_AFTER),
+                                Arrays.asList(
+                                        new Object[] {1, "before"}, new Object[] {1, "after"}))));
+    }
+
+    private void assertStoredValue(String expected) throws Exception {
+        assertThat(
+                        new ValueDecoder(schemaGetter, KvFormat.COMPACTED)
+                                .decodeValue(
+                                        kvTablet.multiGetFromBufferOrKv(
+                                                        Collections.singletonList("k1".getBytes()))
+                                                .get(0)
+                                                .toByteArray())
+                                .row
+                                .getString(1)
+                                .toString())
+                .isEqualTo(expected);
     }
 
     @ParameterizedTest

@@ -71,7 +71,9 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
@@ -94,6 +96,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Stream;
 
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
@@ -106,7 +109,11 @@ import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH_PK;
+import static org.apache.fluss.record.TestData.DATA2_ROW_TYPE;
+import static org.apache.fluss.record.TestData.DATA2_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA2_TABLE_ID;
+import static org.apache.fluss.record.TestData.DATA2_TABLE_INFO;
+import static org.apache.fluss.record.TestData.DATA2_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.rpc.protocol.Errors.SCHEMA_NOT_EXIST;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeProduceLogResponse;
@@ -1747,7 +1754,36 @@ final class SenderTest {
 
     @Test
     void testPutRequestsSeparateMergeModesAcrossBuckets() throws Exception {
-        PhysicalTablePath path = PhysicalTablePath.of(DATA1_TABLE_PATH_PK);
+        assertPutRequestGrouping(MergeMode.IGNORE_NULLS, null, MergeMode.DEFAULT, null, 2);
+    }
+
+    @ParameterizedTest
+    @MethodSource("targetColumnGroups")
+    void testPutRequestsGroupByTargetColumns(
+            MergeMode mode, int[] firstTargets, int[] secondTargets, int expectedRequests)
+            throws Exception {
+        assertPutRequestGrouping(mode, firstTargets, mode, secondTargets, expectedRequests);
+    }
+
+    private static Stream<Arguments> targetColumnGroups() {
+        return Stream.of(MergeMode.DEFAULT, MergeMode.IGNORE_NULLS)
+                .flatMap(
+                        mode ->
+                                Stream.of(
+                                        Arguments.of(mode, null, new int[] {0, 1}, 2),
+                                        Arguments.of(mode, new int[] {0, 1}, null, 2),
+                                        Arguments.of(mode, new int[] {0, 1}, new int[] {0, 2}, 2),
+                                        Arguments.of(mode, new int[] {0, 1}, new int[] {0, 1}, 1)));
+    }
+
+    private void assertPutRequestGrouping(
+            MergeMode firstMode,
+            int[] firstTargets,
+            MergeMode secondMode,
+            int[] secondTargets,
+            int expectedRequests)
+            throws Exception {
+        PhysicalTablePath path = PhysicalTablePath.of(DATA2_TABLE_PATH);
         int[] replicas = new int[] {TestingMetadataUpdater.NODE1.id()};
         metadataUpdater.updateCluster(
                 new Cluster(
@@ -1759,61 +1795,71 @@ final class SenderTest {
                                 Arrays.asList(
                                         new BucketLocation(
                                                 path,
-                                                DATA1_TABLE_ID_PK,
+                                                DATA2_TABLE_ID,
                                                 0,
                                                 TestingMetadataUpdater.NODE1.id(),
                                                 replicas),
                                         new BucketLocation(
                                                 path,
-                                                DATA1_TABLE_ID_PK,
+                                                DATA2_TABLE_ID,
                                                 1,
                                                 TestingMetadataUpdater.NODE1.id(),
                                                 replicas))),
-                        Collections.singletonMap(DATA1_TABLE_PATH_PK, DATA1_TABLE_ID_PK),
+                        Collections.singletonMap(DATA2_TABLE_PATH, DATA2_TABLE_ID),
                         Collections.emptyMap(),
                         Collections.emptyMap()));
         List<CompletableFuture<Exception>> results = new ArrayList<>();
         for (int bucket = 0; bucket < 2; bucket++) {
-            BinaryRow row = compactedRow(DATA1_ROW_TYPE, new Object[] {bucket, "value"});
+            BinaryRow row = compactedRow(DATA2_ROW_TYPE, new Object[] {bucket, "value", "kept"});
             byte[] key =
-                    new CompactedKeyEncoder(DATA1_ROW_TYPE, DATA1_SCHEMA_PK.getPrimaryKeyIndexes())
+                    new CompactedKeyEncoder(DATA2_ROW_TYPE, DATA2_SCHEMA.getPrimaryKeyIndexes())
                             .encodeKey(row);
             bucketAssigner.setBucketId(bucket);
             CompletableFuture<Exception> result = new CompletableFuture<>();
             results.add(result);
             accumulator.append(
                     WriteRecord.forUpsert(
-                            DATA1_TABLE_INFO_PK,
+                            DATA2_TABLE_INFO,
                             path,
                             row,
                             key,
                             key,
                             WriteFormat.COMPACTED_KV,
-                            null,
-                            bucket == 0 ? MergeMode.IGNORE_NULLS : MergeMode.DEFAULT),
+                            bucket == 0 ? firstTargets : secondTargets,
+                            bucket == 0 ? firstMode : secondMode),
                     (tb, offset, error) -> result.complete(error),
                     metadataUpdater.getCluster());
         }
         sender.runOnce();
         TestTabletServerGateway gateway = node1Gateway();
-        assertThat(gateway.pendingRequestSize()).isEqualTo(2);
-        Set<Integer> modes = new HashSet<>();
-        for (int i = 0; i < 2; i++) {
+        assertThat(gateway.pendingRequestSize()).isEqualTo(expectedRequests);
+        Set<Integer> buckets = new HashSet<>();
+        for (int i = 0; i < expectedRequests; i++) {
             PutKvRequest request = (PutKvRequest) gateway.getRequest(i);
-            assertThat(request.getBucketsReqsCount()).isOne();
-            int bucket = request.getBucketsReqAt(0).getBucketId();
-            assertThat(request.getAggMode()).isEqualTo(bucket == 0 ? 3 : 0);
-            modes.add(request.getAggMode());
+            assertThat(request.getTableId()).isEqualTo(DATA2_TABLE_ID);
+            assertThat(request.getBucketsReqsCount()).isEqualTo(2 / expectedRequests);
+            for (int j = 0; j < request.getBucketsReqsCount(); j++) {
+                int bucket = request.getBucketsReqAt(j).getBucketId();
+                assertThat(buckets.add(bucket)).isTrue();
+                int[] targets = bucket == 0 ? firstTargets : secondTargets;
+                assertThat(request.getTargetColumns())
+                        .isEqualTo(targets == null ? new int[0] : targets);
+                assertThat(request.getAggMode())
+                        .isEqualTo((bucket == 0 ? firstMode : secondMode).getProtoValue());
+            }
         }
-        assertThat(modes).containsExactlyInAnyOrder(0, 3);
+        assertThat(buckets).containsExactlyInAnyOrder(0, 1);
         while (gateway.pendingRequestSize() > 0) {
             PutKvRequest request = (PutKvRequest) gateway.getRequest(0);
-            gateway.response(
-                    0,
-                    createPutKvResponse(
-                            new TableBucket(
-                                    DATA1_TABLE_ID_PK, request.getBucketsReqAt(0).getBucketId()),
-                            1L));
+            List<PutKvResultForBucket> responses = new ArrayList<>();
+            for (int i = 0; i < request.getBucketsReqsCount(); i++) {
+                responses.add(
+                        new PutKvResultForBucket(
+                                new TableBucket(
+                                        DATA2_TABLE_ID, request.getBucketsReqAt(i).getBucketId()),
+                                1L));
+            }
+            gateway.response(0, makePutKvResponse(responses));
         }
         for (CompletableFuture<Exception> result : results) {
             assertThat(result.get()).isNull();

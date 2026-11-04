@@ -23,17 +23,13 @@ import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
 import org.apache.fluss.client.table.scanner.log.ScanRecords;
-import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.flink.catalog.FlinkTableFactory;
 import org.apache.fluss.flink.sink.shuffle.DistributionMode;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.row.BinaryString;
-import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
-import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.testutils.common.MultiVersionTest;
 import org.apache.fluss.utils.types.Tuple2;
@@ -76,7 +72,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -645,59 +640,6 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         try (CloseableIterator<Row> rows =
                 tBatchEnv.executeSql("SELECT * FROM " + tableName).collect()) {
             assertThat(rows.hasNext()).isFalse();
-        }
-    }
-
-    @Test
-    @MultiVersionTest
-    void testJavaRequestScopedNullSkipping() throws Exception {
-        tEnv.executeSql(
-                "CREATE TABLE java_ignore_nulls (id INT, name STRING, city STRING, PRIMARY KEY (id) NOT ENFORCED)");
-        try (Connection conn =
-                        ConnectionFactory.createConnection(
-                                FLUSS_CLUSTER_EXTENSION.getClientConfig());
-                Table table = conn.getTable(TablePath.of(DEFAULT_DB, "java_ignore_nulls"))) {
-            UpsertWriter ordinary = table.newUpsert().createWriter();
-            UpsertWriter preserving =
-                    table.newUpsert().mergeMode(MergeMode.IGNORE_NULLS).createWriter();
-            UpsertWriter partialOrdinary =
-                    table.newUpsert().partialUpdate("id", "name").createWriter();
-            UpsertWriter partialPreserving =
-                    table.newUpsert()
-                            .partialUpdate("id", "name")
-                            .mergeMode(MergeMode.IGNORE_NULLS)
-                            .createWriter();
-            ordinary.upsert(
-                            GenericRow.of(
-                                    1,
-                                    BinaryString.fromString("value"),
-                                    BinaryString.fromString("city")))
-                    .get();
-            preserving.upsert(GenericRow.of(1, null, null)).get();
-            assertResultsIgnoreOrder(
-                    tBatchEnv.executeSql("SELECT * FROM java_ignore_nulls").collect(),
-                    Collections.singletonList("+I[1, value, city]"),
-                    true);
-            CompletableFuture<?> fullWrite = preserving.upsert(GenericRow.of(1, null, null));
-            CompletableFuture<?> partialWrite =
-                    partialOrdinary.upsert(
-                            GenericRow.of(1, null, BinaryString.fromString("ignored")));
-            fullWrite.get();
-            partialWrite.get();
-            assertResultsIgnoreOrder(
-                    tBatchEnv.executeSql("SELECT * FROM java_ignore_nulls").collect(),
-                    Collections.singletonList("+I[1, null, city]"),
-                    true);
-            partialWrite =
-                    partialPreserving.upsert(
-                            GenericRow.of(1, null, BinaryString.fromString("ignored")));
-            fullWrite = ordinary.upsert(GenericRow.of(1, BinaryString.fromString("next"), null));
-            partialWrite.get();
-            fullWrite.get();
-            assertResultsIgnoreOrder(
-                    tBatchEnv.executeSql("SELECT * FROM java_ignore_nulls").collect(),
-                    Collections.singletonList("+I[1, next, null]"),
-                    true);
         }
     }
 
