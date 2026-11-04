@@ -59,6 +59,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.annotation.Nullable;
@@ -80,6 +81,7 @@ import java.util.stream.IntStream;
 import static org.apache.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFSET;
 import static org.apache.fluss.config.ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
+import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
@@ -104,11 +106,14 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
     }
 
     @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void testKvSnapshotsOnlyRequestedForUntieredBuckets(boolean partitioned) throws Exception {
+    @NullSource
+    @ValueSource(strings = {"2026", HISTORICAL_PARTITION_VALUE})
+    void testKvSnapshotsOnlyRequestedForUntieredBuckets(@Nullable String partitionName)
+            throws Exception {
+        boolean partitioned = partitionName != null;
+        boolean historicalPartition = HISTORICAL_PARTITION_VALUE.equals(partitionName);
         long tableId = 1L;
         Long partitionId = partitioned ? 2L : null;
-        String partitionName = partitioned ? "2026" : null;
         TableInfo tableInfo =
                 TableInfo.of(
                         DEFAULT_TABLE_PATH,
@@ -136,6 +141,13 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
         }
         ListOffsetsResult latestOffsets = new ListOffsetsResult(offsets);
         AtomicReference<LakeSnapshot> lakeSnapshot = new AtomicReference<>();
+        AtomicReference<KvSnapshots> kvSnapshots =
+                new AtomicReference<>(
+                        new KvSnapshots(
+                                tableId,
+                                partitionId,
+                                Collections.singletonMap(2, 1L),
+                                Collections.singletonMap(2, 6L)));
         AtomicInteger kvSnapshotRequests = new AtomicInteger();
         Admin tieringAdmin =
                 new TestAdminAdapter() {
@@ -172,12 +184,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                             TablePath path, @Nullable String partition) {
                         assertThat(partition).isEqualTo(partitionName);
                         kvSnapshotRequests.incrementAndGet();
-                        return CompletableFuture.completedFuture(
-                                new KvSnapshots(
-                                        tableId,
-                                        partitionId,
-                                        Collections.singletonMap(2, 1L),
-                                        Collections.singletonMap(2, 6L)));
+                        return CompletableFuture.completedFuture(kvSnapshots.get());
                     }
                 };
         TieringSplitGenerator generator = new TieringSplitGenerator(tieringAdmin);
@@ -203,15 +210,34 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
         committedOffsets.remove(bucket1);
         committedOffsets.remove(bucket2);
         lakeSnapshot.set(new LakeSnapshot(2, committedOffsets));
+        TieringSplit untieredBucketSplit =
+                historicalPartition
+                        ? new TieringLogSplit(
+                                DEFAULT_TABLE_PATH, bucket2, partitionName, EARLIEST_OFFSET, 10, 0)
+                        : new TieringSnapshotSplit(
+                                DEFAULT_TABLE_PATH, bucket2, partitionName, 1, 6, 0);
 
         assertThat(generator.generateTableSplits(tableInfo, partitions))
                 .containsExactly(
                         logSplit,
                         new TieringLogSplit(
                                 DEFAULT_TABLE_PATH, bucket1, partitionName, EARLIEST_OFFSET, 10, 0),
-                        new TieringSnapshotSplit(
-                                DEFAULT_TABLE_PATH, bucket2, partitionName, 1, 6, 0));
-        assertThat(kvSnapshotRequests).hasValue(1);
+                        untieredBucketSplit);
+        assertThat(kvSnapshotRequests).hasValue(historicalPartition ? 0 : 1);
+        if (!historicalPartition) {
+            kvSnapshots.set(null);
+            assertThatThrownBy(() -> generator.generateTableSplits(tableInfo, partitions))
+                    .isInstanceOf(IllegalStateException.class);
+
+            kvSnapshots.set(
+                    new KvSnapshots(
+                            tableId,
+                            partitionId,
+                            Collections.singletonMap(2, 1L),
+                            Collections.emptyMap()));
+            assertThatThrownBy(() -> generator.generateTableSplits(tableInfo, partitions))
+                    .isInstanceOf(IllegalStateException.class);
+        }
     }
 
     @ParameterizedTest
