@@ -700,6 +700,19 @@ public class ConfigOptions {
                                     + "from 'security.sasl.plain.credentials' when that credential map is set, "
                                     + "and can also be configured directly for compatibility.");
 
+    public static final ConfigOption<Map<String, String>> SERVER_SASL_PROXY_USERS =
+            key("security.sasl.proxy-users")
+                    .mapType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Users each authenticated SASL account may act as, "
+                                    + "e.g. `gateway:alice;bob,admin:*`. The wildcard `*` allows any target "
+                                    + "except a super user. Prefix a target rule with `regex:` for a "
+                                    + "full-string Java regular expression match, e.g. "
+                                    + "`gateway:'regex:^tenant_a_[a-z0-9_]+$'`. Other rules match literal "
+                                    + "usernames. Invalid patterns fail when loading the authentication "
+                                    + "configuration. Users in `super.users` cannot be impersonated.");
+
     // ------------------------------------------------------------------------
     //  Server-side TLS (transport encryption + mTLS) options
     // ------------------------------------------------------------------------
@@ -1993,7 +2006,7 @@ public class ConfigOptions {
                     .stringType()
                     .noDefaultValue()
                     .withDescription(
-                            "The password to use for client-side SASL JAAS authentication. "
+                            "The username to use for client-side SASL JAAS authentication. "
                                     + "This is used when the client connects to the Fluss cluster with SASL authentication enabled. "
                                     + "If not provided, the username will be read from the JAAS configuration string specified by `client.security.sasl.jaas.config`.");
 
@@ -2002,9 +2015,18 @@ public class ConfigOptions {
                     .stringType()
                     .noDefaultValue()
                     .withDescription(
-                            "The username to use for client-side SASL JAAS authentication. "
+                            "The password to use for client-side SASL JAAS authentication. "
                                     + "This is used when the client connects to the Fluss cluster with SASL authentication enabled. "
                                     + "If not provided, the password will be read from the JAAS configuration string specified by `client.security.sasl.jaas.config`.");
+
+    public static final ConfigOption<String> CLIENT_SASL_AUTHORIZATION_ID =
+            key("client.security.sasl.authorization-id")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The user to act as with SASL/PLAIN. If unset or empty, the authenticated "
+                                    + "account is used. A different user requires a server-side grant "
+                                    + "in 'security.sasl.proxy-users'.");
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for Fluss Table

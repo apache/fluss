@@ -34,6 +34,12 @@ import org.apache.fluss.config.Configuration;
 public interface ServerAuthenticationPlugin extends AuthenticationPlugin {
 
     /**
+     * Prepares shared server authentication configuration. Called once when the plugin is loaded,
+     * before creating connection-local authenticators.
+     */
+    default void configure(Configuration configuration) {}
+
+    /**
      * Creates a server-side authenticator instance for this authentication protocol.
      *
      * @return A new server authenticator instance implementing the protocol defined by {@link

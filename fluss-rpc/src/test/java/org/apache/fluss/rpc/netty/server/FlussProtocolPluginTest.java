@@ -21,6 +21,7 @@ import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.AuthorizationException;
+import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.exception.IllegalConfigurationException;
 import org.apache.fluss.rpc.netty.ssl.TestSslUtils;
 import org.apache.fluss.security.acl.FlussPrincipal;
@@ -114,6 +115,19 @@ class FlussProtocolPluginTest {
                 .isInstanceOf(IllegalConfigurationException.class)
                 .hasMessageContaining("internal listener '" + TestSslUtils.TLS_LISTENER + "'")
                 .hasMessageContaining(ConfigOptions.SERVER_SSL_ENABLED_LISTENERS.key());
+    }
+
+    @Test
+    void testInvalidImpersonationRegexRejectedDuringSetup() {
+        FlussProtocolPlugin plugin = createPlugin(false);
+        Configuration configuration = credentials("root:root-pass,operator:operator-pass");
+        configuration.setString(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT:SASL");
+        configuration.set(
+                ConfigOptions.SERVER_SASL_PROXY_USERS,
+                Collections.singletonMap("operator", "regex:["));
+        assertThatThrownBy(() -> plugin.setup(configuration))
+                .isInstanceOf(ConfigException.class)
+                .hasMessageContaining(ConfigOptions.SERVER_SASL_PROXY_USERS.key());
     }
 
     private static FlussProtocolPlugin tlsPlugin() {

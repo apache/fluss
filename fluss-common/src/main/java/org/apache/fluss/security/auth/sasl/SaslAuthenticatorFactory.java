@@ -31,6 +31,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 
 /** Factory for creating connection-local SASL authenticators. */
@@ -44,7 +45,7 @@ public final class SaslAuthenticatorFactory {
                 PlainSaslServer.PLAIN_MECHANISM,
                 new AuthenticatorCreators(
                         configuration -> new SaslClientAuthenticator(configuration),
-                        configuration -> new PlainSaslServerAuthenticator(configuration)));
+                        PlainSaslServerAuthenticator::new));
         AUTHENTICATOR_CREATORS = Collections.unmodifiableMap(creators);
     }
 
@@ -65,13 +66,20 @@ public final class SaslAuthenticatorFactory {
     /** Creates a server authenticator for the requested mechanism. */
     public static ServerAuthenticator createServerAuthenticator(
             String mechanism, Configuration configuration) {
+        return createServerAuthenticator(
+                mechanism, configuration, new SaslAuthorization(configuration));
+    }
+
+    /** Creates a server authenticator with shared, precompiled authorization rules. */
+    public static ServerAuthenticator createServerAuthenticator(
+            String mechanism, Configuration configuration, SaslAuthorization authorization) {
         String normalizedMechanism = mechanism.toUpperCase(Locale.ROOT);
         AuthenticatorCreators creators = AUTHENTICATOR_CREATORS.get(normalizedMechanism);
         if (creators == null) {
             throw new AuthenticationException(
                     "Unable to find a matching SASL mechanism for " + normalizedMechanism);
         }
-        return creators.serverCreator.apply(configuration);
+        return creators.serverCreator.apply(configuration, authorization);
     }
 
     /** Returns whether the client supports the requested mechanism. */
@@ -86,11 +94,12 @@ public final class SaslAuthenticatorFactory {
 
     private static final class AuthenticatorCreators {
         private final Function<Configuration, ClientAuthenticator> clientCreator;
-        private final Function<Configuration, ServerAuthenticator> serverCreator;
+        private final BiFunction<Configuration, SaslAuthorization, ServerAuthenticator>
+                serverCreator;
 
         private AuthenticatorCreators(
                 Function<Configuration, ClientAuthenticator> clientCreator,
-                Function<Configuration, ServerAuthenticator> serverCreator) {
+                BiFunction<Configuration, SaslAuthorization, ServerAuthenticator> serverCreator) {
             this.clientCreator = clientCreator;
             this.serverCreator = serverCreator;
         }

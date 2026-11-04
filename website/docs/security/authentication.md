@@ -92,7 +92,8 @@ Clients must specify the appropriate security protocol and authentication mechan
 |----------------------------------|--------|---------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | client.security.protocol         | String | PLAINTEXT     | The security protocol used to communicate with brokers. Currently, only `PLAINTEXT` and `SASL` are supported, the configuration value is case insensitive.                                                                                                                                |
 | client.security.sasl.mechanism   | String | PLAIN         | The SASL mechanism used for authentication. Only support PLAIN now, but will support more mechanisms in the future.                                                                                                                                                                       |
-| client.security.sasl.username    | String | (none)        | The password to use for client-side SASL JAAS authentication. This is used when the client connects to the Fluss cluster with SASL authentication enabled. If not provided, the username will be read from the JAAS configuration string specified by `client.security.sasl.jaas.config`. |
+| client.security.sasl.authorization-id | String | (none) | The user to act as with SASL/PLAIN. Unset or empty uses the authenticated account; another user requires a server-side proxy grant. |
+| client.security.sasl.username    | String | (none)        | The username to use for client-side SASL JAAS authentication. This is used when the client connects to the Fluss cluster with SASL authentication enabled. If not provided, the username will be read from the JAAS configuration string specified by `client.security.sasl.jaas.config`. |
 | client.security.sasl.password    | String | (none)        | The password to use for client-side SASL JAAS authentication. This is used when the client connects to the Fluss cluster with SASL authentication enabled. If not provided, the password will be read from the JAAS configuration string specified by `client.security.sasl.jaas.config`. |
 | client.security.sasl.jaas.config | String | (none)        | JAAS configuration for SASL. If not set, fallback to system property `-Djava.security.auth.login.config`.                                                                                                                                                                                 |
 
@@ -111,6 +112,45 @@ CREATE CATALOG fluss_catalog WITH (
 );
 ```
 
+
+## Impersonation
+
+A service can use SASL/PLAIN with its own credentials to act as another user. For example, configure the `CLIENT` listener to allow `gateway` to act as `alice` or `bob`:
+
+```yaml title="conf/server.yaml"
+security.protocol.map: CLIENT:SASL, INTERNAL:PLAINTEXT
+security.sasl.plain.credentials: gateway:gateway-pass
+security.sasl.proxy-users: gateway:alice;bob
+```
+
+On the client, authenticate as the service account and set the SASL authorization identity:
+
+```properties
+client.security.protocol=SASL
+client.security.sasl.username=gateway
+client.security.sasl.password=gateway-pass
+client.security.sasl.authorization-id=alice
+```
+
+Fluss verifies the credentials and the proxy grant before checking ACLs as `alice`. An unset or empty authorization identity uses the authenticated account. SASL JAAS credential configuration also works with this option.
+A wildcard grant (`gateway:*`) permits any target except a user in `super.users`. Super users cannot be impersonated, even with an explicit or regex grant.
+Prefix a target rule with `regex:` to match a complete username with a Java regular expression.
+
+```yaml
+security.sasl.proxy-users: gateway:'alice;regex:^tenant_a_[a-z0-9_]+$'
+```
+
+This allows `alice` and users such as `tenant_a_bob`. Ordinary names match literally.
+Patterns are compiled when loading the authentication configuration, and invalid patterns cause an error.
+Quote the target list to protect colons in regular expressions.
+If a pattern contains a comma, quote the whole map entry as well, doubling its inner quotes.
+
+```yaml
+security.sasl.proxy-users: 'gateway:''regex:^(?:tenant_a_)[a-z]{1,8}$'''
+```
+
+Use `\x3B` for a literal semicolon inside a pattern, since semicolons separate rules.
+Use TLS to protect the password in transit.
 
 ## Extending Authentication Methods (For Developers)
 

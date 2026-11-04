@@ -43,6 +43,8 @@ import org.apache.fluss.utils.NetUtils;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.Collections;
 import java.util.concurrent.CompletableFuture;
@@ -221,8 +223,9 @@ public class SaslAuthenticationITCase {
         testAuthentication(clientConfig);
     }
 
-    @Test
-    void testAddAndDeleteUser() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testAddAndDeleteUser(boolean impersonate) throws Exception {
         // Start a server with username/password list config (admin and alice)
         Configuration serverConfig = new Configuration();
         serverConfig.setString(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT:sasl");
@@ -230,6 +233,10 @@ public class SaslAuthenticationITCase {
         serverConfig.setString(
                 "security.sasl.plain.credentials", "admin:admin-secret,alice:alice-secret");
         serverConfig.setString(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS.key(), "3");
+
+        serverConfig.setString(
+                ConfigOptions.SERVER_SASL_PROXY_USERS.key(),
+                "admin:end-user,alice:end-user,bob:end-user");
 
         MetricGroup metricGroup = NOPMetricsGroup.newInstance();
         TestingAuthenticateGatewayService service = new TestingAuthenticateGatewayService();
@@ -249,12 +256,12 @@ public class SaslAuthenticationITCase {
             ServerReconfigurable reconfigurable = nettyServer.getServerReconfigurables().get(0);
 
             // Verify "admin" can authenticate
-            try (NettyClient client = createSaslClient("admin", "admin-secret")) {
+            try (NettyClient client = createSaslClient("admin", "admin-secret", impersonate)) {
                 verifyListTables(client, serverNode);
             }
 
             // Verify "bob" cannot authenticate initially
-            try (NettyClient client = createSaslClient("bob", "bob-secret")) {
+            try (NettyClient client = createSaslClient("bob", "bob-secret", impersonate)) {
                 assertThatThrownBy(() -> verifyListTables(client, serverNode))
                         .cause()
                         .isExactlyInstanceOf(AuthenticationException.class)
@@ -272,7 +279,7 @@ public class SaslAuthenticationITCase {
             reconfigurable.reconfigure(addBobConfig);
 
             // Verify "bob" can now authenticate
-            try (NettyClient client = createSaslClient("bob", "bob-secret")) {
+            try (NettyClient client = createSaslClient("bob", "bob-secret", impersonate)) {
                 verifyListTables(client, serverNode);
             }
 
@@ -287,7 +294,7 @@ public class SaslAuthenticationITCase {
             reconfigurable.reconfigure(removeAdminConfig);
 
             // Verify "admin" can no longer authenticate
-            try (NettyClient client = createSaslClient("admin", "admin-secret")) {
+            try (NettyClient client = createSaslClient("admin", "admin-secret", impersonate)) {
                 assertThatThrownBy(() -> verifyListTables(client, serverNode))
                         .cause()
                         .isExactlyInstanceOf(AuthenticationException.class)
@@ -295,14 +302,15 @@ public class SaslAuthenticationITCase {
             }
 
             // Verify "bob" still works
-            try (NettyClient client = createSaslClient("bob", "bob-secret")) {
+            try (NettyClient client = createSaslClient("bob", "bob-secret", impersonate)) {
                 verifyListTables(client, serverNode);
             }
         }
     }
 
-    @Test
-    void testReconfigureMergesUsersWithExistingJaasConfig() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testReconfigureMergesUsersWithExistingJaasConfig(boolean impersonate) throws Exception {
         // Start server with legacy jaas.config containing "admin" and "alice"
         Configuration serverConfig = new Configuration();
         serverConfig.setString(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT:sasl");
@@ -313,6 +321,10 @@ public class SaslAuthenticationITCase {
                         + " user_admin=\"admin-secret\""
                         + " user_alice=\"alice-secret\";");
         serverConfig.setString(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS.key(), "3");
+
+        serverConfig.setString(
+                ConfigOptions.SERVER_SASL_PROXY_USERS.key(),
+                "admin:end-user,alice:end-user,bob:end-user");
 
         MetricGroup metricGroup = NOPMetricsGroup.newInstance();
         TestingAuthenticateGatewayService service = new TestingAuthenticateGatewayService();
@@ -332,15 +344,15 @@ public class SaslAuthenticationITCase {
             ServerReconfigurable reconfigurable = nettyServer.getServerReconfigurables().get(0);
 
             // Verify existing users from jaas.config can authenticate
-            try (NettyClient client = createSaslClient("admin", "admin-secret")) {
+            try (NettyClient client = createSaslClient("admin", "admin-secret", impersonate)) {
                 verifyListTables(client, serverNode);
             }
-            try (NettyClient client = createSaslClient("alice", "alice-secret")) {
+            try (NettyClient client = createSaslClient("alice", "alice-secret", impersonate)) {
                 verifyListTables(client, serverNode);
             }
 
             // Verify "bob" cannot authenticate before reconfigure
-            try (NettyClient client = createSaslClient("bob", "bob-secret")) {
+            try (NettyClient client = createSaslClient("bob", "bob-secret", impersonate)) {
                 assertThatThrownBy(() -> verifyListTables(client, serverNode))
                         .cause()
                         .isExactlyInstanceOf(AuthenticationException.class)
@@ -356,13 +368,13 @@ public class SaslAuthenticationITCase {
             reconfigurable.reconfigure(newConfig);
 
             // After merge: admin, alice (from existing jaas.config) + bob (from users list)
-            try (NettyClient client = createSaslClient("admin", "admin-secret")) {
+            try (NettyClient client = createSaslClient("admin", "admin-secret", impersonate)) {
                 verifyListTables(client, serverNode);
             }
-            try (NettyClient client = createSaslClient("alice", "alice-secret")) {
+            try (NettyClient client = createSaslClient("alice", "alice-secret", impersonate)) {
                 verifyListTables(client, serverNode);
             }
-            try (NettyClient client = createSaslClient("bob", "bob-secret")) {
+            try (NettyClient client = createSaslClient("bob", "bob-secret", impersonate)) {
                 verifyListTables(client, serverNode);
             }
 
@@ -370,12 +382,12 @@ public class SaslAuthenticationITCase {
             reconfigurable.validate(newConfig);
             reconfigurable.reconfigure(newConfig);
             // Verify existing users from jaas.config can authenticate
-            try (NettyClient client = createSaslClient("alice", "alice-secret")) {
+            try (NettyClient client = createSaslClient("alice", "alice-secret", impersonate)) {
                 verifyListTables(client, serverNode);
             }
 
             // Verify "bob" cannot authenticate before reconfigure
-            try (NettyClient client = createSaslClient("bob", "bob-secret")) {
+            try (NettyClient client = createSaslClient("bob", "bob-secret", impersonate)) {
                 assertThatThrownBy(() -> verifyListTables(client, serverNode))
                         .cause()
                         .isExactlyInstanceOf(AuthenticationException.class)
@@ -514,12 +526,18 @@ public class SaslAuthenticationITCase {
     }
 
     private NettyClient createSaslClient(String username, String password) {
-        Configuration clientConfig = new Configuration();
-        clientConfig.setString("client.security.protocol", "sasl");
-        clientConfig.setString("client.security.sasl.mechanism", "plain");
-        clientConfig.setString("client.security.sasl.username", username);
-        clientConfig.setString("client.security.sasl.password", password);
-        return new NettyClient(clientConfig, TestingClientMetricGroup.newInstance());
+        return createSaslClient(username, password, false);
+    }
+
+    private NettyClient createSaslClient(String username, String password, boolean impersonate) {
+        Configuration configuration = new Configuration();
+        configuration.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "SASL");
+        configuration.set(ConfigOptions.CLIENT_SASL_JAAS_USERNAME, username);
+        configuration.set(ConfigOptions.CLIENT_SASL_JAAS_PASSWORD, password);
+        if (impersonate) {
+            configuration.set(ConfigOptions.CLIENT_SASL_AUTHORIZATION_ID, "end-user");
+        }
+        return new NettyClient(configuration, TestingClientMetricGroup.newInstance());
     }
 
     private void verifyListTables(NettyClient client, ServerNode serverNode) throws Exception {

@@ -22,6 +22,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.AuthenticationException;
 import org.apache.fluss.security.acl.FlussPrincipal;
 import org.apache.fluss.security.auth.ServerAuthenticator;
+import org.apache.fluss.security.auth.sasl.SaslAuthorization;
 import org.apache.fluss.security.auth.sasl.jaas.JaasContext;
 import org.apache.fluss.security.auth.sasl.jaas.LoginManager;
 import org.apache.fluss.security.auth.sasl.jaas.SaslServerFactory;
@@ -43,11 +44,19 @@ public final class PlainSaslServerAuthenticator implements ServerAuthenticator {
     private static final String SERVER_AUTHENTICATOR_PREFIX = "security.sasl.";
 
     private final Map<String, String> configs;
+    private final SaslAuthorization authorization;
     private SaslServer saslServer;
     private LoginManager loginManager;
 
     /** Creates an authenticator using a snapshot of the supplied configuration. */
     public PlainSaslServerAuthenticator(Configuration configuration) {
+        this(configuration, new SaslAuthorization(configuration));
+    }
+
+    /** Creates an authenticator with shared, precompiled authorization rules. */
+    public PlainSaslServerAuthenticator(
+            Configuration configuration, SaslAuthorization authorization) {
+        this.authorization = authorization;
         this.configs = configuration.toMap();
     }
 
@@ -68,10 +77,8 @@ public final class PlainSaslServerAuthenticator implements ServerAuthenticator {
             SaslServer newSaslServer =
                     SaslServerFactory.createSaslServer(
                             PlainSaslServer.PLAIN_MECHANISM,
-                            context.ipAddress(),
-                            configs,
-                            acquiredLoginManager,
-                            contextConfig.configurationEntries());
+                            contextConfig.configurationEntries(),
+                            authorization);
             loginManager = acquiredLoginManager;
             saslServer = newSaslServer;
         } catch (Exception e) {

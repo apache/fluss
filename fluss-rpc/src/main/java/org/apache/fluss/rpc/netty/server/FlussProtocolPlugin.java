@@ -31,6 +31,7 @@ import org.apache.fluss.rpc.protocol.NetworkProtocolPlugin;
 import org.apache.fluss.security.acl.FlussPrincipal;
 import org.apache.fluss.security.auth.AuthenticationFactory;
 import org.apache.fluss.security.auth.PlainTextAuthenticationPlugin;
+import org.apache.fluss.security.auth.ServerAuthenticator;
 import org.apache.fluss.security.auth.sasl.plain.PlainSaslServerConfigManager;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandler;
 import org.apache.fluss.shaded.netty4.io.netty.handler.ssl.SslContext;
@@ -39,7 +40,8 @@ import javax.annotation.Nullable;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
+import java.util.Map;
+import java.util.function.Supplier;
 
 /** Build-in protocol plugin for Fluss. */
 public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfigurable {
@@ -48,6 +50,7 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
     private final List<String> listeners;
     private Configuration conf;
     private PlainSaslServerConfigManager plainSaslServerConfigManager;
+    private Map<String, Supplier<ServerAuthenticator>> serverAuthenticators;
     @Nullable private SslConfig sslConfig;
     /** Shared by every TLS listener; {@code null} when no listener enables TLS. */
     @Nullable private SslContext sslContext;
@@ -66,6 +69,8 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
     public void setup(Configuration conf) {
         this.plainSaslServerConfigManager = new PlainSaslServerConfigManager(conf);
         this.conf = plainSaslServerConfigManager.getConfiguration();
+        this.serverAuthenticators =
+                AuthenticationFactory.loadServerAuthenticatorSuppliers(this.conf);
         // Built once here so that invalid TLS settings fail the server at startup rather than
         // every accepted connection later.
         this.sslConfig = SslConfig.fromServerConfig(conf).orElse(null);
@@ -94,10 +99,9 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
                 requestsMetrics,
                 conf.get(ConfigOptions.NETTY_CONNECTION_MAX_IDLE_TIME).getSeconds(),
                 (int) conf.get(ConfigOptions.NETTY_SERVER_MAX_REQUEST_SIZE).getBytes(),
-                Optional.ofNullable(
-                                AuthenticationFactory.loadServerAuthenticatorSuppliers(conf)
-                                        .get(listenerName))
-                        .orElse(PlainTextAuthenticationPlugin.PlainTextServerAuthenticator::new),
+                serverAuthenticators.getOrDefault(
+                        listenerName,
+                        PlainTextAuthenticationPlugin.PlainTextServerAuthenticator::new),
                 isTlsListener(listenerName) ? sslContext : null,
                 sslConfig != null && sslConfig.requiresClientAuth(listenerName));
     }

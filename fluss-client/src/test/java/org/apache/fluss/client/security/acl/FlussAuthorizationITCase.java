@@ -81,6 +81,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
@@ -347,6 +348,51 @@ public class FlussAuthorizationITCase {
         guestAdmin.createDatabase("test-database2", DatabaseDescriptor.EMPTY, false).get();
         assertThat(rootAdmin.databaseExists("test-database1").get()).isFalse();
         assertThat(rootAdmin.databaseExists("test-database2").get()).isTrue();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"guest", "tenant_a_guest"})
+    void testImpersonation(String targetUser) throws Exception {
+        Configuration proxyConf = proxyConfig("proxy", "password3", targetUser);
+        FlussPrincipal targetPrincipal = new FlussPrincipal(targetUser, "User");
+        try (Connection proxyConn = ConnectionFactory.createConnection(proxyConf);
+                Admin proxyAdmin = proxyConn.getAdmin()) {
+            assertThatThrownBy(() -> proxyAdmin.getTableInfo(DATA1_TABLE_PATH_PK).get())
+                    .cause()
+                    .isInstanceOf(AuthorizationException.class)
+                    .hasMessageContaining(
+                            "Principal " + targetPrincipal + " have no authorization");
+
+            // Grant DESCRIBE to the target, then the impersonated connection can access it.
+            List<AclBinding> aclBindings =
+                    Collections.singletonList(
+                            new AclBinding(
+                                    Resource.table(DATA1_TABLE_PATH_PK),
+                                    new AccessControlEntry(
+                                            targetPrincipal,
+                                            "*",
+                                            OperationType.DESCRIBE,
+                                            PermissionType.ALLOW)));
+            rootAdmin.createAcls(aclBindings).all().get();
+            FLUSS_CLUSTER_EXTENSION.waitUntilAuthenticationSync(aclBindings, true);
+            assertThat(proxyAdmin.getTableInfo(DATA1_TABLE_PATH_PK).get().getTablePath())
+                    .isEqualTo(DATA1_TABLE_PATH_PK);
+        }
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+        "proxy, password3, tenant_b_guest",
+        "proxy, password3, xtenant_a_guest",
+        "proxy, password3, tenant_a_guest!",
+        "guest, password2, proxy",
+        "guest, password2, root"
+    })
+    void testImpersonationRejected(String username, String password, String targetUser) {
+        Configuration proxyConf = proxyConfig(username, password, targetUser);
+        assertThatThrownBy(() -> ConnectionFactory.createConnection(proxyConf))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("is not allowed to act as '" + targetUser + "'");
     }
 
     @Test
@@ -1502,6 +1548,15 @@ public class FlussAuthorizationITCase {
         rootAdmin.dropTable(testTablePath, true).get();
     }
 
+    private static Configuration proxyConfig(String username, String password, String targetUser) {
+        Configuration conf = FLUSS_CLUSTER_EXTENSION.getClientConfig("CLIENT");
+        conf.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "SASL");
+        conf.set(ConfigOptions.CLIENT_SASL_JAAS_USERNAME, username);
+        conf.set(ConfigOptions.CLIENT_SASL_JAAS_PASSWORD, password);
+        conf.set(ConfigOptions.CLIENT_SASL_AUTHORIZATION_ID, targetUser);
+        return conf;
+    }
+
     private static Configuration initConfig() {
         Configuration conf = new Configuration();
         conf.setInt(ConfigOptions.DEFAULT_REPLICATION_FACTOR, 3);
@@ -1520,7 +1575,11 @@ public class FlussAuthorizationITCase {
                 "security.sasl.plain.jaas.config",
                 "org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required "
                         + "    user_root=\"password\" "
-                        + "    user_guest=\"password2\";");
+                        + "    user_guest=\"password2\" "
+                        + "    user_proxy=\"password3\";");
+        conf.set(
+                ConfigOptions.SERVER_SASL_PROXY_USERS,
+                Collections.singletonMap("proxy", "guest;regex:^tenant_a_[a-z0-9_]+$"));
         conf.set(ConfigOptions.SUPER_USERS, "User:root");
         conf.set(ConfigOptions.AUTHORIZER_ENABLED, true);
         return conf;

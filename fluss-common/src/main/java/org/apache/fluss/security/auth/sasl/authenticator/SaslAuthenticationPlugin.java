@@ -23,11 +23,21 @@ import org.apache.fluss.security.auth.ClientAuthenticator;
 import org.apache.fluss.security.auth.ServerAuthenticationPlugin;
 import org.apache.fluss.security.auth.ServerAuthenticator;
 import org.apache.fluss.security.auth.sasl.SaslAuthenticatorFactory;
+import org.apache.fluss.security.auth.sasl.SaslAuthorization;
+
+import javax.annotation.Nullable;
 
 /** Authentication plugin for SASL. */
 public class SaslAuthenticationPlugin
         implements ClientAuthenticationPlugin, ServerAuthenticationPlugin {
     static final String SASL_AUTH_PROTOCOL = "sasl";
+
+    @Nullable private SaslAuthorization serverAuthorization;
+
+    @Override
+    public void configure(Configuration configuration) {
+        this.serverAuthorization = new SaslAuthorization(configuration);
+    }
 
     @Override
     public ClientAuthenticator createClientAuthenticator(Configuration configuration) {
@@ -36,7 +46,9 @@ public class SaslAuthenticationPlugin
 
     @Override
     public ServerAuthenticator createServerAuthenticator(Configuration configuration) {
-        return new SaslServerAuthenticator(configuration);
+        return serverAuthorization == null
+                ? new SaslServerAuthenticator(configuration)
+                : new SaslServerAuthenticator(configuration, serverAuthorization);
     }
 
     @Override

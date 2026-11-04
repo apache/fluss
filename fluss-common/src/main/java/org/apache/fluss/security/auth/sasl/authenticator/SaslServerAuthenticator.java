@@ -22,6 +22,7 @@ import org.apache.fluss.exception.AuthenticationException;
 import org.apache.fluss.security.acl.FlussPrincipal;
 import org.apache.fluss.security.auth.ServerAuthenticator;
 import org.apache.fluss.security.auth.sasl.SaslAuthenticatorFactory;
+import org.apache.fluss.security.auth.sasl.SaslAuthorization;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -38,11 +39,17 @@ public class SaslServerAuthenticator implements ServerAuthenticator {
     private static final Logger LOG = LoggerFactory.getLogger(SaslServerAuthenticator.class);
 
     private final Configuration configuration;
+    private final SaslAuthorization authorization;
     private final List<String> enabledMechanisms;
 
     private ServerAuthenticator delegate;
 
     public SaslServerAuthenticator(Configuration configuration) {
+        this(configuration, new SaslAuthorization(configuration));
+    }
+
+    SaslServerAuthenticator(Configuration configuration, SaslAuthorization authorization) {
+        this.authorization = authorization;
         this.configuration = configuration;
         List<String> enabledMechanisms = configuration.get(SERVER_SASL_ENABLED_MECHANISMS_CONFIG);
         if (enabledMechanisms == null || enabledMechanisms.isEmpty()) {
@@ -59,7 +66,9 @@ public class SaslServerAuthenticator implements ServerAuthenticator {
         close();
         String mechanism = context.protocol().toUpperCase(Locale.ROOT);
         matchProtocol(mechanism);
-        delegate = SaslAuthenticatorFactory.createServerAuthenticator(mechanism, configuration);
+        delegate =
+                SaslAuthenticatorFactory.createServerAuthenticator(
+                        mechanism, configuration, authorization);
         delegate.initialize(context);
     }
 
