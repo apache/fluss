@@ -21,7 +21,9 @@ import org.apache.fluss.exception.HistoricalPartitionThrottledException;
 import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.NotEnoughReplicasException;
 import org.apache.fluss.exception.TimeoutException;
+import org.apache.fluss.exception.UnknownServerException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
+import org.apache.fluss.rpc.messages.ErrorResponse;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -38,6 +40,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /** Tests for {@link org.apache.fluss.rpc.protocol.ApiError}. */
 public class ApiErrorTest {
+
+    private static final int UNRECOGNIZED_ERROR_CODE = 9999;
+
     @ParameterizedTest
     @MethodSource("parameters")
     public void fromThrowableShouldReturnCorrectError(
@@ -53,6 +58,57 @@ public class ApiErrorTest {
         assertThat(apiError.error()).isEqualTo(Errors.UNKNOWN_SERVER_ERROR);
         // test the error message contains exception stack
         assertThat(apiError.message()).contains("java.io.IOException\n\tat");
+    }
+
+    @Test
+    public void testFromErrorMessageWithoutErrorCode() {
+        ApiError apiError = ApiError.fromErrorMessage(new ErrorResponse().setErrorMessage("boom"));
+        assertThat(apiError.isSuccess()).isTrue();
+        assertThat(apiError.error()).isEqualTo(Errors.NONE);
+        assertThat(apiError.message()).isEqualTo("boom");
+    }
+
+    @Test
+    public void testFromErrorMessageKnownCode() {
+        ApiError apiError =
+                ApiError.fromErrorMessage(
+                        new ErrorResponse()
+                                .setErrorCode(Errors.TABLE_NOT_EXIST.code())
+                                .setErrorMessage("Table db1.t1 does not exist"));
+        assertThat(apiError.error()).isEqualTo(Errors.TABLE_NOT_EXIST);
+        assertThat(apiError.message()).isEqualTo("Table db1.t1 does not exist");
+    }
+
+    @Test
+    public void testFromErrorMessageKeepsGenuineUnknownServerErrorUntouched() {
+        // a real -1 without a message is legitimate: the server sets the message to null
+        // when the exception text equals the default one, and it must not be rewritten
+        ApiError apiError =
+                ApiError.fromErrorMessage(
+                        new ErrorResponse().setErrorCode(Errors.UNKNOWN_SERVER_ERROR.code()));
+        assertThat(apiError.error()).isEqualTo(Errors.UNKNOWN_SERVER_ERROR);
+        assertThat(apiError.message()).isNull();
+    }
+
+    @Test
+    public void testFromErrorMessageKeepsUnknownErrorCode() {
+        ApiError apiError =
+                ApiError.fromErrorMessage(
+                        new ErrorResponse().setErrorCode(UNRECOGNIZED_ERROR_CODE));
+        assertThat(apiError.error()).isEqualTo(Errors.UNKNOWN_SERVER_ERROR);
+        assertThat(apiError.message()).isEqualTo("Unknown error code 9999 from server.");
+        assertThat(apiError.exception()).isInstanceOf(UnknownServerException.class);
+    }
+
+    @Test
+    public void testFromErrorMessageKeepsUnknownErrorCodeWithProvidedMessage() {
+        ApiError apiError =
+                ApiError.fromErrorMessage(
+                        new ErrorResponse()
+                                .setErrorCode(UNRECOGNIZED_ERROR_CODE)
+                                .setErrorMessage("boom"));
+        assertThat(apiError.error()).isEqualTo(Errors.UNKNOWN_SERVER_ERROR);
+        assertThat(apiError.message()).isEqualTo("Unknown error code 9999 from server: boom");
     }
 
     private static Collection<Arguments> parameters() {

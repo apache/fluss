@@ -129,7 +129,13 @@ public class ScannerMetricGroup extends AbstractMetricGroup {
     }
 
     private long lastPollSecondsAgo() {
-        return (System.currentTimeMillis() - lastPollMs) / 1000;
+        long lastPoll = lastPollMs;
+        if (lastPoll == 0L) {
+            // no poll has ever been triggered; report -1
+            return -1L;
+        }
+        // clamp: a backward wall-clock step must not yield negatives
+        return Math.max(0L, System.currentTimeMillis() - lastPoll) / 1000;
     }
 
     @Override
