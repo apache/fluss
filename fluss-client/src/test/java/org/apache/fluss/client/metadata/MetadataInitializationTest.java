@@ -17,300 +17,201 @@
 
 package org.apache.fluss.client.metadata;
 
+import org.apache.fluss.cluster.BucketLocation;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
-import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.exception.AuthenticationException;
-import org.apache.fluss.exception.AuthorizationException;
-import org.apache.fluss.exception.StaleMetadataException;
-import org.apache.fluss.exception.TableNotExistException;
+import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TableOrPartition;
 import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.messages.MetadataResponse;
+import org.apache.fluss.testutils.common.CheckedThread;
+import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.MethodSource;
-import org.junit.jupiter.params.provider.ValueSource;
 
+import java.time.Duration;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.stream.Stream;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
+import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** Regression tests for table initialization without relying on a running Fluss service. */
+/** Tests table mapping initialization from an existing Admin response. */
 class MetadataInitializationTest {
 
     private static final TablePath TABLE_PATH = TablePath.of("db", "docs");
     private static final long TABLE_ID = 1622L;
+    private static final TablePath OTHER_TABLE_PATH = TablePath.of("db", "other");
+    private static final long OTHER_TABLE_ID = 42L;
+    private static final long PARTITION_ID = 51L;
+    private static final ServerNode TABLET_SERVER =
+            new ServerNode(1, "localhost", 9080, ServerType.TABLET_SERVER);
+    private static final ServerNode COORDINATOR =
+            new ServerNode(0, "localhost", 9081, ServerType.COORDINATOR);
 
-    @ParameterizedTest
-    @MethodSource("retryableFailures")
-    void testTransientFailureOnlyReturnsAfterTableMetadataIsReady(Exception failure) {
-        AtomicInteger requests = new AtomicInteger();
-        TestingMetadataRpcClient rpcClient =
-                new TestingMetadataRpcClient(
-                        request ->
-                                requests.incrementAndGet() < 3
-                                        ? failedFuture(failure)
-                                        : CompletableFuture.completedFuture(
-                                                metadataResponse(true)));
+    @Test
+    void testAddsBidirectionalMappingWithoutRpc() {
+        TestingMetadataRpcClient rpcClient = noRpcClient();
+        Cluster original = Cluster.empty();
+        MetadataUpdater updater = new MetadataUpdater(rpcClient, new Configuration(), original);
 
-        MetadataUpdater updater = updater(rpcClient, false);
-        updater.initializeTableMetadata(TABLE_PATH);
+        updater.ensureTableMapping(tableInfo());
 
-        assertThat(requests.get()).isEqualTo(3);
         assertThat(updater.getCluster().getTableId(TABLE_PATH)).hasValue(TABLE_ID);
         assertThat(updater.getCluster().getTablePath(TABLE_ID)).hasValue(TABLE_PATH);
-    }
-
-    @ParameterizedTest
-    @MethodSource("retryableFailures")
-    void testExhaustedRetriesPreserveUnderlyingCause(Exception failure) {
-        TestingMetadataRpcClient rpcClient =
-                new TestingMetadataRpcClient(request -> failedFuture(failure));
-
-        MetadataUpdater updater = updater(rpcClient, false);
-        assertThatThrownBy(() -> updater.initializeTableMetadata(TABLE_PATH)).hasRootCause(failure);
-
-        assertThat(rpcClient.getRequests()).hasSize(3);
-        assertThat(updater.getCluster().getTableId(TABLE_PATH)).isEmpty();
+        assertThat(original.getTableId(TABLE_PATH)).isEmpty();
+        assertThat(original.getTablePath(TABLE_ID)).isEmpty();
+        assertThat(rpcClient.getRequests()).isEmpty();
     }
 
     @Test
-    void testSuccessfulRpcWithoutRequiredMappingCannotCompleteInitialization() {
-        TestingMetadataRpcClient rpcClient =
-                new TestingMetadataRpcClient(
-                        request -> CompletableFuture.completedFuture(metadataResponse(false)));
+    void testPreservesUnrelatedMetadataAndOriginalSnapshot() {
+        TestingMetadataRpcClient rpcClient = noRpcClient();
+        Cluster original = cluster(Collections.singletonMap(OTHER_TABLE_PATH, OTHER_TABLE_ID));
+        MetadataUpdater updater = new MetadataUpdater(rpcClient, new Configuration(), original);
 
-        MetadataUpdater updater = updater(rpcClient, false);
-        assertThatThrownBy(() -> updater.initializeTableMetadata(TABLE_PATH))
-                .isInstanceOf(RuntimeException.class);
+        updater.ensureTableMapping(tableInfo());
 
-        assertThat(rpcClient.getRequests()).hasSize(3);
-        assertThat(updater.getCluster().getTableId(TABLE_PATH)).isEmpty();
-        assertThat(updater.getCluster().getTablePath(TABLE_ID)).isEmpty();
+        Cluster updated = updater.getCluster();
+        assertThat(updated.getTableId(TABLE_PATH)).hasValue(TABLE_ID);
+        assertThat(updated.getTablePath(TABLE_ID)).hasValue(TABLE_PATH);
+        assertThat(updated.getTableId(OTHER_TABLE_PATH)).hasValue(OTHER_TABLE_ID);
+        assertThat(updated.getTablePath(OTHER_TABLE_ID)).hasValue(OTHER_TABLE_PATH);
+        assertThat(updated.getAliveTabletServers()).isEqualTo(original.getAliveTabletServers());
+        assertThat(updated.getCoordinatorServer()).isEqualTo(COORDINATOR);
+        assertThat(updated.getBucketLocationsByPath())
+                .isEqualTo(original.getBucketLocationsByPath());
+        assertThat(updated.getPartitionIdByPath()).isEqualTo(original.getPartitionIdByPath());
+        assertThat(updated.getBucketCountByTableOrPartition())
+                .isEqualTo(original.getBucketCountByTableOrPartition());
+        assertThat(original.getTableIdByPath())
+                .containsExactlyEntriesOf(
+                        Collections.singletonMap(OTHER_TABLE_PATH, OTHER_TABLE_ID));
+        assertThat(original.getTablePath(TABLE_ID)).isEmpty();
+        assertThat(rpcClient.getRequests()).isEmpty();
     }
 
     @Test
-    void testBootstrapNodeDiscoveryDoesNotCompleteTableInitialization() {
-        TestingMetadataRpcClient rpcClient =
-                new TestingMetadataRpcClient(
-                        request -> CompletableFuture.completedFuture(metadataResponse(false)));
-        Configuration configuration = new Configuration();
-        configuration.set(
-                ConfigOptions.BOOTSTRAP_SERVERS, Collections.singletonList("localhost:9080"));
-        MetadataUpdater updater = new MetadataUpdater(rpcClient, configuration, Cluster.empty());
+    void testExistingMappingDoesNotRebuildCluster() {
+        Cluster original = cluster(Collections.singletonMap(TABLE_PATH, TABLE_ID));
+        MetadataUpdater updater = new MetadataUpdater(noRpcClient(), new Configuration(), original);
 
-        assertThatThrownBy(() -> updater.initializeTableMetadata(TABLE_PATH))
-                .isInstanceOf(RuntimeException.class);
+        updater.ensureTableMapping(tableInfo());
+        updater.ensureTableMapping(tableInfo());
 
-        assertThat(rpcClient.getRequests()).hasSize(3);
-        assertThat(updater.getCluster().getAliveTabletServers()).hasSize(3);
-        assertThat(updater.getCluster().getTableId(TABLE_PATH)).isEmpty();
+        assertThat(updater.getCluster()).isSameAs(original);
     }
 
-    @ParameterizedTest
-    @ValueSource(booleans = {true, false})
-    void testExistingMappingRequiresSuccessfulRefresh(boolean failRequest) {
-        TimeoutException failure = new TimeoutException("table metadata request timed out");
-        TestingMetadataRpcClient rpcClient =
-                new TestingMetadataRpcClient(
-                        request ->
-                                failRequest
-                                        ? failedFuture(failure)
-                                        : CompletableFuture.completedFuture(
-                                                metadataResponse(false)));
+    @Test
+    void testReplacesOldTableIdAndReverseMapping() {
+        long oldTableId = TABLE_ID - 1;
+        Cluster original = cluster(Collections.singletonMap(TABLE_PATH, oldTableId));
+        MetadataUpdater updater = new MetadataUpdater(noRpcClient(), new Configuration(), original);
 
-        MetadataUpdater updater = updater(rpcClient, true);
-        if (failRequest) {
-            assertThatThrownBy(() -> updater.initializeTableMetadata(TABLE_PATH))
-                    .hasRootCause(failure);
-        } else {
-            updater.initializeTableMetadata(TABLE_PATH);
-        }
+        updater.ensureTableMapping(tableInfo());
 
-        assertThat(rpcClient.getRequests()).hasSize(failRequest ? 3 : 1);
         assertThat(updater.getCluster().getTableId(TABLE_PATH)).hasValue(TABLE_ID);
         assertThat(updater.getCluster().getTablePath(TABLE_ID)).hasValue(TABLE_PATH);
+        assertThat(updater.getCluster().getTablePath(oldTableId)).isEmpty();
+        assertThat(original.getTablePath(oldTableId)).hasValue(TABLE_PATH);
     }
 
-    @ParameterizedTest
-    @ValueSource(ints = {1, 2})
-    void testBootstrapRecoveryRespectsInitializationAttemptBudget(int serverCount) {
-        AtomicInteger tableRequests = new AtomicInteger();
+    @Test
+    void testMappingMergeUsesSnapshotAfterConcurrentRefresh() throws Exception {
+        TablePath refreshedTable = TablePath.of("db", "refreshed");
+        MetadataResponse response = new MetadataResponse();
+        response.addTabletServer().setNodeId(1).setHost("localhost").setPort(9080);
+        response.addTableMetadata()
+                .setTableId(100L)
+                .setTablePath()
+                .setDatabaseName(refreshedTable.getDatabaseName())
+                .setTableName(refreshedTable.getTableName());
         TestingMetadataRpcClient rpcClient =
                 new TestingMetadataRpcClient(
-                        request ->
-                                !request.getTablePathsList().isEmpty()
-                                                && tableRequests.incrementAndGet() <= serverCount
-                                        ? failedFuture(
-                                                new TimeoutException("table metadata unavailable"))
-                                        : CompletableFuture.completedFuture(
-                                                metadataResponse(
-                                                        !request.getTablePathsList().isEmpty(),
-                                                        serverCount)));
-        MetadataUpdater updater = updater(rpcClient, false, serverCount);
-        if (serverCount == 1) {
-            updater.initializeTableMetadata(TABLE_PATH);
-            assertThat(updater.getCluster().getTablePath(TABLE_ID)).hasValue(TABLE_PATH);
-        } else {
-            assertThatThrownBy(() -> updater.initializeTableMetadata(TABLE_PATH))
-                    .hasRootCauseInstanceOf(StaleMetadataException.class);
-            assertThat(updater.getCluster().getTableId(TABLE_PATH)).isEmpty();
+                        request -> CompletableFuture.completedFuture(response));
+        MetadataUpdater updater =
+                new MetadataUpdater(
+                        rpcClient,
+                        new Configuration(),
+                        cluster(Collections.singletonMap(OTHER_TABLE_PATH, OTHER_TABLE_ID)));
+        CountDownLatch started = new CountDownLatch(1);
+        CheckedThread mappingThread =
+                new CheckedThread("ensure-table-mapping") {
+                    @Override
+                    public void go() {
+                        started.countDown();
+                        updater.ensureTableMapping(tableInfo());
+                    }
+                };
+
+        try {
+            synchronized (updater) {
+                mappingThread.start();
+                assertThat(started.await(10, TimeUnit.SECONDS)).isTrue();
+                waitUntil(
+                        () -> mappingThread.getState() == Thread.State.BLOCKED,
+                        Duration.ofSeconds(10),
+                        "Mapping merge did not wait for the metadata updater lock.");
+                updater.updateMetadata(Collections.singleton(refreshedTable), null, null);
+            }
+        } finally {
+            mappingThread.sync(10000);
         }
-        assertThat(rpcClient.getRequests()).hasSize(3);
-        assertThat(rpcClient.getRequests().get(serverCount).getTablePathsList()).isEmpty();
-    }
 
-    @ParameterizedTest
-    @MethodSource("permanentFailures")
-    void testPermanentFailureIsNotRetried(Exception failure) {
-        TestingMetadataRpcClient rpcClient =
-                new TestingMetadataRpcClient(request -> failedFuture(failure));
-
-        MetadataUpdater updater = updater(rpcClient, false);
-        assertThatThrownBy(() -> updater.initializeTableMetadata(TABLE_PATH)).hasRootCause(failure);
-
+        assertThat(updater.getCluster().getTableId(TABLE_PATH)).hasValue(TABLE_ID);
+        assertThat(updater.getCluster().getTableId(refreshedTable)).hasValue(100L);
+        assertThat(updater.getCluster().getTableId(OTHER_TABLE_PATH)).hasValue(OTHER_TABLE_ID);
         assertThat(rpcClient.getRequests()).hasSize(1);
     }
 
-    @Test
-    void testInterruptedRequestRestoresInterruptAndStopsRetry() {
-        InterruptedException failure = new InterruptedException("interrupted metadata request");
-        TestingMetadataRpcClient rpcClient =
-                new TestingMetadataRpcClient(request -> failedFuture(failure));
-
-        try {
-            MetadataUpdater updater = updater(rpcClient, false);
-            assertThatThrownBy(() -> updater.initializeTableMetadata(TABLE_PATH))
-                    .hasRootCause(failure);
-            assertThat(Thread.currentThread().isInterrupted()).isTrue();
-            assertThat(rpcClient.getRequests()).hasSize(1);
-        } finally {
-            Thread.interrupted();
-        }
+    private static TestingMetadataRpcClient noRpcClient() {
+        return new TestingMetadataRpcClient(
+                request -> {
+                    throw new AssertionError("Merging an existing TableInfo must not send an RPC.");
+                });
     }
 
-    @Test
-    void testInterruptedBackoffRestoresInterruptAndStopsRetry() {
-        TestingMetadataRpcClient rpcClient =
-                new TestingMetadataRpcClient(
-                        request -> {
-                            Thread.currentThread().interrupt();
-                            return failedFuture(new StaleMetadataException("metadata unavailable"));
-                        });
-        MetadataUpdater updater = updater(rpcClient, false);
-        try {
-            assertThatThrownBy(() -> updater.initializeTableMetadata(TABLE_PATH))
-                    .hasRootCauseInstanceOf(InterruptedException.class);
-            assertThat(Thread.currentThread().isInterrupted()).isTrue();
-            assertThat(rpcClient.getRequests()).hasSize(1);
-        } finally {
-            Thread.interrupted();
-        }
+    private static TableInfo tableInfo() {
+        return TableInfo.of(
+                TABLE_PATH,
+                TABLE_ID,
+                1,
+                TableDescriptor.builder()
+                        .schema(Schema.newBuilder().column("id", DataTypes.INT()).build())
+                        .distributedBy(1)
+                        .build(),
+                null,
+                0,
+                0);
     }
 
-    @Test
-    void testWrappedBootstrapInterruptRestoresInterruptAndStopsRetry() {
-        InterruptedException failure = new InterruptedException("interrupted bootstrap request");
-        TestingMetadataRpcClient rpcClient =
-                new TestingMetadataRpcClient(request -> failedFuture(failure));
-        Configuration configuration = new Configuration();
-        configuration.set(
-                ConfigOptions.BOOTSTRAP_SERVERS, Collections.singletonList("localhost:9080"));
-
-        try {
-            MetadataUpdater updater =
-                    new MetadataUpdater(rpcClient, configuration, Cluster.empty());
-            assertThatThrownBy(() -> updater.initializeTableMetadata(TABLE_PATH))
-                    .hasRootCause(failure);
-            assertThat(Thread.currentThread().isInterrupted()).isTrue();
-            assertThat(rpcClient.getRequests()).hasSize(1);
-        } finally {
-            Thread.interrupted();
-        }
-    }
-
-    private static Stream<Exception> retryableFailures() {
-        return Stream.of(
-                new TimeoutException("table metadata request timed out"),
-                new StaleMetadataException("tablet server metadata is not ready"));
-    }
-
-    private static Stream<Exception> permanentFailures() {
-        return Stream.of(
-                new AuthenticationException("authentication failed"),
-                new AuthorizationException("access denied"),
-                new TableNotExistException("table does not exist"));
-    }
-
-    private static MetadataUpdater updater(RpcClient rpcClient, boolean tableMapped) {
-        return updater(rpcClient, tableMapped, 3);
-    }
-
-    private static MetadataUpdater updater(
-            RpcClient rpcClient, boolean tableMapped, int serverCount) {
-        Configuration configuration = new Configuration();
-        configuration.set(
-                ConfigOptions.BOOTSTRAP_SERVERS, Collections.singletonList("localhost:9080"));
-        Cluster cluster =
-                new Cluster(
-                        tabletServers(serverCount),
-                        null,
-                        Collections.emptyMap(),
-                        tableMapped
-                                ? Collections.singletonMap(TABLE_PATH, TABLE_ID)
-                                : Collections.emptyMap(),
-                        Collections.emptyMap(),
-                        Collections.emptyMap());
-        return new MetadataUpdater(rpcClient, configuration, cluster);
-    }
-
-    private static Map<Integer, ServerNode> tabletServers(int serverCount) {
-        Map<Integer, ServerNode> tabletServers = new HashMap<>();
-        for (int id = 1; id <= serverCount; id++) {
-            tabletServers.put(
-                    id, new ServerNode(id, "localhost", 8080 + id, ServerType.TABLET_SERVER));
-        }
-        return tabletServers;
-    }
-
-    private static MetadataResponse metadataResponse(boolean tableMapped) {
-        return metadataResponse(tableMapped, 3);
-    }
-
-    private static MetadataResponse metadataResponse(boolean tableMapped, int serverCount) {
-        MetadataResponse response = new MetadataResponse();
-        tabletServers(serverCount)
-                .values()
-                .forEach(
-                        server ->
-                                response.addTabletServer()
-                                        .setNodeId(server.id())
-                                        .setHost(server.host())
-                                        .setPort(server.port()));
-        if (tableMapped) {
-            response.addTableMetadata()
-                    .setTableId(TABLE_ID)
-                    .setTablePath()
-                    .setDatabaseName(TABLE_PATH.getDatabaseName())
-                    .setTableName(TABLE_PATH.getTableName());
-        }
-        return response;
-    }
-
-    private static CompletableFuture<MetadataResponse> failedFuture(Exception failure) {
-        CompletableFuture<MetadataResponse> future = new CompletableFuture<>();
-        future.completeExceptionally(failure);
-        return future;
+    private static Cluster cluster(Map<TablePath, Long> tableMappings) {
+        PhysicalTablePath partitionPath = PhysicalTablePath.of(OTHER_TABLE_PATH, "p1");
+        BucketLocation bucket =
+                new BucketLocation(
+                        partitionPath,
+                        new TableBucket(OTHER_TABLE_ID, PARTITION_ID, 0),
+                        1,
+                        new int[] {1});
+        Map<TableOrPartition, Integer> bucketCounts = new HashMap<>();
+        bucketCounts.put(TableOrPartition.ofTable(OTHER_TABLE_ID), 1);
+        bucketCounts.put(TableOrPartition.ofPartition(PARTITION_ID), 1);
+        return new Cluster(
+                Collections.singletonMap(1, TABLET_SERVER),
+                COORDINATOR,
+                Collections.singletonMap(partitionPath, Collections.singletonList(bucket)),
+                tableMappings,
+                Collections.singletonMap(partitionPath, PARTITION_ID),
+                bucketCounts);
     }
 }

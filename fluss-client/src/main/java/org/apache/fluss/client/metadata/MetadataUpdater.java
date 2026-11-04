@@ -32,6 +32,7 @@ import org.apache.fluss.exception.RetriableException;
 import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.GatewayClientProxy;
@@ -48,6 +49,7 @@ import javax.annotation.Nullable;
 import java.net.InetSocketAddress;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -59,7 +61,6 @@ import java.util.stream.Collectors;
 
 import static org.apache.fluss.client.utils.MetadataUtils.getOneAvailableTabletServerNode;
 import static org.apache.fluss.client.utils.MetadataUtils.sendMetadataRequestAndRebuildCluster;
-import static org.apache.fluss.utils.ExceptionUtils.findThrowable;
 import static org.apache.fluss.utils.ExceptionUtils.stripExecutionException;
 
 /** The updater to initialize and update client metadata. */
@@ -174,54 +175,24 @@ public class MetadataUpdater {
         }
     }
 
-    /**
-     * Refreshes the required table mapping before a table can be used, with at most three attempts
-     * for transient failures. Each attempt retains the normal RPC timeout and bootstrap recovery.
-     */
-    public void initializeTableMetadata(TablePath tablePath) {
-        int attempts = 0;
-        while (true) {
-            try {
-                updateMetadataOnce(Collections.singleton(tablePath), null, null);
-                Cluster currentCluster = cluster;
-                Optional<Long> tableId = currentCluster.getTableId(tablePath);
-                if (tableId.isPresent()
-                        && currentCluster
-                                .getTablePath(tableId.get())
-                                .filter(tablePath::equals)
-                                .isPresent()) {
-                    return;
-                }
-                // A successful bootstrap refresh only provides nodes, not the requested table.
-                throw new StaleMetadataException(
-                        "Required table mapping is missing for " + tablePath);
-            } catch (Exception e) {
-                Throwable cause = stripExecutionException(e);
-                if (findThrowable(e, InterruptedException.class).isPresent()) {
-                    Thread.currentThread().interrupt();
-                    throw new FlussRuntimeException(
-                            "Interrupted while initializing metadata for table " + tablePath, e);
-                }
-                if (!(cause instanceof RetriableException || cause instanceof TimeoutException)
-                        || ++attempts >= MAX_RETRY_TIMES) {
-                    throw new FlussRuntimeException(
-                            "Failed to initialize metadata for table " + tablePath, cause);
-                }
-                LOG.warn(
-                        "Failed to initialize metadata for table {} (attempt {}/{}), retrying.",
-                        tablePath,
-                        attempts,
-                        MAX_RETRY_TIMES,
-                        cause);
-                try {
-                    Thread.sleep(RETRY_INTERVAL_MS);
-                } catch (InterruptedException interrupted) {
-                    Thread.currentThread().interrupt();
-                    throw new FlussRuntimeException(
-                            "Interrupted while initializing metadata for table " + tablePath,
-                            interrupted);
-                }
+    /** Merges the table mapping from an Admin response without requesting metadata again. */
+    public void ensureTableMapping(TableInfo tableInfo) {
+        synchronized (this) {
+            if (cluster.getTableId(tableInfo.getTablePath())
+                    .filter(id -> id == tableInfo.getTableId())
+                    .isPresent()) {
+                return;
             }
+            Map<TablePath, Long> tableIds = new HashMap<>(cluster.getTableIdByPath());
+            tableIds.put(tableInfo.getTablePath(), tableInfo.getTableId());
+            cluster =
+                    new Cluster(
+                            new HashMap<>(cluster.getAliveTabletServers()),
+                            cluster.getCoordinatorServer(),
+                            new HashMap<>(cluster.getBucketLocationsByPath()),
+                            tableIds,
+                            new HashMap<>(cluster.getPartitionIdByPath()),
+                            new HashMap<>(cluster.getBucketCountByTableOrPartition()));
         }
     }
 
@@ -298,26 +269,6 @@ public class MetadataUpdater {
             @Nullable Collection<PhysicalTablePath> tablePartitionNames,
             @Nullable Collection<Long> tablePartitionIds)
             throws PartitionNotExistException {
-        try {
-            updateMetadataOnce(tablePaths, tablePartitionNames, tablePartitionIds);
-        } catch (Exception e) {
-            Throwable t = stripExecutionException(e);
-            if (t instanceof RetriableException || t instanceof TimeoutException) {
-                LOG.warn("Failed to update metadata, but the exception is re-triable.", t);
-            } else if (t instanceof PartitionNotExistException) {
-                LOG.debug("Failed to update metadata because the partition does not exist", t);
-                throw (PartitionNotExistException) t;
-            } else {
-                throw new FlussRuntimeException("Failed to update metadata", t);
-            }
-        }
-    }
-
-    private void updateMetadataOnce(
-            @Nullable Set<TablePath> tablePaths,
-            @Nullable Collection<PhysicalTablePath> tablePartitionNames,
-            @Nullable Collection<Long> tablePartitionIds)
-            throws Exception {
         ServerNode serverNode =
                 getOneAvailableTabletServerNode(cluster, unavailableTabletServerIds);
         try {
@@ -365,8 +316,13 @@ public class MetadataUpdater {
                             serverNode,
                             unavailableTabletServerIds);
                 }
+                LOG.warn("Failed to update metadata, but the exception is re-triable.", t);
+            } else if (t instanceof PartitionNotExistException) {
+                LOG.debug("Failed to update metadata because the partition does not exist", t);
+                throw (PartitionNotExistException) t;
+            } else {
+                throw new FlussRuntimeException("Failed to update metadata", t);
             }
-            throw e;
         }
     }
 
