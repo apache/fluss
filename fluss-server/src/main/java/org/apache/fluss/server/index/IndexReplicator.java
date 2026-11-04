@@ -77,6 +77,9 @@ public final class IndexReplicator implements AutoCloseable {
     private static final Logger LOG = LoggerFactory.getLogger(IndexReplicator.class);
 
     private static final int PAGE_SIZE = 4096;
+    // A failed window's soft retention target follows the maximum retry interval.
+    private static final long RETAINED_WINDOW_FAILURE_TIMEOUT_NS =
+            TimeUnit.MILLISECONDS.toNanos(IndexReplicatorPool.MAX_RETRY_BACKOFF_MS);
 
     /** Receives sync and all-index progress after an index window advances. */
     @FunctionalInterface
@@ -100,13 +103,9 @@ public final class IndexReplicator implements AutoCloseable {
 
     private final AtomicBoolean closed;
     private final AtomicBoolean readContextClosed;
-    private final ExponentialBackoff retryBackoff;
-    private final Clock clock;
+    private final IndexReplicationRetryState sourceRetry;
     @Nullable private volatile Throwable lastFailure;
-    private long failureOffset;
-    private long retryStartedNs;
-    private long retryDelayNs;
-    private long retryAttempts;
+    private long sourceFailureOffset;
     private final ReentrantLock lifecycleLock;
 
     @Nullable private volatile CompletableFuture<IndexSourceReader.ReadResult> pendingRead;
@@ -132,7 +131,7 @@ public final class IndexReplicator implements AutoCloseable {
                 initialOffset,
                 maxWindowBytes,
                 onProgress,
-                new ExponentialBackoff(100, 2, 10_000, 0.2),
+                new ExponentialBackoff(100, 2, IndexReplicatorPool.MAX_RETRY_BACKOFF_MS, 0.2),
                 SystemClock.getInstance(),
                 null);
     }
@@ -153,10 +152,12 @@ public final class IndexReplicator implements AutoCloseable {
                     "initialOffset must be non-negative, but was " + initialOffset);
         }
         this.sourceReader = sourceReader;
+        this.sourceRetry = new IndexReplicationRetryState(retryBackoff, clock);
         this.indexStates = new ArrayList<>(indexSpecs.size());
         this.indexStatesByName = new LinkedHashMap<>();
         for (IndexSpec indexSpec : indexSpecs) {
-            IndexProgressState state = new IndexProgressState(indexSpec, initialOffset);
+            IndexProgressState state =
+                    new IndexProgressState(indexSpec, initialOffset, retryBackoff, clock);
             if (indexStatesByName.put(indexSpec.getIndexName(), state) != null) {
                 throw new IllegalArgumentException(
                         "Duplicate secondary index name: " + indexSpec.getIndexName());
@@ -169,8 +170,6 @@ public final class IndexReplicator implements AutoCloseable {
         this.maxWindowBytes = maxWindowBytes;
         this.closed = new AtomicBoolean(false);
         this.readContextClosed = new AtomicBoolean(false);
-        this.retryBackoff = retryBackoff;
-        this.clock = clock;
         this.lifecycleLock = new ReentrantLock();
         this.onProgress = onProgress;
         this.metrics = metrics;
@@ -202,7 +201,8 @@ public final class IndexReplicator implements AutoCloseable {
                         failure instanceof CompletionException && failure.getCause() != null
                                 ? failure.getCause()
                                 : failure;
-                backoff(cause, pendingReadOffset);
+                sourceFailureOffset = Math.max(sourceFailureOffset, pendingReadOffset);
+                backoff(cause, sourceRetry);
                 return false;
             }
         } finally {
@@ -211,8 +211,11 @@ public final class IndexReplicator implements AutoCloseable {
     }
 
     private boolean pollLocked() {
-        if (closed.get()
-                || (retryDelayNs > 0 && clock.nanoseconds() - retryStartedNs < retryDelayNs)) {
+        if (closed.get()) {
+            return false;
+        }
+        // Yield before either the retry gate or the global-full gate can hide a stalled window.
+        if (releaseStalledWindows() || sourceRetry.remainingDelayNanos() > 0) {
             return false;
         }
 
@@ -229,7 +232,7 @@ public final class IndexReplicator implements AutoCloseable {
         long hw = sourceReader.highWatermark();
         Map<Long, List<IndexProgressState>> readyStatesByOffset = new LinkedHashMap<>();
         for (IndexProgressState state : indexStates) {
-            if (state.inFlightWindow != null) {
+            if (state.inFlightWindow != null || state.retry.remainingDelayNanos() > 0) {
                 continue;
             }
             long readOffset = nextReadOffset(state);
@@ -260,6 +263,11 @@ public final class IndexReplicator implements AutoCloseable {
     private boolean pollOneWindow(
             List<IndexProgressState> states, long readOffset, long highWatermark) {
         pendingReadOffset = readOffset;
+        for (IndexProgressState state : states) {
+            if (state.replayEndOffset >= 0) {
+                highWatermark = Math.min(highWatermark, state.replayEndOffset);
+            }
+        }
         CompletableFuture<IndexSourceReader.ReadResult> future =
                 sourceReader.read(readOffset, highWatermark, maxWindowBytes);
         pendingRead = future;
@@ -378,11 +386,8 @@ public final class IndexReplicator implements AutoCloseable {
                         new EncodedBatch(
                                 entry.getValue().finish(progress.key(), progress.value()),
                                 progress.key()));
-            } catch (IndexSendBuffer.BufferFullException | RecordTooLargeException failure) {
+            } catch (IOException | RuntimeException failure) {
                 deferWindow(buildState, failure);
-                return false;
-            } catch (IOException e) {
-                deferWindow(buildState, e);
                 return false;
             }
         }
@@ -421,7 +426,7 @@ public final class IndexReplicator implements AutoCloseable {
             }
         } catch (RecordTooLargeException failure) {
             retireUnadmittedWindow(state, window);
-            backoff(failure, buildState.state.pushedOffset);
+            backoff(failure, state.retry);
             return false;
         } catch (RuntimeException | Error failure) {
             retireUnadmittedWindow(state, window);
@@ -456,19 +461,23 @@ public final class IndexReplicator implements AutoCloseable {
      * notifies the owning replica, and wakes the read-pool worker so it can poll the next ready
      * window.
      */
-    void onWindowComplete(String indexName, long windowEndOffset, long completedBytes) {
+    void onWindowComplete(IndexReplicationWindow window, long completedBytes) {
         lifecycleLock.lock();
         try {
             if (closed.get()) {
                 return;
             }
-            IndexProgressState state = indexStatesByName.get(indexName);
+            IndexProgressState state = indexStatesByName.get(window.indexName());
             if (state == null) {
-                if (indexStates.isEmpty() && windowEndOffset > emptyIndexPushedOffset) {
-                    emptyIndexPushedOffset = windowEndOffset;
+                if (indexStates.isEmpty() && window.windowEndOffset() > emptyIndexPushedOffset) {
+                    emptyIndexPushedOffset = window.windowEndOffset();
+                    sourceRetry.reset();
                 }
             } else {
-                advanceIndexState(state, windowEndOffset);
+                if (state.inFlightWindow != window) {
+                    return;
+                }
+                advanceIndexState(state, window.windowEndOffset());
                 state.inFlightWindow = null;
             }
             if (metrics != null) {
@@ -491,31 +500,78 @@ public final class IndexReplicator implements AutoCloseable {
         }
     }
 
-    private void backoff(Throwable failure, long failedOffset) {
-        if (!(failure instanceof IndexSendBuffer.BufferFullException)) {
-            Throwable previous = lastFailure;
-            if (previous == null
-                    || previous.getClass() != failure.getClass()
-                    || !Objects.equals(previous.getMessage(), failure.getMessage())) {
-                LOG.error(
-                        "Index replication for source bucket {} cannot advance at offset {}; "
-                                + "retrying with backoff until the fault is repaired",
-                        sourceBucket(),
-                        getAllIndexPushedOffset(),
-                        failure);
-            }
-            lastFailure = failure;
-            failureOffset = Math.max(failureOffset, failedOffset);
-            if (metrics != null) {
-                metrics.indexReplicationFailures().inc();
-            }
+    private void backoff(Throwable failure, IndexReplicationRetryState retry) {
+        if (failure instanceof IndexSendBuffer.BufferFullException) {
+            retry.onCapacityUnavailable();
+            return;
         }
-        retryStartedNs = clock.nanoseconds();
-        retryDelayNs = TimeUnit.MILLISECONDS.toNanos(retryBackoff.backoff(retryAttempts++));
+        Throwable previous = lastFailure;
+        if (previous == null
+                || previous.getClass() != failure.getClass()
+                || !Objects.equals(previous.getMessage(), failure.getMessage())) {
+            LOG.error(
+                    "Index replication for source bucket {} cannot advance at offset {}. "
+                            + "Retrying with backoff until the fault is repaired",
+                    sourceBucket(),
+                    getAllIndexPushedOffset(),
+                    failure);
+        }
+        lastFailure = failure;
+        retry.onFailure();
+        if (metrics != null) {
+            metrics.indexReplicationFailures().inc();
+        }
+    }
+
+    IndexReplicationRetryState retryState(String indexName) {
+        IndexProgressState state = indexStatesByName.get(indexName);
+        return state == null ? sourceRetry : state.retry;
     }
 
     boolean isFailed() {
-        return lastFailure != null;
+        if (sourceRetry.hasFailure()) {
+            return true;
+        }
+        for (IndexProgressState state : indexStates) {
+            if (state.retry.hasFailure()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Yields index-owned payload capacity while retained WAL and unchanged source progress keep the
+     * window recoverable. Other source buckets can then compete for the shared budget.
+     *
+     * <p>A rebuilt window shares its predecessor's retry history. Requiring an observed failure in
+     * the current window gives healthy attempts an opportunity to receive their acknowledgements.
+     * The replay boundary and retry history survive yielding, followed by backoff before
+     * rebuilding.
+     */
+    private boolean releaseStalledWindows() {
+        boolean released = false;
+        for (IndexProgressState state : indexStates) {
+            IndexReplicationWindow window = state.inFlightWindow;
+            if (window != null
+                    && window.hasFailure()
+                    && state.retry.shouldReleaseResources(RETAINED_WINDOW_FAILURE_TIMEOUT_NS)
+                    && window.tryRetire()) {
+                state.replayEndOffset = Math.max(state.replayEndOffset, window.windowEndOffset());
+                state.inFlightWindow = null;
+                state.retry.onResourcesReleased();
+                sendBuffer.dropWindow(window);
+                LOG.warn(
+                        "Yielding index {} window for source {} at offsets [{}, {}). "
+                                + "Rebuilding after backoff",
+                        state.spec.getIndexName(),
+                        sourceBucket(),
+                        state.pushedOffset,
+                        window.windowEndOffset());
+                released = true;
+            }
+        }
+        return released;
     }
 
     private void retireOwnedBatchesLocked() {
@@ -545,8 +601,14 @@ public final class IndexReplicator implements AutoCloseable {
             case DELETE:
                 for (WindowBuildState window : windows) {
                     if (!window.deferred) {
-                        IndexSpec spec = window.state.spec;
-                        appendMutation(window, OldIndexEntry.from(spec, first.getRow()), null);
+                        try {
+                            appendMutation(
+                                    window,
+                                    OldIndexEntry.from(window.state.spec, first.getRow()),
+                                    null);
+                        } catch (RuntimeException failure) {
+                            deferWindow(window, failure);
+                        }
                     }
                 }
                 return;
@@ -572,9 +634,13 @@ public final class IndexReplicator implements AutoCloseable {
         List<OldIndexEntry> oldEntries = new ArrayList<>(windows.size());
         for (WindowBuildState window : windows) {
             if (!window.deferred) {
-                IndexSpec spec = window.state.spec;
-                activeWindows.add(window);
-                oldEntries.add(OldIndexEntry.from(spec, first.getRow()));
+                try {
+                    OldIndexEntry oldEntry = OldIndexEntry.from(window.state.spec, first.getRow());
+                    activeWindows.add(window);
+                    oldEntries.add(oldEntry);
+                } catch (RuntimeException failure) {
+                    deferWindow(window, failure);
+                }
             }
         }
         if (!records.hasNext()) {
@@ -637,7 +703,7 @@ public final class IndexReplicator implements AutoCloseable {
                                 new TableBucket(spec.getIndexTableId(), newEntry.targetBucket()))
                         .appendUpsert(newEntry.key(), newEntry.value());
             }
-        } catch (IndexSendBuffer.BufferFullException | RecordTooLargeException failure) {
+        } catch (RuntimeException failure) {
             deferWindow(window, failure);
         }
     }
@@ -646,7 +712,7 @@ public final class IndexReplicator implements AutoCloseable {
         window.deferred = true;
         window.builders.clear();
         window.reservation.close();
-        backoff(failure, window.state.pushedOffset);
+        backoff(failure, window.state.retry);
     }
 
     private BucketBatchBuilder bucketBuilder(WindowBuildState window, TableBucket targetBucket) {
@@ -707,16 +773,21 @@ public final class IndexReplicator implements AutoCloseable {
     private boolean advanceIndexState(IndexProgressState state, long newOffset) {
         if (newOffset > state.pushedOffset) {
             state.pushedOffset = newOffset;
+            state.retry.reset();
+            if (newOffset >= state.replayEndOffset) {
+                state.replayEndOffset = -1L;
+            }
             return true;
         }
         return false;
     }
 
     private void notifyProgress() {
-        if (getAllIndexPushedOffset() > failureOffset) {
+        if (getAllIndexPushedOffset() > sourceFailureOffset) {
+            sourceRetry.reset();
+        }
+        if (!isFailed()) {
             lastFailure = null;
-            retryAttempts = 0;
-            retryDelayNs = 0;
         }
         if (!indexStates.isEmpty()) {
             noProgressTracker.update(getAllIndexPushedOffset(), sourceReader.highWatermark());
@@ -805,11 +876,15 @@ public final class IndexReplicator implements AutoCloseable {
     private static final class IndexProgressState {
         private final IndexSpec spec;
         private volatile long pushedOffset;
+        private final IndexReplicationRetryState retry;
+        private long replayEndOffset = -1L;
         @Nullable private volatile IndexReplicationWindow inFlightWindow;
 
-        private IndexProgressState(IndexSpec spec, long initialOffset) {
+        private IndexProgressState(
+                IndexSpec spec, long initialOffset, ExponentialBackoff backoff, Clock clock) {
             this.spec = spec;
             this.pushedOffset = initialOffset;
+            this.retry = new IndexReplicationRetryState(backoff, clock);
         }
     }
 

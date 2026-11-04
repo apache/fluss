@@ -50,9 +50,6 @@ final class IndexBatch {
 
     private int attempts;
 
-    /** Earliest wall-clock time this batch may be re-sent; set on retry to enforce backoff. */
-    private volatile long readyAtMs;
-
     /** One-shot guard ensuring pending-byte accounting is released at most once. */
     private final AtomicBoolean released = new AtomicBoolean(false);
 
@@ -76,7 +73,6 @@ final class IndexBatch {
         this.retainedBytes = retainedBytes;
         this.window = checkNotNull(window, "window");
         this.attempts = 0;
-        this.readyAtMs = 0L;
     }
 
     TableBucket targetBucket() {
@@ -113,14 +109,6 @@ final class IndexBatch {
 
     void reEnqueued() {
         attempts++;
-    }
-
-    long readyAtMs() {
-        return readyAtMs;
-    }
-
-    void setReadyAtMs(long readyAtMs) {
-        this.readyAtMs = readyAtMs;
     }
 
     boolean ownerActive() {

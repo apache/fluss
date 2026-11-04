@@ -110,12 +110,6 @@ public final class IndexSender implements AutoCloseable {
     private final SenderWorker[] workers;
     private final AtomicBoolean bucketRescanRequired = new AtomicBoolean();
 
-    /** Base backoff before retrying a failed batch; grows exponentially with attempts. */
-    private final long retryBackoffMs;
-
-    /** Upper bound on the exponential retry backoff. */
-    private final long retryMaxBackoffMs;
-
     /** Maximum total encoded bytes packed into a single consolidated PutIndex request. */
     private final long maxRequestBytes;
 
@@ -142,8 +136,6 @@ public final class IndexSender implements AutoCloseable {
      * @param metrics tablet-server metrics updated by the sender
      * @param numWorkers number of sender workers
      * @param backoffMs idle-worker backoff in milliseconds
-     * @param retryBackoffMs initial retry backoff in milliseconds
-     * @param retryMaxBackoffMs maximum retry backoff in milliseconds
      * @param maxRequestBytes maximum encoded payload bytes per request
      * @param maxTransportRequestBytes maximum framed request bytes accepted by the transport
      * @param requestTimeoutMs timeout for each index write request
@@ -155,17 +147,11 @@ public final class IndexSender implements AutoCloseable {
             TabletServerMetricGroup metrics,
             int numWorkers,
             long backoffMs,
-            long retryBackoffMs,
-            long retryMaxBackoffMs,
             long maxRequestBytes,
             long maxTransportRequestBytes,
             long requestTimeoutMs) {
         checkArgument(numWorkers > 0, "numWorkers must be positive");
         checkArgument(backoffMs > 0, "backoffMs must be positive");
-        checkArgument(retryBackoffMs > 0, "retryBackoffMs must be positive");
-        checkArgument(
-                retryMaxBackoffMs >= retryBackoffMs,
-                "retryMaxBackoffMs must be greater than or equal to retryBackoffMs");
         checkArgument(maxRequestBytes > 0, "maxRequestBytes must be positive");
         checkArgument(maxTransportRequestBytes > 0, "maxTransportRequestBytes must be positive");
         checkArgument(requestTimeoutMs > 0, "requestTimeoutMs must be positive");
@@ -173,8 +159,6 @@ public final class IndexSender implements AutoCloseable {
         this.leaderResolver = leaderResolver;
         this.gatewayFactory = gatewayFactory;
         this.metrics = metrics;
-        this.retryBackoffMs = retryBackoffMs;
-        this.retryMaxBackoffMs = retryMaxBackoffMs;
         this.maxRequestBytes = maxRequestBytes;
         this.maxTransportRequestBytes = maxTransportRequestBytes;
         this.requestTimeoutMs = requestTimeoutMs;
@@ -190,21 +174,6 @@ public final class IndexSender implements AutoCloseable {
             worker.start();
         }
         LOG.info("IndexSender started with {} workers", numWorkers);
-    }
-
-    /**
-     * Exponential backoff for the given attempt count (1 = first retry), capped at {@link
-     * #retryMaxBackoffMs}.
-     */
-    private long retryDelayMs(int attempts) {
-        if (attempts <= 1) {
-            return retryBackoffMs;
-        }
-        long delay = retryBackoffMs;
-        for (int i = 1; i < attempts && delay < retryMaxBackoffMs; i++) {
-            delay <<= 1;
-        }
-        return Math.min(delay, retryMaxBackoffMs);
     }
 
     private void enqueueReadyBucket(TableBucket bucket) {
@@ -400,7 +369,6 @@ public final class IndexSender implements AutoCloseable {
             if (lifecyclePhase != LifecyclePhase.OPEN) {
                 return false;
             }
-            long now = System.currentTimeMillis();
             List<IndexBatch> claimed = new ArrayList<>();
             List<TableBucket> deferredBuckets = new ArrayList<>();
             TableBucket bucket;
@@ -413,7 +381,7 @@ public final class IndexSender implements AutoCloseable {
                     if (ownerOf(bucket) != workerId || sendBuffer.hasClaim(bucket)) {
                         continue;
                     }
-                    IndexBatch batch = sendBuffer.claimFirstReady(bucket, now);
+                    IndexBatch batch = sendBuffer.claimFirstReady(bucket);
                     if (batch == null) {
                         if (!sendBuffer.hasClaim(bucket) && sendBuffer.hasPending(bucket)) {
                             deferredBuckets.add(bucket);
@@ -919,8 +887,9 @@ public final class IndexSender implements AutoCloseable {
      * write whose index push has not actually landed.
      *
      * <p>Index replication must resume after operator repair, including authorization or metadata
-     * repairs. A non-retriable RPC error therefore does not terminate the replication relationship;
-     * the batch remains retryable with backoff and its source progress is retained.
+     * repairs for errors classified as non-retriable by an individual RPC. The task retains source
+     * progress and retries with backoff. During sustained failures, its window can yield the staged
+     * payload and later rebuild from retained WAL.
      */
     private void addResponseActionsLocked(
             List<BatchAction> actions, List<IndexBatch> batches, PutIndexResponse response) {
@@ -1072,8 +1041,7 @@ public final class IndexSender implements AutoCloseable {
         for (BatchAction action : actions) {
             if (action.disposition == BatchDisposition.REQUEUE) {
                 IndexBatch batch = action.batch;
-                long readyAtMs = System.currentTimeMillis() + retryDelayMs(batch.attempts() + 1);
-                action.transitioned = sendBuffer.retryClaim(batch, readyAtMs);
+                action.transitioned = sendBuffer.retryClaim(batch);
                 if (action.transitioned) {
                     metrics.indexReplicationRetries().inc();
                 }

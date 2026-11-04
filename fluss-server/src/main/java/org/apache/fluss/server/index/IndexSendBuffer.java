@@ -38,6 +38,7 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
+import java.util.function.Predicate;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -51,9 +52,8 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  *
  * <p>The buffer has no knowledge of leaders, RPC, or retry policy. It owns per-bucket ordering,
  * claims, and pending-byte accounting. It tracks total pending (un-acknowledged) retained bytes as
- * a hard admission bound and tracks per-replicator pending bytes so the read layer can apply soft
- * back-pressure without letting one stalled replicator stop unrelated replicators from deriving new
- * windows.
+ * a hard admission bound. Per-source accounting supports soft backpressure. Retiring windows after
+ * sustained failures returns shared capacity so other source buckets can compete for it.
  *
  * <p>Lock order is {@code window} then the per-bucket {@code deque}. Code inside a {@code deque}
  * critical section may only read volatile or atomic state of a window or batch: calling a {@code
@@ -135,7 +135,7 @@ public final class IndexSendBuffer {
         IndexReplicationWindow window = first.window();
 
         synchronized (window) {
-            validateWindowBatches(windowBatches, window);
+            Set<TableBucket> targets = validateWindowBatches(windowBatches, window);
             if (!window.isActive() || window.isOwnerClosed()) {
                 return false;
             }
@@ -165,7 +165,7 @@ public final class IndexSendBuffer {
                         return false;
                     }
                 }
-                window.markAdmitted(payloadBytes(windowBatches));
+                window.markAdmitted(payloadBytes(windowBatches), targets);
             } catch (RuntimeException | Error failure) {
                 rollbackWindow(windowBatches);
                 throw failure;
@@ -178,7 +178,7 @@ public final class IndexSendBuffer {
         return true;
     }
 
-    private void validateWindowBatches(
+    private Set<TableBucket> validateWindowBatches(
             List<IndexBatch> windowBatches, IndexReplicationWindow window) {
         checkArgument(!window.isAdmitted(), "window is already admitted");
         checkArgument(
@@ -193,6 +193,7 @@ public final class IndexSendBuffer {
                     "window contains a duplicate target bucket");
             checkArgument(!batch.isReleased(), "window contains a released batch");
         }
+        return targetBuckets;
     }
 
     private long retainedBytes(List<IndexBatch> windowBatches) {
@@ -356,11 +357,11 @@ public final class IndexSendBuffer {
     }
 
     /**
-     * Claims the front batch if it is eligible for sending at {@code nowMs}. The batch remains in
+     * Claims the front batch when its index retry deadline permits sending. The batch remains in
      * the queue until one of the exact-claim completion methods is called.
      */
     @Nullable
-    public IndexBatch claimFirstReady(TableBucket bucket, long nowMs) {
+    public IndexBatch claimFirstReady(TableBucket bucket) {
         IndexBatch[] result = new IndexBatch[1];
         batches.computeIfPresent(
                 bucket,
@@ -376,7 +377,7 @@ public final class IndexSendBuffer {
                         if (!head.window().isAdmitted()) {
                             return deque;
                         }
-                        if (head.readyAtMs() > nowMs) {
+                        if (!head.window().isReadyForSend()) {
                             return deque;
                         }
                         if (claimedBatches.putIfAbsent(bucket, head) == null) {
@@ -399,10 +400,14 @@ public final class IndexSendBuffer {
     }
 
     /** Releases the exact claim for retry while leaving the batch at the queue front. */
-    public boolean retryClaim(IndexBatch batch, long readyAtMs) {
+    public boolean retryClaim(IndexBatch batch) {
         boolean[] retried = new boolean[1];
         boolean[] discarded = new boolean[1];
         synchronized (batch.window()) {
+            if (!ownsClaim(batch)) {
+                return false;
+            }
+            batch.window().onFailure();
             batches.computeIfPresent(
                     batch.targetBucket(),
                     (ignored, deque) -> {
@@ -413,7 +418,6 @@ public final class IndexSendBuffer {
                             if (deque.peekFirst() == batch
                                     && batch.ownerActive()
                                     && !batch.isReleased()) {
-                                batch.setReadyAtMs(readyAtMs);
                                 batch.reEnqueued();
                                 retried[0] = true;
                             } else {
@@ -582,9 +586,19 @@ public final class IndexSendBuffer {
      * buckets of the same index table that may still have a live leader.
      */
     public int dropForSource(TableBucket source) {
+        return dropBatches(
+                new ArrayList<>(batches.keySet()), batch -> batch.sourceBucket().equals(source));
+    }
+
+    /** Releases one retired index window while preserving every other producer's batches. */
+    int dropWindow(IndexReplicationWindow window) {
+        return dropBatches(window.targetBuckets(), batch -> batch.window() == window);
+    }
+
+    private int dropBatches(Iterable<TableBucket> targets, Predicate<IndexBatch> shouldDrop) {
         Set<IndexBatch> droppedBatches = new HashSet<>();
         Set<TableBucket> affectedBuckets = new HashSet<>();
-        for (TableBucket bucket : new ArrayList<>(batches.keySet())) {
+        for (TableBucket bucket : targets) {
             batches.computeIfPresent(
                     bucket,
                     (ignored, deque) -> {
@@ -592,8 +606,7 @@ public final class IndexSendBuffer {
                             Iterator<IndexBatch> it = deque.iterator();
                             while (it.hasNext()) {
                                 IndexBatch batch = it.next();
-                                IndexReplicationWindow window = batch.window();
-                                if (window != null && window.sourceBucket().equals(source)) {
+                                if (shouldDrop.test(batch)) {
                                     it.remove();
                                     claimedBatches.remove(bucket, batch);
                                     droppedBatches.add(batch);

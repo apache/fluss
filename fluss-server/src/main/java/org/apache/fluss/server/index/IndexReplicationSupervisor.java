@@ -216,7 +216,9 @@ public final class IndexReplicationSupervisor {
     // State queries
     // ------------------------------------------------------------------------------------
 
-    /** Returns whether the active replicator is retrying a reported source failure. */
+    /**
+     * Returns whether the source or one of its indexes has a reported failure awaiting progress.
+     */
     public boolean isFailed() {
         IndexReplicator replicator = indexReplicator;
         return replicator != null && replicator.isFailed();

@@ -20,6 +20,9 @@ package org.apache.fluss.server.index;
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.metadata.TableBucket;
 
+import java.util.Collections;
+import java.util.Set;
+
 /**
  * A deterministic replication window produced by a single {@link IndexReplicator#poll()} cycle.
  *
@@ -33,6 +36,9 @@ import org.apache.fluss.metadata.TableBucket;
  * batch in a window completes and replays from its persisted progress after recovery. Together with
  * the target rejecting requests behind its stored writer progress, this makes different source-side
  * window boundaries safe.
+ *
+ * <p>Retry pacing belongs to the logical index progress and survives replacement of this window.
+ * Yielding makes the window terminal so late completions cannot advance its owner's progress.
  */
 @Internal
 final class IndexReplicationWindow {
@@ -42,9 +48,12 @@ final class IndexReplicationWindow {
     private final int expectedBatchCount;
     private int remaining;
     private final IndexReplicator owner;
+    private final IndexReplicationRetryState retry;
+    private Set<TableBucket> targetBuckets = Collections.emptySet();
     private volatile boolean admitted;
     private long admittedPayloadBytes;
     private volatile boolean terminal;
+    private volatile boolean failed;
 
     IndexReplicationWindow(
             String indexName, long windowEndOffset, int batchCount, IndexReplicator owner) {
@@ -53,6 +62,7 @@ final class IndexReplicationWindow {
         this.expectedBatchCount = batchCount;
         this.remaining = batchCount;
         this.owner = owner;
+        this.retry = owner.retryState(indexName);
         this.admitted = false;
     }
 
@@ -76,7 +86,7 @@ final class IndexReplicationWindow {
 
     /**
      * Retires this window without notifying its owner, when its owner is closed or construction is
-     * abandoned.
+     * abandoned or its retained payload is yielded after sustained failures.
      */
     boolean tryRetire() {
         synchronized (this) {
@@ -88,6 +98,21 @@ final class IndexReplicationWindow {
         }
     }
 
+    synchronized void onFailure() {
+        if (!terminal && !owner.isClosed()) {
+            failed = true;
+            retry.onFailure();
+        }
+    }
+
+    boolean hasFailure() {
+        return failed;
+    }
+
+    boolean isReadyForSend() {
+        return retry.remainingDelayNanos() == 0;
+    }
+
     boolean isActive() {
         return !terminal;
     }
@@ -96,9 +121,14 @@ final class IndexReplicationWindow {
         return admitted;
     }
 
-    synchronized void markAdmitted(long payloadBytes) {
+    synchronized void markAdmitted(long payloadBytes, Set<TableBucket> targetBuckets) {
+        this.targetBuckets = targetBuckets;
         admittedPayloadBytes = payloadBytes;
         admitted = true;
+    }
+
+    Iterable<TableBucket> targetBuckets() {
+        return targetBuckets;
     }
 
     int expectedBatchCount() {
@@ -123,7 +153,7 @@ final class IndexReplicationWindow {
             }
         }
         if (completed) {
-            owner.onWindowComplete(indexName, windowEndOffset, completedBytes);
+            owner.onWindowComplete(this, completedBytes);
         }
     }
 }

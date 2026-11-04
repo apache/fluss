@@ -112,7 +112,7 @@ class IndexSendBufferTest {
             IndexBatch batch = batch(owner, new TableBucket(2L, 0));
             assertThat(buffer.tryAppendWindow(Collections.singletonList(batch))).isTrue();
             assertThat(buffer.isFull()).isTrue();
-            assertThat(buffer.claimFirstReady(batch.targetBucket(), 0)).isSameAs(batch);
+            assertThat(buffer.claimFirstReady(batch.targetBucket())).isSameAs(batch);
             assertThat(buffer.acknowledgeClaim(batch)).isTrue();
             assertThat(wakeups).hasValue(1);
             assertThat(buffer.pendingBytes()).isZero();
@@ -139,7 +139,7 @@ class IndexSendBufferTest {
                     .isTrue();
             reservation.close();
             assertThat(buffer.pendingBytes()).isEqualTo(4096);
-            assertThat(buffer.claimFirstReady(batch.targetBucket(), 0)).isSameAs(batch);
+            assertThat(buffer.claimFirstReady(batch.targetBucket())).isSameAs(batch);
             assertThat(buffer.acknowledgeClaim(batch)).isTrue();
             batch.window().onBatchAcked();
             assertThat(owner.getAllIndexPushedOffset()).isEqualTo(1L);
@@ -170,7 +170,7 @@ class IndexSendBufferTest {
     }
 
     @Test
-    void oversizedTransportBatchKeepsRetryingWithoutFailingItsOwner() throws Exception {
+    void oversizedTransportBatchKeepsItsOwnerActiveWhileReportingFailure() throws Exception {
         IndexSendBuffer buffer = new IndexSendBuffer();
         TabletServerMetricGroup metrics =
                 new TabletServerMetricGroup(NOPMetricRegistry.INSTANCE, "test", "rack", "host", 0);
@@ -187,8 +187,6 @@ class IndexSendBufferTest {
                             metrics,
                             1,
                             1,
-                            10,
-                            20,
                             1,
                             1,
                             1000)) {
@@ -198,7 +196,8 @@ class IndexSendBufferTest {
                                 assertThat(metrics.indexReplicationRetries().getCount())
                                         .isGreaterThanOrEqualTo(2));
                 assertThat(batch.window().isActive()).isTrue();
-                assertThat(owner.isFailed()).isFalse();
+                assertThat(owner.isFailed()).isTrue();
+                assertThat(owner.isClosed()).isFalse();
                 assertThat(owner.getAllIndexPushedOffset()).isZero();
                 assertThat(buffer.pendingBytes()).isEqualTo(1);
             }
@@ -245,8 +244,6 @@ class IndexSendBufferTest {
                             metrics,
                             1,
                             1,
-                            10,
-                            20,
                             1024,
                             1024,
                             1000)) {
@@ -279,7 +276,7 @@ class IndexSendBufferTest {
             IndexBatch firstBatch = batch(first, target);
             IndexBatch secondBatch = batch(second, target);
             assertThat(buffer.tryAppendWindow(Collections.singletonList(firstBatch))).isTrue();
-            assertThat(buffer.claimFirstReady(ready.remove(), 0L)).isSameAs(firstBatch);
+            assertThat(buffer.claimFirstReady(ready.remove())).isSameAs(firstBatch);
             assertThat(buffer.tryAppendWindow(Collections.singletonList(secondBatch))).isTrue();
             assertThat(buffer.hasClaim(ready.remove())).isTrue();
             assertThat(ready).isEmpty();
@@ -288,9 +285,9 @@ class IndexSendBufferTest {
 
             assertThat(ready).containsExactly(target);
             assertThat(buffer.pendingBytes()).isEqualTo(1L);
-            assertThat(buffer.claimFirstReady(ready.remove(), 0L)).isSameAs(secondBatch);
+            assertThat(buffer.claimFirstReady(ready.remove())).isSameAs(secondBatch);
             assertThat(buffer.acknowledgeClaim(firstBatch)).isFalse();
-            assertThat(buffer.retryClaim(firstBatch, 100L)).isFalse();
+            assertThat(buffer.retryClaim(firstBatch)).isFalse();
             assertThat(buffer.ownsClaim(secondBatch)).isTrue();
             assertThat(buffer.pendingBytes()).isEqualTo(1L);
             assertThat(buffer.acknowledgeClaim(secondBatch)).isTrue();
