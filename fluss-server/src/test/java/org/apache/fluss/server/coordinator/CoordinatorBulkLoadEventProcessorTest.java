@@ -39,6 +39,7 @@ import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.rpc.messages.UpdateMetadataResponse;
+import org.apache.fluss.server.coordinator.event.BulkLoadMaintenanceEvent;
 import org.apache.fluss.server.coordinator.event.CommitKvSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitRemoteLogManifestEvent;
 import org.apache.fluss.server.entity.CommitKvSnapshotData;
@@ -60,8 +61,10 @@ import org.apache.fluss.server.zk.data.TabletServerRegistration;
 import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.server.zk.data.bulkload.BulkLoadDataState;
 import org.apache.fluss.server.zk.data.bulkload.BulkLoadTransaction;
+import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import org.apache.fluss.types.DataTypes;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -72,6 +75,7 @@ import javax.annotation.Nullable;
 
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
@@ -94,12 +98,90 @@ import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitValue;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.doCallRealMethod;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.verify;
 
 /** Bulk-load related tests for {@link CoordinatorEventProcessor}. */
 class CoordinatorBulkLoadEventProcessorTest extends CoordinatorEventProcessorTestBase {
 
     private static final String MANIFEST_SHA256 =
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    private final List<BulkLoadHandle> recoveredTargets = new ArrayList<>();
+
+    @AfterEach
+    void releaseRecoveredTargets() throws Exception {
+        for (BulkLoadHandle handle : recoveredTargets) {
+            TablePath tablePath = handle.getTarget().getTablePath();
+            setDataState(
+                    ZkData.TableZNode.path(tablePath),
+                    tablePath,
+                    false,
+                    BulkLoadDataState.ACTIVE,
+                    null);
+            zookeeperClient.getCuratorClient().delete().forPath(transactionPath(handle));
+        }
+    }
+
+    @Test
+    void testStartupIsolatesBulkLoadProgressionFailure() throws Exception {
+        initCoordinatorChannel();
+        eventProcessor.shutdown();
+        for (int serverId : zookeeperClient.getSortedTabletServerList()) {
+            zookeeperClient
+                    .getCuratorClient()
+                    .setData()
+                    .forPath(
+                            ZkData.ServerIdZNode.path(serverId),
+                            ZkData.ServerIdZNode.encode(
+                                    registration(serverId, ServerProtocolVersion.CURRENT)));
+        }
+        BulkLoadHandle failing = createRecoverableBulkLoad("failing_recovery", 1);
+        BulkLoadHandle healthy = createRecoverableBulkLoad("healthy_recovery", 2);
+        String assignmentPath = ZkData.TableIdZNode.path(failing.getTableId());
+        ZooKeeperClient client = spy(zookeeperClient);
+        // Startup loads assignments in bulk. Fail the versioned read used to advance one target.
+        doThrow(new KeeperException.ConnectionLossException())
+                .when(client)
+                .getDataWithStatIfExists(assignmentPath);
+        eventProcessor = buildCoordinatorEventProcessor(client);
+
+        eventProcessor.startup();
+
+        verify(client, atLeastOnce()).getDataWithStatIfExists(assignmentPath);
+        boolean targetRestored = fromCtx(ctx -> ctx.containsTableId(failing.getTableId()));
+        assertThat(targetRestored).isTrue();
+        retry(
+                Duration.ofMinutes(1),
+                () -> assertThat(readBulkLoad(healthy).isFenceReady()).isTrue());
+        assertThat(readBulkLoad(failing).isFenceReady()).isFalse();
+
+        doCallRealMethod().when(client).getDataWithStatIfExists(assignmentPath);
+        eventProcessor.getCoordinatorEventManager().put(new BulkLoadMaintenanceEvent());
+
+        retry(
+                Duration.ofMinutes(1),
+                () -> assertThat(readBulkLoad(failing).isFenceReady()).isTrue());
+    }
+
+    @Test
+    void testStartupRejectsUnreadableBulkLoadTransaction() throws Exception {
+        initCoordinatorChannel();
+        eventProcessor.shutdown();
+        BulkLoadHandle handle = createRecoverableBulkLoad("unreadable_recovery", 3);
+        ZooKeeperClient client = spy(zookeeperClient);
+        doThrow(new KeeperException.ConnectionLossException())
+                .when(client)
+                .getDataWithStatIfExists(transactionPath(handle));
+        eventProcessor = buildCoordinatorEventProcessor(client);
+
+        assertThatThrownBy(() -> eventProcessor.startup())
+                .hasMessageContaining("Fail to initialize coordinator context")
+                .hasRootCauseInstanceOf(KeeperException.ConnectionLossException.class);
+    }
 
     @Test
     void testOrdinaryCommitsRequireCurrentActiveMetadataIdentity(@TempDir Path tempDir)
@@ -406,6 +488,61 @@ class CoordinatorBulkLoadEventProcessorTest extends CoordinatorEventProcessorTes
                     .getCustomExtension()
                     .cleanupPath(ZkData.ServerIdZNode.path(replacementServer));
         }
+    }
+
+    private BulkLoadHandle createRecoverableBulkLoad(String tableName, int id) throws Exception {
+        TablePath tablePath = TablePath.of(defaultDatabase, tableName);
+        long tableId =
+                metadataManager.createTable(
+                        tablePath,
+                        remoteDataDir,
+                        TEST_TABLE,
+                        TableAssignment.builder()
+                                .add(0, BucketAssignment.of(0, 1, 2))
+                                .add(1, BucketAssignment.of(0, 1, 2))
+                                .add(2, BucketAssignment.of(0, 1, 2))
+                                .build(),
+                        false);
+        String bulkLoadId = String.format("550e8400-e29b-41d4-a716-%012d", id);
+        BulkLoadHandle handle =
+                new BulkLoadHandle(PhysicalTablePath.of(tablePath), tableId, null, bulkLoadId);
+        recoveredTargets.add(handle);
+        String registrationPath = ZkData.TableZNode.path(tablePath);
+        setDataState(registrationPath, tablePath, false, BulkLoadDataState.LOADING, bulkLoadId);
+        int metadataVersion =
+                zookeeperClient.getDataWithStat(registrationPath).getStat().getVersion();
+        BulkLoadTransaction transaction =
+                new BulkLoadTransaction(
+                        handle,
+                        BulkLoadState.BEGUN,
+                        "alice",
+                        "USER",
+                        remoteDataDir,
+                        1,
+                        metadataVersion,
+                        null,
+                        Long.MAX_VALUE,
+                        null,
+                        null,
+                        null);
+        zookeeperClient
+                .getCuratorClient()
+                .create()
+                .creatingParentsIfNeeded()
+                .forPath(
+                        transactionPath(handle),
+                        ZkData.BulkLoadTransactionsZNode.encode(transaction));
+        return handle;
+    }
+
+    private static String transactionPath(BulkLoadHandle handle) {
+        return ZkData.BulkLoadTableTransactionZNode.path(
+                handle.getTableId(), handle.getBulkLoadId());
+    }
+
+    private static BulkLoadTransaction readBulkLoad(BulkLoadHandle handle) throws Exception {
+        return ZkData.BulkLoadTransactionsZNode.decode(
+                zookeeperClient.getDataWithStat(transactionPath(handle)).getData());
     }
 
     private void assertSnapshotAndManifestCommitRejected(

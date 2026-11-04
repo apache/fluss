@@ -140,13 +140,6 @@ public final class BulkLoadManager {
         }
     }
 
-    /** Resumes recovered transactions after ordinary replica state has been initialized. */
-    public void resumeRecoveredTransactions() throws Exception {
-        for (BulkLoadHandle handle : new ArrayList<>(pending.keySet())) {
-            advance(handle);
-        }
-    }
-
     Versioned<BulkLoadTransaction> recordActiveTransaction(
             Versioned<BulkLoadTransaction> transaction) {
         pending.computeIfAbsent(

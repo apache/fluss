@@ -384,7 +384,7 @@ class BulkLoadMetadataStoreTest {
 
         BulkLoadManager recovered = manager(zkClient);
         recovered.restoreTransactions(Collections.singletonList(fixture.handle));
-        recovered.resumeRecoveredTransactions();
+        recovered.resumeActiveTransactions();
         assertThat(fixture.transaction().getValue().getDeadlineMs()).isEqualTo(deadline);
     }
 

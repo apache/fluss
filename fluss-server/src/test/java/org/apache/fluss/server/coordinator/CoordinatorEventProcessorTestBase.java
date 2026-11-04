@@ -191,11 +191,15 @@ abstract class CoordinatorEventProcessorTestBase {
     }
 
     CoordinatorEventProcessor buildCoordinatorEventProcessor() {
+        return buildCoordinatorEventProcessor(zookeeperClient);
+    }
+
+    CoordinatorEventProcessor buildCoordinatorEventProcessor(ZooKeeperClient client) {
         Configuration conf = new Configuration();
         conf.set(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
         conf.set(ConfigOptions.COORDINATOR_OFFLINE_LEADER_RETRY_DELAY, Duration.ofDays(1));
         return new CoordinatorEventProcessor(
-                zookeeperClient,
+                client,
                 serverMetadataCache,
                 testCoordinatorChannelManager,
                 new CoordinatorContext(zkEpoch),
