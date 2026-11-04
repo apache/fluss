@@ -125,7 +125,7 @@ For partitioned tables, lookup spans all main-table partitions without requiring
 
 Index maintenance consumes committed main-table WAL. Snapshot metadata preserves index replay progress, and WAL retention covers the data required to resume replication after recovery. A lagging asynchronous index can therefore retain main-table WAL even though it does not delay write acknowledgement.
 
-[Index replication configuration](../maintenance/configuration.md#index-replication) controls reader and sender threads, window sizes, retained batch buffers, and retry backoff. TabletServer aggregate metrics include `indexReplicationPendingBytes`, `indexReplicationMaxNoProgressTimeMs`, `indexReplicationFailedSourceBucketCount`, and `indexReplicationRetriesPerSecond`. Use them with replication logs to investigate backlog or a stopped source bucket.
+[Index replication configuration](../maintenance/configuration.md#index-replication) controls reader and sender threads, window sizes, retained batch buffers, and retry backoff. TabletServer aggregate metrics include `indexReplicationPendingBytes`, `indexReplicationMaxNoProgressTimeMs`, `indexReplicationFailedSourceBucketCount`, and `indexReplicationRetriesPerSecond`. Use them with replication logs to investigate backlog and source failures awaiting repair.
 
 Before creating indexed tables, upgrade all participating TabletServers to support the private `PutIndex` protocol, then the Coordinator and clients/connectors. Do not schedule an indexed main-table bucket or index bucket on a server without index support. `PutIndex` v0 uses API key 1076.
 

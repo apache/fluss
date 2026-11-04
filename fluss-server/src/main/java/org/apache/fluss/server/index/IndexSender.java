@@ -27,6 +27,7 @@ import org.apache.fluss.rpc.messages.PbPutIndexReqForBucket;
 import org.apache.fluss.rpc.messages.PbPutIndexRespForBucket;
 import org.apache.fluss.rpc.messages.PutIndexRequest;
 import org.apache.fluss.rpc.messages.PutIndexResponse;
+import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.utils.ProtoCodecUtils;
 import org.apache.fluss.utils.concurrent.FutureUtils;
@@ -444,7 +445,7 @@ public final class IndexSender implements AutoCloseable {
                                 requestTimeoutMs);
                 singleton.addBucket(batch);
                 if (isOversized(singleton)) {
-                    failOversizedBatch(batch, singleton);
+                    retryOversizedBatch(batch, singleton);
                 } else if (batch.ownerActive()) {
                     activeClaimed.add(batch);
                 }
@@ -574,7 +575,7 @@ public final class IndexSender implements AutoCloseable {
             }
             if (isOversized(requestChunk.size)) {
                 for (IndexBatch batch : requestChunk.batches) {
-                    failOversizedBatch(batch, requestChunk.size);
+                    retryOversizedBatch(batch, requestChunk.size);
                 }
                 return;
             }
@@ -675,7 +676,17 @@ public final class IndexSender implements AutoCloseable {
                     addRetryOrReleaseActionsLocked(actions, chunk);
                 } else if (error != null) {
                     invalidateTargetLocked(target);
-                    LOG.warn("PutIndex failed for tableId={}", tableId, error);
+                    metrics.indexReplicationFailures().inc(chunk.size());
+                    for (IndexBatch batch : chunk) {
+                        LOG.error(
+                                "PutIndex RPC failed for index table {} from {} to {} at source "
+                                        + "end offset {}. Retrying with backoff",
+                                tableId,
+                                batch.sourceBucket(),
+                                batch.targetBucket(),
+                                batch.sourceEndOffset(),
+                                error);
+                    }
                     addRetryOrReleaseActionsLocked(actions, chunk);
                 } else {
                     addResponseActionsLocked(actions, chunk, response);
@@ -867,7 +878,7 @@ public final class IndexSender implements AutoCloseable {
 
     /**
      * Consolidates whole target batches up to the preferred payload bound and exact hard transport
-     * bound. A singleton above the hard bound remains intact so it can enter terminal failure.
+     * bound. A singleton above the transport bound remains intact and is retried after backoff.
      */
     private List<RequestChunk> splitByRequestBytes(long tableId, List<IndexBatch> batches) {
         List<RequestChunk> chunks = new ArrayList<>();
@@ -906,6 +917,10 @@ public final class IndexSender implements AutoCloseable {
      * is absent from the response) is re-enqueued for retry. This keeps a failed index mutation
      * from advancing its window's pushed offset, so SYNC visibility never releases a main-table
      * write whose index push has not actually landed.
+     *
+     * <p>Index replication must resume after operator repair, including authorization or metadata
+     * repairs. A non-retriable RPC error therefore does not terminate the replication relationship;
+     * the batch remains retryable with backoff and its source progress is retained.
      */
     private void addResponseActionsLocked(
             List<BatchAction> actions, List<IndexBatch> batches, PutIndexResponse response) {
@@ -918,13 +933,27 @@ public final class IndexSender implements AutoCloseable {
             PbPutIndexRespForBucket bucketResp = respByBucket.get(bucketId);
             boolean failed = bucketResp == null || bucketResp.hasErrorCode();
             if (failed) {
+                metrics.indexReplicationFailures().inc();
                 if (bucketResp == null) {
-                    LOG.warn("PutIndex response missing bucket {}, re-enqueuing", bucketId);
+                    LOG.error(
+                            "PutIndex response missing target {} for source {} at source end "
+                                    + "offset {}. Retrying with backoff",
+                            batch.targetBucket(),
+                            batch.sourceBucket(),
+                            batch.sourceEndOffset());
                 } else {
-                    LOG.warn(
-                            "PutIndex failed for bucket {} with error code {}, re-enqueuing",
-                            bucketId,
-                            bucketResp.getErrorCode());
+                    Errors error = Errors.forCode(bucketResp.getErrorCode());
+                    LOG.error(
+                            "PutIndex failed from {} to {} at source end offset {} with {} "
+                                    + "(code {}), message={}. Retrying with backoff",
+                            batch.sourceBucket(),
+                            batch.targetBucket(),
+                            batch.sourceEndOffset(),
+                            error.exceptionName(),
+                            bucketResp.getErrorCode(),
+                            bucketResp.hasErrorMessage()
+                                    ? bucketResp.getErrorMessage()
+                                    : error.message());
                 }
                 addBatchActionLocked(actions, batch, BatchDisposition.REQUEUE);
             } else {
@@ -937,13 +966,18 @@ public final class IndexSender implements AutoCloseable {
         return !size.codecRepresentable() || size.framedBytes() > maxTransportRequestBytes;
     }
 
-    private void failOversizedBatch(IndexBatch batch, RequestSizeAccumulator size) {
+    private void retryOversizedBatch(IndexBatch batch, RequestSizeAccumulator size) {
         RecordTooLargeException failure = oversizedFailure(batch, size);
-        IndexReplicationWindow window = batch.window();
-        if (!window.tryFail(failure)) {
-            return;
+        if (batch.attempts() == 0) {
+            LOG.error(
+                    "Cannot send index batch from {} to {}; retrying with backoff until "
+                            + "the cluster request limit is adjusted",
+                    batch.sourceBucket(),
+                    batch.targetBucket(),
+                    failure);
         }
         metrics.indexReplicationFailures().inc();
+        retryClaimedBatch(batch);
     }
 
     private RecordTooLargeException oversizedFailure(

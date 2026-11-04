@@ -74,16 +74,10 @@ final class IndexReplicationWindow {
         return owner.isClosed();
     }
 
-    /** Atomically fails this window. */
-    boolean tryFail(Throwable failure) {
-        if (tryRetire()) {
-            owner.onWindowFailed(indexName, this, failure);
-            return true;
-        }
-        return false;
-    }
-
-    /** Retires this window without notifying its owner, for owner-wide terminal cleanup. */
+    /**
+     * Retires this window without notifying its owner, when its owner is closed or construction is
+     * abandoned.
+     */
     boolean tryRetire() {
         synchronized (this) {
             if (terminal) {

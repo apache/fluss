@@ -20,6 +20,7 @@ package org.apache.fluss.server.index;
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.exception.RecordTooLargeException;
+import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.metadata.TableBucket;
 
 import javax.annotation.Nullable;
@@ -34,6 +35,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 
@@ -67,17 +69,20 @@ public final class IndexSendBuffer {
     /** The front batch currently claimed for sending, at most one per target bucket. */
     private final ConcurrentMap<TableBucket, IndexBatch> claimedBatches = new ConcurrentHashMap<>();
 
-    /** Upper bound on pending retained bytes for one producing replicator. */
+    /** Soft backpressure threshold for one producing source bucket. */
     private final long maxPendingBytes;
 
     /** Hard upper bound on pending retained bytes across this TabletServer sendBuffer. */
     private final long maxTotalPendingBytes;
 
-    /** Serializes competing capacity checks and reservations, but never releases. */
+    /** Serializes admission and construction reservation ownership changes. */
     private final Object admissionLock = new Object();
 
-    /** Total retained bytes of all batches currently pending, including queued and in-flight. */
+    /** Retained payload pages in construction, queued and in-flight batches. */
     private final AtomicLong pendingBytes = new AtomicLong(0L);
+
+    private final AtomicBoolean waitingForCapacity = new AtomicBoolean();
+    @Nullable private volatile Runnable capacityListener;
 
     /** Pending retained bytes grouped by the source main-table bucket that produced them. */
     private final ConcurrentMap<TableBucket, Long> pendingBytesBySource = new ConcurrentHashMap<>();
@@ -103,6 +108,15 @@ public final class IndexSendBuffer {
         this.appendListener = appendListener;
     }
 
+    /** Wakes readers that yielded because the total memory budget was occupied. */
+    public void setCapacityListener(Runnable capacityListener) {
+        this.capacityListener = capacityListener;
+    }
+
+    Reservation newReservation() {
+        return new Reservation();
+    }
+
     /**
      * Atomically admits and publishes every target batch of one source window.
      *
@@ -111,6 +125,10 @@ public final class IndexSendBuffer {
      * leaves no queue or accounting residue.
      */
     public boolean tryAppendWindow(List<IndexBatch> windowBatches) {
+        return tryAppendWindow(windowBatches, null);
+    }
+
+    boolean tryAppendWindow(List<IndexBatch> windowBatches, @Nullable Reservation reservation) {
         checkNotNull(windowBatches, "windowBatches");
         checkArgument(!windowBatches.isEmpty(), "windowBatches must not be empty");
         IndexBatch first = checkNotNull(windowBatches.get(0), "window batch");
@@ -130,7 +148,7 @@ public final class IndexSendBuffer {
                                 + " bytes, exceeding max total pending bytes="
                                 + maxTotalPendingBytes);
             }
-            if (!reserve(window, windowBytes)) {
+            if (!reserve(window, windowBytes, reservation)) {
                 return false;
             }
 
@@ -198,19 +216,29 @@ public final class IndexSendBuffer {
         return bytes;
     }
 
-    private boolean reserve(IndexReplicationWindow window, long windowBytes) {
+    private boolean reserve(
+            IndexReplicationWindow window, long windowBytes, @Nullable Reservation reservation) {
         synchronized (admissionLock) {
             if (!window.isActive() || window.isOwnerClosed()) {
                 return false;
             }
 
-            while (true) {
-                long current = pendingBytes.get();
-                if (current > maxTotalPendingBytes - windowBytes) {
-                    return false;
-                }
-                if (pendingBytes.compareAndSet(current, current + windowBytes)) {
-                    break;
+            if (reservation != null) {
+                checkArgument(!reservation.closed, "reservation is closed");
+                checkArgument(
+                        reservation.bytes == windowBytes, "reservation must cover the window");
+                reservation.closed = true;
+                reservation.bytes = 0;
+            } else {
+                while (true) {
+                    long current = pendingBytes.get();
+                    if (current > maxTotalPendingBytes - windowBytes) {
+                        waitingForCapacity.set(true);
+                        return false;
+                    }
+                    if (pendingBytes.compareAndSet(current, current + windowBytes)) {
+                        break;
+                    }
                 }
             }
 
@@ -280,7 +308,11 @@ public final class IndexSendBuffer {
      * layer.
      */
     public boolean isFull() {
-        return pendingBytes.get() >= maxTotalPendingBytes;
+        boolean full = pendingBytes.get() >= maxTotalPendingBytes;
+        if (full) {
+            waitingForCapacity.set(true);
+        }
+        return full;
     }
 
     /**
@@ -289,10 +321,14 @@ public final class IndexSendBuffer {
      * target index bucket cannot stop unrelated main-table buckets from reading WAL.
      */
     public boolean isFull(TableBucket source) {
-        return pendingBytes(source) >= maxPendingBytes;
+        boolean full = pendingBytes(source) >= maxPendingBytes;
+        if (full) {
+            waitingForCapacity.set(true);
+        }
+        return full;
     }
 
-    /** Total retained bytes currently pending, including queued and in-flight. */
+    /** Total retained payload page bytes, including construction, queued and in-flight batches. */
     public long pendingBytes() {
         return pendingBytes.get();
     }
@@ -458,6 +494,72 @@ public final class IndexSendBuffer {
         pendingBytesBySource.computeIfPresent(
                 source, (ignored, current) -> current == bytes ? null : current - bytes);
         pendingBytes.addAndGet(-bytes);
+        notifyCapacityAvailable();
+    }
+
+    private void notifyCapacityAvailable() {
+        Runnable listener = capacityListener;
+        if (listener != null && waitingForCapacity.getAndSet(false)) {
+            listener.run();
+        }
+    }
+
+    /** Charges construction pages until admission transfers them to the window's batches. */
+    final class Reservation implements AutoCloseable {
+        private long bytes;
+        private boolean closed;
+
+        MemorySegment allocatePage(int pageSize) {
+            synchronized (admissionLock) {
+                checkArgument(!closed, "reservation is closed");
+                if (bytes > maxTotalPendingBytes - pageSize) {
+                    throw new RecordTooLargeException(
+                            "Index replication window needs at least "
+                                    + (bytes + pageSize)
+                                    + " retained bytes, exceeding index.replication.buffer.max-bytes="
+                                    + maxTotalPendingBytes);
+                }
+                while (true) {
+                    long current = pendingBytes.get();
+                    if (current > maxTotalPendingBytes - pageSize) {
+                        waitingForCapacity.set(true);
+                        throw new BufferFullException();
+                    }
+                    if (pendingBytes.compareAndSet(current, current + pageSize)) {
+                        bytes += pageSize;
+                        break;
+                    }
+                }
+            }
+            try {
+                return MemorySegment.allocateHeapMemory(pageSize);
+            } catch (RuntimeException | Error failure) {
+                synchronized (admissionLock) {
+                    bytes -= pageSize;
+                    pendingBytes.addAndGet(-pageSize);
+                }
+                notifyCapacityAvailable();
+                throw failure;
+            }
+        }
+
+        @Override
+        public void close() {
+            synchronized (admissionLock) {
+                if (closed) {
+                    return;
+                }
+                closed = true;
+                pendingBytes.addAndGet(-bytes);
+                bytes = 0;
+            }
+            notifyCapacityAvailable();
+        }
+    }
+
+    /** Temporary competition for the shared construction and send budget. */
+    static final class BufferFullException extends RuntimeException {
+        private static final long serialVersionUID = 1L;
     }
 
     private static boolean removeExact(Deque<IndexBatch> deque, IndexBatch batch) {
