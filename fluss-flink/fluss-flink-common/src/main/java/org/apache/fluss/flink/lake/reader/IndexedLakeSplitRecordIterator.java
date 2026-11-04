@@ -42,6 +42,7 @@ import org.apache.fluss.utils.CloseableIterator;
 public class IndexedLakeSplitRecordIterator implements CloseableIterator<InternalRow> {
     private final CloseableIterator<LogRecord> logRecordIterators;
     private final int currentLakeSplitIndex;
+    private boolean closed;
 
     public IndexedLakeSplitRecordIterator(
             CloseableIterator<LogRecord> logRecordIterators, int currentLakeSplitIndex) {
@@ -55,12 +56,16 @@ public class IndexedLakeSplitRecordIterator implements CloseableIterator<Interna
 
     @Override
     public void close() {
-        logRecordIterators.close();
+        if (!closed) {
+            // Do not retry cleanup if the underlying iterator fails to close.
+            closed = true;
+            logRecordIterators.close();
+        }
     }
 
     @Override
     public boolean hasNext() {
-        return logRecordIterators.hasNext();
+        return !closed && logRecordIterators.hasNext();
     }
 
     @Override

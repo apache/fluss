@@ -82,6 +82,10 @@ public class SeekableLakeSnapshotSplitScanner implements BatchScanner {
     }
 
     private void updateCurrentIterator() throws IOException {
+        if (currentLakeRecordIterator != null) {
+            currentLakeRecordIterator.close();
+            currentLakeRecordIterator = null;
+        }
         if (lakeSplits.size() <= nextLakeSplitIndex) {
             currentLakeRecordIterator = null;
         } else {
