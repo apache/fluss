@@ -17,6 +17,7 @@
 
 package org.apache.fluss.record;
 
+import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.memory.AbstractPagedOutputView;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.memory.MemorySegmentOutputView;
@@ -182,10 +183,18 @@ public class KvRecordBatchBuilder implements AutoCloseable {
     }
 
     public void resetWriterState(long writerId, int batchSequence) {
-        // trigger to rewrite batch header
-        this.builtBuffer = null;
         this.writerId = writerId;
         this.batchSequence = batchSequence;
+        if (builtBuffer != null) {
+            // Requests queued by the RPC connection already hold a view of these bytes.
+            // Refresh the header and CRC before the connection can send that view.
+            try {
+                writeBatchHeader();
+            } catch (IOException e) {
+                throw new FlussRuntimeException("Failed to reset KV batch writer state", e);
+            }
+        }
+        this.builtBuffer = null;
     }
 
     public BytesView build() throws IOException {

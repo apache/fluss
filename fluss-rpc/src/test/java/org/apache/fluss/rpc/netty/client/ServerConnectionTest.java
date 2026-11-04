@@ -24,6 +24,8 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.DisconnectException;
 import org.apache.fluss.exception.InvalidServerTypeException;
 import org.apache.fluss.exception.UnsupportedVersionException;
+import org.apache.fluss.memory.UnmanagedPagedOutputView;
+import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metrics.Gauge;
 import org.apache.fluss.metrics.Metric;
 import org.apache.fluss.metrics.MetricType;
@@ -31,6 +33,9 @@ import org.apache.fluss.metrics.groups.AbstractMetricGroup;
 import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.metrics.registry.NOPMetricRegistry;
 import org.apache.fluss.metrics.util.NOPMetricsGroup;
+import org.apache.fluss.record.DefaultKvRecordBatch;
+import org.apache.fluss.record.KvRecordBatchBuilder;
+import org.apache.fluss.record.bytesview.BytesView;
 import org.apache.fluss.rpc.TestingGatewayService;
 import org.apache.fluss.rpc.TestingTabletGatewayService;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
@@ -64,14 +69,19 @@ import org.apache.fluss.utils.NetUtils;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.apache.fluss.metrics.MetricNames.CLIENT_BYTES_IN_RATE_AVG;
 import static org.apache.fluss.metrics.MetricNames.CLIENT_BYTES_IN_RATE_TOTAL;
@@ -365,6 +375,148 @@ public class ServerConnectionTest {
                     .hasMessageContaining("negotiated version 0");
         } finally {
             connection.close().get();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(shorts = {0, 1, 2, 3, 4})
+    void testKvRecordFormatVersionNegotiation(short version) throws Exception {
+        nettyServer.close();
+        VersionedWriteGatewayService gateway = new VersionedWriteGatewayService(version);
+        buildNettyServer(gateway);
+        ServerConnection connection =
+                new ServerConnection(
+                        bootstrap,
+                        serverNode,
+                        TestingClientMetricGroup.newInstance(),
+                        clientAuthenticator,
+                        (con, ignore) -> {});
+        try {
+            connection.send(ApiKeys.PUT_KV, recordFormatRequest(false)).get(10, TimeUnit.SECONDS);
+            assertThat(gateway.writes.get()).isEqualTo(1);
+            PutKvRequest mixed = recordFormatRequest(false);
+            mixed.addBucketsReq().setBucketId(1).setRecordsBytesView(recordBytes(true));
+            if (version < 4) {
+                assertThatThrownBy(
+                                () ->
+                                        connection
+                                                .send(ApiKeys.PUT_KV, mixed)
+                                                .get(10, TimeUnit.SECONDS))
+                        .rootCause()
+                        .isInstanceOf(UnsupportedVersionException.class);
+                assertThat(gateway.writes.get()).isEqualTo(1);
+            } else {
+                connection.send(ApiKeys.PUT_KV, mixed).get(10, TimeUnit.SECONDS);
+                assertThat(gateway.writes.get()).isEqualTo(2);
+            }
+            connection.send(ApiKeys.PUT_KV, recordFormatRequest(false)).get(10, TimeUnit.SECONDS);
+            assertThat(gateway.writes.get()).isEqualTo(version < 4 ? 2 : 3);
+        } finally {
+            connection.close().get();
+        }
+    }
+
+    @Test
+    void testQueuedWriteUsesReclaimedSequenceAfterHandshake() throws Exception {
+        nettyServer.close();
+        CompletableFuture<Void> handshake = new CompletableFuture<>();
+        VersionedWriteGatewayService gateway =
+                new VersionedWriteGatewayService((short) 3, handshake);
+        buildNettyServer(gateway);
+        ServerConnection connection =
+                new ServerConnection(
+                        bootstrap,
+                        serverNode,
+                        TestingClientMetricGroup.newInstance(),
+                        clientAuthenticator,
+                        (con, ignore) -> {});
+        try (KvRecordBatchBuilder builder =
+                KvRecordBatchBuilder.builder(
+                        1, 1024, new UnmanagedPagedOutputView(256), KvFormat.COMPACTED)) {
+            builder.setWriterState(7L, 1);
+            builder.append(new byte[512], null);
+            PutKvRequest next = new PutKvRequest().setTableId(1L).setAcks(1).setTimeoutMs(10_000);
+            next.addBucketsReq().setBucketId(0).setRecordsBytesView(builder.build());
+            CompletableFuture<ApiMessage> rejected =
+                    connection.send(ApiKeys.PUT_KV, recordFormatRequest(true));
+            CompletableFuture<ApiMessage> reclaimed =
+                    rejected.whenComplete((response, error) -> builder.resetWriterState(7L, 0));
+            CompletableFuture<ApiMessage> accepted = connection.send(ApiKeys.PUT_KV, next);
+
+            gateway.handshakeStarted.get(10, TimeUnit.SECONDS);
+            assertThat(rejected).isNotDone();
+            assertThat(accepted).isNotDone();
+            assertThat(gateway.writes.get()).isZero();
+            handshake.complete(null);
+
+            assertThatThrownBy(() -> reclaimed.get(10, TimeUnit.SECONDS))
+                    .rootCause()
+                    .isInstanceOf(UnsupportedVersionException.class);
+            accepted.get(10, TimeUnit.SECONDS);
+            assertThat(gateway.sequences).containsExactly(0);
+        } finally {
+            handshake.complete(null);
+            connection.close().get();
+        }
+    }
+
+    private static PutKvRequest recordFormatRequest(boolean v2) throws Exception {
+        PutKvRequest request = new PutKvRequest().setTableId(1L).setAcks(1).setTimeoutMs(10_000);
+        request.addBucketsReq().setBucketId(0).setRecordsBytesView(recordBytes(v2));
+        return request;
+    }
+
+    private static BytesView recordBytes(boolean v2) throws Exception {
+        try (KvRecordBatchBuilder builder =
+                KvRecordBatchBuilder.builder(
+                        1, 1024, new UnmanagedPagedOutputView(256), KvFormat.COMPACTED, v2)) {
+            return builder.build();
+        }
+    }
+
+    private static class VersionedWriteGatewayService extends TestingTabletGatewayService {
+        private final short version;
+        private final AtomicInteger writes = new AtomicInteger();
+        private final List<Integer> sequences = new CopyOnWriteArrayList<>();
+        private final CompletableFuture<Void> handshake;
+        private final CompletableFuture<Void> handshakeStarted = new CompletableFuture<>();
+
+        private VersionedWriteGatewayService(short version) {
+            this(version, CompletableFuture.completedFuture(null));
+        }
+
+        private VersionedWriteGatewayService(short version, CompletableFuture<Void> handshake) {
+            this.version = version;
+            this.handshake = handshake;
+        }
+
+        @Override
+        public CompletableFuture<ApiVersionsResponse> apiVersions(ApiVersionsRequest request) {
+            return super.apiVersions(request)
+                    .thenApply(
+                            response -> {
+                                for (PbApiVersion api : response.getApiVersionsList()) {
+                                    if (api.getApiKey() == ApiKeys.PUT_KV.id) {
+                                        api.setMaxVersion(version);
+                                    }
+                                }
+                                handshakeStarted.complete(null);
+                                return response;
+                            })
+                    .thenCompose(response -> handshake.thenApply(ignored -> response));
+        }
+
+        @Override
+        public CompletableFuture<PutKvResponse> putKv(PutKvRequest request) {
+            for (int i = 0; i < request.getBucketsReqsCount(); i++) {
+                DefaultKvRecordBatch batch =
+                        DefaultKvRecordBatch.pointToByteBuffer(
+                                request.getBucketsReqAt(i).getRecordsSlice().nioBuffer());
+                batch.ensureValid();
+                sequences.add(batch.batchSequence());
+            }
+            writes.incrementAndGet();
+            return CompletableFuture.completedFuture(new PutKvResponse());
         }
     }
 

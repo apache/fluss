@@ -24,7 +24,6 @@ import org.apache.fluss.rpc.metrics.ClientMetricGroup;
 import org.apache.fluss.rpc.netty.client.NettyClient;
 import org.apache.fluss.rpc.protocol.ApiKeys;
 
-import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -83,19 +82,6 @@ public interface RpcClient extends AutoCloseable {
      * @return true if the connection to the node is ready
      */
     boolean isReady(ServerNode node);
-
-    /**
-     * Returns the negotiated highest available version for the given api key on the connection to
-     * the given server, or empty if there is no connection or the api version handshake has not
-     * completed yet.
-     *
-     * <p>Callers that must not send a payload the server cannot understand (e.g., KvRecord V2
-     * format batches) should only proceed when this returns a sufficient version.
-     *
-     * @throws org.apache.fluss.exception.UnsupportedVersionException if the handshake completed but
-     *     the server does not support the api key in the client's supported version range
-     */
-    Optional<Short> negotiatedMaxApiVersion(ServerNode node, ApiKeys apiKey);
 
     /**
      * Send an RPC request to the given server and return a future for the response. If the

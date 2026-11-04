@@ -21,6 +21,7 @@ import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.record.DefaultKvRecordBatch;
 import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.remote.RemoteLogFetchInfo;
@@ -82,6 +83,21 @@ public class CommonRpcMessageUtils {
     public static boolean hasHistoricalPut(PutKvRequest putKvRequest) {
         return putKvRequest.getBucketsReqsCount() > 0
                 && putKvRequest.getBucketsReqAt(0).hasOriginalPartitionName();
+    }
+
+    /** Returns whether a put-KV request contains a V2 batch, inspecting only batch headers. */
+    public static boolean hasV2KvRecords(PutKvRequest request) {
+        for (int i = 0; i < request.getBucketsReqsCount(); i++) {
+            ByteBuf records = request.getBucketsReqAt(i).getRecordsSlice();
+            int headerSize = DefaultKvRecordBatch.RECORD_BATCH_HEADER_SIZE;
+            if (records.readableBytes() >= headerSize
+                    && DefaultKvRecordBatch.pointToByteBuffer(
+                                    records.nioBuffer(records.readerIndex(), headerSize))
+                            .isV2Format()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

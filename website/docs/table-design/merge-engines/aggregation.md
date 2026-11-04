@@ -1431,7 +1431,7 @@ Retract is not idempotent: applying a SUM retract twice subtracts the contributi
 
 Recognized duplicate V2 batches return their original write offsets before field functions are reapplied. A retry therefore does not repeat division or element/key removal for a batch already accepted in the retained duplicate window.
 
-Retract requires PUT_KV API version 4 or later. The client waits for version negotiation before sending a retract batch and rejects servers that do not support this version. Waiting for negotiation does not consume the write retry budget. Existing upsert and delete writes continue to use the compatible record format.
+Retract requires PUT_KV API version 4 or later. The RPC connection queues writes until version negotiation completes, without consuming the write retry budget. If the negotiated version is below 4, a PUT_KV request containing any V2 batch fails with `UnsupportedVersionException` before transmission. This rejects the entire request, including any V0 batches grouped with it. Existing upsert and delete writes use V0 batches and remain compatible when sent in requests without V2 batches.
 
 After schema evolution, fields absent from the input row do not participate in retract. This also applies when Flink pads an older input schema to the latest table schema. An explicitly supplied NULL still participates according to the field's aggregation function; for example, LAST_VALUE retract clears that field. Integer SUM uses the same fixed-width arithmetic as forward aggregation, including wraparound at the type boundary.
 

@@ -25,6 +25,7 @@ import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidServerTypeException;
 import org.apache.fluss.exception.NetworkException;
 import org.apache.fluss.exception.RetriableAuthenticationException;
+import org.apache.fluss.exception.UnsupportedRequestVersionException;
 import org.apache.fluss.exception.UnsupportedVersionException;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.ApiMessage;
@@ -61,7 +62,6 @@ import java.net.InetSocketAddress;
 import java.nio.channels.ClosedChannelException;
 import java.util.ArrayDeque;
 import java.util.Map;
-import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
@@ -69,6 +69,7 @@ import java.util.function.BiConsumer;
 
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.hasHistoricalProduce;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.hasHistoricalPut;
+import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.hasV2KvRecords;
 import static org.apache.fluss.utils.IOUtils.closeQuietly;
 
 /** Connection to a Netty server used by the {@link NettyClient}. */
@@ -77,6 +78,7 @@ final class ServerConnection {
     private static final Logger LOG = LoggerFactory.getLogger(ServerConnection.class);
     private static final short HISTORICAL_PRODUCE_LOG_MIN_VERSION = 1;
     private static final short HISTORICAL_PUT_KV_MIN_VERSION = 3;
+    private static final short V2_PUT_KV_MIN_VERSION = 4;
     private static final short ALTER_BUCKET_COUNT_MIN_VERSION = 1;
 
     private final ServerNode node;
@@ -139,22 +141,6 @@ final class ServerConnection {
     public boolean isReady() {
         synchronized (lock) {
             return state == ConnectionState.READY && channel != null && channel.isActive();
-        }
-    }
-
-    /**
-     * Returns the negotiated highest available version for the given api key, or empty if the api
-     * version handshake with the server has not completed yet.
-     *
-     * @throws org.apache.fluss.exception.UnsupportedVersionException if the handshake completed but
-     *     the server does not support the api key in the client's supported version range
-     */
-    public Optional<Short> negotiatedMaxVersion(ApiKeys apiKey) {
-        synchronized (lock) {
-            if (serverApiVersions == null) {
-                return Optional.empty();
-            }
-            return Optional.of(serverApiVersions.highestAvailableVersion(apiKey));
         }
     }
 
@@ -404,6 +390,18 @@ final class ServerConnection {
 
     @VisibleForTesting
     void validateVersionCompatibility(ApiKeys apiKey, short version, ApiMessage rawRequest) {
+        if (apiKey == ApiKeys.PUT_KV
+                && version < V2_PUT_KV_MIN_VERSION
+                && hasV2KvRecords((PutKvRequest) rawRequest)) {
+            throw new UnsupportedRequestVersionException(
+                    "V2 KV records require PUT_KV version "
+                            + V2_PUT_KV_MIN_VERSION
+                            + " or newer, but server "
+                            + node
+                            + " negotiated version "
+                            + version
+                            + '.');
+        }
         if (apiKey == ApiKeys.PRODUCE_LOG && version < HISTORICAL_PRODUCE_LOG_MIN_VERSION) {
             ProduceLogRequest produceLogRequest = (ProduceLogRequest) rawRequest;
             if (hasHistoricalProduce(produceLogRequest)) {

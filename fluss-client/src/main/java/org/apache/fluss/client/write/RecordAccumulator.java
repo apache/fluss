@@ -449,16 +449,6 @@ public final class RecordAccumulator {
 
     /** Re-enqueue a batch unless it was completed concurrently. */
     public boolean reEnqueue(ReadyWriteBatch readyWriteBatch) {
-        return reEnqueue(readyWriteBatch, true);
-    }
-
-    /** Defers an unsent batch without consuming the write retry budget. */
-    boolean reEnqueueUnsent(ReadyWriteBatch readyWriteBatch) {
-        throttle.backoffForConnection(readyWriteBatch.tableBucket());
-        return reEnqueue(readyWriteBatch, false);
-    }
-
-    private boolean reEnqueue(ReadyWriteBatch readyWriteBatch, boolean retry) {
         WriteBatch batch = readyWriteBatch.writeBatch();
         Deque<WriteBatch> deque =
                 getDequeOrThrow(readyWriteBatch.tableBucket(), batch.physicalTablePath());
@@ -466,9 +456,7 @@ public final class RecordAccumulator {
             if (batch.isDone()) {
                 return false;
             }
-            if (retry) {
-                batch.reEnqueued();
-            }
+            batch.reEnqueued();
             if (idempotenceManager.idempotenceEnabled()) {
                 insertInSequenceOrder(deque, batch, readyWriteBatch.tableBucket());
             } else {
