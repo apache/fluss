@@ -44,6 +44,7 @@ const DEFAULT_WRITER_KV_BACKPRESSURE_MAX_THROTTLE_MS: u64 = 3000;
 const MAX_IN_FLIGHT_REQUESTS_PER_BUCKET_FOR_IDEMPOTENCE: usize = 5;
 const DEFAULT_ACKS: &str = "all";
 const DEFAULT_CONNECT_TIMEOUT_MS: u64 = 15_000;
+const DEFAULT_CONNECTION_MAX_IDLE_TIME_MS: u64 = 10 * 60 * 1000;
 // Wait this long before resending a batch the server rejected with a retriable
 // error, doubling up to `DEFAULT_WRITER_RETRY_MAX_BACKOFF_MS`. Shaped like
 // Kafka's `retry.backoff.ms` / `retry.backoff.max.ms`, whose defaults are 100ms
@@ -215,6 +216,13 @@ pub struct Config {
     #[arg(long, default_value_t = DEFAULT_CONNECT_TIMEOUT_MS)]
     pub connect_timeout_ms: u64,
 
+    /// Time in milliseconds after which a cached connection without reads or writes is closed.
+    /// The requests still waiting on it fail with a retriable error. 0 disables closing idle
+    /// connections.
+    /// Default: 600000 (10 minutes), matching Java `netty.connection.max-idle-time`.
+    #[arg(long, default_value_t = DEFAULT_CONNECTION_MAX_IDLE_TIME_MS)]
+    pub connection_max_idle_time_ms: u64,
+
     #[arg(long, default_value_t = String::from(DEFAULT_SECURITY_PROTOCOL))]
     pub security_protocol: String,
 
@@ -340,6 +348,10 @@ impl std::fmt::Debug for Config {
                 &self.writer_kv_backpressure_max_throttle_ms,
             )
             .field("connect_timeout_ms", &self.connect_timeout_ms)
+            .field(
+                "connection_max_idle_time_ms",
+                &self.connection_max_idle_time_ms,
+            )
             .field("security_protocol", &self.security_protocol)
             .field("security_sasl_mechanism", &self.security_sasl_mechanism)
             .field("security_sasl_username", &self.security_sasl_username)
@@ -393,6 +405,7 @@ impl Default for Config {
             writer_buffer_wait_timeout_ms: DEFAULT_WRITER_BUFFER_WAIT_TIMEOUT_MS,
             writer_kv_backpressure_max_throttle_ms: DEFAULT_WRITER_KV_BACKPRESSURE_MAX_THROTTLE_MS,
             connect_timeout_ms: DEFAULT_CONNECT_TIMEOUT_MS,
+            connection_max_idle_time_ms: DEFAULT_CONNECTION_MAX_IDLE_TIME_MS,
             security_protocol: String::from(DEFAULT_SECURITY_PROTOCOL),
             security_sasl_mechanism: String::from(DEFAULT_SASL_MECHANISM),
             security_sasl_username: String::new(),

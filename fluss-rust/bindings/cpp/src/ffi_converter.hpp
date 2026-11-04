@@ -242,6 +242,7 @@ inline ffi::FfiConfig to_ffi_config(const Configuration& config) {
     ffi_config.writer_retry_backoff_ms = config.writer_retry_backoff_ms;
     ffi_config.writer_retry_max_backoff_ms = config.writer_retry_max_backoff_ms;
     ffi_config.connect_timeout_ms = config.connect_timeout_ms;
+    ffi_config.connection_max_idle_time_ms = config.connection_max_idle_time_ms;
     ffi_config.security_protocol = rust::String(config.security_protocol);
     ffi_config.security_sasl_mechanism = rust::String(config.security_sasl_mechanism);
     ffi_config.security_sasl_username = rust::String(config.security_sasl_username);
