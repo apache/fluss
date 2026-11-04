@@ -1190,7 +1190,7 @@ public class ConfigOptions {
                     .durationType()
                     .defaultValue(Duration.ofMillis(100))
                     .withDescription(
-                            "The base backoff applied before retrying a failed index batch send. "
+                            "The base backoff before retrying index source reads, window construction or batch sends. "
                                     + "The value must be positive and must not exceed 10 seconds.");
 
     public static final ConfigOption<MemorySize> INDEX_REPLICATION_MAIN_BUCKET_BUFFER_MAX_BYTES =
@@ -1198,7 +1198,8 @@ public class ConfigOptions {
                     .memoryType()
                     .defaultValue(MemorySize.parse("64mb"))
                     .withDescription(
-                            "Maximum retained payload bytes buffered per leader main-table bucket. "
+                            "Soft backpressure threshold for retained index payload bytes per leader main-table bucket. "
+                                    + "A complete window may exceed this threshold. "
                                     + "The value must be positive.");
 
     public static final ConfigOption<MemorySize> INDEX_REPLICATION_BUFFER_MAX_BYTES =
@@ -1206,7 +1207,8 @@ public class ConfigOptions {
                     .memoryType()
                     .defaultValue(MemorySize.parse("512mb"))
                     .withDescription(
-                            "Maximum retained payload bytes across one TabletServer. "
+                            "Maximum retained index payload page bytes across one TabletServer, "
+                                    + "including construction, queued and in-flight batches. "
                                     + "The value must be positive.");
 
     public static final ConfigOption<MemorySize> INDEX_REPLICATION_REQUEST_TARGET_BYTES =
@@ -1214,7 +1216,8 @@ public class ConfigOptions {
                     .memoryType()
                     .defaultValue(MemorySize.parse("1mb"))
                     .withDescription(
-                            "Preferred encoded payload size for one index replication window. "
+                            "Preferred encoded payload size when aggregating index replication RPC requests. "
+                                    + "A complete target batch may exceed this target. "
                                     + "The value must be positive.");
 
     public static final ConfigOption<MemorySize> LOG_REPLICA_FETCH_MAX_BYTES =

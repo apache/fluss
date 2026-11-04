@@ -17,7 +17,7 @@
 
 package org.apache.fluss.server.index;
 
-/** Terminal failure raised when a source WAL violates FULL changelog mutation boundaries. */
+/** Raised when source WAL cannot prove a contiguous range of complete FULL changelog mutations. */
 final class IndexSourceWalCorruptionException extends RuntimeException {
 
     private static final long serialVersionUID = 1L;

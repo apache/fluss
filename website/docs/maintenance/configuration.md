@@ -319,10 +319,12 @@ These TabletServer options control maintenance of [secondary indexes](../table-d
 | index.replication.reader.threads | Integer | 8 | Number of reader workers that read and convert committed main-table WAL. Must be positive. |
 | index.replication.source.max-bytes | MemorySize | 2mb | Preferred maximum source WAL bytes read per replication window. The first complete log record batch may exceed this limit to ensure progress. Independent of the encoded request target size. Must be between 1 and 2147483647 bytes. |
 | index.replication.sender.threads | Integer | 2 | Number of sender workers that dispatch index batches. Must be positive. |
-| index.replication.request.target-bytes | MemorySize | 1mb | Preferred encoded payload size for one replication window. Complete log record batches are not split. Must be positive. |
-| index.replication.buffer.max-bytes-per-main-bucket | MemorySize | 64mb | Maximum retained payload bytes buffered per leader main-table bucket. Must be positive. |
-| index.replication.buffer.max-bytes | MemorySize | 512mb | Maximum retained bytes of admitted index batches across one TabletServer, including queued and in-flight batches. Source reads and batches still being constructed are not included. Must be positive. |
-| index.replication.retry.backoff | Duration | 100ms | Base backoff before retrying a failed index batch. Must be positive and no greater than 10 seconds. |
+| index.replication.request.target-bytes | MemorySize | 1mb | Preferred encoded payload size for aggregated RPC requests. Complete target batches may exceed this soft target. Must be positive. |
+| index.replication.buffer.max-bytes-per-main-bucket | MemorySize | 64mb | Soft backpressure threshold per leader main-table bucket. A complete window may exceed this threshold. Must be positive. |
+| index.replication.buffer.max-bytes | MemorySize | 512mb | Maximum retained index payload page bytes across one TabletServer, including construction, queued and in-flight batches. Source reads and temporary encoding objects are not included. Must be positive. |
+| index.replication.retry.backoff | Duration | 100ms | Base backoff before retrying source reads, window construction or batch sends. Must be positive and no greater than 10 seconds. |
+
+Source failures and size-limit violations retain the replication task and its progress. Size violations are logged at ERROR and retried with backoff until an administrator repairs the fault or adjusts the constraints. These options are captured when the replication components are constructed; changed limits require recreating the affected components, such as by a rolling restart.
 
 The client option `client.lookup.continuation-threads` (Integer, default `4`) controls how many threads per connection continue secondary-index lookups after index candidates are returned. It must be positive.
 
