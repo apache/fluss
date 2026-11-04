@@ -301,37 +301,6 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
                 FlussSerializationSchema<InputT> flussSerializationSchema,
                 boolean enableUndoRecovery,
                 @Nullable String producerId,
-                boolean schemaSupportsRetract) {
-            this(
-                    tablePath,
-                    flussConfig,
-                    tableRowType,
-                    targetColumnIndexes,
-                    numBucket,
-                    bucketKeys,
-                    partitionKeys,
-                    lakeFormat,
-                    distributionMode,
-                    flussSerializationSchema,
-                    enableUndoRecovery,
-                    producerId,
-                    schemaSupportsRetract,
-                    false);
-        }
-
-        UpsertSinkWriterBuilder(
-                TablePath tablePath,
-                Configuration flussConfig,
-                RowType tableRowType,
-                @Nullable int[] targetColumnIndexes,
-                int numBucket,
-                List<String> bucketKeys,
-                List<String> partitionKeys,
-                @Nullable DataLakeFormat lakeFormat,
-                DistributionMode distributionMode,
-                FlussSerializationSchema<InputT> flussSerializationSchema,
-                boolean enableUndoRecovery,
-                @Nullable String producerId,
                 boolean schemaSupportsRetract,
                 boolean removeRecordOnDelete) {
             this.tablePath = tablePath;

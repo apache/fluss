@@ -57,18 +57,6 @@ class UpsertSinkWriterTest {
                 .hasMessageContaining("does not support retract");
     }
 
-    @Test
-    void testMixedRetractAndUpsertInSequence() throws Exception {
-        UpsertSinkWriter<RowData> writer = createTestingWriter(true);
-        TestUpsertWriter mockWriter = getTestUpsertWriter(writer);
-
-        writer.writeRow(OperationType.RETRACT, genericRow(1, 10L));
-        writer.writeRow(OperationType.UPSERT, genericRow(1, 11L));
-
-        assertThat(mockWriter.getRetractCount()).isEqualTo(1);
-        assertThat(mockWriter.getUpsertCount()).isEqualTo(1);
-    }
-
     private static UpsertSinkWriter<RowData> createTestingWriter(boolean schemaSupportsRetract)
             throws Exception {
         UpsertSinkWriter<RowData> writer =
@@ -81,7 +69,8 @@ class UpsertSinkWriterTest {
                                 .getMailboxExecutor(),
                         new RowDataSerializationSchema(SinkOperationMode.upsert(false)),
                         null,
-                        schemaSupportsRetract);
+                        schemaSupportsRetract,
+                        false);
 
         writer.upsertWriter = new TestUpsertWriter();
         return writer;

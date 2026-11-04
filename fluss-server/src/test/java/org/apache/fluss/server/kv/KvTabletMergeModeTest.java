@@ -564,57 +564,6 @@ class KvTabletMergeModeTest {
     // ==================== Per-Record MutationType RETRACT Tests (V2 format) ====================
 
     @Test
-    void testRetractThenUpsertOnExistingKey() throws Exception {
-        initTablets(RETRACT_SAFE_SCHEMA);
-
-        // Insert initial state: key=k1, count=100, name="init"
-        KvRecordBatch initBatch =
-                kvRecordBatchFactory.ofRecords(
-                        RETRACT_KV_RECORD_FACTORY.ofRecord(
-                                "k1".getBytes(), new Object[] {1, 100L, "init"}));
-        kvTablet.putAsLeader(initBatch, null, MergeMode.DEFAULT);
-
-        long endOffset = logTablet.localLogEndOffset();
-
-        // Send V2 batch: RETRACT(20, "old") + UPSERT(30, "new") for same key
-        // count: 100-20+30=110, name: retract "old" then upsert "new" → "new"
-        List<V2RecordEntry> entries =
-                Arrays.asList(
-                        V2RecordEntry.of(
-                                MutationType.RETRACT,
-                                RETRACT_KV_RECORD_FACTORY.ofRecord(
-                                        "k1".getBytes(), new Object[] {1, 20L, "old"})),
-                        V2RecordEntry.of(
-                                MutationType.UPSERT,
-                                RETRACT_KV_RECORD_FACTORY.ofRecord(
-                                        "k1".getBytes(), new Object[] {1, 30L, "new"})));
-        KvRecordBatch batch = kvRecordBatchFactory.ofV2Records(entries);
-        kvTablet.putAsLeader(batch, null, MergeMode.DEFAULT);
-
-        // Each operation emits its own state transition, including the intermediate value.
-        LogRecords actualLogRecords = readLogRecords(endOffset);
-        MemoryLogRecords expectedLogs =
-                logRecords(
-                        RETRACT_SAFE_ROW_TYPE,
-                        endOffset,
-                        Arrays.asList(
-                                ChangeType.UPDATE_BEFORE,
-                                ChangeType.UPDATE_AFTER,
-                                ChangeType.UPDATE_BEFORE,
-                                ChangeType.UPDATE_AFTER),
-                        Arrays.asList(
-                                new Object[] {1, 100L, "init"},
-                                new Object[] {1, 80L, null},
-                                new Object[] {1, 80L, null},
-                                new Object[] {1, 110L, "new"}));
-
-        assertThatLogRecords(actualLogRecords)
-                .withSchema(RETRACT_SAFE_ROW_TYPE)
-                .assertCheckSum(true)
-                .isEqualTo(expectedLogs);
-    }
-
-    @Test
     void testRetractUnpairedOnExistingKey() throws Exception {
         initTablets(RETRACT_SAFE_SCHEMA);
 

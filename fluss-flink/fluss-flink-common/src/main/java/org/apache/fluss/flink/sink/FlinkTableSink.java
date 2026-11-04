@@ -136,46 +136,12 @@ public class FlinkTableSink
                 bucketKeys,
                 distributionMode,
                 producerId,
-                Collections.emptySet());
-    }
-
-    /** Creates a sink with legacy changelog semantics and the supplied field capabilities. */
-    public FlinkTableSink(
-            TablePath tablePath,
-            Configuration flussConfig,
-            RowType tableRowType,
-            int[] primaryKeyIndexes,
-            List<String> partitionKeys,
-            boolean streaming,
-            @Nullable MergeEngineType mergeEngineType,
-            @Nullable DataLakeFormat lakeFormat,
-            boolean sinkIgnoreDelete,
-            DeleteBehavior tableDeleteBehavior,
-            int numBucket,
-            List<String> bucketKeys,
-            DistributionMode distributionMode,
-            @Nullable String producerId,
-            Set<String> nonRetractableColumns) {
-        this(
-                tablePath,
-                flussConfig,
-                tableRowType,
-                primaryKeyIndexes,
-                partitionKeys,
-                streaming,
-                mergeEngineType,
-                lakeFormat,
-                sinkIgnoreDelete,
-                tableDeleteBehavior,
-                numBucket,
-                bucketKeys,
-                distributionMode,
-                producerId,
-                nonRetractableColumns,
+                Collections.emptySet(),
                 false,
                 false);
     }
 
+    /** Creates a sink with the supplied retract capabilities and changelog DELETE policy. */
     public FlinkTableSink(
             TablePath tablePath,
             Configuration flussConfig,

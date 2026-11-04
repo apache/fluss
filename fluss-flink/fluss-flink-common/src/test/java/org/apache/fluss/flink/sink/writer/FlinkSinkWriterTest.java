@@ -212,7 +212,8 @@ public class FlinkSinkWriterTest extends FlinkTestBase {
                                 new RowDataSerializationSchema(
                                         SinkOperationMode.aggregation(false, true)),
                                 null,
-                                true)) {
+                                true,
+                                false)) {
             UpsertWriter seed = table.newUpsert().createWriter();
             seed.upsert(row(1, 100L, 9)).get();
             writer.initialize(context.metricGroup());

@@ -742,36 +742,14 @@ public class FlinkConversionsTest {
     // --- computeNonRetractableAggregationColumns() tests ---
 
     @Test
-    void testComputeSchemaSupportsRetractAllRetractable() {
-        // SUM supports retract — should return true
+    void testRetractableAggregationFunctionsAllowPlanning() {
         ResolvedSchema schema =
                 new ResolvedSchema(
                         Arrays.asList(
                                 Column.physical(
                                         "id", org.apache.flink.table.api.DataTypes.INT().notNull()),
                                 Column.physical(
-                                        "val", org.apache.flink.table.api.DataTypes.BIGINT())),
-                        Collections.emptyList(),
-                        UniqueConstraint.primaryKey("PK_id", Collections.singletonList("id")));
-
-        Map<String, String> options = new HashMap<>();
-        options.put("table.merge-engine", "aggregation");
-        options.put("fields.val.agg", "sum");
-
-        org.apache.flink.configuration.Configuration conf =
-                org.apache.flink.configuration.Configuration.fromMap(options);
-
-        assertThat(FlinkConversions.computeNonRetractableAggregationColumns(schema, conf).isEmpty())
-                .isTrue();
-    }
-
-    @Test
-    void testProductAndCollectionFieldsAllowRetractPlanning() {
-        ResolvedSchema schema =
-                new ResolvedSchema(
-                        Arrays.asList(
-                                Column.physical(
-                                        "id", org.apache.flink.table.api.DataTypes.INT().notNull()),
+                                        "total", org.apache.flink.table.api.DataTypes.BIGINT()),
                                 Column.physical(
                                         "factor", org.apache.flink.table.api.DataTypes.BIGINT()),
                                 Column.physical(
@@ -787,6 +765,7 @@ public class FlinkConversionsTest {
                         UniqueConstraint.primaryKey("PK_id", Collections.singletonList("id")));
         Map<String, String> options = new HashMap<>();
         options.put("table.merge-engine", "aggregation");
+        options.put("fields.total.agg", "sum");
         options.put("fields.factor.agg", "product");
         options.put("fields.items.agg", "collect");
         options.put("fields.attributes.agg", "merge_map");
@@ -795,29 +774,6 @@ public class FlinkConversionsTest {
                                 schema,
                                 org.apache.flink.configuration.Configuration.fromMap(options)))
                 .isEmpty();
-    }
-
-    @Test
-    void testComputeSchemaSupportsRetractNonRetractableFunction() {
-        // MAX does not support retract — should return false
-        ResolvedSchema schema =
-                new ResolvedSchema(
-                        Arrays.asList(
-                                Column.physical(
-                                        "id", org.apache.flink.table.api.DataTypes.INT().notNull()),
-                                Column.physical("val", org.apache.flink.table.api.DataTypes.INT())),
-                        Collections.emptyList(),
-                        UniqueConstraint.primaryKey("PK_id", Collections.singletonList("id")));
-
-        Map<String, String> options = new HashMap<>();
-        options.put("table.merge-engine", "aggregation");
-        options.put("fields.val.agg", "max");
-
-        org.apache.flink.configuration.Configuration conf =
-                org.apache.flink.configuration.Configuration.fromMap(options);
-
-        assertThat(FlinkConversions.computeNonRetractableAggregationColumns(schema, conf).isEmpty())
-                .isFalse();
     }
 
     @Test

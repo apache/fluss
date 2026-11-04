@@ -214,6 +214,7 @@ class FlussSinkBuilderTest {
                         new OrderSerializationSchema(),
                         true,
                         null,
+                        false,
                         false);
 
         writerBuilder.addPreWriteTopology(input);
@@ -247,6 +248,7 @@ class FlussSinkBuilderTest {
                             new OrderSerializationSchema(),
                             true,
                             null,
+                            false,
                             false);
 
             assertThatThrownBy(() -> writerBuilder.addPreWriteTopology(input))

@@ -171,13 +171,7 @@ public class RowDataSerializationSchema implements FlussSerializationSchema<RowD
         }
         if (targetFieldNames.size() != inputFieldNames.size()) {
             // there is a schema evolution happens (e.g., ADD COLUMN), need to build index mapping
-            int[] indexMapping = new int[targetFieldNames.size()];
-            for (int i = 0; i < targetFieldNames.size(); i++) {
-                String fieldName = targetFieldNames.get(i);
-                int fieldIndex = inputFieldNames.indexOf(fieldName);
-                indexMapping[i] = fieldIndex;
-            }
-            outputProjection = ProjectedRow.from(indexMapping);
+            outputProjection = ProjectedRow.from(inputIndexes);
         }
         if (context.isStatisticEnabled()) {
             this.sizeEstimator = new RowDataSizeEstimator(context.getRowSchema());

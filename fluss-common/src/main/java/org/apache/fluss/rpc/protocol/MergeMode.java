@@ -19,9 +19,6 @@ package org.apache.fluss.rpc.protocol;
 
 import org.apache.fluss.annotation.PublicEvolving;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 /**
  * Merge mode for write operations on tables with merge engines.
  *
@@ -63,11 +60,6 @@ public enum MergeMode {
      */
     OVERWRITE(1);
 
-    private static final Logger LOG = LoggerFactory.getLogger(MergeMode.class);
-
-    /** Whether the unknown-merge-mode warning has been logged (logged only once per JVM). */
-    private static volatile boolean unknownMergeModeWarned = false;
-
     private final int value;
 
     MergeMode(int value) {
@@ -100,7 +92,7 @@ public enum MergeMode {
      * Converts an integer value to a MergeMode enum.
      *
      * @param value the integer value
-     * @return the corresponding MergeMode, or DEFAULT if the value is unknown
+     * @return the corresponding MergeMode, or DEFAULT if the value is invalid
      */
     public static MergeMode fromValue(int value) {
         switch (value) {
@@ -116,27 +108,12 @@ public enum MergeMode {
     /**
      * Converts a proto value to a MergeMode enum.
      *
-     * <p>Unknown values return {@link #DEFAULT}, as in {@link #fromValue(int)}, and log a warning
-     * once for protocol diagnostics.
+     * <p>This is an alias for {@link #fromValue(int)} for clarity when working with proto messages.
      *
      * @param protoValue the proto value
-     * @return the corresponding MergeMode, or {@link #DEFAULT} for unknown values
+     * @return the corresponding MergeMode, or DEFAULT if the value is invalid
      */
     public static MergeMode fromProtoValue(int protoValue) {
-        switch (protoValue) {
-            case 0:
-                return DEFAULT;
-            case 1:
-                return OVERWRITE;
-            default:
-                if (!unknownMergeModeWarned) {
-                    unknownMergeModeWarned = true;
-                    LOG.warn(
-                            "Unknown MergeMode proto value: {}, falling back to DEFAULT. "
-                                    + "This warning is logged only once.",
-                            protoValue);
-                }
-                return DEFAULT;
-        }
+        return fromValue(protoValue);
     }
 }

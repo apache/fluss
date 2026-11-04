@@ -52,6 +52,7 @@ class WriteRecordTest {
                         WriteFormat.COMPACTED_KV,
                         null);
 
+        assertThat(writeRecord.getMutationType()).isEqualTo(MutationType.UPSERT);
         assertThat(writeRecord.getRow()).isNotNull();
         assertThat(writeRecord.getKey()).isEqualTo(key);
     }
@@ -71,6 +72,7 @@ class WriteRecordTest {
                         WriteFormat.COMPACTED_KV,
                         null);
 
+        assertThat(writeRecord.getMutationType()).isEqualTo(MutationType.DELETE);
         assertThat(writeRecord.getRow()).isNull();
         assertThat(writeRecord.getKey()).isEqualTo(key);
     }
@@ -84,43 +86,6 @@ class WriteRecordTest {
 
         assertThat(writeRecord.getRow()).isNotNull();
         assertThat(writeRecord.getKey()).isNull();
-    }
-
-    @Test
-    void testUpsertMutationType() {
-        BinaryRow row = compactedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
-        byte[] key =
-                new CompactedKeyEncoder(DATA1_ROW_TYPE, DATA1_SCHEMA_PK.getPrimaryKeyIndexes())
-                        .encodeKey(row);
-        WriteRecord writeRecord =
-                WriteRecord.forUpsert(
-                        DATA1_TABLE_INFO_PK,
-                        PhysicalTablePath.of(DATA1_TABLE_PATH_PK),
-                        row,
-                        key,
-                        key,
-                        WriteFormat.COMPACTED_KV,
-                        null);
-
-        assertThat(writeRecord.getMutationType()).isEqualTo(MutationType.UPSERT);
-    }
-
-    @Test
-    void testDeleteMutationType() {
-        CompactedRow row = compactedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
-        byte[] key =
-                new CompactedKeyEncoder(DATA1_ROW_TYPE, DATA1_SCHEMA_PK.getPrimaryKeyIndexes())
-                        .encodeKey(row);
-        WriteRecord writeRecord =
-                WriteRecord.forDelete(
-                        DATA1_TABLE_INFO_PK,
-                        PhysicalTablePath.of(DATA1_TABLE_PATH_PK),
-                        key,
-                        key,
-                        WriteFormat.COMPACTED_KV,
-                        null);
-
-        assertThat(writeRecord.getMutationType()).isEqualTo(MutationType.DELETE);
     }
 
     @Test

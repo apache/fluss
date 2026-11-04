@@ -38,5 +38,6 @@ class AggFunctionTypeTest {
         } else {
             assertThat(type.supportsRetract()).as("%s should NOT support retract", type).isFalse();
         }
+        assertThat(AggFunctions.of(type, null).supportsRetract()).isEqualTo(type.supportsRetract());
     }
 }

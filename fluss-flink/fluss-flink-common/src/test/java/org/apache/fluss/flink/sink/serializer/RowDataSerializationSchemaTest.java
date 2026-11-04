@@ -18,165 +18,94 @@
 package org.apache.fluss.flink.sink.serializer;
 
 import org.apache.fluss.flink.row.OperationType;
-import org.apache.fluss.flink.row.RowWithOp;
 import org.apache.fluss.types.IntType;
 import org.apache.fluss.types.RowType;
 
 import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.types.RowKind;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.MethodSource;
 
+import java.util.stream.Stream;
+
+import static org.apache.fluss.flink.row.OperationType.APPEND;
+import static org.apache.fluss.flink.row.OperationType.DELETE;
+import static org.apache.fluss.flink.row.OperationType.IGNORE;
+import static org.apache.fluss.flink.row.OperationType.RETRACT;
+import static org.apache.fluss.flink.row.OperationType.UPSERT;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for {@link RowDataSerializationSchema}. */
 class RowDataSerializationSchemaTest {
 
-    @Test
-    void testUpdateBeforeMapsToRetractWhenRetractCompatible() throws Exception {
-        RowDataSerializationSchema schema =
-                new RowDataSerializationSchema(SinkOperationMode.aggregation(false, true));
-        schema.open(new TestInitializationContext());
-
-        GenericRowData rowData = new GenericRowData(2);
-        rowData.setField(0, 1);
-        rowData.setField(1, 2);
-        rowData.setRowKind(RowKind.UPDATE_BEFORE);
-
-        RowWithOp result = schema.serialize(rowData);
-        assertThat(result.getOperationType()).isEqualTo(OperationType.RETRACT);
-    }
-
-    @Test
-    void testDeleteMapsToRetractWhenEnabled() throws Exception {
-        RowDataSerializationSchema schema =
-                new RowDataSerializationSchema(SinkOperationMode.aggregation(false, true));
-        schema.open(new TestInitializationContext());
-
-        GenericRowData rowData = new GenericRowData(2);
-        rowData.setField(0, 1);
-        rowData.setField(1, 2);
-        rowData.setRowKind(RowKind.DELETE);
-
-        RowWithOp result = schema.serialize(rowData);
-        assertThat(result.getOperationType()).isEqualTo(OperationType.RETRACT);
-    }
-
-    @Test
-    void testWholeRowDeleteDoesNotChangeUpdateBefore() throws Exception {
-        RowDataSerializationSchema schema =
-                new RowDataSerializationSchema(SinkOperationMode.aggregation(false, true, true));
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("operationMappings")
+    void testOperationMapping(
+            String modeName, RowDataSerializationSchema schema, OperationType[] expected)
+            throws Exception {
         schema.open(new TestInitializationContext());
         GenericRowData row = GenericRowData.of(1, 2);
-        row.setRowKind(RowKind.DELETE);
-        assertThat(schema.serialize(row).getOperationType()).isEqualTo(OperationType.DELETE);
-        row.setRowKind(RowKind.UPDATE_BEFORE);
-        assertThat(schema.serialize(row).getOperationType()).isEqualTo(OperationType.RETRACT);
+        RowKind[] rowKinds = {
+            RowKind.INSERT, RowKind.UPDATE_BEFORE, RowKind.UPDATE_AFTER, RowKind.DELETE
+        };
+        for (int i = 0; i < rowKinds.length; i++) {
+            row.setRowKind(rowKinds[i]);
+            assertThat(schema.serialize(row).getOperationType())
+                    .as("%s with %s", modeName, rowKinds[i])
+                    .isEqualTo(expected[i]);
+        }
     }
 
-    @Test
-    void testUpdateBeforeMapsToDeleteWhenNotRetractCompatible() throws Exception {
-        RowDataSerializationSchema schema =
-                new RowDataSerializationSchema(SinkOperationMode.upsert(false));
-        schema.open(new TestInitializationContext());
-
-        GenericRowData rowData = new GenericRowData(2);
-        rowData.setField(0, 1);
-        rowData.setField(1, 2);
-        rowData.setRowKind(RowKind.UPDATE_BEFORE);
-
-        RowWithOp result = schema.serialize(rowData);
-        assertThat(result.getOperationType()).isEqualTo(OperationType.DELETE);
+    private static Stream<Arguments> operationMappings() {
+        return Stream.of(
+                Arguments.of(
+                        "append",
+                        new RowDataSerializationSchema(true, false),
+                        new OperationType[] {APPEND, APPEND, APPEND, APPEND}),
+                Arguments.of(
+                        "append with ignore-delete",
+                        new RowDataSerializationSchema(true, true),
+                        new OperationType[] {APPEND, IGNORE, APPEND, IGNORE}),
+                Arguments.of(
+                        "upsert",
+                        new RowDataSerializationSchema(false, false),
+                        new OperationType[] {UPSERT, DELETE, UPSERT, DELETE}),
+                Arguments.of(
+                        "upsert with ignore-delete",
+                        new RowDataSerializationSchema(false, true),
+                        new OperationType[] {UPSERT, IGNORE, UPSERT, IGNORE}),
+                Arguments.of(
+                        "aggregation retract",
+                        new RowDataSerializationSchema(SinkOperationMode.aggregation(false, true)),
+                        new OperationType[] {UPSERT, RETRACT, UPSERT, RETRACT}),
+                Arguments.of(
+                        "aggregation retract with ignore-delete",
+                        new RowDataSerializationSchema(SinkOperationMode.aggregation(true, true)),
+                        new OperationType[] {UPSERT, IGNORE, UPSERT, IGNORE}),
+                Arguments.of(
+                        "aggregation retract with whole-row delete",
+                        new RowDataSerializationSchema(
+                                SinkOperationMode.aggregation(false, true, true)),
+                        new OperationType[] {UPSERT, RETRACT, UPSERT, DELETE}));
     }
 
-    @Test
-    void testUpdateBeforeFailsFastForAggregationTableWithoutRetract() throws Exception {
+    @ParameterizedTest
+    @EnumSource(
+            value = RowKind.class,
+            names = {"UPDATE_BEFORE", "DELETE"})
+    void testUnsupportedAggregationRetractFails(RowKind rowKind) throws Exception {
         RowDataSerializationSchema schema =
                 new RowDataSerializationSchema(SinkOperationMode.aggregation(false, false));
         schema.open(new TestInitializationContext());
+        GenericRowData row = GenericRowData.of(1, 2);
+        row.setRowKind(rowKind);
 
-        GenericRowData rowData = new GenericRowData(2);
-        rowData.setField(0, 1);
-        rowData.setField(1, 2);
-        rowData.setRowKind(RowKind.UPDATE_BEFORE);
-
-        assertThatThrownBy(() -> schema.serialize(rowData))
+        assertThatThrownBy(() -> schema.serialize(row))
                 .isInstanceOf(UnsupportedOperationException.class)
                 .hasMessageContaining("support retract");
-    }
-
-    @Test
-    void testNonAggregationTableKeepsCurrentBehavior() throws Exception {
-        RowDataSerializationSchema schema = new RowDataSerializationSchema(false, false);
-        schema.open(new TestInitializationContext());
-
-        // INSERT -> UPSERT
-        GenericRowData insert = new GenericRowData(2);
-        insert.setField(0, 1);
-        insert.setField(1, 2);
-        insert.setRowKind(RowKind.INSERT);
-        assertThat(schema.serialize(insert).getOperationType()).isEqualTo(OperationType.UPSERT);
-
-        // UPDATE_AFTER -> UPSERT
-        GenericRowData updateAfter = new GenericRowData(2);
-        updateAfter.setField(0, 1);
-        updateAfter.setField(1, 2);
-        updateAfter.setRowKind(RowKind.UPDATE_AFTER);
-        assertThat(schema.serialize(updateAfter).getOperationType())
-                .isEqualTo(OperationType.UPSERT);
-
-        // DELETE -> DELETE
-        GenericRowData delete = new GenericRowData(2);
-        delete.setField(0, 1);
-        delete.setField(1, 2);
-        delete.setRowKind(RowKind.DELETE);
-        assertThat(schema.serialize(delete).getOperationType()).isEqualTo(OperationType.DELETE);
-
-        // UPDATE_BEFORE -> DELETE (not RETRACT)
-        GenericRowData updateBefore = new GenericRowData(2);
-        updateBefore.setField(0, 1);
-        updateBefore.setField(1, 2);
-        updateBefore.setRowKind(RowKind.UPDATE_BEFORE);
-        assertThat(schema.serialize(updateBefore).getOperationType())
-                .isEqualTo(OperationType.DELETE);
-    }
-
-    @Test
-    void testInsertAndUpdateAfterStillMapToUpsertWhenAggregationTable() throws Exception {
-        RowDataSerializationSchema schema =
-                new RowDataSerializationSchema(SinkOperationMode.aggregation(false, true));
-        schema.open(new TestInitializationContext());
-
-        // INSERT -> UPSERT even when isAggregationTable=true
-        GenericRowData insert = new GenericRowData(2);
-        insert.setField(0, 1);
-        insert.setField(1, 2);
-        insert.setRowKind(RowKind.INSERT);
-        assertThat(schema.serialize(insert).getOperationType()).isEqualTo(OperationType.UPSERT);
-
-        // UPDATE_AFTER -> UPSERT even when isAggregationTable=true
-        GenericRowData updateAfter = new GenericRowData(2);
-        updateAfter.setField(0, 1);
-        updateAfter.setField(1, 2);
-        updateAfter.setRowKind(RowKind.UPDATE_AFTER);
-        assertThat(schema.serialize(updateAfter).getOperationType())
-                .isEqualTo(OperationType.UPSERT);
-    }
-
-    @Test
-    void testIgnoreDeleteOverridesAggregationTable() throws Exception {
-        // When ignoreDelete=true, UPDATE_BEFORE should be IGNORE even if aggregation table
-        RowDataSerializationSchema schema =
-                new RowDataSerializationSchema(SinkOperationMode.aggregation(true, true));
-        schema.open(new TestInitializationContext());
-
-        GenericRowData rowData = new GenericRowData(2);
-        rowData.setField(0, 1);
-        rowData.setField(1, 2);
-        rowData.setRowKind(RowKind.UPDATE_BEFORE);
-
-        RowWithOp result = schema.serialize(rowData);
-        assertThat(result.getOperationType()).isEqualTo(OperationType.IGNORE);
     }
 
     /**

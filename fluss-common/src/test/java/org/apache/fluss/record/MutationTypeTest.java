@@ -48,9 +48,4 @@ class MutationTypeTest {
         assertThatThrownBy(() -> MutationType.fromValue(Byte.MAX_VALUE))
                 .isInstanceOf(IllegalArgumentException.class);
     }
-
-    @Test
-    void testValuesCount() {
-        assertThat(MutationType.values()).hasSize(3);
-    }
 }

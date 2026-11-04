@@ -32,6 +32,11 @@ import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
+
+import java.util.stream.Stream;
 
 import static org.apache.fluss.testutils.DataTestUtils.compactedRow;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -1091,32 +1096,39 @@ class AggregateRowMergerTest {
 
     // ========== Retract Tests ==========
 
-    @Test
-    void testBasicRetract() {
-        Schema schema =
-                Schema.newBuilder()
-                        .column("id", DataTypes.INT())
-                        .column("sum_count", DataTypes.BIGINT(), AggFunctions.SUM())
-                        .column("sum_total", DataTypes.DOUBLE(), AggFunctions.SUM())
-                        .primaryKey("id")
-                        .build();
-
-        TableConfig tableConfig = new TableConfig(new Configuration());
-        AggregateRowMerger merger = createMerger(schema, tableConfig);
-        merger.configureTargetColumns(null, SCHEMA_ID, schema);
-        RowType rowType = schema.getRowType();
-
-        // Existing accumulated row: id=1, sum_count=100, sum_total=50.5
-        BinaryRow oldRow = compactedRow(rowType, new Object[] {1, 100L, 50.5});
-        // Retract row: id=1, sum_count=30, sum_total=10.5
-        BinaryRow retractRow = compactedRow(rowType, new Object[] {1, 30L, 10.5});
+    @ParameterizedTest
+    @MethodSource("sumRetractions")
+    void testSumRetract(Object[] oldValues, Object[] retractValues, Object[] expectedValues) {
+        AggregateRowMerger merger = createMerger(SCHEMA_SUM, new TableConfig(new Configuration()));
+        merger.configureTargetColumns(null, SCHEMA_ID, SCHEMA_SUM);
+        BinaryRow oldRow = compactedRow(ROW_TYPE_SUM, oldValues);
+        BinaryRow retractRow = compactedRow(ROW_TYPE_SUM, retractValues);
 
         BinaryValue result = merger.retract(toBinaryValue(oldRow), toBinaryValue(retractRow));
 
+        assertThat(result).isNotNull();
         assertThat(result.schemaId).isEqualTo(SCHEMA_ID);
-        assertThat(result.row.getInt(0)).isEqualTo(1); // id unchanged
-        assertThat(result.row.getLong(1)).isEqualTo(70L); // 100 - 30
-        assertThat(result.row.getDouble(2)).isEqualTo(40.0); // 50.5 - 10.5
+        assertThat(result.row).isEqualTo(compactedRow(ROW_TYPE_SUM, expectedValues));
+    }
+
+    private static Stream<Arguments> sumRetractions() {
+        return Stream.of(
+                Arguments.of(
+                        new Object[] {1, 100L, 50.5},
+                        new Object[] {1, 30L, 10.5},
+                        new Object[] {1, 70L, 40.0}),
+                Arguments.of(
+                        new Object[] {1, 30L, 10.5},
+                        new Object[] {1, 30L, 10.5},
+                        new Object[] {1, 0L, 0.0}),
+                Arguments.of(
+                        new Object[] {1, 5L, 2.0},
+                        new Object[] {1, 10L, 7.0},
+                        new Object[] {1, -5L, -5.0}),
+                Arguments.of(
+                        new Object[] {1, 100L, 50.5},
+                        new Object[] {1, null, 10.5},
+                        new Object[] {1, 100L, 40.0}));
     }
 
     @Test
@@ -1210,63 +1222,6 @@ class AggregateRowMergerTest {
         assertThat(result.row.getInt(0)).isEqualTo(1);
         assertThat(result.row.getLong(1)).isEqualTo(-30L);
         assertThat(result.row.isNullAt(2)).isTrue();
-    }
-
-    @Test
-    void testRetractToZero() {
-        TableConfig tableConfig = new TableConfig(new Configuration());
-        AggregateRowMerger merger = createMerger(SCHEMA_SUM, tableConfig);
-        merger.configureTargetColumns(null, SCHEMA_ID, SCHEMA_SUM);
-        RowType rowType = SCHEMA_SUM.getRowType();
-
-        // Existing accumulated row: id=1, sum_count=30, sum_total=10.5
-        BinaryRow oldRow = compactedRow(rowType, new Object[] {1, 30L, 10.5});
-        // Retract the same values — result should be zero, not null
-        BinaryRow retractRow = compactedRow(rowType, new Object[] {1, 30L, 10.5});
-
-        BinaryValue result = merger.retract(toBinaryValue(oldRow), toBinaryValue(retractRow));
-
-        assertThat(result).isNotNull();
-        assertThat(result.row.getInt(0)).isEqualTo(1); // id unchanged
-        assertThat(result.row.getLong(1)).isEqualTo(0L); // 30 - 30 = 0
-        assertThat(result.row.getDouble(2)).isEqualTo(0.0); // 10.5 - 10.5 = 0.0
-    }
-
-    @Test
-    void testRetractBeyondAccumulatorProducesNegative() {
-        TableConfig tableConfig = new TableConfig(new Configuration());
-        AggregateRowMerger merger = createMerger(SCHEMA_SUM, tableConfig);
-        merger.configureTargetColumns(null, SCHEMA_ID, SCHEMA_SUM);
-        RowType rowType = SCHEMA_SUM.getRowType();
-
-        // Existing accumulated row: id=1, count=5, total=2.0
-        BinaryRow oldRow = compactedRow(rowType, new Object[] {1, 5L, 2.0});
-        // Retract more than accumulated — should produce negative values
-        BinaryRow retractRow = compactedRow(rowType, new Object[] {1, 10L, 7.0});
-
-        BinaryValue result = merger.retract(toBinaryValue(oldRow), toBinaryValue(retractRow));
-
-        assertThat(result).isNotNull();
-        assertThat(result.row.getInt(0)).isEqualTo(1); // id unchanged
-        assertThat(result.row.getLong(1)).isEqualTo(-5L); // 5 - 10 = -5
-        assertThat(result.row.getDouble(2)).isEqualTo(-5.0); // 2.0 - 7.0 = -5.0
-    }
-
-    @Test
-    void testRetractWithNullFields() {
-        TableConfig tableConfig = new TableConfig(new Configuration());
-        AggregateRowMerger merger = createMerger(SCHEMA_SUM, tableConfig);
-        merger.configureTargetColumns(null, SCHEMA_ID, SCHEMA_SUM);
-
-        // Existing row: id=1, count=100, total=50.5
-        BinaryRow oldRow = compactedRow(ROW_TYPE_SUM, new Object[] {1, 100L, 50.5});
-        // Retract row with null field: id=1, count=null, total=10.5
-        BinaryRow retractRow = compactedRow(ROW_TYPE_SUM, new Object[] {1, null, 10.5});
-
-        BinaryValue result = merger.retract(toBinaryValue(oldRow), toBinaryValue(retractRow));
-
-        assertThat(result.row.getLong(1)).isEqualTo(100L); // null retract -> unchanged
-        assertThat(result.row.getDouble(2)).isEqualTo(40.0); // 50.5 - 10.5
     }
 
     @Test

@@ -85,41 +85,7 @@ public class UpsertSinkWriter<InputT> extends FlinkSinkWriter<InputT> {
                 mailboxExecutor,
                 flussSerializationSchema,
                 offsetReporter,
-                false);
-    }
-
-    /**
-     * Creates a new UpsertSinkWriter with ProducerOffsetReporter for UndoRecoveryOperator
-     * integration.
-     *
-     * @param tablePath the path of the table to write to
-     * @param flussConfig the Fluss configuration
-     * @param tableRowType the row type of the table
-     * @param targetColumnIndexes optional column indexes for partial updates
-     * @param mailboxExecutor the mailbox executor for async operations
-     * @param flussSerializationSchema the serialization schema for input records
-     * @param offsetReporter optional reporter for reporting offsets to upstream operator
-     * @param schemaSupportsRetract whether this writer can use retract semantics for its target
-     *     columns
-     */
-    public UpsertSinkWriter(
-            TablePath tablePath,
-            Configuration flussConfig,
-            RowType tableRowType,
-            @Nullable int[] targetColumnIndexes,
-            MailboxExecutor mailboxExecutor,
-            FlussSerializationSchema<InputT> flussSerializationSchema,
-            @Nullable ProducerOffsetReporter offsetReporter,
-            boolean schemaSupportsRetract) {
-        this(
-                tablePath,
-                flussConfig,
-                tableRowType,
-                targetColumnIndexes,
-                mailboxExecutor,
-                flussSerializationSchema,
-                offsetReporter,
-                schemaSupportsRetract,
+                false,
                 false);
     }
 
