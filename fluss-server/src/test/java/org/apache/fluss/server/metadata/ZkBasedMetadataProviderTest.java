@@ -19,6 +19,7 @@ package org.apache.fluss.server.metadata;
 
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.PartitionNotExistException;
+import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
@@ -89,6 +90,17 @@ class ZkBasedMetadataProviderTest {
     @AfterAll
     static void afterAll() {
         zookeeperClient.close();
+    }
+
+    @Test
+    void testGetTableMetadataFromZkForNonExistentTable() {
+        TablePath tablePath = TablePath.of("test_db", "non_existent_table");
+        assertThatThrownBy(
+                        () ->
+                                metadataProvider.getTablesMetadataFromZK(
+                                        Collections.singletonList(tablePath)))
+                .isInstanceOf(TableNotExistException.class)
+                .hasMessageContaining("does not exist");
     }
 
     @Test
