@@ -29,6 +29,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -98,6 +99,32 @@ public class JaasContext {
     // -------  static constructor------
     private static final String GLOBAL_CONTEXT_NAME_SERVER = "FlussServer";
     private static final String GLOBAL_CONTEXT_NAME_CLIENT = "FlussClient";
+
+    /**
+     * Loads the listener-specific JAAS entry, falling back to the mechanism-wide setting if the
+     * listener setting is missing or empty. Only an absent mechanism-wide setting falls back to JVM
+     * JAAS; an explicitly empty or malformed entry fails validation.
+     */
+    public static JaasContext loadServerContext(
+            String listenerName, String mechanism, Map<String, String> configs) {
+        String suffix = mechanism.toLowerCase(Locale.ROOT) + "." + SASL_JAAS_CONFIG;
+        String listenerKey =
+                "security.sasl.listener.name."
+                        + listenerName.toLowerCase(Locale.ROOT)
+                        + "."
+                        + suffix;
+        String config = configs.get(listenerKey);
+        if (config == null || config.isEmpty()) {
+            String globalKey = "security.sasl." + suffix;
+            LOG.debug("No JAAS configuration for '{}'. Checking '{}'.", listenerKey, globalKey);
+            config = configs.get(globalKey);
+            if (config == null) {
+                LOG.warn(
+                        "No JAAS configuration for '{}'. Using JVM JAAS configuration.", globalKey);
+            }
+        }
+        return loadServerContext(listenerName, config);
+    }
 
     /**
      * Returns a server-side {@link JaasContext} instance configured for a specific listener.

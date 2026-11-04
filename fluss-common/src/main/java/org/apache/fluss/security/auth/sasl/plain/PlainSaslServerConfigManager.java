@@ -266,11 +266,7 @@ public final class PlainSaslServerConfigManager implements ServerReconfigurable 
 
     private boolean isSuperUserName(String username) {
         return superUsers.stream()
-                .anyMatch(
-                        superUser ->
-                                principalIgnoreCase
-                                        ? username.equalsIgnoreCase(superUser.getName())
-                                        : username.equals(superUser.getName()));
+                .anyMatch(superUser -> superUser.matchesName(username, principalIgnoreCase));
     }
 
     private static Set<FlussPrincipal> parseSuperUsers(Configuration configuration) {

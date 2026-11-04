@@ -33,14 +33,12 @@ import org.slf4j.LoggerFactory;
 import javax.security.sasl.SaslException;
 import javax.security.sasl.SaslServer;
 
-import java.util.Locale;
 import java.util.Map;
 
 /** A connection-local SASL/PLAIN server authenticator. */
 @Internal
 public final class PlainSaslServerAuthenticator implements ServerAuthenticator {
     private static final Logger LOG = LoggerFactory.getLogger(PlainSaslServerAuthenticator.class);
-    private static final String SERVER_AUTHENTICATOR_PREFIX = "security.sasl.";
 
     private final Map<String, String> configs;
     private SaslServer saslServer;
@@ -59,9 +57,9 @@ public final class PlainSaslServerAuthenticator implements ServerAuthenticator {
     @Override
     public void initialize(AuthenticateContext context) {
         close();
-        String dynamicJaasConfig = findJaasConfig(context.listenerName());
         JaasContext contextConfig =
-                JaasContext.loadServerContext(context.listenerName(), dynamicJaasConfig);
+                JaasContext.loadServerContext(
+                        context.listenerName(), PlainSaslServer.PLAIN_MECHANISM, configs);
         LoginManager acquiredLoginManager = null;
         try {
             acquiredLoginManager = LoginManager.acquireLoginManager(contextConfig);
@@ -118,37 +116,5 @@ public final class PlainSaslServerAuthenticator implements ServerAuthenticator {
             loginManager.release();
             loginManager = null;
         }
-    }
-
-    private String findJaasConfig(String listenerName) {
-        String listenerMechanismKey =
-                String.format(
-                        SERVER_AUTHENTICATOR_PREFIX
-                                + "listener.name.%s.%s."
-                                + JaasContext.SASL_JAAS_CONFIG,
-                        listenerName.toLowerCase(Locale.ROOT),
-                        PlainSaslServer.PLAIN_MECHANISM.toLowerCase(Locale.ROOT));
-        String dynamicJaasConfig = configs.get(listenerMechanismKey);
-        if (dynamicJaasConfig != null && !dynamicJaasConfig.isEmpty()) {
-            return dynamicJaasConfig;
-        }
-
-        String globalMechanismKey =
-                SERVER_AUTHENTICATOR_PREFIX
-                        + PlainSaslServer.PLAIN_MECHANISM.toLowerCase(Locale.ROOT)
-                        + "."
-                        + JaasContext.SASL_JAAS_CONFIG;
-        LOG.debug(
-                "No listener-mechanism JAAS config found for key: '{}'. Falling back to mechanism-level config: '{}'",
-                listenerMechanismKey,
-                globalMechanismKey);
-        dynamicJaasConfig = configs.get(globalMechanismKey);
-        if (dynamicJaasConfig == null || dynamicJaasConfig.isEmpty()) {
-            LOG.warn(
-                    "No mechanism-level JAAS config found for key: '{}'. Falling back to JVM option: -D{}",
-                    globalMechanismKey,
-                    JaasContext.JAVA_LOGIN_CONFIG_PARAM);
-        }
-        return dynamicJaasConfig;
     }
 }

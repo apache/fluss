@@ -79,6 +79,27 @@ public class JaasContextTest {
 
     // -------- test server context ----------
     @Test
+    void testServerConfigFallbackWithEmptySettings() throws IOException {
+        writeConfiguration("FlussServer", "test.Jvm required;");
+        String globalKey = "security.sasl.plain.jaas.config";
+        String globalEntry = "test.Global required;";
+        Map<String, String> configs = new HashMap<>();
+        configs.put("security.sasl.listener.name.client.plain.jaas.config", "");
+        configs.put(globalKey, globalEntry);
+        assertThat(JaasContext.loadServerContext("CLIENT", "PLAIN", configs).dynamicJaasConfig())
+                .isEqualTo(globalEntry);
+
+        configs.put(globalKey, "");
+        assertThatThrownBy(() -> JaasContext.loadServerContext("CLIENT", "PLAIN", configs))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Login module not specified");
+
+        configs.remove(globalKey);
+        assertThat(JaasContext.loadServerContext("CLIENT", "PLAIN", configs).name())
+                .isEqualTo("FlussServer");
+    }
+
+    @Test
     void testControlFlag() throws Exception {
         AppConfigurationEntry.LoginModuleControlFlag[] controlFlags =
                 new AppConfigurationEntry.LoginModuleControlFlag[] {

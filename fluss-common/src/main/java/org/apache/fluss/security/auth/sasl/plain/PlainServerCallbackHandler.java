@@ -17,9 +17,8 @@
 
 package org.apache.fluss.security.auth.sasl.plain;
 
+import org.apache.fluss.security.auth.UserPasswordVerifier;
 import org.apache.fluss.security.auth.sasl.jaas.AuthenticateCallbackHandler;
-import org.apache.fluss.security.auth.sasl.jaas.JaasContext;
-import org.apache.fluss.utils.ArrayUtils;
 
 import javax.security.auth.callback.Callback;
 import javax.security.auth.callback.NameCallback;
@@ -55,12 +54,12 @@ import java.util.List;
  * <p>If the username is not found or the password does not match, authentication will fail.
  */
 public class PlainServerCallbackHandler implements AuthenticateCallbackHandler {
-    private static final String JAAS_USER_PREFIX = "user_";
-    private List<AppConfigurationEntry> jaasConfigEntries;
+    private UserPasswordVerifier passwordVerifier;
 
     @Override
     public void configure(String saslMechanism, List<AppConfigurationEntry> jaasConfigEntries) {
-        this.jaasConfigEntries = jaasConfigEntries;
+        this.passwordVerifier =
+                new UserPasswordVerifier(jaasConfigEntries, PlainLoginModule.class.getName());
     }
 
     @Override
@@ -80,16 +79,6 @@ public class PlainServerCallbackHandler implements AuthenticateCallbackHandler {
     }
 
     protected boolean authenticate(String username, char[] password) {
-        if (username == null) {
-            return false;
-        } else {
-            String expectedPassword =
-                    JaasContext.configEntryOption(
-                            jaasConfigEntries,
-                            JAAS_USER_PREFIX + username,
-                            PlainLoginModule.class.getName());
-            return expectedPassword != null
-                    && ArrayUtils.isEqualConstantTime(password, expectedPassword.toCharArray());
-        }
+        return passwordVerifier.authenticate(username, password);
     }
 }
