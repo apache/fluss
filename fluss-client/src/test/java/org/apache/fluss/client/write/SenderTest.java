@@ -98,6 +98,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static org.apache.fluss.client.write.WriteRpcTestUtils.createProduceLogResponse;
+import static org.apache.fluss.client.write.WriteRpcTestUtils.createPutKvResponse;
+import static org.apache.fluss.client.write.WriteRpcTestUtils.getWriteRequestTableId;
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA_PK;
@@ -2601,17 +2604,6 @@ final class SenderTest {
         return tableIds;
     }
 
-    private static long getWriteRequestTableId(ApiMessage request) {
-        if (request instanceof ProduceLogRequest) {
-            return ((ProduceLogRequest) request).getTableId();
-        }
-        if (request instanceof PutKvRequest) {
-            return ((PutKvRequest) request).getTableId();
-        }
-        throw new IllegalArgumentException(
-                "Expected a write request but found " + request.getClass().getName());
-    }
-
     private void failRequest(TableBucket referenceBucket, int index, Throwable throwable) {
         TestTabletServerGateway gateway =
                 (TestTabletServerGateway)
@@ -2631,33 +2623,6 @@ final class SenderTest {
         assertThat(hasIdempotentRecords(tb1, (ProduceLogRequest) request)).isTrue();
         assertBatchSequenceEquals(tb1, (ProduceLogRequest) request, batchSequence);
         gateway.response(index, response);
-    }
-
-    private ProduceLogResponse createProduceLogResponse(
-            TableBucket tb, long baseOffset, long endOffset) {
-        return makeProduceLogResponse(
-                Collections.singletonList(
-                        new ProduceLogResultForBucket(tb, baseOffset, endOffset)));
-    }
-
-    private ProduceLogResponse createProduceLogResponse(TableBucket tb, Errors error) {
-        return makeProduceLogResponse(
-                Collections.singletonList(new ProduceLogResultForBucket(tb, error.toApiError())));
-    }
-
-    private PutKvResponse createPutKvResponse(TableBucket tb, long endOffset) {
-        return makePutKvResponse(
-                Collections.singletonList(new PutKvResultForBucket(tb, endOffset)));
-    }
-
-    private PutKvResponse createPutKvResponse(TableBucket tb, long endOffset, float pressure) {
-        return makePutKvResponse(
-                Collections.singletonList(new PutKvResultForBucket(tb, endOffset, pressure)));
-    }
-
-    private PutKvResponse createPutKvResponse(TableBucket tb, Errors error) {
-        return makePutKvResponse(
-                Collections.singletonList(new PutKvResultForBucket(tb, error.toApiError())));
     }
 
     @ParameterizedTest
