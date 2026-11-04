@@ -137,6 +137,7 @@ import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import org.apache.fluss.utils.ByteArraySlice;
+import org.apache.fluss.utils.ExponentialBackoff;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.clock.Clock;
@@ -367,9 +368,14 @@ public class ReplicaManager implements ServerReconfigurable {
                 new IndexReplicatorPool(
                         conf.getInt(ConfigOptions.INDEX_REPLICATION_READER_THREADS),
                         (int) sourceMaxBytes,
-                        conf.get(ConfigOptions.INDEX_REPLICATION_REQUEST_TARGET_BYTES).getBytes(),
+                        new ExponentialBackoff(
+                                conf.get(ConfigOptions.INDEX_REPLICATION_RETRY_BACKOFF).toMillis(),
+                                2,
+                                INDEX_REPLICATION_RETRY_MAX_BACKOFF_MS,
+                                0.2),
                         INDEX_REPLICATION_WORKER_BACKOFF_MS,
                         ioExecutor);
+        indexSendBuffer.setCapacityListener(indexReplicatorPool::wakeup);
         this.indexSender =
                 new IndexSender(
                         indexSendBuffer,

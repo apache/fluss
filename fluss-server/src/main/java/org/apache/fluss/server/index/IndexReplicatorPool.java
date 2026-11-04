@@ -19,6 +19,7 @@ package org.apache.fluss.server.index;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.utils.ExponentialBackoff;
 import org.apache.fluss.utils.concurrent.ShutdownableThread;
 
 import org.slf4j.Logger;
@@ -55,21 +56,20 @@ public final class IndexReplicatorPool implements AutoCloseable {
 
     private final ReplicatorWorker[] workers;
     private final int maxWindowBytes;
-    private final long preferredMaxRequestBytes;
+    private final ExponentialBackoff retryBackoff;
     private final Executor remoteReadExecutor;
 
     public IndexReplicatorPool(
             int numWorkers,
             int maxWindowBytes,
-            long preferredMaxRequestBytes,
+            ExponentialBackoff retryBackoff,
             long backoffMs,
             Executor remoteReadExecutor) {
         checkArgument(numWorkers > 0, "numWorkers must be positive");
         checkArgument(maxWindowBytes > 0, "maxWindowBytes must be positive");
-        checkArgument(preferredMaxRequestBytes > 0, "preferredMaxRequestBytes must be positive");
         checkArgument(backoffMs > 0, "backoffMs must be positive");
         this.maxWindowBytes = maxWindowBytes;
-        this.preferredMaxRequestBytes = preferredMaxRequestBytes;
+        this.retryBackoff = retryBackoff;
         this.remoteReadExecutor = remoteReadExecutor;
         this.workers = new ReplicatorWorker[numWorkers];
         for (int i = 0; i < numWorkers; i++) {
@@ -84,9 +84,16 @@ public final class IndexReplicatorPool implements AutoCloseable {
         return maxWindowBytes;
     }
 
-    /** Preferred aggregate encoded output bound for one source window. */
-    public long preferredMaxRequestBytes() {
-        return preferredMaxRequestBytes;
+    /** Retry policy shared by source reads and index-window construction. */
+    ExponentialBackoff retryBackoff() {
+        return retryBackoff;
+    }
+
+    /** Wakes readers after shared memory becomes available. */
+    public void wakeup() {
+        for (ReplicatorWorker worker : workers) {
+            worker.wakeup();
+        }
     }
 
     /** Executor for blocking remote-WAL reads initiated by this replication pool. */

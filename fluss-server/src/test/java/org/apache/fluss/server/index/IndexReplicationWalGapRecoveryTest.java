@@ -33,21 +33,16 @@ import org.apache.fluss.types.RowType;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.time.Duration;
 import java.util.Collections;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
 
+import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.fail;
 
-/**
- * Covers replication-time fail-stop on a source WAL gap: when the pushed offset has fallen below
- * the local log start and the raw remote WAL cannot cover the missing range, replication must stop
- * for good rather than skip ahead. A transient remote read failure over the same gap must stay
- * retryable, since giving up on it would take the index offline over a blip.
- */
-class IndexReplicationWalGapFailStopTest {
+/** Verifies that source WAL failures preserve progress and remain retryable after backoff. */
+class IndexReplicationWalGapRecoveryTest {
 
     private static final TableBucket SOURCE_BUCKET = new TableBucket(1L, 0);
     private static final long HIGH_WATERMARK = 10L;
@@ -55,9 +50,8 @@ class IndexReplicationWalGapFailStopTest {
     private static final long PUSHED_OFFSET = 0L;
 
     @Test
-    void testRemoteWalShortOfLocalHandoffStopsReplicationForGood() throws Exception {
+    void testRemoteWalGapKeepsRetryingWithoutSkippingProgress() throws Exception {
         AtomicInteger remoteFetches = new AtomicInteger();
-        AtomicReference<Throwable> reportedFailure = new AtomicReference<>();
         IndexSendBuffer sendBuffer = new IndexSendBuffer();
 
         // The remote WAL yields nothing for [0, 5), so the range is unrecoverable from either side.
@@ -66,22 +60,15 @@ class IndexReplicationWalGapFailStopTest {
                         remoteFetches,
                         (startOffset, localLogStartOffset) -> Collections.emptyList());
 
-        try (IndexReplicator replicator = replicator(emptyRemoteWal, sendBuffer, reportedFailure)) {
-            assertThatThrownBy(replicator::poll)
-                    .isInstanceOf(IndexSourceWalCorruptionException.class)
-                    .hasMessageContaining(
-                            "remote WAL ended at expected offset "
-                                    + PUSHED_OFFSET
-                                    + " before local handoff "
-                                    + LOCAL_LOG_START);
-            assertThat(reportedFailure.get()).isInstanceOf(IndexSourceWalCorruptionException.class);
-            assertThat(remoteFetches).hasValue(1);
-
-            // Fail-stop, not fail-once: later polls must neither throw again nor re-read, so no
-            // successor window can be derived from a later offset.
-            assertThat(replicator.poll()).isFalse();
+        try (IndexReplicator replicator = replicator(emptyRemoteWal, sendBuffer)) {
             assertThat(replicator.poll()).isFalse();
             assertThat(remoteFetches).hasValue(1);
+            retry(
+                    Duration.ofSeconds(5),
+                    () -> {
+                        assertThat(replicator.poll()).isFalse();
+                        assertThat(remoteFetches.get()).isGreaterThanOrEqualTo(2);
+                    });
 
             // The gap must not be papered over by advancing past it.
             assertThat(replicator.getAllIndexPushedOffset()).isEqualTo(PUSHED_OFFSET);
@@ -90,15 +77,9 @@ class IndexReplicationWalGapFailStopTest {
         }
     }
 
-    /**
-     * Control for the test above: the same gap read failing transiently must keep being retried, so
-     * the terminal transition is attributable to the corruption verdict rather than to any failure
-     * on the remote path.
-     */
     @Test
     void testTransientRemoteReadFailureKeepsReplicationRetryable() throws Exception {
         AtomicInteger remoteFetches = new AtomicInteger();
-        AtomicReference<Throwable> reportedFailure = new AtomicReference<>();
         IndexSendBuffer sendBuffer = new IndexSendBuffer();
 
         IndexSourceReader.RemoteFetcherFactory unavailableRemoteWal =
@@ -108,15 +89,17 @@ class IndexReplicationWalGapFailStopTest {
                             throw new IOException("remote storage temporarily unavailable");
                         });
 
-        try (IndexReplicator replicator =
-                replicator(unavailableRemoteWal, sendBuffer, reportedFailure)) {
+        try (IndexReplicator replicator = replicator(unavailableRemoteWal, sendBuffer)) {
             assertThat(replicator.poll()).isFalse();
             assertThat(remoteFetches).hasValue(1);
 
-            assertThat(replicator.poll()).isFalse();
-            assertThat(remoteFetches).hasValue(2);
+            retry(
+                    Duration.ofSeconds(5),
+                    () -> {
+                        assertThat(replicator.poll()).isFalse();
+                        assertThat(remoteFetches.get()).isGreaterThanOrEqualTo(2);
+                    });
 
-            assertThat(reportedFailure.get()).isNull();
             assertThat(replicator.getAllIndexPushedOffset()).isEqualTo(PUSHED_OFFSET);
             assertThat(sendBuffer.buckets()).isEmpty();
         }
@@ -124,8 +107,7 @@ class IndexReplicationWalGapFailStopTest {
 
     private static IndexReplicator replicator(
             IndexSourceReader.RemoteFetcherFactory remoteFetcherFactory,
-            IndexSendBuffer sendBuffer,
-            AtomicReference<Throwable> reportedFailure) {
+            IndexSendBuffer sendBuffer) {
         LogRecordReadContext readContext =
                 LogRecordReadContext.createCompactedRowReadContext(
                         RowType.of(DataTypes.INT()), 1, null);
@@ -139,9 +121,7 @@ class IndexReplicationWalGapFailStopTest {
                 readContext,
                 PUSHED_OFFSET,
                 1024,
-                1,
-                (syncOffset, allOffset) -> {},
-                (ignored, failure) -> reportedFailure.set(failure));
+                (syncOffset, allOffset) -> {});
     }
 
     /** A source log whose early segments are gone, so {@code [0, 5)} is only reachable remotely. */

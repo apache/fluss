@@ -31,6 +31,7 @@ import org.apache.fluss.server.metadata.MetadataProvider;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.utils.IndexTableUtils;
+import org.apache.fluss.utils.clock.SystemClock;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -58,9 +59,7 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  *   NOT_STARTED --&gt; DEFERRED   (metadata not yet available)
  *   NOT_STARTED --&gt; RUNNING    (metadata available, replicator started)
  *   DEFERRED   --&gt; RUNNING    (metadata arrived, retry succeeded)
- *   RUNNING    --&gt; FAILED      (current replicator reports a terminal failure)
  *   RUNNING    --&gt; NOT_STARTED (become follower / close)
- *   FAILED     --&gt; NOT_STARTED (become follower / close)
  * </pre>
  */
 @Internal
@@ -70,8 +69,7 @@ public final class IndexReplicationSupervisor {
     enum State {
         NOT_STARTED,
         DEFERRED,
-        RUNNING,
-        FAILED
+        RUNNING
     }
 
     private static final Logger LOG = LoggerFactory.getLogger(IndexReplicationSupervisor.class);
@@ -218,9 +216,10 @@ public final class IndexReplicationSupervisor {
     // State queries
     // ------------------------------------------------------------------------------------
 
-    /** Returns {@code true} when the current replicator stopped after a terminal failure. */
+    /** Returns whether the active replicator is retrying a reported source failure. */
     public boolean isFailed() {
-        return state.get() == State.FAILED;
+        IndexReplicator replicator = indexReplicator;
+        return replicator != null && replicator.isFailed();
     }
 
     // ------------------------------------------------------------------------------------
@@ -279,9 +278,9 @@ public final class IndexReplicationSupervisor {
                         readContext,
                         initialOffset,
                         replicatorPool.maxWindowBytes(),
-                        replicatorPool.preferredMaxRequestBytes(),
                         onProgress,
-                        this::onIndexReplicatorFailed,
+                        replicatorPool.retryBackoff(),
+                        SystemClock.getInstance(),
                         metrics);
         // Register with the read pool; the pool worker will catch up on any WAL entries already
         // committed before this replicator was created.
@@ -330,16 +329,6 @@ public final class IndexReplicationSupervisor {
             }
             throw registrationError;
         }
-    }
-
-    void onIndexReplicatorFailed(IndexReplicator failed, Throwable failure) {
-        synchronized (lifecycleLock) {
-            if (indexReplicator != failed || state.get() != State.RUNNING) {
-                return;
-            }
-            state.set(State.FAILED);
-        }
-        LOG.error("Index replication stopped for source bucket {}", tableBucket, failure);
     }
 
     private void stopIndexReplicator() {
