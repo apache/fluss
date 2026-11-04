@@ -137,7 +137,6 @@ import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import org.apache.fluss.utils.ByteArraySlice;
-import org.apache.fluss.utils.ExponentialBackoff;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.clock.Clock;
@@ -191,7 +190,6 @@ public class ReplicaManager implements ServerReconfigurable {
 
     public static final String HIGH_WATERMARK_CHECKPOINT_FILE_NAME = "high-watermark-checkpoint";
     private static final long INDEX_REPLICATION_WORKER_BACKOFF_MS = 50L;
-    private static final long INDEX_REPLICATION_RETRY_MAX_BACKOFF_MS = 10_000L;
 
     /**
      * The first PUT_KV API version whose clients understand the {@link
@@ -368,11 +366,7 @@ public class ReplicaManager implements ServerReconfigurable {
                 new IndexReplicatorPool(
                         conf.getInt(ConfigOptions.INDEX_REPLICATION_READER_THREADS),
                         (int) sourceMaxBytes,
-                        new ExponentialBackoff(
-                                conf.get(ConfigOptions.INDEX_REPLICATION_RETRY_BACKOFF).toMillis(),
-                                2,
-                                INDEX_REPLICATION_RETRY_MAX_BACKOFF_MS,
-                                0.2),
+                        conf.get(ConfigOptions.INDEX_REPLICATION_RETRY_BACKOFF).toMillis(),
                         INDEX_REPLICATION_WORKER_BACKOFF_MS,
                         ioExecutor);
         indexSendBuffer.setCapacityListener(indexReplicatorPool::wakeup);
@@ -384,8 +378,6 @@ public class ReplicaManager implements ServerReconfigurable {
                         serverMetricGroup,
                         conf.getInt(ConfigOptions.INDEX_REPLICATION_SENDER_THREADS),
                         INDEX_REPLICATION_WORKER_BACKOFF_MS,
-                        conf.get(ConfigOptions.INDEX_REPLICATION_RETRY_BACKOFF).toMillis(),
-                        INDEX_REPLICATION_RETRY_MAX_BACKOFF_MS,
                         conf.get(ConfigOptions.INDEX_REPLICATION_REQUEST_TARGET_BYTES).getBytes(),
                         conf.get(ConfigOptions.NETTY_SERVER_MAX_REQUEST_SIZE).getBytes(),
                         30_000L);

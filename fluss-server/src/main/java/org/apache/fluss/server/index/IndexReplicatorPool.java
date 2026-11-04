@@ -52,6 +52,8 @@ import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
 @ThreadSafe
 public final class IndexReplicatorPool implements AutoCloseable {
 
+    static final long MAX_RETRY_BACKOFF_MS = 10_000L;
+
     private static final Logger LOG = LoggerFactory.getLogger(IndexReplicatorPool.class);
 
     private final ReplicatorWorker[] workers;
@@ -62,14 +64,19 @@ public final class IndexReplicatorPool implements AutoCloseable {
     public IndexReplicatorPool(
             int numWorkers,
             int maxWindowBytes,
-            ExponentialBackoff retryBackoff,
+            long retryBackoffMs,
             long backoffMs,
             Executor remoteReadExecutor) {
         checkArgument(numWorkers > 0, "numWorkers must be positive");
         checkArgument(maxWindowBytes > 0, "maxWindowBytes must be positive");
         checkArgument(backoffMs > 0, "backoffMs must be positive");
+        checkArgument(
+                retryBackoffMs > 0 && retryBackoffMs <= MAX_RETRY_BACKOFF_MS,
+                "retryBackoffMs must be between 1 and %s milliseconds, but was %s",
+                MAX_RETRY_BACKOFF_MS,
+                retryBackoffMs);
         this.maxWindowBytes = maxWindowBytes;
-        this.retryBackoff = retryBackoff;
+        this.retryBackoff = new ExponentialBackoff(retryBackoffMs, 2, MAX_RETRY_BACKOFF_MS, 0.2);
         this.remoteReadExecutor = remoteReadExecutor;
         this.workers = new ReplicatorWorker[numWorkers];
         for (int i = 0; i < numWorkers; i++) {
