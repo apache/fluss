@@ -31,6 +31,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.exception.BucketRescaleException;
 import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.metadata.PartitionInfo;
+import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
@@ -39,7 +40,10 @@ import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.rpc.messages.MetadataResponse;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
+import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.data.ZkData.PartitionZNode;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableIterator;
@@ -48,6 +52,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -59,6 +64,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 
+import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeMetadataRequest;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.InternalRowAssert.assertThatRow;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -76,6 +82,64 @@ class PartitionBucketCountRescaleITCase extends ClientToServerITCaseBase {
     private static final int NEW_BUCKET_NUM = 4;
     private static final int RECORDS_PER_PARTITION = 12;
     private static final List<String> OLD_NEW_PARTITIONS = Arrays.asList("old", "new");
+
+    @Test
+    void testCoordinatorReloadsLegacyPartitionCountAtEpochZero() throws Exception {
+        TablePath path = TablePath.of("test_db_1", "legacy_restart_counts");
+        createPartitionedTable(path, logSchema());
+        admin.createPartition(path, newPartitionSpec("c", "old"), false).get();
+        TableInfo tableInfo = admin.getTableInfo(path).get();
+        assertThat(tableInfo.getBucketCountEpoch()).isZero();
+        PartitionInfo partition = admin.listPartitionInfos(path).get().get(0);
+        ZooKeeperClient zkClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
+
+        FLUSS_CLUSTER_EXTENSION.stopCoordinatorServer();
+        String registration =
+                String.format(
+                        "{\"version\":1,\"table_id\":%d,\"partition_id\":%d}",
+                        tableInfo.getTableId(), partition.getPartitionId());
+        zkClient.getCuratorClient()
+                .setData()
+                .forPath(
+                        PartitionZNode.path(path, partition.getPartitionName()),
+                        registration.getBytes(StandardCharsets.UTF_8));
+        FLUSS_CLUSTER_EXTENSION.startCoordinatorServer();
+
+        AccessContextEvent<Integer> event =
+                new AccessContextEvent<>(
+                        context ->
+                                context.getPartitionBucketCount(
+                                        new TablePartition(
+                                                tableInfo.getTableId(),
+                                                partition.getPartitionId())));
+        FLUSS_CLUSTER_EXTENSION
+                .getCoordinatorServer()
+                .getCoordinatorEventProcessor()
+                .getCoordinatorEventManager()
+                .put(event);
+        assertThat(event.getResultFuture().get(30, TimeUnit.SECONDS)).isEqualTo(OLD_BUCKET_NUM);
+
+        MetadataResponse response =
+                FLUSS_CLUSTER_EXTENSION
+                        .newCoordinatorClient()
+                        .metadata(
+                                makeMetadataRequest(
+                                        null,
+                                        Collections.singleton(
+                                                PhysicalTablePath.of(
+                                                        path, partition.getPartitionName())),
+                                        null))
+                        .get(30, TimeUnit.SECONDS);
+        assertThat(response.getPartitionMetadatasList())
+                .singleElement()
+                .satisfies(
+                        metadata -> {
+                            assertThat(metadata.getPartitionId())
+                                    .isEqualTo(partition.getPartitionId());
+                            assertThat(metadata.hasBucketCount()).isTrue();
+                            assertThat(metadata.getBucketCount()).isEqualTo(OLD_BUCKET_NUM);
+                        });
+    }
 
     @Test
     void testCoordinatorReloadsRegisteredPartitionCountsAfterRescale() throws Exception {

@@ -449,6 +449,37 @@ public class MetadataUpdaterTest {
     }
 
     @Test
+    void testPartitionOnlyLegacyResponseUsesCachedTableCount() throws Exception {
+        MetadataResponse tableResponse = routingPartitionResponse(3, 0, false);
+        tableResponse.getTableMetadatasList().get(0).clearBucketCountEpoch();
+        Cluster cachedCluster = updateRouting(tableResponse, null, false);
+        assertThat(cachedCluster.getBucketCount(TableOrPartition.ofTable(1))).hasValue(3);
+        assertThat(cachedCluster.getBucketCountEpoch(1)).hasValue(0);
+
+        MetadataResponse partitionResponse = new MetadataResponse();
+        partitionResponse.addTabletServer().setNodeId(1).setHost("localhost").setPort(8080);
+        partitionResponse
+                .addPartitionMetadata()
+                .setTableId(1)
+                .setPartitionId(2)
+                .setPartitionName("p")
+                .addBucketMetadata()
+                .setBucketId(0)
+                .setLeaderId(1);
+
+        Cluster updatedCluster = updateRouting(partitionResponse, cachedCluster, true);
+
+        assertThat(updatedCluster.getBucketCount(TableOrPartition.ofTable(1))).hasValue(3);
+        assertThat(updatedCluster.getBucketCountEpoch(1)).hasValue(0);
+        assertThat(updatedCluster.getBucketCount(TableOrPartition.ofPartition(2))).hasValue(3);
+        assertThat(
+                        updatedCluster
+                                .getBucketLocationsByPath()
+                                .get(PhysicalTablePath.of("db", "table", "p")))
+                .hasSize(1);
+    }
+
+    @Test
     void testExplicitCountWithoutEpochDoesNotEnableLegacyFallback() {
         MetadataResponse response = routingPartitionResponse(6, 1, true);
         response.getTableMetadatasList().get(0).clearBucketCountEpoch();
