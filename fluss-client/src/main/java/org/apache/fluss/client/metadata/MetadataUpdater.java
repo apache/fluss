@@ -278,21 +278,11 @@ public class MetadataUpdater {
                             "No available tablet server to update metadata, try to re-initialize cluster using bootstrap server.");
                     cluster = initializeCluster(conf, rpcClient);
                 } else {
-                    Set<TablePath> requiredTablePaths =
-                            tablePaths == null ? new HashSet<>() : new HashSet<>(tablePaths);
-                    if (tablePartitionNames != null) {
-                        for (PhysicalTablePath partition : tablePartitionNames) {
-                            TablePath tablePath = partition.getTablePath();
-                            if (!cluster.getTableId(tablePath).isPresent()) {
-                                requiredTablePaths.add(tablePath);
-                            }
-                        }
-                    }
                     cluster =
                             sendMetadataRequestAndRebuildCluster(
                                     cluster,
                                     rpcClient,
-                                    requiredTablePaths,
+                                    tablePaths,
                                     tablePartitionNames,
                                     tablePartitionIds,
                                     serverNode);
