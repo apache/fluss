@@ -17,7 +17,9 @@
 
 package org.apache.fluss.server.metadata;
 
+import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePartition;
@@ -55,7 +57,14 @@ class CoordinatorMetadataProviderTest {
         PhysicalTablePath path = PhysicalTablePath.of(tableInfo.getTablePath(), "p");
         context.putTableInfo(tableInfo);
         context.putTablePath(tableId, path.getTablePath());
-        context.putPartition(12, path);
+        context.putPartition(
+                12,
+                path,
+                new PartitionInfo(
+                        12,
+                        ResolvedPartitionSpec.fromPartitionName(tableInfo.getPartitionKeys(), "p"),
+                        tableInfo.getRemoteDataDir(),
+                        3));
         TablePartition partition = new TablePartition(tableId, 12L);
         context.putPartitionBucketCount(partition, 3);
         context.updateBucketReplicaAssignment(

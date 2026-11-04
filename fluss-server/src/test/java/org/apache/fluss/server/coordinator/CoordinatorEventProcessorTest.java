@@ -954,6 +954,8 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
         assertThat(restored).isNotNull();
         assertThat(restored.getRemoteDataDir()).isEqualTo(partitionRemoteDir);
         assertThat(restored.getBucketCount()).isEqualTo(1);
+        Integer restoredBucketCount = fromCtx(ctx -> ctx.getPartitionBucketCount(partition));
+        assertThat(restoredBucketCount).isEqualTo(1);
         assertThat(dataFile).exists();
 
         zookeeperClient.deletePartition(tablePath, partitionName);
