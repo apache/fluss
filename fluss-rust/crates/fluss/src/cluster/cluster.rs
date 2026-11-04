@@ -313,7 +313,6 @@ impl Cluster {
             table_id_by_path.extend(origin.get_table_id_by_path().clone());
             partitions_id_by_path.extend(origin.partitions_id_by_path.clone());
             tmp_available_locations_by_path.extend(origin.available_locations_by_path.clone());
-            tmp_available_location_by_bucket.extend(origin.available_locations_by_bucket.clone());
             bucket_count_by_table_or_partition
                 .extend(origin.bucket_count_by_table_or_partition.clone());
         }
@@ -425,6 +424,8 @@ impl Cluster {
             tmp_available_locations_by_path.insert(physical_table_path, bucket_locations);
         }
 
+        // Rebuild this index so buckets omitted from refreshed metadata or without a
+        // leader cannot retain an old route that disagrees with the path index.
         for bucket_locations in &mut tmp_available_locations_by_path.values() {
             for location in bucket_locations {
                 if location.leader().is_some() {
@@ -1188,6 +1189,36 @@ mod tests {
             table_metadata,
             partition_metadata,
         }
+    }
+
+    #[test]
+    fn metadata_refresh_removes_stale_leaders_and_preserves_other_tables() {
+        let current = pb_metadata_response(
+            vec![
+                pb_table_metadata("plain", 1, false, vec![pb_bucket(0), pb_bucket(1)]),
+                pb_table_metadata("other", 2, false, vec![pb_bucket(0)]),
+            ],
+            vec![],
+        );
+        let current = Cluster::from_metadata_response(current, None).unwrap();
+        let mut leaderless = pb_bucket(0);
+        leaderless.leader_id = None;
+        // Bucket 0 loses its leader; bucket 1 disappears from the refreshed table.
+        let response = pb_metadata_response(
+            vec![pb_table_metadata("plain", 1, false, vec![leaderless])],
+            vec![],
+        );
+        let updated = Cluster::from_metadata_response(response, Some(&current)).unwrap();
+        assert!(updated.leader_for(&TableBucket::new(1, 0)).is_none());
+        assert!(updated.leader_for(&TableBucket::new(1, 1)).is_none());
+        assert!(updated.leader_for(&TableBucket::new(2, 0)).is_some());
+
+        let recovered = pb_metadata_response(
+            vec![pb_table_metadata("plain", 1, false, vec![pb_bucket(0)])],
+            vec![],
+        );
+        let recovered = Cluster::from_metadata_response(recovered, Some(&updated)).unwrap();
+        assert!(recovered.leader_for(&TableBucket::new(1, 0)).is_some());
     }
 
     #[test]
