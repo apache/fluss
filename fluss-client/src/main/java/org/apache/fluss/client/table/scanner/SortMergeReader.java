@@ -206,11 +206,12 @@ public class SortMergeReader {
         }
     }
 
-    /** A concat record iterator to concat multiple record iterator. */
+    /** An iterator that merges sorted snapshot record streams by primary key. */
     private static class ConcatRecordIterator implements CloseableIterator<LogRecord> {
         private final PriorityQueue<SingleElementHeadIterator<LogRecord>> priorityQueue;
         private final ProjectedRow snapshotProjectedPkRow1;
         private final ProjectedRow snapshotProjectedPkRow2;
+        private @Nullable SingleElementHeadIterator<LogRecord> currentIterator;
 
         public ConcatRecordIterator(
                 List<CloseableIterator<LogRecord>> iteratorList,
@@ -251,6 +252,10 @@ public class SortMergeReader {
 
         @Override
         public void close() {
+            if (currentIterator != null) {
+                currentIterator.close();
+                currentIterator = null;
+            }
             while (!priorityQueue.isEmpty()) {
                 priorityQueue.poll().close();
             }
@@ -258,14 +263,17 @@ public class SortMergeReader {
 
         @Override
         public boolean hasNext() {
-            while (!priorityQueue.isEmpty()) {
-                CloseableIterator<LogRecord> iterator = priorityQueue.peek();
-                if (iterator.hasNext()) {
-                    return true;
+            // Advance on the next read because the stream may reuse its returned row.
+            if (currentIterator != null) {
+                if (currentIterator.hasNext()) {
+                    currentIterator.peek();
+                    priorityQueue.add(currentIterator);
+                } else {
+                    currentIterator.close();
                 }
-                priorityQueue.poll().close();
+                currentIterator = null;
             }
-            return false;
+            return !priorityQueue.isEmpty();
         }
 
         @Override
@@ -273,7 +281,8 @@ public class SortMergeReader {
             if (!hasNext()) {
                 throw new NoSuchElementException();
             }
-            return priorityQueue.peek().next();
+            currentIterator = priorityQueue.poll();
+            return currentIterator.next();
         }
     }
 }
