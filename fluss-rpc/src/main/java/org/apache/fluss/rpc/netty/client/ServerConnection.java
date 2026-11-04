@@ -387,6 +387,18 @@ final class ServerConnection {
 
     @VisibleForTesting
     void validateVersionCompatibility(ApiKeys apiKey, short version, ApiMessage rawRequest) {
+        if (apiKey == ApiKeys.PUT_KV && version < 4) {
+            PutKvRequest request = (PutKvRequest) rawRequest;
+            if (request.hasIgnoreNulls() && request.isIgnoreNulls()) {
+                throw new UnsupportedVersionException(
+                        "Ignoring NULLs requires PUT_KV version 4 or newer, but server "
+                                + node
+                                + " negotiated version "
+                                + version
+                                + '.');
+            }
+        }
+
         if (apiKey == ApiKeys.PRODUCE_LOG && version < HISTORICAL_PRODUCE_LOG_MIN_VERSION) {
             ProduceLogRequest produceLogRequest = (ProduceLogRequest) rawRequest;
             if (hasHistoricalProduce(produceLogRequest)) {

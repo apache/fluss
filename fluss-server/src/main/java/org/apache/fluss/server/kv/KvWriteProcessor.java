@@ -102,6 +102,7 @@ public final class KvWriteProcessor {
     // Pre-created DefaultRowMerger for OVERWRITE mode (undo recovery scenarios)
     // This avoids creating a new instance on every putAsLeader call
     private final RowMerger overwriteRowMerger;
+    @Nullable private final RowMerger ignoreNullsRowMerger;
     private final ArrowCompressionInfo arrowCompressionInfo;
     private final SchemaGetter schemaGetter;
     // the changelog image mode for this tablet
@@ -141,6 +142,10 @@ public final class KvWriteProcessor {
         // Pre-create DefaultRowMerger for OVERWRITE mode to avoid creating new instances
         // on every putAsLeader call. Used for undo recovery scenarios.
         this.overwriteRowMerger = new DefaultRowMerger(kvFormat, DeleteBehavior.ALLOW);
+        this.ignoreNullsRowMerger =
+                rowMerger instanceof DefaultRowMerger
+                        ? new DefaultRowMerger(kvFormat, rowMerger.deleteBehavior(), true)
+                        : null;
         this.arrowCompressionInfo = arrowCompressionInfo;
         this.schemaGetter = schemaGetter;
         this.changelogImage = changelogImage;
@@ -158,11 +163,13 @@ public final class KvWriteProcessor {
             KvRecordBatch kvRecords,
             @Nullable int[] targetColumns,
             MergeMode mergeMode,
+            boolean ignoreNulls,
             KvStateAccessor stateAccessor,
             @Nullable String originalPartitionName,
             @Nullable HistoricalValueLookup historicalValueLookup)
             throws Exception {
-        WriteContext writeContext = createWriteContext(kvRecords, targetColumns, mergeMode);
+        WriteContext writeContext =
+                createWriteContext(kvRecords, targetColumns, mergeMode, ignoreNulls);
         RowType latestRowType = writeContext.latestSchema.getRowType();
         WalBuilder walBuilder = createWalBuilder(writeContext.latestSchemaId, latestRowType);
         walBuilder.setWriterState(kvRecords.writerId(), kvRecords.batchSequence());
@@ -233,10 +240,12 @@ public final class KvWriteProcessor {
             KvRecordBatch kvRecords,
             @Nullable int[] targetColumns,
             MergeMode mergeMode,
+            boolean ignoreNulls,
             KvStateAccessor stateAccessor,
             String originalPartitionName)
             throws Exception {
-        WriteContext writeContext = createWriteContext(kvRecords, targetColumns, mergeMode);
+        WriteContext writeContext =
+                createWriteContext(kvRecords, targetColumns, mergeMode, ignoreNulls);
 
         LocalValueLookupResult localLookupResult =
                 new LocalValueLookupResult(valueDecoder, lakeValueDecoder);
@@ -270,7 +279,14 @@ public final class KvWriteProcessor {
     }
 
     private WriteContext createWriteContext(
-            KvRecordBatch kvRecords, @Nullable int[] targetColumns, MergeMode mergeMode) {
+            KvRecordBatch kvRecords,
+            @Nullable int[] targetColumns,
+            MergeMode mergeMode,
+            boolean ignoreNulls) {
+        if (ignoreNulls && (mergeMode != MergeMode.DEFAULT || ignoreNullsRowMerger == null)) {
+            throw new InvalidTableException(
+                    "Ignoring NULLs requires MergeMode.DEFAULT and the default merge engine.");
+        }
         if (skipUnchangedUpsert && mergeMode == MergeMode.OVERWRITE) {
             throw new InvalidTableException(
                     "MergeMode.OVERWRITE cannot be used with table.upsert.skip-unchanged enabled.");
@@ -285,13 +301,16 @@ public final class KvWriteProcessor {
                 autoIncrementManager.getUpdaterForSchema(kvFormat, latestSchemaId);
         autoIncrementUpdater.validateTargetColumns(targetColumns);
 
-        // OVERWRITE bypasses the configured merge engine for undo recovery.
+        RowMerger requestMerger;
+        if (mergeMode == MergeMode.OVERWRITE) {
+            requestMerger = overwriteRowMerger;
+        } else if (ignoreNulls) {
+            requestMerger = ignoreNullsRowMerger;
+        } else {
+            requestMerger = rowMerger;
+        }
         RowMerger configuredRowMerger =
-                (mergeMode == MergeMode.OVERWRITE)
-                        ? overwriteRowMerger.configureTargetColumns(
-                                targetColumns, latestSchemaId, latestSchema)
-                        : rowMerger.configureTargetColumns(
-                                targetColumns, latestSchemaId, latestSchema);
+                requestMerger.configureTargetColumns(targetColumns, latestSchemaId, latestSchema);
         return new WriteContext(
                 latestSchema, latestSchemaId, autoIncrementUpdater, configuredRowMerger);
     }

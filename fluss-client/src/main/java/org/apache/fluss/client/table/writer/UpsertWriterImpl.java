@@ -57,6 +57,8 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
     /** The merge mode for this writer. This controls how the server handles data merging. */
     private final MergeMode mergeMode;
 
+    private final boolean ignoreNulls;
+
     UpsertWriterImpl(
             TablePath tablePath,
             TableInfo tableInfo,
@@ -71,6 +73,16 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
             @Nullable int[] partialUpdateColumns,
             WriterClient writerClient,
             MergeMode mergeMode) {
+        this(tablePath, tableInfo, partialUpdateColumns, writerClient, mergeMode, false);
+    }
+
+    UpsertWriterImpl(
+            TablePath tablePath,
+            TableInfo tableInfo,
+            @Nullable int[] partialUpdateColumns,
+            WriterClient writerClient,
+            MergeMode mergeMode,
+            boolean ignoreNulls) {
         super(tablePath, tableInfo, writerClient);
         RowType rowType = tableInfo.getRowType();
         sanityCheck(
@@ -102,6 +114,7 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
 
         this.tableInfo = tableInfo;
         this.mergeMode = mergeMode;
+        this.ignoreNulls = ignoreNulls;
     }
 
     private static void sanityCheck(
@@ -188,7 +201,8 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
                         bucketKey,
                         writeFormat,
                         targetColumns,
-                        mergeMode);
+                        mergeMode,
+                        ignoreNulls);
         return sendWithResult(record, UpsertResult::new);
     }
 
@@ -213,7 +227,8 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
                         bucketKey,
                         writeFormat,
                         targetColumns,
-                        mergeMode);
+                        mergeMode,
+                        ignoreNulls);
         return sendWithResult(record, DeleteResult::new);
     }
 

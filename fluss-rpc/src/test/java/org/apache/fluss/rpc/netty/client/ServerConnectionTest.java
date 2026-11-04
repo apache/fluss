@@ -324,6 +324,33 @@ public class ServerConnectionTest {
     }
 
     @Test
+    void testRejectIgnoreNullsForOldServer() throws Exception {
+        ServerConnection connection =
+                new ServerConnection(
+                        bootstrap,
+                        serverNode,
+                        TestingClientMetricGroup.newInstance(),
+                        clientAuthenticator,
+                        (con, ignore) -> {});
+        try {
+            PutKvRequest request = putKvRequest(null);
+            connection.validateVersionCompatibility(ApiKeys.PUT_KV, (short) 3, request);
+            request.setIgnoreNulls(false);
+            connection.validateVersionCompatibility(ApiKeys.PUT_KV, (short) 3, request);
+            request.setIgnoreNulls(true);
+            assertThatThrownBy(
+                            () ->
+                                    connection.validateVersionCompatibility(
+                                            ApiKeys.PUT_KV, (short) 3, request))
+                    .isInstanceOf(UnsupportedVersionException.class)
+                    .hasMessageContaining("Ignoring NULLs requires PUT_KV version 4 or newer");
+            connection.validateVersionCompatibility(ApiKeys.PUT_KV, (short) 4, request);
+        } finally {
+            connection.close().get();
+        }
+    }
+
+    @Test
     void testRejectHistoricalWritesForOldServer() throws Exception {
         nettyServer.close();
         buildNettyServer(new OldWriteGatewayService());
