@@ -20,6 +20,7 @@ package org.apache.fluss.security.auth.sasl.authenticator;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.AuthenticationException;
 import org.apache.fluss.security.auth.ClientAuthenticator;
+import org.apache.fluss.security.auth.sasl.SaslAuthenticatorFactory;
 import org.apache.fluss.security.auth.sasl.jaas.JaasConfig;
 import org.apache.fluss.security.auth.sasl.jaas.JaasContext;
 import org.apache.fluss.security.auth.sasl.jaas.LoginManager;
@@ -31,6 +32,7 @@ import javax.security.auth.login.AppConfigurationEntry;
 import javax.security.auth.login.LoginException;
 import javax.security.sasl.SaslClient;
 
+import java.util.Locale;
 import java.util.Map;
 
 import static org.apache.fluss.config.ConfigOptions.CLIENT_SASL_JAAS_CONFIG;
@@ -51,7 +53,7 @@ public class SaslClientAuthenticator implements ClientAuthenticator {
     private LoginManager loginManager;
 
     public SaslClientAuthenticator(Configuration configuration) {
-        this.mechanism = configuration.get(CLIENT_SASL_MECHANISM).toUpperCase();
+        this.mechanism = configuration.get(CLIENT_SASL_MECHANISM).toUpperCase(Locale.ROOT);
         String jaasConfigStr = configuration.getString(CLIENT_SASL_JAAS_CONFIG);
         if (jaasConfigStr != null) {
             // Validate that only PlainLoginModule is allowed in the JAAS config.
@@ -137,6 +139,11 @@ public class SaslClientAuthenticator implements ClientAuthenticator {
 
     @Override
     public void initialize(AuthenticateContext context) throws AuthenticationException {
+        if (!SaslAuthenticatorFactory.supportsClientMechanism(mechanism)) {
+            throw new AuthenticationException(
+                    "Unable to find a matching SASL mechanism for " + mechanism);
+        }
+
         String hostAddress = context.ipAddress();
         JaasContext jaasContext = JaasContext.loadClientContext(jaasConfig);
 
