@@ -384,6 +384,10 @@ public class CoordinatorEventProcessor implements EventProcessor {
         return coordinatorContext.getCoordinatorEpoch();
     }
 
+    MetadataManager getMetadataManager() {
+        return metadataManager;
+    }
+
     /** The ZK version of the coordinator epoch znode, used for epoch fencing of ZK mutations. */
     public int getCoordinatorZkVersion() {
         return coordinatorContext.getCoordinatorZkVersion();
@@ -455,6 +459,14 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 tablePathSet.add(TablePath.of(database, tableName));
             }
         }
+        // A table can have staged schemas before its registration is published.
+        Set<TablePath> missingRegistrations = new HashSet<>(tablePathSet);
+        missingRegistrations.removeAll(zooKeeperClient.getTables(tablePathSet).keySet());
+        for (TablePath tablePath : missingRegistrations) {
+            if (!zooKeeperClient.getTable(tablePath).isPresent()) {
+                tablePathSet.remove(tablePath);
+            }
+        }
         Map<TablePath, TableInfo> tablePath2TableInfoMap = metadataManager.getTables(tablePathSet);
         List<TablePath> partitionedTablePathList =
                 tablePath2TableInfoMap.entrySet().stream()
@@ -477,6 +489,15 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 if (partitions != null) {
                     for (Map.Entry<String, PartitionRegistration> partition :
                             partitions.entrySet()) {
+                        if (partition.getValue().getTableId() != tableInfo.getTableId()) {
+                            LOG.warn(
+                                    "Ignoring partition {} with parent ID {} under table {} (ID {}).",
+                                    partition.getKey(),
+                                    partition.getValue().getTableId(),
+                                    tablePath,
+                                    tableInfo.getTableId());
+                            continue;
+                        }
                         long partitionId = partition.getValue().getPartitionId();
                         // put partition info to coordinator context
                         PartitionInfo partitionInfo =
@@ -491,6 +512,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                                                         tableInfo.getNumBuckets(),
                                                         tableInfo.getBucketCountEpoch()));
                         coordinatorContext.putPartition(
+                                partition.getValue().getTableId(),
                                 partitionId,
                                 PhysicalTablePath.of(tableInfo.getTablePath(), partition.getKey()),
                                 partitionInfo);
@@ -1102,6 +1124,9 @@ public class CoordinatorEventProcessor implements EventProcessor {
         String partitionName = createPartitionEvent.getPartitionName();
         PartitionAssignment partitionAssignment = createPartitionEvent.getPartitionAssignment();
         TableInfo tableInfo = coordinatorContext.getTableInfoById(tableId);
+        if (tableInfo == null || coordinatorContext.getTablesToBeDeleted().contains(tableId)) {
+            return;
+        }
         PartitionInfo partitionInfo =
                 new PartitionInfo(
                         partitionId,
@@ -1137,15 +1162,15 @@ public class CoordinatorEventProcessor implements EventProcessor {
     private void processDropTable(DropTableEvent dropTableEvent) {
         long tableId = dropTableEvent.getTableId();
         TableInfo dropTableInfo = coordinatorContext.getTableInfoById(tableId);
-
-        // Remove table metrics before dropping their backing snapshot stores.
-        coordinatorMetricGroup.removeTableMetricGroup(dropTableInfo.getTablePath(), tableId);
-
-        // If this is a primary key table, drop the kv snapshot store.
-        if (dropTableInfo.hasPrimaryKey()) {
-            Set<TableBucket> deleteTableBuckets = coordinatorContext.getAllBucketsForTable(tableId);
-            completedSnapshotStoreManager.removeCompletedSnapshotStoreByTableBuckets(
-                    deleteTableBuckets);
+        if (dropTableInfo != null) {
+            // Remove metrics before dropping their backing snapshot stores.
+            coordinatorMetricGroup.removeTableMetricGroup(dropTableInfo.getTablePath(), tableId);
+            if (dropTableInfo.hasPrimaryKey()) {
+                Set<TableBucket> deleteTableBuckets =
+                        coordinatorContext.getAllBucketsForTable(tableId);
+                completedSnapshotStoreManager.removeCompletedSnapshotStoreByTableBuckets(
+                        deleteTableBuckets);
+            }
         }
 
         coordinatorContext.queueTableDeletion(Collections.singleton(tableId));
@@ -1156,28 +1181,15 @@ public class CoordinatorEventProcessor implements EventProcessor {
         if (dropTableEvent.isDataLakeEnabled()) {
             lakeTableTieringManager.removeLakeTable(tableId);
         }
-
-        // for partitioned table, if all the partitions of this table have been deleted,
-        // there's no event to trigger resumeTableDeletions, so we need to trigger here
-        if (dropTableInfo.isPartitioned()) {
-            tableManager.resumeTableDeletions();
-        }
-
-        // send update metadata request.
         updateTabletServerMetadataCache(
                 new HashSet<>(coordinatorContext.getLiveTabletServers().values()),
                 tableId,
                 null,
                 Collections.emptySet());
 
-        // For partitioned tables, the dropped table has no table-level replicas
-        // (all buckets live under partitionAssignments), so getAllReplicasForTable
-        // returns empty and areAllReplicasInState(.., ReplicaDeletionSuccessful)
-        // is vacuously true. Without this explicit trigger, the table would linger
-        // in tablesToBeDeleted (and the tableCount metric) until some unrelated
-        // replica-deletion response happens to invoke resumeDeletions(), which
-        // can be never if no other table is being dropped.
-        if (dropTableInfo.isPartitioned()) {
+        // Empty assignments produce no replica-deletion response to advance cleanup.
+        if (coordinatorContext.getTableAssignment(tableId).values().stream()
+                .allMatch(List::isEmpty)) {
             tableManager.resumeDeletions();
         }
     }
@@ -1186,32 +1198,33 @@ public class CoordinatorEventProcessor implements EventProcessor {
         long tableId = dropPartitionEvent.getTableId();
         TablePartition tablePartition =
                 new TablePartition(tableId, dropPartitionEvent.getPartitionId());
-
-        // If this is a primary key table partition, drop the kv snapshot store.
         TableInfo dropTableInfo = coordinatorContext.getTableInfoById(tableId);
-
-        // Remove partition metrics before dropping their backing snapshot stores.
-        coordinatorMetricGroup.removeTablePartitionMetricsGroup(
-                dropTableInfo.getTablePath(), tableId, tablePartition.getPartitionId());
-
-        if (dropTableInfo.hasPrimaryKey()) {
-            Set<TableBucket> deleteTableBuckets =
-                    coordinatorContext.getAllBucketsForPartition(
-                            tableId, dropPartitionEvent.getPartitionId());
-            completedSnapshotStoreManager.removeCompletedSnapshotStoreByTableBuckets(
-                    deleteTableBuckets);
+        if (dropTableInfo != null) {
+            // Remove metrics before dropping their backing snapshot stores.
+            coordinatorMetricGroup.removeTablePartitionMetricsGroup(
+                    dropTableInfo.getTablePath(), tableId, tablePartition.getPartitionId());
+            if (dropTableInfo.hasPrimaryKey()) {
+                Set<TableBucket> deleteTableBuckets =
+                        coordinatorContext.getAllBucketsForPartition(
+                                tableId, dropPartitionEvent.getPartitionId());
+                completedSnapshotStoreManager.removeCompletedSnapshotStoreByTableBuckets(
+                        deleteTableBuckets);
+            }
         }
 
         coordinatorContext.queuePartitionDeletion(Collections.singleton(tablePartition));
         tableManager.onDeletePartition(tableId, dropPartitionEvent.getPartitionId());
         autoPartitionManager.removePartition(tableId, dropPartitionEvent.getPartitionName());
-
-        // send update metadata request.
         updateTabletServerMetadataCache(
                 new HashSet<>(coordinatorContext.getLiveTabletServers().values()),
                 tableId,
                 tablePartition.getPartitionId(),
                 Collections.emptySet());
+
+        if (coordinatorContext.getPartitionAssignment(tablePartition).values().stream()
+                .allMatch(List::isEmpty)) {
+            tableManager.resumeDeletions();
+        }
     }
 
     private void processDeleteReplicaResponseReceived(

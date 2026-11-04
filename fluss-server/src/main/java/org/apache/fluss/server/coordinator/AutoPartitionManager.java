@@ -23,6 +23,7 @@ import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InsufficientKvLeaderReplicaCapacityException;
+import org.apache.fluss.exception.OperationNotAttemptedException;
 import org.apache.fluss.exception.PartitionAlreadyExistsException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.TooManyBucketsException;
@@ -34,7 +35,6 @@ import org.apache.fluss.server.coordinator.remote.RemoteDirDynamicLoader;
 import org.apache.fluss.server.metadata.ServerMetadataCache;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
-import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.utils.AutoPartitionStrategy;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.clock.SystemClock;
@@ -60,6 +60,7 @@ import java.util.NavigableMap;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
@@ -111,6 +112,12 @@ public class AutoPartitionManager implements AutoCloseable {
     // for single partition key, the partition name set will be null to reduce memory usage
     @GuardedBy("lock")
     private final Map<Long, TreeMap<String, Set<String>>> partitionsByTable = new HashMap<>();
+
+    @GuardedBy("lock")
+    private final Map<Long, Boolean> ddlRetries = new HashMap<>();
+
+    @GuardedBy("lock")
+    private boolean ddlRetryScheduled;
 
     private final Lock lock = new ReentrantLock();
 
@@ -247,23 +254,35 @@ public class AutoPartitionManager implements AutoCloseable {
     /** Creates the historical system partition if it does not already exist. */
     void createHistoricalPartition(TableInfo tableInfo) {
         checkNotClosed();
-        inLock(
-                lock,
-                () -> {
-                    long tableId = tableInfo.getTableId();
-                    TreeMap<String, Set<String>> currentPartitions =
-                            checkNotNull(
-                                    partitionsByTable.get(tableId),
-                                    "Auto partition state does not exist for table " + tableId);
-                    if (!currentPartitions.containsKey(HISTORICAL_PARTITION_VALUE)) {
-                        createPartition(
-                                tableInfo,
-                                new ResolvedPartitionSpec(
-                                        tableInfo.getPartitionKeys(),
-                                        Collections.singletonList(HISTORICAL_PARTITION_VALUE)),
-                                currentPartitions,
-                                tableInfo.getNumBuckets());
+        metadataManager.runTableDdl(
+                tableInfo.getTablePath(),
+                scopedMetadata -> {
+                    TableInfo currentTable = scopedMetadata.getTable(tableInfo.getTablePath());
+                    if (currentTable.getTableId() != tableInfo.getTableId()) {
+                        return null;
                     }
+                    inLock(
+                            lock,
+                            () -> {
+                                long tableId = tableInfo.getTableId();
+                                TreeMap<String, Set<String>> currentPartitions =
+                                        checkNotNull(
+                                                partitionsByTable.get(tableId),
+                                                "Auto partition state does not exist for table "
+                                                        + tableId);
+                                if (!currentPartitions.containsKey(HISTORICAL_PARTITION_VALUE)) {
+                                    createPartition(
+                                            scopedMetadata,
+                                            currentTable,
+                                            new ResolvedPartitionSpec(
+                                                    currentTable.getPartitionKeys(),
+                                                    Collections.singletonList(
+                                                            HISTORICAL_PARTITION_VALUE)),
+                                            currentPartitions,
+                                            currentTable.getNumBuckets());
+                                }
+                            });
+                    return null;
                 });
     }
 
@@ -283,6 +302,7 @@ public class AutoPartitionManager implements AutoCloseable {
                     try {
                         metadataManager.dropPartition(
                                 tablePath,
+                                tableId,
                                 new ResolvedPartitionSpec(
                                         tableInfo.getPartitionKeys(),
                                         Collections.singletonList(HISTORICAL_PARTITION_VALUE)),
@@ -303,6 +323,7 @@ public class AutoPartitionManager implements AutoCloseable {
     /** Must be called while holding {@link #lock}. */
     @Nullable
     private TableInfo removeAutoPartitionTableLocked(long tableId) {
+        ddlRetries.remove(tableId);
         partitionsByTable.remove(tableId);
         autoCreateDayPartitionDelayMinutes.remove(tableId);
         return autoPartitionTables.remove(tableId);
@@ -453,42 +474,91 @@ public class AutoPartitionManager implements AutoCloseable {
                 continue;
             }
             TablePath tablePath = tableInfo.getTablePath();
-            TreeMap<String, Set<String>> currentPartitions =
-                    partitionsByTable.computeIfAbsent(
-                            tableId,
-                            tableInfo.getPartitionKeys().size() > 1
-                                    ? k -> new TreeMap<>()
-                                    : k -> null);
-            TableRegistration table;
+            Instant plannedCreateInstant = createPartitionInstant;
             try {
-                table = metadataManager.getTableRegistration(tablePath);
+                metadataManager.runTableDdl(
+                        tablePath,
+                        scopedMetadata -> {
+                            TableInfo currentTable = scopedMetadata.getTable(tablePath);
+                            if (currentTable.getTableId() != tableId) {
+                                LOG.info(
+                                        "Skipping auto partitioning for table [{}] (id={}) as the table has been replaced.",
+                                        tablePath,
+                                        tableId);
+                                return null;
+                            }
+                            TreeMap<String, Set<String>> currentPartitions =
+                                    partitionsByTable.computeIfAbsent(
+                                            tableId,
+                                            currentTable.getPartitionKeys().size() > 1
+                                                    ? k -> new TreeMap<>()
+                                                    : k -> null);
+                            dropPartitions(
+                                    scopedMetadata,
+                                    currentTable.getTablePath(),
+                                    currentTable.getPartitionKeys(),
+                                    now,
+                                    currentTable.getTableConfig().getAutoPartitionStrategy(),
+                                    currentPartitions);
+                            createPartitions(
+                                    scopedMetadata,
+                                    currentTable,
+                                    plannedCreateInstant,
+                                    currentPartitions);
+                            return null;
+                        });
+            } catch (OperationNotAttemptedException e) {
+                retryAutoPartition(tableId, forceDoAutoPartition);
             } catch (Exception e) {
                 LOG.warn(
-                        "Skipping auto partitioning for table [{}] (id={}) as failed to get table information.",
+                        "Skipping auto partitioning for table [{}] (id={}) as its metadata could not be updated.",
                         tablePath,
                         tableId,
                         e);
-                continue;
             }
-            if (table.tableId != tableId) {
-                LOG.warn(
-                        "Skipping auto partitioning for table [{}] (id={}) as the table has been dropped.",
-                        tablePath,
-                        tableId);
-                continue;
-            }
-
-            dropPartitions(
-                    tablePath,
-                    tableInfo.getPartitionKeys(),
-                    now,
-                    tableInfo.getTableConfig().getAutoPartitionStrategy(),
-                    currentPartitions);
-            createPartitions(tableInfo, createPartitionInstant, currentPartitions);
         }
     }
 
+    /** Must be called while holding {@link #lock}. */
+    private void retryAutoPartition(long tableId, boolean forceDoAutoPartition) {
+        if (isClosed.get()) {
+            return;
+        }
+        ddlRetries.merge(tableId, forceDoAutoPartition, Boolean::logicalOr);
+        if (!ddlRetryScheduled) {
+            ddlRetryScheduled = true;
+            try {
+                periodicExecutor.schedule(this::retryAutoPartitions, 1, TimeUnit.SECONDS);
+            } catch (RejectedExecutionException e) {
+                ddlRetryScheduled = false;
+                ddlRetries.clear();
+                if (!isClosed.get()) {
+                    throw e;
+                }
+            }
+        }
+    }
+
+    private void retryAutoPartitions() {
+        inLock(
+                lock,
+                () -> {
+                    ddlRetryScheduled = false;
+                    Map<Long, Boolean> retries = new HashMap<>(ddlRetries);
+                    ddlRetries.clear();
+                    if (!isClosed.get()) {
+                        retries.forEach(
+                                (tableId, force) ->
+                                        doAutoPartition(
+                                                clock.instant(),
+                                                Collections.singleton(tableId),
+                                                force));
+                    }
+                });
+    }
+
     private void createPartitions(
+            MetadataManager scopedMetadata,
             TableInfo tableInfo,
             Instant currentInstant,
             TreeMap<String, Set<String>> currentPartitions) {
@@ -504,11 +574,17 @@ public class AutoPartitionManager implements AutoCloseable {
         }
 
         for (ResolvedPartitionSpec partition : partitionsToPreCreate) {
-            createPartition(tableInfo, partition, currentPartitions, tableInfo.getNumBuckets());
+            createPartition(
+                    scopedMetadata,
+                    tableInfo,
+                    partition,
+                    currentPartitions,
+                    tableInfo.getNumBuckets());
         }
     }
 
     private void createPartition(
+            MetadataManager scopedMetadata,
             TableInfo tableInfo,
             ResolvedPartitionSpec partition,
             TreeMap<String, Set<String>> currentPartitions,
@@ -527,7 +603,7 @@ public class AutoPartitionManager implements AutoCloseable {
                     new PartitionAssignment(tableInfo.getTableId(), bucketAssignments);
 
             String remoteDataDir = remoteDirDynamicLoader.getRemoteDirSelector().nextDataDir();
-            metadataManager.createPartition(
+            scopedMetadata.createPartition(
                     tablePath,
                     tableId,
                     remoteDataDir,
@@ -600,6 +676,7 @@ public class AutoPartitionManager implements AutoCloseable {
     }
 
     private void dropPartitions(
+            MetadataManager scopedMetadata,
             TablePath tablePath,
             List<String> partitionKeys,
             Instant currentInstant,
@@ -644,11 +721,12 @@ public class AutoPartitionManager implements AutoCloseable {
             if (HISTORICAL_PARTITION_VALUE.equals(entry.getKey())) {
                 continue;
             }
-            dropPartitions(tablePath, partitionKeys, iterator, entry);
+            dropPartitions(scopedMetadata, tablePath, partitionKeys, iterator, entry);
         }
     }
 
     private void dropPartitions(
+            MetadataManager scopedMetadata,
             TablePath tablePath,
             List<String> partitionKeys,
             Iterator<Map.Entry<String, Set<String>>> iterator,
@@ -664,7 +742,7 @@ public class AutoPartitionManager implements AutoCloseable {
         while (dropIterator.hasNext()) {
             String partitionName = dropIterator.next();
             try {
-                metadataManager.dropPartition(
+                scopedMetadata.dropPartition(
                         tablePath,
                         ResolvedPartitionSpec.fromPartitionName(partitionKeys, partitionName),
                         false);

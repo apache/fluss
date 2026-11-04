@@ -20,6 +20,7 @@ package org.apache.fluss.server.coordinator;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.PartitionInfo;
+import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableBucketReplica;
@@ -455,6 +456,50 @@ class TableManagerTest {
                 () -> assertThat(zookeeperClient.getPartitionAssignment(partitionId)).isEmpty());
         // the partition will also be removed from coordinator context
         assertThat(coordinatorContext.getAllReplicasForPartition(tableId, partitionId)).isEmpty();
+    }
+
+    @Test
+    void testTableDeletionWaitsForKnownPartitionBeforeItsDropEvent() {
+        long tableId = 451L;
+        long partitionId = 452L;
+        TableInfo tableInfo =
+                TableInfo.of(
+                        DATA1_TABLE_PATH,
+                        tableId,
+                        1,
+                        DATA1_PARTITIONED_TABLE_DESCRIPTOR,
+                        DEFAULT_REMOTE_DATA_DIR,
+                        0L,
+                        0L);
+        coordinatorContext.putTablePath(tableId, DATA1_TABLE_PATH);
+        coordinatorContext.putTableInfo(tableInfo);
+        PartitionInfo partitionInfo =
+                new PartitionInfo(
+                        partitionId,
+                        ResolvedPartitionSpec.fromPartitionName(
+                                DATA1_PARTITIONED_TABLE_DESCRIPTOR.getPartitionKeys(), "2024"),
+                        DEFAULT_REMOTE_DATA_DIR,
+                        1);
+        coordinatorContext.putPartition(
+                tableId,
+                partitionId,
+                PhysicalTablePath.of(DATA1_TABLE_PATH, "2024"),
+                partitionInfo);
+        coordinatorContext.queueTableDeletion(Collections.singleton(tableId));
+
+        tableManager.resumeTableDeletions();
+
+        assertThat(coordinatorContext.getTableInfoById(tableId)).isSameAs(tableInfo);
+        assertThat(coordinatorContext.getTablesToBeDeleted()).contains(tableId);
+        assertThat(coordinatorContext.getPartitionsToBeDeleted()).isEmpty();
+
+        coordinatorContext.queuePartitionDeletion(
+                Collections.singleton(new TablePartition(tableId, partitionId)));
+        tableManager.resumeDeletions();
+
+        assertThat(coordinatorContext.getTableInfoById(tableId)).isNull();
+        assertThat(coordinatorContext.getPartitionInfoById(partitionId)).isNull();
+        assertThat(coordinatorContext.getTablesToBeDeleted()).doesNotContain(tableId);
     }
 
     private TableAssignment createAssignment() {

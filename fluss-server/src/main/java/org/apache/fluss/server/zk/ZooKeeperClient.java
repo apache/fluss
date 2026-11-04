@@ -100,6 +100,7 @@ import org.apache.fluss.shaded.curator5.org.apache.curator.framework.api.Curator
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.api.transaction.CuratorOp;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.CreateMode;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
+import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.ZooKeeper;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.data.Stat;
 import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.types.Tuple2;
@@ -138,41 +139,14 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  * This class includes methods for write/read various metadata (leader address, tablet server
  * registration, table assignment, table, schema) in Zookeeper.
  *
- * <p>In some method, 'expectedZkVersion' is used to execute an epoch Zookeeper version check.
- * Conditions requiring epoch checks (all must be met):
+ * <p>Coordinator assignment and LeaderAndIsr mutations use {@code expectedZkVersion} to check the
+ * coordinator epoch atomically with their writes. DDL mutations use a {@link
+ * ZooKeeperMetadataOperation}, which also binds the write to the ZooKeeper session that elected the
+ * leader. The caller holds database or table admission across the metadata reads and writes.
  *
- * <pre>
- * ┌─────────────────────────────────────────────────────────┐
- * │ 1. Invoked by the Coordinator (not the TabletServer)    │
- * │ 2. Operates on persistent nodes (not ephemeral)         │
- * │ 3. Constitutes a "control plane" operation:             │
- * │    partition assignment or LeaderAndIsr election        │
- * │ 4. Concurrent access to the same path by old and new    │
- * │    leaders during leader failover                       │
- * │ 5. No other mechanisms (optimistic locking,             │
- * │    idempotency, or reloading) provide fallback          │
- * └─────────────────────────────────────────────────────────┘
- * </pre>
- *
- * <p>In practice, only two types of operations truly require this:
- *
- * <ul>
- *   <li>CRUD for Table/Partition Assignment (assignment decisions).
- *   <li>CRUD for LeaderAndIsr (leader election results).
- * </ul>
- *
- * <p>These operations are inevitably executed concurrently by the old and new coordinators during
- * failover (as the new leader immediately reassigns partitions), and overwrites cannot be
- * automatically recovered.
- *
- * <p>All other operations do not require epoch checks because:
- *
- * <ul>
- *   <li>DDL operations are protected against concurrency by client reconnection mechanisms.
- *   <li>TabletServer operations are unaffected by coordinator failovers.
- *   <li>ACLs and Configs have their own version control or idempotency guarantees.
- *   <li>Ephemeral nodes are managed via session lifecycle.
- * </ul>
+ * <p>TabletServer operations use their own ownership checks. ACLs and configuration updates use
+ * their respective versioning or idempotency guarantees. Ephemeral nodes follow the session
+ * lifecycle.
  */
 @Internal
 public class ZooKeeperClient implements AutoCloseable {
@@ -194,6 +168,8 @@ public class ZooKeeperClient implements AutoCloseable {
     private final Configuration configuration;
 
     private final String defaultRemoteDataDir;
+
+    private volatile ZooKeeperMetadataContext metadataContext;
 
     public ZooKeeperClient(
             CuratorFrameworkWithUnhandledErrorListener curatorFrameworkWrapper,
@@ -259,6 +235,8 @@ public class ZooKeeperClient implements AutoCloseable {
      */
     public ZkEpoch fenceBecomeCoordinatorLeader(String coordinatorId) throws Exception {
         ensureEpochZnodeExists();
+        long instanceIndex = zkClient.getZookeeperClient().getInstanceIndex();
+        ZooKeeper session = zkClient.getZookeeperClient().getZooKeeper();
 
         try {
             ZkEpoch getEpoch = getCurrentEpoch();
@@ -285,6 +263,15 @@ public class ZooKeeperClient implements AutoCloseable {
                     newCoordinatorEpoch,
                     stat.getVersion());
 
+            ZooKeeperMetadataContext context =
+                    new ZooKeeperMetadataContext(
+                            zkClient,
+                            session,
+                            instanceIndex,
+                            stat.getVersion(),
+                            configuration.getInt(ConfigOptions.ZOOKEEPER_MAX_BUFFER_SIZE));
+            context.checkSession();
+            metadataContext = context;
             return new ZkEpoch(newCoordinatorEpoch, stat.getVersion());
         } catch (KeeperException.BadVersionException e) {
             // Other coordinator leader has updated epoch.
@@ -293,6 +280,16 @@ public class ZooKeeperClient implements AutoCloseable {
             throw new CoordinatorEpochFencedException(
                     "Coordinator leader election has been fenced.");
         }
+    }
+
+    /** Returns the original session for this epoch after ordering its earlier metadata writes. */
+    public ZooKeeperMetadataContext newMetadataContext(int epochVersion) throws Exception {
+        ZooKeeperMetadataContext context = metadataContext;
+        if (context == null || context.epochVersion != epochVersion) {
+            throw new CoordinatorEpochFencedException("Metadata epoch is no longer owned.");
+        }
+        context.beginOperation();
+        return context;
     }
 
     /** Register a coordinator leader to ZK. */
@@ -675,6 +672,179 @@ public class ZooKeeperClient implements AutoCloseable {
     // --------------------------------------------------------------------------------------------
     // Database
     // --------------------------------------------------------------------------------------------
+    /** Registers a database using its leader-scoped metadata operation. */
+    public void registerDatabase(
+            ZooKeeperMetadataOperation operation,
+            String database,
+            DatabaseRegistration registration)
+            throws Exception {
+        operation.ensurePath("/metadata");
+        operation.ensurePath(DatabasesZNode.path());
+        operation.create(DatabaseZNode.path(database), DatabaseZNode.encode(registration));
+    }
+
+    /** Updates a database using its leader-scoped metadata operation. */
+    public void updateDatabase(
+            ZooKeeperMetadataOperation operation,
+            String database,
+            DatabaseRegistration registration)
+            throws Exception {
+        String path = DatabaseZNode.path(database);
+        Stat stat = operation.read(() -> zkClient.checkExists().forPath(path));
+        if (stat == null) {
+            throw new KeeperException.NoNodeException(path);
+        }
+        operation.setData(path, DatabaseZNode.encode(registration), stat.getVersion());
+    }
+
+    /** Deletes a database with an epoch check on every removed node. */
+    public void deleteDatabase(ZooKeeperMetadataOperation operation, String database)
+            throws Exception {
+        List<String> tables = operation.read(() -> getChildren(TablesZNode.path(database)));
+        for (String table : tables) {
+            deleteTable(operation, TablePath.of(database, table));
+        }
+        operation.deleteRecursively(DatabaseZNode.path(database));
+    }
+
+    /** Registers a table assignment with fenced creation of its static parents. */
+    public void registerTableAssignment(
+            ZooKeeperMetadataOperation operation, long tableId, TableAssignment assignment)
+            throws Exception {
+        operation.ensurePath("/tabletservers");
+        operation.ensurePath(ZkData.TableIdsZNode.path());
+        operation.create(TableIdZNode.path(tableId), TableIdZNode.encode(assignment));
+    }
+
+    /** Registers a table using its leader-scoped metadata operation. */
+    public void registerTable(
+            ZooKeeperMetadataOperation operation,
+            TablePath tablePath,
+            TableRegistration registration,
+            boolean needCreateNode)
+            throws Exception {
+        String path = TableZNode.path(tablePath);
+        if (needCreateNode) {
+            operation.ensurePath(TablesZNode.path(tablePath.getDatabaseName()));
+            operation.create(path, TableZNode.encode(registration));
+        } else {
+            Stat stat = operation.read(() -> zkClient.checkExists().forPath(path));
+            if (stat == null) {
+                throw new KeeperException.NoNodeException(path);
+            }
+            operation.setData(path, TableZNode.encode(registration), stat.getVersion());
+        }
+    }
+
+    /** Withdraws a table registration before deleting its metadata under the original epoch. */
+    public void deleteTable(ZooKeeperMetadataOperation operation, TablePath tablePath)
+            throws Exception {
+        String path = TableZNode.path(tablePath);
+        Stat stat = new Stat();
+        Optional<byte[]> registration = operation.read(() -> getDataWithStat(path, stat));
+        if (!registration.isPresent()) {
+            throw new KeeperException.NoNodeException(path);
+        }
+        if (registration.get().length > 0) {
+            operation.setData(path, new byte[0], stat.getVersion());
+        }
+        operation.deleteRecursively(path);
+    }
+
+    /** Creates the first schema and its table-local parents within a table creation operation. */
+    public int registerFirstSchema(
+            ZooKeeperMetadataOperation operation, TablePath tablePath, Schema schema)
+            throws Exception {
+        String tableNode = TableZNode.path(tablePath);
+        Optional<byte[]> existing = operation.read(() -> getOrEmpty(tableNode));
+        if (existing.isPresent()) {
+            if (existing.get().length > 0) {
+                throw new KeeperException.NodeExistsException(tableNode);
+            }
+            // Empty registrations are invisible. Earlier creation or deletion may have left
+            // child metadata that must be removed before this table is published.
+            operation.deleteRecursively(tableNode);
+        }
+        operation.ensurePath(TablesZNode.path(tablePath.getDatabaseName()));
+        operation.ensurePath(tableNode);
+        return registerSchema(operation, tablePath, schema, DEFAULT_SCHEMA_ID);
+    }
+
+    /** Registers a schema without recreating an absent table or database. */
+    public int registerSchema(
+            ZooKeeperMetadataOperation operation, TablePath tablePath, Schema schema, int schemaId)
+            throws Exception {
+        operation.ensurePath(SchemasZNode.path(tablePath));
+        operation.create(SchemaZNode.path(tablePath, schemaId), SchemaZNode.encode(schema));
+        return schemaId;
+    }
+
+    /** Deletes a partition using its observed registration version and original leader epoch. */
+    public void deletePartition(
+            ZooKeeperMetadataOperation operation,
+            TablePath tablePath,
+            String partitionName,
+            int expectedVersion)
+            throws Exception {
+        String path = PartitionZNode.path(tablePath, partitionName);
+        int version = expectedVersion;
+        if (version < 0) {
+            Stat stat = operation.read(() -> zkClient.checkExists().forPath(path));
+            if (stat == null) {
+                throw new KeeperException.NoNodeException(path);
+            }
+            version = stat.getVersion();
+        }
+        operation.delete(path, version);
+    }
+
+    /** Atomically registers partition assignment and metadata under the original leader epoch. */
+    public void registerPartitionAssignmentAndMetadata(
+            ZooKeeperMetadataOperation operation,
+            long partitionId,
+            String partitionName,
+            PartitionAssignment assignment,
+            String remoteDataDir,
+            TablePath tablePath,
+            long tableId,
+            int bucketCount)
+            throws Exception {
+        operation.ensurePath("/tabletservers");
+        operation.ensurePath(ZkData.PartitionIdsZNode.path());
+        operation.ensurePath(PartitionsZNode.path(tablePath));
+        List<CuratorOp> operations = new ArrayList<>(2);
+        operations.add(
+                zkOp.createOp(
+                        PartitionIdZNode.path(partitionId),
+                        PartitionIdZNode.encode(assignment),
+                        CreateMode.PERSISTENT));
+        operations.add(
+                zkOp.createOp(
+                        PartitionZNode.path(tablePath, partitionName),
+                        PartitionZNode.encode(
+                                new PartitionRegistration(
+                                        tableId, partitionId, remoteDataDir, bucketCount)),
+                        CreateMode.PERSISTENT));
+        operation.multi(operations);
+    }
+
+    /** Updates table properties and partition backfills using the leader's fixed session. */
+    public void updateTableWithPartitionBucketCountBackfill(
+            ZooKeeperMetadataOperation operation,
+            TablePath tablePath,
+            TableRegistration registration,
+            int expectedTableVersion,
+            Map<String, VersionedData<PartitionRegistration>> backfills,
+            int expectedEpochVersion)
+            throws Exception {
+        if (operation.getEpochVersion() != expectedEpochVersion) {
+            throw new CoordinatorEpochFencedException("Metadata operation epoch changed.");
+        }
+        operation.multi(
+                tableAndPartitionBackfillOperations(
+                        tablePath, registration, expectedTableVersion, backfills));
+    }
+
     public void registerDatabase(String database, DatabaseRegistration databaseRegistration)
             throws Exception {
         String path = DatabaseZNode.path(database);
@@ -1181,24 +1351,9 @@ public class ZooKeeperClient implements AutoCloseable {
             Map<String, VersionedData<PartitionRegistration>> partitionBackfills,
             int expectedCoordinatorEpochZkVersion)
             throws Exception {
-        List<CuratorOp> ops = new ArrayList<>(partitionBackfills.size() + 1);
-        for (Map.Entry<String, VersionedData<PartitionRegistration>> entry :
-                partitionBackfills.entrySet()) {
-            String partitionPath = PartitionZNode.path(tablePath, entry.getKey());
-            byte[] partitionData = PartitionZNode.encode(entry.getValue().data());
-            ops.add(
-                    zkClient.transactionOp()
-                            .setData()
-                            .withVersion(entry.getValue().zkVersion())
-                            .forPath(partitionPath, partitionData));
-        }
-        String tablePathStr = TableZNode.path(tablePath);
-        byte[] tableData = TableZNode.encode(tableRegistration);
-        ops.add(
-                zkClient.transactionOp()
-                        .setData()
-                        .withVersion(expectedTableZkVersion)
-                        .forPath(tablePathStr, tableData));
+        List<CuratorOp> ops =
+                tableAndPartitionBackfillOperations(
+                        tablePath, tableRegistration, expectedTableZkVersion, partitionBackfills);
 
         List<CuratorOp> fencedOps =
                 wrapRequestsWithEpochCheck(ops, expectedCoordinatorEpochZkVersion);
@@ -2477,5 +2632,33 @@ public class ZooKeeperClient implements AutoCloseable {
      */
     public List<String> listProducerIds() throws Exception {
         return getChildren(ProducersZNode.path());
+    }
+
+    private List<CuratorOp> tableAndPartitionBackfillOperations(
+            TablePath tablePath,
+            TableRegistration tableRegistration,
+            int expectedTableZkVersion,
+            Map<String, VersionedData<PartitionRegistration>> partitionBackfills)
+            throws Exception {
+        List<CuratorOp> ops = new ArrayList<>(partitionBackfills.size() + 1);
+        for (Map.Entry<String, VersionedData<PartitionRegistration>> entry :
+                partitionBackfills.entrySet()) {
+            String partitionPath = PartitionZNode.path(tablePath, entry.getKey());
+            byte[] partitionData = PartitionZNode.encode(entry.getValue().data());
+            ops.add(
+                    zkClient.transactionOp()
+                            .setData()
+                            .withVersion(entry.getValue().zkVersion())
+                            .forPath(partitionPath, partitionData));
+        }
+        String tablePathStr = TableZNode.path(tablePath);
+        byte[] tableData = TableZNode.encode(tableRegistration);
+        ops.add(
+                zkClient.transactionOp()
+                        .setData()
+                        .withVersion(expectedTableZkVersion)
+                        .forPath(tablePathStr, tableData));
+
+        return ops;
     }
 }

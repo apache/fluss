@@ -160,7 +160,10 @@ public class TableManager {
             TableBucket tableBucket = new TableBucket(tableId, partitionId, bucket);
             coordinatorContext.updateBucketReplicaAssignment(tableBucket, replicas);
             coordinatorContext.putPartition(
-                    partitionId, PhysicalTablePath.of(tablePath, partitionName), partitionInfo);
+                    tableId,
+                    partitionId,
+                    PhysicalTablePath.of(tablePath, partitionName),
+                    partitionInfo);
             newTableBuckets.add(tableBucket);
         }
         onCreateNewTableBucket(tableId, newTableBuckets);
@@ -315,8 +318,9 @@ public class TableManager {
                     tableId, ReplicaState.ReplicaDeletionSuccessful)) {
                 TableInfo tableInfo = coordinatorContext.getTableInfoById(tableId);
                 if (tableInfo != null && tableInfo.isPartitioned()) {
-                    if (coordinatorContext.hasPartitionsToDelete(tableId)) {
-                        // Skip table deletion until all partitions are deleted
+                    if (coordinatorContext.hasPartitions(tableId)
+                            || coordinatorContext.hasPartitionsToDelete(tableId)) {
+                        // Retain table metadata until all known partitions complete deletion.
                         LOG.debug(
                                 "Table {} has partitions still being deleted, skip table deletion for now.",
                                 tableId);

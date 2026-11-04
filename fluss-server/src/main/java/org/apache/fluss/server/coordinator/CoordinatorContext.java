@@ -92,6 +92,7 @@ public class CoordinatorContext {
     private final Map<Long, PhysicalTablePath> pathByPartitionId = new HashMap<>();
     private final Map<PhysicalTablePath, Long> partitionIdByPath = new HashMap<>();
     private final Map<Long, PartitionInfo> partitionInfoById = new HashMap<>();
+    private final Map<Long, Integer> partitionCountByTable = new HashMap<>();
 
     // a map from table_id to the table path
     private final Map<Long, TablePath> tablePathById = new HashMap<>();
@@ -428,9 +429,18 @@ public class CoordinatorContext {
         this.tableInfoById.put(tableInfo.getTableId(), tableInfo);
     }
 
+    /**
+     * Registers partition metadata under its physical table and partition IDs. Refreshing a
+     * partition preserves its owning table ID.
+     */
     public void putPartition(
-            long partitionId, PhysicalTablePath physicalTablePath, PartitionInfo partitionInfo) {
-        this.pathByPartitionId.put(partitionId, physicalTablePath);
+            long tableId,
+            long partitionId,
+            PhysicalTablePath physicalTablePath,
+            PartitionInfo partitionInfo) {
+        if (this.pathByPartitionId.put(partitionId, physicalTablePath) == null) {
+            partitionCountByTable.merge(tableId, 1, Integer::sum);
+        }
         this.partitionIdByPath.put(physicalTablePath, partitionId);
         this.partitionInfoById.put(partitionId, partitionInfo);
     }
@@ -607,6 +617,11 @@ public class CoordinatorContext {
                             }
                         });
         return allReplicas;
+    }
+
+    /** Returns whether partition metadata still belongs to the physical table ID. */
+    boolean hasPartitions(long tableId) {
+        return partitionCountByTable.containsKey(tableId);
     }
 
     public boolean hasPartitionsToDelete(long tableId) {
@@ -804,7 +819,7 @@ public class CoordinatorContext {
 
         TablePath tablePath = tablePathById.remove(tableId);
         if (tablePath != null) {
-            tableIdByPath.remove(tablePath);
+            tableIdByPath.remove(tablePath, tableId);
         }
         tableInfoById.remove(tableId);
     }
@@ -832,7 +847,14 @@ public class CoordinatorContext {
         PhysicalTablePath physicalTablePath =
                 pathByPartitionId.remove(tablePartition.getPartitionId());
         if (physicalTablePath != null) {
-            partitionIdByPath.remove(physicalTablePath);
+            partitionIdByPath.remove(physicalTablePath, tablePartition.getPartitionId());
+            long tableId = tablePartition.getTableId();
+            int count = partitionCountByTable.get(tableId);
+            if (count == 1) {
+                partitionCountByTable.remove(tableId);
+            } else {
+                partitionCountByTable.put(tableId, count - 1);
+            }
         }
 
         partitionInfoById.remove(tablePartition.getPartitionId());
@@ -871,6 +893,7 @@ public class CoordinatorContext {
         tableInfoById.clear();
         pathByPartitionId.clear();
         partitionIdByPath.clear();
+        partitionCountByTable.clear();
         kvBuckets.clear();
     }
 

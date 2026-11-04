@@ -325,6 +325,8 @@ public class CoordinatorServer extends ServerBase {
     protected void initCoordinatorLeader() throws Exception {
         // to avoid split-brain
         ZkEpoch zkEpoch = zkClient.fenceBecomeCoordinatorLeader(serverId);
+        MetadataManager leaderMetadataManager =
+                metadataManager.forLeader(zkEpoch.getCoordinatorEpochZkVersion());
         registerCoordinatorLeader();
 
         synchronized (lock) {
@@ -347,7 +349,7 @@ public class CoordinatorServer extends ServerBase {
             this.autoPartitionManager =
                     new AutoPartitionManager(
                             metadataCache,
-                            metadataManager,
+                            leaderMetadataManager,
                             remoteDirDynamicLoader,
                             conf,
                             replicaCapacityController);
@@ -365,7 +367,7 @@ public class CoordinatorServer extends ServerBase {
                             serverMetricGroup,
                             conf,
                             ioExecutor,
-                            metadataManager,
+                            leaderMetadataManager,
                             kvSnapshotLeaseManager,
                             scheduler,
                             clock);
@@ -375,7 +377,7 @@ public class CoordinatorServer extends ServerBase {
             // latest values, so stop consuming change notifications to avoid rolling a value back.
             dynamicConfigManager.pauseListening();
 
-            createDefaultDatabase();
+            createDefaultDatabases(leaderMetadataManager, conf);
         }
     }
 
@@ -545,12 +547,6 @@ public class CoordinatorServer extends ServerBase {
     @FunctionalInterface
     private interface ThrowingRunnable {
         void run() throws Exception;
-    }
-
-    private void createDefaultDatabase() {
-        MetadataManager metadataManager =
-                new MetadataManager(zkClient, conf, lakeCatalogDynamicLoader);
-        createDefaultDatabases(metadataManager, conf);
     }
 
     @VisibleForTesting
