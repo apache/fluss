@@ -43,7 +43,7 @@ configurationOverrides:
   # /fluss rather than a child, because a release still on /fluss uses that as
   # its ZooKeeper namespace and would contain it.
   zookeeper.path.root: /fluss{{ if .Values.uniqueResourceNames }}-{{ .Release.Namespace }}/{{ .Release.Name }}{{ end }}
-  zookeeper.address: zk-zookeeper.{{ .Release.Namespace }}.svc.cluster.local:2181
+  zookeeper.address: zk-zookeeper.{{ .Release.Namespace }}.svc.{{ .Values.clusterDomain }}:2181
   remote.data.dir: /tmp/fluss/remote-data
   data.dir: /tmp/fluss/data
   internal.listener.name: INTERNAL
@@ -98,6 +98,14 @@ tablet:
   initContainers: []
   extraEnv: []
   envFrom: []
+  # Optional EXTERNAL advertised host/port overrides for tablets only.
+  # advertisedHosts / advertisedPorts are per-ordinal; length must equal numberOfReplicas.
+  listeners:
+    external:
+      advertisedHost: ""
+      advertisedHosts: []
+      advertisedPort: ""
+      advertisedPorts: []
   annotations: {}
   service:
     annotations: {}
@@ -174,6 +182,13 @@ coordinator:
   initContainers: []
   extraEnv: []
   envFrom: []
+  # Optional EXTERNAL advertised host/port overrides for the coordinator.
+  # EXTERNAL with numberOfReplicas > 1 fails the render: per-ordinal
+  # coordinator addresses are not supported yet.
+  listeners:
+    external:
+      advertisedHost: ""
+      advertisedPort: ""
   annotations: {}
   service:
     annotations: {}
@@ -189,12 +204,21 @@ coordinator:
   tolerations: []
   topologySpreadConstraints: []
 
-# Fluss listener configurations
+# Kubernetes cluster domain for chart-owned in-cluster DNS (CLIENT advertised FQDN).
+clusterDomain: cluster.local
+
 listeners:
   internal:
     port: 9123
   client:
     port: 9124
+  external:
+    # Opt-in second client listener so in-cluster CLIENT advertised addresses
+    # stay on cluster DNS while external clients bootstrap on EXTERNAL.
+    enabled: false
+    port: 9125
+    advertisedHost: ""
+    advertisedPort: ""
 
 # Secrets referenced from configurationOverrides via config provider markers:
 # mounts are read with ${directory:<basePath>/<name>:<key>}, env entries with
@@ -224,6 +248,21 @@ security:
         #   password: alice-pass
         # - existingSecret:
         #     name: fluss-client-sasl-bob
+        #     usernameKey: username
+        #     passwordKey: password
+
+  external:
+    sasl:
+      # "" (PLAINTEXT + warning when listeners.external.enabled) | plain
+      mechanism: ""
+      plain:
+        users: []
+        # To share credentials with CLIENT, point both listeners' users at the
+        # same existingSecret.
+        # - username: external-user
+        #   password: external-pass
+        # - existingSecret:
+        #     name: fluss-external-sasl
         #     usernameKey: username
         #     passwordKey: password
 
