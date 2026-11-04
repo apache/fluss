@@ -30,6 +30,7 @@ import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.tablet.TabletServer;
+import org.apache.fluss.server.zk.data.PartitionRegistration;
 
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
@@ -203,39 +204,71 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
     }
 
     public Optional<PartitionMetadata> getPartitionMetadata(PhysicalTablePath partitionPath) {
-        TablePath tablePath = partitionPath.getTablePath();
-        String partitionName = partitionPath.getPartitionName();
-        ServerMetadataSnapshot snapshot = serverMetadataSnapshot;
+        return Optional.ofNullable(
+                getPartitionsMetadata(Collections.singletonList(partitionPath)).get(partitionPath));
+    }
 
-        OptionalLong tableIdOpt = snapshot.getTableId(tablePath);
-        Optional<Long> partitionIdOpt = snapshot.getPartitionId(partitionPath);
-        if (tableIdOpt.isPresent() && partitionIdOpt.isPresent()) {
+    /**
+     * Returns the cached metadata of the given partitions. Each cached partition is checked against
+     * its ZK registration, with one batched ZK read per table, so that a partition of a dropped or
+     * re-created table is not served. Partitions that are not cached or fail the check are absent
+     * from the result.
+     */
+    public Map<PhysicalTablePath, PartitionMetadata> getPartitionsMetadata(
+            Collection<PhysicalTablePath> partitionPaths) {
+        ServerMetadataSnapshot snapshot = serverMetadataSnapshot;
+        Map<TablePath, Map<String, PartitionMetadata>> cachedPartitionsByTable = new HashMap<>();
+        for (PhysicalTablePath partitionPath : partitionPaths) {
+            TablePath tablePath = partitionPath.getTablePath();
+            String partitionName = partitionPath.getPartitionName();
+            OptionalLong tableIdOpt = snapshot.getTableId(tablePath);
+            Optional<Long> partitionIdOpt = snapshot.getPartitionId(partitionPath);
+            if (!tableIdOpt.isPresent() || !partitionIdOpt.isPresent()) {
+                continue;
+            }
             long tableId = tableIdOpt.getAsLong();
             long partitionId = partitionIdOpt.get();
-            try {
-                if (!metadataManager.isPartitionRegistered(partitionPath, tableId, partitionId)) {
-                    return Optional.empty();
-                }
-            } catch (Exception e) {
-                return Optional.empty();
-            }
             List<BucketMetadata> bucketMetadataList =
                     new ArrayList<>(snapshot.getBucketMetadataForPartition(partitionId).values());
             // prefer the explicit bucket count sent by the coordinator; the merged bucket
             // metadata list may be transiently partial during incremental updates
             Integer bucketCount =
                     snapshot.getPartitionBucketCount(new TablePartition(tableId, partitionId));
-            return Optional.of(
-                    new PartitionMetadata(
-                            tableId,
+            cachedPartitionsByTable
+                    .computeIfAbsent(tablePath, k -> new HashMap<>())
+                    .put(
                             partitionName,
-                            partitionId,
-                            bucketMetadataList,
-                            bucketCount != null ? bucketCount : bucketMetadataList.size()));
-        } else {
-
-            return Optional.empty();
+                            new PartitionMetadata(
+                                    tableId,
+                                    partitionName,
+                                    partitionId,
+                                    bucketMetadataList,
+                                    bucketCount != null ? bucketCount : bucketMetadataList.size()));
         }
+
+        Map<PhysicalTablePath, PartitionMetadata> result = new HashMap<>();
+        for (Map.Entry<TablePath, Map<String, PartitionMetadata>> entry :
+                cachedPartitionsByTable.entrySet()) {
+            TablePath tablePath = entry.getKey();
+            Map<String, PartitionRegistration> registrations;
+            try {
+                registrations =
+                        metadataManager.getPartitionRegistrations(
+                                tablePath, entry.getValue().keySet());
+            } catch (Exception e) {
+                // let the caller fall back to reading the partitions from ZK
+                continue;
+            }
+            for (PartitionMetadata cached : entry.getValue().values()) {
+                PartitionRegistration registration = registrations.get(cached.getPartitionName());
+                if (registration != null
+                        && registration.getTableId() == cached.getTableId()
+                        && registration.getPartitionId() == cached.getPartitionId()) {
+                    result.put(PhysicalTablePath.of(tablePath, cached.getPartitionName()), cached);
+                }
+            }
+        }
+        return result;
     }
 
     public boolean contains(TableBucket tableBucket) {

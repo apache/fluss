@@ -42,7 +42,6 @@ import org.apache.fluss.metadata.DatabaseSummary;
 import org.apache.fluss.metadata.KafkaTableSchema;
 import org.apache.fluss.metadata.LakeTableUtil;
 import org.apache.fluss.metadata.MergeEngineType;
-import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaInfo;
@@ -1173,23 +1172,20 @@ public class MetadataManager {
     }
 
     /**
-     * Returns whether the partition registered in ZK under the given path belongs to the given
-     * table id and has the given partition id.
+     * Returns the ZK registrations of the given partitions of a table, read in one batch.
+     * Partitions that are not registered are absent from the result.
      */
-    public boolean isPartitionRegistered(
-            PhysicalTablePath partitionPath, long tableId, long partitionId) {
-        Optional<PartitionRegistration> registration;
+    public Map<String, PartitionRegistration> getPartitionRegistrations(
+            TablePath tablePath, Collection<String> partitionNames) {
         try {
-            registration =
-                    zookeeperClient.getPartition(
-                            partitionPath.getTablePath(), partitionPath.getPartitionName());
+            return zookeeperClient.getPartitionRegistrations(tablePath, partitionNames);
         } catch (Exception e) {
             throw new FlussRuntimeException(
-                    String.format("Failed to get partition '%s'.", partitionPath), e);
+                    String.format(
+                            "Failed to get partitions %s of table '%s'.",
+                            partitionNames, tablePath),
+                    e);
         }
-        return registration.isPresent()
-                && registration.get().getTableId() == tableId
-                && registration.get().getPartitionId() == partitionId;
     }
 
     /**

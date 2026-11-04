@@ -1018,7 +1018,11 @@ public class ZooKeeperClient implements AutoCloseable {
         return getPartitionRegistrations(tablePath, matchedPartitionNames);
     }
 
-    private Map<String, PartitionRegistration> getPartitionRegistrations(
+    /**
+     * Get the registrations of the given partitions of a table in ZK, in one batched read.
+     * Partitions that are not registered are absent from the result.
+     */
+    public Map<String, PartitionRegistration> getPartitionRegistrations(
             TablePath tablePath, Collection<String> partitionNames) throws Exception {
         Map<String, String> path2PartitionName =
                 partitionNames.stream()
