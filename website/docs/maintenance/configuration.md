@@ -324,7 +324,11 @@ These TabletServer options control maintenance of [secondary indexes](../table-d
 | index.replication.buffer.max-bytes | MemorySize | 512mb | Maximum retained index payload page bytes across one TabletServer, including construction, queued and in-flight batches. Source reads and temporary encoding objects are not included. Must be positive. |
 | index.replication.retry.backoff | Duration | 100ms | Base backoff before retrying source reads, window construction or batch sends. Must be positive and no greater than 10 seconds. |
 
-Source failures and size-limit violations retain the replication task and its progress. Size violations are logged at ERROR and retried with backoff until an administrator repairs the fault or adjusts the constraints. These options are captured when the replication components are constructed; changed limits require recreating the affected components, such as by a rolling restart.
+Source and index failures retain the replication task and its progress. Retries use exponential backoff with a multiplier of 2, 20% jitter and a maximum interval of 10 seconds. Failures are reported through ERROR logs and failure metrics until an administrator repairs the fault or adjusts the constraints. These options are captured when the replication components are constructed. Changed limits require recreating the affected components, such as by a rolling restart.
+
+A failed index window yields its staged payload and buffer accounting when its continuous failure duration plus the next backoff reaches a 10-second soft retention target. Retry state and replay boundaries survive yielding. After backoff, the task competes for buffer capacity and rebuilds the window from retained WAL. Only a fully acknowledged window advances source progress and resets that index's retry state. Capacity competition during construction releases the abandoned payload and waits for another capacity opportunity.
+
+The buffer budget accounts for payload pages owned by index replication, including construction, queued and active in-flight batches. RPC request references and transport buffers have their own lifecycle.
 
 The client option `client.lookup.continuation-threads` (Integer, default `4`) controls how many threads per connection continue secondary-index lookups after index candidates are returned. It must be positive.
 
