@@ -679,7 +679,7 @@ public class FlussAdmin implements Admin {
                 .setTableName(tablePath.getTableName());
         return readOnlyGateway
                 .getLatestKvSnapshots(request)
-                .thenCompose(response -> selectReadableKvSnapshots(tablePath, response));
+                .thenCompose(response -> getReadableKvSnapshots(tablePath, response));
     }
 
     @Override
@@ -693,14 +693,37 @@ public class FlussAdmin implements Admin {
         request.setPartitionName(partitionName);
         return readOnlyGateway
                 .getLatestKvSnapshots(request)
-                .thenCompose(response -> selectReadableKvSnapshots(tablePath, response));
+                .thenCompose(response -> getReadableKvSnapshots(tablePath, response));
     }
 
-    private CompletableFuture<KvSnapshots> selectReadableKvSnapshots(
+    private CompletableFuture<KvSnapshots> getReadableKvSnapshots(
             TablePath tablePath, GetLatestKvSnapshotsResponse response) {
         if (!response.hasHasSyncIndexes() || !response.isHasSyncIndexes()) {
             return CompletableFuture.completedFuture(ClientRpcMessageUtils.toKvSnapshots(response));
         }
+        return getSnapshotReadBounds(tablePath, response)
+                .thenCompose(
+                        bounds -> {
+                            if (response.getLatestSnapshotsList().stream()
+                                    .allMatch(bounds::isReadable)) {
+                                return CompletableFuture.completedFuture(
+                                        ClientRpcMessageUtils.toKvSnapshots(response));
+                            }
+                            Long partitionId =
+                                    response.hasPartitionId() ? response.getPartitionId() : null;
+                            return listKvSnapshotMetadata(response.getTableId(), partitionId, true)
+                                    .thenApply(
+                                            retained ->
+                                                    selectReadableKvSnapshots(
+                                                            response,
+                                                            retained.getActiveSnapshotsList(),
+                                                            bounds));
+                        })
+                .applyToEither(snapshotSelectionClosed, snapshots -> snapshots);
+    }
+
+    private CompletableFuture<SnapshotReadBounds> getSnapshotReadBounds(
+            TablePath tablePath, GetLatestKvSnapshotsResponse response) {
         // Routing may refresh metadata synchronously. Keep it off the RPC callback thread and
         // compose the offset RPCs without blocking the metadata-refresh executor on their results.
         return CompletableFuture.completedFuture(response)
@@ -727,72 +750,19 @@ public class FlussAdmin implements Admin {
                                             new OffsetSpec.EarliestSpec(),
                                             tablePath);
                             return latest.all()
-                                    .thenCombine(
-                                            earliest.all(),
-                                            (visibleOffsets, startOffsets) -> {
-                                                boolean latestReadable =
-                                                        snapshots.getLatestSnapshotsList().stream()
-                                                                .allMatch(
-                                                                        snapshot -> {
-                                                                            int bucket =
-                                                                                    snapshot
-                                                                                            .getBucketId();
-                                                                            long start =
-                                                                                    startOffsets
-                                                                                            .get(
-                                                                                                    bucket);
-                                                                            if (!snapshot
-                                                                                    .hasSnapshotId()) {
-                                                                                return start == 0;
-                                                                            }
-                                                                            return isSnapshotReadable(
-                                                                                    snapshot,
-                                                                                    visibleOffsets
-                                                                                            .get(
-                                                                                                    bucket),
-                                                                                    start);
-                                                                        });
-                                                if (latestReadable) {
-                                                    return CompletableFuture.completedFuture(
-                                                            ClientRpcMessageUtils.toKvSnapshots(
-                                                                    snapshots));
-                                                }
-                                                return listKvSnapshotMetadata(
-                                                                snapshots.getTableId(),
-                                                                partitionId,
-                                                                true)
-                                                        .thenApply(
-                                                                retained ->
-                                                                        selectReadableKvSnapshots(
-                                                                                snapshots,
-                                                                                retained
-                                                                                        .getActiveSnapshotsList(),
-                                                                                visibleOffsets,
-                                                                                startOffsets));
-                                            })
-                                    .thenCompose(selected -> selected);
+                                    .thenCombine(earliest.all(), SnapshotReadBounds::new);
                         },
-                        refreshExecutor)
-                .applyToEither(snapshotSelectionClosed, snapshots -> snapshots);
-    }
-
-    private static boolean isSnapshotReadable(
-            PbKvSnapshot snapshot, long visibleOffset, long startOffset) {
-        return snapshot.hasLogOffset()
-                && snapshot.getLogOffset() <= visibleOffset
-                && snapshot.getLogOffset() >= startOffset;
+                        refreshExecutor);
     }
 
     private static KvSnapshots selectReadableKvSnapshots(
             GetLatestKvSnapshotsResponse response,
             List<PbKvSnapshot> candidates,
-            Map<Integer, Long> visibleOffsets,
-            Map<Integer, Long> startOffsets) {
+            SnapshotReadBounds bounds) {
         Map<Integer, PbKvSnapshot> selected = new HashMap<>();
         for (PbKvSnapshot candidate : candidates) {
             int bucket = candidate.getBucketId();
-            if (isSnapshotReadable(
-                    candidate, visibleOffsets.get(bucket), startOffsets.get(bucket))) {
+            if (bounds.isReadable(candidate)) {
                 PbKvSnapshot previous = selected.get(bucket);
                 if (previous == null || candidate.getSnapshotId() > previous.getSnapshotId()) {
                     selected.put(bucket, candidate);
@@ -804,7 +774,7 @@ public class FlussAdmin implements Admin {
         for (PbKvSnapshot bucketSnapshot : response.getLatestSnapshotsList()) {
             int bucket = bucketSnapshot.getBucketId();
             PbKvSnapshot snapshot = selected.get(bucket);
-            if (snapshot == null && startOffsets.get(bucket) > 0) {
+            if (snapshot == null && bounds.startOffsets.get(bucket) > 0) {
                 // TODO: Improve this rare case where no visible snapshot can bridge retained WAL.
                 // Increasing kv.snapshot.num-retained and log TTL can keep a usable read history.
                 throw new FlussRuntimeException(
@@ -1392,6 +1362,28 @@ public class FlussAdmin implements Admin {
             checkArgument(
                     !isNullOrWhitespaceOnly(rack),
                     "rack element must not be null, empty, or whitespace-only");
+        }
+    }
+
+    private static final class SnapshotReadBounds {
+        private final Map<Integer, Long> visibleOffsets;
+        private final Map<Integer, Long> startOffsets;
+
+        private SnapshotReadBounds(
+                Map<Integer, Long> visibleOffsets, Map<Integer, Long> startOffsets) {
+            this.visibleOffsets = visibleOffsets;
+            this.startOffsets = startOffsets;
+        }
+
+        private boolean isReadable(PbKvSnapshot snapshot) {
+            int bucket = snapshot.getBucketId();
+            long startOffset = startOffsets.get(bucket);
+            if (!snapshot.hasSnapshotId()) {
+                return startOffset == 0;
+            }
+            return snapshot.hasLogOffset()
+                    && snapshot.getLogOffset() <= visibleOffsets.get(bucket)
+                    && snapshot.getLogOffset() >= startOffset;
         }
     }
 }
