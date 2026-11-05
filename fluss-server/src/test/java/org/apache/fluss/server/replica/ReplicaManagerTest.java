@@ -2315,10 +2315,18 @@ class ReplicaManagerTest extends ReplicaTestBase {
 
         PartitionMetadata partitionMetadata1 =
                 new PartitionMetadata(
-                        partitionTableId, partitionName1, partitionId1, Collections.emptyList());
+                        partitionTableId,
+                        partitionName1,
+                        partitionId1,
+                        Collections.emptyList(),
+                        null);
         PartitionMetadata partitionMetadata2 =
                 new PartitionMetadata(
-                        partitionTableId, partitionName2, partitionId2, Collections.emptyList());
+                        partitionTableId,
+                        partitionName2,
+                        partitionId2,
+                        Collections.emptyList(),
+                        null);
         replicaManager.maybeUpdateMetadataCache(
                 2,
                 buildClusterMetadata(
@@ -2419,7 +2427,8 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                         partitionTableId,
                                         partitionName1,
                                         DELETED_PARTITION_ID, // mark as deleted.
-                                        Collections.emptyList()))));
+                                        Collections.emptyList(),
+                                        null))));
         expectedPartitionNameById.put(partitionId1, null);
         expectedPartitionMetadataById.put(physicalTablePath1, null);
         assertUpdateMetadataEquals(

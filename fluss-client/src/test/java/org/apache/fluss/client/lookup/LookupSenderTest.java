@@ -1628,7 +1628,8 @@ public class LookupSenderTest {
                     bucketLocations,
                     cluster.getTableIdByPath(),
                     cluster.getPartitionIdByPath(),
-                    cluster.getBucketCountByTableOrPartition());
+                    cluster.getBucketCountByTableOrPartition(),
+                    Collections.emptyMap());
         }
     }
 }

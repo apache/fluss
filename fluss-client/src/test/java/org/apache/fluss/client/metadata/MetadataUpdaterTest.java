@@ -240,6 +240,7 @@ public class MetadataUpdaterTest {
                         Collections.emptyMap(),
                         Collections.emptyMap(),
                         Collections.emptyMap(),
+                        Collections.emptyMap(),
                         Collections.emptyMap());
         AdminReadOnlyGateway gateway =
                 new TestCoordinatorGateway() {
@@ -286,7 +287,8 @@ public class MetadataUpdaterTest {
                         Collections.emptyMap(),
                         initialTableBucketCount == 0
                                 ? Collections.emptyMap()
-                                : Collections.singletonMap(table, initialTableBucketCount));
+                                : Collections.singletonMap(table, initialTableBucketCount),
+                        Collections.emptyMap());
 
         int expectedTableBucketCount = initialTableBucketCount;
         for (int partitionBucketCount : new int[] {4, 2, 6}) {

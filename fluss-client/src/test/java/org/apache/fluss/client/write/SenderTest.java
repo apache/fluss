@@ -273,7 +273,8 @@ final class SenderTest {
                         Collections.emptyMap(),
                         Collections.singletonMap(
                                 TableOrPartition.ofTable(tableInfo.getTableId()),
-                                tableInfo.getNumBuckets()));
+                                tableInfo.getNumBuckets()),
+                        Collections.emptyMap());
         metadataUpdater.updateCluster(cluster);
         sender = setupWithIdempotenceState();
         CompletableFuture<Exception> firstResult = appendDiskTestRecord(kv, firstBucket, 1);
@@ -1777,6 +1778,7 @@ final class SenderTest {
                         oldCluster.getBucketLocationsByPath(),
                         oldCluster.getTableIdByPath(),
                         oldCluster.getPartitionIdByPath(),
+                        Collections.emptyMap(),
                         Collections.emptyMap());
 
         metadataUpdater.updateCluster(newCluster);
@@ -2376,7 +2378,8 @@ final class SenderTest {
                 bucketLocationsByPath,
                 Collections.singletonMap(tableInfo.getTablePath(), tableInfo.getTableId()),
                 partitionIdsByPath,
-                bucketCountByTableOrPartition);
+                bucketCountByTableOrPartition,
+                Collections.emptyMap());
     }
 
     private CompletableFuture<Exception> appendKvRecord(

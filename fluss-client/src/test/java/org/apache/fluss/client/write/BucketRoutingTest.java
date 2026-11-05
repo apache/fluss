@@ -461,7 +461,8 @@ class BucketRoutingTest {
                                                 path, new TableBucket(10, 0), 1, new int[] {1}))),
                         Collections.singletonMap(path.getTablePath(), 10L),
                         Collections.emptyMap(),
-                        Collections.singletonMap(TableOrPartition.ofTable(10), 1));
+                        Collections.singletonMap(TableOrPartition.ofTable(10), 1),
+                        Collections.emptyMap());
         RecordAccumulator accumulator = accumulator(ConfigOptions.NoKeyAssigner.STICKY);
         try {
             accumulator.append(
@@ -486,7 +487,8 @@ class BucketRoutingTest {
                         Collections.emptyMap(),
                         Collections.singletonMap(PATH.getTablePath(), table.getTableId()),
                         Collections.emptyMap(),
-                        Collections.singletonMap(TableOrPartition.ofTable(table.getTableId()), 4));
+                        Collections.singletonMap(TableOrPartition.ofTable(table.getTableId()), 4),
+                        Collections.emptyMap());
         RecordAccumulator accumulator = accumulator(ConfigOptions.NoKeyAssigner.STICKY);
         List<CompletableFuture<Exception>> completions = new ArrayList<>();
         List<WriteBatch> originals = new ArrayList<>();
@@ -561,7 +563,8 @@ class BucketRoutingTest {
                             newPartition.getBucketLocationsByPath(),
                             newPartition.getTableIdByPath(),
                             newPartition.getPartitionIdByPath(),
-                            counts);
+                            counts,
+                            Collections.emptyMap());
             assertThat(accumulator.ready(resolved).readyNodes).containsExactly(1);
             assertThat(completion).isNotDone();
             List<ReadyWriteBatch> drained =
@@ -1185,7 +1188,8 @@ class BucketRoutingTest {
                 Collections.singletonMap(path, partitionId),
                 includeCount
                         ? Collections.singletonMap(TableOrPartition.ofPartition(partitionId), count)
-                        : Collections.emptyMap());
+                        : Collections.emptyMap(),
+                Collections.emptyMap());
     }
 
     private static WriteRecord record(TableInfo table, WriteFormat format, int key, int version) {

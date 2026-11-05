@@ -86,7 +86,8 @@ class ServerRpcMessageUtilsTest {
                         "p",
                         2,
                         Collections.singletonList(
-                                new BucketMetadata(0, null, null, Collections.emptyList())));
+                                new BucketMetadata(0, null, null, Collections.emptyList())),
+                        null);
         UpdateMetadataRequest request =
                 makeUpdateMetadataRequest(
                         null,
@@ -322,7 +323,8 @@ class ServerRpcMessageUtilsTest {
                                 2, 2, 4, Arrays.asList(2, 3), Collections.emptyList(), 5));
         TableMetadata tableMetadata = new TableMetadata(DATA1_TABLE_INFO, bucketMetadata);
         PartitionMetadata partitionMetadata =
-                new PartitionMetadata(DATA1_TABLE_INFO.getTableId(), "p1", 10L, bucketMetadata);
+                new PartitionMetadata(
+                        DATA1_TABLE_INFO.getTableId(), "p1", 10L, bucketMetadata, null);
 
         UpdateMetadataRequest request =
                 makeUpdateMetadataRequest(

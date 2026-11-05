@@ -155,6 +155,7 @@ class PrefixKeyLookuperTest {
                 Collections.singletonMap(path, Collections.singletonList(bucket)),
                 Collections.singletonMap(TABLE_PATH, TABLE_ID),
                 Collections.emptyMap(),
+                Collections.emptyMap(),
                 Collections.emptyMap());
     }
 

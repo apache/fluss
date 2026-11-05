@@ -61,23 +61,6 @@ public final class Cluster {
     private final Map<TableOrPartition, Integer> bucketCountByTableOrPartition;
     private final Map<Long, Long> bucketCountEpochByTableId;
 
-    public Cluster(
-            Map<Integer, ServerNode> aliveTabletServersById,
-            @Nullable ServerNode coordinatorServer,
-            Map<PhysicalTablePath, List<BucketLocation>> bucketLocationsByPath,
-            Map<TablePath, Long> tableIdByPath,
-            Map<PhysicalTablePath, Long> partitionsIdByPath,
-            Map<TableOrPartition, Integer> bucketCountByTableOrPartition) {
-        this(
-                aliveTabletServersById,
-                coordinatorServer,
-                bucketLocationsByPath,
-                tableIdByPath,
-                partitionsIdByPath,
-                bucketCountByTableOrPartition,
-                Collections.emptyMap());
-    }
-
     /** Creates a metadata snapshot including table bucket-count epochs. */
     public Cluster(
             Map<Integer, ServerNode> aliveTabletServersById,
@@ -416,6 +399,7 @@ public final class Cluster {
         return new Cluster(
                 Collections.emptyMap(),
                 null,
+                Collections.emptyMap(),
                 Collections.emptyMap(),
                 Collections.emptyMap(),
                 Collections.emptyMap(),

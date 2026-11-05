@@ -577,7 +577,8 @@ class MetadataUpdateITCase {
                                     throw new RuntimeException(e);
                                 }
                             });
-            return new PartitionMetadata(tableId, partitionName, partitionId, bucketMetadataList);
+            return new PartitionMetadata(
+                    tableId, partitionName, partitionId, bucketMetadataList, null);
         } catch (Exception e) {
             throw new RuntimeException(e);
         }

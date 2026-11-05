@@ -257,6 +257,7 @@ class MetadataUpdaterITCase {
                         Collections.emptyMap(),
                         Collections.emptyMap(),
                         Collections.emptyMap(),
+                        Collections.emptyMap(),
                         Collections.emptyMap());
 
         metadataUpdater = new MetadataUpdater(rpcClient, new Configuration(), newCluster);

@@ -214,7 +214,8 @@ public class TabletServerMetadataCacheTest {
                                         partitionTableId,
                                         partitionName1,
                                         partitionId1,
-                                        changedBucket1BucketMetadata))));
+                                        changedBucket1BucketMetadata,
+                                        null))));
         assertTableMetadataEquals(DATA1_TABLE_ID, DATA1_TABLE_INFO, afterChangeBucketMetadata);
 
         assertPartitionMetadataEquals(
@@ -274,7 +275,8 @@ public class TabletServerMetadataCacheTest {
                                                 partitionName1,
                                                 DELETED_PARTITION_ID, // mark this partition as
                                                 // deletion.
-                                                Collections.emptyList()))));
+                                                Collections.emptyList(),
+                                                null))));
         assertThat(deletedTableIds).isEmpty();
         assertThat(serverMetadataCache.getPhysicalTablePath(partitionId1)).isEmpty();
         assertPartitionMetadataEquals(
@@ -329,7 +331,11 @@ public class TabletServerMetadataCacheTest {
                 new TableMetadata(partitionTableInfo, Collections.emptyList()));
         serverMetadataCache.updatePartitionMetadata(
                 new PartitionMetadata(
-                        partitionTableId, partitionName1, partitionId1, initialBucketMetadata));
+                        partitionTableId,
+                        partitionName1,
+                        partitionId1,
+                        initialBucketMetadata,
+                        null));
         assertThat(
                         serverMetadataCache.getPartitionMetadata(
                                 PhysicalTablePath.of(partitionedTablePath, partitionName1)))
@@ -347,7 +353,8 @@ public class TabletServerMetadataCacheTest {
                                 partitionTableId,
                                 partitionName1,
                                 partitionId1,
-                                initialBucketMetadata));
+                                initialBucketMetadata,
+                                null));
         serverMetadataCache.updateClusterMetadata(
                 new ClusterMetadata(
                         coordinatorServer,
@@ -445,7 +452,8 @@ public class TabletServerMetadataCacheTest {
                                         partitionTableId,
                                         partitionName1,
                                         DELETED_PARTITION_ID,
-                                        Collections.emptyList()))));
+                                        Collections.emptyList(),
+                                        null))));
         assertThat(
                         serverMetadataCache.getPartitionMetadata(
                                 PhysicalTablePath.of(partitionedTablePath, partitionName1)))
@@ -462,7 +470,8 @@ public class TabletServerMetadataCacheTest {
                                         partitionTableId,
                                         partitionName1,
                                         partitionId1,
-                                        initialBucketMetadata))));
+                                        initialBucketMetadata,
+                                        null))));
         assertThat(
                         serverMetadataCache.getPartitionMetadata(
                                 PhysicalTablePath.of(partitionedTablePath, partitionName1)))
@@ -485,7 +494,8 @@ public class TabletServerMetadataCacheTest {
                                         partitionTableId,
                                         DELETED_PARTITION_NAME,
                                         partitionId2,
-                                        Collections.emptyList()))));
+                                        Collections.emptyList(),
+                                        null))));
         assertThat(
                         serverMetadataCache.getPartitionMetadata(
                                 PhysicalTablePath.of(partitionedTablePath, partitionName2)))
@@ -502,7 +512,8 @@ public class TabletServerMetadataCacheTest {
                                         partitionTableId,
                                         partitionName2,
                                         partitionId2,
-                                        initialBucketMetadata))));
+                                        initialBucketMetadata,
+                                        null))));
         assertThat(
                         serverMetadataCache.getPartitionMetadata(
                                 PhysicalTablePath.of(partitionedTablePath, partitionName2)))
@@ -804,7 +815,7 @@ public class TabletServerMetadataCacheTest {
         PhysicalTablePath partitionPath = PhysicalTablePath.of(partitionedTablePath, partitionName);
         PartitionMetadata partitionMetadata =
                 new PartitionMetadata(
-                        partitionTableId, partitionName, partitionId, initialBucketMetadata);
+                        partitionTableId, partitionName, partitionId, initialBucketMetadata, null);
 
         // When: update partition metadata without table
         serverMetadataCache.updatePartitionMetadata(partitionMetadata);
@@ -1092,7 +1103,7 @@ public class TabletServerMetadataCacheTest {
         PhysicalTablePath partitionPath = PhysicalTablePath.of(partitionedTablePath, partitionName);
         PartitionMetadata partitionMetadata =
                 new PartitionMetadata(
-                        partitionTableId, partitionName, partitionId, initialBucketMetadata);
+                        partitionTableId, partitionName, partitionId, initialBucketMetadata, null);
         serverMetadataCache.updatePartitionMetadata(partitionMetadata);
 
         // When: clear table metadata
