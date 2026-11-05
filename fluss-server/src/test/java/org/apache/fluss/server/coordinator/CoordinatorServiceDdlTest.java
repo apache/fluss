@@ -27,6 +27,7 @@ import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.messages.CreateTableFromLakeRequest;
+import org.apache.fluss.rpc.messages.CreateTableResponse;
 import org.apache.fluss.rpc.netty.server.Session;
 import org.apache.fluss.security.acl.FlussPrincipal;
 import org.apache.fluss.server.coordinator.remote.RemoteDirDynamicLoader;
@@ -37,12 +38,14 @@ import org.junit.jupiter.api.Test;
 
 import java.net.InetAddress;
 import java.net.URI;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 
+import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newCreateTableRequest;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.fromTablePath;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -164,5 +167,105 @@ class CoordinatorServiceDdlTest extends CoordinatorEventProcessorTestBase {
             ioExecutor.shutdownNow();
         }
         assertThatThrownBy(lakeRequest::get).hasRootCauseInstanceOf(TableNotExistException.class);
+    }
+
+    @Test
+    void testWaitingDdlReleasesRequestWorkerAndDoesNotOccupyIoWorker() throws Exception {
+        ExecutorService io = Executors.newSingleThreadExecutor();
+        ExecutorService worker = Executors.newSingleThreadExecutor();
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
+        CoordinatorService service =
+                new CoordinatorService(
+                        conf,
+                        FileSystem.get(URI.create("file:///")),
+                        zookeeperClient,
+                        () -> eventProcessor,
+                        serverMetadataCache,
+                        metadataManager,
+                        null,
+                        new LakeCatalogDynamicLoader(new Configuration(), null, true),
+                        lakeTableTieringManager,
+                        new RemoteDirDynamicLoader(conf),
+                        null,
+                        io,
+                        kvSnapshotLeaseManager,
+                        null,
+                        replicaCapacityController);
+        TablePath hot = TablePath.of(defaultDatabase, "hot");
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        FutureTask<Void> owner =
+                new FutureTask<>(
+                        () -> {
+                            eventProcessor
+                                    .getMetadataManager()
+                                    .runTableDdl(
+                                            hot,
+                                            scoped -> {
+                                                entered.countDown();
+                                                try {
+                                                    release.await();
+                                                } catch (InterruptedException e) {
+                                                    Thread.currentThread().interrupt();
+                                                    throw new RuntimeException(e);
+                                                }
+                                                return null;
+                                            });
+                            return null;
+                        });
+        Thread ownerThread = new Thread(owner);
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(Schema.newBuilder().column("id", DataTypes.INT()).build())
+                        .distributedBy(1)
+                        .build();
+        try {
+            ownerThread.start();
+            assertThat(entered.await(10, TimeUnit.SECONDS)).isTrue();
+            CompletableFuture<CreateTableResponse> waiting =
+                    worker.submit(
+                                    () -> {
+                                        service.setCurrentSession(
+                                                new Session(
+                                                        (short) 1,
+                                                        "FLUSS",
+                                                        false,
+                                                        InetAddress.getLoopbackAddress(),
+                                                        new FlussPrincipal("test", "USER")));
+                                        return service.createTable(
+                                                newCreateTableRequest(hot, descriptor, false));
+                                    })
+                            .get(10, TimeUnit.SECONDS);
+            assertThat(waiting).isNotDone();
+            CompletableFuture<CreateTableResponse> other =
+                    worker.submit(
+                                    () -> {
+                                        service.setCurrentSession(
+                                                new Session(
+                                                        (short) 1,
+                                                        "FLUSS",
+                                                        false,
+                                                        InetAddress.getLoopbackAddress(),
+                                                        new FlussPrincipal("test", "USER")));
+                                        return service.createTable(
+                                                newCreateTableRequest(
+                                                        TablePath.of(defaultDatabase, "cold"),
+                                                        descriptor,
+                                                        false));
+                                    })
+                            .get(10, TimeUnit.SECONDS);
+            other.get(10, TimeUnit.SECONDS);
+            assertThat(waiting).isNotDone();
+            release.countDown();
+            waiting.get(10, TimeUnit.SECONDS);
+            owner.get(10, TimeUnit.SECONDS);
+        } finally {
+            release.countDown();
+            ownerThread.join(10000);
+            worker.shutdownNow();
+            io.shutdownNow();
+            service.shutdown();
+        }
     }
 }

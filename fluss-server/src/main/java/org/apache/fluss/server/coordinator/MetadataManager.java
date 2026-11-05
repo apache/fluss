@@ -83,8 +83,12 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 import java.util.function.BiConsumer;
+import java.util.function.BiFunction;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 import static org.apache.fluss.server.utils.TableDescriptorValidation.validateAlterTableProperties;
 import static org.apache.fluss.server.utils.TableDescriptorValidation.validateAlterTableSchema;
@@ -161,7 +165,104 @@ public class MetadataManager {
                 uncheck(
                         () -> zookeeperClient.newMetadataContext(coordinatorZkVersion),
                         "Failed to bind DDL metadata to coordinator leadership");
-        return new MetadataManager(this, new DdlAdmission(), context, null, null);
+        return new MetadataManager(this, ddlAdmission.newLeadership(), context, null, null);
+    }
+
+    /** Ends this leader's admission without waiting for operations already executing. */
+    void closeDdlAdmission() {
+        ddlAdmission.close();
+    }
+
+    <T> CompletableFuture<T> runTableDdlAsync(
+            TablePath tablePath, Executor executor, Function<MetadataManager, T> action) {
+        return runDdlAsync(tablePath.getDatabaseName(), tablePath.getTableName(), executor, action);
+    }
+
+    <T> CompletableFuture<T> runDatabaseDdlAsync(
+            String database, Executor executor, Function<MetadataManager, T> action) {
+        return runDdlAsync(database, null, executor, action);
+    }
+
+    private <T> CompletableFuture<T> runDdlAsync(
+            String database,
+            @Nullable String table,
+            Executor executor,
+            Function<MetadataManager, T> action) {
+        return ddlAdmission.withRequest(
+                context -> runDdlAsync(context, database, table, executor, action));
+    }
+
+    /** Prepares table creation and selects its final scope using one request capacity. */
+    <P, T> CompletableFuture<T> runTableOrDatabaseDdlAsync(
+            TablePath tablePath,
+            Executor executor,
+            Supplier<P> prepare,
+            BiFunction<MetadataManager, P, T> action) {
+        String database = tablePath.getDatabaseName();
+        return ddlAdmission.withRequest(
+                context -> {
+                    CompletableFuture<P> preparation =
+                            ddlAdmission.submit(
+                                    context, null, null, executor, ignored -> prepare.get());
+                    return preparation.thenCompose(
+                            prepared -> {
+                                CompletableFuture<Optional<T>> tableResult =
+                                        runDdlAsync(
+                                                context,
+                                                database,
+                                                tablePath.getTableName(),
+                                                executor,
+                                                scoped -> {
+                                                    if (!scoped.databaseExists(database)) {
+                                                        return Optional.empty();
+                                                    }
+                                                    return Optional.of(
+                                                            action.apply(scoped, prepared));
+                                                });
+                                return tableResult.thenCompose(
+                                        result -> {
+                                            if (result.isPresent()) {
+                                                return CompletableFuture.completedFuture(
+                                                        result.get());
+                                            }
+                                            // The missing-database check made no changes and
+                                            // released its table permit.
+                                            return runDdlAsync(
+                                                    context,
+                                                    database,
+                                                    null,
+                                                    executor,
+                                                    scoped -> action.apply(scoped, prepared));
+                                        });
+                            });
+                });
+    }
+
+    private <T> CompletableFuture<T> runDdlAsync(
+            DdlAdmission.RequestContext context,
+            String database,
+            @Nullable String table,
+            Executor executor,
+            Function<MetadataManager, T> action) {
+        return ddlAdmission.submit(
+                context,
+                database,
+                table,
+                executor,
+                permit -> {
+                    try {
+                        ZooKeeperMetadataOperation operation =
+                                ddlContext == null ? null : ddlContext.beginOperation();
+                        return action.apply(
+                                new MetadataManager(
+                                        this, ddlAdmission, ddlContext, operation, permit));
+                    } catch (RuntimeException e) {
+                        throw e;
+                    } catch (Exception e) {
+                        throw new FlussRuntimeException(
+                                "Failed to start DDL metadata operation", e);
+                    }
+                });
     }
 
     /** Returns the captured epoch, or -1 when no fenced DDL operation is active. */

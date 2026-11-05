@@ -128,6 +128,10 @@ public class CoordinatorServer extends ServerBase {
     private MetadataManager metadataManager;
 
     @GuardedBy("lock")
+    @Nullable
+    private MetadataManager leaderMetadataManager;
+
+    @GuardedBy("lock")
     private CoordinatorChannelManager coordinatorChannelManager;
 
     @GuardedBy("lock")
@@ -330,6 +334,7 @@ public class CoordinatorServer extends ServerBase {
         registerCoordinatorLeader();
 
         synchronized (lock) {
+            this.leaderMetadataManager = leaderMetadataManager;
             this.clientMetricGroup = new ClientMetricGroup(metricRegistry, SERVER_NAME);
             this.rpcClient = RpcClient.create(conf, clientMetricGroup);
 
@@ -391,6 +396,10 @@ public class CoordinatorServer extends ServerBase {
     protected void cleanupCoordinatorLeader() {
         synchronized (lock) {
             LOG.info("Cleaning up coordinator leader services.");
+            if (leaderMetadataManager != null) {
+                leaderMetadataManager.closeDdlAdmission();
+                leaderMetadataManager = null;
+            }
 
             try {
                 // make sure the current coordinator leader node is unregistered.

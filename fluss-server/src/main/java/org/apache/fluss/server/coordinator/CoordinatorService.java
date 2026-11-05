@@ -445,11 +445,18 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         } else {
             databaseDescriptor = DatabaseDescriptor.builder().build();
         }
-        ddlMetadataManagerSupplier
+        return ddlMetadataManagerSupplier
                 .get()
-                .createDatabase(
-                        request.getDatabaseName(), databaseDescriptor, request.isIgnoreIfExists());
-        return CompletableFuture.completedFuture(response);
+                .runDatabaseDdlAsync(
+                        request.getDatabaseName(),
+                        ioExecutor,
+                        scoped -> {
+                            scoped.createDatabase(
+                                    request.getDatabaseName(),
+                                    databaseDescriptor,
+                                    request.isIgnoreIfExists());
+                            return response;
+                        });
     }
 
     @Override
@@ -464,11 +471,18 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         DatabasePropertyChanges databasePropertyChanges =
                 toDatabasePropertyChanges(databaseChanges);
 
-        ddlMetadataManagerSupplier
+        return ddlMetadataManagerSupplier
                 .get()
-                .alterDatabaseProperties(
-                        databaseName, databasePropertyChanges, request.isIgnoreIfNotExists());
-        return CompletableFuture.completedFuture(new AlterDatabaseResponse());
+                .runDatabaseDdlAsync(
+                        databaseName,
+                        ioExecutor,
+                        scoped -> {
+                            scoped.alterDatabaseProperties(
+                                    databaseName,
+                                    databasePropertyChanges,
+                                    request.isIgnoreIfNotExists());
+                            return new AlterDatabaseResponse();
+                        });
     }
 
     private DatabasePropertyChanges toDatabasePropertyChanges(
@@ -499,13 +513,18 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     public CompletableFuture<DropDatabaseResponse> dropDatabase(DropDatabaseRequest request) {
         authorizeDatabase(OperationType.DROP, request.getDatabaseName());
         DropDatabaseResponse response = new DropDatabaseResponse();
-        ddlMetadataManagerSupplier
+        return ddlMetadataManagerSupplier
                 .get()
-                .dropDatabase(
+                .runDatabaseDdlAsync(
                         request.getDatabaseName(),
-                        request.isIgnoreIfNotExists(),
-                        request.isCascade());
-        return CompletableFuture.completedFuture(response);
+                        ioExecutor,
+                        scoped -> {
+                            scoped.dropDatabase(
+                                    request.getDatabaseName(),
+                                    request.isIgnoreIfNotExists(),
+                                    request.isCascade());
+                            return response;
+                        });
     }
 
     @Override
@@ -531,8 +550,9 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
         return ddlMetadataManagerSupplier
                 .get()
-                .runTableDdl(
+                .runTableDdlAsync(
                         tablePath,
+                        ioExecutor,
                         metadataManager -> {
                             LakeCatalogDynamicLoader.LakeCatalogContainer lakeCatalogContainer =
                                     lakeCatalogDynamicLoader.getLakeCatalogContainer();
@@ -543,9 +563,10 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                                     tableDescriptor,
                                     request.isIgnoreIfExists(),
                                     true,
-                                    lakeCatalogContainer);
+                                    lakeCatalogContainer,
+                                    session);
 
-                            return CompletableFuture.completedFuture(new CreateTableResponse());
+                            return new CreateTableResponse();
                         });
     }
 
@@ -555,56 +576,48 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         TablePath tablePath = toTablePath(request.getTablePath());
         tablePath.validate();
         String databaseName = tablePath.getDatabaseName();
-
+        Session session = currentSession();
         MetadataManager metadata = ddlMetadataManagerSupplier.get();
-        authorizeCreateTableFromLake(metadata, databaseName);
-        validateSystemTableCreationCaller(tablePath, currentSession());
         LakeCatalogDynamicLoader.LakeCatalogContainer lakeCatalogContainer =
                 lakeCatalogDynamicLoader.getLakeCatalogContainer();
-        if (!lakeCatalogContainer.isClusterDataLakeTableEnabled()
-                || lakeCatalogContainer.getDataLakeFormat() != DataLakeFormat.PAIMON
-                || lakeCatalogContainer.getLakeCatalog() == null) {
-            throw new InvalidTableException(
-                    "Creating a Fluss table on an existing lake table requires the cluster to "
-                            + "enable Paimon Lake Storage.");
-        }
-        TableDescriptor tableDescriptor =
-                mergeCreateTableFromLakeOptions(
-                        tablePath,
-                        lakeCatalogContainer.getLakeCatalog().getTableDescriptor(tablePath),
-                        request.getOptionsList());
-        CreateTableFromLakeResponse response =
-                metadata.runTableDdl(
-                        tablePath,
-                        scoped -> {
-                            if (!scoped.databaseExists(databaseName)) {
-                                return null;
-                            }
-                            authorizeCreateTableFromLake(scoped, databaseName);
-                            return createTableFromLake(
-                                    scoped, tablePath, tableDescriptor, lakeCatalogContainer);
-                        });
-        if (response == null) {
-            // Do not upgrade a table permit while another table may hold the database busy.
-            response =
-                    metadata.runDatabaseDdl(
-                            databaseName,
-                            scoped -> {
-                                authorizeCreateTableFromLake(scoped, databaseName);
-                                scoped.createDatabase(
-                                        databaseName, DatabaseDescriptor.builder().build(), true);
-                                return createTableFromLake(
-                                        scoped, tablePath, tableDescriptor, lakeCatalogContainer);
-                            });
-        }
-        return CompletableFuture.completedFuture(response);
+        return metadata.runTableOrDatabaseDdlAsync(
+                tablePath,
+                ioExecutor,
+                () -> {
+                    authorizeCreateTableFromLake(metadata, databaseName, session);
+                    validateSystemTableCreationCaller(tablePath, session);
+                    if (!lakeCatalogContainer.isClusterDataLakeTableEnabled()
+                            || lakeCatalogContainer.getDataLakeFormat() != DataLakeFormat.PAIMON
+                            || lakeCatalogContainer.getLakeCatalog() == null) {
+                        throw new InvalidTableException(
+                                "Creating a Fluss table on an existing lake table requires the cluster to "
+                                        + "enable Paimon Lake Storage.");
+                    }
+                    return mergeCreateTableFromLakeOptions(
+                            tablePath,
+                            lakeCatalogContainer.getLakeCatalog().getTableDescriptor(tablePath),
+                            request.getOptionsList());
+                },
+                (scoped, descriptor) -> {
+                    authorizeCreateTableFromLake(scoped, databaseName, session);
+                    if (!scoped.databaseExists(databaseName)) {
+                        scoped.createDatabase(
+                                databaseName, DatabaseDescriptor.builder().build(), true);
+                    }
+                    return createTableFromLake(
+                            scoped, tablePath, descriptor, lakeCatalogContainer, session);
+                });
     }
 
-    private void authorizeCreateTableFromLake(MetadataManager metadata, String databaseName) {
+    private void authorizeCreateTableFromLake(
+            MetadataManager metadata, String databaseName, Session session) {
         if (metadata.databaseExists(databaseName)) {
-            authorizeDatabase(OperationType.CREATE, databaseName);
+            if (authorizer != null) {
+                authorizer.authorize(
+                        session, OperationType.CREATE, Resource.database(databaseName));
+            }
         } else if (authorizer != null) {
-            authorizer.authorize(currentSession(), OperationType.CREATE, Resource.cluster());
+            authorizer.authorize(session, OperationType.CREATE, Resource.cluster());
         }
     }
 
@@ -612,13 +625,14 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             MetadataManager metadata,
             TablePath tablePath,
             TableDescriptor tableDescriptor,
-            LakeCatalogDynamicLoader.LakeCatalogContainer lakeCatalogContainer) {
+            LakeCatalogDynamicLoader.LakeCatalogContainer lakeCatalogContainer,
+            Session session) {
         if (metadata.tableExists(tablePath)) {
             validateExistingTableFromLake(tablePath, metadata.getTable(tablePath), tableDescriptor);
             throw new TableAlreadyExistException("Table " + tablePath + " already exists.");
         }
         createTableInternal(
-                metadata, tablePath, tableDescriptor, false, false, lakeCatalogContainer);
+                metadata, tablePath, tableDescriptor, false, false, lakeCatalogContainer, session);
         TableInfo tableInfo = metadata.getTable(tablePath);
         PbTableInfo pbTableInfo =
                 new PbTableInfo()
@@ -640,7 +654,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             TableDescriptor tableDescriptor,
             boolean ignoreIfExists,
             boolean createLakeTable,
-            LakeCatalogDynamicLoader.LakeCatalogContainer lakeCatalogContainer) {
+            LakeCatalogDynamicLoader.LakeCatalogContainer lakeCatalogContainer,
+            Session session) {
 
         // Check table creation permissions based on table type
         validateTableCreationPermission(tableDescriptor, tablePath);
@@ -684,11 +699,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                                 lakeTablePath,
                                 tableDescriptor,
                                 new DefaultLakeCatalogContext(
-                                        true,
-                                        null,
-                                        currentSession().getPrincipal(),
-                                        null,
-                                        tableDescriptor));
+                                        true, null, session.getPrincipal(), null, tableDescriptor));
             } catch (TableAlreadyExistException e) {
                 throw new LakeTableAlreadyExistException(e.getMessage(), e);
             }
@@ -851,6 +862,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
     @Override
     public CompletableFuture<AlterTableResponse> alterTable(AlterTableRequest request) {
+        Session session = currentSession();
         TablePath tablePath = toTablePath(request.getTablePath());
         tablePath.validate();
         authorizeTable(OperationType.ALTER, tablePath);
@@ -874,15 +886,16 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
         return ddlMetadataManagerSupplier
                 .get()
-                .runTableDdl(
+                .runTableDdlAsync(
                         tablePath,
+                        ioExecutor,
                         metadataManager -> {
                             if (hasSchemaChanges) {
                                 metadataManager.alterTableSchema(
                                         tablePath,
                                         alterSchemaChanges,
                                         request.isIgnoreIfNotExists(),
-                                        currentSession().getPrincipal());
+                                        session.getPrincipal());
                             }
 
                             if (hasConfigChanges) {
@@ -891,7 +904,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                                         alterTableConfigChanges,
                                         tablePropertyChanges,
                                         request.isIgnoreIfNotExists(),
-                                        currentSession().getPrincipal(),
+                                        session.getPrincipal(),
                                         (current, updated) ->
                                                 beforeTablePropertiesUpdate(
                                                         metadataManager, current, updated),
@@ -909,11 +922,11 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                                         tablePath,
                                         modifyBucketCount.getNewBucketCount(),
                                         request.isIgnoreIfNotExists(),
-                                        currentSession().getPrincipal(),
+                                        session.getPrincipal(),
                                         metadataManager.getCoordinatorZkVersion());
                             }
 
-                            return CompletableFuture.completedFuture(new AlterTableResponse());
+                            return new AlterTableResponse();
                         });
     }
 
@@ -1174,8 +1187,15 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         authorizeTable(OperationType.DROP, tablePath);
 
         DropTableResponse response = new DropTableResponse();
-        ddlMetadataManagerSupplier.get().dropTable(tablePath, request.isIgnoreIfNotExists());
-        return CompletableFuture.completedFuture(response);
+        return ddlMetadataManagerSupplier
+                .get()
+                .runTableDdlAsync(
+                        tablePath,
+                        ioExecutor,
+                        scoped -> {
+                            scoped.dropTable(tablePath, request.isIgnoreIfNotExists());
+                            return response;
+                        });
     }
 
     @Override
@@ -1186,8 +1206,9 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
         return ddlMetadataManagerSupplier
                 .get()
-                .runTableDdl(
+                .runTableDdlAsync(
                         tablePath,
+                        ioExecutor,
                         metadataManager -> {
                             CreatePartitionResponse response = new CreatePartitionResponse();
                             // The table metadata (including bucket.num) is read fresh here, and the
@@ -1220,7 +1241,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                                             .getOptionalPartitionRegistration(
                                                     tablePath, partitionToCreate.getPartitionName())
                                             .isPresent()) {
-                                return CompletableFuture.completedFuture(response);
+                                return response;
                             }
 
                             long newKvLeaderReplicaCount =
@@ -1253,7 +1274,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                                     partitionToCreate,
                                     request.isIgnoreIfNotExists(),
                                     tableInfo.getNumBuckets());
-                            return CompletableFuture.completedFuture(response);
+                            return response;
                         });
     }
 
@@ -1264,8 +1285,9 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
         return ddlMetadataManagerSupplier
                 .get()
-                .runTableDdl(
+                .runTableDdlAsync(
                         tablePath,
+                        ioExecutor,
                         metadataManager -> {
                             DropPartitionResponse response = new DropPartitionResponse();
                             TableRegistration table =
@@ -1293,7 +1315,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
                             metadataManager.dropPartition(
                                     tablePath, partitionToDrop, request.isIgnoreIfNotExists());
-                            return CompletableFuture.completedFuture(response);
+                            return response;
                         });
     }
 

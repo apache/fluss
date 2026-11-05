@@ -39,8 +39,13 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
 import java.time.Duration;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Deque;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -238,5 +243,44 @@ class MetadataManagerTest {
                         org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException
                                 .BadVersionException.class);
         assertThat(client.getTable(table)).isPresent();
+    }
+
+    @Test
+    void testMissingDatabaseFallbackProceedsWithOnlyOneRemainingRequestSlot() throws Exception {
+        Deque<Runnable> heldTasks = new ArrayDeque<>();
+        Deque<Runnable> stages = new ArrayDeque<>();
+        List<CompletableFuture<String>> heldRequests = new ArrayList<>();
+        TablePath target = TablePath.of("missing", "created");
+        try {
+            for (int i = 0; i < DdlAdmission.MAX_ASYNC_REQUESTS - 1; i++) {
+                heldRequests.add(
+                        metadata.runTableDdlAsync(
+                                TablePath.of("db", "held"), heldTasks::add, scoped -> "held"));
+            }
+            CompletableFuture<Long> created =
+                    metadata.runTableOrDatabaseDdlAsync(
+                            target,
+                            stages::add,
+                            () -> descriptor,
+                            (scoped, prepared) -> {
+                                scoped.createDatabase(
+                                        "missing", DatabaseDescriptor.builder().build(), true);
+                                return scoped.createTable(
+                                        target, "/created", prepared, null, false);
+                            });
+            while (!stages.isEmpty()) {
+                stages.remove().run();
+            }
+            assertThat(created.get(10, TimeUnit.SECONDS)).isNotNegative();
+            assertThat(metadata.getTable(target).getSchema()).isEqualTo(descriptor.getSchema());
+        } finally {
+            heldRequests.forEach(request -> request.cancel(false));
+            while (!heldTasks.isEmpty()) {
+                heldTasks.remove().run();
+            }
+            while (!stages.isEmpty()) {
+                stages.remove().run();
+            }
+        }
     }
 }
