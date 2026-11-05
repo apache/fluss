@@ -1590,8 +1590,12 @@ fn align_record_batch_to_schema(
         }
         // Keep validation for a different target schema, but move the column list
         // instead of allocating a new list and cloning every array reference.
-        let (_, columns, _) = record_batch.into_parts();
-        return Ok(RecordBatch::try_new(target_schema, columns)?);
+        let (_, columns, row_count) = record_batch.into_parts();
+        return Ok(RecordBatch::try_new_with_options(
+            target_schema,
+            columns,
+            &arrow::array::RecordBatchOptions::new().with_row_count(Some(row_count)),
+        )?);
     }
 
     let row_count = record_batch.num_rows();
@@ -1788,14 +1792,22 @@ mod tests {
         assert_eq!(aligned.num_columns(), 1);
 
         let zero_columns = Arc::new(arrow_schema::Schema::empty());
-        let aligned = align_record_batch_to_schema(
-            RecordBatch::new_empty(zero_columns.clone()),
-            zero_columns.clone(),
-            &[],
-        )?;
-        assert_eq!(aligned.schema(), zero_columns);
-        assert_eq!(aligned.num_rows(), 0);
-        assert_eq!(aligned.num_columns(), 0);
+        for row_count in [0, 2] {
+            for target in [
+                zero_columns.clone(),
+                Arc::new(arrow_schema::Schema::empty()),
+            ] {
+                let batch = RecordBatch::try_new_with_options(
+                    zero_columns.clone(),
+                    vec![],
+                    &arrow::array::RecordBatchOptions::new().with_row_count(Some(row_count)),
+                )?;
+                let aligned = align_record_batch_to_schema(batch, target.clone(), &[])?;
+                assert!(Arc::ptr_eq(aligned.schema_ref(), &target));
+                assert_eq!(aligned.num_rows(), row_count);
+                assert_eq!(aligned.num_columns(), 0);
+            }
+        }
         Ok(())
     }
 

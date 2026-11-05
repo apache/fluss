@@ -2854,6 +2854,10 @@ mod tests {
     async fn check_poll_remote_projection(batch_mode: bool) -> Result<()> {
         for compression in ["NONE", "LZ4_FRAME", "ZSTD"] {
             for fields in [
+                vec![],
+                vec![1, 0],
+                vec![1, 0, 1],
+                vec![0, 1],
                 vec![2, 1, 0],
                 vec![0],
                 vec![1],
