@@ -1510,9 +1510,11 @@ When using the `aggregation` merge engine, be aware of the following critical li
 
 ### Exactly-Once Semantics
 
-When writing to an aggregate merge engine table using the Flink engine, Fluss does provide exactly-once guarantees. Thanks to Flink's checkpointing mechanism, in the event of a failure and recovery, the Flink connector automatically performs an undo operation to roll back the table state to what it was at the last successful checkpoint. This ensures no over-counting or under-counting: data remains consistent and accurate.
+Flink checkpoint-based exactly-once guarantees for an aggregation table assume that a single Flink job has exclusive write access to the table throughout normal processing and recovery. After a failure, the connector uses undo recovery to restore the table state at the last successful checkpoint before replaying input.
 
-However, when using the Fluss client API directly (outside of Flink), exactly-once is not provided out of the box. In such cases, users must implement their own recovery logic (similar to what the Flink connector does) by explicitly resetting the table state to a previous version by performing undo operations.
+Undo recovery restores or deletes records by primary key from the changelog after the checkpoint, using OVERWRITE for restored values. It does not isolate contributions from independent writers. If another Flink job or a direct client writes to the table, recovery can overwrite or remove that writer's already acknowledged changes. Writing different columns of the same key alone does not establish recovery isolation.
+
+[Writer-batch deduplication](#ordering-and-recovery) protects transport retries within a writer session. Exactly-once across application failures and replay requires a recovery protocol. Applications using the Fluss client API directly must implement their own recovery logic and account for concurrent writers when restoring table state.
 
 For detailed information about Exactly-Once implementation, please refer to: [FIP-21: Aggregation Merge Engine](https://cwiki.apache.org/confluence/display/FLUSS/FIP-21%3A+Aggregation+Merge+Engine)
 
