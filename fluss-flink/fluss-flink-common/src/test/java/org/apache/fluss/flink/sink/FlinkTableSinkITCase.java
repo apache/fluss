@@ -1858,6 +1858,58 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
 
     @Test
     @MultiVersionTest
+    void testDirectContributionsFromDistinctRowsShareAggregationKey() throws Exception {
+        disableSinkRequireOnConflict();
+        tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
+        // Preserve contributions from distinct source rows through the sink.
+        tEnv.getConfig().set("table.exec.sink.upsert-materialize", "NONE");
+        tEnv.executeSql(
+                "CREATE TABLE contribution_input ("
+                        + "id INT NOT NULL, k INT NOT NULL, amount BIGINT, "
+                        + "PRIMARY KEY (id) NOT ENFORCED)");
+        tEnv.executeSql(
+                "CREATE TABLE contribution_agg ("
+                        + "k INT NOT NULL, total BIGINT, PRIMARY KEY (k) NOT ENFORCED) WITH ("
+                        + "'table.merge-engine' = 'aggregation', 'sink.enable-retract' = 'true', "
+                        + "'fields.total.agg' = 'sum')");
+        tEnv.executeSql("INSERT INTO contribution_agg VALUES (1, 0), (2, 0)").await();
+        TableResult pipeline =
+                tEnv.executeSql(
+                        "INSERT INTO contribution_agg SELECT k, amount FROM contribution_input");
+        TableResult queryResult = tEnv.executeSql("SELECT k, total FROM contribution_agg");
+
+        try (CloseableIterator<Row> rows = queryResult.collect()) {
+            assertResultsIgnoreOrder(rows, Arrays.asList("+I[1, 0]", "+I[2, 0]"), false);
+            tEnv.executeSql("INSERT INTO contribution_input VALUES (101, 1, 10)").await();
+            assertResultsIgnoreOrder(rows, Arrays.asList("-U[1, 0]", "+U[1, 10]"), false);
+            tEnv.executeSql("INSERT INTO contribution_input VALUES (102, 1, 20)").await();
+            assertResultsIgnoreOrder(rows, Arrays.asList("-U[1, 10]", "+U[1, 30]"), false);
+
+            tEnv.executeSql("INSERT INTO contribution_input VALUES (101, 1, 15)").await();
+            assertResultsIgnoreOrder(
+                    rows, Arrays.asList("-U[1, 30]", "+U[1, 20]", "-U[1, 20]", "+U[1, 35]"), false);
+            tBatchEnv.executeSql("DELETE FROM contribution_input WHERE id = 102").await();
+            assertResultsIgnoreOrder(rows, Arrays.asList("-U[1, 35]", "+U[1, 15]"), false);
+
+            tEnv.executeSql("INSERT INTO contribution_input VALUES (101, 2, 15)").await();
+            assertResultsIgnoreOrder(
+                    rows, Arrays.asList("-U[1, 15]", "+U[1, 0]", "-U[2, 0]", "+U[2, 15]"), false);
+            tEnv.executeSql("INSERT INTO contribution_input VALUES (101, 2, CAST(NULL AS BIGINT))")
+                    .await();
+            assertResultsIgnoreOrder(
+                    rows, Arrays.asList("-U[2, 15]", "+U[2, 0]", "-U[2, 0]", "+U[2, 0]"), false);
+            tEnv.executeSql("INSERT INTO contribution_input VALUES (101, 2, 7)").await();
+            assertResultsIgnoreOrder(rows, Arrays.asList("-U[2, 0]", "+U[2, 7]"), false);
+        } finally {
+            JobClient pipelineJob = pipeline.getJobClient().get();
+            pipelineJob.cancel().get();
+            waitForJobTermination(pipelineJob);
+            waitForJobTermination(queryResult.getJobClient().get());
+        }
+    }
+
+    @Test
+    @MultiVersionTest
     void testProductCollectAndMergeMapRetractEndToEnd() throws Exception {
         disableSinkRequireOnConflict();
         tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
