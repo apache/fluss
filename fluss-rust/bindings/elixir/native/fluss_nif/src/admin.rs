@@ -19,14 +19,15 @@ use crate::async_nif;
 use crate::atoms::to_nif_err;
 use crate::connection::ConnectionResource;
 use crate::schema::{NifSchema, TableDescriptorResource};
-use fluss::client::FlussAdmin;
+use fluss::client::{FlussAdmin, Metadata};
 use fluss::error::Error;
 use fluss::metadata::{
-    DatabaseDescriptor, DatabaseInfo, PartitionInfo, PartitionSpec, SchemaInfo, TableInfo,
-    TablePath,
+    DatabaseDescriptor, DatabaseInfo, PartitionInfo, PartitionSpec, ResolvedPartitionSpec,
+    SchemaInfo, TableInfo, TablePath,
 };
+use fluss::rpc::message::OffsetSpec;
 use fluss::{ServerNode, ServerType};
-use rustler::{Env, NifMap, NifStruct, NifUnitEnum, ResourceArc, Term};
+use rustler::{Env, NifMap, NifStruct, NifTaggedEnum, NifUnitEnum, ResourceArc, Term};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -199,6 +200,8 @@ pub struct DropPartitionOpts {
 
 pub struct AdminResource {
     pub inner: Arc<FlussAdmin>,
+    /// The connection's metadata cache, for partition keys.
+    metadata: Arc<Metadata>,
 }
 
 impl std::panic::RefUnwindSafe for AdminResource {}
@@ -211,7 +214,8 @@ fn admin_new(
     conn: ResourceArc<ConnectionResource>,
 ) -> Result<ResourceArc<AdminResource>, rustler::Error> {
     let inner = conn.inner.get_admin().map_err(to_nif_err)?;
-    Ok(ResourceArc::new(AdminResource { inner }))
+    let metadata = conn.inner.get_metadata();
+    Ok(ResourceArc::new(AdminResource { inner, metadata }))
 }
 
 #[rustler::nif]
@@ -468,5 +472,100 @@ fn admin_get_table_schema<'a>(
         let table_path = TablePath::new(database_name, table_name);
         let schema_info = admin.inner.get_table_schema(&table_path, schema_id).await?;
         NifSchemaInfo::from_core(&schema_info)
+    })
+}
+
+/// `:earliest | :latest | {:timestamp, milliseconds}`; `Fluss.Admin` validates it first.
+#[derive(NifTaggedEnum)]
+pub enum NifOffsetSpec {
+    Earliest,
+    Latest,
+    Timestamp(i64),
+}
+
+impl From<NifOffsetSpec> for OffsetSpec {
+    fn from(spec: NifOffsetSpec) -> Self {
+        match spec {
+            NifOffsetSpec::Earliest => OffsetSpec::Earliest,
+            NifOffsetSpec::Latest => OffsetSpec::Latest,
+            NifOffsetSpec::Timestamp(milliseconds) => OffsetSpec::Timestamp(milliseconds),
+        }
+    }
+}
+
+#[rustler::nif]
+fn admin_list_offsets<'a>(
+    env: Env<'a>,
+    admin: ResourceArc<AdminResource>,
+    database_name: String,
+    table_name: String,
+    bucket_ids: Vec<i32>,
+    spec: NifOffsetSpec,
+) -> Term<'a> {
+    async_nif::spawn_task_with_result(env, async move {
+        let path = TablePath::new(&database_name, &table_name);
+        admin
+            .inner
+            .list_offsets(&path, &bucket_ids, spec.into())
+            .await
+    })
+}
+
+/// `{:name, name}` or `{:spec, %{column => value}}`; built by `Fluss.Admin`.
+#[derive(NifTaggedEnum)]
+pub enum NifPartition {
+    Name(String),
+    Spec(HashMap<String, String>),
+}
+
+/// Core takes the partition name: values joined in partition-key order. The keys are
+/// refreshed on each call, as the table may have been re-created. Core fills a missing key
+/// with `""`, so the key set is checked here (a non-partitioned table has no keys).
+async fn partition_name(
+    metadata: &Metadata,
+    path: &TablePath,
+    partition: NifPartition,
+) -> Result<String, Error> {
+    let spec = match partition {
+        NifPartition::Name(name) => return Ok(name),
+        NifPartition::Spec(spec) => spec,
+    };
+
+    metadata.update_table_metadata(path).await?;
+    let keys = metadata
+        .get_cluster()
+        .get_table(path)?
+        .get_partition_keys()
+        .clone();
+
+    if spec.len() != keys.len() || !keys.iter().all(|key| spec.contains_key(key)) {
+        let mut given: Vec<&String> = spec.keys().collect();
+        given.sort();
+        return Err(Error::invalid_partition(format!(
+            "expected partition columns {keys:?}, got {given:?}"
+        )));
+    }
+
+    let spec = PartitionSpec::new(spec);
+    Ok(ResolvedPartitionSpec::from_partition_spec(keys, &spec).get_partition_name())
+}
+
+#[rustler::nif]
+fn admin_list_partition_offsets<'a>(
+    env: Env<'a>,
+    admin: ResourceArc<AdminResource>,
+    database_name: String,
+    table_name: String,
+    partition: NifPartition,
+    bucket_ids: Vec<i32>,
+    spec: NifOffsetSpec,
+) -> Term<'a> {
+    async_nif::spawn_task_with_result(env, async move {
+        let path = TablePath::new(&database_name, &table_name);
+        let name = partition_name(&admin.metadata, &path, partition).await?;
+        admin
+            .inner
+            .list_partition_offsets(&path, &name, &bucket_ids, spec.into())
+            .await
     })
 }
