@@ -36,6 +36,7 @@ import org.apache.fluss.metrics.Gauge;
 import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.DefaultKvRecord;
+import org.apache.fluss.record.DefaultKvRecordBatch;
 import org.apache.fluss.record.IndexedLogRecord;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.record.LogRecordBatch;
@@ -45,11 +46,13 @@ import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.arrow.ArrowWriter;
+import org.apache.fluss.row.encode.CompactedKeyEncoder;
 import org.apache.fluss.row.indexed.IndexedRow;
 import org.apache.fluss.rpc.GatewayClientProxy;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
+import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.utils.CloseableIterator;
 import org.apache.fluss.utils.ExponentialBackoff;
 import org.apache.fluss.utils.clock.ManualClock;
@@ -75,12 +78,18 @@ import java.util.stream.Collectors;
 import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
 import static org.apache.fluss.record.LogRecordBatchFormat.recordBatchHeaderSize;
 import static org.apache.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
+import static org.apache.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH_PK;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
+import static org.apache.fluss.record.TestData.DATA1_SCHEMA_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_ID_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH_PK;
 import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
+import static org.apache.fluss.testutils.DataTestUtils.compactedRow;
 import static org.apache.fluss.testutils.DataTestUtils.indexedRow;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -738,6 +747,85 @@ class RecordAccumulatorTest {
                 DATA1_TABLE_INFO.getComment().orElse(null),
                 DATA1_TABLE_INFO.getCreatedTime(),
                 DATA1_TABLE_INFO.getModifiedTime());
+    }
+
+    @Test
+    void testOnlyRetractRecordCreatesBatchWithMutationType() throws Exception {
+        RecordAccumulator accum = createTestRecordAccumulator(64 * 1024, Integer.MAX_VALUE);
+
+        // build a cluster containing the pk table bucket.
+        BucketLocation pkBucket =
+                new BucketLocation(
+                        DATA1_PHYSICAL_TABLE_PATH_PK,
+                        DATA1_TABLE_ID_PK,
+                        0,
+                        node1.id(),
+                        serverNodes);
+        Map<Integer, ServerNode> aliveTabletServersById = new HashMap<>();
+        aliveTabletServersById.put(node1.id(), node1);
+        Map<PhysicalTablePath, List<BucketLocation>> bucketsByPath = new HashMap<>();
+        bucketsByPath.put(DATA1_PHYSICAL_TABLE_PATH_PK, Collections.singletonList(pkBucket));
+        Map<TablePath, Long> tableIdByPath = new HashMap<>();
+        tableIdByPath.put(DATA1_TABLE_PATH_PK, DATA1_TABLE_ID_PK);
+        cluster =
+                new Cluster(
+                        aliveTabletServersById,
+                        new ServerNode(0, "localhost", 89, ServerType.COORDINATOR),
+                        bucketsByPath,
+                        tableIdByPath,
+                        Collections.emptyMap(),
+                        Collections.emptyMap());
+
+        BinaryRow pkRow = compactedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
+        byte[] key =
+                new CompactedKeyEncoder(DATA1_ROW_TYPE, DATA1_SCHEMA_PK.getPrimaryKeyIndexes())
+                        .encodeKey(pkRow);
+        WriteRecord upsertRecord =
+                WriteRecord.forUpsert(
+                        DATA1_TABLE_INFO_PK,
+                        DATA1_PHYSICAL_TABLE_PATH_PK,
+                        pkRow,
+                        key,
+                        key,
+                        WriteFormat.COMPACTED_KV,
+                        null,
+                        MergeMode.DEFAULT);
+        WriteRecord retractRecord =
+                WriteRecord.forRetract(
+                        DATA1_TABLE_INFO_PK,
+                        DATA1_PHYSICAL_TABLE_PATH_PK,
+                        pkRow,
+                        key,
+                        key,
+                        WriteFormat.COMPACTED_KV,
+                        null,
+                        MergeMode.DEFAULT);
+
+        // upsert records create V0 batches, even though the table could be an aggregation
+        // table: V0 stays wire-compatible with servers only supporting PUT_KV version < 4.
+        accum.append(upsertRecord, writeCallback, cluster);
+        // the retract record cannot join the V0 batch, so it closes the
+        // batch without mutation types and creates one with them; a following upsert joins it.
+        accum.append(retractRecord, writeCallback, cluster);
+        accum.append(upsertRecord, writeCallback, cluster);
+
+        Map<Integer, List<ReadyWriteBatch>> drained =
+                accum.drain(cluster, Collections.singleton(node1.id()), Integer.MAX_VALUE);
+        List<ReadyWriteBatch> batches = drained.get(node1.id());
+        assertThat(batches).hasSize(1);
+        KvWriteBatch firstBatch = (KvWriteBatch) batches.get(0).writeBatch();
+        assertThat(DefaultKvRecordBatch.pointToBytesView(firstBatch.build()).hasMutationType())
+                .isFalse();
+        assertThat(firstBatch.getRecordCount()).isEqualTo(1);
+
+        // drain again to fetch the second batch of the same bucket.
+        drained = accum.drain(cluster, Collections.singleton(node1.id()), Integer.MAX_VALUE);
+        batches = drained.get(node1.id());
+        assertThat(batches).hasSize(1);
+        KvWriteBatch secondBatch = (KvWriteBatch) batches.get(0).writeBatch();
+        assertThat(DefaultKvRecordBatch.pointToBytesView(secondBatch.build()).hasMutationType())
+                .isTrue();
+        assertThat(secondBatch.getRecordCount()).isEqualTo(2);
     }
 
     private Cluster updateCluster(List<BucketLocation> bucketLocations) {

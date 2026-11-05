@@ -361,6 +361,36 @@ public final class LogTablet {
         return writerStateManager;
     }
 
+    /**
+     * Returns the original offsets for a retained duplicate writer batch, without replaying its
+     * records. The writer state is read under the same lock that protects log appends.
+     */
+    public Optional<LogAppendInfo> findDuplicateBatch(long writerId, int batchSequence) {
+        synchronized (lock) {
+            localLog.checkIfMemoryMappedBufferClosed();
+            return writerStateManager
+                    .lastEntry(writerId)
+                    .flatMap(entry -> entry.findDuplicateBatch(batchSequence))
+                    .map(
+                            batch -> {
+                                long firstOffset = batch.firstOffset();
+                                // The retained entry describes one batch; this lookup appends no
+                                // bytes to the log.
+                                LogAppendInfo info =
+                                        new LogAppendInfo(
+                                                firstOffset,
+                                                batch.lastOffset,
+                                                batch.timestamp,
+                                                firstOffset,
+                                                1,
+                                                0,
+                                                true);
+                                info.setDuplicated(true);
+                                return info;
+                            });
+        }
+    }
+
     public static LogTablet create(
             File dataDir,
             PhysicalTablePath tablePath,

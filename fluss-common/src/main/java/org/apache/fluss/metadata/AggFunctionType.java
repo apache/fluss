@@ -263,6 +263,40 @@ public enum AggFunctionType {
     }
 
     /**
+     * Returns whether this aggregation function has a retract implementation.
+     *
+     * <p>The retract rule is specific to each function and does not reconstruct prior history:
+     *
+     * <ul>
+     *   <li>{@link #SUM} subtracts the input, or negates it when the accumulator is null, using the
+     *       field's numeric representation.
+     *   <li>{@link #PRODUCT} divides by a non-null input when the accumulator is non-null, using
+     *       the field's numeric division rules.
+     *   <li>{@link #COLLECT} removes one matching occurrence per input element without remembering
+     *       unmatched retracts or contribution counts discarded by distinct aggregation.
+     *   <li>{@link #MERGE_MAP} removes entries by input key without restoring overwritten values.
+     *   <li>{@link #LAST_VALUE} clears to null regardless of the input.
+     *   <li>{@link #LAST_VALUE_IGNORE_NULLS} clears to null for a non-null input and preserves the
+     *       accumulator for a null input.
+     * </ul>
+     *
+     * @return true if this function has a retract implementation, false otherwise
+     */
+    public boolean supportsRetract() {
+        switch (this) {
+            case SUM:
+            case PRODUCT:
+            case COLLECT:
+            case MERGE_MAP:
+            case LAST_VALUE:
+            case LAST_VALUE_IGNORE_NULLS:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    /**
      * Converts a string to an AggFunctionType enum value.
      *
      * <p>This method supports multiple naming formats:

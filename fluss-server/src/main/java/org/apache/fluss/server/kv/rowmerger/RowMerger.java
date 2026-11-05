@@ -56,6 +56,31 @@ public interface RowMerger {
     BinaryValue delete(BinaryValue oldRow);
 
     /**
+     * Apply the field-level retract rules to an input contribution.
+     *
+     * <p>Only supported by merge engines whose aggregation functions have retract implementations
+     * (e.g., aggregation merge engine with SUM). Retract quality varies by function — see {@link
+     * org.apache.fluss.metadata.AggFunctionType#supportsRetract()} for details. By default, this
+     * method throws {@link UnsupportedOperationException}.
+     *
+     * <p>Retraction does not restore historical values or implicitly delete an all-null aggregate
+     * row. An absent row starts with null field accumulators, so a retract can create a row.
+     *
+     * @param oldValue the current accumulated value, or null if the key has no row
+     * @param retractValue the value to retract
+     * @return the aggregate row after retraction
+     */
+    default BinaryValue retract(@Nullable BinaryValue oldValue, BinaryValue retractValue) {
+        throw new UnsupportedOperationException(
+                String.format("%s does not support retract", this.getClass().getSimpleName()));
+    }
+
+    /** Whether the fields present in the given input schema can be retracted. */
+    default boolean supportsRetract(short inputSchemaId) {
+        return false;
+    }
+
+    /**
      * The behavior of delete operations on primary key tables.
      *
      * @return {@link DeleteBehavior}

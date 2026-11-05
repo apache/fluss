@@ -26,6 +26,7 @@ import org.apache.fluss.flink.adapter.CatalogTableAdapter;
 import org.apache.fluss.flink.adapter.IntervalFreshnessAdapter;
 import org.apache.fluss.flink.catalog.FlinkCatalogFactory;
 import org.apache.fluss.metadata.AggFunction;
+import org.apache.fluss.metadata.AggFunctionType;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.Schema;
@@ -62,10 +63,12 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 import static org.apache.flink.table.factories.FactoryUtil.CONNECTOR;
@@ -143,6 +146,7 @@ public class FlinkConversions {
                         column.getName(), column.getAggFunction().get(), newOptions);
             }
         }
+
         List<String> physicalColumns = schema.getColumnNames();
         int columnCount =
                 physicalColumns.size()
@@ -751,6 +755,53 @@ public class FlinkConversions {
                 .refreshHandlerDescription(refreshHandlerDesc)
                 .serializedRefreshHandler(refreshHandlerBytes);
         return builder.build();
+    }
+
+    /**
+     * Compute non-PK aggregation columns whose effective aggregation function is not retractable.
+     *
+     * <p>For columns without an explicit {@code fields.<col>.agg} option, the server defaults to
+     * {@link AggFunctionType#LAST_VALUE_IGNORE_NULLS}. This method mirrors that default to keep the
+     * Flink-side check consistent with the server-side behavior.
+     */
+    public static Set<String> computeNonRetractableAggregationColumns(
+            ResolvedSchema resolvedSchema, Configuration tableOptions) {
+        if (!isAggregationMergeEngine(tableOptions)) {
+            return Collections.emptySet();
+        }
+
+        Set<String> nonRetractableColumns = new HashSet<>();
+        org.apache.fluss.config.TableConfig retractConfig =
+                new org.apache.fluss.config.TableConfig(
+                        org.apache.fluss.config.Configuration.fromMap(tableOptions.toMap()));
+        Set<String> pkSet =
+                new HashSet<>(
+                        resolvedSchema
+                                .getPrimaryKey()
+                                .map(pk -> pk.getColumns())
+                                .orElse(Collections.emptyList()));
+        for (Column column : resolvedSchema.getColumns()) {
+            if (!column.isPhysical() || pkSet.contains(column.getName())) {
+                continue;
+            }
+            String columnName = column.getName();
+            if (retractConfig.isFieldIgnoreRetract(columnName)) {
+                continue;
+            }
+            DataType flussDataType = toFlussType(column.getDataType());
+            Optional<AggFunction> aggFunc =
+                    FlinkAggFunctionParser.parseAggFunction(
+                            columnName, flussDataType, tableOptions);
+            // Mirror the server default: columns without an explicit agg function
+            // default to LAST_VALUE_IGNORE_NULLS (see AggregationContext.getAggFunction).
+            AggFunctionType effectiveType =
+                    aggFunc.map(AggFunction::getType)
+                            .orElse(AggFunctionType.LAST_VALUE_IGNORE_NULLS);
+            if (!effectiveType.supportsRetract()) {
+                nonRetractableColumns.add(columnName);
+            }
+        }
+        return Collections.unmodifiableSet(nonRetractableColumns);
     }
 
     /**

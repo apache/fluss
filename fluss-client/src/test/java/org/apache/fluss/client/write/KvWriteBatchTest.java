@@ -30,6 +30,7 @@ import org.apache.fluss.record.DefaultKvRecord;
 import org.apache.fluss.record.DefaultKvRecordBatch;
 import org.apache.fluss.record.KvRecord;
 import org.apache.fluss.record.KvRecordReadContext;
+import org.apache.fluss.record.MutationType;
 import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.encode.CompactedKeyEncoder;
@@ -38,6 +39,8 @@ import org.apache.fluss.types.DataType;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -78,18 +81,17 @@ class KvWriteBatchTest {
 
     @Test
     void testTryAppendWithWriteLimit() throws Exception {
-        int writeLimit = 100;
+        // Use a write limit that fits exactly N records with no leftover space
+        int headerSize = DefaultKvRecordBatch.RECORD_BATCH_HEADER_SIZE;
+        int numRecords = 5;
+        int writeLimit = headerSize + numRecords * estimatedSizeInBytes;
         KvWriteBatch kvProducerBatch =
                 createKvWriteBatch(
                         new TableBucket(DATA1_TABLE_ID_PK, 0),
                         writeLimit,
                         MemorySegment.allocateHeapMemory(writeLimit));
 
-        for (int i = 0;
-                i
-                        < (writeLimit - DefaultKvRecordBatch.RECORD_BATCH_HEADER_SIZE)
-                                / estimatedSizeInBytes;
-                i++) {
+        for (int i = 0; i < numRecords; i++) {
             boolean appendResult =
                     kvProducerBatch.tryAppend(createWriteRecord(), newWriteCallback());
 
@@ -105,8 +107,7 @@ class KvWriteBatchTest {
     void testToBytes() throws Exception {
         KvWriteBatch kvProducerBatch = createKvWriteBatch(new TableBucket(DATA1_TABLE_ID_PK, 0));
 
-        boolean appendResult = kvProducerBatch.tryAppend(createWriteRecord(), newWriteCallback());
-        assertThat(appendResult).isTrue();
+        assertThat(kvProducerBatch.tryAppend(createWriteRecord(), newWriteCallback())).isTrue();
         DefaultKvRecordBatch kvRecords =
                 DefaultKvRecordBatch.pointToBytesView(kvProducerBatch.build());
         assertDefaultKvRecordBatchEquals(kvRecords);
@@ -116,8 +117,7 @@ class KvWriteBatchTest {
     void testCompleteTwice() throws Exception {
         KvWriteBatch kvWriteBatch = createKvWriteBatch(new TableBucket(DATA1_TABLE_ID_PK, 0));
 
-        boolean appendResult = kvWriteBatch.tryAppend(createWriteRecord(), newWriteCallback());
-        assertThat(appendResult).isTrue();
+        assertThat(kvWriteBatch.tryAppend(createWriteRecord(), newWriteCallback())).isTrue();
 
         assertThat(kvWriteBatch.complete()).isTrue();
         assertThatThrownBy(kvWriteBatch::complete)
@@ -130,8 +130,7 @@ class KvWriteBatchTest {
     void testFailedTwice() throws Exception {
         KvWriteBatch kvWriteBatch = createKvWriteBatch(new TableBucket(DATA1_TABLE_ID_PK, 0));
 
-        boolean appendResult = kvWriteBatch.tryAppend(createWriteRecord(), newWriteCallback());
-        assertThat(appendResult).isTrue();
+        assertThat(kvWriteBatch.tryAppend(createWriteRecord(), newWriteCallback())).isTrue();
 
         assertThat(kvWriteBatch.completeExceptionally(new IllegalStateException("test failed.")))
                 .isTrue();
@@ -143,14 +142,12 @@ class KvWriteBatchTest {
     @Test
     void testClose() throws Exception {
         KvWriteBatch kvProducerBatch = createKvWriteBatch(new TableBucket(DATA1_TABLE_ID_PK, 0));
-        boolean appendResult = kvProducerBatch.tryAppend(createWriteRecord(), newWriteCallback());
-        assertThat(appendResult).isTrue();
+        assertThat(kvProducerBatch.tryAppend(createWriteRecord(), newWriteCallback())).isTrue();
 
         kvProducerBatch.close();
         assertThat(kvProducerBatch.isClosed()).isTrue();
 
-        appendResult = kvProducerBatch.tryAppend(createWriteRecord(), newWriteCallback());
-        assertThat(appendResult).isFalse();
+        assertThat(kvProducerBatch.tryAppend(createWriteRecord(), newWriteCallback())).isFalse();
     }
 
     @Test
@@ -231,6 +228,7 @@ class KvWriteBatchTest {
                 outputView,
                 null,
                 MergeMode.DEFAULT,
+                false,
                 false,
                 System.currentTimeMillis());
     }
@@ -330,6 +328,7 @@ class KvWriteBatchTest {
                 null,
                 mergeMode,
                 false,
+                false,
                 System.currentTimeMillis());
     }
 
@@ -343,5 +342,96 @@ class KvWriteBatchTest {
                 WriteFormat.COMPACTED_KV,
                 null,
                 mergeMode);
+    }
+
+    // ==================== Mutation Type Tests ====================
+
+    @Test
+    void testV0BatchRejectsRetract() throws Exception {
+        KvWriteBatch batchWithoutMutationType =
+                createKvWriteBatch(new TableBucket(DATA1_TABLE_ID_PK, 0));
+
+        // UPSERT should succeed on V0 batch
+        WriteRecord upsertRecord = createWriteRecord();
+        assertThat(batchWithoutMutationType.tryAppend(upsertRecord, newWriteCallback())).isTrue();
+
+        // RETRACT should be rejected on V0 batch
+        WriteRecord retractRecord =
+                WriteRecord.forRetract(
+                        DATA1_TABLE_INFO_PK,
+                        PhysicalTablePath.of(DATA1_TABLE_PATH_PK),
+                        row,
+                        key,
+                        key,
+                        WriteFormat.COMPACTED_KV,
+                        null,
+                        MergeMode.DEFAULT);
+        assertThat(batchWithoutMutationType.tryAppend(retractRecord, newWriteCallback())).isFalse();
+
+        // Only the UPSERT record should be in the batch
+        assertThat(batchWithoutMutationType.getRecordCount()).isEqualTo(1);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testMixedMutationRoundTrip(boolean retractFirst) throws Exception {
+        KvWriteBatch batch =
+                createKvWriteBatchWithMutationType(new TableBucket(DATA1_TABLE_ID_PK, 0));
+        MutationType[] mutationTypes =
+                retractFirst
+                        ? new MutationType[] {MutationType.RETRACT, MutationType.UPSERT}
+                        : new MutationType[] {MutationType.UPSERT, MutationType.RETRACT};
+        for (MutationType mutationType : mutationTypes) {
+            WriteRecord record =
+                    mutationType == MutationType.RETRACT
+                            ? WriteRecord.forRetract(
+                                    DATA1_TABLE_INFO_PK,
+                                    PhysicalTablePath.of(DATA1_TABLE_PATH_PK),
+                                    row,
+                                    key,
+                                    key,
+                                    WriteFormat.COMPACTED_KV,
+                                    null,
+                                    MergeMode.DEFAULT)
+                            : createWriteRecord();
+            assertThat(batch.tryAppend(record, newWriteCallback())).isTrue();
+        }
+
+        DefaultKvRecordBatch records = DefaultKvRecordBatch.pointToBytesView(batch.build());
+        records.ensureValid();
+        assertThat(records.hasMutationType()).isTrue();
+        assertThat(records.getRecordCount()).isEqualTo(2);
+        KvRecordReadContext readContext =
+                KvRecordReadContext.createReadContext(
+                        KvFormat.COMPACTED, new TestingSchemaGetter(1, DATA1_SCHEMA));
+        Iterator<KvRecord> iterator = records.records(readContext).iterator();
+        for (MutationType mutationType : mutationTypes) {
+            assertThat(iterator.hasNext()).isTrue();
+            KvRecord record = iterator.next();
+            assertThat(toArray(record.getKey())).isEqualTo(key);
+            assertThat(record.getRow()).isEqualTo(row);
+            assertThat(record.getMutationType()).isEqualTo(mutationType);
+        }
+        assertThat(iterator.hasNext()).isFalse();
+    }
+
+    private KvWriteBatch createKvWriteBatchWithMutationType(TableBucket tb) throws Exception {
+        PreAllocatedPagedOutputView outputView =
+                new PreAllocatedPagedOutputView(
+                        Collections.singletonList(memoryPool.nextSegment()));
+        return new KvWriteBatch(
+                tb.getTableId(),
+                tb.getBucket(),
+                DATA1_TABLE_INFO_PK.getNumBuckets(),
+                PhysicalTablePath.of(DATA1_TABLE_PATH_PK),
+                DATA1_TABLE_INFO_PK.getSchemaId(),
+                KvFormat.COMPACTED,
+                Integer.MAX_VALUE,
+                outputView,
+                null,
+                MergeMode.DEFAULT,
+                false,
+                true,
+                System.currentTimeMillis());
     }
 }

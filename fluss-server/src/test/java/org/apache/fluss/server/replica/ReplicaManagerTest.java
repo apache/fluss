@@ -162,6 +162,7 @@ import static org.apache.fluss.testutils.DataTestUtils.assertMemoryRecordsEquals
 import static org.apache.fluss.testutils.DataTestUtils.assertMemoryRecordsEqualsWithRowKind;
 import static org.apache.fluss.testutils.DataTestUtils.compactedRow;
 import static org.apache.fluss.testutils.DataTestUtils.genKvRecordBatch;
+import static org.apache.fluss.testutils.DataTestUtils.genKvRecordBatchWithMutationType;
 import static org.apache.fluss.testutils.DataTestUtils.genKvRecordBatchWithWriterId;
 import static org.apache.fluss.testutils.DataTestUtils.genKvRecords;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
@@ -1041,7 +1042,6 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 future1::complete);
         assertThat(future1.get()).containsOnly(new PutKvResultForBucket(tb, 8));
 
-        // second lookup key in table, key = 1, value = 1, "a1".
         Object[] value1 = DATA_1_WITH_KEY_AND_VALUE.get(3).f1;
         byte[] value1Bytes =
                 ValueEncoder.encodeValue(DEFAULT_SCHEMA_ID, compactedRow(DATA1_ROW_TYPE, value1));
@@ -2952,5 +2952,42 @@ class ReplicaManagerTest extends ReplicaTestBase {
         assertThat(tableDir).doesNotExist();
         // LogManager should no longer hold the log.
         assertThat(logManager.getLog(tb)).isNotPresent();
+    }
+
+    @ParameterizedTest
+    @ValueSource(shorts = {1, 2, 3})
+    void testPutKvMutationTypeRequiresApiVersion4(short oldApiVersion) throws Exception {
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID_PK, 1);
+        makeKvTableAsLeader(DATA1_TABLE_ID_PK, DATA1_TABLE_PATH_PK, tb.getBucket());
+
+        KvRecordBatch batchWithMutationType =
+                genKvRecordBatchWithMutationType(DATA_1_WITH_KEY_AND_VALUE);
+
+        // A batch with mutation types must be rejected under an API version below 4.
+        CompletableFuture<List<PutKvResultForBucket>> future = new CompletableFuture<>();
+        replicaManager.putRecordsToKv(
+                20000,
+                1,
+                Collections.singletonMap(tb, batchWithMutationType),
+                null,
+                MergeMode.DEFAULT,
+                oldApiVersion,
+                future::complete);
+        List<PutKvResultForBucket> results = future.get();
+        assertThat(results).hasSize(1);
+        assertThat(results.get(0).failed()).isTrue();
+        assertThat(results.get(0).getErrorMessage()).contains("require api version >= 4");
+
+        // The same batch with API version 4 is accepted.
+        future = new CompletableFuture<>();
+        replicaManager.putRecordsToKv(
+                20000,
+                1,
+                Collections.singletonMap(tb, batchWithMutationType),
+                null,
+                MergeMode.DEFAULT,
+                (short) 4,
+                future::complete);
+        assertThat(future.get()).containsOnly(new PutKvResultForBucket(tb, 8));
     }
 }

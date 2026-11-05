@@ -29,6 +29,7 @@ import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.InvalidColumnProjectionException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidPartitionException;
+import org.apache.fluss.exception.InvalidRecordException;
 import org.apache.fluss.exception.InvalidRequiredAcksException;
 import org.apache.fluss.exception.KvStorageException;
 import org.apache.fluss.exception.LogOffsetOutOfRangeException;
@@ -900,6 +901,7 @@ public class ReplicaManager implements ServerReconfigurable {
             validateClientVersionForPkTable(apiVersion, replica.getTableInfo());
 
             KvRecordBatch records = putData.records();
+            validateKvMutationTypeForApiVersion(apiVersion, records, putData.tableBucket());
             checkArgument(
                     records instanceof DefaultKvRecordBatch,
                     "Historical RPC write requires DefaultKvRecordBatch, but found %s.",
@@ -1696,6 +1698,7 @@ public class ReplicaManager implements ServerReconfigurable {
                 LOG.trace("Put records to local kv tablet for table bucket {}", tb);
                 Replica replica = getReplicaOrException(tb);
                 validateClientVersionForPkTable(apiVersion, replica.getTableInfo());
+                validateKvMutationTypeForApiVersion(apiVersion, entry.getValue(), tb);
                 tableMetrics = replica.tableMetrics();
                 tableMetrics.totalPutKvRequests().inc();
                 LogAppendInfo appendInfo =
@@ -2764,6 +2767,20 @@ public class ReplicaManager implements ServerReconfigurable {
                                     + "This table uses new key encoding strategy (kv format version %d). "
                                     + "Please upgrade your Fluss client to a newer version.",
                             apiVersion, tableInfo.getTablePath(), kvFormatVersion.get()));
+        }
+    }
+
+    /**
+     * Rejects batches carrying mutation types when the PUT_KV API version does not support them.
+     */
+    private void validateKvMutationTypeForApiVersion(
+            short apiVersion, KvRecordBatch kvRecords, TableBucket tb) {
+        if (kvRecords.hasMutationType() && apiVersion < 4) {
+            throw new InvalidRecordException(
+                    String.format(
+                            "Received a kv record batch with mutation types for bucket %s with PUT_KV api "
+                                    + "version %d, but mutation types require api version >= 4.",
+                            tb, apiVersion));
         }
     }
 

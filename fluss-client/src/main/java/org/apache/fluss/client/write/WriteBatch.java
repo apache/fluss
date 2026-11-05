@@ -103,7 +103,7 @@ public abstract class WriteBatch {
     public abstract boolean isLogBatch();
 
     /**
-     * try to append one write record to the record batch.
+     * Try to append one write record to the record batch.
      *
      * @param writeRecord the record to write
      * @param callback the callback to send back to writer

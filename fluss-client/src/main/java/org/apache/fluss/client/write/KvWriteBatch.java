@@ -24,6 +24,7 @@ import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.record.KvRecordBatchBuilder;
+import org.apache.fluss.record.MutationType;
 import org.apache.fluss.record.bytesview.BytesView;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.InternalRow;
@@ -52,6 +53,7 @@ public class KvWriteBatch extends WriteBatch {
     private final KvRecordBatchBuilder recordsBuilder;
     private final @Nullable int[] targetColumns;
     private final MergeMode mergeMode;
+    private final boolean hasMutationType;
 
     public KvWriteBatch(
             long tableId,
@@ -65,6 +67,7 @@ public class KvWriteBatch extends WriteBatch {
             @Nullable int[] targetColumns,
             MergeMode mergeMode,
             boolean isHistoricalPartition,
+            boolean hasMutationType,
             long createdMs) {
         super(
                 tableId,
@@ -77,9 +80,11 @@ public class KvWriteBatch extends WriteBatch {
                 createdMs);
         this.outputView = outputView;
         this.recordsBuilder =
-                KvRecordBatchBuilder.builder(schemaId, writeLimit, outputView, kvFormat);
+                KvRecordBatchBuilder.builder(
+                        schemaId, writeLimit, outputView, kvFormat, hasMutationType);
         this.targetColumns = targetColumns;
         this.mergeMode = mergeMode;
+        this.hasMutationType = hasMutationType;
     }
 
     @Override
@@ -89,38 +94,42 @@ public class KvWriteBatch extends WriteBatch {
 
     @Override
     boolean tryAppendRecord(WriteRecord writeRecord, WriteCallback callback) throws Exception {
-        // currently, we throw exception directly when the target columns of the write record is
-        // not the same as the current target columns in the batch.
-        // this should be quite fast as they should be the same objects.
+        // Target columns belong to the batch header. Keep full-row deletes and partial field
+        // writes in separate, ordered batches within the same writer session.
         if (!Arrays.equals(targetColumns, writeRecord.getTargetColumns())) {
-            throw new IllegalStateException(
-                    String.format(
-                            "target columns %s of the write record to append are not the same as the current target columns %s in the batch.",
-                            Arrays.toString(writeRecord.getTargetColumns()),
-                            Arrays.toString(targetColumns)));
+            return false;
         }
+        validateRecordConsistency(writeRecord);
 
-        // Validate mergeMode consistency - records with different mergeMode cannot be batched
-        // together
-        if (writeRecord.getMergeMode() != this.mergeMode) {
-            throw new IllegalStateException(
-                    String.format(
-                            "Cannot mix records with different mergeMode in the same batch. "
-                                    + "Batch mergeMode: %s, Record mergeMode: %s",
-                            this.mergeMode, writeRecord.getMergeMode()));
+        // RETRACT requires a batch with explicit mutation types.
+        if (!hasMutationType && writeRecord.getMutationType() == MutationType.RETRACT) {
+            return false;
         }
 
         byte[] key = writeRecord.getKey();
         checkNotNull(key, "key must be not null for kv record");
         checkNotNull(callback, "write callback must be not null");
         BinaryRow row = checkRow(writeRecord.getRow());
+
+        // hasRoomFor() and append() are format-aware: the builder sizes and writes records
+        // according to whether the batch includes mutation types.
         if (!recordsBuilder.hasRoomFor(key, row) || isClosed()) {
             return false;
         } else {
-            recordsBuilder.append(key, row);
+            recordsBuilder.append(writeRecord.getMutationType(), key, row);
             callbacks.add(callback);
             recordCount++;
             return true;
+        }
+    }
+
+    private void validateRecordConsistency(WriteRecord writeRecord) {
+        if (writeRecord.getMergeMode() != this.mergeMode) {
+            throw new IllegalStateException(
+                    String.format(
+                            "Cannot mix records with different mergeMode in the same batch. "
+                                    + "Batch mergeMode: %s, Record mergeMode: %s",
+                            this.mergeMode, writeRecord.getMergeMode()));
         }
     }
 

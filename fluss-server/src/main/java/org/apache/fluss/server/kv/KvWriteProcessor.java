@@ -20,6 +20,7 @@ package org.apache.fluss.server.kv;
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.compression.ArrowCompressionInfo;
 import org.apache.fluss.exception.DeletionDisabledException;
+import org.apache.fluss.exception.InvalidRecordException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.SchemaNotExistException;
 import org.apache.fluss.memory.MemorySegmentPool;
@@ -67,7 +68,9 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.NotThreadSafe;
 
+import java.util.Arrays;
 import java.util.HashSet;
+import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -162,6 +165,16 @@ public final class KvWriteProcessor {
             @Nullable String originalPartitionName,
             @Nullable HistoricalValueLookup historicalValueLookup)
             throws Exception {
+        if (kvRecords.hasMutationType()) {
+            // Replaying an accepted retract can change state or fail (for example, division by
+            // zero after a later upsert). Resolve known duplicates before invoking aggregators.
+            Optional<LogAppendInfo> duplicate =
+                    logTablet.findDuplicateBatch(kvRecords.writerId(), kvRecords.batchSequence());
+            if (duplicate.isPresent()) {
+                kvRecords.ensureValid();
+                return duplicate.get();
+            }
+        }
         WriteContext writeContext = createWriteContext(kvRecords, targetColumns, mergeMode);
         RowType latestRowType = writeContext.latestSchema.getRowType();
         WalBuilder walBuilder = createWalBuilder(writeContext.latestSchemaId, latestRowType);
@@ -318,6 +331,20 @@ public final class KvWriteProcessor {
             @Nullable String originalPartitionName,
             @Nullable HistoricalValueLookup historicalValueLookup)
             throws Exception {
+        if (kvRecords.hasMutationType()) {
+            processKvRecordsWithMutationType(
+                    kvRecords,
+                    schemaIdOfNewData,
+                    currentMerger,
+                    autoIncrementUpdater,
+                    walBuilder,
+                    latestSchemaRow,
+                    startLogOffset,
+                    stateAccessor,
+                    originalPartitionName,
+                    historicalValueLookup);
+            return;
+        }
         long logOffset = startLogOffset;
 
         // TODO: reuse the read context
@@ -354,6 +381,114 @@ public final class KvWriteProcessor {
                                 stateAccessor,
                                 keyBytes,
                                 historicalValueLookup);
+            }
+        }
+    }
+
+    private void processKvRecordsWithMutationType(
+            KvRecordBatch kvRecords,
+            short schemaIdOfNewData,
+            RowMerger currentMerger,
+            AutoIncrementUpdater autoIncrementUpdater,
+            WalBuilder walBuilder,
+            PaddingRow latestSchemaRow,
+            long startLogOffset,
+            KvStateAccessor stateAccessor,
+            @Nullable String originalPartitionName,
+            @Nullable HistoricalValueLookup historicalValueLookup)
+            throws Exception {
+        long logOffset = startLogOffset;
+        KvRecordBatch.ReadContext readContext =
+                KvRecordReadContext.createReadContext(kvFormat, schemaGetter);
+        // Each mutation observes the previous mutation's state. Client batching does not establish
+        // a retract/upsert pair or suppress its intermediate CDC transition.
+        for (KvRecord kvRecord : kvRecords.records(readContext)) {
+            byte[] primaryKey = BytesUtils.toArray(kvRecord.getKey());
+            KvPreWriteBuffer.Key key = stateAccessor.encodeKey(primaryKey, originalPartitionName);
+            BinaryRow row = kvRecord.getRow();
+            BinaryValue value = row == null ? null : new BinaryValue(schemaIdOfNewData, row);
+            switch (kvRecord.getMutationType()) {
+                case UPSERT:
+                    if (value == null) {
+                        throw new InvalidRecordException(
+                                "UPSERT record must carry a non-null row value.");
+                    }
+                    logOffset =
+                            processUpsert(
+                                    key,
+                                    value,
+                                    currentMerger,
+                                    autoIncrementUpdater,
+                                    walBuilder,
+                                    latestSchemaRow,
+                                    logOffset,
+                                    stateAccessor,
+                                    primaryKey,
+                                    historicalValueLookup);
+                    break;
+                case DELETE:
+                    if (value != null) {
+                        throw new InvalidRecordException(
+                                "DELETE record must not carry a row value.");
+                    }
+                    logOffset =
+                            processDeletion(
+                                    key,
+                                    currentMerger,
+                                    walBuilder,
+                                    latestSchemaRow,
+                                    logOffset,
+                                    stateAccessor,
+                                    primaryKey,
+                                    historicalValueLookup);
+                    break;
+                case RETRACT:
+                    if (!currentMerger.supportsRetract(schemaIdOfNewData)) {
+                        throw new InvalidRecordException(
+                                "RETRACT records are only supported for aggregation merge "
+                                        + "engine tables with retract-safe functions.");
+                    }
+                    if (value == null) {
+                        throw new InvalidRecordException(
+                                "RETRACT record must carry a non-null row value.");
+                    }
+                    BinaryValue oldValue =
+                            getPreviousValue(key, primaryKey, stateAccessor, historicalValueLookup);
+                    BinaryValue newValue;
+                    try {
+                        newValue = currentMerger.retract(oldValue, value);
+                    } catch (InvalidRecordException e) {
+                        throw new InvalidRecordException(
+                                String.format(
+                                        "Cannot retract record in %s with encoded primary key %s: %s",
+                                        tableBucket, Arrays.toString(primaryKey), e.getMessage()),
+                                e);
+                    }
+                    if (oldValue == null) {
+                        logOffset =
+                                applyInsert(
+                                        key,
+                                        newValue,
+                                        walBuilder,
+                                        latestSchemaRow,
+                                        logOffset,
+                                        autoIncrementUpdater,
+                                        stateAccessor);
+                    } else if (!newValue.equals(oldValue)) {
+                        logOffset =
+                                applyUpdate(
+                                        key,
+                                        oldValue,
+                                        newValue,
+                                        walBuilder,
+                                        latestSchemaRow,
+                                        logOffset,
+                                        stateAccessor);
+                    }
+                    break;
+                default:
+                    throw new InvalidRecordException(
+                            "Unknown MutationType: " + kvRecord.getMutationType());
             }
         }
     }

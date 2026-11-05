@@ -20,6 +20,7 @@ package org.apache.fluss.flink.sink;
 import org.apache.fluss.flink.sink.serializer.FlussSerializationSchema;
 import org.apache.fluss.flink.sink.serializer.RowDataSerializationSchema;
 import org.apache.fluss.flink.sink.serializer.SerializerInitContextImpl;
+import org.apache.fluss.flink.sink.serializer.SinkOperationMode;
 
 import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.RowData;
@@ -36,7 +37,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class FlinkRowDataChannelComputerTest {
 
     private static final FlussSerializationSchema<RowData> serializationSchema =
-            new RowDataSerializationSchema(false, false);
+            new RowDataSerializationSchema(SinkOperationMode.upsert(false));
 
     @BeforeAll
     static void init() throws Exception {

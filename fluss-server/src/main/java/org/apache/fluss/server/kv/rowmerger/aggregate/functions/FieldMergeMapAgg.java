@@ -32,7 +32,9 @@ import org.apache.fluss.types.MapType;
 import org.apache.fluss.utils.ByteArrayWrapper;
 
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 
 /** Merge two maps. */
 public class FieldMergeMapAgg extends FieldAggregator {
@@ -78,6 +80,45 @@ public class FieldMergeMapAgg extends FieldAggregator {
             putToMap(resultMap, accumulatorMap);
             putToMap(resultMap, inputMap);
         }
+        return toInternalMap(resultMap);
+    }
+
+    @Override
+    public boolean supportsRetract() {
+        return true;
+    }
+
+    /**
+     * Removes entries by the supplied keys regardless of their values. Overwritten values are not
+     * restored, and a retract received before its contribution is not remembered.
+     */
+    @Override
+    public Object retract(Object accumulator, Object retractField) {
+        if (accumulator == null || retractField == null) {
+            return accumulator;
+        }
+        InternalMap input = (InternalMap) retractField;
+        if (input.size() == 0) {
+            return accumulator;
+        }
+        Set<Object> retractedKeys = new HashSet<>();
+        for (int i = 0; i < input.size(); i++) {
+            Object key = keyGetter.getElementOrNull(input.keyArray(), i);
+            retractedKeys.add(binaryKeys ? new ByteArrayWrapper((byte[]) key) : key);
+        }
+        InternalMap accumulated = (InternalMap) accumulator;
+        Map<Object, Object> result = new HashMap<>();
+        for (int i = 0; i < accumulated.size(); i++) {
+            Object key = keyGetter.getElementOrNull(accumulated.keyArray(), i);
+            Object mapKey = binaryKeys ? new ByteArrayWrapper((byte[]) key) : key;
+            if (!retractedKeys.contains(mapKey)) {
+                result.put(mapKey, valueGetter.getElementOrNull(accumulated.valueArray(), i));
+            }
+        }
+        return toInternalMap(result);
+    }
+
+    private InternalMap toInternalMap(Map<Object, Object> resultMap) {
         if (binaryKeys) {
             Object[] keys = new Object[resultMap.size()];
             Object[] values = new Object[resultMap.size()];

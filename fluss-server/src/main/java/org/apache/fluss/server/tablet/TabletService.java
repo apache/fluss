@@ -443,11 +443,8 @@ public final class TabletService extends RpcServiceBase
             }
         }
 
-        // Get mergeMode from request, default to DEFAULT if not set
-        MergeMode mergeMode =
-                request.hasAggMode()
-                        ? MergeMode.fromValue(request.getAggMode())
-                        : MergeMode.DEFAULT;
+        int aggMode = request.hasAggMode() ? request.getAggMode() : 0;
+        MergeMode mergeMode = MergeMode.fromProtoValue(aggMode);
         CompletableFuture<PutKvResponse> response = new CompletableFuture<>();
         Consumer<List<PutKvResultForBucket>> responseCallback =
                 results ->

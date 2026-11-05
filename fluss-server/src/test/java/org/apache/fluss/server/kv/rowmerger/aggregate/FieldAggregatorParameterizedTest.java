@@ -29,10 +29,26 @@ import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.server.kv.rowmerger.AggregateRowMerger;
+import org.apache.fluss.server.kv.rowmerger.aggregate.functions.FieldAggregator;
+import org.apache.fluss.server.kv.rowmerger.aggregate.functions.FieldBoolAndAgg;
+import org.apache.fluss.server.kv.rowmerger.aggregate.functions.FieldBoolOrAgg;
+import org.apache.fluss.server.kv.rowmerger.aggregate.functions.FieldFirstNonNullValueAgg;
+import org.apache.fluss.server.kv.rowmerger.aggregate.functions.FieldFirstValueAgg;
+import org.apache.fluss.server.kv.rowmerger.aggregate.functions.FieldLastNonNullValueAgg;
+import org.apache.fluss.server.kv.rowmerger.aggregate.functions.FieldLastValueAgg;
+import org.apache.fluss.server.kv.rowmerger.aggregate.functions.FieldListaggAgg;
+import org.apache.fluss.server.kv.rowmerger.aggregate.functions.FieldMaxAgg;
+import org.apache.fluss.server.kv.rowmerger.aggregate.functions.FieldMinAgg;
+import org.apache.fluss.server.kv.rowmerger.aggregate.functions.FieldProductAgg;
+import org.apache.fluss.server.kv.rowmerger.aggregate.functions.FieldRoaringBitmap32Agg;
+import org.apache.fluss.server.kv.rowmerger.aggregate.functions.FieldRoaringBitmap64Agg;
+import org.apache.fluss.server.kv.rowmerger.aggregate.functions.FieldSumAgg;
 import org.apache.fluss.server.utils.RoaringBitmapUtils;
+import org.apache.fluss.types.BooleanType;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypeChecks;
 import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.types.StringType;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -52,6 +68,7 @@ import java.util.stream.Stream;
 
 import static org.apache.fluss.testutils.DataTestUtils.compactedRow;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Parameterized tests for all aggregation functions with different data types. */
 class FieldAggregatorParameterizedTest {
@@ -190,6 +207,62 @@ class FieldAggregatorParameterizedTest {
                         Decimal.fromBigDecimal(new BigDecimal("2.50"), 10, 2),
                         Decimal.fromBigDecimal(new BigDecimal("4.00"), 10, 2),
                         Decimal.fromBigDecimal(new BigDecimal("10.00"), 10, 2)));
+    }
+
+    // ===================================================================================
+    // Product Retraction Tests
+    // ===================================================================================
+
+    @ParameterizedTest
+    @MethodSource("productRetractData")
+    void testProductRetract(DataType type, Object accumulator, Object input, Object expected) {
+        assertRetractResult(new FieldProductAgg(type).retract(accumulator, input), expected);
+    }
+
+    static Stream<Arguments> productRetractData() {
+        return Stream.of(
+                Arguments.of(DataTypes.TINYINT(), (byte) 12, (byte) 3, (byte) 4),
+                Arguments.of(DataTypes.SMALLINT(), (short) 120, (short) 3, (short) 40),
+                Arguments.of(DataTypes.INT(), 13, 3, 4),
+                Arguments.of(DataTypes.BIGINT(), -13L, 3L, -4L),
+                Arguments.of(DataTypes.FLOAT(), 10.0f, 4.0f, 2.5f),
+                Arguments.of(DataTypes.DOUBLE(), 10.0, 4.0, 2.5),
+                Arguments.of(
+                        DataTypes.DECIMAL(10, 2),
+                        Decimal.fromBigDecimal(new BigDecimal("10.00"), 10, 2),
+                        Decimal.fromBigDecimal(new BigDecimal("4.00"), 10, 2),
+                        Decimal.fromBigDecimal(new BigDecimal("2.50"), 10, 2)),
+                Arguments.of(DataTypes.INT(), null, 3, null),
+                Arguments.of(
+                        DataTypes.DECIMAL(3, 1),
+                        Decimal.fromBigDecimal(new BigDecimal("99.9"), 3, 1),
+                        Decimal.fromBigDecimal(new BigDecimal("0.1"), 3, 1),
+                        null),
+                Arguments.of(DataTypes.INT(), null, 0, null),
+                Arguments.of(DataTypes.INT(), 12, null, 12),
+                Arguments.of(DataTypes.INT(), null, null, null),
+                Arguments.of(DataTypes.INT(), 0, 3, 0),
+                Arguments.of(DataTypes.TINYINT(), Byte.MIN_VALUE, (byte) -1, Byte.MIN_VALUE),
+                Arguments.of(DataTypes.SMALLINT(), Short.MIN_VALUE, (short) -1, Short.MIN_VALUE),
+                Arguments.of(DataTypes.INT(), Integer.MIN_VALUE, -1, Integer.MIN_VALUE),
+                Arguments.of(DataTypes.BIGINT(), Long.MIN_VALUE, -1L, Long.MIN_VALUE),
+                Arguments.of(DataTypes.FLOAT(), 1.0f, 0.0f, Float.POSITIVE_INFINITY),
+                Arguments.of(DataTypes.DOUBLE(), 0.0, 0.0, Double.NaN));
+    }
+
+    @Test
+    void testProductRetractDivisionFailures() {
+        assertThatThrownBy(() -> new FieldProductAgg(DataTypes.INT()).retract(12, 0))
+                .isInstanceOf(ArithmeticException.class);
+        assertThatThrownBy(
+                        () ->
+                                new FieldProductAgg(DataTypes.DECIMAL(10, 2))
+                                        .retract(
+                                                Decimal.fromBigDecimal(
+                                                        new BigDecimal("1.00"), 10, 2),
+                                                Decimal.fromBigDecimal(
+                                                        new BigDecimal("3.00"), 10, 2)))
+                .isInstanceOf(ArithmeticException.class);
     }
 
     // ===================================================================================
@@ -787,6 +860,272 @@ class FieldAggregatorParameterizedTest {
     }
 
     // ===================================================================================
+    // Retract (Sum Subtraction) Tests
+    // ===================================================================================
+
+    @ParameterizedTest(name = "sum retract with {0}")
+    @MethodSource("sumRetractTestData")
+    void testSumRetract(
+            String typeName,
+            DataType dataType,
+            Object accumulator,
+            Object retractVal,
+            Object expected) {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("value", dataType, AggFunctions.SUM())
+                        .primaryKey("id")
+                        .build();
+        AggregateRowMerger merger = createMerger(schema, new TableConfig(new Configuration()));
+        BinaryValue result =
+                merger.retract(
+                        toBinaryValue(
+                                compactedRow(schema.getRowType(), new Object[] {1, accumulator})),
+                        toBinaryValue(
+                                compactedRow(schema.getRowType(), new Object[] {1, retractVal})));
+        assertThat(result).isNotNull();
+        assertThat(result.row.getInt(0)).isEqualTo(1);
+        assertAggregatedValue(result.row, 1, dataType, expected);
+    }
+
+    static Stream<Arguments> sumRetractTestData() {
+        return Stream.of(
+                Arguments.of("TINYINT", DataTypes.TINYINT(), (byte) 10, (byte) 3, (byte) 7),
+                Arguments.of(
+                        "SMALLINT", DataTypes.SMALLINT(), (short) 300, (short) 100, (short) 200),
+                Arguments.of("INT", DataTypes.INT(), 3000, 1000, 2000),
+                Arguments.of("BIGINT", DataTypes.BIGINT(), 30000L, 10000L, 20000L),
+                Arguments.of("FLOAT", DataTypes.FLOAT(), 4.0f, 1.5f, 2.5f),
+                Arguments.of(
+                        "FLOAT_infinity",
+                        DataTypes.FLOAT(),
+                        -Float.MAX_VALUE,
+                        Float.MAX_VALUE,
+                        Float.NEGATIVE_INFINITY),
+                Arguments.of(
+                        "DOUBLE_infinity",
+                        DataTypes.DOUBLE(),
+                        -Double.MAX_VALUE,
+                        Double.MAX_VALUE,
+                        Double.NEGATIVE_INFINITY),
+                Arguments.of("DOUBLE", DataTypes.DOUBLE(), 31.0, 10.5, 20.5),
+                Arguments.of(
+                        "DECIMAL(10,2)",
+                        DataTypes.DECIMAL(10, 2),
+                        Decimal.fromBigDecimal(new BigDecimal("301.25"), 10, 2),
+                        Decimal.fromBigDecimal(new BigDecimal("100.50"), 10, 2),
+                        Decimal.fromBigDecimal(new BigDecimal("200.75"), 10, 2)),
+                // Negative result cases: retract value exceeds accumulator
+                Arguments.of("INT_negative", DataTypes.INT(), 5, 10, -5),
+                Arguments.of("BIGINT_negative", DataTypes.BIGINT(), 5L, 10L, -5L));
+    }
+
+    @ParameterizedTest(name = "integer aggregation wraparound with {0}")
+    @MethodSource("integerWraparoundData")
+    void testIntegerAggregationWraparound(
+            String name,
+            DataType type,
+            Object maximum,
+            Object one,
+            Object minimum,
+            Object two,
+            Object product) {
+        FieldSumAgg sum = new FieldSumAgg(type);
+        assertThat(sum.agg(maximum, one)).isEqualTo(minimum);
+        assertThat(new FieldProductAgg(type).agg(maximum, two)).isEqualTo(product);
+        assertThat(sum.retract(null, minimum)).isEqualTo(minimum);
+    }
+
+    static Stream<Arguments> integerWraparoundData() {
+        return Stream.of(
+                Arguments.of(
+                        "TINYINT",
+                        DataTypes.TINYINT(),
+                        Byte.MAX_VALUE,
+                        (byte) 1,
+                        Byte.MIN_VALUE,
+                        (byte) 2,
+                        (byte) -2),
+                Arguments.of(
+                        "SMALLINT",
+                        DataTypes.SMALLINT(),
+                        Short.MAX_VALUE,
+                        (short) 1,
+                        Short.MIN_VALUE,
+                        (short) 2,
+                        (short) -2),
+                Arguments.of(
+                        "INTEGER", DataTypes.INT(), Integer.MAX_VALUE, 1, Integer.MIN_VALUE, 2, -2),
+                Arguments.of(
+                        "BIGINT", DataTypes.BIGINT(), Long.MAX_VALUE, 1L, Long.MIN_VALUE, 2L, -2L));
+    }
+
+    @ParameterizedTest(name = "sum retract wraparound with {0}")
+    @MethodSource("sumRetractOverflowTestData")
+    void testSumRetractOverflow(
+            String typeName,
+            DataType dataType,
+            Object accumulator,
+            Object retractVal,
+            Object expected) {
+        assertThat(new FieldSumAgg(dataType).retract(accumulator, retractVal)).isEqualTo(expected);
+    }
+
+    static Stream<Arguments> sumRetractOverflowTestData() {
+        return Stream.of(
+                Arguments.of(
+                        "TINYINT_underflow",
+                        DataTypes.TINYINT(),
+                        Byte.MIN_VALUE,
+                        (byte) 1,
+                        Byte.MAX_VALUE),
+                Arguments.of(
+                        "SMALLINT_underflow",
+                        DataTypes.SMALLINT(),
+                        Short.MIN_VALUE,
+                        (short) 1,
+                        Short.MAX_VALUE),
+                Arguments.of(
+                        "INT_underflow", DataTypes.INT(), Integer.MIN_VALUE, 1, Integer.MAX_VALUE),
+                Arguments.of(
+                        "BIGINT_underflow", DataTypes.BIGINT(), Long.MIN_VALUE, 1L, Long.MAX_VALUE),
+                Arguments.of(
+                        "TINYINT_overflow",
+                        DataTypes.TINYINT(),
+                        Byte.MAX_VALUE,
+                        (byte) -1,
+                        Byte.MIN_VALUE),
+                Arguments.of(
+                        "SMALLINT_overflow",
+                        DataTypes.SMALLINT(),
+                        Short.MAX_VALUE,
+                        (short) -1,
+                        Short.MIN_VALUE),
+                Arguments.of(
+                        "INT_overflow", DataTypes.INT(), Integer.MAX_VALUE, -1, Integer.MIN_VALUE),
+                Arguments.of(
+                        "BIGINT_overflow",
+                        DataTypes.BIGINT(),
+                        Long.MAX_VALUE,
+                        -1L,
+                        Long.MIN_VALUE));
+    }
+
+    @ParameterizedTest(name = "sum retract with null - {0}")
+    @MethodSource("sumRetractNullTestData")
+    void testSumRetractWithNull(
+            String typeName,
+            DataType dataType,
+            Object accumulator,
+            Object retractVal,
+            Object expected) {
+        FieldSumAgg sumAgg = new FieldSumAgg(dataType);
+        Object result = sumAgg.retract(accumulator, retractVal);
+        assertThat(result).isEqualTo(expected);
+    }
+
+    static Stream<Arguments> sumRetractNullTestData() {
+        return Stream.of(
+                Arguments.of("TINYINT_null_acc", DataTypes.TINYINT(), null, (byte) 10, (byte) -10),
+                Arguments.of(
+                        "SMALLINT_null_acc", DataTypes.SMALLINT(), null, (short) 10, (short) -10),
+                Arguments.of("INTEGER_null_acc", DataTypes.INT(), null, 10, -10),
+                Arguments.of("BIGINT_null_acc", DataTypes.BIGINT(), null, 10L, -10L),
+                Arguments.of("FLOAT_null_acc", DataTypes.FLOAT(), null, 10.0f, -10.0f),
+                Arguments.of("DOUBLE_null_acc", DataTypes.DOUBLE(), null, 10.0, -10.0),
+                Arguments.of(
+                        "DECIMAL_null_acc",
+                        DataTypes.DECIMAL(10, 2),
+                        null,
+                        Decimal.fromBigDecimal(new BigDecimal("10.00"), 10, 2),
+                        Decimal.fromBigDecimal(new BigDecimal("-10.00"), 10, 2)),
+                // non-null accumulator, null retract -> accumulator unchanged
+                Arguments.of("BIGINT_null_retract", DataTypes.BIGINT(), 10L, null, 10L),
+                // both null -> null
+                Arguments.of("BIGINT_both_null", DataTypes.BIGINT(), null, null, null));
+    }
+
+    // ===================================================================================
+    // Retract (Last Value) Tests
+    // ===================================================================================
+
+    @ParameterizedTest(name = "last_value retract - {0}")
+    @MethodSource("lastValueRetractTestData")
+    void testLastValueRetract(
+            String caseName, Object accumulator, Object retractVal, Object expected) {
+        FieldLastValueAgg agg = new FieldLastValueAgg(DataTypes.INT());
+        Object result = agg.retract(accumulator, retractVal);
+        assertThat(result).isEqualTo(expected);
+    }
+
+    static Stream<Arguments> lastValueRetractTestData() {
+        return Stream.of(
+                // last_value retract always returns null regardless of inputs
+                Arguments.of("non_null_acc_non_null_retract", 10, 5, null),
+                Arguments.of("non_null_acc_null_retract", 10, null, null),
+                Arguments.of("null_acc_non_null_retract", null, 5, null),
+                Arguments.of("both_null", null, null, null));
+    }
+
+    @ParameterizedTest(name = "last_value_ignore_nulls retract - {0}")
+    @MethodSource("lastNonNullValueRetractTestData")
+    void testLastNonNullValueRetract(
+            String caseName, Object accumulator, Object retractVal, Object expected) {
+        FieldLastNonNullValueAgg agg = new FieldLastNonNullValueAgg(DataTypes.INT());
+        Object result = agg.retract(accumulator, retractVal);
+        assertThat(result).isEqualTo(expected);
+    }
+
+    static Stream<Arguments> lastNonNullValueRetractTestData() {
+        return Stream.of(
+                // non-null retract -> null (retract the value)
+                Arguments.of("non_null_acc_non_null_retract", 10, 5, null),
+                // null retract -> accumulator unchanged
+                Arguments.of("non_null_acc_null_retract", 10, null, 10),
+                // null accumulator, non-null retract -> null
+                Arguments.of("null_acc_non_null_retract", null, 5, null),
+                // both null -> null (accumulator is null, retract is null -> keep accumulator)
+                Arguments.of("both_null", null, null, null));
+    }
+
+    @ParameterizedTest(name = "non-retractable function throws: {0}")
+    @MethodSource("nonRetractableAggregators")
+    void testNonRetractableFunctionThrows(
+            String name, FieldAggregator agg, Object acc, Object val) {
+        assertThatThrownBy(() -> agg.retract(acc, val))
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessageContaining("does not support retract");
+    }
+
+    static Stream<Arguments> nonRetractableAggregators() {
+        return Stream.of(
+                Arguments.of("FieldMaxAgg", new FieldMaxAgg(DataTypes.INT()), 10, 5),
+                Arguments.of("FieldMinAgg", new FieldMinAgg(DataTypes.INT()), 10, 5),
+                Arguments.of("FieldFirstValueAgg", new FieldFirstValueAgg(DataTypes.INT()), 10, 5),
+                Arguments.of(
+                        "FieldFirstNonNullValueAgg",
+                        new FieldFirstNonNullValueAgg(DataTypes.INT()),
+                        10,
+                        5),
+                Arguments.of(
+                        "FieldListaggAgg", new FieldListaggAgg(new StringType(), ","), "a,b", "a"),
+                Arguments.of(
+                        "FieldBoolAndAgg", new FieldBoolAndAgg(new BooleanType()), true, false),
+                Arguments.of("FieldBoolOrAgg", new FieldBoolOrAgg(new BooleanType()), true, false),
+                Arguments.of(
+                        "FieldRoaringBitmap32Agg",
+                        new FieldRoaringBitmap32Agg(DataTypes.BYTES()),
+                        new byte[] {1, 2},
+                        new byte[] {3, 4}),
+                Arguments.of(
+                        "FieldRoaringBitmap64Agg",
+                        new FieldRoaringBitmap64Agg(DataTypes.BYTES()),
+                        new byte[] {1, 2},
+                        new byte[] {3, 4}));
+    }
+
+    // ===================================================================================
     // Helper Methods
     // ===================================================================================
 
@@ -797,6 +1136,15 @@ class FieldAggregatorParameterizedTest {
                 new AggregateRowMerger(tableConfig, tableConfig.getKvFormat(), schemaGetter);
         merger.configureTargetColumns(null, (short) 1, schema);
         return merger;
+    }
+
+    private static void assertRetractResult(Object result, Object expected) {
+        if (expected instanceof Decimal) {
+            assertThat(((Decimal) result).toBigDecimal())
+                    .isEqualByComparingTo(((Decimal) expected).toBigDecimal());
+        } else {
+            assertThat(result).isEqualTo(expected);
+        }
     }
 
     private void assertAggregatedValue(BinaryRow row, int pos, DataType dataType, Object expected) {
@@ -886,5 +1234,36 @@ class FieldAggregatorParameterizedTest {
     private static TimestampLtz timestampLtz(String timestamp) {
         Instant instant = LocalDateTime.parse(timestamp).toInstant(ZoneOffset.UTC);
         return TimestampLtz.fromInstant(instant);
+    }
+
+    // ===================================================================================
+    // Retract Overflow / Boundary Tests
+    // ===================================================================================
+
+    @Test
+    void testSumRetractDecimalOverflow() {
+        // DECIMAL(20,2): max is 999999999999999999.99
+        DataType decimalType = DataTypes.DECIMAL(20, 2);
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("val", decimalType, AggFunctions.SUM())
+                        .primaryKey("id")
+                        .build();
+
+        AggregateRowMerger merger = createMerger(schema, new TableConfig(new Configuration()));
+
+        // Subtracting the negative maximum overflows DECIMAL(20,2), which is encoded as NULL.
+        Decimal maxDecimal = Decimal.fromBigDecimal(new BigDecimal("999999999999999999.99"), 20, 2);
+        Decimal negMaxDecimal =
+                Decimal.fromBigDecimal(new BigDecimal("-999999999999999999.99"), 20, 2);
+
+        BinaryRow oldRow = compactedRow(schema.getRowType(), new Object[] {1, maxDecimal});
+        BinaryRow retractRow = compactedRow(schema.getRowType(), new Object[] {1, negMaxDecimal});
+
+        BinaryValue result = merger.retract(toBinaryValue(oldRow), toBinaryValue(retractRow));
+        assertThat(result).isNotNull();
+        assertThat(result.row.getInt(0)).isEqualTo(1);
+        assertThat(result.row.isNullAt(1)).isTrue();
     }
 }

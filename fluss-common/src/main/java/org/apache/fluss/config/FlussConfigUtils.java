@@ -69,7 +69,14 @@ public class FlussConfigUtils {
     }
 
     public static boolean isTableStorageConfig(String key) {
-        return key.startsWith(TABLE_PREFIX);
+        return key.startsWith(TABLE_PREFIX) || isFieldIgnoreRetractConfig(key);
+    }
+
+    /** Whether the key names a field-level aggregation retract option. */
+    public static boolean isFieldIgnoreRetractConfig(String key) {
+        return key.startsWith("fields.")
+                && key.endsWith(".ignore-retract")
+                && key.length() > "fields.".length() + ".ignore-retract".length();
     }
 
     public static boolean isAlterableTableOption(String key) {

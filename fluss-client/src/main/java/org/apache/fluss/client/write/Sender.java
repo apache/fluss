@@ -31,6 +31,7 @@ import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.RetriableException;
 import org.apache.fluss.exception.StorageBackpressureException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
+import org.apache.fluss.exception.UnsupportedRequestVersionException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
@@ -440,10 +441,6 @@ public class Sender implements Runnable {
      * ProduceLogRequest} or {@link PutKvRequest}.
      */
     private void sendWriteRequest(int destination, short acks, List<ReadyWriteBatch> batches) {
-        if (batches.isEmpty()) {
-            return;
-        }
-
         // Snapshot each idempotent batch's send-time lastAckedBatchSequence, so a later
         // out-of-order response can be recognized as stale (and retried) if the acked sequence
         // has advanced while the batch was in flight.
@@ -701,6 +698,18 @@ public class Sender implements Runnable {
         Throwable cause = Errors.maybeUnwrapException(t);
         if (cause instanceof Error) {
             recordFatalError(cause);
+            return;
+        }
+
+        if (cause instanceof UnsupportedRequestVersionException) {
+            for (ReadyWriteBatch batch : writeBatches) {
+                // Only the first attempt is known to be unsent. An earlier attempt may have
+                // reached the server even if its response was lost.
+                failBatch(
+                        batch,
+                        (UnsupportedRequestVersionException) cause,
+                        batch.writeBatch().attempts() == 0);
+            }
             return;
         }
 

@@ -34,8 +34,10 @@ import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
+import org.apache.fluss.exception.InvalidRecordException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.TestFileSystem;
+import org.apache.fluss.metadata.AggFunctions;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
@@ -48,9 +50,12 @@ import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.row.BinaryString;
+import org.apache.fluss.row.GenericArray;
+import org.apache.fluss.row.GenericMap;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.ProjectedRow;
+import org.apache.fluss.row.encode.KeyEncoder;
 import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.row.indexed.IndexedRow;
 import org.apache.fluss.types.BigIntType;
@@ -69,6 +74,7 @@ import javax.annotation.Nullable;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -2173,5 +2179,280 @@ class FlussTableITCase extends ClientToServerITCaseBase {
             assertThat(result2.getLogEndOffset()).isEqualTo(3);
             assertThat(result3.getLogEndOffset()).isEqualTo(3);
         }
+    }
+
+    @Test
+    void testRetractAppliesSum() throws Exception {
+        TablePath tablePath = TablePath.of("test_db_1", "test_retract_sum_table");
+        createTable(tablePath, aggSumTableDescriptor(), false);
+
+        try (Table table = conn.getTable(tablePath)) {
+            UpsertWriter upsertWriter = table.newUpsert().createWriter();
+            // accumulate 10 + 5 = 15, then retract the contribution of 5.
+            upsertWriter.upsert(row(1, 10L)).get();
+            upsertWriter.upsert(row(1, 5L)).get();
+            upsertWriter.retract(row(1, 5L)).get();
+            upsertWriter.flush();
+
+            Lookuper lookuper = table.newLookup().createLookuper();
+            InternalRow result = lookupRow(lookuper, row(1));
+            assertThat(result).isNotNull();
+            assertThat(result.getLong(1)).isEqualTo(10L);
+
+            upsertWriter.retract(row(2, 5L)).get();
+            InternalRow negativeResult = lookupRow(lookuper, row(2));
+            assertThat(negativeResult).isNotNull();
+            assertThat(negativeResult.getLong(1)).isEqualTo(-5L);
+
+            upsertWriter.upsert(row(2, 5L)).get();
+            InternalRow zeroResult = lookupRow(lookuper, row(2));
+            assertThat(zeroResult).isNotNull();
+            assertThat(zeroResult.getLong(1)).isZero();
+        }
+    }
+
+    @Test
+    void testRetractArithmeticFailureIdentifiesRecord() throws Exception {
+        TablePath tablePath = TablePath.of("test_db_1", "test_retract_arithmetic_failure");
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("factor", DataTypes.BIGINT(), AggFunctions.PRODUCT())
+                        .primaryKey("id")
+                        .build();
+        createTable(
+                tablePath,
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .property(ConfigOptions.TABLE_MERGE_ENGINE, MergeEngineType.AGGREGATION)
+                        .build(),
+                false);
+
+        try (Table table = conn.getTable(tablePath)) {
+            UpsertWriter writer = table.newUpsert().createWriter();
+            writer.upsert(row(1, 12L)).get();
+            TableInfo tableInfo = table.getTableInfo();
+            byte[] encodedKey =
+                    KeyEncoder.ofPrimaryKeyEncoder(
+                                    tableInfo.getRowType(),
+                                    tableInfo.getPhysicalPrimaryKeys(),
+                                    tableInfo.getTableConfig(),
+                                    tableInfo.isDefaultBucketKey())
+                            .encodeKey(row(1, 0L));
+            assertThatThrownBy(() -> writer.retract(row(1, 0L)).get())
+                    .rootCause()
+                    .isInstanceOf(InvalidRecordException.class)
+                    .hasMessageContaining("tableId=" + table.getTableInfo().getTableId())
+                    .hasMessageContaining("encoded primary key " + Arrays.toString(encodedKey))
+                    .hasMessageContaining("factor")
+                    .hasMessageContaining("product");
+            assertThat(lookupRow(table.newLookup().createLookuper(), row(1)).getLong(1))
+                    .isEqualTo(12L);
+        }
+    }
+
+    @Test
+    void testRetractHonorsPersistedFieldIgnoreRule() throws Exception {
+        TablePath tablePath = TablePath.of("test_db_1", "test_retract_ignore_field");
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("total", DataTypes.BIGINT(), AggFunctions.SUM())
+                        .column("maximum", DataTypes.INT(), AggFunctions.MAX())
+                        .primaryKey("id")
+                        .build();
+        createTable(
+                tablePath,
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .property("table.merge-engine", "aggregation")
+                        .property("fields.maximum.ignore-retract", "true")
+                        .build(),
+                false);
+        try (Table table = conn.getTable(tablePath)) {
+            UpsertWriter writer = table.newUpsert().createWriter();
+            writer.upsert(row(1, 100L, 9)).get();
+            writer.retract(row(1, 30L, 7)).get();
+            InternalRow result = lookupRow(table.newLookup().createLookuper(), row(1));
+            assertThat(result.getLong(1)).isEqualTo(70L);
+            assertThat(result.getInt(2)).isEqualTo(9);
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"compacted", "indexed"})
+    void testProductCollectAndMergeMapRetract(String kvFormat) throws Exception {
+        TablePath tablePath = TablePath.of("test_db_1", "retract_product_collections_" + kvFormat);
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("factor", DataTypes.BIGINT(), AggFunctions.PRODUCT())
+                        .column(
+                                "items",
+                                DataTypes.ARRAY(DataTypes.INT()),
+                                AggFunctions.COLLECT(false))
+                        .column(
+                                "attrs",
+                                DataTypes.MAP(DataTypes.INT(), DataTypes.STRING()),
+                                AggFunctions.MERGE_MAP())
+                        .primaryKey("id")
+                        .build();
+        createTable(
+                tablePath,
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .kvFormat(KvFormat.fromString(kvFormat))
+                        .property("table.merge-engine", "aggregation")
+                        .build(),
+                false);
+        try (Table table = conn.getTable(tablePath)) {
+            UpsertWriter writer = table.newUpsert().createWriter();
+            Lookuper lookuper = table.newLookup().createLookuper();
+            writer.upsert(
+                            row(
+                                    1,
+                                    3L,
+                                    GenericArray.of(1, 2, 2),
+                                    GenericMap.of(1, BinaryString.fromString("old"))))
+                    .get();
+            Map<Integer, Object> attrs = new HashMap<>();
+            attrs.put(1, BinaryString.fromString("new"));
+            attrs.put(2, BinaryString.fromString("kept"));
+            writer.upsert(row(1, 4L, GenericArray.of(3), new GenericMap(attrs))).get();
+            writer.retract(
+                            row(
+                                    1,
+                                    3L,
+                                    GenericArray.of(2),
+                                    GenericMap.of(1, BinaryString.fromString("old"))))
+                    .get();
+            InternalRow actual = lookupRow(lookuper, row(1));
+            assertThat(actual.getLong(1)).isEqualTo(4L);
+            assertThat(actual.getArray(2).toIntArray()).containsExactly(1, 2, 3);
+            assertThat(actual.getMap(3).size()).isEqualTo(1);
+            assertThat(actual.getMap(3).keyArray().getInt(0)).isEqualTo(2);
+            assertThat(actual.getMap(3).valueArray().getString(0).toString()).isEqualTo("kept");
+
+            writer.retract(row(1, 4L, GenericArray.of(1, 2, 3), GenericMap.of(2, null))).get();
+            actual = lookupRow(lookuper, row(1));
+            assertThat(actual).isNotNull();
+            assertThat(actual.getLong(1)).isEqualTo(1L);
+            assertThat(actual.getArray(2).size()).isZero();
+            assertThat(actual.getMap(3).size()).isZero();
+
+            writer.retract(
+                            row(
+                                    2,
+                                    3L,
+                                    GenericArray.of(5),
+                                    GenericMap.of(7, BinaryString.fromString("v"))))
+                    .get();
+            actual = lookupRow(lookuper, row(2));
+            assertThat(actual).isNotNull();
+            assertThat(actual.isNullAt(1)).isTrue();
+            assertThat(actual.isNullAt(2)).isTrue();
+            assertThat(actual.isNullAt(3)).isTrue();
+            writer.upsert(
+                            row(
+                                    2,
+                                    6L,
+                                    GenericArray.of(5),
+                                    GenericMap.of(7, BinaryString.fromString("v"))))
+                    .get();
+            actual = lookupRow(lookuper, row(2));
+            assertThat(actual.getLong(1)).isEqualTo(6L);
+            assertThat(actual.getArray(2).toIntArray()).containsExactly(5);
+            assertThat(actual.getMap(3).keyArray().getInt(0)).isEqualTo(7);
+            assertThat(actual.getMap(3).valueArray().getString(0).toString()).isEqualTo("v");
+        }
+    }
+
+    @Test
+    void testPartialRetractAndWholeRowDeleteShareWriterOrdering() throws Exception {
+        TablePath tablePath = TablePath.of("test_db_1", "test_partial_retract_delete");
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("total", DataTypes.BIGINT(), AggFunctions.SUM())
+                        .column("other", DataTypes.BIGINT())
+                        .primaryKey("id")
+                        .build();
+        createTable(
+                tablePath,
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .property("table.merge-engine", "aggregation")
+                        .property("table.delete.behavior", "allow")
+                        .property("table.aggregation.remove-record-on-delete", "true")
+                        .build(),
+                false);
+        Configuration batchingConf = new Configuration(clientConf);
+        batchingConf.set(ConfigOptions.CLIENT_WRITER_BATCH_TIMEOUT, Duration.ofMinutes(1));
+        try (Connection batchingConnection = ConnectionFactory.createConnection(batchingConf);
+                Table table = batchingConnection.getTable(tablePath)) {
+            UpsertWriter full = table.newUpsert().createWriter();
+            UpsertWriter partial = table.newUpsert().partialUpdate("id", "total").createWriter();
+            CompletableFuture<?> first = full.upsert(row(1, 10L, 7L));
+            CompletableFuture<?> retract = partial.retract(row(1, 3L, 999L));
+            CompletableFuture<?> delete = full.delete(row(1, null, null));
+            CompletableFuture<?> last = partial.upsert(row(1, 4L, null));
+            partial.flush();
+            CompletableFuture.allOf(first, retract, delete, last).get();
+            InternalRow result = lookupRow(table.newLookup().createLookuper(), row(1));
+            assertThat(result).isNotNull();
+            assertThat(result.getLong(1)).isEqualTo(4L);
+            assertThat(result.isNullAt(2)).isTrue();
+        }
+    }
+
+    @Test
+    void testRetractRequiresIdempotentWriter() throws Exception {
+        TablePath tablePath = TablePath.of("test_db_1", "test_retract_idempotence_table");
+        createTable(tablePath, aggSumTableDescriptor(), false);
+
+        Configuration nonIdempotentConf = new Configuration(clientConf);
+        nonIdempotentConf.set(ConfigOptions.CLIENT_WRITER_ENABLE_IDEMPOTENCE, false);
+        try (Connection nonIdempotentConn = ConnectionFactory.createConnection(nonIdempotentConf);
+                Table table = nonIdempotentConn.getTable(tablePath)) {
+            UpsertWriter upsertWriter = table.newUpsert().createWriter();
+            // retract is not idempotent, so it must be rejected when the idempotent writer
+            // is disabled: a retried duplicate would silently subtract twice.
+            assertThatThrownBy(() -> upsertWriter.retract(row(1, 10L)))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("client.writer.enable-idempotence");
+        }
+    }
+
+    @Test
+    void testRetractOnNonAggregationTableThrows() throws Exception {
+        TablePath tablePath = TablePath.of("test_db_1", "test_retract_non_agg_table");
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("total", DataTypes.BIGINT())
+                        .primaryKey("id")
+                        .build();
+        createTable(tablePath, TableDescriptor.builder().schema(schema).build(), false);
+
+        try (Table table = conn.getTable(tablePath)) {
+            UpsertWriter upsertWriter = table.newUpsert().createWriter();
+            assertThatThrownBy(() -> upsertWriter.retract(row(1, 10L)))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("AGGREGATION merge engine");
+        }
+    }
+
+    /** An aggregation merge engine table with a SUM column, used by the retract tests. */
+    private static TableDescriptor aggSumTableDescriptor() {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("total", DataTypes.BIGINT(), AggFunctions.SUM())
+                        .primaryKey("id")
+                        .build();
+        return TableDescriptor.builder()
+                .schema(schema)
+                .property(ConfigOptions.TABLE_MERGE_ENGINE.key(), "aggregation")
+                .build();
     }
 }

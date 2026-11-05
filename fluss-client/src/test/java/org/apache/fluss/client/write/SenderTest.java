@@ -37,6 +37,8 @@ import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.exception.TimeoutException;
 import org.apache.fluss.exception.TooManyPartitionsException;
 import org.apache.fluss.exception.UnknownWriterIdException;
+import org.apache.fluss.exception.UnsupportedRequestVersionException;
+import org.apache.fluss.exception.UnsupportedVersionException;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
@@ -45,6 +47,7 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TableOrPartition;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.record.DefaultKvRecordBatch;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.GenericRow;
@@ -57,6 +60,7 @@ import org.apache.fluss.rpc.messages.ProduceLogResponse;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.messages.PutKvResponse;
 import org.apache.fluss.rpc.protocol.Errors;
+import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.server.entity.ProduceLogDataForBucket;
 import org.apache.fluss.server.entity.PutKvDataForBucket;
 import org.apache.fluss.server.tablet.TestTabletServerGateway;
@@ -95,6 +99,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static org.apache.fluss.client.write.WriteRpcTestUtils.createProduceLogResponse;
+import static org.apache.fluss.client.write.WriteRpcTestUtils.createPutKvResponse;
+import static org.apache.fluss.client.write.WriteRpcTestUtils.getWriteRequestTableId;
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA_PK;
@@ -169,6 +176,86 @@ final class SenderTest {
                                 tableInfo,
                                 now))
                 .isFalse();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testLocalVersionRejectionReclaimsOnlyUnsentSequence(boolean retried) throws Exception {
+        sender.destroyResources();
+        IdempotenceManager manager = createIdempotenceManager(true);
+        manager.setWriterId(0L);
+        sender = setupWithIdempotenceState(manager, retried ? 1 : 0, 0);
+        TableBucket bucket = new TableBucket(DATA1_TABLE_ID_PK, 0);
+        CompletableFuture<Exception> retract = appendRetract(bucket);
+        sender.runOnce();
+        if (retried) {
+            Cluster cluster = metadataUpdater.getCluster();
+            failRequest(bucket, 0, new NetworkException("response lost"));
+            metadataUpdater.updateCluster(cluster);
+            sender.runOnce();
+        }
+        failRequest(
+                bucket,
+                0,
+                new UnsupportedRequestVersionException("Mutation types require PUT_KV 4"));
+        assertThat(retract.get()).isInstanceOf(UnsupportedVersionException.class);
+        assertThat(manager.nextSequence(bucket)).isEqualTo(retried ? 1 : 0);
+
+        if (!retried) {
+            CompletableFuture<Exception> upsert = new CompletableFuture<>();
+            appendKvToAccumulator(
+                    bucket,
+                    compactedRow(DATA1_ROW_TYPE, new Object[] {1, "a"}),
+                    (tb, offset, error) -> upsert.complete(error));
+            sender.runOnce();
+            PutKvRequest request = (PutKvRequest) node1Gateway().getRequest(0);
+            assertThat(
+                            DefaultKvRecordBatch.pointToByteBuffer(
+                                            request.getBucketsReqAt(0)
+                                                    .getRecordsSlice()
+                                                    .nioBuffer())
+                                    .batchSequence())
+                    .isZero();
+            finishRequest(bucket, 0, createPutKvResponse(bucket, 1L));
+            assertThat(upsert.get()).isNull();
+            assertThat(manager.nextSequence(bucket)).isEqualTo(1);
+        }
+    }
+
+    @Test
+    void testRemoteVersionFailureDoesNotReclaimUncertainSequence() throws Exception {
+        sender.destroyResources();
+        IdempotenceManager manager = createIdempotenceManager(true);
+        manager.setWriterId(0L);
+        sender = setupWithIdempotenceState(manager, 0, 0);
+        TableBucket bucket = new TableBucket(DATA1_TABLE_ID_PK, 0);
+        CompletableFuture<Exception> retract = appendRetract(bucket);
+        sender.runOnce();
+        failRequest(bucket, 0, new UnsupportedVersionException("remote failure"));
+        assertThat(retract.get()).isInstanceOf(UnsupportedVersionException.class);
+        assertThat(manager.nextSequence(bucket)).isEqualTo(1);
+    }
+
+    private CompletableFuture<Exception> appendRetract(TableBucket bucket) throws Exception {
+        BinaryRow row = compactedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
+        byte[] key =
+                new CompactedKeyEncoder(DATA1_ROW_TYPE, DATA1_SCHEMA_PK.getPrimaryKeyIndexes())
+                        .encodeKey(row);
+        bucketAssigner.setBucketId(bucket.getBucket());
+        CompletableFuture<Exception> result = new CompletableFuture<>();
+        accumulator.append(
+                WriteRecord.forRetract(
+                        DATA1_TABLE_INFO_PK,
+                        PhysicalTablePath.of(DATA1_TABLE_PATH_PK),
+                        row,
+                        key,
+                        key,
+                        WriteFormat.COMPACTED_KV,
+                        null,
+                        MergeMode.DEFAULT),
+                (tb, offset, error) -> result.complete(error),
+                metadataUpdater.getCluster());
+        return result;
     }
 
     @ParameterizedTest
@@ -2499,17 +2586,6 @@ final class SenderTest {
         return tableIds;
     }
 
-    private static long getWriteRequestTableId(ApiMessage request) {
-        if (request instanceof ProduceLogRequest) {
-            return ((ProduceLogRequest) request).getTableId();
-        }
-        if (request instanceof PutKvRequest) {
-            return ((PutKvRequest) request).getTableId();
-        }
-        throw new IllegalArgumentException(
-                "Expected a write request but found " + request.getClass().getName());
-    }
-
     private void failRequest(TableBucket referenceBucket, int index, Throwable throwable) {
         TestTabletServerGateway gateway =
                 (TestTabletServerGateway)
@@ -2529,33 +2605,6 @@ final class SenderTest {
         assertThat(hasIdempotentRecords(tb1, (ProduceLogRequest) request)).isTrue();
         assertBatchSequenceEquals(tb1, (ProduceLogRequest) request, batchSequence);
         gateway.response(index, response);
-    }
-
-    private ProduceLogResponse createProduceLogResponse(
-            TableBucket tb, long baseOffset, long endOffset) {
-        return makeProduceLogResponse(
-                Collections.singletonList(
-                        new ProduceLogResultForBucket(tb, baseOffset, endOffset)));
-    }
-
-    private ProduceLogResponse createProduceLogResponse(TableBucket tb, Errors error) {
-        return makeProduceLogResponse(
-                Collections.singletonList(new ProduceLogResultForBucket(tb, error.toApiError())));
-    }
-
-    private PutKvResponse createPutKvResponse(TableBucket tb, long endOffset) {
-        return makePutKvResponse(
-                Collections.singletonList(new PutKvResultForBucket(tb, endOffset)));
-    }
-
-    private PutKvResponse createPutKvResponse(TableBucket tb, long endOffset, float pressure) {
-        return makePutKvResponse(
-                Collections.singletonList(new PutKvResultForBucket(tb, endOffset, pressure)));
-    }
-
-    private PutKvResponse createPutKvResponse(TableBucket tb, Errors error) {
-        return makePutKvResponse(
-                Collections.singletonList(new PutKvResultForBucket(tb, error.toApiError())));
     }
 
     @ParameterizedTest

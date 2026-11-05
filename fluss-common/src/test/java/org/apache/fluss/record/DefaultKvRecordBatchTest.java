@@ -19,8 +19,10 @@ package org.apache.fluss.record;
 
 import org.apache.fluss.memory.UnmanagedPagedOutputView;
 import org.apache.fluss.metadata.KvFormat;
+import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.TestInternalRowGenerator;
 import org.apache.fluss.row.compacted.CompactedRow;
+import org.apache.fluss.row.encode.CompactedRowEncoder;
 
 import org.junit.jupiter.api.Test;
 
@@ -64,6 +66,7 @@ class DefaultKvRecordBatchTest extends KvTestBase {
         assertThat(kvRecords.magic()).isEqualTo(magic);
         assertThat(kvRecords.isValid()).isTrue();
         assertThat(kvRecords.schemaId()).isEqualTo(schemaId);
+        assertThat(kvRecords.hasMutationType()).isFalse();
 
         // verify record.
         int i = 0;
@@ -73,10 +76,130 @@ class DefaultKvRecordBatchTest extends KvTestBase {
                                 KvFormat.COMPACTED, new TestingSchemaGetter(1, DATA1_SCHEMA)))) {
             assertThat(keyToBytes(record)).isEqualTo(keys.get(i));
             assertThat(record.getRow()).isEqualTo(rows.get(i));
+            assertThat(record.getMutationType())
+                    .isEqualTo(rows.get(i) == null ? MutationType.DELETE : MutationType.UPSERT);
             i++;
         }
+        assertThat(i).isEqualTo(recordNumber);
 
         builder.close();
+    }
+
+    @Test
+    void testBatchWithMixedMutationTypes() throws Exception {
+        KvRecordBatchBuilder builder =
+                KvRecordBatchBuilder.builder(
+                        schemaId,
+                        Integer.MAX_VALUE,
+                        new UnmanagedPagedOutputView(100),
+                        KvFormat.COMPACTED,
+                        true);
+
+        CompactedRow upsertRow;
+        try (CompactedRowEncoder writer = new CompactedRowEncoder(baseRowFieldTypes)) {
+            writer.startNewRow();
+            writer.encodeField(0, 10);
+            writer.encodeField(1, BinaryString.fromString("upsert"));
+            upsertRow = writer.finishRow();
+        }
+
+        CompactedRow retractRow;
+        try (CompactedRowEncoder writer = new CompactedRowEncoder(baseRowFieldTypes)) {
+            writer.startNewRow();
+            writer.encodeField(0, 20);
+            writer.encodeField(1, BinaryString.fromString("retract"));
+            retractRow = writer.finishRow();
+        }
+
+        byte[] key1 = new byte[] {1};
+        byte[] key2 = new byte[] {2};
+        byte[] key3 = new byte[] {3};
+
+        builder.append(MutationType.UPSERT, key1, upsertRow);
+        builder.append(MutationType.DELETE, key2, null);
+        builder.append(MutationType.RETRACT, key3, retractRow);
+
+        DefaultKvRecordBatch batch = DefaultKvRecordBatch.pointToBytesView(builder.build());
+        batch.ensureValid();
+
+        assertThat(batch.getRecordCount()).isEqualTo(3);
+
+        // Read context for records with explicit mutation types
+        KvRecordReadContext readContext =
+                KvRecordReadContext.createReadContext(
+                        KvFormat.COMPACTED, new TestingSchemaGetter(1, DATA1_SCHEMA));
+
+        List<KvRecord> records = new ArrayList<>();
+        for (KvRecord record : batch.records(readContext)) {
+            records.add(record);
+        }
+
+        assertThat(records).hasSize(3);
+
+        // Record 0: UPSERT
+        assertThat(keyToBytes(records.get(0))).isEqualTo(key1);
+        assertThat(records.get(0).getRow()).isEqualTo(upsertRow);
+        assertThat(records.get(0).getMutationType()).isEqualTo(MutationType.UPSERT);
+
+        // Record 1: DELETE
+        assertThat(keyToBytes(records.get(1))).isEqualTo(key2);
+        assertThat(records.get(1).getRow()).isNull();
+        assertThat(records.get(1).getMutationType()).isEqualTo(MutationType.DELETE);
+
+        // Record 2: RETRACT
+        assertThat(keyToBytes(records.get(2))).isEqualTo(key3);
+        assertThat(records.get(2).getRow()).isEqualTo(retractRow);
+        assertThat(records.get(2).getMutationType()).isEqualTo(MutationType.RETRACT);
+
+        builder.close();
+    }
+
+    @Test
+    void testMutationTypeAttributeRoundTrip() throws Exception {
+        // Batches carrying mutation types set the corresponding attribute.
+        KvRecordBatchBuilder builderWithMutationType =
+                KvRecordBatchBuilder.builder(
+                        schemaId,
+                        Integer.MAX_VALUE,
+                        new UnmanagedPagedOutputView(100),
+                        KvFormat.COMPACTED,
+                        true);
+
+        CompactedRow row;
+        try (CompactedRowEncoder writer = new CompactedRowEncoder(baseRowFieldTypes)) {
+            writer.startNewRow();
+            writer.encodeField(0, 42);
+            writer.encodeField(1, BinaryString.fromString("v2test"));
+            row = writer.finishRow();
+        }
+
+        builderWithMutationType.append(MutationType.UPSERT, new byte[] {1}, row);
+
+        DefaultKvRecordBatch batchWithMutationType =
+                DefaultKvRecordBatch.pointToBytesView(builderWithMutationType.build());
+        batchWithMutationType.ensureValid();
+        assertThat(batchWithMutationType.hasMutationType()).isTrue();
+        assertThat(batchWithMutationType.getRecordCount()).isEqualTo(1);
+
+        builderWithMutationType.close();
+
+        // Batches without mutation types leave the attribute unset.
+        KvRecordBatchBuilder builderWithoutMutationType =
+                KvRecordBatchBuilder.builder(
+                        schemaId,
+                        Integer.MAX_VALUE,
+                        new UnmanagedPagedOutputView(100),
+                        KvFormat.COMPACTED);
+
+        builderWithoutMutationType.append(new byte[] {2}, row);
+
+        DefaultKvRecordBatch batchWithoutMutationType =
+                DefaultKvRecordBatch.pointToBytesView(builderWithoutMutationType.build());
+        batchWithoutMutationType.ensureValid();
+        assertThat(batchWithoutMutationType.hasMutationType()).isFalse();
+        assertThat(batchWithoutMutationType.getRecordCount()).isEqualTo(1);
+
+        builderWithoutMutationType.close();
     }
 
     @Test
