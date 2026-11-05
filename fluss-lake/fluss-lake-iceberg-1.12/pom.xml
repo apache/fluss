@@ -119,6 +119,19 @@
             <version>${iceberg.version}</version>
         </dependency>
 
+        <!--
+            The HTTP client 5.6 of Iceberg 1.12 decodes zstd and other encodings with the bundled
+            commons-compress, which needs commons-io (e.g. ZstdCompressorInputStream). The
+            commons-io of commons-compress is dropped by the commons-io exclusion on hadoop-common,
+            which is where the bundled commons-compress version is resolved from, so add it back
+            with the version commons-compress 1.26.1 is built against.
+        -->
+        <dependency>
+            <groupId>commons-io</groupId>
+            <artifactId>commons-io</artifactId>
+            <version>2.15.1</version>
+        </dependency>
+
         <dependency>
             <groupId>org.apache.fluss</groupId>
             <artifactId>fluss-common</artifactId>
