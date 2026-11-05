@@ -903,6 +903,46 @@ public final class ZkData {
         }
     }
 
+    /**
+     * The znode for the bounded history of completed rebalance tasks.
+     *
+     * <p>This is the root node for the individual {@link RebalanceHistoryTaskZNode}s. Kept as a
+     * sibling of, rather than a child of, {@link RebalanceZNode} because that znode already stores
+     * the current task as its own data -- nesting history under it would prevent deleting the
+     * current task once any history exists (a znode with children cannot be deleted). The znode
+     * path is:
+     *
+     * <p>/cluster/rebalance_history
+     */
+    public static final class RebalanceHistoryZNode {
+        /** Returns the path of the parent znode of all history entries. */
+        public static String path() {
+            return "/cluster/rebalance_history";
+        }
+    }
+
+    /**
+     * The znode for a single historical rebalance task, keyed by rebalance id. The znode path is:
+     *
+     * <p>/cluster/rebalance_history/[rebalanceId]
+     */
+    public static final class RebalanceHistoryTaskZNode {
+        /** Returns the path of the history entry of the given rebalance id. */
+        public static String path(String rebalanceId) {
+            return RebalanceHistoryZNode.path() + "/" + rebalanceId;
+        }
+
+        /** Encodes a history entry; it uses the same JSON format as {@link RebalanceZNode}. */
+        public static byte[] encode(RebalanceTask rebalanceTask) {
+            return RebalanceZNode.encode(rebalanceTask);
+        }
+
+        /** Decodes a history entry written by {@link #encode}. */
+        public static RebalanceTask decode(byte[] json) {
+            return RebalanceZNode.decode(json);
+        }
+    }
+
     // ------------------------------------------------------------------------------------------
     // ZNodes under "/producers/"
     // ------------------------------------------------------------------------------------------

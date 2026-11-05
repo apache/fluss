@@ -21,6 +21,10 @@ import org.apache.fluss.client.admin.Admin;
 
 import org.apache.flink.table.procedures.Procedure;
 
+import javax.annotation.Nullable;
+
+import java.time.Instant;
+
 /** Base implementation for flink {@link Procedure}. */
 public abstract class ProcedureBase implements Procedure {
     protected Admin admin;
@@ -29,5 +33,10 @@ public abstract class ProcedureBase implements Procedure {
     void withContext(FlussProcedureContext context) {
         this.flussProcedureContext = context;
         this.admin = context.getAdmin();
+    }
+
+    /** Converts epoch milliseconds to an {@link Instant}, or null for an unset (-1) time. */
+    protected static @Nullable Instant toInstant(long epochMs) {
+        return epochMs < 0 ? null : Instant.ofEpochMilli(epochMs);
     }
 }

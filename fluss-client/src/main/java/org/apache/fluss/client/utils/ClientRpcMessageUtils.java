@@ -36,6 +36,7 @@ import org.apache.fluss.client.write.ReadyWriteBatch;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.cluster.rebalance.RebalanceInfo;
 import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
 import org.apache.fluss.cluster.rebalance.RebalanceProgress;
 import org.apache.fluss.cluster.rebalance.RebalanceResultForBucket;
@@ -78,6 +79,7 @@ import org.apache.fluss.rpc.messages.ListKvSnapshotsResponse;
 import org.apache.fluss.rpc.messages.ListOffsetsRequest;
 import org.apache.fluss.rpc.messages.ListPartitionInfosResponse;
 import org.apache.fluss.rpc.messages.ListRebalanceProgressResponse;
+import org.apache.fluss.rpc.messages.ListRebalancesResponse;
 import org.apache.fluss.rpc.messages.ListRemoteLogManifestsResponse;
 import org.apache.fluss.rpc.messages.LookupRequest;
 import org.apache.fluss.rpc.messages.MetadataRequest;
@@ -101,6 +103,7 @@ import org.apache.fluss.rpc.messages.PbPrefixLookupReqForBucket;
 import org.apache.fluss.rpc.messages.PbProduceLogReqForBucket;
 import org.apache.fluss.rpc.messages.PbProducerTableOffsets;
 import org.apache.fluss.rpc.messages.PbPutKvReqForBucket;
+import org.apache.fluss.rpc.messages.PbRebalanceInfo;
 import org.apache.fluss.rpc.messages.PbRebalancePlanForBucket;
 import org.apache.fluss.rpc.messages.PbRebalanceProgressForBucket;
 import org.apache.fluss.rpc.messages.PbRebalanceProgressForTable;
@@ -639,14 +642,16 @@ public class ClientRpcMessageUtils {
         }
 
         checkArgument(response.hasRebalanceStatus(), "Rebalance status is not set");
-        RebalanceStatus totalRebalanceStatus = RebalanceStatus.of(response.getRebalanceStatus());
+        RebalanceStatus totalRebalanceStatus =
+                toKnownRebalanceStatus(response.getRebalanceStatus());
         int totalTask = 0;
         int finishedTask = 0;
         Map<TableBucket, RebalanceResultForBucket> rebalanceProgress = new HashMap<>();
         for (PbRebalanceProgressForTable pbTable : response.getTableProgressesList()) {
             long tableId = pbTable.getTableId();
             for (PbRebalanceProgressForBucket pbBucket : pbTable.getBucketsProgressesList()) {
-                RebalanceStatus bucketStatus = RebalanceStatus.of(pbBucket.getRebalanceStatus());
+                RebalanceStatus bucketStatus =
+                        toKnownRebalanceStatus(pbBucket.getRebalanceStatus());
                 RebalancePlanForBucket planForBucket =
                         toRebalancePlanForBucket(tableId, pbBucket.getRebalancePlan());
                 rebalanceProgress.put(
@@ -671,7 +676,48 @@ public class ClientRpcMessageUtils {
                         response.getRebalanceId(),
                         totalRebalanceStatus,
                         progress,
-                        rebalanceProgress));
+                        rebalanceProgress,
+                        response.hasStartedAtMs() ? response.getStartedAtMs() : -1,
+                        response.hasCompletedAtMs() ? response.getCompletedAtMs() : -1));
+    }
+
+    /** Fails with the offending code when this client does not know the status. */
+    private static RebalanceStatus toKnownRebalanceStatus(int statusCode) {
+        RebalanceStatus status = RebalanceStatus.of(statusCode);
+        checkArgument(
+                status != null,
+                "Unknown rebalance status code %s; upgrade the client.",
+                statusCode);
+        return status;
+    }
+
+    /**
+     * Converts a {@link ListRebalancesResponse} to rebalance summaries. Entries whose status code
+     * this client does not know are skipped; an absent timestamp maps to -1.
+     */
+    public static List<RebalanceInfo> toRebalanceInfos(ListRebalancesResponse response) {
+        List<RebalanceInfo> rebalanceInfos = new ArrayList<>();
+        for (PbRebalanceInfo pbRebalanceInfo : response.getRebalanceInfosList()) {
+            RebalanceStatus status = RebalanceStatus.of(pbRebalanceInfo.getRebalanceStatus());
+            if (status == null) {
+                LOG.warn(
+                        "Skipping rebalance {} with unknown status code {}; upgrade the client.",
+                        pbRebalanceInfo.getRebalanceId(),
+                        pbRebalanceInfo.getRebalanceStatus());
+                continue;
+            }
+            rebalanceInfos.add(
+                    new RebalanceInfo(
+                            pbRebalanceInfo.getRebalanceId(),
+                            status,
+                            pbRebalanceInfo.hasStartedAtMs()
+                                    ? pbRebalanceInfo.getStartedAtMs()
+                                    : -1,
+                            pbRebalanceInfo.hasCompletedAtMs()
+                                    ? pbRebalanceInfo.getCompletedAtMs()
+                                    : -1));
+        }
+        return rebalanceInfos;
     }
 
     private static RebalancePlanForBucket toRebalancePlanForBucket(

@@ -19,7 +19,9 @@ package org.apache.fluss.server.coordinator.rebalance;
 
 import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.cluster.rebalance.RebalanceInfo;
 import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
+import org.apache.fluss.cluster.rebalance.RebalanceProgress;
 import org.apache.fluss.cluster.rebalance.RebalanceResultForBucket;
 import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.cluster.rebalance.ServerTag;
@@ -27,6 +29,8 @@ import org.apache.fluss.config.ConfigOption;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.ConfigException;
+import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.NoRebalanceInProgressException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
@@ -46,6 +50,8 @@ import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.RebalanceTask;
+import org.apache.fluss.server.zk.data.ZkData.RebalanceHistoryTaskZNode;
+import org.apache.fluss.server.zk.data.ZkData.RebalanceHistoryZNode;
 import org.apache.fluss.shaded.curator5.org.apache.curator.retry.ExponentialBackoffRetry;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
@@ -121,7 +127,7 @@ public class RebalanceManagerTest {
 
     @BeforeEach
     void beforeEach() throws Exception {
-        zookeeperClient.deleteRebalanceTask();
+        deleteRebalanceZNodes();
         clock = new ManualClock();
         rebalanceExecutor = new TestingRebalanceExecutor(new CoordinatorContext(zkEpoch));
         eventManager = new RecordingEventManager();
@@ -131,7 +137,14 @@ public class RebalanceManagerTest {
     @AfterEach
     void afterEach() throws Exception {
         rebalanceManager.close();
+        deleteRebalanceZNodes();
+    }
+
+    private static void deleteRebalanceZNodes() throws Exception {
         zookeeperClient.deleteRebalanceTask();
+        for (String rebalanceId : zookeeperClient.getChildren(RebalanceHistoryZNode.path())) {
+            zookeeperClient.deletePath(RebalanceHistoryTaskZNode.path(rebalanceId));
+        }
     }
 
     @Test
@@ -154,7 +167,9 @@ public class RebalanceManagerTest {
         assertThat(status).isNotNull();
         assertThat(status).isEqualTo(COMPLETED);
         assertThat(zookeeperClient.getRebalanceTask())
-                .hasValue(new RebalanceTask(rebalanceId, COMPLETED, new HashMap<>()));
+                .hasValue(task(rebalanceId, COMPLETED, new HashMap<>(), 0L, 0L));
+        // Nothing was moved, so the no-op rebalance stays out of the bounded history.
+        assertThat(zookeeperClient.getRebalanceHistory()).isEmpty();
     }
 
     @Test
@@ -1002,6 +1017,224 @@ public class RebalanceManagerTest {
         }
     }
 
+    @Test
+    void testGenerateRebalanceTaskStampsStartedAtMs() {
+        clock.advanceTime(12_345L, TimeUnit.MILLISECONDS);
+
+        RebalanceTask task = rebalanceManager.generateRebalanceTask(Collections.emptyList());
+
+        assertThat(task.getStartedAtMs()).isEqualTo(12_345L);
+        assertThat(task.getCompletedAtMs()).isEqualTo(-1L);
+    }
+
+    @Test
+    void testFinalStatusStampsCompletedAtMsAndWritesHistory() throws Exception {
+        TableBucket tableBucket = new TableBucket(1L, 0);
+        Map<TableBucket, RebalancePlanForBucket> plan = plans(tableBucket);
+        rebalanceManager.registerRebalance("timestamp-test", plan, 1_000L);
+        clock.advanceTime(6_000L, TimeUnit.MILLISECONDS);
+
+        rebalanceManager.finishRebalanceTask(tableBucket, COMPLETED);
+
+        RebalanceProgress progress = rebalanceManager.listRebalanceProgress(null);
+        assertThat(progress.startedAtMs()).isEqualTo(1_000L);
+        assertThat(progress.completedAtMs()).isEqualTo(6_000L);
+        RebalanceTask finalTask = task("timestamp-test", COMPLETED, plan, 1_000L, 6_000L);
+        assertThat(zookeeperClient.getRebalanceTask()).hasValue(finalTask);
+        assertThat(zookeeperClient.getRebalanceHistory()).containsExactly(finalTask);
+    }
+
+    @Test
+    void testCancelKeepsStartedAtMsAndWritesHistoryOnceDrained() throws Exception {
+        TableBucket running = new TableBucket(1L, 0);
+        TableBucket pending = new TableBucket(1L, 1);
+        // One slot, so the second bucket is still pending when the cancellation arrives.
+        configureManager(new Configuration().set(COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS, 1));
+        rebalanceManager.registerRebalance("cancel-history-test", plans(running, pending), 1_000L);
+        RebalanceExecutionKey runningAttempt = rebalanceManager.getExecutionKey(running);
+
+        rebalanceManager.cancelRebalance("cancel-history-test");
+
+        // The cancellation request is not final yet: no history entry and no completion time.
+        RebalanceTask storedTask = zookeeperClient.getRebalanceTask().get();
+        assertThat(storedTask.getStartedAtMs()).isEqualTo(1_000L);
+        assertThat(storedTask.getCompletedAtMs()).isEqualTo(-1L);
+        assertThat(zookeeperClient.getRebalanceHistory()).isEmpty();
+
+        clock.advanceTime(4_000L, TimeUnit.MILLISECONDS);
+        rebalanceManager.finishRebalanceTask(runningAttempt, COMPLETED);
+
+        RebalanceTask historyTask =
+                zookeeperClient.getRebalanceHistoryTask("cancel-history-test").get();
+        assertThat(historyTask).isEqualTo(zookeeperClient.getRebalanceTask().get());
+        assertThat(historyTask.getRebalanceStatus()).isEqualTo(CANCELED);
+        assertThat(historyTask.getStartedAtMs()).isEqualTo(1_000L);
+        assertThat(historyTask.getCompletedAtMs()).isEqualTo(4_000L);
+        // The bucket that finished its move keeps its own status in a canceled rebalance.
+        assertThat(historyTask.getBucketStatus(running)).isEqualTo(COMPLETED);
+        assertThat(historyTask.getBucketStatus(pending)).isEqualTo(CANCELED);
+    }
+
+    @Test
+    void testHistoricalProgressKeepsPerBucketStatus() throws Exception {
+        TableBucket failed = new TableBucket(1L, 0);
+        TableBucket completed = new TableBucket(1L, 1);
+        rebalanceManager.registerRebalance("per-bucket-1", plans(failed, completed));
+        rebalanceManager.finishRebalanceTask(failed, FAILED);
+        rebalanceManager.finishRebalanceTask(completed, COMPLETED);
+        assertThat(rebalanceManager.getRebalanceStatus()).isEqualTo(FAILED);
+
+        // A second rebalance makes the first one historical.
+        rebalanceManager.registerRebalance("per-bucket-2", new HashMap<>());
+
+        // The in-memory view never serves a historical id (that would read ZooKeeper on the
+        // event thread); the caller routes it to historicalRebalanceProgress().
+        assertThat(rebalanceManager.isHistorical("per-bucket-1")).isTrue();
+        assertThatThrownBy(() -> rebalanceManager.listRebalanceProgress("per-bucket-1"))
+                .isInstanceOf(IllegalArgumentException.class);
+        RebalanceProgress historical = rebalanceManager.historicalRebalanceProgress("per-bucket-1");
+        assertThat(historical.status()).isEqualTo(FAILED);
+        assertThat(historical.progressForBucketMap().get(failed).status()).isEqualTo(FAILED);
+        assertThat(historical.progressForBucketMap().get(completed).status()).isEqualTo(COMPLETED);
+    }
+
+    @Test
+    void testHistoricalProgressOfUnknownIdThrows() {
+        assertThat(rebalanceManager.getRebalanceId()).isNull();
+        assertThatThrownBy(() -> rebalanceManager.historicalRebalanceProgress("unknown-id"))
+                .isInstanceOf(NoRebalanceInProgressException.class)
+                .hasMessageContaining("retained history")
+                .hasMessageContaining("Admin#listRebalances()");
+    }
+
+    @Test
+    void testRecoverFinalTaskKeepsPerBucketStatusAndTimestamps() throws Exception {
+        TableBucket failed = new TableBucket(1L, 0);
+        TableBucket completed = new TableBucket(1L, 1);
+        RebalanceTask finalTask =
+                new RebalanceTask(
+                        "recover-per-bucket",
+                        FAILED,
+                        plans(failed, completed),
+                        false,
+                        Collections.emptySet(),
+                        Collections.singletonMap(completed, COMPLETED),
+                        1_000L,
+                        2_000L);
+        zookeeperClient.registerFinalRebalanceTask(finalTask, 10);
+        configureManager(new Configuration());
+
+        RecoverRebalanceEvent recoveryEvent = (RecoverRebalanceEvent) eventManager.events.get(0);
+        rebalanceManager.recoverRebalance(recoveryEvent.getRebalanceTask());
+
+        assertThat(statuses(rebalanceManager))
+                .containsEntry(failed, FAILED)
+                .containsEntry(completed, COMPLETED);
+        assertThat(rebalanceManager.currentRebalanceInfo())
+                .isEqualTo(new RebalanceInfo("recover-per-bucket", FAILED, 1_000L, 2_000L));
+        assertThat(zookeeperClient.getRebalanceHistory()).containsExactly(finalTask);
+    }
+
+    @Test
+    void testStartupAddsFinalTaskMissingFromHistory() throws Exception {
+        // A coordinator from before the history existed finished this task, so only the current
+        // znode holds it. The next rebalance would overwrite it unless startup copies it over.
+        RebalanceTask upgradedTask =
+                new RebalanceTask("pre-history-test", COMPLETED, plans(new TableBucket(1L, 0)));
+        zookeeperClient.registerRebalanceTask(upgradedTask);
+
+        configureManager(new Configuration());
+
+        assertThat(zookeeperClient.getRebalanceHistory()).containsExactly(upgradedTask);
+    }
+
+    @Test
+    void testStartupKeepsNoOpFinalTaskOutOfHistory() throws Exception {
+        zookeeperClient.registerRebalanceTask(
+                new RebalanceTask("no-op-test", COMPLETED, new HashMap<>()));
+
+        configureManager(new Configuration());
+
+        assertThat(zookeeperClient.getRebalanceHistory()).isEmpty();
+    }
+
+    @Test
+    void testListRebalancesEmptyWhenNoRebalanceEverRun() {
+        assertThat(rebalanceManager.listRebalances()).isEmpty();
+    }
+
+    @Test
+    void testListRebalancesCurrentFirstThenHistoryNewestFirstDeduped() {
+        TableBucket tableBucket = new TableBucket(1L, 0);
+        for (String finishedId : Arrays.asList("rebalance-1", "rebalance-2")) {
+            rebalanceManager.registerRebalance(finishedId, plans(tableBucket));
+            clock.advanceTime(1_000L, TimeUnit.MILLISECONDS);
+            rebalanceManager.finishRebalanceTask(tableBucket, COMPLETED);
+        }
+        // The third rebalance is still in progress, so only the current view holds it.
+        rebalanceManager.registerRebalance("rebalance-3", plans(tableBucket));
+
+        assertThat(rebalanceManager.listRebalances())
+                .containsExactly(
+                        new RebalanceInfo("rebalance-3", REBALANCING, 2_000L, -1L),
+                        new RebalanceInfo("rebalance-2", COMPLETED, 1_000L, 2_000L),
+                        new RebalanceInfo("rebalance-1", COMPLETED, 0L, 1_000L));
+
+        // A historical id returns the full per-bucket detail from the ZooKeeper history.
+        RebalanceProgress historical = rebalanceManager.historicalRebalanceProgress("rebalance-1");
+        assertThat(historical.status()).isEqualTo(COMPLETED);
+        assertThat(historical.progressForBucketMap().get(tableBucket).status())
+                .isEqualTo(COMPLETED);
+        assertThat(historical.startedAtMs()).isEqualTo(0L);
+        assertThat(historical.completedAtMs()).isEqualTo(1_000L);
+    }
+
+    @Test
+    void testListRebalancesPrefersHistoryOverStaleCurrentSnapshot() throws Exception {
+        // The snapshot of rebalance-1 is taken on the event thread, then rebalance-2 finishes
+        // before the history is read: the list must stay newest first.
+        Map<TableBucket, RebalancePlanForBucket> plan = plans(new TableBucket(1L, 0));
+        RebalanceInfo staleSnapshot = new RebalanceInfo("rebalance-1", COMPLETED, 1_000L, 2_000L);
+        zookeeperClient.registerFinalRebalanceTask(
+                task("rebalance-1", COMPLETED, plan, 1_000L, 2_000L), 10);
+        zookeeperClient.registerFinalRebalanceTask(
+                task("rebalance-2", COMPLETED, plan, 3_000L, 4_000L), 10);
+
+        assertThat(rebalanceManager.listRebalances(staleSnapshot))
+                .containsExactly(
+                        new RebalanceInfo("rebalance-2", COMPLETED, 3_000L, 4_000L), staleSnapshot);
+    }
+
+    @Test
+    void testListRebalancesPropagatesZooKeeperReadFailure() throws Exception {
+        rebalanceManager.close();
+        try (TestingZooKeeperClient testingClient = new TestingZooKeeperClient()) {
+            rebalanceManager = createManager(new Configuration(), testingClient);
+            testingClient.failHistoryRead = true;
+
+            assertThatThrownBy(() -> rebalanceManager.listRebalances())
+                    .isInstanceOf(FlussRuntimeException.class)
+                    .hasRootCauseMessage("zk read failed");
+        }
+    }
+
+    private static RebalanceTask task(
+            String rebalanceId,
+            RebalanceStatus status,
+            Map<TableBucket, RebalancePlanForBucket> plan,
+            long startedAtMs,
+            long completedAtMs) {
+        return new RebalanceTask(
+                rebalanceId,
+                status,
+                plan,
+                false,
+                Collections.emptySet(),
+                Collections.emptyMap(),
+                startedAtMs,
+                completedAtMs);
+    }
+
     private RebalanceManager createManager(Configuration conf) {
         return createManager(conf, zookeeperClient);
     }
@@ -1218,6 +1451,7 @@ public class RebalanceManagerTest {
 
         private boolean failNextFinalWrite;
         private boolean failNextCancellationAfterCommit;
+        private boolean failHistoryRead;
 
         private TestingZooKeeperClient() {
             super(createCuratorFrameworkWrapper(), createConfiguration());
@@ -1232,7 +1466,8 @@ public class RebalanceManagerTest {
         }
 
         @Override
-        public void registerRebalanceTask(RebalanceTask rebalanceTask) throws Exception {
+        public void registerRebalanceTask(RebalanceTask rebalanceTask, int expectedZkVersion)
+                throws Exception {
             if (failNextFinalWrite
                     && RebalanceStatus.FINAL_STATUSES.contains(
                             rebalanceTask.getRebalanceStatus())) {
@@ -1243,10 +1478,18 @@ public class RebalanceManagerTest {
                     && rebalanceTask.getRebalanceStatus() == REBALANCING
                     && rebalanceTask.isCancelRequested()) {
                 failNextCancellationAfterCommit = false;
-                super.registerRebalanceTask(rebalanceTask);
+                super.registerRebalanceTask(rebalanceTask, expectedZkVersion);
                 throw new RuntimeException("Expected ambiguous cancellation write");
             }
-            super.registerRebalanceTask(rebalanceTask);
+            super.registerRebalanceTask(rebalanceTask, expectedZkVersion);
+        }
+
+        @Override
+        public List<RebalanceTask> getRebalanceHistory() throws Exception {
+            if (failHistoryRead) {
+                throw new Exception("zk read failed");
+            }
+            return super.getRebalanceHistory();
         }
 
         private static CuratorFrameworkWithUnhandledErrorListener createCuratorFrameworkWrapper() {

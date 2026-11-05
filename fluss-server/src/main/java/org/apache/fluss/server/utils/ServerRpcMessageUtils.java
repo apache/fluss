@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.cluster.rebalance.RebalanceInfo;
 import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
 import org.apache.fluss.cluster.rebalance.RebalanceProgress;
 import org.apache.fluss.cluster.rebalance.RebalanceResultForBucket;
@@ -104,6 +105,7 @@ import org.apache.fluss.rpc.messages.ListOffsetsRequest;
 import org.apache.fluss.rpc.messages.ListOffsetsResponse;
 import org.apache.fluss.rpc.messages.ListPartitionInfosResponse;
 import org.apache.fluss.rpc.messages.ListRebalanceProgressResponse;
+import org.apache.fluss.rpc.messages.ListRebalancesResponse;
 import org.apache.fluss.rpc.messages.ListRemoteLogManifestsResponse;
 import org.apache.fluss.rpc.messages.LookupRequest;
 import org.apache.fluss.rpc.messages.LookupResponse;
@@ -171,6 +173,7 @@ import org.apache.fluss.rpc.messages.PbProduceLogRespForBucket;
 import org.apache.fluss.rpc.messages.PbProducerTableOffsets;
 import org.apache.fluss.rpc.messages.PbPutKvReqForBucket;
 import org.apache.fluss.rpc.messages.PbPutKvRespForBucket;
+import org.apache.fluss.rpc.messages.PbRebalanceInfo;
 import org.apache.fluss.rpc.messages.PbRebalancePlanForBucket;
 import org.apache.fluss.rpc.messages.PbRebalanceProgressForBucket;
 import org.apache.fluss.rpc.messages.PbRemoteLogManifestEntry;
@@ -2585,6 +2588,12 @@ public class ServerRpcMessageUtils {
                 new ListRebalanceProgressResponse()
                         .setRebalanceId(rebalanceProgress.rebalanceId())
                         .setRebalanceStatus(rebalanceProgress.status().getCode());
+        if (rebalanceProgress.startedAtMs() >= 0) {
+            response.setStartedAtMs(rebalanceProgress.startedAtMs());
+        }
+        if (rebalanceProgress.completedAtMs() >= 0) {
+            response.setCompletedAtMs(rebalanceProgress.completedAtMs());
+        }
 
         Map<Long, List<PbRebalanceProgressForBucket>> tableIdToPbBuckets = new HashMap<>();
         for (Map.Entry<TableBucket, RebalanceResultForBucket> progressForBucket :
@@ -2608,6 +2617,28 @@ public class ServerRpcMessageUtils {
                     .addAllBucketsProgresses(entry.getValue());
         }
 
+        return response;
+    }
+
+    /**
+     * Converts the rebalance summaries to a {@link ListRebalancesResponse}. An unset timestamp (-1)
+     * is left absent on the wire.
+     */
+    public static ListRebalancesResponse makeListRebalancesResponse(
+            List<RebalanceInfo> rebalanceInfos) {
+        ListRebalancesResponse response = new ListRebalancesResponse();
+        for (RebalanceInfo rebalanceInfo : rebalanceInfos) {
+            PbRebalanceInfo pbRebalanceInfo =
+                    response.addRebalanceInfo()
+                            .setRebalanceId(rebalanceInfo.rebalanceId())
+                            .setRebalanceStatus(rebalanceInfo.status().getCode());
+            if (rebalanceInfo.startedAtMs() >= 0) {
+                pbRebalanceInfo.setStartedAtMs(rebalanceInfo.startedAtMs());
+            }
+            if (rebalanceInfo.completedAtMs() >= 0) {
+                pbRebalanceInfo.setCompletedAtMs(rebalanceInfo.completedAtMs());
+            }
+        }
         return response;
     }
 

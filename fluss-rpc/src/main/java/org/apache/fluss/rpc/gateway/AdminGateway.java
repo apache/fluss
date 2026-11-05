@@ -61,6 +61,8 @@ import org.apache.fluss.rpc.messages.ListKvSnapshotsRequest;
 import org.apache.fluss.rpc.messages.ListKvSnapshotsResponse;
 import org.apache.fluss.rpc.messages.ListRebalanceProgressRequest;
 import org.apache.fluss.rpc.messages.ListRebalanceProgressResponse;
+import org.apache.fluss.rpc.messages.ListRebalancesRequest;
+import org.apache.fluss.rpc.messages.ListRebalancesResponse;
 import org.apache.fluss.rpc.messages.ListRemoteLogManifestsRequest;
 import org.apache.fluss.rpc.messages.ListRemoteLogManifestsResponse;
 import org.apache.fluss.rpc.messages.RebalanceRequest;
@@ -199,6 +201,9 @@ public interface AdminGateway extends AdminReadOnlyGateway {
 
     @RPC(api = ApiKeys.CANCEL_REBALANCE)
     CompletableFuture<CancelRebalanceResponse> cancelRebalance(CancelRebalanceRequest request);
+
+    @RPC(api = ApiKeys.LIST_REBALANCES)
+    CompletableFuture<ListRebalancesResponse> listRebalances(ListRebalancesRequest request);
 
     // ==================================================================================
     // Producer Offset Management APIs (for Exactly-Once Semantics)
