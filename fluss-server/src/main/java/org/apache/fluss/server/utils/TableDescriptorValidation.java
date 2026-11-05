@@ -647,6 +647,11 @@ public class TableDescriptorValidation {
                                     + ".ignore-retract have conflicting behavior and cannot both be enabled.");
                 }
             }
+            if (config.getDeleteBehavior().orElse(DeleteBehavior.IGNORE) != DeleteBehavior.ALLOW) {
+                throw new InvalidConfigException(
+                        "table.aggregation.remove-record-on-delete=true requires "
+                                + "table.delete.behavior=allow. Aggregation tables default to ignore.");
+            }
         }
     }
 

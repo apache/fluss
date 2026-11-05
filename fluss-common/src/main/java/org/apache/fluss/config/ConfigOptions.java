@@ -2302,7 +2302,8 @@ public class ConfigOptions {
                     .withDescription(
                             "For an aggregation table, interpret changelog DELETE as record deletion "
                                     + "instead of field retraction when the Flink sink enables retract. "
-                                    + "UPDATE_BEFORE still retracts fields. Cannot be combined with "
+                                    + "UPDATE_BEFORE still retracts fields. Requires table.delete.behavior=allow. "
+                                    + "Cannot be combined with "
                                     + "fields.<column>.ignore-retract=true. Does not change the Java "
                                     + "writer's explicit delete or retract operations.");
 

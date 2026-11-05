@@ -1369,9 +1369,11 @@ In a Flink job, the failed write causes task failure. Recovery can replay the sa
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `fields.<column>.ignore-retract` | `false` | Preserve this field on retract while retaining its configured upsert aggregation. This also permits a function without a retract implementation, such as MAX, to coexist with retractable fields. |
-| `table.aggregation.remove-record-on-delete` | `false` | With Flink retract mode enabled, interpret changelog DELETE as whole-row deletion instead of field retraction. UPDATE_BEFORE still retracts fields. |
+| `table.aggregation.remove-record-on-delete` | `false` | With Flink retract mode enabled, interpret changelog DELETE as whole-row deletion instead of field retraction. UPDATE_BEFORE still retracts fields. Requires `table.delete.behavior=allow`. |
 
 Both options belong to the aggregation table. They cannot be enabled together: whole-row deletion and retaining individual fields on retract have conflicting behavior, matching Paimon's restriction. Configure them when creating the table. The whole-row option does not change the Java writer's explicit `delete(row)` or `retract(row)` operations.
+
+Enabling `table.aggregation.remove-record-on-delete` requires an explicit `table.delete.behavior=allow`. Table creation rejects `ignore`, `disable`, and an omitted delete policy, which defaults to `ignore` for aggregation tables. With Flink retract mode enabled, this combination corresponds to Paimon's `aggregation.remove-record-on-delete=true`. With the whole-row option disabled, all three delete policies remain valid and field retraction is independent of them.
 
 For example, an aggregation table can configure `fields.maximum.ignore-retract=true` alongside a SUM field. Retracting a row subtracts its SUM contribution and preserves the existing maximum. Upserting a row still applies MAX to that field. A field missing from an older input schema is preserved, rather than treated as an explicit null retract.
 
@@ -1387,7 +1389,7 @@ For an aggregation sink with `sink.enable-retract=true`:
 | UPDATE_BEFORE | Retract the input contribution. |
 | DELETE | Retract the input contribution by default. If `table.aggregation.remove-record-on-delete=true`, delete the entire record, including fields outside a partial write's target columns. |
 
-`sink.ignore-delete=true` drops both UPDATE_BEFORE and DELETE before applying these rules. Explicit record deletion remains subject to `table.delete.behavior`: use `allow` to permit deletion; `ignore` or `disable` retain their existing meanings. Field retraction is independent of that deletion policy.
+`sink.ignore-delete=true` drops both UPDATE_BEFORE and DELETE before applying these rules, matching Paimon's `ignore-delete=true` input filtering. Explicit record deletion follows `table.delete.behavior`. The whole-row option requires `allow`; with that option disabled, `ignore` silently skips explicit deletes and `disable` rejects them. Field retraction is independent of that deletion policy.
 
 When the declared input changelog mode requires retraction, Flink validates the participating target fields after resolving partial writes. Each participating field must support retract or set `ignore-retract=true`. Non-target fields do not prevent a partial retract, and an input mode containing only INSERT / UPDATE_AFTER does not require retract-capable functions. See [Retract Validation and Paimon Compatibility](#retract-validation-and-paimon-compatibility) for the distinction between the declared mode and records observed at runtime.
 

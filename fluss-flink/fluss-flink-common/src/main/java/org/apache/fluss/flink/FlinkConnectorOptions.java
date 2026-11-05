@@ -252,7 +252,8 @@ public class FlinkConnectorOptions {
                             "Enable field retraction for aggregation sinks. UPDATE_BEFORE and, by "
                                     + "default, DELETE retract their input contributions. "
                                     + "table.aggregation.remove-record-on-delete selects whole-row "
-                                    + "deletion for DELETE. sink.ignore-delete still drops both kinds. "
+                                    + "deletion for DELETE and requires table.delete.behavior=allow. "
+                                    + "sink.ignore-delete still drops both kinds. "
                                     + "When false, changelog negotiation and deletion retain their "
                                     + "existing behavior.");
 
