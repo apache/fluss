@@ -406,4 +406,9 @@ public class MetricNames {
     // for lake tiering metrics - enumerator level
     public static final String TIERING_SERVICE_READERS_AWAITING_SPLIT_RATIO =
             "readersAwaitingSplitRatio";
+
+    // for lake tiering enumerator heartbeat and request-table metrics
+    public static final String TIERING_HEARTBEAT_FAILURE = "tiering.heartbeat.failure";
+    public static final String TIERING_REQUEST_TABLE_EMPTY = "tiering.request-table.empty";
+    public static final String TIERING_REQUEST_TABLE_FAILURE = "tiering.request-table.failure";
 }

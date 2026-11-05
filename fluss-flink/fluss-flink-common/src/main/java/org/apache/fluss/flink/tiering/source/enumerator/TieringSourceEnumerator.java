@@ -31,6 +31,7 @@ import org.apache.fluss.flink.metrics.FlinkMetricRegistry;
 import org.apache.fluss.flink.tiering.event.FailedTieringEvent;
 import org.apache.fluss.flink.tiering.event.FinishedTieringEvent;
 import org.apache.fluss.flink.tiering.event.TieringReachMaxDurationEvent;
+import org.apache.fluss.flink.tiering.source.metrics.TieringEnumeratorMetrics;
 import org.apache.fluss.flink.tiering.source.metrics.TieringMetrics;
 import org.apache.fluss.flink.tiering.source.split.FlinkTieringSplit;
 import org.apache.fluss.flink.tiering.source.state.TieringSourceEnumeratorState;
@@ -85,7 +86,6 @@ import java.util.stream.Collectors;
 import static org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper.basicHeartBeat;
 import static org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper.heartBeatWithRequestNewTieringTable;
 import static org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper.tieringTableHeartBeat;
-import static org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper.waitHeartbeatResponse;
 
 /**
  * An implementation of {@link SplitEnumerator} used to request {@link TieringSplit} from Fluss
@@ -116,6 +116,7 @@ public class TieringSourceEnumerator
     private final ScheduledExecutorService timerService;
     private final SplitEnumeratorMetricGroup enumeratorMetricGroup;
     private final AutoCloseable tieringMetrics;
+    private final TieringEnumeratorMetrics enumeratorRequestMetrics;
     private final long pollTieringTableIntervalMs;
     // Also inspected by asynchronous heartbeat requests.
     private final Deque<TieringSplit> pendingSplits;
@@ -195,6 +196,17 @@ public class TieringSourceEnumerator
                 TieringMetrics.registerReadersAwaitingSplitRatio(
                         enumeratorMetricGroup,
                         () -> (double) readersAwaitingSplit.size() / context.currentParallelism());
+        this.enumeratorRequestMetrics = new TieringEnumeratorMetrics(enumeratorMetricGroup);
+    }
+
+    @VisibleForTesting
+    TieringEnumeratorMetrics getTieringMetrics() {
+        return enumeratorRequestMetrics;
+    }
+
+    @VisibleForTesting
+    void setCoordinatorGateway(CoordinatorGateway gateway) {
+        this.coordinatorGateway = gateway;
     }
 
     @Override
@@ -232,6 +244,7 @@ public class TieringSourceEnumerator
                     flussCoordinatorEpoch);
 
         } catch (Exception e) {
+            enumeratorRequestMetrics.incHeartbeatFailure();
             LOG.error("Register Tiering Service failed due to ", e);
             throw new FlinkRuntimeException("Register Tiering Service failed due to ", e);
         }
@@ -421,6 +434,7 @@ public class TieringSourceEnumerator
     void generateAndAssignSplits(
             @Nullable Tuple3<Long, Long, TablePath> tieringTable, Throwable throwable) {
         if (throwable != null) {
+            enumeratorRequestMetrics.incRequestTableFailure();
             ExceptionUtils.rethrow(throwable);
         }
         if (tieringTable != null) {
@@ -451,7 +465,9 @@ public class TieringSourceEnumerator
         }
     }
 
-    private @Nullable Tuple3<Long, Long, TablePath> requestTieringTableSplitsViaHeartBeat() {
+    @VisibleForTesting
+    @Nullable
+    Tuple3<Long, Long, TablePath> requestTieringTableSplitsViaHeartBeat() {
         if (closed) {
             return null;
         }
@@ -490,6 +506,7 @@ public class TieringSourceEnumerator
                 tieringTableEpochs.put(lakeTieringInfo.f0, lakeTieringInfo.f1);
                 LOG.info("Tiering table {} has been requested.", lakeTieringInfo);
             } else {
+                enumeratorRequestMetrics.incRequestTableEmpty();
                 LOG.info("No available Tiering table found, will poll later.");
             }
         } else {
@@ -749,15 +766,20 @@ public class TieringSourceEnumerator
             }
             return lakeTieringHeartbeatRequest;
         }
+    }
 
-        static LakeTieringHeartbeatResponse waitHeartbeatResponse(
-                CompletableFuture<LakeTieringHeartbeatResponse> responseCompletableFuture) {
-            try {
-                return responseCompletableFuture.get(3, TimeUnit.MINUTES);
-            } catch (Exception e) {
-                LOG.error("Failed to wait heartbeat response due to ", e);
-                throw new FlinkRuntimeException("Failed to wait heartbeat response due to ", e);
-            }
+    /**
+     * Waits for the heartbeat response from the Fluss coordinator. Increments the heartbeat failure
+     * counter if the wait fails.
+     */
+    private LakeTieringHeartbeatResponse waitHeartbeatResponse(
+            CompletableFuture<LakeTieringHeartbeatResponse> responseCompletableFuture) {
+        try {
+            return responseCompletableFuture.get(3, TimeUnit.MINUTES);
+        } catch (Exception e) {
+            enumeratorRequestMetrics.incHeartbeatFailure();
+            LOG.error("Failed to wait heartbeat response due to ", e);
+            throw new FlinkRuntimeException("Failed to wait heartbeat response due to ", e);
         }
     }
 
