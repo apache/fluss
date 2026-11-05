@@ -169,6 +169,7 @@ abstract class OrphanFilesCleanITCase extends AbstractTestBase {
         String dbName = newDatabaseName("mixed");
         TablePath tablePath = createLogTable(dbName, "mixed_bucket");
         TableInfo tableInfo = admin.getTableInfo(tablePath).get();
+        FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableInfo.getTableId());
         TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), 0);
         FsPath remoteLogTabletDir =
                 FlussPaths.remoteLogTabletDir(
