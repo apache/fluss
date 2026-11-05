@@ -131,6 +131,10 @@ An unavailable index bucket prevents source buckets with pending mutations for t
 
 Before creating indexed tables, upgrade all participating TabletServers to support the private `PutIndex` protocol, then the Coordinator and clients/connectors. Do not schedule an indexed main-table bucket or index bucket on a server without index support. `PutIndex` v0 uses API key 1076.
 
+The Coordinator checks the API versions of online TabletServers when they register. Creating a table with secondary indexes requires every online TabletServer to advertise `PutIndex` v0. Creation is rejected while any server lacks support or its API versions are still unknown. Query failures are retried automatically.
+
+This admission check applies when creating a table. Once indexed tables exist, operators must keep all participating TabletServers and the Coordinator on index-compatible versions, including nodes that rejoin the cluster.
+
 The following limitations apply:
 
 - Indexes can only be declared when creating a primary key table. Online index creation, backfill, and removal are not supported.

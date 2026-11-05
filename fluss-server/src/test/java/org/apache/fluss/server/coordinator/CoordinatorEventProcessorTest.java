@@ -702,6 +702,7 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
     @Test
     void testMetricsRemainCollectableAfterDropTableFailure() throws Exception {
         eventProcessor.shutdown();
+        testCoordinatorChannelManager.close();
 
         FailingUpdateMetadataChannelManager failingChannelManager =
                 new FailingUpdateMetadataChannelManager();
@@ -766,6 +767,7 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
     @Test
     void testMetricsRemainCollectableAfterDropPartitionFailure() throws Exception {
         eventProcessor.shutdown();
+        testCoordinatorChannelManager.close();
 
         FailingUpdateMetadataChannelManager failingChannelManager =
                 new FailingUpdateMetadataChannelManager();

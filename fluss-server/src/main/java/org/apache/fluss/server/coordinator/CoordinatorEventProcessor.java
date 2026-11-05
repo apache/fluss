@@ -64,6 +64,7 @@ import org.apache.fluss.rpc.messages.RebalanceResponse;
 import org.apache.fluss.rpc.messages.RemoveServerTagByRackResponse;
 import org.apache.fluss.rpc.messages.RemoveServerTagResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
+import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.AddServerTagByRackEvent;
 import org.apache.fluss.server.coordinator.event.AddServerTagEvent;
@@ -101,6 +102,7 @@ import org.apache.fluss.server.coordinator.event.ResumeDropEvent;
 import org.apache.fluss.server.coordinator.event.RetryOfflineLeaderEvent;
 import org.apache.fluss.server.coordinator.event.SchemaChangeEvent;
 import org.apache.fluss.server.coordinator.event.TableRegistrationChangeEvent;
+import org.apache.fluss.server.coordinator.event.TabletServerApiVersionsEvent;
 import org.apache.fluss.server.coordinator.event.watcher.CoordinatorChangeWatcher;
 import org.apache.fluss.server.coordinator.event.watcher.TableChangeWatcher;
 import org.apache.fluss.server.coordinator.event.watcher.TabletServerChangeWatcher;
@@ -207,6 +209,7 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
     private final RebalanceManager rebalanceManager;
     private final Scheduler scheduler;
     private final long offlineLeaderRetryDelayMs;
+    private final long apiVersionsRetryBackoffMs;
     private final CompletedSnapshotStoreManager completedSnapshotStoreManager;
     private final LakeTableHelper lakeTableHelper;
     // Tracks the exact assignment last confirmed in ZooKeeper for an active rebalance bucket. A
@@ -302,6 +305,8 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                             ConfigOptions.COORDINATOR_OFFLINE_LEADER_RETRY_DELAY.key(),
                             offlineLeaderRetryDelayMs));
         }
+        this.apiVersionsRetryBackoffMs =
+                conf.get(ConfigOptions.COORDINATOR_CONTROL_REQUEST_RETRY_BACKOFF).toMillis();
         this.scheduler = scheduler;
         this.ioExecutor = ioExecutor;
         this.lakeTableHelper = new LakeTableHelper(zooKeeperClient);
@@ -443,6 +448,7 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
 
         // init tablet server channels
         coordinatorChannelManager.startup(internalServerNodes);
+        tabletServerInfos.forEach(this::queryTabletServerApiVersions);
 
         // load server tags.
         zooKeeperClient
@@ -740,6 +746,25 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
             processNewCoordinator((NewCoordinatorEvent) event);
         } else if (event instanceof DeadCoordinatorEvent) {
             processDeadCoordinator((DeadCoordinatorEvent) event);
+        } else if (event instanceof TabletServerApiVersionsEvent) {
+            TabletServerApiVersionsEvent received = (TabletServerApiVersionsEvent) event;
+            if (coordinatorContext.getLiveTabletServers().get(received.getRegistration().id())
+                    != received.getRegistration()) {
+                return;
+            }
+            if (received.getResponse() == null) {
+                queryTabletServerApiVersions(received.getRegistration());
+            } else {
+                boolean supported =
+                        received.getResponse().getApiVersionsList().stream()
+                                .anyMatch(
+                                        api ->
+                                                api.getApiKey() == ApiKeys.PUT_INDEX.id
+                                                        && api.getMinVersion() <= 0
+                                                        && api.getMaxVersion() >= 0);
+                coordinatorContext.updateTabletServerIndexSupport(
+                        received.getRegistration(), supported);
+            }
         } else if (event instanceof NewTabletServerEvent) {
             processNewTabletServer((NewTabletServerEvent) event);
         } else if (event instanceof DeadTabletServerEvent) {
@@ -1441,6 +1466,30 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
         coordinatorContext.removeLiveCoordinator(coordinatorServerId);
     }
 
+    private void queryTabletServerApiVersions(ServerInfo registration) {
+        coordinatorChannelManager.sendApiVersionsRequest(
+                registration.id(),
+                (response, failure) -> {
+                    if (failure != null) {
+                        LOG.warn(
+                                "Could not check API versions for TabletServer {}. "
+                                        + "Indexed table creation remains blocked until support is confirmed.",
+                                registration.id(),
+                                failure);
+                        scheduler.scheduleOnce(
+                                "tablet-server-api-versions-" + registration.id(),
+                                () ->
+                                        coordinatorEventManager.put(
+                                                new TabletServerApiVersionsEvent(
+                                                        registration, null)),
+                                apiVersionsRetryBackoffMs);
+                    } else {
+                        coordinatorEventManager.put(
+                                new TabletServerApiVersionsEvent(registration, response));
+                    }
+                });
+    }
+
     private void processNewTabletServer(NewTabletServerEvent newTabletServerEvent) {
         // NOTE: we won't need to detect bounced tablet servers like Kafka as we won't
         // miss the event of tablet server un-register and register again since we can
@@ -1476,6 +1525,7 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
 
         ServerNode serverNode = serverInfo.nodeOrThrow(internalListenerName);
         coordinatorChannelManager.addTabletServer(serverNode);
+        queryTabletServerApiVersions(serverInfo);
 
         // update coordinatorServer metadata cache for the new added table server.
         serverMetadataCache.updateMetadata(
