@@ -174,15 +174,24 @@ public class MetadataManager {
     }
 
     /**
-     * Runs modifying table work on the calling thread. Conflicting DDL fails before reads or
-     * external side effects. The supplied view must be used for all nested metadata work.
+     * Runs modifying table work on the calling worker thread, waiting for conflicting DDL before
+     * reads or external side effects. The supplied view must be used for all nested metadata work.
      */
     public <T> T runTableDdl(TablePath tablePath, Function<MetadataManager, T> action) {
         if (ddlPermit != null) {
             ddlPermit.checkTable(tablePath);
             return action.apply(this);
         }
-        return runDdl(tablePath.getDatabaseName(), tablePath.getTableName(), action);
+        return runDdl(tablePath.getDatabaseName(), tablePath.getTableName(), action, true);
+    }
+
+    /** Runs background table work without waiting while maintenance locks may be held. */
+    <T> T tryRunTableDdl(TablePath tablePath, Function<MetadataManager, T> action) {
+        if (ddlPermit != null) {
+            ddlPermit.checkTable(tablePath);
+            return action.apply(this);
+        }
+        return runDdl(tablePath.getDatabaseName(), tablePath.getTableName(), action, false);
     }
 
     /** Runs modifying database work, excluding all modifying work in its child tables. */
@@ -191,12 +200,18 @@ public class MetadataManager {
             ddlPermit.checkDatabase(databaseName);
             return action.apply(this);
         }
-        return runDdl(databaseName, null, action);
+        return runDdl(databaseName, null, action, true);
     }
 
     private <T> T runDdl(
-            String databaseName, @Nullable String tableName, Function<MetadataManager, T> action) {
-        try (DdlAdmission.Permit permit = ddlAdmission.acquire(databaseName, tableName)) {
+            String databaseName,
+            @Nullable String tableName,
+            Function<MetadataManager, T> action,
+            boolean waitForAdmission) {
+        try (DdlAdmission.Permit permit =
+                waitForAdmission
+                        ? ddlAdmission.acquire(databaseName, tableName)
+                        : ddlAdmission.tryAcquire(databaseName, tableName)) {
             ZooKeeperMetadataOperation operation =
                     ddlContext == null ? null : ddlContext.beginOperation();
             MetadataManager scoped =
@@ -208,6 +223,9 @@ public class MetadataManager {
                             permit,
                             coordinatorZkVersion);
             return action.apply(scoped);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new FlussRuntimeException("Interrupted while waiting for DDL admission", e);
         } catch (RuntimeException e) {
             throw e;
         } catch (Exception e) {
@@ -1646,7 +1664,7 @@ public class MetadataManager {
             long expectedTableId,
             ResolvedPartitionSpec partition,
             boolean ignoreIfNotExists) {
-        runTableDdl(
+        tryRunTableDdl(
                 tablePath,
                 metadata -> {
                     if (metadata.getTableRegistration(tablePath).tableId != expectedTableId) {

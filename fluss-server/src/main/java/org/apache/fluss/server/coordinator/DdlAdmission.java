@@ -31,9 +31,17 @@ import java.util.Set;
 final class DdlAdmission {
     private final Map<String, DatabaseState> databases = new HashMap<>();
 
-    synchronized Permit acquire(String database, @Nullable String table) {
+    synchronized Permit acquire(String database, @Nullable String table)
+            throws InterruptedException {
+        while (conflicts(database, table)) {
+            wait();
+        }
+        return tryAcquire(database, table);
+    }
+
+    synchronized Permit tryAcquire(String database, @Nullable String table) {
         DatabaseState state = databases.get(database);
-        if (state != null && (state.exclusive || table == null || state.tables.contains(table))) {
+        if (conflicts(database, table)) {
             throw new OperationNotAttemptedException(
                     "Another DDL operation is modifying "
                             + (table == null ? database : database + "." + table)
@@ -49,6 +57,11 @@ final class DdlAdmission {
             state.tables.add(table);
         }
         return new Permit(database, table, state);
+    }
+
+    private boolean conflicts(String database, @Nullable String table) {
+        DatabaseState state = databases.get(database);
+        return state != null && (state.exclusive || table == null || state.tables.contains(table));
     }
 
     private static final class DatabaseState {
@@ -98,6 +111,7 @@ final class DdlAdmission {
                 if (!state.exclusive && state.tables.isEmpty()) {
                     databases.remove(database, state);
                 }
+                DdlAdmission.this.notifyAll();
             }
         }
     }

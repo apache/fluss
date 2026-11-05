@@ -38,8 +38,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
+import java.time.Duration;
 import java.util.Collections;
+import java.util.concurrent.CompletableFuture;
 
+import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -163,6 +166,46 @@ class MetadataManagerTest {
     }
 
     @Test
+    void testRequestWaitsForBackgroundTableDdl() throws Exception {
+        CompletableFuture<Long> created = new CompletableFuture<>();
+        Thread request =
+                new Thread(
+                        () -> {
+                            try {
+                                created.complete(
+                                        metadata.createTable(
+                                                table, "/table", descriptor, null, false));
+                            } catch (Throwable error) {
+                                created.completeExceptionally(error);
+                            }
+                        });
+        try {
+            metadata.runTableDdl(
+                    table,
+                    scoped -> {
+                        request.start();
+                        try {
+                            waitUntil(
+                                    () ->
+                                            created.isDone()
+                                                    || request.getState() == Thread.State.WAITING,
+                                    Duration.ofSeconds(10),
+                                    "Request neither waited for DDL nor completed");
+                        } catch (Exception error) {
+                            throw new RuntimeException(error);
+                        }
+                        assertThat(created).isNotDone();
+                        return null;
+                    });
+            long tableId = created.get();
+            assertThat(metadata.getTable(table).getTableId()).isEqualTo(tableId);
+        } finally {
+            request.interrupt();
+            request.join();
+        }
+    }
+
+    @Test
     void testScopeCoversNestedOperationsAndReleasesAfterFailure() {
         assertThatThrownBy(
                         () ->
@@ -172,7 +215,9 @@ class MetadataManagerTest {
                                             scoped.createTable(
                                                     table, "/table", descriptor, null, false);
                                             assertThatThrownBy(
-                                                            () -> metadata.dropTable(table, false))
+                                                            () ->
+                                                                    metadata.tryRunTableDdl(
+                                                                            table, other -> null))
                                                     .isInstanceOf(
                                                             OperationNotAttemptedException.class);
                                             scoped.dropTable(table, false);

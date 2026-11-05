@@ -254,7 +254,7 @@ public class AutoPartitionManager implements AutoCloseable {
     /** Creates the historical system partition if it does not already exist. */
     void createHistoricalPartition(TableInfo tableInfo) {
         checkNotClosed();
-        metadataManager.runTableDdl(
+        metadataManager.tryRunTableDdl(
                 tableInfo.getTablePath(),
                 scopedMetadata -> {
                     TableInfo currentTable = scopedMetadata.getTable(tableInfo.getTablePath());
@@ -476,7 +476,7 @@ public class AutoPartitionManager implements AutoCloseable {
             TablePath tablePath = tableInfo.getTablePath();
             Instant plannedCreateInstant = createPartitionInstant;
             try {
-                metadataManager.runTableDdl(
+                metadataManager.tryRunTableDdl(
                         tablePath,
                         scopedMetadata -> {
                             TableInfo currentTable = scopedMetadata.getTable(tablePath);
