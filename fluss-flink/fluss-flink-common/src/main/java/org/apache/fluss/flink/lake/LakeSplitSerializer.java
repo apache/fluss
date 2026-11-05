@@ -66,8 +66,10 @@ public class LakeSplitSerializer {
             LakeSnapshotAndFlussLogSplit lakeSnapshotAndFlussLogSplit =
                     ((LakeSnapshotAndFlussLogSplit) split);
             List<LakeSplit> lakeSplits = lakeSnapshotAndFlussLogSplit.getLakeSplits();
-            if (lakeSplits == null) {
-                // no snapshot data for the bucket
+            if (lakeSplits == null
+                    || (lakeSnapshotAndFlussLogSplit.isStreaming()
+                            && lakeSnapshotAndFlussLogSplit.isLakeSplitFinished())) {
+                // No lake snapshot data, or a completed streaming lake snapshot.
                 out.writeBoolean(false);
             } else {
                 out.writeBoolean(true);
