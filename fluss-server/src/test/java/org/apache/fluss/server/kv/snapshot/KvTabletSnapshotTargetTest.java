@@ -42,7 +42,6 @@ import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
 import org.apache.fluss.utils.CloseableRegistry;
 import org.apache.fluss.utils.FlussPaths;
-import org.apache.fluss.utils.concurrent.Executors;
 
 import io.github.fluss_contrib.rocksdb.RocksDB;
 import org.junit.jupiter.api.AfterEach;
@@ -51,6 +50,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 import javax.annotation.Nonnull;
 
@@ -68,6 +69,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -78,6 +80,7 @@ import static org.apache.fluss.server.zk.ZooKeeperUtils.startZookeeperClient;
 import static org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFrameworkFactory.Builder;
 import static org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFrameworkFactory.builder;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
+import static org.apache.fluss.utils.concurrent.Executors.directExecutor;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link KvTabletSnapshotTarget}. */
@@ -201,10 +204,21 @@ class KvTabletSnapshotTargetTest {
         }
     }
 
-    @Test
-    void testSnapshotFailure(@TempDir Path kvTabletDir) throws Exception {
+    @ParameterizedTest
+    @EnumSource(
+            value = SnapshotFailType.class,
+            names = {"SYNC_PHASE", "ASYNC_PHASE", "DIRECTORY_INITIALIZATION"})
+    void testSnapshotFailure(SnapshotFailType snapshotFailType, @TempDir Path kvTabletDir)
+            throws Exception {
+        AtomicInteger committedSnapshots = new AtomicInteger();
         CompletedSnapshotHandleStore completedSnapshotHandleStore =
-                TestCompletedSnapshotHandleStore.newBuilder().build();
+                TestCompletedSnapshotHandleStore.newBuilder()
+                        .setAddFunction(
+                                snapshot -> {
+                                    committedSnapshots.incrementAndGet();
+                                    return null;
+                                })
+                        .build();
         AtomicInteger mkdirsCalls = new AtomicInteger();
         AtomicInteger deleteCalls = new AtomicInteger();
         FileSystem remoteFileSystem =
@@ -212,7 +226,11 @@ class KvTabletSnapshotTargetTest {
                     @Override
                     public boolean mkdirs(FsPath path) throws IOException {
                         mkdirsCalls.incrementAndGet();
-                        return super.mkdirs(path);
+                        boolean created = super.mkdirs(path);
+                        if (snapshotFailType == SnapshotFailType.DIRECTORY_INITIALIZATION) {
+                            throw new IOException("Directory initialization failed after creation");
+                        }
+                        return created;
                     }
 
                     @Override
@@ -228,55 +246,37 @@ class KvTabletSnapshotTargetTest {
                         return remoteFileSystem;
                     }
                 };
-        // test fail in the sync phase of snapshot
         KvTabletSnapshotTarget kvTabletSnapshotTarget =
                 createSnapshotTarget(
-                        remoteKvTabletDir,
-                        completedSnapshotHandleStore,
-                        SnapshotFailType.SYNC_PHASE);
-        long snapshotId1 = 1;
-
-        periodicSnapshotManager = createSnapshotManager(kvTabletSnapshotTarget);
-        periodicSnapshotManager.start();
-        periodicSnapshotManager.triggerSnapshot();
-
-        // Native checkpoint failure must clean local files without creating or deleting remote
-        // directories. An absent remote directory alone would also pass after synchronous I/O.
-        assertThat(mkdirsCalls).hasValue(0);
-        assertThat(deleteCalls).hasValue(0);
-        assertThat(new File(rocksDBExtension.getRockDbDir(), "snap-" + snapshotId1)).doesNotExist();
-        assertThat(
-                        ((TestRocksIncrementalSnapshot)
-                                        kvTabletSnapshotTarget.getRocksIncrementalSnapshot())
-                                .abortedSnapshots)
-                .isEmpty();
-        periodicSnapshotManager.close();
-
-        // test fail in the async phase of snapshot
-        kvTabletSnapshotTarget =
-                createSnapshotTarget(
-                        remoteKvTabletDir,
-                        completedSnapshotHandleStore,
-                        SnapshotFailType.ASYNC_PHASE);
-        periodicSnapshotManager = createSnapshotManager(kvTabletSnapshotTarget);
-        periodicSnapshotManager.start();
-        periodicSnapshotManager.triggerSnapshot();
-        final long snapshotId2 = 2;
-
+                        remoteKvTabletDir, completedSnapshotHandleStore, snapshotFailType);
+        long snapshotId = 1;
         TestRocksIncrementalSnapshot rocksIncrementalSnapshot =
                 (TestRocksIncrementalSnapshot) kvTabletSnapshotTarget.getRocksIncrementalSnapshot();
-        FsPath snapshotPath2 = FlussPaths.remoteKvSnapshotDir(remoteKvTabletDir, snapshotId2);
-        // the snapshot1 will fail
-        retry(
-                Duration.ofMinutes(1),
-                () -> {
-                    assertThat(rocksIncrementalSnapshot.abortedSnapshots).contains(snapshotId2);
-                    // the snapshot dir should be discarded, the snapshotPath is disposed after
-                    // notify abort, so we have to assert the path doesn't exist in the retry
-                    assertThat(snapshotPath2.getFileSystem().exists(snapshotPath2)).isFalse();
-                });
-        // minRetainOffset shouldn't updated
-        assertThat(updateMinRetainOffsetConsumer.get()).isEqualTo(Long.MAX_VALUE);
+
+        periodicSnapshotManager = createSnapshotManager(kvTabletSnapshotTarget);
+        periodicSnapshotManager.start();
+        periodicSnapshotManager.triggerSnapshot();
+
+        if (snapshotFailType == SnapshotFailType.SYNC_PHASE) {
+            // Native preparation failure must not create or delete remote directories.
+            assertThat(mkdirsCalls).hasValue(0);
+            assertThat(deleteCalls).hasValue(0);
+            assertThat(rocksIncrementalSnapshot.abortedSnapshots).isEmpty();
+        } else {
+            FsPath snapshotPath = FlussPaths.remoteKvSnapshotDir(remoteKvTabletDir, snapshotId);
+            retry(
+                    Duration.ofMinutes(1),
+                    () -> {
+                        assertThat(rocksIncrementalSnapshot.abortedSnapshots).contains(snapshotId);
+                        // Remote cleanup follows the abort notification.
+                        assertThat(remoteFileSystem.exists(snapshotPath)).isFalse();
+                    });
+            assertThat(mkdirsCalls).hasValue(1);
+            assertThat(deleteCalls).hasValue(1);
+        }
+        assertThat(new File(rocksDBExtension.getRockDbDir(), "snap-" + snapshotId)).doesNotExist();
+        assertThat(committedSnapshots).hasValue(0);
+        assertThat(updateMinRetainOffsetConsumer).hasValue(Long.MAX_VALUE);
     }
 
     @Test
@@ -503,7 +503,7 @@ class KvTabletSnapshotTargetTest {
                 tableBucket,
                 target,
                 periodicMaterializeDelay,
-                java.util.concurrent.Executors.newFixedThreadPool(1),
+                Executors.newFixedThreadPool(1),
                 scheduledExecutorService);
     }
 
@@ -520,7 +520,7 @@ class KvTabletSnapshotTargetTest {
             throws IOException {
         TableBucket tableBucket = new TableBucket(1, 1);
         SharedKvFileRegistry sharedKvFileRegistry = new SharedKvFileRegistry();
-        Executor executor = Executors.directExecutor();
+        Executor executor = directExecutor();
 
         CompletedSnapshotStore completedSnapshotStore =
                 new CompletedSnapshotStore(
@@ -570,7 +570,7 @@ class KvTabletSnapshotTargetTest {
             CompletedKvSnapshotCommitter customCommitter)
             throws IOException {
         TableBucket tableBucket = new TableBucket(1, 1);
-        Executor executor = Executors.directExecutor();
+        Executor executor = directExecutor();
         RocksIncrementalSnapshot rocksIncrementalSnapshot =
                 createIncrementalSnapshot(SnapshotFailType.NONE);
         CloseableRegistry cancelStreamRegistry = new CloseableRegistry();
@@ -607,8 +607,7 @@ class KvTabletSnapshotTargetTest {
 
         RocksDB rocksDB = rocksDBExtension.getRocksDb();
 
-        ExecutorService downLoaderExecutor =
-                java.util.concurrent.Executors.newSingleThreadExecutor();
+        ExecutorService downLoaderExecutor = Executors.newSingleThreadExecutor();
 
         KvSnapshotDataUploader snapshotDataUploader =
                 new KvSnapshotDataUploader(downLoaderExecutor);
@@ -744,7 +743,8 @@ class KvTabletSnapshotTargetTest {
     private enum SnapshotFailType {
         NONE, // don't fail
         SYNC_PHASE, // fail in the sync phase
-        ASYNC_PHASE // fail in the async phase
+        ASYNC_PHASE, // fail in the async phase
+        DIRECTORY_INITIALIZATION // fail after creating the remote directory
     }
 
     /**
