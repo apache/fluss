@@ -27,6 +27,8 @@ import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.ApiMessage;
+import org.apache.fluss.rpc.messages.ApiVersionsRequest;
+import org.apache.fluss.rpc.messages.ApiVersionsResponse;
 import org.apache.fluss.rpc.messages.NotifyKvSnapshotOffsetRequest;
 import org.apache.fluss.rpc.messages.NotifyKvSnapshotOffsetResponse;
 import org.apache.fluss.rpc.messages.NotifyLakeTableOffsetRequest;
@@ -209,6 +211,21 @@ public class CoordinatorChannelManager {
         } catch (Throwable t) {
             LOG.error("Error tearing down channel state for tabletServer {}", serverId, t);
         }
+    }
+
+    /** Queries API versions using the existing transport retry and timeout policy. */
+    public void sendApiVersionsRequest(
+            int serverId, BiConsumer<ApiVersionsResponse, ? super Throwable> responseConsumer) {
+        enqueueRequest(
+                serverId,
+                ApiKeys.API_VERSIONS,
+                epochSupplier.getAsInt(),
+                gateway ->
+                        gateway.apiVersions(
+                                new ApiVersionsRequest()
+                                        .setClientSoftwareName("fluss")
+                                        .setClientSoftwareVersion("unknown")),
+                responseConsumer);
     }
 
     /** Send NotifyLeaderAndIsr request to the server and handle the response. */

@@ -113,7 +113,7 @@ class CoordinatorEventProcessorTestBase {
     void beforeEach() {
         serverMetadataCache = new CoordinatorMetadataCache();
         // set a test channel manager for the context
-        testCoordinatorChannelManager = new TestCoordinatorChannelManager();
+        testCoordinatorChannelManager = createCoordinatorChannelManager();
         lakeTableTieringManager =
                 new LakeTableTieringManager(TestingMetricGroups.LAKE_TIERING_METRICS);
         remoteDataDir = zookeeperClient.getDefaultRemoteDataDir();
@@ -151,6 +151,9 @@ class CoordinatorEventProcessorTestBase {
         if (eventProcessor != null) {
             eventProcessor.shutdown();
         }
+        if (testCoordinatorChannelManager != null) {
+            testCoordinatorChannelManager.close();
+        }
         if (scheduler != null) {
             scheduler.shutdown();
         }
@@ -158,6 +161,11 @@ class CoordinatorEventProcessorTestBase {
         // clear the assignment info for all tables;
         ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupPath(TableIdsZNode.path());
         ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupPath(PartitionIdsZNode.path());
+    }
+
+    /** Creates the channel manager owned and closed by this test. */
+    protected TestCoordinatorChannelManager createCoordinatorChannelManager() {
+        return new TestCoordinatorChannelManager();
     }
 
     protected CoordinatorEventProcessor buildCoordinatorEventProcessor() {

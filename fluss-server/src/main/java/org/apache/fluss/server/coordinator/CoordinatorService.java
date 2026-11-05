@@ -287,6 +287,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     private final int defaultReplicationFactor;
     private final boolean logTableAllowCreation;
     private final boolean kvTableAllowCreation;
+    private final Supplier<CoordinatorContext> coordinatorContextSupplier;
     private final Supplier<EventManager> eventManagerSupplier;
     private final Supplier<Integer> coordinatorEpochSupplier;
     private final Supplier<Integer> coordinatorZkVersionSupplier;
@@ -331,6 +332,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         this.defaultReplicationFactor = conf.getInt(ConfigOptions.DEFAULT_REPLICATION_FACTOR);
         this.logTableAllowCreation = conf.getBoolean(ConfigOptions.LOG_TABLE_ALLOW_CREATION);
         this.kvTableAllowCreation = conf.getBoolean(ConfigOptions.KV_TABLE_ALLOW_CREATION);
+        this.coordinatorContextSupplier =
+                () -> coordinatorEventProcessorSupplier.get().getCoordinatorContext();
         this.eventManagerSupplier =
                 () -> coordinatorEventProcessorSupplier.get().getCoordinatorEventManager();
         this.coordinatorEpochSupplier =
@@ -662,6 +665,12 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         metadataManager.validateTableDescriptor(tablePath, tableDescriptor);
 
         boolean hasIndexes = !tableDescriptor.getSchema().getIndexes().isEmpty();
+        if (ignoreIfExists && metadataManager.tableExists(tablePath)) {
+            return;
+        }
+        if (hasIndexes) {
+            coordinatorContextSupplier.get().checkIndexTableCreationSupported();
+        }
 
         // the distribution and bucket count must be set now
         //noinspection OptionalGetWithoutIsPresent
@@ -676,10 +685,6 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             int replicaFactor = tableDescriptor.getReplicationFactor();
             TabletServerInfo[] servers = metadataCache.getLiveServers();
             tableAssignment = generateAssignment(bucketCount, replicaFactor, servers);
-        }
-
-        if (ignoreIfExists && metadataManager.tableExists(tablePath)) {
-            return;
         }
 
         long tableId = -1L;

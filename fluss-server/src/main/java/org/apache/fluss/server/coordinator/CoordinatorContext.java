@@ -19,6 +19,7 @@ package org.apache.fluss.server.coordinator;
 
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.cluster.rebalance.ServerTag;
+import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
@@ -75,6 +76,9 @@ public class CoordinatorContext {
     // coordinator id -> registered address, for all live coordinators including the active one
     private final Map<String, CoordinatorAddress> liveCoordinatorServers = new HashMap<>();
     private final Map<Integer, ServerInfo> liveTabletServers = new HashMap<>();
+    // Written on the coordinator event thread, published atomically for RPC admission checks.
+    // False includes registrations whose API versions have not been received yet.
+    private volatile Map<Integer, Boolean> tabletServerIndexSupport = Collections.emptyMap();
     private final Set<Integer> shuttingDownTabletServers = new HashSet<>();
 
     // a map from the table bucket to the state of the bucket.
@@ -194,6 +198,9 @@ public class CoordinatorContext {
 
     @VisibleForTesting
     public void setLiveTabletServers(List<ServerInfo> servers) {
+        Map<Integer, Boolean> support = new HashMap<>();
+        servers.forEach(server -> support.put(server.id(), false));
+        tabletServerIndexSupport = Collections.unmodifiableMap(support);
         liveTabletServers.clear();
         servers.forEach(server -> liveTabletServers.put(server.id(), server));
     }
@@ -223,11 +230,44 @@ public class CoordinatorContext {
     }
 
     public void addLiveTabletServer(ServerInfo serverInfo) {
+        Map<Integer, Boolean> support = new HashMap<>(tabletServerIndexSupport);
+        support.put(serverInfo.id(), false);
+        tabletServerIndexSupport = Collections.unmodifiableMap(support);
         this.liveTabletServers.put(serverInfo.id(), serverInfo);
     }
 
     public void removeLiveTabletServer(int serverId) {
         this.liveTabletServers.remove(serverId);
+        Map<Integer, Boolean> support = new HashMap<>(tabletServerIndexSupport);
+        support.remove(serverId);
+        tabletServerIndexSupport = Collections.unmodifiableMap(support);
+    }
+
+    /** Records API support only for the registration that initiated the query. */
+    public void updateTabletServerIndexSupport(ServerInfo registration, boolean supported) {
+        if (liveTabletServers.get(registration.id()) != registration) {
+            return;
+        }
+        Map<Integer, Boolean> support = new HashMap<>(tabletServerIndexSupport);
+        support.put(registration.id(), supported);
+        tabletServerIndexSupport = Collections.unmodifiableMap(support);
+    }
+
+    /** Checks the published live-node snapshot. Safe to call from RPC threads. */
+    public void checkIndexTableCreationSupported() {
+        List<Integer> unsupported =
+                tabletServerIndexSupport.entrySet().stream()
+                        .filter(entry -> !entry.getValue())
+                        .map(Map.Entry::getKey)
+                        .sorted()
+                        .collect(Collectors.toList());
+        if (!unsupported.isEmpty()) {
+            throw new InvalidTableException(
+                    "Cannot create a table with secondary indexes: "
+                            + "TabletServers "
+                            + unsupported
+                            + " have not confirmed support for PUT_INDEX v0.");
+        }
     }
 
     public boolean isReplicaOnline(int serverId, TableBucket tableBucket) {
@@ -892,6 +932,7 @@ public class CoordinatorContext {
         tablesToBeDeleted.clear();
         clearTablesState();
         liveTabletServers.clear();
+        tabletServerIndexSupport = Collections.emptyMap();
         liveCoordinatorServers.clear();
         shuttingDownTabletServers.clear();
         serverTags.clear();
