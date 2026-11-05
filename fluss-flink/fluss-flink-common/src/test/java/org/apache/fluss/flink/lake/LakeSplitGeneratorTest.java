@@ -17,9 +17,11 @@
 
 package org.apache.fluss.flink.lake;
 
+import org.apache.fluss.client.initializer.NoStoppingOffsetsInitializer;
 import org.apache.fluss.client.initializer.OffsetsInitializer;
 import org.apache.fluss.client.metadata.LakeSnapshot;
 import org.apache.fluss.flink.lake.split.LakeSnapshotAndFlussLogSplit;
+import org.apache.fluss.flink.lake.split.LakeSnapshotSplit;
 import org.apache.fluss.flink.sink.testutils.TestAdminAdapter;
 import org.apache.fluss.flink.source.split.SourceSplitBase;
 import org.apache.fluss.lake.source.LakeSource;
@@ -37,16 +39,22 @@ import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.stream.Stream;
 
 import static org.apache.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFSET;
+import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -55,6 +63,10 @@ class LakeSplitGeneratorTest {
 
     /** Table-level bucket count, kept different from the per-partition counts used below. */
     private static final int TABLE_LEVEL_BUCKET_COUNT = 3;
+
+    private static final long TABLE_ID = 1L;
+    private static final PartitionInfo ACTIVE = partition(10L, "20260916");
+    private static final PartitionInfo HISTORICAL = partition(20L, HISTORICAL_PARTITION_VALUE);
 
     /**
      * Builds a {@link LakeSplitGenerator} for a partitioned primary-key table (schema: a INT, b
@@ -247,5 +259,143 @@ class LakeSplitGeneratorTest {
                                                 .get()
                                         : split.asLogSplit().getStoppingOffset().get())
                 .containsExactly(110L, 20L);
+    }
+
+    private static Stream<Arguments> historicalPartitionCases() {
+        return Stream.of(
+                Arguments.of("primary-key table with lake splits", true, true),
+                Arguments.of("primary-key table with all lake splits pruned", true, false),
+                Arguments.of("log table with lake splits", false, true),
+                Arguments.of("log table with all lake splits pruned", false, false));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("historicalPartitionCases")
+    void testHistoricalPartitionSplits(
+            String description, boolean primaryKey, boolean hasLakeSplits) throws Exception {
+        Map<TableBucket, Long> offsets = new HashMap<>();
+        for (int bucket = 0; bucket < 2; bucket++) {
+            offsets.put(new TableBucket(TABLE_ID, ACTIVE.getPartitionId(), bucket), 100L);
+        }
+        // Historical bucket 0 resumes at its tiered offset; bucket 1 starts from earliest.
+        offsets.put(new TableBucket(TABLE_ID, HISTORICAL.getPartitionId(), 0), 50L);
+        // Partition predicates may prune every lake split without changing the log offsets.
+        List<SourceSplitBase> splits =
+                generateSplits(
+                        primaryKey,
+                        hasLakeSplits
+                                ? Arrays.asList(
+                                        ACTIVE,
+                                        partition(1L, "20240101"),
+                                        partition(2L, "20240102"))
+                                : Collections.emptyList(),
+                        offsets);
+
+        // Both table types retain four log subscriptions. Log tables also have six independent
+        // lake splits; primary-key tables group the lake splits with the corresponding logs.
+        boolean hasIndependentLakeSplits = !primaryKey && hasLakeSplits;
+        assertThat(splits).hasSize(hasIndependentLakeSplits ? 10 : 4);
+        assertThat(splits)
+                .filteredOn(split -> !(split instanceof LakeSnapshotSplit))
+                .extracting(SourceSplitBase::getTableBucket)
+                .containsExactlyInAnyOrder(
+                        new TableBucket(TABLE_ID, ACTIVE.getPartitionId(), 0),
+                        new TableBucket(TABLE_ID, ACTIVE.getPartitionId(), 1),
+                        new TableBucket(TABLE_ID, HISTORICAL.getPartitionId(), 0),
+                        new TableBucket(TABLE_ID, HISTORICAL.getPartitionId(), 1));
+        if (hasIndependentLakeSplits) {
+            assertThat(splits)
+                    .filteredOn(split -> split instanceof LakeSnapshotSplit)
+                    .extracting(SourceSplitBase::getPartitionName)
+                    .containsExactlyInAnyOrder(
+                            ACTIVE.getPartitionName(),
+                            ACTIVE.getPartitionName(),
+                            "20240101",
+                            "20240101",
+                            "20240102",
+                            "20240102");
+        }
+        for (SourceSplitBase split : splits) {
+            if (split instanceof LakeSnapshotSplit) {
+                continue;
+            }
+            long expectedOffset = offsets.getOrDefault(split.getTableBucket(), EARLIEST_OFFSET);
+            if (!primaryKey) {
+                assertThat(split.isLogSplit()).isTrue();
+                assertThat(split.asLogSplit().getStartingOffset()).isEqualTo(expectedOffset);
+                continue;
+            }
+            assertThat(split).isInstanceOf(LakeSnapshotAndFlussLogSplit.class);
+            LakeSnapshotAndFlussLogSplit hybrid = (LakeSnapshotAndFlussLogSplit) split;
+            assertThat(hybrid.getStartingOffset()).isEqualTo(expectedOffset);
+            assertThat(hybrid.isLakeSplitFinished()).isEqualTo(!hasLakeSplits);
+            if (!hasLakeSplits) {
+                assertThat(hybrid.getLakeSplits()).isNull();
+                continue;
+            }
+            assertThat(hybrid.getLakeSplits())
+                    .allSatisfy(
+                            lakeSplit ->
+                                    assertThat(lakeSplit.bucket())
+                                            .isEqualTo(split.getTableBucket().getBucket()));
+            if (HISTORICAL_PARTITION_VALUE.equals(split.getPartitionName())) {
+                assertThat(hybrid.getLakeSplits())
+                        .extracting(LakeSplit::partition)
+                        .containsExactlyInAnyOrder(
+                                Collections.singletonList("20240101"),
+                                Collections.singletonList("20240102"));
+            } else {
+                assertThat(hybrid.getLakeSplits())
+                        .extracting(LakeSplit::partition)
+                        .containsExactly(Collections.singletonList(ACTIVE.getPartitionName()));
+            }
+        }
+    }
+
+    private List<SourceSplitBase> generateSplits(
+            boolean primaryKey, List<PartitionInfo> lakePartitions, Map<TableBucket, Long> offsets)
+            throws Exception {
+        TablePath tablePath = TablePath.of("db", "historical");
+        Schema.Builder schemaBuilder =
+                Schema.newBuilder().column("id", DataTypes.INT()).column("dt", DataTypes.STRING());
+        if (primaryKey) {
+            schemaBuilder.primaryKey("id", "dt");
+        }
+        TableInfo tableInfo =
+                TableInfo.of(
+                        tablePath,
+                        TABLE_ID,
+                        0,
+                        TableDescriptor.builder()
+                                .schema(schemaBuilder.build())
+                                .distributedBy(2, "id")
+                                .partitionedBy("dt")
+                                .build(),
+                        null,
+                        0,
+                        0);
+        TestAdminAdapter admin =
+                new TestAdminAdapter() {
+                    @Override
+                    public CompletableFuture<LakeSnapshot> getReadableLakeSnapshot(
+                            TablePath ignored) {
+                        return CompletableFuture.completedFuture(new LakeSnapshot(1L, offsets));
+                    }
+                };
+        LakeSplitGenerator generator =
+                new LakeSplitGenerator(
+                        tableInfo,
+                        admin,
+                        new TestingLakeSource(2, lakePartitions),
+                        new ZeroOffsetsRetriever(),
+                        new NoStoppingOffsetsInitializer(),
+                        2,
+                        () -> new HashSet<>(Arrays.asList(ACTIVE, HISTORICAL)));
+        return generator.generateHybridLakeFlussSplits();
+    }
+
+    private static PartitionInfo partition(long id, String value) {
+        return new PartitionInfo(
+                id, ResolvedPartitionSpec.fromPartitionValue("dt", value), null, 2);
     }
 }
