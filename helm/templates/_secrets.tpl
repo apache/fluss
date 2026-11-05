@@ -131,6 +131,13 @@ Usage:
 {{- $errMessages = append $errMessages "secrets.env entries require 'name', 'secretName' and 'key'." -}}
 {{- end -}}
 {{- end -}}
+{{- if .Values.tablet.readinessProbe.healthCheckAuth -}}
+{{- range .Values.secrets.env -}}
+{{- if eq .name "READINESS_HEALTH_CHECK_AUTH" -}}
+{{- $errMessages = append $errMessages "tablet.readinessProbe.healthCheckAuth conflicts with the secrets.env entry named READINESS_HEALTH_CHECK_AUTH; set only one." -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- $errMessages = without $errMessages "" -}}
 {{- join "\n" $errMessages -}}
 {{- end -}}
