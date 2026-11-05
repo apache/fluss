@@ -51,66 +51,69 @@ class HistoricalPartitionTaskExecutorTest {
         AtomicInteger waits = new AtomicInteger();
         executor.terminationResult =
                 () -> {
-                    assertThat(waits.incrementAndGet()).isOne();
+                    waits.incrementAndGet();
                     if (failure == ShutdownFailure.INTERRUPTED) {
                         throw new InterruptedException("Simulated shutdown interruption.");
                     }
                     return false; // Simulate TIMEOUT without actually waiting ten seconds.
                 };
 
-        try (HistoricalPartitionTaskExecutor taskExecutor =
-                new HistoricalPartitionTaskExecutor(configuration(1), executor)) {
-            CompletableFuture<String> request =
-                    taskExecutor.submit(() -> "accepted", () -> "throttled");
-            try {
-                // Neither timeout nor interruption should prevent the caller's remaining cleanup.
-                taskExecutor.close();
-                assertThat(request).isCancelled();
-                assertThat(taskExecutor.numInflightRequests()).isZero();
-                assertThat(executor.forcedShutdown).isFalse();
-                assertThat(Thread.currentThread().isInterrupted())
-                        .isEqualTo(failure == ShutdownFailure.INTERRUPTED);
-            } finally {
-                //noinspection ResultOfMethodCallIgnored -- clear the interrupt set by this test
-                Thread.interrupted();
-                executor.terminationResult = executor::isTerminated;
-                executor.runAll();
+        HistoricalPartitionTaskExecutor taskExecutor =
+                new HistoricalPartitionTaskExecutor(configuration(1), executor);
+        try {
+            CompletableFuture<String> request;
+            try (HistoricalPartitionTaskExecutor closingExecutor = taskExecutor) {
+                request = closingExecutor.submit(() -> "accepted", () -> "throttled");
             }
+
+            // Neither timeout nor interruption should prevent the caller's remaining cleanup.
+            assertThat(waits).hasValue(1);
+            assertThat(request).isCancelled();
+            assertThat(taskExecutor.numInflightRequests()).isZero();
+            assertThat(executor.forcedShutdown).isFalse();
+            assertThat(Thread.currentThread().isInterrupted())
+                    .isEqualTo(failure == ShutdownFailure.INTERRUPTED);
+        } finally {
+            //noinspection ResultOfMethodCallIgnored -- clear the interrupt set by this test
+            Thread.interrupted();
+            executor.runAll();
         }
     }
 
     @Test
     void testCloseRejectsQueuedAndNewRequests() {
         ManualExecutor executor = new ManualExecutor();
-        HistoricalPartitionTaskExecutor taskExecutor =
-                new HistoricalPartitionTaskExecutor(configuration(3), executor);
-        List<String> executed = new ArrayList<>();
-        CompletableFuture<Boolean> unordered =
-                taskExecutor.submit(() -> executed.add("unordered"), () -> false);
-        CompletableFuture<Boolean> first =
-                taskExecutor.submitOrdered("key", () -> executed.add("first"), () -> false);
-        CompletableFuture<Boolean> next =
-                taskExecutor.submitOrdered("key", () -> executed.add("next"), () -> false);
-        executor.terminationResult =
-                () -> {
-                    executor.runAll();
-                    return executor.isTerminated();
-                };
+        try (HistoricalPartitionTaskExecutor taskExecutor =
+                new HistoricalPartitionTaskExecutor(configuration(3), executor)) {
+            List<String> executed = new ArrayList<>();
+            CompletableFuture<Boolean> unordered =
+                    taskExecutor.submit(() -> executed.add("unordered"), () -> false);
+            CompletableFuture<Boolean> first =
+                    taskExecutor.submitOrdered("key", () -> executed.add("first"), () -> false);
+            CompletableFuture<Boolean> next =
+                    taskExecutor.submitOrdered("key", () -> executed.add("next"), () -> false);
+            executor.terminationResult =
+                    () -> {
+                        executor.runAll();
+                        return executor.isTerminated();
+                    };
 
-        taskExecutor.close();
+            taskExecutor.close();
 
-        assertThat(executed).isEmpty();
-        assertThatThrownBy(unordered::join).hasCauseInstanceOf(RejectedExecutionException.class);
-        assertThatThrownBy(first::join).hasCauseInstanceOf(RejectedExecutionException.class);
-        assertThatThrownBy(next::join).hasCauseInstanceOf(RejectedExecutionException.class);
-        assertThat(taskExecutor.numInflightRequests()).isZero();
-        assertThatThrownBy(() -> taskExecutor.submit(() -> "accepted", () -> "throttled"))
-                .isInstanceOf(RejectedExecutionException.class);
-        assertThatThrownBy(
-                        () ->
-                                taskExecutor.submitOrdered(
-                                        "key", () -> "accepted", () -> "throttled"))
-                .isInstanceOf(RejectedExecutionException.class);
+            assertThat(executed).isEmpty();
+            assertThatThrownBy(unordered::join)
+                    .hasCauseInstanceOf(RejectedExecutionException.class);
+            assertThatThrownBy(first::join).hasCauseInstanceOf(RejectedExecutionException.class);
+            assertThatThrownBy(next::join).hasCauseInstanceOf(RejectedExecutionException.class);
+            assertThat(taskExecutor.numInflightRequests()).isZero();
+            assertThatThrownBy(() -> taskExecutor.submit(() -> "accepted", () -> "throttled"))
+                    .isInstanceOf(RejectedExecutionException.class);
+            assertThatThrownBy(
+                            () ->
+                                    taskExecutor.submitOrdered(
+                                            "key", () -> "accepted", () -> "throttled"))
+                    .isInstanceOf(RejectedExecutionException.class);
+        }
     }
 
     @Test

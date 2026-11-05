@@ -1087,30 +1087,34 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
         ExecutorService executor = Executors.newSingleThreadExecutor();
         CountDownLatch lookupStarted = new CountDownLatch(1);
         CountDownLatch finishLookup = new CountDownLatch(1);
-        try (HistoricalPartitionManager manager =
-                new HistoricalPartitionManager(
-                        new HistoricalPartitionTaskExecutor(lookupConfiguration(), executor),
-                        lakeLookupManager)) {
-            // Open the WAL first so a later interrupted write would damage the shared channel.
-            writeBatch(
-                    manager,
-                    replica,
-                    ORIGINAL_PARTITION,
-                    batch(tableInfo.getRowType(), upsert(2, "eu", ORIGINAL_PARTITION, "existing")));
-            long logEndOffset = replica.getLogTablet().localLogEndOffset();
-            lakeLookupManager.setLookupHook(
-                    () -> {
-                        lookupStarted.countDown();
-                        try {
-                            finishLookup.await();
-                        } catch (InterruptedException e) {
-                            // Model a lookup that returns normally with the interrupt flag set.
-                            Thread.currentThread().interrupt();
-                        }
-                    });
+        try {
+            long logEndOffset;
+            CompletableFuture<PutKvResultForBucket> request;
+            try (HistoricalPartitionManager manager =
+                    new HistoricalPartitionManager(
+                            new HistoricalPartitionTaskExecutor(lookupConfiguration(), executor),
+                            lakeLookupManager)) {
+                // Open the WAL first so a later interrupted write would damage the shared channel.
+                writeBatch(
+                        manager,
+                        replica,
+                        ORIGINAL_PARTITION,
+                        batch(
+                                tableInfo.getRowType(),
+                                upsert(2, "eu", ORIGINAL_PARTITION, "existing")));
+                logEndOffset = replica.getLogTablet().localLogEndOffset();
+                lakeLookupManager.setLookupHook(
+                        () -> {
+                            lookupStarted.countDown();
+                            try {
+                                finishLookup.await();
+                            } catch (InterruptedException e) {
+                                // Model a lookup that returns normally with the interrupt flag set.
+                                Thread.currentThread().interrupt();
+                            }
+                        });
 
-            try {
-                CompletableFuture<PutKvResultForBucket> request =
+                request =
                         manager.putKv(
                                 replica,
                                 new PutKvDataForBucket(
@@ -1123,23 +1127,22 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
                                 MergeMode.DEFAULT,
                                 1);
                 assertThat(lookupStarted.await(10, TimeUnit.SECONDS)).isTrue();
-                manager.close();
-
-                // Wait for actual termination: the old shutdown cancelled the request future
-                // before the interrupted task finished attempting its WAL write.
-                assertThat(executor.awaitTermination(10, TimeUnit.SECONDS)).isTrue();
-                replica.getLogTablet().flush(true);
-                assertThat(request.get(10, TimeUnit.SECONDS).failed()).isTrue();
-                assertThat(replica.getLogTablet().localLogEndOffset()).isEqualTo(logEndOffset);
-
-                logManager.shutdown();
-                logManager = null;
-                assertThat(new File(tempDir, ".fluss_cleanshutdown")).exists();
-            } finally {
-                finishLookup.countDown();
-                executor.shutdown();
-                assertThat(executor.awaitTermination(10, TimeUnit.SECONDS)).isTrue();
             }
+
+            // Wait for actual termination: the old shutdown cancelled the request future
+            // before the interrupted task finished attempting its WAL write.
+            assertThat(executor.awaitTermination(10, TimeUnit.SECONDS)).isTrue();
+            replica.getLogTablet().flush(true);
+            assertThat(request.get(10, TimeUnit.SECONDS).failed()).isTrue();
+            assertThat(replica.getLogTablet().localLogEndOffset()).isEqualTo(logEndOffset);
+
+            logManager.shutdown();
+            logManager = null;
+            assertThat(new File(tempDir, ".fluss_cleanshutdown")).exists();
+        } finally {
+            finishLookup.countDown();
+            executor.shutdown();
+            assertThat(executor.awaitTermination(10, TimeUnit.SECONDS)).isTrue();
         }
     }
 
