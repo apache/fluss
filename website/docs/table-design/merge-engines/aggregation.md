@@ -1381,6 +1381,16 @@ For example, an aggregation table can configure `fields.maximum.ignore-retract=t
 
 `sink.enable-retract` defaults to `false`. In this default mode, Flink keeps the existing upsert changelog negotiation: UPDATE_BEFORE is excluded, and DELETE follows the existing delete path. Existing jobs do not acquire field retract semantics automatically.
 
+For contribution-based aggregation writes, set the following Flink SQL TableConfig before submitting the INSERT statement, matching [Paimon's aggregation recommendation](https://paimon.apache.org/docs/2.1/primary-key-table/merge-engine/aggregation/):
+
+```sql
+SET 'table.exec.sink.upsert-materialize' = 'NONE';
+```
+
+The sink upsert materializer maintains an upsert view for each target primary key. It can suppress a contribution's retraction or re-emit an older row, which Fluss then treats as another contribution. Disabling it preserves the input contribution changelog. Pure INSERT queries and queries whose inferred upsert key matches the target primary key may already plan without materialization under `AUTO`.
+
+In Flink 2.3, a direct SELECT from independently keyed source rows into one aggregation key can fail planning under `AUTO` with the default `table.exec.sink.require-on-conflict=true`. Setting materialization to `NONE` permits this query while retaining that default. Setting only `require-on-conflict=false` can still insert the materializer and produce incorrect aggregates.
+
 For an aggregation sink with `sink.enable-retract=true`:
 
 | Changelog kind | Operation |

@@ -1859,7 +1859,6 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
     @Test
     @MultiVersionTest
     void testDirectContributionsFromDistinctRowsShareAggregationKey() throws Exception {
-        disableSinkRequireOnConflict();
         tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
         // Preserve contributions from distinct source rows through the sink.
         tEnv.getConfig().set("table.exec.sink.upsert-materialize", "NONE");
