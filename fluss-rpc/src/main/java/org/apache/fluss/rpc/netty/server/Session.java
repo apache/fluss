@@ -18,9 +18,12 @@
 package org.apache.fluss.rpc.netty.server;
 
 import org.apache.fluss.security.acl.FlussPrincipal;
+import org.apache.fluss.shaded.guava32.com.google.common.collect.ImmutableList;
 
 import java.io.Serializable;
 import java.net.InetAddress;
+import java.util.Collections;
+import java.util.List;
 
 /** The connection session of a request. */
 public class Session implements Serializable {
@@ -28,7 +31,7 @@ public class Session implements Serializable {
     private final String listenerName;
     private final boolean isInternal;
     private final InetAddress inetAddress;
-    private final FlussPrincipal principal;
+    private final List<FlussPrincipal> principals;
 
     public Session(
             short apiVersion,
@@ -36,11 +39,26 @@ public class Session implements Serializable {
             boolean isInternal,
             InetAddress inetAddress,
             FlussPrincipal principal) {
+        this(
+                apiVersion,
+                listenerName,
+                isInternal,
+                inetAddress,
+                Collections.singletonList(principal));
+    }
+
+    /** Creates a session with an immutable snapshot of the authenticated principals. */
+    public Session(
+            short apiVersion,
+            String listenerName,
+            boolean isInternal,
+            InetAddress inetAddress,
+            Iterable<FlussPrincipal> principals) {
         this.apiVersion = apiVersion;
         this.listenerName = listenerName;
         this.isInternal = isInternal;
         this.inetAddress = inetAddress;
-        this.principal = principal;
+        this.principals = ImmutableList.copyOf(principals);
     }
 
     public short getApiVersion() {
@@ -55,8 +73,14 @@ public class Session implements Serializable {
         return inetAddress;
     }
 
+    /** Returns the client identity used for logging, user metrics, and resource ownership. */
     public FlussPrincipal getPrincipal() {
-        return principal;
+        return principals.isEmpty() ? null : principals.get(0);
+    }
+
+    /** Returns all authenticated principals used for authorization. */
+    public List<FlussPrincipal> getPrincipals() {
+        return principals;
     }
 
     public boolean isInternal() {

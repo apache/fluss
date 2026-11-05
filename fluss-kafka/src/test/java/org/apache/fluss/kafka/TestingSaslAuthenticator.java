@@ -21,6 +21,8 @@ import org.apache.fluss.exception.AuthenticationException;
 import org.apache.fluss.security.acl.FlussPrincipal;
 import org.apache.fluss.security.auth.ServerAuthenticator;
 
+import java.util.Collections;
+
 /** Controllable authenticator for failure cleanup and request identity tests. */
 public class TestingSaslAuthenticator implements ServerAuthenticator {
     private final FlussPrincipal principal;
@@ -69,8 +71,8 @@ public class TestingSaslAuthenticator implements ServerAuthenticator {
     }
 
     @Override
-    public FlussPrincipal createPrincipal() {
-        return principal;
+    public Iterable<FlussPrincipal> createPrincipals() {
+        return Collections.singletonList(principal);
     }
 
     @Override

@@ -50,6 +50,7 @@ import org.slf4j.LoggerFactory;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.util.ArrayDeque;
+import java.util.Collections;
 import java.util.Deque;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -133,7 +134,9 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
                             buffer,
                             listenerName,
                             isInternal,
-                            authenticator.isCompleted() ? authenticator.createPrincipal() : null,
+                            authenticator.isCompleted()
+                                    ? authenticator.createPrincipals()
+                                    : Collections.emptyList(),
                             ((InetSocketAddress) ctx.channel().remoteAddress()).getAddress(),
                             future);
 

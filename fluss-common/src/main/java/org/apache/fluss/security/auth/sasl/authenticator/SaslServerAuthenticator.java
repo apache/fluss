@@ -94,8 +94,8 @@ public class SaslServerAuthenticator implements ServerAuthenticator {
     }
 
     @Override
-    public FlussPrincipal createPrincipal() {
-        return delegate.createPrincipal();
+    public Iterable<FlussPrincipal> createPrincipals() {
+        return delegate.createPrincipals();
     }
 
     @Override

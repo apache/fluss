@@ -197,7 +197,7 @@ public final class KafkaSaslConnection implements AutoCloseable {
         try {
             byte[] challenge = authenticator.evaluateResponse(checkNotNull(token));
             if (authenticator.isCompleted()) {
-                principal = checkNotNull(authenticator.createPrincipal());
+                principal = checkNotNull(authenticator.createPrincipals().iterator().next());
                 state = State.READY;
                 closeAuthenticator(authenticator);
                 authenticator = null;
