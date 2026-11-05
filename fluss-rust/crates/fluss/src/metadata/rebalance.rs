@@ -17,8 +17,8 @@
 
 use crate::error::{Error, Result};
 use crate::proto::{
-    ListRebalanceProgressResponse, PbRebalancePlanForBucket, PbRebalanceProgressForBucket,
-    PbRebalanceProgressForTable,
+    ListRebalanceProgressResponse, PbRebalanceInfo, PbRebalancePlanForBucket,
+    PbRebalanceProgressForBucket, PbRebalanceProgressForTable,
 };
 use crate::{BucketId, PartitionId, TableId};
 
@@ -127,6 +127,10 @@ pub struct RebalanceProgress {
     pub rebalance_id: Option<String>,
     pub rebalance_status: Option<RebalanceStatus>,
     pub table_progress: Vec<TableRebalanceProgress>,
+    /// Epoch millis when the rebalance started; `None` from servers that predate the field.
+    pub started_at_ms: Option<i64>,
+    /// Epoch millis when the rebalance reached a final status; `None` while it is running.
+    pub completed_at_ms: Option<i64>,
 }
 
 impl RebalanceProgress {
@@ -142,6 +146,28 @@ impl RebalanceProgress {
                 .iter()
                 .map(TableRebalanceProgress::from_pb)
                 .collect::<Result<Vec<_>>>()?,
+            started_at_ms: pb.started_at_ms,
+            completed_at_ms: pb.completed_at_ms,
+        })
+    }
+}
+
+/// One entry of `list_rebalances`. Mirrors Java `org.apache.fluss.cluster.rebalance.RebalanceInfo`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RebalanceInfo {
+    pub rebalance_id: String,
+    pub rebalance_status: RebalanceStatus,
+    pub started_at_ms: Option<i64>,
+    pub completed_at_ms: Option<i64>,
+}
+
+impl RebalanceInfo {
+    pub fn from_pb(pb: &PbRebalanceInfo) -> Result<Self> {
+        Ok(Self {
+            rebalance_id: pb.rebalance_id.clone(),
+            rebalance_status: RebalanceStatus::try_from_i32(pb.rebalance_status)?,
+            started_at_ms: pb.started_at_ms,
+            completed_at_ms: pb.completed_at_ms,
         })
     }
 }
@@ -183,5 +209,46 @@ mod tests {
         assert_eq!(p.bucket_id, 2);
         assert_eq!(p.new_leader, Some(4));
         assert_eq!(p.new_replicas, vec![4, 5, 6]);
+    }
+
+    #[test]
+    fn test_rebalance_progress_from_pb_keeps_timestamps() {
+        let pb = ListRebalanceProgressResponse {
+            rebalance_id: Some("r1".to_string()),
+            rebalance_status: Some(RebalanceStatus::Rebalancing.to_i32()),
+            table_progress: vec![],
+            started_at_ms: Some(5),
+            completed_at_ms: None,
+        };
+        let p = RebalanceProgress::from_pb(&pb).unwrap();
+        assert_eq!(p.started_at_ms, Some(5));
+        assert_eq!(p.completed_at_ms, None);
+    }
+
+    #[test]
+    fn test_rebalance_info_from_pb() {
+        let pb = PbRebalanceInfo {
+            rebalance_id: "r1".to_string(),
+            rebalance_status: RebalanceStatus::Completed.to_i32(),
+            started_at_ms: Some(1),
+            completed_at_ms: Some(2),
+        };
+        let info = RebalanceInfo::from_pb(&pb).unwrap();
+        assert_eq!(
+            info,
+            RebalanceInfo {
+                rebalance_id: "r1".to_string(),
+                rebalance_status: RebalanceStatus::Completed,
+                started_at_ms: Some(1),
+                completed_at_ms: Some(2),
+            }
+        );
+        assert!(
+            RebalanceInfo::from_pb(&PbRebalanceInfo {
+                rebalance_status: 99,
+                ..pb
+            })
+            .is_err()
+        );
     }
 }

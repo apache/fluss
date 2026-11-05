@@ -72,6 +72,7 @@ pub enum ApiKey {
     GetClusterHealth,           // 1062
     ListRemoteLogManifests,     // 1063
     ListKvSnapshots,            // 1064
+    ListRebalances,             // 1076
     Unknown(i16),
 }
 
@@ -125,7 +126,8 @@ impl ApiKey {
             | ApiKey::ScanKv
             | ApiKey::GetClusterHealth
             | ApiKey::ListRemoteLogManifests
-            | ApiKey::ListKvSnapshots => Some(ApiVersionRange::new(ApiVersion(0), ApiVersion(0))),
+            | ApiKey::ListKvSnapshots
+            | ApiKey::ListRebalances => Some(ApiVersionRange::new(ApiVersion(0), ApiVersion(0))),
             // v1 declares that the client can decode tagged persisted KV values.
             ApiKey::GetKvSnapshotMetadata => Some(ApiVersionRange::new(
                 ApiVersion(0),
@@ -204,6 +206,7 @@ impl From<i16> for ApiKey {
             1062 => ApiKey::GetClusterHealth,
             1063 => ApiKey::ListRemoteLogManifests,
             1064 => ApiKey::ListKvSnapshots,
+            1076 => ApiKey::ListRebalances,
 
             _ => Unknown(key),
         }
@@ -265,6 +268,7 @@ impl From<ApiKey> for i16 {
             ApiKey::GetClusterHealth => 1062,
             ApiKey::ListRemoteLogManifests => 1063,
             ApiKey::ListKvSnapshots => 1064,
+            ApiKey::ListRebalances => 1076,
             Unknown(x) => x,
         }
     }
@@ -329,6 +333,7 @@ mod tests {
             (1062, ApiKey::GetClusterHealth),
             (1063, ApiKey::ListRemoteLogManifests),
             (1064, ApiKey::ListKvSnapshots),
+            (1076, ApiKey::ListRebalances),
         ];
 
         for (raw, key) in cases {
