@@ -632,7 +632,9 @@ class KafkaProduceRegressionITCase {
                 new RebalanceTask(
                         rebalanceId,
                         RebalanceStatus.NOT_STARTED,
-                        Collections.singletonMap(bucket, plan));
+                        Collections.singletonMap(bucket, plan),
+                        -1,
+                        -1);
         // Submit a deterministic leader-only plan through the coordinator event thread.
         // All replicas and their client connections remain online during the real handoff.
         CLUSTER.getZooKeeperClient().registerRebalanceTask(task);
