@@ -32,13 +32,17 @@ for attempt in range(30):
             },
         )
         table = dataset.to_table()
-        assert table.num_rows == 3, table.num_rows
-        assert sorted(table.column("event_id").to_pylist()) == [1001, 1002, 1003]
-        assert table.column("item_id").to_pylist().count(101) == 2
-        assert str(table.schema.field("embedding").type.value_type).lower() in (
+        if table.num_rows != 3:
+            raise AssertionError("Expected 3 rows, got %s" % table.num_rows)
+        if sorted(table.column("event_id").to_pylist()) != [1001, 1002, 1003]:
+            raise AssertionError("Unexpected event IDs")
+        if table.column("item_id").to_pylist().count(101) != 2:
+            raise AssertionError("Expected two rows for item 101")
+        if str(table.schema.field("embedding").type.value_type).lower() not in (
             "float",
             "double",
-        )
+        ):
+            raise AssertionError("Expected a float embedding")
         print(table)
         break
     except Exception:

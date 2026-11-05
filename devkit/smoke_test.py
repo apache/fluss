@@ -84,7 +84,8 @@ class CoreSmoke(ProfileSmoke):
         self.assertRegex(
             output,
             r"(?m)^\|[ \t]*1[ \t]*\|[ \t]*10[ \t]*\|"
-            r"[ \t]*login[ \t]*\|[ \t]*alpha[ \t]*\|",
+            r"[ \t]*login[ \t]*\|[ \t]*alpha[ \t]*\|"
+            r"[ \t]*2026-01-01 00:00:00\.000[ \t]*\|$",
         )
         self.assertRegex(
             output,
@@ -125,7 +126,13 @@ class GatewaySmoke(ProfileSmoke):
         )
         table = self.request("GET", "tables/gateway_events")
         self.assertEqual((table["database"], table["table"]), ("fluss", "gateway_events"))
-        self.assertEqual([column["name"] for column in table["columns"]], ["event_id", "message"])
+        self.assertEqual(
+            [
+                (column["name"], column["data_type"]["type"], column["nullable"])
+                for column in table["columns"]
+            ],
+            [("event_id", "BIGINT", False), ("message", "STRING", False)],
+        )
 
         result = self.request(
             "POST",
@@ -137,6 +144,7 @@ class GatewaySmoke(ProfileSmoke):
             },
         )
         self.assertEqual((result["success_count"], result["error_count"]), (1, 0))
+        self.assertEqual(len(result["successes"]), 1)
         self.assertEqual(result["successes"][0]["id"], "event-1")
 
 
@@ -145,7 +153,13 @@ class PaimonLakeSmoke(ProfileSmoke):
 
     def test_lake_read(self):
         self.sql("examples/lake/paimon/setup.sql")
-        self.sql("examples/lake/paimon/union-read.sql")
+        output = self.sql("examples/lake/paimon/union-read.sql")
+        self.assertRegex(
+            output, r"(?m)^\|[ \t]*1[ \t]*\|[ \t]*login[ \t]*\|[ \t]*alpha[ \t]*\|$"
+        )
+        self.assertRegex(
+            output, r"(?m)^\|[ \t]*1[ \t]*\|[ \t]*Alice[ \t]*\|[ \t]*gold[ \t]*\|$"
+        )
         self.wait_for_sql(
             "examples/lake/paimon/lake-only-read.sql",
             r"(?m)^\|[ \t]*1[ \t]*\|[ \t]*Alice[ \t]*\|[ \t]*gold[ \t]*\|$",
