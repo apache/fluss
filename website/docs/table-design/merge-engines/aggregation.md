@@ -1331,6 +1331,14 @@ The Java client exposes three distinct operations:
 
 For example, after `upsert((1, 10))` on a SUM field, `retract((1, 3))` produces `(1, 7)`. Calling `delete((1, 3))` instead requests deletion according to `table.delete.behavior` and the writer's target columns; it does not subtract `3`.
 
+### Input Determinism
+
+To remove or replace a source record, retract its previous primary key and the original contribution to each participating target field. For a key-changing update, retract the contribution under the old key and upsert the contribution under the new key.
+
+Lookup joins against changing dimension data and non-deterministic expressions can produce different values when an old source row is evaluated again. With `amount = 10` and a lookup rate of `2`, a SUM field receives `20`. If the rate changes to `3` and the pipeline recomputes the old contribution, it retracts `30`, leaving `-10`. Removing the original contribution requires retracting `20`.
+
+Flink's `table.optimizer.non-deterministic-update.strategy = TRY_RESOLVE` can add lookup materialization according to the query plan. For the actual query, inspect the physical plan and verify that UPDATE_BEFORE and DELETE carry the original contributions as dimension data changes. See [Flink's determinism guidance](https://nightlies.apache.org/flink/flink-docs-release-2.3/docs/concepts/sql-table-concepts/determinism/).
+
 ### Field Rules
 
 | Function | Retract rule |
