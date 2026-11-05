@@ -68,6 +68,7 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.NotThreadSafe;
 
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Optional;
 import java.util.Set;
@@ -453,7 +454,16 @@ public final class KvWriteProcessor {
                     }
                     BinaryValue oldValue =
                             getPreviousValue(key, primaryKey, stateAccessor, historicalValueLookup);
-                    BinaryValue newValue = currentMerger.retract(oldValue, value);
+                    BinaryValue newValue;
+                    try {
+                        newValue = currentMerger.retract(oldValue, value);
+                    } catch (InvalidRecordException e) {
+                        throw new InvalidRecordException(
+                                String.format(
+                                        "Cannot retract record in %s with encoded primary key %s: %s",
+                                        tableBucket, Arrays.toString(primaryKey), e.getMessage()),
+                                e);
+                    }
                     if (oldValue == null) {
                         logOffset =
                                 applyInsert(

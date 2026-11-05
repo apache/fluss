@@ -1348,6 +1348,14 @@ Primary keys are retained. For partial writes, only target value fields are retr
 
 Zero, a product of one, empty arrays or maps, and all-null aggregate fields do not imply that the record should be removed. Retraction retains the row, including a row whose only non-null fields are its primary key. Explicit deletion has separate rules described below.
 
+### Arithmetic Failures
+
+An arithmetic failure while retracting a field rejects the write batch with `InvalidRecordException`. The error identifies the field, aggregation function, table ID, bucket and encoded primary key, and includes the arithmetic failure reason. Valid writes to other keys in the same batch also fail.
+
+For example, a `DECIMAL(10, 2)` PRODUCT accumulator stores `1.33 * 1.33` as `1.77`. Retracting `1.33` then requires the non-terminating division `1.77 / 1.33`, which fails under the exact division rules shared with Paimon 2.1.0.
+
+In a Flink job, the failed write causes task failure. Recovery can replay the same contribution and fail again until the input or computation is corrected. Locate the record using the error context and inspect its field values and numeric constraints.
+
 ### Table Options
 
 | Option | Default | Meaning |

@@ -67,6 +67,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -76,7 +77,6 @@ import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.as
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.collectRowsWithTimeout;
 import static org.apache.fluss.flink.utils.FlinkTestBase.waitUntilPartitions;
 import static org.apache.fluss.server.testutils.FlussClusterExtension.BUILTIN_DATABASE;
-import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -1915,13 +1915,10 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         }
     }
 
-    private static void waitForJobTermination(JobClient jobClient) {
-        // Subsequent tests share the mini-cluster and need the cancelled job's slots.
-        waitUntil(
-                () -> jobClient.getJobStatus().get().isTerminalState(),
-                Duration.ofSeconds(30),
-                Duration.ofMillis(100),
-                "Timed out waiting for Flink job termination");
+    private static void waitForJobTermination(JobClient jobClient) throws Exception {
+        // Cancellation completes exceptionally. The result future also works after a local
+        // job has shut down its mini-cluster, when status queries are no longer available.
+        jobClient.getJobExecutionResult().handle((result, error) -> null).get(30, TimeUnit.SECONDS);
     }
 
     private InsertAndExpectValues rowsToInsertInto(Collection<String> partitions) {

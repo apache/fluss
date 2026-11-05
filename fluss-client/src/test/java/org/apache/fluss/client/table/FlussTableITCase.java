@@ -34,6 +34,7 @@ import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
+import org.apache.fluss.exception.InvalidRecordException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.TestFileSystem;
 import org.apache.fluss.metadata.AggFunctions;
@@ -54,6 +55,7 @@ import org.apache.fluss.row.GenericMap;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.ProjectedRow;
+import org.apache.fluss.row.encode.KeyEncoder;
 import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.row.indexed.IndexedRow;
 import org.apache.fluss.types.BigIntType;
@@ -72,6 +74,7 @@ import javax.annotation.Nullable;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -2205,6 +2208,46 @@ class FlussTableITCase extends ClientToServerITCaseBase {
             InternalRow zeroResult = lookupRow(lookuper, row(2));
             assertThat(zeroResult).isNotNull();
             assertThat(zeroResult.getLong(1)).isZero();
+        }
+    }
+
+    @Test
+    void testRetractArithmeticFailureIdentifiesRecord() throws Exception {
+        TablePath tablePath = TablePath.of("test_db_1", "test_retract_arithmetic_failure");
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("factor", DataTypes.BIGINT(), AggFunctions.PRODUCT())
+                        .primaryKey("id")
+                        .build();
+        createTable(
+                tablePath,
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .property(ConfigOptions.TABLE_MERGE_ENGINE, MergeEngineType.AGGREGATION)
+                        .build(),
+                false);
+
+        try (Table table = conn.getTable(tablePath)) {
+            UpsertWriter writer = table.newUpsert().createWriter();
+            writer.upsert(row(1, 12L)).get();
+            TableInfo tableInfo = table.getTableInfo();
+            byte[] encodedKey =
+                    KeyEncoder.ofPrimaryKeyEncoder(
+                                    tableInfo.getRowType(),
+                                    tableInfo.getPhysicalPrimaryKeys(),
+                                    tableInfo.getTableConfig(),
+                                    tableInfo.isDefaultBucketKey())
+                            .encodeKey(row(1, 0L));
+            assertThatThrownBy(() -> writer.retract(row(1, 0L)).get())
+                    .rootCause()
+                    .isInstanceOf(InvalidRecordException.class)
+                    .hasMessageContaining("tableId=" + table.getTableInfo().getTableId())
+                    .hasMessageContaining("encoded primary key " + Arrays.toString(encodedKey))
+                    .hasMessageContaining("factor")
+                    .hasMessageContaining("product");
+            assertThat(lookupRow(table.newLookup().createLookuper(), row(1)).getLong(1))
+                    .isEqualTo(12L);
         }
     }
 

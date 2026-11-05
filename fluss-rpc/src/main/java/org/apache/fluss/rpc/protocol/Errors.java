@@ -47,6 +47,7 @@ import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidDatabaseException;
 import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.exception.InvalidProducerIdException;
+import org.apache.fluss.exception.InvalidRecordException;
 import org.apache.fluss.exception.InvalidReplicationFactorException;
 import org.apache.fluss.exception.InvalidRequiredAcksException;
 import org.apache.fluss.exception.InvalidScanRequestException;
@@ -319,7 +320,8 @@ public enum Errors {
     CONSUMER_OFFSET_METADATA_TOO_LARGE(
             80,
             "The metadata field of the consumer offset request is too large.",
-            ConsumerOffsetMetadataTooLargeException::new);
+            ConsumerOffsetMetadataTooLargeException::new),
+    INVALID_RECORD_EXCEPTION(81, "The record is invalid.", InvalidRecordException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 

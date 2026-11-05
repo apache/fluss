@@ -56,6 +56,11 @@ public interface UpsertWriter extends TableWriter {
      * <p>Each call is processed in order without inferring an update pair from adjacency or client
      * batching. Atomicity is not provided across separate requests.
      *
+     * <p>An arithmetic failure, such as integer or decimal division by zero or non-terminating
+     * decimal division, rejects the write batch with {@link
+     * org.apache.fluss.exception.InvalidRecordException}. The error identifies the field,
+     * aggregation function, table bucket and encoded primary key.
+     *
      * <p><b>Retract is NOT idempotent.</b> Applying the same retract twice subtracts the
      * contribution twice (e.g., for SUM). Correctness under retries relies on the server-side
      * writer batch deduplication, therefore retract requires {@code

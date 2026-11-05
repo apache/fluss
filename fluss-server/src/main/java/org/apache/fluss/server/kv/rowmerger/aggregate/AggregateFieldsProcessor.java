@@ -17,6 +17,8 @@
 
 package org.apache.fluss.server.kv.rowmerger.aggregate;
 
+import org.apache.fluss.exception.InvalidRecordException;
+import org.apache.fluss.metadata.AggFunctions;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.InternalRow;
@@ -359,7 +361,8 @@ public final class AggregateFieldsProcessor {
                     targetAggregators[targetIdx],
                     targetIdx,
                     encoder,
-                    fieldOp);
+                    fieldOp,
+                    targetContext);
         }
     }
 
@@ -392,7 +395,8 @@ public final class AggregateFieldsProcessor {
                         aggregators[idx],
                         idx,
                         encoder,
-                        fieldOp);
+                        fieldOp,
+                        context);
             }
         }
     }
@@ -471,7 +475,8 @@ public final class AggregateFieldsProcessor {
                         targetAggregators[targetIdx],
                         targetIdx,
                         encoder,
-                        fieldOp);
+                        fieldOp,
+                        targetContext);
             } else if (oldIdx != null) {
                 copyOldValueAndEncode(oldFieldGetters[oldIdx], oldRow, targetIdx, encoder);
             } else {
@@ -516,7 +521,8 @@ public final class AggregateFieldsProcessor {
                         aggregators[idx],
                         idx,
                         encoder,
-                        fieldOp);
+                        fieldOp,
+                        context);
             } else {
                 copyOldValueAndEncode(fieldGetters[idx], oldRow, idx, encoder);
             }
@@ -532,10 +538,26 @@ public final class AggregateFieldsProcessor {
             FieldAggregator aggregator,
             int targetIdx,
             RowEncoder encoder,
-            FieldOperation fieldOp) {
+            FieldOperation fieldOp,
+            AggregationContext context) {
         Object accumulator = oldFieldGetter.getFieldOrNull(oldRow);
         Object inputField = inputFieldGetter.getFieldOrNull(inputRow);
-        Object result = fieldOp.apply(aggregator, accumulator, inputField);
+        Object result;
+        try {
+            result = fieldOp.apply(aggregator, accumulator, inputField);
+        } catch (ArithmeticException e) {
+            if (fieldOp != RETRACT_OP) {
+                throw e;
+            }
+            Schema.Column column = context.getSchema().getColumns().get(targetIdx);
+            throw new InvalidRecordException(
+                    String.format(
+                            "Cannot retract field '%s' using %s: %s",
+                            column.getName(),
+                            column.getAggFunction().orElse(AggFunctions.LAST_VALUE_IGNORE_NULLS()),
+                            e.getMessage()),
+                    e);
+        }
         encoder.encodeField(targetIdx, result);
     }
 

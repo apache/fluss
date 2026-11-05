@@ -20,6 +20,7 @@ package org.apache.fluss.server.kv.rowmerger;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.TableConfig;
+import org.apache.fluss.exception.InvalidRecordException;
 import org.apache.fluss.metadata.AggFunctions;
 import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.Schema;
@@ -34,12 +35,14 @@ import org.apache.fluss.types.RowType;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.MethodSource;
 
 import java.util.stream.Stream;
 
 import static org.apache.fluss.testutils.DataTestUtils.compactedRow;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for {@link AggregateRowMerger}. */
 class AggregateRowMergerTest {
@@ -156,6 +159,38 @@ class AggregateRowMergerTest {
         BinaryRow row = compactedRow(ROW_TYPE_SUM, new Object[] {1, 5L, 10.5});
         BinaryValue deleted = merger.delete(toBinaryValue(row));
         assertThat(deleted).isNull();
+    }
+
+    @ParameterizedTest
+    @CsvSource({"false, 1", "false, 2", "true, 1", "true, 2"})
+    void testRetractArithmeticFailureIdentifiesField(boolean partial, short oldSchemaId) {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("total", DataTypes.BIGINT(), AggFunctions.SUM())
+                        .column("factor", DataTypes.BIGINT(), AggFunctions.PRODUCT())
+                        .primaryKey("id")
+                        .build();
+        TestingSchemaGetter getter = new TestingSchemaGetter(new SchemaInfo(schema, 1));
+        getter.updateLatestSchemaInfo(new SchemaInfo(schema, 2));
+        TableConfig config = new TableConfig(new Configuration());
+        RowMerger merger =
+                new AggregateRowMerger(config, config.getKvFormat(), getter)
+                        .configureTargetColumns(
+                                partial ? new int[] {0, 2} : null, (short) 2, schema);
+        BinaryValue accumulated =
+                new BinaryValue(
+                        oldSchemaId,
+                        compactedRow(schema.getRowType(), new Object[] {1, 100L, 12L}));
+        BinaryValue contribution =
+                new BinaryValue(
+                        (short) 2, compactedRow(schema.getRowType(), new Object[] {1, 10L, 0L}));
+
+        assertThatThrownBy(() -> merger.retract(accumulated, contribution))
+                .isInstanceOf(InvalidRecordException.class)
+                .hasMessageContaining("factor")
+                .hasMessageContaining("product")
+                .hasRootCauseInstanceOf(ArithmeticException.class);
     }
 
     @Test
