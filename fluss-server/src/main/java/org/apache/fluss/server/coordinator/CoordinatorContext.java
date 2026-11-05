@@ -90,7 +90,7 @@ public class CoordinatorContext {
             new HashMap<>();
     // a map from partition_id -> physicalTablePath
     private final Map<Long, PhysicalTablePath> pathByPartitionId = new HashMap<>();
-    private final Map<PhysicalTablePath, Long> partitionIdByPath = new HashMap<>();
+    private final Map<PhysicalTablePath, TablePartition> partitionByPath = new HashMap<>();
     private final Map<Long, PartitionInfo> partitionInfoById = new HashMap<>();
     private final Map<Long, Integer> partitionCountByTable = new HashMap<>();
 
@@ -441,7 +441,7 @@ public class CoordinatorContext {
         if (this.pathByPartitionId.put(partitionId, physicalTablePath) == null) {
             partitionCountByTable.merge(tableId, 1, Integer::sum);
         }
-        this.partitionIdByPath.put(physicalTablePath, partitionId);
+        this.partitionByPath.put(physicalTablePath, new TablePartition(tableId, partitionId));
         this.partitionInfoById.put(partitionId, partitionInfo);
     }
 
@@ -478,8 +478,14 @@ public class CoordinatorContext {
         return Optional.ofNullable(pathByPartitionId.get(partitionId));
     }
 
+    /** Returns the partition ID belonging to the current table instance at this path. */
     public Optional<Long> getPartitionId(PhysicalTablePath physicalTablePath) {
-        return Optional.ofNullable(partitionIdByPath.get(physicalTablePath));
+        TablePartition partition = partitionByPath.get(physicalTablePath);
+        if (partition == null
+                || partition.getTableId() != getTableIdByPath(physicalTablePath.getTablePath())) {
+            return Optional.empty();
+        }
+        return Optional.of(partition.getPartitionId());
     }
 
     public PartitionInfo getPartitionInfoById(long partitionId) {
@@ -847,7 +853,7 @@ public class CoordinatorContext {
         PhysicalTablePath physicalTablePath =
                 pathByPartitionId.remove(tablePartition.getPartitionId());
         if (physicalTablePath != null) {
-            partitionIdByPath.remove(physicalTablePath, tablePartition.getPartitionId());
+            partitionByPath.remove(physicalTablePath, tablePartition);
             long tableId = tablePartition.getTableId();
             int count = partitionCountByTable.get(tableId);
             if (count == 1) {
@@ -892,7 +898,7 @@ public class CoordinatorContext {
         tableIdByPath.clear();
         tableInfoById.clear();
         pathByPartitionId.clear();
-        partitionIdByPath.clear();
+        partitionByPath.clear();
         partitionCountByTable.clear();
         kvBuckets.clear();
     }

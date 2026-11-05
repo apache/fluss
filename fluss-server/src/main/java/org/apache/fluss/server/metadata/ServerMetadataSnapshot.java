@@ -51,7 +51,7 @@ public class ServerMetadataSnapshot {
     private final Map<TablePath, Long> tableIdByPath;
     private final Map<Long, TablePath> pathByTableId;
     // partition table.
-    private final Map<PhysicalTablePath, Long> partitionIdByPath;
+    private final Map<PhysicalTablePath, TablePartition> partitionByPath;
     private final Map<Long, PhysicalTablePath> physicalPathByPartitionId;
 
     // a map of bucket metadata of none-partition table, table_id -> <bucket, bucketMetadata>
@@ -74,7 +74,7 @@ public class ServerMetadataSnapshot {
             Map<Integer, ServerInfo> aliveTabletServers,
             Map<TablePath, Long> tableIdByPath,
             Map<Long, TablePath> pathByTableId,
-            Map<PhysicalTablePath, Long> partitionIdByPath,
+            Map<PhysicalTablePath, TablePartition> partitionByPath,
             Map<Long, Map<Integer, BucketMetadata>> bucketMetadataMapForTables,
             Map<Long, Map<Integer, BucketMetadata>> bucketMetadataMapForPartitions,
             Map<TablePartition, Integer> partitionBucketCounts,
@@ -85,11 +85,12 @@ public class ServerMetadataSnapshot {
         this.tableIdByPath = Collections.unmodifiableMap(tableIdByPath);
         this.pathByTableId = Collections.unmodifiableMap(pathByTableId);
 
-        this.partitionIdByPath = Collections.unmodifiableMap(partitionIdByPath);
+        this.partitionByPath = Collections.unmodifiableMap(partitionByPath);
         Map<Long, PhysicalTablePath> tempPhysicalPathByPartitionId = new HashMap<>();
-        partitionIdByPath.forEach(
-                ((physicalTablePath, partitionId) ->
-                        tempPhysicalPathByPartitionId.put(partitionId, physicalTablePath)));
+        partitionByPath.forEach(
+                ((physicalTablePath, partition) ->
+                        tempPhysicalPathByPartitionId.put(
+                                partition.getPartitionId(), physicalTablePath)));
         this.physicalPathByPartitionId = Collections.unmodifiableMap(tempPhysicalPathByPartitionId);
 
         this.bucketMetadataMapForTables = Collections.unmodifiableMap(bucketMetadataMapForTables);
@@ -158,8 +159,14 @@ public class ServerMetadataSnapshot {
         return tableIdByPath;
     }
 
+    /** Returns the partition ID belonging to the current table instance at this path. */
     public Optional<Long> getPartitionId(PhysicalTablePath physicalTablePath) {
-        return Optional.ofNullable(partitionIdByPath.get(physicalTablePath));
+        TablePartition partition = partitionByPath.get(physicalTablePath);
+        Long tableId = tableIdByPath.get(physicalTablePath.getTablePath());
+        if (partition == null || tableId == null || partition.getTableId() != tableId) {
+            return Optional.empty();
+        }
+        return Optional.of(partition.getPartitionId());
     }
 
     public Optional<PhysicalTablePath> getPhysicalTablePath(long partitionId) {
@@ -199,8 +206,9 @@ public class ServerMetadataSnapshot {
         return bucketCountEpochByTableId;
     }
 
-    public Map<PhysicalTablePath, Long> getPartitionIdByPath() {
-        return partitionIdByPath;
+    /** Returns cached table and partition identities by physical path. */
+    public Map<PhysicalTablePath, TablePartition> getPartitionByPath() {
+        return partitionByPath;
     }
 
     public Map<Long, Map<Integer, BucketMetadata>> getBucketMetadataMapForTables() {

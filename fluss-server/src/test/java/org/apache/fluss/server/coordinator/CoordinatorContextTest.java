@@ -109,7 +109,10 @@ class CoordinatorContextTest {
         PhysicalTablePath partitionPath = PhysicalTablePath.of(tablePath, "2026");
         context.putTablePath(1L, tablePath);
         context.putPartition(1L, 100L, partitionPath, createPartitionInfo(100L, "2026"));
+        assertThat(context.getPartitionId(partitionPath)).contains(100L);
         context.putTablePath(2L, tablePath);
+        assertThat(context.getPartitionId(partitionPath)).isEmpty();
+        assertThat(context.getPartitionInfoById(100L)).isNotNull();
         context.putPartition(2L, 101L, partitionPath, createPartitionInfo(101L, "2026"));
 
         context.removePartition(new TablePartition(1L, 100L));

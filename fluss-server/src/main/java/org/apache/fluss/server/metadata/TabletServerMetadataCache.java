@@ -329,8 +329,8 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                             ((tablePath, tableId) -> newPathByTableId.put(tableId, tablePath)));
 
                     // 4. update partition metadata. Always partial update.
-                    Map<PhysicalTablePath, Long> partitionIdByPath =
-                            new HashMap<>(currentSnapshot.getPartitionIdByPath());
+                    Map<PhysicalTablePath, TablePartition> partitionByPath =
+                            new HashMap<>(currentSnapshot.getPartitionByPath());
                     Map<Long, Map<Integer, BucketMetadata>> bucketMetadataMapForPartitions =
                             new HashMap<>(currentSnapshot.getBucketMetadataMapForPartitions());
                     Map<TablePartition, Integer> partitionBucketCounts =
@@ -345,8 +345,12 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                                 PhysicalTablePath.of(tablePath, partitionName);
                         long partitionId = partitionMetadata.getPartitionId();
                         if (partitionId == DELETED_PARTITION_ID) {
-                            Long removedPartitionId = partitionIdByPath.remove(physicalTablePath);
-                            if (removedPartitionId != null) {
+                            TablePartition removedPartition =
+                                    partitionByPath.get(physicalTablePath);
+                            if (removedPartition != null
+                                    && removedPartition.getTableId() == tableId) {
+                                partitionByPath.remove(physicalTablePath);
+                                long removedPartitionId = removedPartition.getPartitionId();
                                 bucketMetadataMapForPartitions.remove(removedPartitionId);
                                 partitionBucketCounts
                                         .keySet()
@@ -355,13 +359,19 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                         } else if (partitionName.equals(DELETED_PARTITION_NAME)) {
                             currentSnapshot
                                     .getPhysicalTablePath(partitionId)
-                                    .ifPresent(partitionIdByPath::remove);
+                                    .ifPresent(
+                                            path ->
+                                                    partitionByPath.remove(
+                                                            path,
+                                                            new TablePartition(
+                                                                    tableId, partitionId)));
                             bucketMetadataMapForPartitions.remove(partitionId);
                             partitionBucketCounts
                                     .keySet()
                                     .removeIf(k -> k.getPartitionId() == partitionId);
                         } else {
-                            partitionIdByPath.put(physicalTablePath, partitionId);
+                            partitionByPath.put(
+                                    physicalTablePath, new TablePartition(tableId, partitionId));
                             mergePartitionBucketCount(
                                     partitionBucketCounts, tableId, partitionId, partitionMetadata);
                             Map<Integer, BucketMetadata> partitionBuckets =
@@ -383,7 +393,7 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                                     newAliveTableServers,
                                     tableIdByPath,
                                     newPathByTableId,
-                                    partitionIdByPath,
+                                    partitionByPath,
                                     bucketMetadataMapForTables,
                                     bucketMetadataMapForPartitions,
                                     partitionBucketCounts,
@@ -488,8 +498,8 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                             tableId, Collections.unmodifiableMap(tableBucketMetadata));
 
                     // Copy other existing data
-                    Map<PhysicalTablePath, Long> partitionIdByPath =
-                            new HashMap<>(currentSnapshot.getPartitionIdByPath());
+                    Map<PhysicalTablePath, TablePartition> partitionByPath =
+                            new HashMap<>(currentSnapshot.getPartitionByPath());
                     Map<Long, Map<Integer, BucketMetadata>> bucketMetadataMapForPartitions =
                             new HashMap<>(currentSnapshot.getBucketMetadataMapForPartitions());
 
@@ -511,7 +521,7 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                                     currentSnapshot.getAliveTabletServers(),
                                     tableIdByPath,
                                     pathByTableId,
-                                    partitionIdByPath,
+                                    partitionByPath,
                                     bucketMetadataMapForTables,
                                     bucketMetadataMapForPartitions,
                                     currentSnapshot.getPartitionBucketCounts(),
@@ -552,13 +562,14 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                     Map<TablePath, Long> tableIdByPath =
                             new HashMap<>(currentSnapshot.getTableIdByPath());
                     Map<Long, TablePath> pathByTableId = new HashMap<>();
-                    Map<PhysicalTablePath, Long> partitionIdByPath =
-                            new HashMap<>(currentSnapshot.getPartitionIdByPath());
+                    Map<PhysicalTablePath, TablePartition> partitionByPath =
+                            new HashMap<>(currentSnapshot.getPartitionByPath());
                     Map<Long, Map<Integer, BucketMetadata>> bucketMetadataMapForPartitions =
                             new HashMap<>(currentSnapshot.getBucketMetadataMapForPartitions());
 
                     // Update partition mapping
-                    partitionIdByPath.put(physicalTablePath, partitionId);
+                    partitionByPath.put(
+                            physicalTablePath, new TablePartition(tableId, partitionId));
 
                     // Update bucket metadata for this partition
                     Map<Integer, BucketMetadata> partitionBucketMetadata = new HashMap<>();
@@ -588,7 +599,7 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                                     currentSnapshot.getAliveTabletServers(),
                                     tableIdByPath,
                                     pathByTableId,
-                                    partitionIdByPath,
+                                    partitionByPath,
                                     bucketMetadataMapForTables,
                                     bucketMetadataMapForPartitions,
                                     partitionBucketCounts,
