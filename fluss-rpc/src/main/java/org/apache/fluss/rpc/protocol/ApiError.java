@@ -21,6 +21,7 @@ import org.apache.fluss.exception.ApiException;
 import org.apache.fluss.rpc.messages.ErrorMessage;
 import org.apache.fluss.rpc.messages.ErrorResponse;
 import org.apache.fluss.utils.ExceptionUtils;
+import org.apache.fluss.utils.StringUtils;
 
 import javax.annotation.Nullable;
 
@@ -61,9 +62,22 @@ public class ApiError {
     }
 
     public static ApiError fromErrorMessage(ErrorMessage msg) {
-        Errors code = msg.hasErrorCode() ? Errors.forCode(msg.getErrorCode()) : Errors.NONE;
         String message = msg.hasErrorMessage() ? msg.getErrorMessage() : null;
-        return new ApiError(code, message);
+        if (!msg.hasErrorCode()) {
+            return new ApiError(Errors.NONE, message);
+        }
+        int code = msg.getErrorCode();
+        Errors error = Errors.forCode(code);
+        if (error.code() != code) {
+            // The code is unknown to this client, e.g. an error added in a newer server
+            // version. Errors.forCode maps it to UNKNOWN_SERVER_ERROR; keep the original
+            // code in the message so it stays visible in the resulting exception.
+            message =
+                    StringUtils.isNullOrWhitespaceOnly(message)
+                            ? String.format("Unknown error code %d from server.", code)
+                            : String.format("Unknown error code %d from server: %s", code, message);
+        }
+        return new ApiError(error, message);
     }
 
     public ApiError(Errors error, @Nullable String message) {

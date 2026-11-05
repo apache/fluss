@@ -36,6 +36,7 @@ import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.PbScanReqForBucket;
 import org.apache.fluss.rpc.messages.ScanKvRequest;
 import org.apache.fluss.rpc.messages.ScanKvResponse;
+import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import org.apache.fluss.utils.CloseableIterator;
@@ -237,8 +238,8 @@ public final class KvBatchScanner implements BatchScanner {
 
     private CloseableIterator<InternalRow> handleErrorResponse(ScanKvResponse response)
             throws IOException {
-        Errors error = Errors.forCode(response.getErrorCode());
-        String message = response.hasErrorMessage() ? response.getErrorMessage() : null;
+        ApiError apiError = ApiError.fromErrorMessage(response);
+        Errors error = apiError.error();
 
         if (error == Errors.TOO_MANY_SCANNERS
                 && scannerId == null
@@ -283,7 +284,7 @@ public final class KvBatchScanner implements BatchScanner {
                         refreshFailure);
             }
             terminate();
-            throw new IOException(error.exception(message));
+            throw new IOException(apiError.exception());
         }
 
         // The server-side session is already gone; skip close_scanner.
@@ -291,11 +292,11 @@ public final class KvBatchScanner implements BatchScanner {
             scannerId = null;
             closed.set(true);
             drained = true;
-            throw new IOException(error.exception(message));
+            throw new IOException(apiError.exception());
         }
 
         terminate();
-        throw new IOException(error.exception(message));
+        throw new IOException(apiError.exception());
     }
 
     private void terminate() {

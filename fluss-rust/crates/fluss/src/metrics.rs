@@ -86,9 +86,7 @@ pub const SCANNER_POLL_IDLE_RATIO: &str = "fluss.client.scanner.poll_idle_ratio"
 ///
 /// Pushed every second by a per-scanner background tokio task. Emission is
 /// skipped until the first `poll()` happens; Java's equivalent
-/// `lastPollSecondsAgo` returns roughly the current Unix-epoch seconds
-/// before the first poll (an unguarded `(now - 0)/1000`), which would trip
-/// every consumer-liveness alert on startup.
+/// `lastPollSecondsAgo` gauge reports `-1` before the first poll.
 ///
 pub const SCANNER_LAST_POLL_SECONDS_AGO: &str = "fluss.client.scanner.last_poll_seconds_ago";
 

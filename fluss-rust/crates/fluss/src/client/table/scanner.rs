@@ -491,8 +491,8 @@ struct LogScannerInner {
     metrics: Arc<ScannerMetrics>,
     /// Wall-clock millis (since `UNIX_EPOCH`) of the most recent
     /// `record_poll_start`. Sentinel `0` means "no poll yet" — the
-    /// `last_poll_seconds_ago` ticker skips emission while this is `0`,
-    /// deviating from Java's unguarded `(now - 0)/1000` startup value.
+    /// `last_poll_seconds_ago` ticker skips emission while this is `0`;
+    /// Java's equivalent gauge reports `-1` before the first poll.
     ///
     /// Written by `record_poll_start` with `Release` ordering, read by
     /// the ticker task with `Acquire` ordering. Cloned (`Arc`) into the
@@ -560,12 +560,11 @@ impl Drop for PollGuard<'_> {
 /// integer-seconds into the gauge.
 ///
 /// Emission is skipped while the atomic still holds the sentinel `0` (no
-/// `record_poll_start` yet) — Java's `(System.currentTimeMillis() - 0) /
-/// 1000` startup nonsense (see `ScannerMetricGroup.java:121`) would trip
-/// every consumer-liveness alert on startup. Java parity note: Java's
-/// expression is integer-truncating (`long / long`); we preserve that with
-/// `i64` division before the `f64` cast so dashboards built against Java
-/// behave the same.
+/// `record_poll_start` yet); Java's equivalent gauge reports `-1` in that
+/// state (see `ScannerMetricGroup#lastPollSecondsAgo`). Java parity note:
+/// Java's expression is integer-truncating (`long / long`); we preserve that
+/// with `i64` division before the `f64` cast so dashboards built against
+/// Java behave the same.
 ///
 /// Extracted from the ticker loop so unit tests can exercise the emission
 /// logic without depending on real-time scheduling.
@@ -5066,9 +5065,10 @@ mod tests {
 
     /// `emit_last_poll_seconds_ago_once` must skip emission while the
     /// shared atomic still holds the sentinel `0` — that's the
-    /// pre-first-poll guard that prevents Java's
-    /// `(System.currentTimeMillis() - 0) / 1000` startup nonsense from
-    /// tripping consumer-liveness alerts before any poll happens.
+    /// pre-first-poll guard that keeps the gauge from reporting
+    /// `(now - 0) / 1000` (current Unix-epoch seconds) and tripping
+    /// consumer-liveness alerts before any poll happens. Java's
+    /// equivalent gauge reports `-1` in that state.
     ///
     /// `ScannerMetrics::new` already registers the gauge with the
     /// recorder, so it appears in the snapshot with the default `0.0`
