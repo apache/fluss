@@ -22,8 +22,8 @@ Start by choosing the workflow closest to the code path you changed:
 
 | Profile | Use it when you need to test | Starts |
 |---|---|---|
-| `core` | Fluss Server, Client, Flink Connector, or SQL behavior | ZooKeeper, Fluss, Flink |
-| `gateway` | REST Gateway against a real Fluss cluster | ZooKeeper, Fluss, Gateway |
+| `core` | Fluss Server, Client, Flink Connector, or SQL behavior | ZooKeeper, Fluss, Flink, RustFS |
+| `gateway` | REST Gateway against a real Fluss cluster | ZooKeeper, Fluss, Gateway, RustFS |
 | `paimon` | Paimon tiering, Union Read, or Lake-only Read | ZooKeeper, Fluss, Flink, Tiering, RustFS |
 | `iceberg` | Iceberg tiering with a JDBC catalog | ZooKeeper, Fluss, Flink, Tiering, RustFS, PostgreSQL |
 | `lance` | Lance writes or tiering | ZooKeeper, Fluss, Flink, Tiering, RustFS |

@@ -52,10 +52,5 @@ services:
       rustfs-init:
         condition: service_completed_successfully
 
-  jobmanager:
-    depends_on:
-      rustfs-init:
-        condition: service_completed_successfully
-
 volumes:
   rustfs-data:

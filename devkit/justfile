@@ -320,6 +320,11 @@ stage-profile-jars profile:
     copy_urls "$PROFILE_DIR/jars.urls" "$ACTIVE_DIR/lib"
     copy_urls "$PROFILE_DIR/server.urls" "$SERVER_PLUGIN_DIR" "devkit-"
     copy_urls "$PROFILE_DIR/flink.urls" "$ACTIVE_DIR/lib"
+    REMOTE_DATA_DIR=$(sed -n 's/^[[:space:]]*remote\.data\.dir[[:space:]]*: \([^#]*\).*$/\1/p' "$PROFILE_DIR/server.yaml" | sed 's/[[:space:]]*$//' | tail -n 1)
+    SCHEME="${REMOTE_DATA_DIR%%:*}"
+    if [ "$SCHEME" != "$REMOTE_DATA_DIR" ] && [ -d "{{ FLUSS_DEV_HOME }}/build-target/plugins/$SCHEME" ]; then
+      cp "{{ FLUSS_DEV_HOME }}/build-target/plugins/$SCHEME/"*.jar "$ACTIVE_DIR/lib/"
+    fi
     chmod -R a+rX "$ACTIVE_DIR"
 
 [private]
@@ -353,12 +358,6 @@ ensure-tiering profile:
     mkdir -p "$SERVER_PLUGIN_DIR"
     # Filesystem plugins must stay isolated from lake plugin classpaths.
     rm -f "$SERVER_PLUGIN_DIR"/fluss-fs-*.jar
-    REMOTE_DATA_DIR=$(sed -n 's/^[[:space:]]*remote\.data\.dir[[:space:]]*: \([^#]*\).*$/\1/p' "$PROFILE_DIR/server.yaml" | sed 's/[[:space:]]*$//' | tail -n 1)
-    SCHEME="${REMOTE_DATA_DIR%%:*}"
-    if [ "$SCHEME" != "$REMOTE_DATA_DIR" ] && [ -d "{{ FLUSS_DEV_HOME }}/build-target/plugins/$SCHEME" ]; then
-      cp "{{ FLUSS_DEV_HOME }}/build-target/plugins/$SCHEME/"*.jar "$ACTIVE_DIR/lib/"
-    fi
-
     chmod -R a+rX "$ACTIVE_DIR"
 
 [doc("Start a built profile from the profiles directory")]
