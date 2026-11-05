@@ -1237,13 +1237,13 @@ class FieldAggregatorParameterizedTest {
     }
 
     // ===================================================================================
-    // Retract Overflow / Boundary Tests (M10)
+    // Retract Overflow / Boundary Tests
     // ===================================================================================
 
     @Test
     void testSumRetractDecimalOverflow() {
-        // DECIMAL(10,2): max is 99999999.99
-        DataType decimalType = DataTypes.DECIMAL(10, 2);
+        // DECIMAL(20,2): max is 999999999999999999.99
+        DataType decimalType = DataTypes.DECIMAL(20, 2);
         Schema schema =
                 Schema.newBuilder()
                         .column("id", DataTypes.INT())
@@ -1253,19 +1253,17 @@ class FieldAggregatorParameterizedTest {
 
         AggregateRowMerger merger = createMerger(schema, new TableConfig(new Configuration()));
 
-        // old = 99999999.99, retract = -99999999.99 → result would be 199999999.98 which overflows
-        // DECIMAL(10,2). The behavior depends on the Decimal implementation — verify it doesn't
-        // throw an unhandled exception.
-        Decimal maxDecimal = Decimal.fromBigDecimal(new BigDecimal("99999999.99"), 10, 2);
-        Decimal negMaxDecimal = Decimal.fromBigDecimal(new BigDecimal("-99999999.99"), 10, 2);
+        // Subtracting the negative maximum overflows DECIMAL(20,2), which is encoded as NULL.
+        Decimal maxDecimal = Decimal.fromBigDecimal(new BigDecimal("999999999999999999.99"), 20, 2);
+        Decimal negMaxDecimal =
+                Decimal.fromBigDecimal(new BigDecimal("-999999999999999999.99"), 20, 2);
 
         BinaryRow oldRow = compactedRow(schema.getRowType(), new Object[] {1, maxDecimal});
         BinaryRow retractRow = compactedRow(schema.getRowType(), new Object[] {1, negMaxDecimal});
 
-        // This should either produce a result or handle overflow gracefully
         BinaryValue result = merger.retract(toBinaryValue(oldRow), toBinaryValue(retractRow));
         assertThat(result).isNotNull();
-        // The result decimal may be null (overflow) or a valid value
-        // Just verify no unhandled exception is thrown
+        assertThat(result.row.getInt(0)).isEqualTo(1);
+        assertThat(result.row.isNullAt(1)).isTrue();
     }
 }
