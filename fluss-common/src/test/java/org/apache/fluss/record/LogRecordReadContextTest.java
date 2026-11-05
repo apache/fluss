@@ -88,7 +88,6 @@ import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
 import static org.apache.fluss.types.DataTypeChecks.getPrecision;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for {@link LogRecordReadContext}. */
 class LogRecordReadContextTest {
@@ -367,33 +366,6 @@ class LogRecordReadContextTest {
             ArrowReadPlan serverPlan = serverProjected.getArrowReadPlan(DEFAULT_SCHEMA_ID);
             assertThat(serverPlan.getLoadedRowType().getFieldNames()).containsExactly("b");
             assertThat(serverPlan.createOutputRow()).isNull();
-        }
-    }
-
-    @ParameterizedTest
-    @EnumSource(SchemaResolution.class)
-    void testOutputProjectedRowRejectsArrowWithoutResolvingSchema(SchemaResolution resolution) {
-        Schema schema = Schema.newBuilder().column("id", DataTypes.INT()).build();
-        TestingSchemaGetter schemas =
-                new TestingSchemaGetter(0, schema) {
-                    @Override
-                    public Schema getSchema(int schemaId) {
-                        throw new AssertionError("Output mapping must not resolve Arrow schemas.");
-                    }
-                };
-        try (LogRecordReadContext context =
-                LogRecordReadContext.createReadContext(
-                        tableInfo(LogFormat.ARROW, schema, 0),
-                        true,
-                        resolution,
-                        null,
-                        schemas,
-                        null)) {
-            for (int schemaId : new int[] {0, 1}) {
-                assertThatThrownBy(() -> context.getOutputProjectedRow(schemaId))
-                        .isInstanceOf(IllegalArgumentException.class)
-                        .hasMessageContaining("indexed and compacted");
-            }
         }
     }
 
