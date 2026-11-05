@@ -669,14 +669,10 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     @Override
     public CompletableFuture<DropDatabaseResponse> dropDatabase(DropDatabaseRequest request) {
         authorizeDatabase(OperationType.DROP, request.getDatabaseName());
-        return submitToEventThread(
-                () -> {
-                    metadataManager.dropDatabase(
-                            request.getDatabaseName(),
-                            request.isIgnoreIfNotExists(),
-                            request.isCascade());
-                    return new DropDatabaseResponse();
-                });
+        DropDatabaseResponse response = new DropDatabaseResponse();
+        metadataManager.dropDatabase(
+                request.getDatabaseName(), request.isIgnoreIfNotExists(), request.isCascade());
+        return CompletableFuture.completedFuture(response);
     }
 
     @Override
@@ -1005,42 +1001,38 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                             + "table properties, table schema, or table distribution.");
         }
 
-        FlussPrincipal principal = currentSession().getPrincipal();
-        return submitToEventThread(
-                () -> {
-                    if (hasSchemaChanges) {
-                        metadataManager.alterTableSchema(
-                                tablePath,
-                                alterSchemaChanges,
-                                request.isIgnoreIfNotExists(),
-                                principal);
-                    }
+        if (hasSchemaChanges) {
+            metadataManager.alterTableSchema(
+                    tablePath,
+                    alterSchemaChanges,
+                    request.isIgnoreIfNotExists(),
+                    currentSession().getPrincipal());
+        }
 
-                    if (hasConfigChanges) {
-                        metadataManager.alterTableProperties(
-                                tablePath,
-                                alterTableConfigChanges,
-                                tablePropertyChanges,
-                                request.isIgnoreIfNotExists(),
-                                principal,
-                                this::beforeTablePropertiesUpdate,
-                                this::afterTablePropertiesUpdate,
-                                coordinatorZkVersionSupplier.get());
-                    }
+        if (hasConfigChanges) {
+            metadataManager.alterTableProperties(
+                    tablePath,
+                    alterTableConfigChanges,
+                    tablePropertyChanges,
+                    request.isIgnoreIfNotExists(),
+                    currentSession().getPrincipal(),
+                    this::beforeTablePropertiesUpdate,
+                    this::afterTablePropertiesUpdate,
+                    coordinatorZkVersionSupplier.get());
+        }
 
-                    if (hasDistributionChanges) {
-                        TableChange.ModifyBucketCount modifyBucketCount =
-                                (TableChange.ModifyBucketCount) alterDistributionChanges.get(0);
-                        metadataManager.alterBucketCount(
-                                tablePath,
-                                modifyBucketCount.getNewBucketCount(),
-                                request.isIgnoreIfNotExists(),
-                                principal,
-                                coordinatorZkVersionSupplier.get());
-                    }
+        if (hasDistributionChanges) {
+            TableChange.ModifyBucketCount modifyBucketCount =
+                    (TableChange.ModifyBucketCount) alterDistributionChanges.get(0);
+            metadataManager.alterBucketCount(
+                    tablePath,
+                    modifyBucketCount.getNewBucketCount(),
+                    request.isIgnoreIfNotExists(),
+                    currentSession().getPrincipal(),
+                    coordinatorZkVersionSupplier.get());
+        }
 
-                    return new AlterTableResponse();
-                });
+        return CompletableFuture.completedFuture(new AlterTableResponse());
     }
 
     private void beforeTablePropertiesUpdate(TableInfo currentTable, TableDescriptor updatedTable) {
@@ -1293,11 +1285,9 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         TablePath tablePath = toTablePath(request.getTablePath());
         authorizeTable(OperationType.DROP, tablePath);
 
-        return submitToEventThread(
-                () -> {
-                    metadataManager.dropTable(tablePath, request.isIgnoreIfNotExists());
-                    return new DropTableResponse();
-                });
+        DropTableResponse response = new DropTableResponse();
+        metadataManager.dropTable(tablePath, request.isIgnoreIfNotExists());
+        return CompletableFuture.completedFuture(response);
     }
 
     @Override
@@ -1367,29 +1357,27 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         TablePath tablePath = toTablePath(request.getTablePath());
         authorizeTable(OperationType.WRITE, tablePath);
 
+        DropPartitionResponse response = new DropPartitionResponse();
+        TableRegistration table = metadataManager.getTableRegistration(tablePath);
+        if (!table.isPartitioned()) {
+            throw new TableNotPartitionedException(
+                    "Only partitioned table support drop partition.");
+        }
+
+        // first, validate the partition spec.
         PartitionSpec partitionSpec = getPartitionSpec(request.getPartitionSpec());
-        return submitToEventThread(
-                () -> {
-                    TableRegistration table = metadataManager.getTableRegistration(tablePath);
-                    if (!table.isPartitioned()) {
-                        throw new TableNotPartitionedException(
-                                "Only partitioned table support drop partition.");
-                    }
-                    validatePartitionSpec(tablePath, table.partitionKeys, partitionSpec, false);
-                    ResolvedPartitionSpec partitionToDrop =
-                            ResolvedPartitionSpec.fromPartitionSpec(
-                                    table.partitionKeys, partitionSpec);
-                    if (table.getTableConfig().isHistoricalPartitionEnabled()
-                            && HISTORICAL_PARTITION_VALUE.equals(
-                                    partitionToDrop.getPartitionName())) {
-                        throw new InvalidPartitionException(
-                                "Historical system partition is managed by the coordinator "
-                                        + "and cannot be dropped manually.");
-                    }
-                    metadataManager.dropPartition(
-                            tablePath, partitionToDrop, request.isIgnoreIfNotExists());
-                    return new DropPartitionResponse();
-                });
+        validatePartitionSpec(tablePath, table.partitionKeys, partitionSpec, false);
+        ResolvedPartitionSpec partitionToDrop =
+                ResolvedPartitionSpec.fromPartitionSpec(table.partitionKeys, partitionSpec);
+        if (table.getTableConfig().isHistoricalPartitionEnabled()
+                && HISTORICAL_PARTITION_VALUE.equals(partitionToDrop.getPartitionName())) {
+            throw new InvalidPartitionException(
+                    "Historical system partition is managed by the coordinator and cannot be "
+                            + "dropped manually.");
+        }
+
+        metadataManager.dropPartition(tablePath, partitionToDrop, request.isIgnoreIfNotExists());
+        return CompletableFuture.completedFuture(response);
     }
 
     @Override

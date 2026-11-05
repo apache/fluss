@@ -1358,6 +1358,7 @@ public class MetadataManager {
                             partition.getPartitionQualifiedName(), tablePath));
         }
 
+        // TODO: Fence concurrent target recreation during DROP (#5046).
         validateNoBulkLoad(optionalPartitionRegistration.get().data().getBulkLoadId());
 
         try {
@@ -1385,6 +1386,7 @@ public class MetadataManager {
         }
     }
 
+    // TODO: Make ownership checks atomic with DDL mutations (#5046).
     private void validateTableDdl(TablePath tablePath, TableRegistration registration) {
         validateNoBulkLoad(registration.bulkLoadId);
         if (registration.isPartitioned()) {
