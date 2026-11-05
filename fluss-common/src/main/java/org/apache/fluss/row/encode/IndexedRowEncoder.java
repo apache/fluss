@@ -24,6 +24,10 @@ import org.apache.fluss.row.indexed.IndexedRowWriter;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.RowType;
 
+import java.util.BitSet;
+import java.util.Collections;
+import java.util.Map;
+
 import static org.apache.fluss.row.BinaryRow.BinaryRowFormat.INDEXED;
 
 /**
@@ -32,7 +36,7 @@ import static org.apache.fluss.row.BinaryRow.BinaryRowFormat.INDEXED;
  * @since 0.2
  */
 @PublicEvolving
-public class IndexedRowEncoder implements RowEncoder {
+public class IndexedRowEncoder extends AbstractRowEncoder {
 
     private final DataType[] fieldDataTypes;
     private final IndexedRowWriter rowWriter;
@@ -43,6 +47,12 @@ public class IndexedRowEncoder implements RowEncoder {
     }
 
     public IndexedRowEncoder(DataType[] fieldDataTypes) {
+        this(fieldDataTypes, new BitSet(), Collections.emptyMap());
+    }
+
+    IndexedRowEncoder(
+            DataType[] fieldDataTypes, BitSet encodedColumns, Map<Integer, String> tableConfigs) {
+        super(encodedColumns, tableConfigs);
         this.fieldDataTypes = fieldDataTypes;
         // create writer.
         this.fieldWriters = new BinaryWriter.ValueWriter[fieldDataTypes.length];
@@ -58,7 +68,7 @@ public class IndexedRowEncoder implements RowEncoder {
     }
 
     @Override
-    public void encodeField(int pos, Object value) {
+    protected void encode(int pos, Object value) {
         fieldWriters[pos].writeValue(rowWriter, pos, value);
     }
 

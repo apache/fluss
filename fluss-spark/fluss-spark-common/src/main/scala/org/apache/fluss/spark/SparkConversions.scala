@@ -78,7 +78,7 @@ object SparkConversions {
 
     val (tableProps, customProps) =
       caseInsensitiveProps.filterNot(e => SPARK_TABLE_OPTIONS.contains(e._1)).partition {
-        case (key, _) => key.startsWith(FlussConfigUtils.TABLE_PREFIX)
+        case (key, _) => FlussConfigUtils.isTableStorageConfig(key)
       }
 
     tableDescriptorBuilder
