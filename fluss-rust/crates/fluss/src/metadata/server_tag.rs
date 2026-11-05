@@ -25,14 +25,14 @@ pub enum ServerTag {
 }
 
 impl ServerTag {
-    pub fn to_i32(self) -> i32 {
+    pub(crate) fn to_i32(self) -> i32 {
         match self {
             Self::PermanentOffline => 0,
             Self::TemporaryOffline => 1,
         }
     }
 
-    pub fn try_from_i32(value: i32) -> Result<Self> {
+    pub(crate) fn try_from_i32(value: i32) -> Result<Self> {
         match value {
             0 => Ok(Self::PermanentOffline),
             1 => Ok(Self::TemporaryOffline),

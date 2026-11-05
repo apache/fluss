@@ -196,7 +196,7 @@ impl Drop for MemoryPermit {
 type BucketBatches = Vec<(BucketId, Arc<Mutex<VecDeque<WriteBatch>>>)>;
 
 #[allow(dead_code)]
-pub struct RecordAccumulator {
+pub(crate) struct RecordAccumulator {
     config: Config,
     write_batches: DashMap<Arc<PhysicalTablePath>, BucketAndWriteBatches>,
     // batch_id -> (complete callback, memory permit)
@@ -1685,7 +1685,7 @@ impl RecordAccumulator {
     }
 }
 
-pub struct ReadyWriteBatch {
+pub(crate) struct ReadyWriteBatch {
     pub table_bucket: TableBucket,
     pub write_batch: WriteBatch,
 }
@@ -1802,7 +1802,7 @@ impl BucketAndWriteBatches {
     }
 }
 
-pub struct RecordAppendResult {
+pub(crate) struct RecordAppendResult {
     pub batch_is_full: bool,
     pub new_batch_created: bool,
     pub abort_record_for_new_batch: bool,
@@ -1851,7 +1851,7 @@ impl RecordAppendResult {
     }
 }
 
-pub struct ReadyCheckResult {
+pub(crate) struct ReadyCheckResult {
     pub ready_nodes: HashSet<ServerNode>,
     pub next_ready_check_delay_ms: i64,
     pub unknown_leader_tables: HashSet<Arc<PhysicalTablePath>>,

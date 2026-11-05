@@ -32,7 +32,7 @@ pub trait JsonSerde: Sized {
 }
 
 impl DataType {
-    pub fn to_type_root(&self) -> &str {
+    pub(crate) fn to_type_root(&self) -> &str {
         match &self {
             DataType::Boolean(_) => "BOOLEAN",
             DataType::TinyInt(_) => "TINYINT",

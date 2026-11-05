@@ -25,7 +25,7 @@ use crate::error::Error;
 use crate::metadata::{PhysicalTablePath, TableInfo};
 
 use crate::row::InternalRow;
-pub use accumulator::*;
+pub(crate) use accumulator::*;
 use arrow::array::RecordBatch;
 use bytes::Bytes;
 use std::future::Future;
@@ -42,11 +42,11 @@ mod write_format;
 mod writer_client;
 
 pub(crate) use idempotence::IdempotenceManager;
-pub use write_format::WriteFormat;
+pub(crate) use write_format::WriteFormat;
 pub(crate) use writer_client::WriterClient;
 
 #[allow(dead_code)]
-pub struct WriteRecord<'a> {
+pub(crate) struct WriteRecord<'a> {
     record: Record<'a>,
     physical_table_path: Arc<PhysicalTablePath>,
     bucket_key: Option<Bytes>,
@@ -84,18 +84,18 @@ impl<'a> WriteRecord<'a> {
     }
 }
 
-pub enum Record<'a> {
+pub(crate) enum Record<'a> {
     Log(LogWriteRecord<'a>),
     Kv(KvWriteRecord<'a>),
 }
 
-pub enum LogWriteRecord<'a> {
+pub(crate) enum LogWriteRecord<'a> {
     InternalRow(&'a dyn InternalRow),
     RecordBatch(Arc<RecordBatch>),
 }
 
 #[derive(Clone)]
-pub enum RowBytes<'a> {
+pub(crate) enum RowBytes<'a> {
     Borrowed(&'a [u8]),
     Owned(Bytes),
 }
@@ -109,7 +109,7 @@ impl<'a> RowBytes<'a> {
     }
 }
 
-pub struct KvWriteRecord<'a> {
+pub(crate) struct KvWriteRecord<'a> {
     key: Bytes,
     target_columns: Option<Arc<Vec<usize>>>,
     row_bytes: Option<RowBytes<'a>>,
@@ -206,7 +206,7 @@ impl<'a> WriteRecord<'a> {
 }
 
 #[derive(Debug, Clone)]
-pub struct ResultHandle {
+pub(crate) struct ResultHandle {
     receiver: BroadcastOnceReceiver<BatchWriteResult>,
 }
 

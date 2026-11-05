@@ -77,64 +77,65 @@ mod scan_kv;
 mod table_exists;
 mod update_metadata;
 
-pub use crate::rpc::RpcError;
-pub use acquire_kv_snapshot_lease::*;
-pub use add_server_tag::*;
-pub use alter_cluster_configs::*;
-pub use alter_database::*;
-pub use alter_table::*;
-pub use api_versions::*;
-pub use authenticate::*;
-pub use cancel_rebalance::*;
-pub use create_acls::*;
-pub use create_database::*;
-pub use create_partition::*;
-pub use create_table::*;
-pub use database_exists::*;
-pub use delete_producer_offsets::*;
-pub use describe_cluster_configs::*;
-pub use drop_acls::*;
-pub use drop_database::*;
-pub use drop_kv_snapshot_lease::*;
-pub use drop_partition::*;
-pub use drop_table::*;
-pub use fetch::*;
-pub use get_cluster_health::*;
-pub use get_database_info::*;
-pub use get_kv_snapshot_metadata::*;
-pub use get_lake_snapshot::*;
-pub use get_latest_kv_snapshots::*;
-pub use get_latest_lake_snapshot::*;
-pub use get_producer_offsets::*;
-pub use get_security_token::*;
-pub use get_table::*;
-pub use get_table_schema::*;
-pub use get_table_stats::*;
-pub use header::*;
-pub use init_writer::*;
-pub use limit_scan::*;
-pub use list_acls::*;
-pub use list_database_summaries::*;
-pub use list_databases::*;
-pub use list_kv_snapshots::*;
-pub use list_offsets::*;
-pub use list_partition_infos::*;
-pub use list_rebalance_progress::*;
-pub use list_remote_log_manifests::*;
-pub use list_tables::*;
-pub use lookup::*;
-pub use prefix_lookup::*;
-pub use produce_log::*;
-pub use put_kv::*;
-pub use rebalance::*;
-pub use register_producer_offsets::*;
-pub use release_kv_snapshot_lease::*;
-pub use remove_server_tag::*;
-pub use scan_kv::*;
-pub use table_exists::*;
-pub use update_metadata::*;
+pub(crate) use crate::rpc::RpcError;
+pub(crate) use acquire_kv_snapshot_lease::*;
+pub(crate) use add_server_tag::*;
+pub(crate) use alter_cluster_configs::*;
+pub(crate) use alter_database::*;
+pub(crate) use alter_table::*;
+pub(crate) use api_versions::*;
+pub(crate) use authenticate::*;
+pub(crate) use cancel_rebalance::*;
+pub(crate) use create_acls::*;
+pub(crate) use create_database::*;
+pub(crate) use create_partition::*;
+pub(crate) use create_table::*;
+pub(crate) use database_exists::*;
+pub(crate) use delete_producer_offsets::*;
+pub(crate) use describe_cluster_configs::*;
+pub(crate) use drop_acls::*;
+pub(crate) use drop_database::*;
+pub(crate) use drop_kv_snapshot_lease::*;
+pub(crate) use drop_partition::*;
+pub(crate) use drop_table::*;
+pub(crate) use fetch::*;
+pub(crate) use get_cluster_health::*;
+pub(crate) use get_database_info::*;
+pub(crate) use get_kv_snapshot_metadata::*;
+pub(crate) use get_lake_snapshot::*;
+pub(crate) use get_latest_kv_snapshots::*;
+pub(crate) use get_latest_lake_snapshot::*;
+pub(crate) use get_producer_offsets::*;
+pub(crate) use get_security_token::*;
+pub(crate) use get_table::*;
+pub(crate) use get_table_schema::*;
+pub(crate) use get_table_stats::*;
+pub(crate) use header::*;
+pub(crate) use init_writer::*;
+pub(crate) use limit_scan::*;
+pub(crate) use list_acls::*;
+pub(crate) use list_database_summaries::*;
+pub(crate) use list_databases::*;
+pub(crate) use list_kv_snapshots::*;
+pub use list_offsets::OffsetSpec;
+pub(crate) use list_offsets::*;
+pub(crate) use list_partition_infos::*;
+pub(crate) use list_rebalance_progress::*;
+pub(crate) use list_remote_log_manifests::*;
+pub(crate) use list_tables::*;
+pub(crate) use lookup::*;
+pub(crate) use prefix_lookup::*;
+pub(crate) use produce_log::*;
+pub(crate) use put_kv::*;
+pub(crate) use rebalance::*;
+pub(crate) use register_producer_offsets::*;
+pub(crate) use release_kv_snapshot_lease::*;
+pub(crate) use remove_server_tag::*;
+pub(crate) use scan_kv::*;
+pub(crate) use table_exists::*;
+pub(crate) use update_metadata::*;
 
-pub trait RequestBody {
+pub(crate) trait RequestBody {
     type ResponseBody;
 
     const API_KEY: ApiKey;
@@ -155,14 +156,14 @@ impl<T: RequestBody> RequestBody for &T {
     }
 }
 
-pub trait WriteType<W>: Sized
+pub(crate) trait WriteType<W>: Sized
 where
     W: BufMut,
 {
     fn write(&self, writer: &mut W) -> Result<(), WriteError>;
 }
 
-pub trait ReadType<R>: Sized
+pub(crate) trait ReadType<R>: Sized
 where
     R: Buf,
 {

@@ -35,7 +35,7 @@ pub(crate) struct ClientSchemaGetter {
 }
 
 impl ClientSchemaGetter {
-    pub fn new(table_path: TablePath, admin: Arc<FlussAdmin>, latest: SchemaInfo) -> Self {
+    pub(crate) fn new(table_path: TablePath, admin: Arc<FlussAdmin>, latest: SchemaInfo) -> Self {
         let mut map = HashMap::new();
         let (schema, schema_id) = latest.into_parts();
         map.insert(schema_id, Arc::new(schema));
@@ -50,7 +50,7 @@ impl ClientSchemaGetter {
     /// accept one redundant RPC in exchange for staying off
     /// `tokio::sync` machinery. Schemas are immutable per id, so
     /// last-write-wins on the cache insert is correct.
-    pub async fn get_schema(&self, schema_id: i32) -> Result<Arc<Schema>> {
+    pub(crate) async fn get_schema(&self, schema_id: i32) -> Result<Arc<Schema>> {
         if let Some(schema) = self.cache.read().get(&schema_id).cloned() {
             return Ok(schema);
         }

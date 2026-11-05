@@ -25,7 +25,7 @@ mod frame;
 pub mod message;
 pub use error::*;
 mod server_connection;
-pub use server_connection::*;
+pub(crate) use server_connection::*;
 mod convert;
 mod transport;
 

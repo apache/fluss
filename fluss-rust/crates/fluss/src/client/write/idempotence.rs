@@ -48,7 +48,7 @@ impl BucketEntry {
     }
 }
 
-pub struct IdempotenceManager {
+pub(crate) struct IdempotenceManager {
     writer_id: AtomicI64,
     bucket_entries: Mutex<HashMap<TableBucket, BucketEntry>>,
     enabled: bool,

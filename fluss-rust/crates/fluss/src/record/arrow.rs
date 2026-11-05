@@ -55,7 +55,7 @@ use crate::record::statistics::{estimated_serialized_size, serialize_statistics}
 use arrow::ipc::writer::IpcWriteOptions;
 use bytes::Bytes;
 
-pub const BUILDER_DEFAULT_OFFSET: i64 = 0;
+pub(crate) const BUILDER_DEFAULT_OFFSET: i64 = 0;
 
 /// Initial capacity for Arrow column vectors (pre-allocation hint, not a record cap).
 /// Matching Java's `ArrowWriter.INITIAL_CAPACITY`.
@@ -108,7 +108,7 @@ pub(crate) struct ArrowBatchConfig {
     pub compression_ratio_estimator: Arc<ArrowCompressionRatioEstimator>,
 }
 
-pub trait ArrowRecordBatchInnerBuilder: Send {
+pub(crate) trait ArrowRecordBatchInnerBuilder: Send {
     fn build_arrow_record_batch(&mut self) -> Result<Arc<RecordBatch>>;
 
     fn append(&mut self, row: &dyn InternalRow) -> Result<bool>;
@@ -185,7 +185,7 @@ impl ArrowRecordBatchInnerBuilder for PrebuiltRecordBatchBuilder {
     }
 }
 
-pub struct RowAppendRecordBatchBuilder {
+pub(crate) struct RowAppendRecordBatchBuilder {
     table_schema: SchemaRef,
     column_writers: Vec<ColumnWriter>,
     records_count: i32,
@@ -608,7 +608,7 @@ fn estimate_arrow_ipc_overhead(
     Ok(ipc_message_len.saturating_sub(raw_data))
 }
 
-pub trait ToArrow {
+pub(crate) trait ToArrow {
     fn append_to(&self, builder: &mut dyn ArrayBuilder) -> Result<()>;
 }
 
@@ -1225,7 +1225,7 @@ pub(crate) fn from_arrow_type(arrow_type: &ArrowDataType) -> Result<DataType> {
 }
 
 #[derive(Clone)]
-pub struct ReadContext {
+pub(crate) struct ReadContext {
     target_schema: SchemaRef,
     full_schema: SchemaRef,
     row_type: Arc<RowType>,
@@ -1595,7 +1595,7 @@ fn align_record_batch_to_schema(
     )?)
 }
 
-pub struct ArrowLogRecordIterator {
+pub(crate) struct ArrowLogRecordIterator {
     reader: ArrowReader,
     base_offset: i64,
     timestamp: i64,
@@ -1653,7 +1653,7 @@ impl Iterator for ArrowLogRecordIterator {
     }
 }
 
-pub struct ArrowReader {
+pub(crate) struct ArrowReader {
     batch: Arc<TypedBatch>,
 }
 
@@ -1682,7 +1682,7 @@ impl ArrowReader {
         ColumnarRow::from_typed_batch(Arc::clone(&self.batch), row_id)
     }
 }
-pub struct MyVec<T>(pub StreamReader<T>);
+pub(crate) struct MyVec<T>(pub(crate) StreamReader<T>);
 
 #[cfg(test)]
 mod tests {

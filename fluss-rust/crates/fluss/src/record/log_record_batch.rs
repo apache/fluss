@@ -753,7 +753,7 @@ impl LogRecordBatch {
     }
 }
 
-pub enum LogRecordIterator {
+pub(crate) enum LogRecordIterator {
     Empty,
     Arrow(ArrowLogRecordIterator),
 }

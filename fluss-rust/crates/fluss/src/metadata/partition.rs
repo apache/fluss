@@ -45,7 +45,7 @@ impl PartitionSpec {
         &self.partition_spec
     }
 
-    pub fn to_pb(&self) -> PbPartitionSpec {
+    pub(crate) fn to_pb(&self) -> PbPartitionSpec {
         PbPartitionSpec {
             partition_key_values: self
                 .partition_spec
@@ -58,7 +58,7 @@ impl PartitionSpec {
         }
     }
 
-    pub fn from_pb(pb: &PbPartitionSpec) -> Self {
+    pub(crate) fn from_pb(pb: &PbPartitionSpec) -> Self {
         let partition_spec = pb
             .partition_key_values
             .iter()
@@ -231,7 +231,7 @@ impl ResolvedPartitionSpec {
         Ok(expected_partition_name == other_partition_name)
     }
 
-    pub fn to_pb(&self) -> PbPartitionSpec {
+    pub(crate) fn to_pb(&self) -> PbPartitionSpec {
         PbPartitionSpec {
             partition_key_values: self
                 .partition_keys
@@ -245,7 +245,7 @@ impl ResolvedPartitionSpec {
         }
     }
 
-    pub fn from_pb(pb: &PbPartitionSpec) -> Self {
+    pub(crate) fn from_pb(pb: &PbPartitionSpec) -> Self {
         let partition_keys = pb
             .partition_key_values
             .iter()
@@ -328,7 +328,7 @@ impl PartitionInfo {
         self.partition_spec.to_partition_spec()
     }
 
-    pub fn to_pb(&self) -> PbPartitionInfo {
+    pub(crate) fn to_pb(&self) -> PbPartitionInfo {
         PbPartitionInfo {
             partition_id: self.partition_id,
             partition_spec: self.partition_spec.to_pb(),
@@ -337,7 +337,7 @@ impl PartitionInfo {
         }
     }
 
-    pub fn from_pb(pb: &PbPartitionInfo) -> Self {
+    pub(crate) fn from_pb(pb: &PbPartitionInfo) -> Self {
         Self {
             partition_id: pb.partition_id,
             partition_spec: ResolvedPartitionSpec::from_pb(&pb.partition_spec),

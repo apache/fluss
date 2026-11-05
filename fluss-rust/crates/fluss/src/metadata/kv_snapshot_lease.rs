@@ -27,7 +27,7 @@ pub struct KvSnapshotLeaseForBucket {
 }
 
 impl KvSnapshotLeaseForBucket {
-    pub fn to_pb(&self) -> PbKvSnapshotLeaseForBucket {
+    pub(crate) fn to_pb(&self) -> PbKvSnapshotLeaseForBucket {
         PbKvSnapshotLeaseForBucket {
             partition_id: self.partition_id,
             bucket_id: self.bucket_id,
@@ -35,7 +35,7 @@ impl KvSnapshotLeaseForBucket {
         }
     }
 
-    pub fn from_pb(pb: &PbKvSnapshotLeaseForBucket) -> Self {
+    pub(crate) fn from_pb(pb: &PbKvSnapshotLeaseForBucket) -> Self {
         Self {
             partition_id: pb.partition_id,
             bucket_id: pb.bucket_id,
@@ -52,7 +52,7 @@ pub struct KvSnapshotLeaseForTable {
 }
 
 impl KvSnapshotLeaseForTable {
-    pub fn to_pb(&self) -> PbKvSnapshotLeaseForTable {
+    pub(crate) fn to_pb(&self) -> PbKvSnapshotLeaseForTable {
         PbKvSnapshotLeaseForTable {
             table_id: self.table_id,
             bucket_snapshots: self
@@ -63,7 +63,7 @@ impl KvSnapshotLeaseForTable {
         }
     }
 
-    pub fn from_pb(pb: &PbKvSnapshotLeaseForTable) -> Self {
+    pub(crate) fn from_pb(pb: &PbKvSnapshotLeaseForTable) -> Self {
         Self {
             table_id: pb.table_id,
             bucket_snapshots: pb

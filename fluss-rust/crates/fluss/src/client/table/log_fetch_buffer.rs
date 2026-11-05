@@ -121,7 +121,7 @@ enum FetchStep<T> {
 }
 
 /// Represents a pending fetch that is waiting to be completed
-pub trait PendingFetch: Send + Sync {
+pub(crate) trait PendingFetch: Send + Sync {
     fn table_bucket(&self) -> &TableBucket;
     fn fetch_offset(&self) -> i64;
     fn is_completed(&self) -> bool;
@@ -129,7 +129,7 @@ pub trait PendingFetch: Send + Sync {
 }
 
 /// Thread-safe buffer for completed fetches
-pub struct LogFetchBuffer {
+pub(crate) struct LogFetchBuffer {
     resolver: Arc<ReadContextResolver>,
     completed_fetches: Mutex<VecDeque<Box<dyn CompletedFetch>>>,
     pending_fetches: Mutex<HashMap<TableBucket, VecDeque<Box<dyn PendingFetch>>>>,
@@ -385,7 +385,7 @@ pub(crate) const NO_FILTERED_END_OFFSET: i64 = -1;
 
 /// Default implementation of CompletedFetch for in-memory log records
 /// Used for local fetches from tablet server
-pub struct DefaultCompletedFetch {
+pub(crate) struct DefaultCompletedFetch {
     table_bucket: TableBucket,
     api_error: Option<ApiError>,
     fetch_error_context: Option<FetchErrorContext>,
@@ -899,7 +899,7 @@ impl CompletedFetch for DefaultCompletedFetch {
 /// Completed fetch for remote log segments
 /// Matches Java's RemoteCompletedFetch design - separate class for remote vs local
 /// Holds RAII permit until consumed (data is in inner)
-pub struct RemoteCompletedFetch {
+pub(crate) struct RemoteCompletedFetch {
     inner: DefaultCompletedFetch,
     permit: Option<PrefetchPermit>,
 }
@@ -984,7 +984,7 @@ impl CompletedFetch for RemoteCompletedFetch {
 // Permit released explicitly in drain() or automatically when struct drops
 
 /// Pending fetch that waits for remote log file to be downloaded
-pub struct RemotePendingFetch {
+pub(crate) struct RemotePendingFetch {
     segment: RemoteLogSegment,
     download_future: RemoteLogDownloadFuture,
     pos_in_log_segment: i32,

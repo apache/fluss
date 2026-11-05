@@ -28,7 +28,7 @@ pub enum ClusterHealthStatus {
 }
 
 impl ClusterHealthStatus {
-    pub fn to_i32(self) -> i32 {
+    pub(crate) fn to_i32(self) -> i32 {
         match self {
             Self::Green => 0,
             Self::Yellow => 1,
@@ -37,7 +37,7 @@ impl ClusterHealthStatus {
         }
     }
 
-    pub fn try_from_i32(value: i32) -> Result<Self> {
+    pub(crate) fn try_from_i32(value: i32) -> Result<Self> {
         match value {
             0 => Ok(Self::Green),
             1 => Ok(Self::Yellow),
@@ -61,7 +61,7 @@ pub struct ClusterHealth {
 }
 
 impl ClusterHealth {
-    pub fn from_pb(pb: &GetClusterHealthResponse) -> Result<Self> {
+    pub(crate) fn from_pb(pb: &GetClusterHealthResponse) -> Result<Self> {
         Ok(Self {
             num_replicas: pb.num_replicas,
             in_sync_replicas: pb.in_sync_replicas,

@@ -18,7 +18,7 @@
 mod admin;
 mod connection;
 mod credentials;
-pub mod lookup;
+mod lookup;
 mod metadata;
 mod schema_getter;
 mod table;
@@ -26,9 +26,11 @@ mod write;
 
 pub use admin::*;
 pub use connection::*;
-pub use credentials::*;
-pub use lookup::LookupClient;
+pub(crate) use credentials::*;
+pub(crate) use lookup::LookupClient;
+pub use crate::rpc::message::OffsetSpec;
 pub use metadata::*;
 pub(crate) use schema_getter::ClientSchemaGetter;
 pub use table::*;
-pub use write::*;
+pub use write::WriteResultFuture;
+pub(crate) use write::*;

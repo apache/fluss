@@ -27,7 +27,7 @@ pub struct BucketOffset {
 }
 
 impl BucketOffset {
-    pub fn to_pb(&self) -> PbBucketOffset {
+    pub(crate) fn to_pb(&self) -> PbBucketOffset {
         PbBucketOffset {
             partition_id: self.partition_id,
             bucket_id: self.bucket_id,
@@ -35,7 +35,7 @@ impl BucketOffset {
         }
     }
 
-    pub fn from_pb(pb: &PbBucketOffset) -> Self {
+    pub(crate) fn from_pb(pb: &PbBucketOffset) -> Self {
         Self {
             partition_id: pb.partition_id,
             bucket_id: pb.bucket_id,
@@ -52,7 +52,7 @@ pub struct ProducerTableOffsets {
 }
 
 impl ProducerTableOffsets {
-    pub fn to_pb(&self) -> PbProducerTableOffsets {
+    pub(crate) fn to_pb(&self) -> PbProducerTableOffsets {
         PbProducerTableOffsets {
             table_id: self.table_id,
             bucket_offsets: self
@@ -63,7 +63,7 @@ impl ProducerTableOffsets {
         }
     }
 
-    pub fn from_pb(pb: &PbProducerTableOffsets) -> Self {
+    pub(crate) fn from_pb(pb: &PbProducerTableOffsets) -> Self {
         Self {
             table_id: pb.table_id,
             bucket_offsets: pb
@@ -84,7 +84,7 @@ pub struct ProducerOffsets {
 }
 
 impl ProducerOffsets {
-    pub fn from_pb(pb: &GetProducerOffsetsResponse) -> Self {
+    pub(crate) fn from_pb(pb: &GetProducerOffsetsResponse) -> Self {
         Self {
             producer_id: pb.producer_id.clone(),
             expiration_time: pb.expiration_time,

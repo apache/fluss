@@ -28,7 +28,7 @@ pub enum AlterConfigOpType {
 }
 
 impl AlterConfigOpType {
-    pub fn to_i32(self) -> i32 {
+    pub(crate) fn to_i32(self) -> i32 {
         match self {
             Self::Set => 0,
             Self::Delete => 1,
@@ -37,7 +37,7 @@ impl AlterConfigOpType {
         }
     }
 
-    pub fn try_from_i32(value: i32) -> Result<Self> {
+    pub(crate) fn try_from_i32(value: i32) -> Result<Self> {
         match value {
             0 => Ok(Self::Set),
             1 => Ok(Self::Delete),
@@ -71,7 +71,7 @@ impl AlterConfig {
         }
     }
 
-    pub fn to_pb(&self) -> PbAlterConfig {
+    pub(crate) fn to_pb(&self) -> PbAlterConfig {
         PbAlterConfig {
             config_key: self.config_key.clone(),
             config_value: self.config_value.clone(),
@@ -79,7 +79,7 @@ impl AlterConfig {
         }
     }
 
-    pub fn from_pb(pb: &PbAlterConfig) -> Result<Self> {
+    pub(crate) fn from_pb(pb: &PbAlterConfig) -> Result<Self> {
         Ok(Self {
             config_key: pb.config_key.clone(),
             config_value: pb.config_value.clone(),
@@ -98,7 +98,7 @@ pub struct DescribeConfig {
 }
 
 impl DescribeConfig {
-    pub fn from_pb(pb: &PbDescribeConfig) -> Self {
+    pub(crate) fn from_pb(pb: &PbDescribeConfig) -> Self {
         Self {
             config_key: pb.config_key.clone(),
             config_value: pb.config_value.clone(),
@@ -106,7 +106,7 @@ impl DescribeConfig {
         }
     }
 
-    pub fn to_pb(&self) -> PbDescribeConfig {
+    pub(crate) fn to_pb(&self) -> PbDescribeConfig {
         PbDescribeConfig {
             config_key: self.config_key.clone(),
             config_value: self.config_value.clone(),

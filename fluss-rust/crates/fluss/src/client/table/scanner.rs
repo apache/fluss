@@ -79,7 +79,7 @@ pub struct TableScan<'a> {
 }
 
 impl<'a> TableScan<'a> {
-    pub fn new(conn: &'a FlussConnection, table_info: TableInfo, metadata: Arc<Metadata>) -> Self {
+    pub(crate) fn new(conn: &'a FlussConnection, table_info: TableInfo, metadata: Arc<Metadata>) -> Self {
         Self {
             conn,
             table_info,
@@ -1417,7 +1417,7 @@ impl Drop for LogFetcher {
 
 impl LogFetcher {
     #[allow(clippy::too_many_arguments)]
-    pub fn new(
+    pub(crate) fn new(
         table_info: TableInfo,
         conns: Arc<RpcClient>,
         metadata: Arc<Metadata>,
@@ -2573,7 +2573,7 @@ impl LogFetcher {
     }
 }
 
-pub struct LogScannerStatus {
+pub(crate) struct LogScannerStatus {
     bucket_status_map: Arc<RwLock<FairBucketStatusMap<BucketScanStatus>>>,
 }
 
@@ -2678,7 +2678,7 @@ impl Default for LogScannerStatus {
 
 #[derive(Debug)]
 #[allow(dead_code)]
-pub struct BucketScanStatus {
+pub(crate) struct BucketScanStatus {
     offset: RwLock<i64>,
     high_watermark: RwLock<i64>,
 }

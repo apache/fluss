@@ -30,7 +30,7 @@ pub enum ResourceType {
 }
 
 impl ResourceType {
-    pub fn to_i32(self) -> i32 {
+    pub(crate) fn to_i32(self) -> i32 {
         match self {
             Self::Any => 1,
             Self::Cluster => 2,
@@ -39,7 +39,7 @@ impl ResourceType {
         }
     }
 
-    pub fn try_from_i32(value: i32) -> Result<Self> {
+    pub(crate) fn try_from_i32(value: i32) -> Result<Self> {
         match value {
             1 => Ok(Self::Any),
             2 => Ok(Self::Cluster),
@@ -66,7 +66,7 @@ pub enum OperationType {
 }
 
 impl OperationType {
-    pub fn to_i32(self) -> i32 {
+    pub(crate) fn to_i32(self) -> i32 {
         match self {
             Self::Any => 1,
             Self::All => 2,
@@ -79,7 +79,7 @@ impl OperationType {
         }
     }
 
-    pub fn try_from_i32(value: i32) -> Result<Self> {
+    pub(crate) fn try_from_i32(value: i32) -> Result<Self> {
         match value {
             1 => Ok(Self::Any),
             2 => Ok(Self::All),
@@ -104,14 +104,14 @@ pub enum PermissionType {
 }
 
 impl PermissionType {
-    pub fn to_i32(self) -> i32 {
+    pub(crate) fn to_i32(self) -> i32 {
         match self {
             Self::Any => 1,
             Self::Allow => 2,
         }
     }
 
-    pub fn try_from_i32(value: i32) -> Result<Self> {
+    pub(crate) fn try_from_i32(value: i32) -> Result<Self> {
         match value {
             1 => Ok(Self::Any),
             2 => Ok(Self::Allow),
@@ -135,7 +135,7 @@ pub struct AclInfo {
 }
 
 impl AclInfo {
-    pub fn to_pb(&self) -> PbAclInfo {
+    pub(crate) fn to_pb(&self) -> PbAclInfo {
         PbAclInfo {
             resource_name: self.resource_name.clone(),
             resource_type: self.resource_type.to_i32(),
@@ -147,7 +147,7 @@ impl AclInfo {
         }
     }
 
-    pub fn from_pb(pb: &PbAclInfo) -> Result<Self> {
+    pub(crate) fn from_pb(pb: &PbAclInfo) -> Result<Self> {
         Ok(Self {
             resource_name: pb.resource_name.clone(),
             resource_type: ResourceType::try_from_i32(pb.resource_type)?,
@@ -174,7 +174,7 @@ pub struct AclFilter {
 }
 
 impl AclFilter {
-    pub fn to_pb(&self) -> PbAclFilter {
+    pub(crate) fn to_pb(&self) -> PbAclFilter {
         PbAclFilter {
             resource_name: self.resource_name.clone(),
             resource_type: self.resource_type.to_i32(),
@@ -186,7 +186,7 @@ impl AclFilter {
         }
     }
 
-    pub fn from_pb(pb: &PbAclFilter) -> Result<Self> {
+    pub(crate) fn from_pb(pb: &PbAclFilter) -> Result<Self> {
         Ok(Self {
             resource_name: pb.resource_name.clone(),
             resource_type: ResourceType::try_from_i32(pb.resource_type)?,
@@ -213,7 +213,7 @@ pub struct AclError {
 }
 
 impl CreateAclResult {
-    pub fn from_pb(pb: &PbCreateAclRespInfo) -> Result<Self> {
+    pub(crate) fn from_pb(pb: &PbCreateAclRespInfo) -> Result<Self> {
         Ok(Self {
             acl: AclInfo::from_pb(&pb.acl)?,
             error: pb.error_code.map(|code| AclError {
@@ -233,7 +233,7 @@ pub struct DropAclMatchingAcl {
 }
 
 impl DropAclMatchingAcl {
-    pub fn from_pb(pb: &PbDropAclsMatchingAcl) -> Result<Self> {
+    pub(crate) fn from_pb(pb: &PbDropAclsMatchingAcl) -> Result<Self> {
         Ok(Self {
             acl: AclInfo::from_pb(&pb.acl)?,
             error: pb.error_code.map(|code| AclError {
@@ -253,7 +253,7 @@ pub struct DropAclsFilterResult {
 }
 
 impl DropAclsFilterResult {
-    pub fn from_pb(pb: &PbDropAclsFilterResult) -> Result<Self> {
+    pub(crate) fn from_pb(pb: &PbDropAclsFilterResult) -> Result<Self> {
         let matching_acls = pb
             .matching_acls
             .iter()

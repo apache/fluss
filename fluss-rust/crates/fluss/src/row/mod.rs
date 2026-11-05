@@ -19,21 +19,21 @@ pub mod binary_array;
 pub mod binary_map;
 mod column;
 pub(crate) mod column_vector;
-pub mod columnar;
+pub(crate) mod columnar;
 pub mod view;
 
 pub(crate) mod datum;
 mod decimal;
 
 pub(crate) mod aligned;
-pub mod binary;
+pub(crate) mod binary;
 pub(crate) mod column_writer;
-pub mod compacted;
-pub mod encode;
-pub mod field_getter;
+pub(crate) mod compacted;
+pub(crate) mod encode;
+pub(crate) mod field_getter;
 mod fixed_schema_decoder;
 mod lookup_row;
-pub mod paimon;
+pub(crate) mod paimon;
 mod projected_row;
 mod row_decoder;
 
@@ -45,26 +45,26 @@ pub use column::*;
 pub use compacted::CompactedRow;
 pub use datum::*;
 pub use decimal::{Decimal, MAX_COMPACT_PRECISION};
-pub use encode::KeyEncoder;
+pub(crate) use encode::KeyEncoder;
 pub(crate) use fixed_schema_decoder::FixedSchemaDecoder;
 pub use lookup_row::LookupRow;
 pub(crate) use projected_row::ProjectedRow;
-pub use row_decoder::{CompactedRowDecoder, RowDecoder, RowDecoderFactory};
+pub(crate) use row_decoder::{CompactedRowDecoder, RowDecoder, RowDecoderFactory};
 use serde::Serialize;
 pub use view::{ArrayView, MapView, RowView};
 
-pub struct BinaryRow<'a> {
+pub(crate) struct BinaryRow<'a> {
     data: BinaryDataWrapper<'a>,
 }
 
-pub enum BinaryDataWrapper<'a> {
+pub(crate) enum BinaryDataWrapper<'a> {
     Bytes(Bytes),
     Ref(&'a [u8]),
 }
 
 impl<'a> BinaryRow<'a> {
     /// Returns the binary representation of this row as a byte slice.
-    pub fn as_bytes(&'a self) -> &'a [u8] {
+    pub(crate) fn as_bytes(&'a self) -> &'a [u8] {
         match &self.data {
             BinaryDataWrapper::Bytes(bytes) => bytes.as_ref(),
             BinaryDataWrapper::Ref(r) => r,

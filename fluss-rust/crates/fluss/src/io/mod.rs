@@ -18,10 +18,10 @@
 
 mod file_io;
 
-pub use file_io::*;
+pub(crate) use file_io::*;
 
 mod storage;
-pub use storage::*;
+pub(crate) use storage::*;
 
 #[cfg(feature = "storage-fs")]
 mod storage_fs;

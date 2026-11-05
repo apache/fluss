@@ -41,7 +41,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 #[allow(dead_code)]
-pub struct WriterClient {
+pub(crate) struct WriterClient {
     config: Config,
     max_request_size: i32,
     accumulate: Arc<RecordAccumulator>,

@@ -49,7 +49,7 @@ struct BootstrapServer {
 }
 
 impl Metadata {
-    pub async fn new(bootstrap: &str, connections: Arc<RpcClient>) -> Result<Self> {
+    pub(crate) async fn new(bootstrap: &str, connections: Arc<RpcClient>) -> Result<Self> {
         let cluster = Self::init_cluster(bootstrap, connections.clone()).await?;
         let (cluster_version_tx, _) = watch::channel(0);
         Ok(Metadata {
@@ -61,7 +61,7 @@ impl Metadata {
         })
     }
 
-    pub fn subscribe_cluster_changes(&self) -> watch::Receiver<u64> {
+    pub(crate) fn subscribe_cluster_changes(&self) -> watch::Receiver<u64> {
         self.cluster_version_tx.subscribe()
     }
 
@@ -263,7 +263,7 @@ impl Metadata {
         *guard = Arc::new(cluster);
     }
 
-    pub fn invalidate_server(&self, server_id: &i32, table_ids: Vec<i64>) {
+    pub(crate) fn invalidate_server(&self, server_id: &i32, table_ids: Vec<i64>) {
         {
             let mut cluster_guard = self.cluster.write();
             let updated_cluster = cluster_guard.invalidate_server(server_id, table_ids);
@@ -272,7 +272,7 @@ impl Metadata {
         self.notify_cluster_changed();
     }
 
-    pub fn invalidate_physical_table_meta(
+    pub(crate) fn invalidate_physical_table_meta(
         &self,
         physical_tables_to_invalid: &HashSet<PhysicalTablePath>,
     ) {
@@ -342,7 +342,7 @@ impl Metadata {
         self.notify_cluster_changed();
     }
 
-    pub async fn update(&self, metadata_response: MetadataResponse) -> Result<()> {
+    pub(crate) async fn update(&self, metadata_response: MetadataResponse) -> Result<()> {
         let origin_cluster = self.cluster.read().clone();
         let new_cluster =
             Cluster::from_metadata_response(metadata_response, Some(&origin_cluster))?;
@@ -351,7 +351,7 @@ impl Metadata {
         Ok(())
     }
 
-    pub async fn update_tables_metadata(
+    pub(crate) async fn update_tables_metadata(
         &self,
         table_paths: &HashSet<&TablePath>,
         physical_table_paths: &HashSet<&Arc<PhysicalTablePath>>,
@@ -398,12 +398,12 @@ impl Metadata {
         result
     }
 
-    pub async fn update_table_metadata(&self, table_path: &TablePath) -> Result<()> {
+    pub(crate) async fn update_table_metadata(&self, table_path: &TablePath) -> Result<()> {
         self.update_tables_metadata(&HashSet::from([table_path]), &HashSet::new(), vec![])
             .await
     }
 
-    pub async fn update_physical_table_metadata(
+    pub(crate) async fn update_physical_table_metadata(
         &self,
         physical_table_paths: &[Arc<PhysicalTablePath>],
     ) -> Result<()> {
@@ -424,7 +424,7 @@ impl Metadata {
             .await
     }
 
-    pub async fn check_and_update_table_metadata(&self, table_paths: &[TablePath]) -> Result<()> {
+    pub(crate) async fn check_and_update_table_metadata(&self, table_paths: &[TablePath]) -> Result<()> {
         let cluster_binding = self.cluster.read().clone();
         let need_update_table_paths: HashSet<&TablePath> = table_paths
             .iter()
@@ -467,7 +467,7 @@ impl Metadata {
     /// Resolves the partition id, refreshing metadata once if not cached.
     /// Returns `None` when the partition does not exist — `PartitionNotExists`
     /// server errors are swallowed so callers can short-circuit to an empty result.
-    pub async fn check_and_update_partition_metadata(
+    pub(crate) async fn check_and_update_partition_metadata(
         &self,
         physical_table_path: &PhysicalTablePath,
     ) -> Result<Option<PartitionId>> {
@@ -493,14 +493,14 @@ impl Metadata {
         Ok(result)
     }
 
-    pub fn get_cluster(&self) -> Arc<Cluster> {
+    pub(crate) fn get_cluster(&self) -> Arc<Cluster> {
         let guard = self.cluster.read();
         guard.clone()
     }
 
     const MAX_RETRY_TIMES: u8 = 3;
 
-    pub async fn leader_for(
+    pub(crate) async fn leader_for(
         &self,
         table_path: &TablePath,
         table_bucket: &TableBucket,

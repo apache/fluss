@@ -23,13 +23,14 @@ use std::collections::HashMap;
 
 mod arrow;
 mod error;
-pub mod kv;
+pub(crate) mod kv;
 mod log_record_batch;
 mod statistics;
 
 pub(crate) use statistics::is_supported_statistics_type;
 
-pub use arrow::*;
+pub use arrow::{from_arrow_field, to_arrow_schema, to_arrow_type};
+pub(crate) use arrow::*;
 pub(crate) use log_record_batch::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -93,7 +94,7 @@ impl fmt::Display for ChangeType {
 
 #[derive(Clone)]
 pub struct ScanRecord {
-    pub row: ColumnarRow,
+    row: ColumnarRow,
     offset: i64,
     timestamp: i64,
     change_type: ChangeType,

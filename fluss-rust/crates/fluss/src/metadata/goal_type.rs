@@ -26,7 +26,7 @@ pub enum GoalType {
 }
 
 impl GoalType {
-    pub fn to_i32(self) -> i32 {
+    pub(crate) fn to_i32(self) -> i32 {
         match self {
             Self::ReplicaDistribution => 0,
             Self::LeaderDistribution => 1,
@@ -34,7 +34,7 @@ impl GoalType {
         }
     }
 
-    pub fn try_from_i32(value: i32) -> Result<Self> {
+    pub(crate) fn try_from_i32(value: i32) -> Result<Self> {
         match value {
             0 => Ok(Self::ReplicaDistribution),
             1 => Ok(Self::LeaderDistribution),

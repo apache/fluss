@@ -27,7 +27,7 @@ pub struct RemoteLogManifestEntry {
 }
 
 impl RemoteLogManifestEntry {
-    pub fn from_pb(pb: &PbRemoteLogManifestEntry) -> Self {
+    pub(crate) fn from_pb(pb: &PbRemoteLogManifestEntry) -> Self {
         Self {
             table_bucket: TableBucket::from_pb(&pb.table_bucket),
             remote_log_manifest_path: pb.remote_log_manifest_path.clone(),

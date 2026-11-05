@@ -40,7 +40,7 @@ pub struct TableUpsert {
 
 #[allow(dead_code)]
 impl TableUpsert {
-    pub fn new(
+    pub(crate) fn new(
         table_path: TablePath,
         table_info: TableInfo,
         writer_client: Arc<WriterClient>,
@@ -126,7 +126,7 @@ pub struct UpsertWriter {
 struct UpsertWriterFactory;
 
 impl UpsertWriterFactory {
-    pub fn create(
+    pub(crate) fn create(
         table_path: Arc<TablePath>,
         table_info: Arc<TableInfo>,
         partial_update_columns: Option<Arc<Vec<usize>>>,
@@ -570,10 +570,10 @@ mod tests {
 /// Currently this is an empty struct to allow for compatible evolution in the future
 #[derive(Default)]
 #[allow(dead_code)]
-pub struct UpsertResult;
+pub(crate) struct UpsertResult;
 
 /// The result of deleting a record
 /// Currently this is an empty struct to allow for compatible evolution in the future
 #[derive(Default)]
 #[allow(dead_code)]
-pub struct DeleteResult;
+pub(crate) struct DeleteResult;

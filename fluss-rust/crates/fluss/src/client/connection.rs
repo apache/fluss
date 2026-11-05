@@ -92,11 +92,11 @@ impl FlussConnection {
         Ok(())
     }
 
-    pub fn get_metadata(&self) -> Arc<Metadata> {
+    pub(crate) fn get_metadata(&self) -> Arc<Metadata> {
         self.metadata.clone()
     }
 
-    pub fn get_connections(&self) -> Arc<RpcClient> {
+    pub(crate) fn get_connections(&self) -> Arc<RpcClient> {
         self.network_connects.clone()
     }
 
@@ -127,7 +127,7 @@ impl FlussConnection {
         Ok(admin)
     }
 
-    pub fn get_or_create_writer_client(&self) -> Result<Arc<WriterClient>> {
+    pub(crate) fn get_or_create_writer_client(&self) -> Result<Arc<WriterClient>> {
         // 1. Fast path: Attempt to acquire a read lock to check if the client already exists.
         if let Some(client) = self.writer_client.read().as_ref() {
             return Ok(client.clone());
@@ -166,7 +166,7 @@ impl FlussConnection {
     }
 
     /// Gets or creates a lookup client for batched lookup operations.
-    pub fn get_or_create_lookup_client(&self) -> Result<Arc<LookupClient>> {
+    pub(crate) fn get_or_create_lookup_client(&self) -> Result<Arc<LookupClient>> {
         // 1. Fast path: Attempt to acquire a read lock to check if the client already exists.
         if let Some(client) = self.lookup_client.read().as_ref() {
             return Ok(client.clone());

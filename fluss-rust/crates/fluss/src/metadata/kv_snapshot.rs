@@ -32,7 +32,7 @@ pub struct KvSnapshot {
 }
 
 impl KvSnapshot {
-    pub fn from_pb(pb: &PbKvSnapshot) -> Self {
+    pub(crate) fn from_pb(pb: &PbKvSnapshot) -> Self {
         Self {
             bucket_id: pb.bucket_id,
             snapshot_id: pb.snapshot_id,
@@ -50,7 +50,7 @@ pub struct LatestKvSnapshots {
 }
 
 impl LatestKvSnapshots {
-    pub fn from_pb(pb: &GetLatestKvSnapshotsResponse) -> Self {
+    pub(crate) fn from_pb(pb: &GetLatestKvSnapshotsResponse) -> Self {
         Self {
             table_id: pb.table_id,
             partition_id: pb.partition_id,
@@ -72,7 +72,7 @@ pub struct RemotePathAndLocalFile {
 }
 
 impl RemotePathAndLocalFile {
-    pub fn from_pb(pb: &PbRemotePathAndLocalFile) -> Self {
+    pub(crate) fn from_pb(pb: &PbRemotePathAndLocalFile) -> Self {
         Self {
             remote_path: pb.remote_path.clone(),
             local_file_name: pb.local_file_name.clone(),
@@ -88,7 +88,7 @@ pub struct KvSnapshotMetadata {
 }
 
 impl KvSnapshotMetadata {
-    pub fn from_pb(pb: &GetKvSnapshotMetadataResponse) -> Self {
+    pub(crate) fn from_pb(pb: &GetKvSnapshotMetadataResponse) -> Self {
         Self {
             log_offset: pb.log_offset,
             snapshot_files: pb
@@ -108,7 +108,7 @@ pub struct AcquireKvSnapshotLeaseResult {
 }
 
 impl AcquireKvSnapshotLeaseResult {
-    pub fn from_pb(pb: &AcquireKvSnapshotLeaseResponse) -> Self {
+    pub(crate) fn from_pb(pb: &AcquireKvSnapshotLeaseResponse) -> Self {
         Self {
             unavailable_snapshots: pb
                 .unavailable_snapshots
@@ -128,7 +128,7 @@ pub struct ActiveKvSnapshots {
 }
 
 impl ActiveKvSnapshots {
-    pub fn from_pb(pb: &ListKvSnapshotsResponse) -> Self {
+    pub(crate) fn from_pb(pb: &ListKvSnapshotsResponse) -> Self {
         Self {
             table_id: pb.table_id,
             partition_id: pb.partition_id,

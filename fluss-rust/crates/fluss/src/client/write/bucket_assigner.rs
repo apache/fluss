@@ -26,7 +26,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, Ordering};
 
 /// `bucket_count` can differ from the table's `num_buckets` after `bucket.num` changes.
-pub trait BucketAssigner: Sync + Send {
+pub(crate) trait BucketAssigner: Sync + Send {
     fn abort_if_batch_full(&self) -> bool;
 
     fn on_new_batch(&self, cluster: &Cluster, bucket_count: i32, prev_bucket_id: BucketId);
@@ -40,7 +40,7 @@ pub trait BucketAssigner: Sync + Send {
 }
 
 #[derive(Debug)]
-pub struct StickyBucketAssigner {
+pub(crate) struct StickyBucketAssigner {
     table_path: Arc<PhysicalTablePath>,
     current_bucket_id: AtomicI32,
 }
@@ -130,7 +130,7 @@ impl BucketAssigner for StickyBucketAssigner {
 
 /// Unlike [StickyBucketAssigner], each record is assigned to the next bucket
 /// in a rotating sequence, providing even data distribution across all buckets.
-pub struct RoundRobinBucketAssigner {
+pub(crate) struct RoundRobinBucketAssigner {
     table_path: Arc<PhysicalTablePath>,
     counter: AtomicI32,
 }
@@ -175,7 +175,7 @@ impl BucketAssigner for RoundRobinBucketAssigner {
 }
 
 /// A [BucketAssigner] which assigns based on a modulo hashing function
-pub struct HashBucketAssigner {
+pub(crate) struct HashBucketAssigner {
     bucketing_function: Box<dyn BucketingFunction>,
 }
 

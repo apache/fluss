@@ -24,7 +24,7 @@ use crate::util::partition;
 use std::sync::Arc;
 
 /// Get the physical table path for a row, handling partitioned vs non-partitioned tables.
-pub fn get_physical_path<R: InternalRow>(
+pub(crate) fn get_physical_path<R: InternalRow>(
     table_path: &Arc<TablePath>,
     partition_getter: Option<&PartitionGetter>,
     row: &R,
@@ -42,7 +42,7 @@ pub fn get_physical_path<R: InternalRow>(
 
 /// A getter to get partition name from a row.
 #[allow(dead_code)]
-pub struct PartitionGetter {
+pub(crate) struct PartitionGetter {
     partition_keys: Arc<[String]>,
     partitions: Vec<(DataType, FieldGetter)>,
 }

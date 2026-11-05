@@ -18,5 +18,5 @@
 mod arrow_compression;
 mod arrow_compression_ratio_estimator;
 
-pub use arrow_compression::*;
-pub use arrow_compression_ratio_estimator::*;
+pub(crate) use arrow_compression::*;
+pub(crate) use arrow_compression_ratio_estimator::*;

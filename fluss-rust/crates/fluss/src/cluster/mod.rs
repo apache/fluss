@@ -23,7 +23,7 @@ use std::sync::Arc;
 #[allow(clippy::module_inception)]
 mod cluster;
 
-pub use cluster::Cluster;
+pub(crate) use cluster::Cluster;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ServerNode {
@@ -35,7 +35,7 @@ pub struct ServerNode {
 }
 
 impl ServerNode {
-    pub fn new(id: i32, host: String, port: u32, server_type: ServerType) -> ServerNode {
+    pub(crate) fn new(id: i32, host: String, port: u32, server_type: ServerType) -> ServerNode {
         let uid = match &server_type {
             ServerType::CoordinatorServer => format!("cs-{id}"),
             ServerType::TabletServer => format!("ts-{id}"),
@@ -83,7 +83,7 @@ pub enum ServerType {
 }
 
 impl ServerType {
-    pub fn to_type_id(&self) -> i32 {
+    pub(crate) fn to_type_id(&self) -> i32 {
         match self {
             ServerType::CoordinatorServer => 1,
             ServerType::TabletServer => 2,
@@ -91,7 +91,7 @@ impl ServerType {
         }
     }
 
-    pub fn from_type_id(type_id: i32) -> ServerType {
+    pub(crate) fn from_type_id(type_id: i32) -> ServerType {
         match type_id {
             1 => ServerType::CoordinatorServer,
             2 => ServerType::TabletServer,
@@ -111,14 +111,14 @@ impl fmt::Display for ServerType {
 }
 
 #[derive(Debug, Clone)]
-pub struct BucketLocation {
-    pub table_bucket: TableBucket,
+pub(crate) struct BucketLocation {
+    pub(crate) table_bucket: TableBucket,
     leader: Option<ServerNode>,
     physical_table_path: Arc<PhysicalTablePath>,
 }
 
 impl BucketLocation {
-    pub fn new(
+    pub(crate) fn new(
         table_bucket: TableBucket,
         leader: Option<ServerNode>,
         physical_table_path: Arc<PhysicalTablePath>,
@@ -130,19 +130,19 @@ impl BucketLocation {
         }
     }
 
-    pub fn leader(&self) -> &Option<ServerNode> {
+    pub(crate) fn leader(&self) -> &Option<ServerNode> {
         &self.leader
     }
 
-    pub fn table_bucket(&self) -> &TableBucket {
+    pub(crate) fn table_bucket(&self) -> &TableBucket {
         &self.table_bucket
     }
 
-    pub fn bucket_id(&self) -> BucketId {
+    pub(crate) fn bucket_id(&self) -> BucketId {
         self.table_bucket.bucket_id()
     }
 
-    pub fn physical_table_path(&self) -> &Arc<PhysicalTablePath> {
+    pub(crate) fn physical_table_path(&self) -> &Arc<PhysicalTablePath> {
         &self.physical_table_path
     }
 }

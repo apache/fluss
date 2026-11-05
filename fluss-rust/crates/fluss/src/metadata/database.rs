@@ -190,7 +190,7 @@ impl JsonSerde for DatabaseDescriptor {
 
 impl DatabaseDescriptor {
     /// Create DatabaseDescriptor from JSON bytes (equivalent to Java's fromJsonBytes)
-    pub fn from_json_bytes(bytes: &[u8]) -> Result<Self> {
+    pub(crate) fn from_json_bytes(bytes: &[u8]) -> Result<Self> {
         let json_value: Value = serde_json::from_slice(bytes).map_err(|e| JsonSerdeError {
             message: format!("Failed to parse JSON: {e}"),
         })?;
@@ -198,7 +198,7 @@ impl DatabaseDescriptor {
     }
 
     /// Convert DatabaseDescriptor to JSON bytes
-    pub fn to_json_bytes(&self) -> Result<Vec<u8>> {
+    pub(crate) fn to_json_bytes(&self) -> Result<Vec<u8>> {
         let json_value = self.serialize_json()?;
         serde_json::to_vec(&json_value).map_err(|e| JsonSerdeError {
             message: format!("Failed to serialize to JSON: {e}"),
@@ -215,7 +215,7 @@ pub struct DatabaseSummary {
 }
 
 impl DatabaseSummary {
-    pub fn from_pb(pb: &PbDatabaseSummary) -> Self {
+    pub(crate) fn from_pb(pb: &PbDatabaseSummary) -> Self {
         Self {
             database_name: pb.database_name.clone(),
             created_time: pb.created_time,

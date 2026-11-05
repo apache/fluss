@@ -34,7 +34,7 @@ impl BucketStatsRequest {
         }
     }
 
-    pub fn to_pb(&self) -> PbTableStatsReqForBucket {
+    pub(crate) fn to_pb(&self) -> PbTableStatsReqForBucket {
         PbTableStatsReqForBucket {
             partition_id: self.partition_id,
             bucket_id: self.bucket_id,
@@ -42,7 +42,7 @@ impl BucketStatsRequest {
         }
     }
 
-    pub fn from_pb(pb: &PbTableStatsReqForBucket) -> Self {
+    pub(crate) fn from_pb(pb: &PbTableStatsReqForBucket) -> Self {
         Self {
             partition_id: pb.partition_id,
             bucket_id: pb.bucket_id,
@@ -67,7 +67,7 @@ pub struct BucketStatsError {
 }
 
 impl BucketStats {
-    pub fn from_pb(pb: &PbTableStatsRespForBucket) -> Self {
+    pub(crate) fn from_pb(pb: &PbTableStatsRespForBucket) -> Self {
         let error = pb.error_code.map(|code| BucketStatsError {
             code,
             message: pb.error_message.clone(),
@@ -88,7 +88,7 @@ pub struct TableStats {
 }
 
 impl TableStats {
-    pub fn from_pb(pb: &GetTableStatsResponse) -> Self {
+    pub(crate) fn from_pb(pb: &GetTableStatsResponse) -> Self {
         Self {
             buckets: pb.buckets_resp.iter().map(BucketStats::from_pb).collect(),
         }

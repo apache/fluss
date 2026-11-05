@@ -133,7 +133,7 @@ pub enum Error {
 /// These create `FlussAPIError` with the correct protocol error code,
 /// consistent with Java where e.g. `InvalidTableException` always carries code 15.
 impl Error {
-    pub fn table_not_exist(message: impl Into<String>) -> Self {
+    pub(crate) fn table_not_exist(message: impl Into<String>) -> Self {
         Error::FlussAPIError {
             api_error: ApiError {
                 code: FlussError::TableNotExist.code(),
@@ -142,7 +142,7 @@ impl Error {
         }
     }
 
-    pub fn invalid_table(message: impl Into<String>) -> Self {
+    pub(crate) fn invalid_table(message: impl Into<String>) -> Self {
         Error::FlussAPIError {
             api_error: ApiError {
                 code: FlussError::InvalidTableException.code(),
@@ -151,7 +151,7 @@ impl Error {
         }
     }
 
-    pub fn partition_not_exist(message: impl Into<String>) -> Self {
+    pub(crate) fn partition_not_exist(message: impl Into<String>) -> Self {
         Error::FlussAPIError {
             api_error: ApiError {
                 code: FlussError::PartitionNotExists.code(),
@@ -160,7 +160,7 @@ impl Error {
         }
     }
 
-    pub fn invalid_partition(message: impl Into<String>) -> Self {
+    pub(crate) fn invalid_partition(message: impl Into<String>) -> Self {
         Error::FlussAPIError {
             api_error: ApiError {
                 code: FlussError::PartitionSpecInvalidException.code(),
@@ -178,7 +178,7 @@ impl Error {
         }
     }
 
-    pub fn leader_not_available(message: impl Into<String>) -> Self {
+    pub(crate) fn leader_not_available(message: impl Into<String>) -> Self {
         Error::FlussAPIError {
             api_error: ApiError {
                 code: FlussError::LeaderNotAvailableException.code(),

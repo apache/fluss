@@ -34,7 +34,7 @@ pub enum RebalanceStatus {
 }
 
 impl RebalanceStatus {
-    pub fn to_i32(self) -> i32 {
+    pub(crate) fn to_i32(self) -> i32 {
         match self {
             Self::NotStarted => 0,
             Self::Rebalancing => 1,
@@ -45,7 +45,7 @@ impl RebalanceStatus {
         }
     }
 
-    pub fn try_from_i32(value: i32) -> Result<Self> {
+    pub(crate) fn try_from_i32(value: i32) -> Result<Self> {
         match value {
             0 => Ok(Self::NotStarted),
             1 => Ok(Self::Rebalancing),
@@ -73,7 +73,7 @@ pub struct BucketRebalancePlan {
 }
 
 impl BucketRebalancePlan {
-    pub fn from_pb(pb: &PbRebalancePlanForBucket) -> Self {
+    pub(crate) fn from_pb(pb: &PbRebalancePlanForBucket) -> Self {
         Self {
             partition_id: pb.partition_id,
             bucket_id: pb.bucket_id,
@@ -93,7 +93,7 @@ pub struct BucketRebalanceProgress {
 }
 
 impl BucketRebalanceProgress {
-    pub fn from_pb(pb: &PbRebalanceProgressForBucket) -> Result<Self> {
+    pub(crate) fn from_pb(pb: &PbRebalanceProgressForBucket) -> Result<Self> {
         Ok(Self {
             rebalance_plan: BucketRebalancePlan::from_pb(&pb.rebalance_plan),
             rebalance_status: RebalanceStatus::try_from_i32(pb.rebalance_status)?,
@@ -109,7 +109,7 @@ pub struct TableRebalanceProgress {
 }
 
 impl TableRebalanceProgress {
-    pub fn from_pb(pb: &PbRebalanceProgressForTable) -> Result<Self> {
+    pub(crate) fn from_pb(pb: &PbRebalanceProgressForTable) -> Result<Self> {
         Ok(Self {
             table_id: pb.table_id,
             buckets_progress: pb
@@ -130,7 +130,7 @@ pub struct RebalanceProgress {
 }
 
 impl RebalanceProgress {
-    pub fn from_pb(pb: &ListRebalanceProgressResponse) -> Result<Self> {
+    pub(crate) fn from_pb(pb: &ListRebalanceProgressResponse) -> Result<Self> {
         Ok(Self {
             rebalance_id: pb.rebalance_id.clone(),
             rebalance_status: pb

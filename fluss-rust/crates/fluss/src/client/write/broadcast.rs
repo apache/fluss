@@ -21,9 +21,9 @@ use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::Notify;
 
-pub type Result<T, E = Error> = std::result::Result<T, E>;
+pub(crate) type Result<T, E = Error> = std::result::Result<T, E>;
 
-pub type BatchWriteResult = Result<(), Error>;
+pub(crate) type BatchWriteResult = Result<(), Error>;
 
 type Callback<T> = Box<dyn FnOnce(&Result<T>) + Send + 'static>;
 type Dispatcher<T> = fn(CompletionBatch<T>);
@@ -63,7 +63,7 @@ impl<T> std::fmt::Debug for CallbackGroup<T> {
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
-pub enum Error {
+pub(crate) enum Error {
     #[error("BroadcastOnce dropped")]
     Dropped,
     #[error("Write failed: {message} (code {code})")]
@@ -73,7 +73,7 @@ pub enum Error {
 }
 
 #[derive(Debug, Clone)]
-pub struct BroadcastOnceReceiver<T> {
+pub(crate) struct BroadcastOnceReceiver<T> {
     shared: Arc<Shared<T>>,
 }
 
@@ -202,7 +202,7 @@ impl<T> Shared<T> {
 }
 
 #[derive(Debug)]
-pub struct BroadcastOnce<T>
+pub(crate) struct BroadcastOnce<T>
 where
     T: Send + Sync,
 {

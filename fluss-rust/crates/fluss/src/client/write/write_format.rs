@@ -21,7 +21,7 @@ use crate::metadata::KvFormat;
 use std::fmt::Display;
 
 #[derive(Copy, Clone)]
-pub enum WriteFormat {
+pub(crate) enum WriteFormat {
     ArrowLog,
     CompactedLog,
     CompactedKv,

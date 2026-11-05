@@ -28,7 +28,7 @@ pub struct LakeBucketSnapshot {
 }
 
 impl LakeBucketSnapshot {
-    pub fn from_pb(pb: &PbLakeSnapshotForBucket) -> Self {
+    pub(crate) fn from_pb(pb: &PbLakeSnapshotForBucket) -> Self {
         Self {
             partition_id: pb.partition_id,
             bucket_id: pb.bucket_id,
@@ -49,7 +49,7 @@ pub struct LakeSnapshotInfo {
 }
 
 impl LakeSnapshotInfo {
-    pub fn from_pb(pb: &GetLakeSnapshotResponse) -> Self {
+    pub(crate) fn from_pb(pb: &GetLakeSnapshotResponse) -> Self {
         Self {
             table_id: pb.table_id,
             snapshot_id: pb.snapshot_id,

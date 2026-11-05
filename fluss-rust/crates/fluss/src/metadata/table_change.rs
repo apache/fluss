@@ -30,13 +30,13 @@ pub enum ColumnPositionType {
 }
 
 impl ColumnPositionType {
-    pub fn to_i32(self) -> i32 {
+    pub(crate) fn to_i32(self) -> i32 {
         match self {
             Self::Last => 0,
         }
     }
 
-    pub fn try_from_i32(value: i32) -> Result<Self> {
+    pub(crate) fn try_from_i32(value: i32) -> Result<Self> {
         match value {
             0 => Ok(Self::Last),
             _ => Err(Error::IllegalArgument {
@@ -60,7 +60,7 @@ pub struct AddColumn {
 }
 
 impl AddColumn {
-    pub fn to_pb(&self) -> PbAddColumn {
+    pub(crate) fn to_pb(&self) -> PbAddColumn {
         PbAddColumn {
             column_name: self.column_name.clone(),
             data_type_json: self.data_type_json.clone(),
@@ -73,7 +73,7 @@ impl AddColumn {
         }
     }
 
-    pub fn from_pb(pb: &PbAddColumn) -> Result<Self> {
+    pub(crate) fn from_pb(pb: &PbAddColumn) -> Result<Self> {
         Ok(Self {
             column_name: pb.column_name.clone(),
             data_type_json: pb.data_type_json.clone(),
@@ -90,13 +90,13 @@ pub struct DropColumn {
 }
 
 impl DropColumn {
-    pub fn to_pb(&self) -> PbDropColumn {
+    pub(crate) fn to_pb(&self) -> PbDropColumn {
         PbDropColumn {
             column_name: self.column_name.clone(),
         }
     }
 
-    pub fn from_pb(pb: &PbDropColumn) -> Self {
+    pub(crate) fn from_pb(pb: &PbDropColumn) -> Self {
         Self {
             column_name: pb.column_name.clone(),
         }
@@ -111,14 +111,14 @@ pub struct RenameColumn {
 }
 
 impl RenameColumn {
-    pub fn to_pb(&self) -> PbRenameColumn {
+    pub(crate) fn to_pb(&self) -> PbRenameColumn {
         PbRenameColumn {
             old_column_name: self.old_column_name.clone(),
             new_column_name: self.new_column_name.clone(),
         }
     }
 
-    pub fn from_pb(pb: &PbRenameColumn) -> Self {
+    pub(crate) fn from_pb(pb: &PbRenameColumn) -> Self {
         Self {
             old_column_name: pb.old_column_name.clone(),
             new_column_name: pb.new_column_name.clone(),
@@ -179,7 +179,7 @@ pub struct ModifyColumn {
 }
 
 impl ModifyColumn {
-    pub fn to_pb(&self) -> PbModifyColumn {
+    pub(crate) fn to_pb(&self) -> PbModifyColumn {
         PbModifyColumn {
             column_name: self.column_name.clone(),
             data_type_json: self.data_type_json.clone(),
@@ -188,7 +188,7 @@ impl ModifyColumn {
         }
     }
 
-    pub fn from_pb(pb: &PbModifyColumn) -> Result<Self> {
+    pub(crate) fn from_pb(pb: &PbModifyColumn) -> Result<Self> {
         Ok(Self {
             column_name: pb.column_name.clone(),
             data_type_json: pb.data_type_json.clone(),

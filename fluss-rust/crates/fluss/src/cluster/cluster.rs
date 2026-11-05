@@ -32,7 +32,7 @@ use std::sync::Arc;
 static EMPTY: Vec<BucketLocation> = Vec::new();
 
 #[derive(Default)]
-pub struct Cluster {
+pub(crate) struct Cluster {
     coordinator_server: Option<ServerNode>,
     alive_tablet_servers_by_id: HashMap<i32, ServerNode>,
     alive_tablet_servers: Vec<ServerNode>,
@@ -48,7 +48,7 @@ pub struct Cluster {
 
 impl Cluster {
     #[allow(clippy::too_many_arguments)]
-    pub fn new(
+    pub(crate) fn new(
         coordinator_server: Option<ServerNode>,
         alive_tablet_servers_by_id: HashMap<i32, ServerNode>,
         available_locations_by_path: HashMap<Arc<PhysicalTablePath>, Vec<BucketLocation>>,
@@ -82,7 +82,7 @@ impl Cluster {
         }
     }
 
-    pub fn invalidate_server(&self, server_id: &i32, table_ids: Vec<TableId>) -> Self {
+    pub(crate) fn invalidate_server(&self, server_id: &i32, table_ids: Vec<TableId>) -> Self {
         let alive_tablet_servers_by_id = self
             .alive_tablet_servers_by_id
             .iter()
@@ -110,7 +110,7 @@ impl Cluster {
         )
     }
 
-    pub fn invalidate_physical_table_meta(
+    pub(crate) fn invalidate_physical_table_meta(
         &self,
         physical_tables_to_invalid: &HashSet<PhysicalTablePath>,
     ) -> Self {
@@ -186,7 +186,7 @@ impl Cluster {
         )
     }
 
-    pub fn update(&mut self, cluster: Cluster) {
+    pub(crate) fn update(&mut self, cluster: Cluster) {
         let Cluster {
             coordinator_server,
             alive_tablet_servers_by_id,
@@ -265,7 +265,7 @@ impl Cluster {
         (available_locations_by_path, available_locations_by_bucket)
     }
 
-    pub fn from_metadata_response(
+    pub(crate) fn from_metadata_response(
         metadata_response: MetadataResponse,
         origin_cluster: Option<&Cluster>,
     ) -> Result<Cluster> {
@@ -446,11 +446,11 @@ impl Cluster {
         ))
     }
 
-    pub fn get_coordinator_server(&self) -> Option<&ServerNode> {
+    pub(crate) fn get_coordinator_server(&self) -> Option<&ServerNode> {
         self.coordinator_server.as_ref()
     }
 
-    pub fn leader_for(&self, table_bucket: &TableBucket) -> Option<&ServerNode> {
+    pub(crate) fn leader_for(&self, table_bucket: &TableBucket) -> Option<&ServerNode> {
         let location = self.available_locations_by_bucket.get(table_bucket);
         if let Some(location) = location {
             location.leader().as_ref()
@@ -459,11 +459,11 @@ impl Cluster {
         }
     }
 
-    pub fn get_tablet_server(&self, id: i32) -> Option<&ServerNode> {
+    pub(crate) fn get_tablet_server(&self, id: i32) -> Option<&ServerNode> {
         self.alive_tablet_servers_by_id.get(&id)
     }
 
-    pub fn get_table_bucket(
+    pub(crate) fn get_table_bucket(
         &self,
         physical_table_path: &PhysicalTablePath,
         bucket_id: BucketId,
@@ -485,37 +485,37 @@ impl Cluster {
         ))
     }
 
-    pub fn get_partition_id(&self, physical_table_path: &PhysicalTablePath) -> Option<PartitionId> {
+    pub(crate) fn get_partition_id(&self, physical_table_path: &PhysicalTablePath) -> Option<PartitionId> {
         self.partitions_id_by_path.get(physical_table_path).copied()
     }
 
-    pub fn get_partition_name(&self, partition_id: PartitionId) -> Option<&String> {
+    pub(crate) fn get_partition_name(&self, partition_id: PartitionId) -> Option<&String> {
         self.partition_name_by_id.get(&partition_id)
     }
 
-    pub fn get_table_id(&self, table_path: &TablePath) -> Option<TableId> {
+    pub(crate) fn get_table_id(&self, table_path: &TablePath) -> Option<TableId> {
         self.table_id_by_path.get(table_path).copied()
     }
 
-    pub fn get_bucket_locations_by_path(
+    pub(crate) fn get_bucket_locations_by_path(
         &self,
     ) -> &HashMap<Arc<PhysicalTablePath>, Vec<BucketLocation>> {
         &self.available_locations_by_path
     }
 
-    pub fn get_table_info_by_path(&self) -> &HashMap<TablePath, TableInfo> {
+    pub(crate) fn get_table_info_by_path(&self) -> &HashMap<TablePath, TableInfo> {
         &self.table_info_by_path
     }
 
-    pub fn get_table_id_by_path(&self) -> &HashMap<TablePath, TableId> {
+    pub(crate) fn get_table_id_by_path(&self) -> &HashMap<TablePath, TableId> {
         &self.table_id_by_path
     }
 
-    pub fn get_table_path_by_id(&self, table_id: TableId) -> Option<&TablePath> {
+    pub(crate) fn get_table_path_by_id(&self, table_id: TableId) -> Option<&TablePath> {
         self.table_path_by_id.get(&table_id)
     }
 
-    pub fn get_available_buckets_for_table_path(
+    pub(crate) fn get_available_buckets_for_table_path(
         &self,
         table_path: &PhysicalTablePath,
     ) -> &Vec<BucketLocation> {
@@ -524,7 +524,7 @@ impl Cluster {
             .unwrap_or(&EMPTY)
     }
 
-    pub fn get_server_nodes(&self) -> Vec<ServerNode> {
+    pub(crate) fn get_server_nodes(&self) -> Vec<ServerNode> {
         let mut nodes = Vec::new();
         if let Some(coordinator) = &self.coordinator_server {
             nodes.push(coordinator.clone());
@@ -533,7 +533,7 @@ impl Cluster {
         nodes
     }
 
-    pub fn get_one_available_server(&self) -> Option<&ServerNode> {
+    pub(crate) fn get_one_available_server(&self) -> Option<&ServerNode> {
         if self.alive_tablet_servers.is_empty() {
             return None;
         }
@@ -551,14 +551,14 @@ impl Cluster {
             .choose(&mut rand::rng())
     }
 
-    pub fn bucket_count(&self, table_or_partition: TableOrPartition) -> Option<i32> {
+    pub(crate) fn bucket_count(&self, table_or_partition: TableOrPartition) -> Option<i32> {
         self.bucket_count_by_table_or_partition
             .get(&table_or_partition)
             .copied()
     }
 
     /// Falls back to `num_buckets` only while the table has never changed `bucket.num`.
-    pub fn bucket_count_or_fallback(
+    pub(crate) fn bucket_count_or_fallback(
         &self,
         table_info: &TableInfo,
         partition_id: Option<PartitionId>,
@@ -577,17 +577,17 @@ impl Cluster {
         Ok(table_info.num_buckets)
     }
 
-    pub fn get_table(&self, table_path: &TablePath) -> Result<&TableInfo> {
+    pub(crate) fn get_table(&self, table_path: &TablePath) -> Result<&TableInfo> {
         self.table_info_by_path
             .get(table_path)
             .ok_or_else(|| Error::invalid_table(format!("Table info not found for {table_path}")))
     }
 
-    pub fn opt_get_table(&self, table_path: &TablePath) -> Option<&TableInfo> {
+    pub(crate) fn opt_get_table(&self, table_path: &TablePath) -> Option<&TableInfo> {
         self.table_info_by_path.get(table_path)
     }
 
-    pub fn get_partition_id_by_path(&self) -> &HashMap<Arc<PhysicalTablePath>, PartitionId> {
+    pub(crate) fn get_partition_id_by_path(&self) -> &HashMap<Arc<PhysicalTablePath>, PartitionId> {
         &self.partitions_id_by_path
     }
 }

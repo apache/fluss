@@ -42,7 +42,7 @@ const DEFAULT_NON_EXPIRING_REFRESH_INTERVAL: Duration = Duration::from_secs(7 * 
 /// Type alias for credentials properties receiver
 /// - `None` = not yet fetched, should wait
 /// - `Some(HashMap)` = fetched (may be empty if no auth needed)
-pub type CredentialsReceiver = watch::Receiver<Option<HashMap<String, String>>>;
+pub(crate) type CredentialsReceiver = watch::Receiver<Option<HashMap<String, String>>>;
 
 #[derive(Debug, Deserialize)]
 struct Credentials {
@@ -136,7 +136,7 @@ fn build_remote_fs_props(
 /// // Consumer can get latest credentials via:
 /// let props = credentials_rx.borrow().clone();
 /// ```
-pub struct SecurityTokenManager {
+pub(crate) struct SecurityTokenManager {
     rpc_client: Arc<RpcClient>,
     metadata: Arc<Metadata>,
     token_renewal_ratio: f64,
@@ -152,7 +152,7 @@ pub struct SecurityTokenManager {
 }
 
 impl SecurityTokenManager {
-    pub fn new(rpc_client: Arc<RpcClient>, metadata: Arc<Metadata>) -> Self {
+    pub(crate) fn new(rpc_client: Arc<RpcClient>, metadata: Arc<Metadata>) -> Self {
         let (credentials_tx, credentials_rx) = watch::channel(None);
         Self {
             rpc_client,
@@ -169,13 +169,13 @@ impl SecurityTokenManager {
     /// Subscribe to credential updates.
     /// Returns a receiver that always contains the latest credentials.
     /// Consumers can call `receiver.borrow()` to get the current value.
-    pub fn subscribe(&self) -> CredentialsReceiver {
+    pub(crate) fn subscribe(&self) -> CredentialsReceiver {
         self.credentials_rx.clone()
     }
 
     /// Start the background token refresh task.
     /// This should be called once after creating the manager.
-    pub fn start(&self) {
+    pub(crate) fn start(&self) {
         if self.task_handle.read().is_some() {
             warn!("SecurityTokenManager is already started");
             return;
@@ -207,7 +207,7 @@ impl SecurityTokenManager {
     }
 
     /// Stop the background token refresh task.
-    pub fn stop(&self) {
+    pub(crate) fn stop(&self) {
         if let Some(tx) = self.shutdown_tx.write().take() {
             let _ = tx.send(());
         }

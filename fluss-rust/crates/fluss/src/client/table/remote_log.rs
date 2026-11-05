@@ -47,11 +47,11 @@ use uuid::Uuid;
 
 /// Default maximum number of remote log segments to prefetch
 /// Matches Java's CLIENT_SCANNER_REMOTE_LOG_PREFETCH_NUM (default: 4)
-pub const DEFAULT_SCANNER_REMOTE_LOG_PREFETCH_NUM: usize = 4;
+pub(crate) const DEFAULT_SCANNER_REMOTE_LOG_PREFETCH_NUM: usize = 4;
 
 /// Default maximum concurrent remote log downloads
 /// Matches Java's REMOTE_FILE_DOWNLOAD_THREAD_NUM (default: 3)
-pub const DEFAULT_REMOTE_FILE_DOWNLOAD_THREAD_NUM: usize = 3;
+pub(crate) const DEFAULT_REMOTE_FILE_DOWNLOAD_THREAD_NUM: usize = 3;
 
 /// Initial retry backoff delay (milliseconds)
 /// Prevents hot-spin retry loops on persistent failures
@@ -128,13 +128,13 @@ fn calculate_backoff_delay(retry_count: u32) -> tokio::time::Duration {
 
 /// Result of a fetch operation containing file path and size
 #[derive(Debug)]
-pub struct FetchResult {
+pub(crate) struct FetchResult {
     pub file_path: PathBuf,
     pub file_size: usize,
 }
 
 /// Trait for fetching remote log segments (allows dependency injection for testing)
-pub trait RemoteLogFetcher: Send + Sync {
+pub(crate) trait RemoteLogFetcher: Send + Sync {
     fn fetch(
         &self,
         request: &RemoteLogDownloadRequest,
@@ -143,7 +143,7 @@ pub trait RemoteLogFetcher: Send + Sync {
 
 /// Represents a remote log segment that needs to be downloaded
 #[derive(Debug, Clone)]
-pub struct RemoteLogSegment {
+pub(crate) struct RemoteLogSegment {
     pub segment_id: String,
     pub start_offset: i64,
     #[allow(dead_code)]
@@ -178,7 +178,7 @@ impl RemoteLogSegment {
 
 /// Represents remote log fetch information
 #[derive(Debug, Clone)]
-pub struct RemoteLogFetchInfo {
+pub(crate) struct RemoteLogFetchInfo {
     pub remote_log_tablet_dir: String,
     #[allow(dead_code)]
     pub partition_name: Option<String>,
@@ -208,7 +208,7 @@ impl RemoteLogFetchInfo {
 /// NOTE: File deletion is now handled by FileSource::drop(), not here.
 /// This ensures the file is closed before deletion
 #[derive(Debug)]
-pub struct PrefetchPermit {
+pub(crate) struct PrefetchPermit {
     permit: Option<OwnedSemaphorePermit>,
     recycle_notify: Arc<Notify>,
 }
@@ -235,7 +235,7 @@ impl Drop for PrefetchPermit {
 /// Downloaded remote log file with prefetch permit
 /// File remains on disk for memory efficiency; file deletion is handled by FileCleanupGuard in FileSource
 #[derive(Debug)]
-pub struct RemoteLogFile {
+pub(crate) struct RemoteLogFile {
     /// Path to the downloaded file on local disk
     pub file_path: PathBuf,
     /// Size of the file in bytes
@@ -248,7 +248,7 @@ pub struct RemoteLogFile {
 
 /// Represents a request to download a remote log segment with priority ordering
 #[derive(Debug)]
-pub struct RemoteLogDownloadRequest {
+pub(crate) struct RemoteLogDownloadRequest {
     segment: RemoteLogSegment,
     remote_log_tablet_dir: String,
     result_sender: oneshot::Sender<Result<RemoteLogFile>>,
@@ -750,7 +750,7 @@ async fn coordinator_loop(
 type CompletionCallback = Box<dyn Fn() + Send + Sync>;
 
 /// Future for a remote log download request
-pub struct RemoteLogDownloadFuture {
+pub(crate) struct RemoteLogDownloadFuture {
     result: Arc<Mutex<Option<Result<RemoteLogFile>>>>,
     completion_callbacks: Arc<Mutex<Vec<CompletionCallback>>>,
 }
@@ -859,7 +859,7 @@ impl RemoteLogDownloadFuture {
 /// When the downloader is dropped, the request channel closes, signaling the coordinator
 /// to stop accepting new work. The coordinator will finish any in-flight downloads but
 /// won't wait for completion. Pending futures will fail.
-pub struct RemoteLogDownloader {
+pub(crate) struct RemoteLogDownloader {
     request_sender: Option<mpsc::UnboundedSender<RemoteLogDownloadRequest>>,
 }
 

@@ -64,7 +64,7 @@ pub struct FlussAdmin {
 }
 
 impl FlussAdmin {
-    pub fn new(connections: Arc<RpcClient>, metadata: Arc<Metadata>) -> Self {
+    pub(crate) fn new(connections: Arc<RpcClient>, metadata: Arc<Metadata>) -> Self {
         FlussAdmin {
             metadata,
             rpc_client: connections,

@@ -48,7 +48,7 @@ use tokio::task::JoinHandle;
 /// let lookup_client = LookupClient::new(config, metadata);
 /// let result = lookup_client.lookup(table_path, table_bucket, key_bytes).await?;
 /// ```
-pub struct LookupClient {
+pub(crate) struct LookupClient {
     /// Channel to send lookup requests to the queue
     lookup_tx: mpsc::Sender<QueuedLookup>,
     /// Handle to the sender task
@@ -61,7 +61,7 @@ pub struct LookupClient {
 
 impl LookupClient {
     /// Creates a new lookup client.
-    pub fn new(config: &Config, metadata: Arc<Metadata>) -> Self {
+    pub(crate) fn new(config: &Config, metadata: Arc<Metadata>) -> Self {
         // Extract configuration values
         let queue_size = config.lookup_queue_size;
         let max_batch_size = config.lookup_max_batch_size;
@@ -121,7 +121,7 @@ impl LookupClient {
     /// * `Ok(Some(bytes))` - The value bytes if found
     /// * `Ok(None)` - If the key was not found
     /// * `Err(Error)` - If the lookup fails
-    pub async fn lookup(
+    pub(crate) async fn lookup(
         &self,
         table_path: TablePath,
         table_bucket: TableBucket,
@@ -168,7 +168,7 @@ impl LookupClient {
     /// # Returns
     /// * `Ok(rows)` - Every row matching the prefix (possibly empty)
     /// * `Err(Error)` - If the lookup fails
-    pub async fn prefix_lookup(
+    pub(crate) async fn prefix_lookup(
         &self,
         table_path: TablePath,
         table_bucket: TableBucket,
