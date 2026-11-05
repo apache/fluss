@@ -211,7 +211,8 @@ pub struct Config {
     #[arg(long, default_value_t = DEFAULT_WRITER_KV_BACKPRESSURE_MAX_THROTTLE_MS)]
     pub writer_kv_backpressure_max_throttle_ms: u64,
 
-    /// Connect timeout in milliseconds for TCP transport connect.
+    /// Connection establishment timeout in milliseconds, including TCP connect,
+    /// API negotiation and SASL authentication.
     /// Default: 15000 (15 seconds), matching Java `client.connect-timeout`.
     #[arg(long, default_value_t = DEFAULT_CONNECT_TIMEOUT_MS)]
     pub connect_timeout_ms: u64,
@@ -235,7 +236,9 @@ pub struct Config {
     #[arg(long, default_value_t = String::new())]
     #[serde(skip_serializing)]
     pub security_sasl_password: String,
-    /// Maximum number of pending lookup operations
+    /// Capacity of the send queue; new lookups wait when it is full.
+    /// Each bucket also holds up to this many lookups while waiting for a
+    /// leader. Additional lookups for that bucket fail with `BufferExhausted`.
     /// Default: 25600 (matching Java CLIENT_LOOKUP_QUEUE_SIZE)
     #[arg(long, default_value_t = 25600)]
     pub lookup_queue_size: usize,
@@ -255,20 +258,27 @@ pub struct Config {
     #[arg(long, default_value_t = 128)]
     pub lookup_max_inflight_requests: usize,
 
-    /// Maximum number of lookup retries
+    /// Maximum number of times a lookup is resent after a retriable error.
+    /// Waiting for a bucket's leader is not a retry, so this does not bound
+    /// how long a lookup waits for one: it is not a lookup timeout.
     /// Default: i32::MAX (matching Java CLIENT_LOOKUP_MAX_RETRIES)
     #[arg(long, default_value_t = i32::MAX)]
     pub lookup_max_retries: i32,
 
-    /// Initial delay before a lookup that failed with a retriable error is resent.
-    /// The delay doubles per attempt, up to `lookup_retry_max_backoff_ms`, and
-    /// carries +/-20% jitter. 0 resends immediately.
+    /// Initial delay before a lookup that failed with a retriable error is
+    /// resent, doubling with each retry of that lookup. Also the initial delay
+    /// before the metadata of a bucket without a known leader is refreshed
+    /// again, doubling with each refresh of that bucket that finds no leader,
+    /// and shared by all lookups waiting for it. Delays grow up to
+    /// `lookup_retry_max_backoff_ms` and carry +/-20% jitter. 0 resends and
+    /// refreshes immediately.
     /// Default: 100 (matching Java CLIENT_LOOKUP_RETRY_BACKOFF)
     #[arg(long, default_value_t = DEFAULT_LOOKUP_RETRY_BACKOFF_MS)]
     pub lookup_retry_backoff_ms: u64,
 
-    /// Ceiling for the exponentially growing lookup retry delay, before jitter,
-    /// so a delay can reach 20% above it. Must be >= `lookup_retry_backoff_ms`.
+    /// Ceiling for the exponentially growing delays of
+    /// `lookup_retry_backoff_ms`, before jitter, so a delay can reach 20%
+    /// above it. Must be >= `lookup_retry_backoff_ms`.
     /// Default: 1000 (matching Java CLIENT_LOOKUP_RETRY_BACKOFF_MAX)
     #[arg(long, default_value_t = DEFAULT_LOOKUP_RETRY_MAX_BACKOFF_MS)]
     pub lookup_retry_max_backoff_ms: u64,

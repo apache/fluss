@@ -19,6 +19,7 @@ use crate::cluster::{Cluster, ServerNode, ServerType};
 use crate::error::{Error, FlussError, Result};
 use crate::metadata::{PhysicalTablePath, TableBucket, TablePath};
 use crate::proto::MetadataResponse;
+use crate::rpc::from_pb_table_path;
 use crate::rpc::message::{GetTableRequest, UpdateMetadataRequest};
 use crate::rpc::{RpcClient, ServerConnection};
 use crate::{PartitionId, TableId};
@@ -302,6 +303,13 @@ impl Metadata {
         });
     }
 
+    /// Drops the cached leaders of those of `table_buckets` that `server_id` still leads, so that a
+    /// leader already replaced by a metadata refresh is kept. Leaves the cache as it is, without
+    /// notifying a change, if `server_id` leads none of them.
+    pub fn invalidate_bucket_leaders(&self, table_buckets: &HashSet<TableBucket>, server_id: i32) {
+        self.invalidate(|cluster| cluster.invalidate_bucket_leaders(table_buckets, server_id));
+    }
+
     /// Drops the cached leaders of `partition_path` if it still resolves to `partition_id` of
     /// table `table_id`, and returns whether it does. A partition found missing by a request sent
     /// before the cache learned a newer table or partition under the path says nothing about it.
@@ -376,6 +384,49 @@ impl Metadata {
         physical_table_paths: &HashSet<&Arc<PhysicalTablePath>>,
         partition_ids: Vec<i64>,
     ) -> Result<()> {
+        if let Some(response) = self
+            .fetch_tables_metadata(table_paths, physical_table_paths, partition_ids)
+            .await?
+        {
+            self.update(response).await?;
+        }
+        Ok(())
+    }
+
+    /// Updates lookup routing and returns the tables omitted from a successful response, which the
+    /// server does for tables the client may not describe, even if they are cached. A refresh
+    /// through the bootstrap servers only discovers servers, so it reports no table as omitted.
+    pub(crate) async fn update_lookup_metadata(
+        &self,
+        table_paths: &HashSet<&TablePath>,
+        partition_ids: Vec<PartitionId>,
+    ) -> Result<HashSet<TablePath>> {
+        let Some(response) = self
+            .fetch_tables_metadata(table_paths, &HashSet::new(), partition_ids)
+            .await?
+        else {
+            return Ok(HashSet::new());
+        };
+        let returned_tables: HashSet<TablePath> = response
+            .table_metadata
+            .iter()
+            .map(|table| from_pb_table_path(&table.table_path))
+            .collect();
+        let missing_tables = table_paths
+            .iter()
+            .filter(|path| !returned_tables.contains(*path))
+            .map(|path| (*path).clone())
+            .collect();
+        self.update(response).await?;
+        Ok(missing_tables)
+    }
+
+    async fn fetch_tables_metadata(
+        &self,
+        table_paths: &HashSet<&TablePath>,
+        physical_table_paths: &HashSet<&Arc<PhysicalTablePath>>,
+        partition_ids: Vec<PartitionId>,
+    ) -> Result<Option<MetadataResponse>> {
         let server = match self.server_for_refresh() {
             Some(s) => s,
             None => {
@@ -383,24 +434,25 @@ impl Metadata {
                     "No available tablet server to update metadata, attempting to re-initialize cluster using bootstrap server."
                 );
                 self.reinit_cluster().await?;
-                return Ok(());
+                return Ok(None);
             }
         };
 
         let result = async {
             let conn = self.connections.get_connection(&server).await?;
-            let response = conn
-                .request(UpdateMetadataRequest::new(
-                    table_paths,
-                    physical_table_paths,
-                    partition_ids,
-                ))
-                .await?;
-            self.update(response).await
+            conn.request(UpdateMetadataRequest::new(
+                table_paths,
+                physical_table_paths,
+                partition_ids,
+            ))
+            .await
+            .map(Some)
         }
         .await;
         if let Err(err) = &result {
-            if err.is_retriable() {
+            // A schema that is not visible yet does not make the server unavailable for other
+            // tables, or for the individual requests used to isolate a failed combined refresh.
+            if err.is_retriable() && err.api_error() != Some(FlussError::SchemaNotExist) {
                 self.unavailable_tablet_servers
                     .write()
                     .insert(server.clone());
@@ -573,6 +625,22 @@ impl Metadata {
             bootstrap: Arc::from(""),
             cluster_version_tx,
         }
+    }
+
+    pub(crate) fn with_connections(mut self, connections: RpcClient) -> Self {
+        self.connections = Arc::new(connections);
+        self
+    }
+
+    pub(crate) fn with_bootstrap(mut self, bootstrap: &str) -> Self {
+        self.bootstrap = bootstrap.into();
+        self
+    }
+
+    pub(crate) fn with_sasl(mut self, username: &str, password: &str) -> Self {
+        self.connections =
+            Arc::new(RpcClient::new().with_sasl(username.to_string(), password.to_string()));
+        self
     }
 }
 

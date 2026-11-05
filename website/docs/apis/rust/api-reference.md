@@ -28,7 +28,14 @@ Complete API reference for the Fluss Rust client.
 | `scanner_log_fetch_min_bytes`         | `i32`           | `1`                | Minimum bytes the server must accumulate before returning a fetch response           |
 | `scanner_log_fetch_wait_max_time_ms`  | `i32`           | `500`              | Maximum time (ms) the server may wait to satisfy min-bytes                           |
 | `scanner_log_fetch_max_bytes_for_bucket`| `i32`         | `1048576` (1 MB)   | Maximum bytes per fetch response per bucket for LogScanner                           |
-| `connect_timeout_ms`                  | `u64`           | `120000`           | TCP connect timeout in milliseconds                                                  |
+| `lookup_queue_size`                   | `usize`         | `25600`            | Send queue capacity; new lookups wait when it is full. Each bucket also holds up to this many lookups while waiting for a leader; additional lookups for that bucket fail immediately with a buffer exhaustion error |
+| `lookup_max_batch_size`               | `usize`         | `128`              | Maximum number of lookups merged into one request                                    |
+| `lookup_batch_timeout_ms`             | `u64`           | `100`              | Maximum time in ms a lookup waits for its batch to fill                              |
+| `lookup_max_inflight_requests`        | `usize`         | `128`              | Maximum number of unacknowledged lookup requests                                     |
+| `lookup_max_retries`                  | `i32`           | `i32::MAX`         | Maximum number of times a lookup is resent after a retriable error. Waiting for a bucket's leader is not a retry, so this is not a lookup timeout |
+| `lookup_retry_backoff_ms`             | `u64`           | `100`              | Initial delay in ms before a lookup that failed with a retriable error is resent, doubling with each retry of that lookup; also before a bucket without a known leader is refreshed again, doubling with each refresh of that bucket and shared by its lookups. ±20% jitter; `0` resends and refreshes immediately |
+| `lookup_retry_max_backoff_ms`         | `u64`           | `1000`             | Cap in ms for the lookup retry delay and the refresh delay of a bucket without a known leader, applied before jitter; must be >= `lookup_retry_backoff_ms` |
+| `connect_timeout_ms`                  | `u64`           | `15000`            | Connection establishment timeout in milliseconds, including TCP connect, API negotiation and SASL authentication |
 | `connection_max_idle_time_ms`         | `u64`           | `600000` (10 min)  | Idle cached connections are closed after this many milliseconds, failing the requests still waiting on them with a retriable error; `0` disables closing idle connections |
 | `security_protocol`                   | `String`        | `"PLAINTEXT"`      | `PLAINTEXT` (default) or `sasl` for SASL auth                                        |
 | `security_sasl_mechanism`             | `String`        | `"PLAIN"`          | SASL mechanism (only `PLAIN` is supported)                                           |
@@ -331,6 +338,16 @@ batches into one.
 | Method                                                                       |  Description                |
 |------------------------------------------------------------------------------|-----------------------------|
 | `async fn lookup(&self, key: &impl InternalRow) -> Result<LookupResult>`     | Lookup a row by primary key |
+
+A lookup whose bucket has no known leader waits while the client refreshes the bucket's
+metadata, backing off with `lookup_retry_backoff_ms`. Up to `lookup_queue_size` lookups wait per
+bucket; further ones fail with `Error::BufferExhausted`. A waiting lookup fails with the API error
+`TableNotExist` if its table was dropped or recreated, `PartitionNotExists` if its partition was
+dropped, or `AuthorizationException` if the client may not access its table's metadata. Rejected
+credentials or API versions also fail it; other refresh errors, e.g. for a schema that is not
+visible yet, keep it waiting. Lookups to a closed client, lookups still without a leader after the
+final refresh on close, and lookups left unfinished when the close times out fail with
+`Error::LookupClosed`.
 
 ## `LookupResult`
 

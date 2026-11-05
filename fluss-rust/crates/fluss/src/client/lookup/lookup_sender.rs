@@ -15,11 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use super::leader_waits::{LeaderRefresh, LeaderWaits};
 use super::{LookupQueue, QueuedLookup};
 use crate::client::lookup::lookup_query::LookupQuery;
 use crate::client::metadata::Metadata;
 use crate::error::{Error, FlussError, Result};
-use crate::metadata::{PhysicalTablePath, TableBucket, TablePath};
+use crate::metadata::{TableBucket, TablePath};
 use crate::proto::{LookupResponse, PrefixLookupResponse};
 use crate::rpc::message::{
     BucketLookupKeys, LookupRequest, PrefixLookupRequest, ReadType, RequestBody, WriteType,
@@ -28,13 +29,14 @@ use crate::rpc::{ApiError, ServerConnection};
 use crate::util::retry_backoff_ms;
 use crate::{BucketId, PartitionId, TableId};
 use bytes::Bytes;
-use log::{debug, error, warn};
+use log::{debug, error, info, warn};
+use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
 use std::io::Cursor;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, watch};
+use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, mpsc, watch};
 use tokio::task::JoinSet;
 use tokio::time::Instant;
 
@@ -116,50 +118,47 @@ impl LookupProtocol for Prefix {
     }
 }
 
-struct GroupByLeaderResult {
+struct GroupingResult {
     primary: PrimaryBatches,
     prefix: PrefixBatches,
-    unknown_leader_tables: HashSet<TablePath>,
-    unknown_leader_partition_ids: HashSet<PartitionId>,
-}
-
-impl GroupByLeaderResult {
-    fn is_empty(&self) -> bool {
-        self.primary.is_empty() && self.prefix.is_empty()
-    }
-
-    /// Assumes no `(server, bucket)` overlap — safe because the second pass only
-    /// re-groups items unknown in the first.
-    fn merge_batches(&mut self, other: GroupByLeaderResult) {
-        for (server, inner) in other.primary {
-            self.primary.entry(server).or_default().extend(inner);
-        }
-        for (server, inner) in other.prefix {
-            self.prefix.entry(server).or_default().extend(inner);
-        }
-    }
-}
-
-struct GroupingResult {
-    groups: GroupByLeaderResult,
-    unknowns: Vec<QueuedLookup>,
+    leaderless_lookups: Vec<QueuedLookup>,
 }
 
 pub struct LookupSender {
     queue: LookupQueue,
     dispatcher: Arc<LookupDispatcher>,
-    requests: JoinSet<()>,
+    tasks: SenderTasks,
     running: AtomicBool,
     force_close: AtomicBool,
     shutdown_rx: watch::Receiver<bool>,
 }
 
+/// The tasks of a sender, aborted once it is dropped.
+#[derive(Default)]
+struct SenderTasks {
+    /// Requests in flight, each ending once its response is handled.
+    requests: JoinSet<()>,
+    /// Runs [`LookupDispatcher::refresh_leaders`] while lookups wait for a leader.
+    leader_refresher: JoinSet<()>,
+}
+
 /// Sends lookups to their leaders and completes, retries or fails them. Shared by the sender and
-/// the tasks that wait for responses.
+/// its tasks.
+///
+/// A lookup not yet completed is held by exactly one of: the queue, a request in flight, or
+/// `leader_waits`. Requests and the leader refresher hand lookups back through the queue.
 struct LookupDispatcher {
     metadata: Arc<Metadata>,
     re_enqueue_tx: mpsc::UnboundedSender<QueuedLookup>,
     inflight_semaphore: Arc<Semaphore>,
+    /// Lookups whose bucket has no cached leader, held until [`Self::refresh_leaders`] finds it.
+    leader_waits: Mutex<LeaderWaits>,
+    /// Wakes the leader refresher before the refresh it planned: a bucket started to wait, or the
+    /// sender is closing.
+    leader_refresh_due: Notify,
+    /// Set once the sender stops taking new lookups. From then on, no lookup is retried, and
+    /// lookups whose bucket still has no leader after one more refresh fail, so closing ends.
+    closing: AtomicBool,
     max_retries: i32,
     retry_backoff_ms: u64,
     retry_max_backoff_ms: u64,
@@ -206,12 +205,9 @@ impl<T> LookupBatch<T> {
         }
     }
 
-    fn complete_all_with_error(&mut self, error_msg: &str) {
+    fn complete_all_with_error(&mut self, make_error: impl Fn() -> Error) {
         for lookup in &mut self.lookups {
-            lookup.complete_with_error(Error::UnexpectedError {
-                message: error_msg.to_string(),
-                source: None,
-            });
+            lookup.complete_with_error(make_error());
         }
     }
 
@@ -238,6 +234,7 @@ impl LookupSender {
         queue: LookupQueue,
         re_enqueue_tx: mpsc::UnboundedSender<QueuedLookup>,
         max_inflight_requests: usize,
+        max_waiting_per_bucket: usize,
         max_retries: i32,
         retry_backoff_ms: u64,
         retry_max_backoff_ms: u64,
@@ -249,11 +246,18 @@ impl LookupSender {
                 metadata,
                 re_enqueue_tx,
                 inflight_semaphore: Arc::new(Semaphore::new(max_inflight_requests)),
+                leader_waits: Mutex::new(LeaderWaits::new(
+                    max_waiting_per_bucket,
+                    retry_backoff_ms,
+                    retry_max_backoff_ms,
+                )),
+                leader_refresh_due: Notify::new(),
+                closing: AtomicBool::new(false),
                 max_retries,
                 retry_backoff_ms,
                 retry_max_backoff_ms,
             }),
-            requests: JoinSet::new(),
+            tasks: SenderTasks::default(),
             running: AtomicBool::new(true),
             force_close: AtomicBool::new(false),
             shutdown_rx,
@@ -272,50 +276,81 @@ impl LookupSender {
                 break;
             }
 
-            tokio::select! {
+            let lookups = tokio::select! {
                 biased;
-                _ = shutdown_rx.changed() => {
-                    if *shutdown_rx.borrow() {
-                        debug!("Lookup sender received shutdown signal during select");
+                changed = shutdown_rx.changed() => {
+                    if changed.is_err() || *shutdown_rx.borrow() {
                         self.initiate_close();
                     }
+                    continue;
                 }
-                result = self.run_once(false) => {
-                    if let Err(e) = result {
-                        error!("Error in lookup sender: {}", e);
+                lookups = self.queue.drain() => lookups,
+            };
+            let dispatcher = Arc::clone(&self.dispatcher);
+            let shutdown = {
+                let sending = self.send_lookups(lookups);
+                tokio::pin!(sending);
+                tokio::select! {
+                    biased;
+                    changed = shutdown_rx.changed() => {
+                        let shutdown = changed.is_err() || *shutdown_rx.borrow();
+                        if shutdown {
+                            dispatcher.start_closing();
+                        }
+                        // Sending may hold batches waiting for a permit. Finish handing them to
+                        // the request tasks before closing.
+                        sending.await;
+                        shutdown
                     }
+                    () = &mut sending => false,
                 }
+            };
+            if shutdown {
+                self.initiate_close();
             }
         }
 
         debug!("Beginning shutdown of lookup sender, sending remaining lookups");
 
         if !self.force_close.load(Ordering::Acquire) {
-            if self.queue.has_undrained() {
-                if let Err(e) = self.run_once(true).await {
-                    error!("Error during lookup sender shutdown: {}", e);
-                }
-            }
-            // Wait for the requests in flight.
-            while self.requests.join_next().await.is_some() {}
+            self.close_gracefully().await;
         }
 
         // TODO: If force close failed, add logic to abort incomplete lookup requests.
         debug!("Lookup sender shutdown complete");
     }
 
-    async fn run_once(&mut self, drain_all: bool) -> Result<()> {
-        let lookups = if drain_all {
-            self.queue.drain_all()
-        } else {
-            self.queue.drain().await
-        };
+    async fn send_lookups(&mut self, lookups: Vec<QueuedLookup>) {
+        // Remove the tasks that have finished from their sets.
+        while self.tasks.requests.try_join_next().is_some() {}
+        while self.tasks.leader_refresher.try_join_next().is_some() {}
+        self.dispatcher.send_lookups(lookups, &mut self.tasks).await
+    }
 
-        // Remove the requests that have finished from the set.
-        while self.requests.try_join_next().is_some() {}
-        self.dispatcher
-            .send_lookups(lookups, &mut self.requests)
-            .await
+    /// Sends the lookups left once the sender stopped taking new ones, and returns once every
+    /// lookup queued, in flight or waiting for a leader has completed.
+    async fn close_gracefully(&mut self) {
+        self.dispatcher.start_closing();
+        loop {
+            if self.queue.has_undrained() {
+                let lookups = self.queue.drain_all();
+                self.dispatcher.send_lookups(lookups, &mut self.tasks).await;
+            }
+            let SenderTasks {
+                requests,
+                leader_refresher,
+            } = &mut self.tasks;
+            if requests.is_empty() && leader_refresher.is_empty() {
+                break;
+            }
+            // The leader refresher puts back the lookups whose leader it finds while it goes on
+            // refreshing other buckets, so those are sent without waiting for it to end.
+            tokio::select! {
+                Some(_) = requests.join_next() => {}
+                Some(_) = leader_refresher.join_next() => {}
+                _ = self.queue.wait_for_re_enqueued() => {}
+            }
+        }
     }
 
     pub fn initiate_close(&mut self) {
@@ -330,79 +365,48 @@ impl LookupSender {
 }
 
 impl LookupDispatcher {
+    fn start_closing(&self) {
+        self.closing.store(true, Ordering::Release);
+        self.leader_refresh_due.notify_one();
+    }
+
+    /// Sends `lookups` to their leaders, and hands those without a cached leader to the leader
+    /// refresher.
     async fn send_lookups(
         self: &Arc<Self>,
         mut lookups: Vec<QueuedLookup>,
-        requests: &mut JoinSet<()>,
-    ) -> Result<()> {
+        tasks: &mut SenderTasks,
+    ) {
         lookups.retain(|lookup| !lookup.is_done());
         if lookups.is_empty() {
-            return Ok(());
+            return;
         }
 
         let GroupingResult {
-            mut groups,
-            unknowns,
+            primary,
+            prefix,
+            leaderless_lookups,
         } = self.group_by_leader(lookups);
 
-        if !unknowns.is_empty() {
-            let table_paths_refs: HashSet<&TablePath> =
-                groups.unknown_leader_tables.iter().collect();
-            let partition_ids: Vec<PartitionId> = groups
-                .unknown_leader_partition_ids
-                .iter()
-                .copied()
-                .collect();
-            if let Err(e) = self
-                .metadata
-                .update_tables_metadata(&table_paths_refs, &HashSet::new(), partition_ids)
-                .await
-            {
-                warn!("Failed to update metadata for unknown leader tables: {}", e);
-            } else {
-                debug!(
-                    "Updated metadata due to unknown leader tables during lookup: {:?}",
-                    groups.unknown_leader_tables
-                );
-            }
-
-            // Re-group with fresh cluster state; dispatch what resolved, re-enqueue the rest.
-            let retry = self.group_by_leader(unknowns);
-            groups.merge_batches(retry.groups);
-            for item in retry.unknowns {
-                self.re_enqueue_lookup(item);
-            }
-
-            // Nothing to dispatch even after refresh — back off to avoid a tight RPC loop.
-            if groups.is_empty() {
-                let mut cluster_rx = self.metadata.subscribe_cluster_changes();
-                tokio::select! {
-                    _ = cluster_rx.changed() => {}
-                    _ = tokio::time::sleep(Duration::from_millis(100)) => {}
-                }
-                return Ok(());
-            }
+        if !leaderless_lookups.is_empty() {
+            self.wait_for_leaders(leaderless_lookups, &mut tasks.leader_refresher);
         }
 
-        for (server, batches) in groups.primary {
-            self.send_requests::<Primary>(server, batches, requests)
+        for (server, batches) in primary {
+            self.send_requests::<Primary>(server, batches, &mut tasks.requests)
                 .await;
         }
-        for (server, batches) in groups.prefix {
-            self.send_requests::<Prefix>(server, batches, requests)
+        for (server, batches) in prefix {
+            self.send_requests::<Prefix>(server, batches, &mut tasks.requests)
                 .await;
         }
-
-        Ok(())
     }
 
     fn group_by_leader(&self, lookups: Vec<QueuedLookup>) -> GroupingResult {
         let cluster = self.metadata.get_cluster();
         let mut primary: PrimaryBatches = HashMap::new();
         let mut prefix: PrefixBatches = HashMap::new();
-        let mut unknown_leader_tables: HashSet<TablePath> = HashSet::new();
-        let mut unknown_leader_partition_ids: HashSet<PartitionId> = HashSet::new();
-        let mut unknowns: Vec<QueuedLookup> = Vec::new();
+        let mut leaderless_lookups: Vec<QueuedLookup> = Vec::new();
 
         for query in lookups {
             let table_bucket = query.table_bucket().clone();
@@ -410,15 +414,7 @@ impl LookupDispatcher {
             let leader = match cluster.leader_for(&table_bucket) {
                 Some(leader) => leader.id(),
                 None => {
-                    warn!(
-                        "No leader found for table bucket {} during lookup",
-                        table_bucket
-                    );
-                    unknown_leader_tables.insert(query.table_path().clone());
-                    if let Some(partition_id) = table_bucket.partition_id() {
-                        unknown_leader_partition_ids.insert(partition_id);
-                    }
-                    unknowns.push(query);
+                    leaderless_lookups.push(query);
                     continue;
                 }
             };
@@ -444,14 +440,257 @@ impl LookupDispatcher {
         }
 
         GroupingResult {
-            groups: GroupByLeaderResult {
-                primary,
-                prefix,
-                unknown_leader_tables,
-                unknown_leader_partition_ids,
-            },
-            unknowns,
+            primary,
+            prefix,
+            leaderless_lookups,
         }
+    }
+
+    /// Holds `lookups`, whose bucket has no cached leader, until the leader refresher finds it.
+    /// The refresher runs as a task of its own, as a refresh can take long, e.g. when it first
+    /// picks a server that is down, and must not hold up the lookups whose leader is known.
+    fn wait_for_leaders(
+        self: &Arc<Self>,
+        lookups: Vec<QueuedLookup>,
+        leader_refresher: &mut JoinSet<()>,
+    ) {
+        let (start_refresher, has_new_buckets) = {
+            let mut leader_waits = self.leader_waits.lock();
+            let has_new_buckets = leader_waits.add(lookups, Instant::now());
+            (leader_waits.claim_refresher(), has_new_buckets)
+        };
+        if start_refresher {
+            leader_refresher.spawn(Arc::clone(self).refresh_leaders());
+        } else if has_new_buckets {
+            self.leader_refresh_due.notify_one();
+        }
+    }
+
+    /// Refreshes the metadata of the buckets that lookups wait for, until none waits, and puts
+    /// their lookups back to the queue once their leader is cached, by these refreshes or any
+    /// other, e.g. the writer's. At most one refresh runs at a time, for the buckets due when it
+    /// starts. While closing, every bucket is due, and lookups still without a leader fail.
+    async fn refresh_leaders(self: Arc<Self>) {
+        let mut cluster_changes = self.metadata.subscribe_cluster_changes();
+        let mut refresh_failures = None;
+        loop {
+            let closing = self.closing.load(Ordering::Acquire);
+            let (found, refresh, idle, next_refresh_at) = {
+                let mut leader_waits = self.leader_waits.lock();
+                let found = leader_waits.take_found(&self.metadata.get_cluster());
+                let refresh = leader_waits.due_refresh(Instant::now(), closing);
+                let idle = leader_waits.release_refresher_if_idle();
+                (found, refresh, idle, leader_waits.next_refresh_at())
+            };
+            self.re_enqueue_lookups(found);
+            if idle {
+                return;
+            }
+
+            if let Some(refresh) = refresh {
+                let refreshing = self.refresh_metadata(&refresh);
+                tokio::pin!(refreshing);
+                let RefreshOutcome {
+                    result,
+                    dropped_partitions,
+                    failed_tables,
+                } = loop {
+                    tokio::select! {
+                        outcome = &mut refreshing => break outcome,
+                        Ok(()) = cluster_changes.changed() => self.re_enqueue_found(),
+                    }
+                };
+                let terminal_error =
+                    terminal_refresh_error(&refresh, result, &mut refresh_failures);
+                self.finish_refresh(
+                    &refresh,
+                    &dropped_partitions,
+                    &failed_tables,
+                    terminal_error,
+                );
+                // A refresh may fail without waiting, e.g. without a server to ask; with no
+                // backoff configured, this keeps the next one from starving the runtime.
+                tokio::task::yield_now().await;
+            } else if let Some(next_refresh_at) = next_refresh_at {
+                tokio::select! {
+                    _ = tokio::time::sleep_until(next_refresh_at) => {}
+                    _ = self.leader_refresh_due.notified() => {}
+                    Ok(()) = cluster_changes.changed() => {}
+                }
+            }
+        }
+    }
+
+    /// Isolates table-specific failures so a dropped or inaccessible table cannot keep the other
+    /// tables of a combined request waiting for their leaders.
+    async fn refresh_metadata(&self, refresh: &LeaderRefresh) -> RefreshOutcome {
+        let mut outcome = self.refresh_tables_and_partitions(refresh).await;
+        if !outcome.result.as_ref().is_err_and(is_table_refresh_error) {
+            return outcome;
+        }
+        if refresh.table_paths.len() == 1 {
+            if !outcome.result.as_ref().is_err_and(Error::is_retriable) {
+                let table_path = refresh.table_paths.iter().next().unwrap().clone();
+                let error = std::mem::replace(&mut outcome.result, Ok(())).unwrap_err();
+                outcome.failed_tables.insert(table_path, error);
+            }
+            return outcome;
+        }
+
+        outcome.result = Ok(());
+        for table_path in &refresh.table_paths {
+            let table_refresh = LeaderRefresh {
+                table_paths: HashSet::from([table_path.clone()]),
+                partitions: refresh
+                    .partitions
+                    .iter()
+                    .filter(|(_, path)| *path == table_path)
+                    .map(|(&partition_id, path)| (partition_id, path.clone()))
+                    .collect(),
+                ..Default::default()
+            };
+            let table_outcome = self.refresh_tables_and_partitions(&table_refresh).await;
+            outcome
+                .dropped_partitions
+                .extend(table_outcome.dropped_partitions);
+            outcome.failed_tables.extend(table_outcome.failed_tables);
+            match table_outcome.result {
+                Err(error) if is_table_refresh_error(&error) && error.is_retriable() => {
+                    // A table's schema may not be visible yet. Keep its backoff while the other
+                    // tables refresh, instead of making them wait for that schema too.
+                    outcome.result = Err(error);
+                }
+                Err(error) if is_table_refresh_error(&error) => {
+                    outcome.failed_tables.insert(table_path.clone(), error);
+                }
+                Err(error) => {
+                    outcome.result = Err(error);
+                    return outcome;
+                }
+                Ok(()) => {}
+            }
+        }
+        outcome
+    }
+
+    /// Refreshes the metadata of `refresh`'s tables and partitions in one request. The server fails
+    /// all of it if a partition no longer exists, without saying which, so each partition is then
+    /// asked for on its own, as the Java client always does: the dropped ones are told apart, and
+    /// the others still find their leaders.
+    async fn refresh_tables_and_partitions(&self, refresh: &LeaderRefresh) -> RefreshOutcome {
+        let table_paths: HashSet<&TablePath> = refresh.table_paths.iter().collect();
+        let mut outcome = RefreshOutcome::from_metadata_result(
+            self.metadata
+                .update_lookup_metadata(&table_paths, refresh.partitions.keys().copied().collect())
+                .await,
+        );
+        if refresh.partitions.is_empty()
+            || !outcome.result.as_ref().is_err_and(is_partition_not_exists)
+        {
+            return outcome;
+        }
+        outcome.result = Ok(());
+        for (&partition_id, table_path) in &refresh.partitions {
+            let partition_outcome = RefreshOutcome::from_metadata_result(
+                self.metadata
+                    .update_lookup_metadata(&HashSet::from([table_path]), vec![partition_id])
+                    .await,
+            );
+            outcome
+                .failed_tables
+                .extend(partition_outcome.failed_tables);
+            match partition_outcome.result {
+                Ok(()) => {}
+                Err(error) if is_partition_not_exists(&error) => {
+                    outcome.dropped_partitions.insert(partition_id, error);
+                }
+                Err(error) => {
+                    outcome.result = Err(error);
+                    return outcome;
+                }
+            }
+        }
+        let partitioned_tables: HashSet<&TablePath> = refresh.partitions.values().collect();
+        let non_partitioned_tables: HashSet<&TablePath> = table_paths
+            .difference(&partitioned_tables)
+            .copied()
+            .collect();
+        if !non_partitioned_tables.is_empty() {
+            let table_outcome = RefreshOutcome::from_metadata_result(
+                self.metadata
+                    .update_lookup_metadata(&non_partitioned_tables, vec![])
+                    .await,
+            );
+            outcome.failed_tables.extend(table_outcome.failed_tables);
+            outcome.result = table_outcome.result;
+        }
+        outcome
+    }
+
+    fn re_enqueue_found(&self) {
+        let found = self
+            .leader_waits
+            .lock()
+            .take_found(&self.metadata.get_cluster());
+        self.re_enqueue_lookups(found);
+    }
+
+    /// Puts back to the queue the lookups whose leader `refresh` found, and fails those of the
+    /// partitions and tables it found dropped or inaccessible with their errors. The other buckets
+    /// of `refresh` fail their lookups with `terminal_error` or while closing, and otherwise back
+    /// off before their next refresh.
+    fn finish_refresh(
+        &self,
+        refresh: &LeaderRefresh,
+        dropped_partitions: &HashMap<PartitionId, Error>,
+        failed_tables: &HashMap<TablePath, Error>,
+        terminal_error: Option<Error>,
+    ) {
+        let closing = self.closing.load(Ordering::Acquire);
+        let found = {
+            let mut leader_waits = self.leader_waits.lock();
+            let found = leader_waits.take_found(&self.metadata.get_cluster());
+            for (&partition_id, error) in dropped_partitions {
+                let failed = leader_waits.fail_partition(partition_id, || copy_error(error));
+                if failed > 0 {
+                    warn!(
+                        "Partition {partition_id} of table {} no longer exists, failing {failed} \
+                         lookups: {error}",
+                        refresh.partitions[&partition_id]
+                    );
+                }
+            }
+            for (table_path, error) in failed_tables {
+                let failed =
+                    leader_waits.fail_table(table_path, &refresh.table_ids, || copy_error(error));
+                if failed > 0 {
+                    warn!(
+                        "Failed to refresh table {table_path}, failing {failed} lookups: {error}"
+                    );
+                }
+            }
+            if let Some(error) = terminal_error {
+                leader_waits.fail(&refresh.table_buckets, || copy_error(&error));
+            } else if closing {
+                leader_waits.fail_on_close(&refresh.table_buckets);
+            } else {
+                leader_waits.refresh_failed(&refresh.table_buckets, Instant::now());
+            }
+            found
+        };
+        self.re_enqueue_lookups(found);
+    }
+
+    /// Drops the cached leaders of `batches`' buckets that `destination` still leads, after their
+    /// request to it failed, e.g. because the server is down, so their retries look the leader up
+    /// again. The other buckets keep their leaders, so lookups to them go on.
+    fn invalidate_leaders<T>(&self, destination: ServerId, batches: &[LookupBatch<T>]) {
+        let table_buckets: HashSet<TableBucket> = batches
+            .iter()
+            .map(|batch| batch.table_bucket.clone())
+            .collect();
+        self.metadata
+            .invalidate_bucket_leaders(&table_buckets, destination);
     }
 
     /// Sends `destination` one request per table, each on a task of its own in `requests`, so a
@@ -496,6 +735,7 @@ impl LookupDispatcher {
                     message: format!("Server {destination} is not found in metadata cache"),
                     source: None,
                 };
+                self.invalidate_leaders(destination, batches);
                 self.fail_all_batches(&error, true, batches);
                 return None;
             }
@@ -504,11 +744,12 @@ impl LookupDispatcher {
         match self.metadata.get_connection(&tablet_server).await {
             Ok(conn) => Some(conn),
             Err(e) => {
-                let error = with_context(
+                self.handle_request_error(
+                    destination,
+                    batches,
                     e,
                     format!("Failed to get connection to server {destination}"),
                 );
-                self.fail_all_batches(&error, true, batches);
                 None
             }
         }
@@ -543,13 +784,36 @@ impl LookupDispatcher {
                 self.handle_response::<P>(table_id, destination, response, &mut batches);
             }
             Err(e) => {
-                let is_retriable = e.is_retriable();
-                let error = with_context(e, format!("{} request failed", P::OP_NAME));
-                for batch in &mut batches {
-                    self.handle_batch_error(&error, is_retriable, batch);
-                }
+                self.handle_request_error(
+                    destination,
+                    &mut batches,
+                    e,
+                    format!("{} request failed", P::OP_NAME),
+                );
             }
         }
+    }
+
+    fn handle_request_error<T>(
+        &self,
+        destination: ServerId,
+        batches: &mut [LookupBatch<T>],
+        error: Error,
+        context: String,
+    ) where
+        LookupQuery<T>: Into<QueuedLookup>,
+    {
+        // A closed response channel is a missing answer even though its error variant is not
+        // retriable on its own. API errors still follow their retry policy: an invalid bucket
+        // count, for example, cannot be fixed by replaying the same request.
+        let should_invalidate_leader = leader_may_have_moved(&error);
+        if should_invalidate_leader {
+            self.invalidate_leaders(destination, batches);
+        }
+        let is_retriable = error.is_retriable()
+            || (should_invalidate_leader && !matches!(error, Error::FlussAPIError { .. }));
+        let error = with_context(error, context);
+        self.fail_all_batches(&error, is_retriable, batches);
     }
 
     async fn acquire_inflight_permit<T>(
@@ -561,7 +825,9 @@ impl LookupDispatcher {
             Err(_) => {
                 error!("Semaphore closed during lookup");
                 for batch in batches.iter_mut() {
-                    batch.complete_all_with_error("Lookup sender shutdown");
+                    batch.complete_all_with_error(|| Error::LookupClosed {
+                        message: "the lookup sender has stopped".to_string(),
+                    });
                 }
                 None
             }
@@ -601,7 +867,7 @@ impl LookupDispatcher {
             if let Some(api_error) = bucket_error(bucket_resp.error_code, bucket_resp.error_message)
             {
                 if FlussError::for_code(api_error.code).invalidates_metadata() {
-                    self.invalidate_bucket_metadata(&table_bucket);
+                    self.invalidate_leaders(destination, std::slice::from_ref(batch));
                 }
                 let is_retriable = api_error.is_retriable();
                 self.handle_batch_error(&Error::FlussAPIError { api_error }, is_retriable, batch);
@@ -612,27 +878,6 @@ impl LookupDispatcher {
         }
 
         self.fail_unprocessed_batches(&processed, batches, destination, P::OP_NAME);
-    }
-
-    /// Drops the cached leaders of `table_bucket`'s table or partition, so the next lookup
-    /// for it waits for a metadata refresh.
-    fn invalidate_bucket_metadata(&self, table_bucket: &TableBucket) {
-        let cluster = self.metadata.get_cluster();
-        let Some(table_path) = cluster.get_table_path_by_id(table_bucket.table_id()) else {
-            return;
-        };
-        let table_path = Arc::new(table_path.clone());
-        let physical_table_path = match table_bucket.partition_id() {
-            Some(partition_id) => match cluster.get_partition_name(partition_id) {
-                Some(partition_name) => {
-                    PhysicalTablePath::of_partitioned(table_path, Some(partition_name.clone()))
-                }
-                None => return,
-            },
-            None => PhysicalTablePath::of(table_path),
-        };
-        self.metadata
-            .invalidate_physical_table_meta(&HashSet::from([physical_table_path]));
     }
 
     fn fail_unprocessed_batches<T>(
@@ -670,9 +915,13 @@ impl LookupDispatcher {
         let mut max_retry_delay_ms = 0u64;
         let table_bucket = batch.table_bucket.clone();
         let now = Instant::now();
+        // While closing, retries could keep the sender from ever stopping, e.g. against a server
+        // that is down, so the lookups fail with this error instead.
+        let closing = self.closing.load(Ordering::Acquire);
 
         for mut lookup in batch.lookups.drain(..) {
-            if is_retriable && lookup.retries() < self.max_retries && !lookup.is_done() {
+            if is_retriable && !closing && lookup.retries() < self.max_retries && !lookup.is_done()
+            {
                 // Resending right away does not help while the lookup keeps failing, e.g. during a
                 // leader restart; it only floods the server and the log.
                 let retry_delay_ms = retry_backoff_ms(
@@ -704,13 +953,18 @@ impl LookupDispatcher {
         }
     }
 
+    fn re_enqueue_lookups(&self, lookups: Vec<QueuedLookup>) {
+        for lookup in lookups {
+            self.re_enqueue_lookup(lookup);
+        }
+    }
+
     fn re_enqueue_lookup(&self, lookup: QueuedLookup) {
         if let Err(e) = self.re_enqueue_tx.send(lookup) {
             error!("Failed to re-enqueue lookup: {}", e);
             let mut failed_lookup = e.0;
-            failed_lookup.complete_with_error(Error::UnexpectedError {
-                message: "Failed to re-enqueue lookup: channel closed".to_string(),
-                source: None,
+            failed_lookup.complete_with_error(Error::LookupClosed {
+                message: "the lookup queue has stopped accepting retries".to_string(),
             });
         }
     }
@@ -744,10 +998,164 @@ fn bucket_error(error_code: Option<i32>, error_message: Option<String>) -> Optio
     Some(ApiError { code, message })
 }
 
-/// Leaves API errors as they are, so callers keep the error code.
+/// What a leader refresh found out.
+struct RefreshOutcome {
+    result: Result<()>,
+    /// The partitions of the refresh that no longer exist, with the error that tells so.
+    dropped_partitions: HashMap<PartitionId, Error>,
+    /// Tables rejected independently of other tables, e.g. because they were dropped.
+    failed_tables: HashMap<TablePath, Error>,
+}
+
+impl RefreshOutcome {
+    fn from_metadata_result(result: Result<HashSet<TablePath>>) -> Self {
+        let mut outcome = Self {
+            result: Ok(()),
+            dropped_partitions: HashMap::new(),
+            failed_tables: HashMap::new(),
+        };
+        match result {
+            Ok(missing_tables) => {
+                for table_path in missing_tables {
+                    let error = Error::FlussAPIError {
+                        api_error: ApiError {
+                            code: FlussError::AuthorizationException.code(),
+                            message: format!(
+                                "Metadata for table {table_path} was omitted because access was denied"
+                            ),
+                        },
+                    };
+                    outcome.failed_tables.insert(table_path, error);
+                }
+            }
+            Err(error) => outcome.result = Err(error),
+        }
+        outcome
+    }
+}
+
+fn is_table_refresh_error(error: &Error) -> bool {
+    matches!(
+        error.api_error(),
+        Some(
+            FlussError::TableNotExist
+                | FlussError::SchemaNotExist
+                | FlussError::AuthorizationException
+        )
+    )
+}
+
+fn is_partition_not_exists(error: &Error) -> bool {
+    error.api_error() == Some(FlussError::PartitionNotExists)
+}
+
+/// Leader refreshes that failed in a row, so that a metadata service that stays unreachable warns
+/// only once.
+struct RefreshFailures {
+    count: u32,
+    since: Instant,
+}
+
+/// Returns failures another refresh cannot fix, see [`is_refusal`]. Other failures leave lookups
+/// waiting; table-specific errors are isolated by `refresh_metadata`. Counts consecutive failures,
+/// logging only the first warning and eventual recovery.
+fn terminal_refresh_error(
+    refresh: &LeaderRefresh,
+    result: Result<()>,
+    failures: &mut Option<RefreshFailures>,
+) -> Option<Error> {
+    let error = match result {
+        Ok(()) => {
+            if let Some(failures) = failures.take() {
+                info!(
+                    "Refreshed the metadata of table buckets without a leader after {} failed \
+                     refreshes over {:?}",
+                    failures.count,
+                    failures.since.elapsed()
+                );
+            }
+            return None;
+        }
+        Err(error) => error,
+    };
+    if is_refusal(&error) {
+        warn!(
+            "Failed to refresh the metadata of {} table buckets without a leader, failing their \
+             lookups: {error}",
+            refresh.table_buckets.len()
+        );
+        return Some(error);
+    }
+    match failures {
+        Some(failures) => {
+            failures.count = failures.count.saturating_add(1);
+            debug!(
+                "Failed to refresh the metadata of {} table buckets without a leader {} times in a \
+                 row, refreshing again after a backoff: {error}",
+                refresh.table_buckets.len(),
+                failures.count
+            );
+        }
+        None => {
+            *failures = Some(RefreshFailures {
+                count: 1,
+                since: Instant::now(),
+            });
+            warn!(
+                "Failed to refresh the metadata of {} table buckets without a leader, refreshing \
+                 again after a backoff; further failures in a row are logged at debug level: \
+                 {error}",
+                refresh.table_buckets.len()
+            );
+        }
+    }
+    None
+}
+
+/// Whether a failed leader refresh refuses the client, so another one cannot succeed: rejected
+/// credentials or API version, no shared API version, the wrong server type, or an invalid API
+/// version advertisement. Other errors leave the lookups waiting, e.g. `UNKNOWN_SERVER_ERROR`,
+/// which the server answers for a schema or bucket assignment that is not visible yet, or
+/// `IllegalArgument` for a bootstrap DNS failure.
+fn is_refusal(error: &Error) -> bool {
+    match error {
+        Error::FlussAPIError { .. } => matches!(
+            error.api_error(),
+            Some(FlussError::AuthenticateException | FlussError::UnsupportedVersion)
+        ),
+        Error::IllegalArgument { .. } => false,
+        _ => !error.is_retriable() && !leader_may_have_moved(error),
+    }
+}
+
+/// Whether the destination of a failed request may no longer lead its buckets: the request didn't
+/// get through, e.g. because the connection dropped, or the server answered that the client's
+/// metadata is stale. Errors the client raises itself, e.g. finding no API version it shares with
+/// the server, say nothing about the leader.
+fn leader_may_have_moved(error: &Error) -> bool {
+    match error {
+        Error::FlussAPIError { .. } => error
+            .api_error()
+            .is_some_and(|api_error| api_error.invalidates_metadata()),
+        Error::RpcError { .. } | Error::IoUnexpectedError { .. } => true,
+        Error::UnexpectedError {
+            source: Some(source),
+            ..
+        } => {
+            // PendingResponse uses this error when its response channel closes without an answer.
+            // Other unexpected errors, e.g. an invalid API version, are not transport failures.
+            source.is::<tokio::sync::oneshot::error::RecvError>()
+        }
+        _ => false,
+    }
+}
+
+/// Preserves errors callers can identify by their API code or variant.
 fn with_context(error: Error, context: String) -> Error {
     match error {
-        Error::FlussAPIError { .. } => error,
+        Error::FlussAPIError { .. }
+        | Error::UnsupportedVersion { .. }
+        | Error::InvalidServerType { .. } => error,
         other => Error::UnexpectedError {
             message: format!("{context}: {other}"),
             source: None,
@@ -757,6 +1165,12 @@ fn with_context(error: Error, context: String) -> Error {
 
 fn copy_error(error: &Error) -> Error {
     match error {
+        Error::UnsupportedVersion { message } => Error::UnsupportedVersion {
+            message: message.clone(),
+        },
+        Error::InvalidServerType { message } => Error::InvalidServerType {
+            message: message.clone(),
+        },
         Error::FlussAPIError { api_error } => Error::FlussAPIError {
             api_error: api_error.clone(),
         },
@@ -772,468 +1186,5 @@ fn copy_error(error: &Error) -> Error {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::client::lookup::{LookupQueue, PrefixLookupQuery, PrimaryLookupQuery};
-    use crate::cluster::ServerType;
-    use crate::proto::{
-        ApiVersionsResponse, PbApiVersion, PbLookupRespForBucket, PbPrefixLookupRespForBucket,
-        PbValue, PbValueList,
-    };
-    use crate::rpc::ApiKey;
-    use crate::test_utils::build_cluster_arc_with_port;
-    use prost::Message;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
-    use tokio::sync::oneshot;
-
-    const TABLE_ID: TableId = 1;
-
-    type PrimaryResult = Result<Option<Vec<u8>>>;
-
-    fn table_path() -> TablePath {
-        TablePath::new("db", "tbl")
-    }
-
-    /// A sender whose only tablet server listens on `port`, with the channels that feed and
-    /// stop it.
-    fn sender_on_port(
-        port: u16,
-        max_retries: i32,
-    ) -> (
-        LookupSender,
-        mpsc::Sender<QueuedLookup>,
-        watch::Sender<bool>,
-    ) {
-        sender_with_backoff(port, max_retries, 100, 0, 0)
-    }
-
-    fn sender_with_backoff(
-        port: u16,
-        max_retries: i32,
-        batch_timeout_ms: u64,
-        retry_backoff_ms: u64,
-        retry_max_backoff_ms: u64,
-    ) -> (
-        LookupSender,
-        mpsc::Sender<QueuedLookup>,
-        watch::Sender<bool>,
-    ) {
-        let cluster = build_cluster_arc_with_port(&table_path(), TABLE_ID, 1, u32::from(port));
-        let metadata = Arc::new(Metadata::new_for_test(cluster));
-        let (queue, lookup_tx, re_enqueue_tx) =
-            LookupQueue::new(8, 8, batch_timeout_ms, metadata.subscribe_cluster_changes());
-        let (shutdown_tx, shutdown_rx) = watch::channel(false);
-        let sender = LookupSender::new(
-            metadata,
-            queue,
-            re_enqueue_tx,
-            1,
-            max_retries,
-            retry_backoff_ms,
-            retry_max_backoff_ms,
-            shutdown_rx,
-        );
-        (sender, lookup_tx, shutdown_tx)
-    }
-
-    fn sender(max_retries: i32) -> LookupSender {
-        sender_on_port(9092, max_retries).0
-    }
-
-    fn lookup(bucket_id: BucketId) -> (PrimaryLookupQuery, oneshot::Receiver<PrimaryResult>) {
-        let (result_tx, result_rx) = oneshot::channel();
-        let query = LookupQuery::new(
-            table_path(),
-            TableBucket::new(TABLE_ID, bucket_id),
-            1,
-            Bytes::from_static(b"key"),
-            result_tx,
-        );
-        (query, result_rx)
-    }
-
-    fn fail_with_bucket_error(sender: &LookupSender, error_code: i32) -> Error {
-        respond_with_bucket_error(sender, error_code)
-            .try_recv()
-            .expect("lookup completed")
-            .expect_err("lookup failed")
-    }
-
-    fn respond_with_bucket_error(
-        sender: &LookupSender,
-        error_code: i32,
-    ) -> oneshot::Receiver<PrimaryResult> {
-        let table_bucket = TableBucket::new(TABLE_ID, 0);
-        let (result_tx, result_rx) = oneshot::channel();
-        let mut batch = LookupBatch::new(table_bucket.clone());
-        batch.add_lookup(LookupQuery::new(
-            table_path(),
-            table_bucket,
-            1,
-            Bytes::from_static(b"key"),
-            result_tx,
-        ));
-        let response = LookupResponse {
-            buckets_resp: vec![PbLookupRespForBucket {
-                bucket_id: 0,
-                error_code: Some(error_code),
-                error_message: Some("from the server".to_string()),
-                ..Default::default()
-            }],
-        };
-        sender.dispatcher.handle_response::<Primary>(
-            TABLE_ID,
-            1,
-            response,
-            std::slice::from_mut(&mut batch),
-        );
-        result_rx
-    }
-
-    #[test]
-    fn a_bucket_error_fails_its_lookups_with_the_api_error() {
-        let error = fail_with_bucket_error(&sender(3), FlussError::InvalidBucketRouting.code());
-        assert_eq!(error.api_error(), Some(FlussError::InvalidBucketRouting));
-        assert!(error.to_string().contains("from the server"), "{error}");
-    }
-
-    #[test]
-    fn a_retriable_bucket_error_keeps_its_code_once_retries_run_out() {
-        let error = fail_with_bucket_error(&sender(0), FlussError::NotLeaderOrFollower.code());
-        assert_eq!(error.api_error(), Some(FlussError::NotLeaderOrFollower));
-    }
-
-    #[test]
-    fn a_routing_error_drops_the_cached_leaders() {
-        let sender = sender(3);
-        let table_bucket = TableBucket::new(TABLE_ID, 0);
-        assert!(
-            sender
-                .dispatcher
-                .metadata
-                .get_cluster()
-                .leader_for(&table_bucket)
-                .is_some()
-        );
-
-        fail_with_bucket_error(&sender, FlussError::InvalidBucketRouting.code());
-
-        assert!(
-            sender
-                .dispatcher
-                .metadata
-                .get_cluster()
-                .leader_for(&table_bucket)
-                .is_none()
-        );
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn a_not_leader_error_drops_the_cached_leaders_and_retries_after_the_backoff() {
-        let (mut sender, _lookup_tx, _shutdown_tx) = sender_with_backoff(9092, 3, 100, 100, 1000);
-        let table_bucket = TableBucket::new(TABLE_ID, 0);
-
-        let mut result_rx =
-            respond_with_bucket_error(&sender, FlussError::NotLeaderOrFollower.code());
-
-        assert!(
-            sender
-                .dispatcher
-                .metadata
-                .get_cluster()
-                .leader_for(&table_bucket)
-                .is_none()
-        );
-        assert!(matches!(
-            result_rx.try_recv(),
-            Err(oneshot::error::TryRecvError::Empty)
-        ));
-        let Some(QueuedLookup::Primary(retried)) = sender.queue.drain_all().pop() else {
-            panic!("the lookup was not retried");
-        };
-        assert_eq!(retried.retries(), 1);
-        let backoff = retried.retry_at().expect("retry deadline") - Instant::now();
-        assert!(
-            (Duration::from_millis(80)..=Duration::from_millis(120)).contains(&backoff),
-            "should back off 80..=120ms, got {backoff:?}"
-        );
-    }
-
-    #[test]
-    fn a_lookup_whose_caller_stopped_waiting_is_not_retried() {
-        let mut sender = sender(3);
-        let (query, result_rx) = lookup(0);
-        drop(result_rx);
-        let mut batch = LookupBatch::new(query.table_bucket().clone());
-        batch.add_lookup(query);
-        let error = Error::UnexpectedError {
-            message: "connection reset".to_string(),
-            source: None,
-        };
-
-        sender
-            .dispatcher
-            .handle_batch_error(&error, true, &mut batch);
-
-        assert!(sender.queue.drain_all().is_empty());
-    }
-
-    fn retry_backoffs(
-        retry_backoff_ms: u64,
-        retry_max_backoff_ms: u64,
-        retries: usize,
-    ) -> Vec<Duration> {
-        let (mut sender, _lookup_tx, _shutdown_tx) =
-            sender_with_backoff(9092, i32::MAX, 100, retry_backoff_ms, retry_max_backoff_ms);
-        let (mut query, _result_rx) = lookup(0);
-        let error = Error::UnexpectedError {
-            message: "connection reset".to_string(),
-            source: None,
-        };
-        let mut backoffs = Vec::with_capacity(retries);
-        for _ in 0..retries {
-            let mut batch = LookupBatch::new(query.table_bucket().clone());
-            batch.add_lookup(query);
-            sender
-                .dispatcher
-                .handle_batch_error(&error, true, &mut batch);
-
-            let Some(QueuedLookup::Primary(retried)) = sender.queue.drain_all().pop() else {
-                panic!("the lookup was not retried");
-            };
-            backoffs.push(retried.retry_at().expect("retry deadline") - Instant::now());
-            query = retried;
-        }
-        backoffs
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn a_retried_lookup_backs_off_exponentially() {
-        let expected_ms = [(80, 120), (160, 240), (320, 480), (640, 960), (800, 1200)];
-        let backoffs = retry_backoffs(100, 1000, expected_ms.len());
-        for (retry, (min_ms, max_ms)) in expected_ms.into_iter().enumerate() {
-            let backoff = backoffs[retry];
-            assert!(
-                (Duration::from_millis(min_ms)..=Duration::from_millis(max_ms)).contains(&backoff),
-                "retry {retry} should back off {min_ms}..={max_ms}ms, got {backoff:?}"
-            );
-        }
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn a_zero_retry_backoff_resends_immediately() {
-        assert_eq!(retry_backoffs(0, 1000, 3), [Duration::ZERO; 3]);
-    }
-
-    async fn fail_then_answer_lookups(listener: TcpListener) -> Duration {
-        let (mut stream, _) = listener.accept().await.unwrap();
-        let mut failed_at: Option<Instant> = None;
-        loop {
-            let len = stream.read_i32().await.unwrap();
-            let mut frame = vec![0u8; len as usize];
-            stream.read_exact(&mut frame).await.unwrap();
-            let api_key = ApiKey::from(i16::from_be_bytes([frame[0], frame[1]]));
-            let error_code = failed_at
-                .is_none()
-                .then(|| FlussError::KvStorageException.code());
-            let body = match api_key {
-                ApiKey::ApiVersion => ApiVersionsResponse {
-                    api_versions: [ApiKey::ApiVersion, ApiKey::Lookup, ApiKey::PrefixLookup]
-                        .into_iter()
-                        .map(|api_key| PbApiVersion {
-                            api_key: i32::from(i16::from(api_key)),
-                            min_version: 0,
-                            max_version: 0,
-                        })
-                        .collect(),
-                    server_type: Some(ServerType::TabletServer.to_type_id()),
-                }
-                .encode_to_vec(),
-                ApiKey::Lookup => LookupResponse {
-                    buckets_resp: vec![PbLookupRespForBucket {
-                        bucket_id: 0,
-                        error_code,
-                        values: vec![PbValue {
-                            values: Some(b"value".to_vec()),
-                        }],
-                        ..Default::default()
-                    }],
-                }
-                .encode_to_vec(),
-                ApiKey::PrefixLookup => PrefixLookupResponse {
-                    buckets_resp: vec![PbPrefixLookupRespForBucket {
-                        bucket_id: 0,
-                        error_code,
-                        value_lists: vec![PbValueList {
-                            values: vec![b"value".to_vec()],
-                        }],
-                        ..Default::default()
-                    }],
-                }
-                .encode_to_vec(),
-                other => panic!("unexpected api key {other:?}"),
-            };
-            stream.write_i32(5 + body.len() as i32).await.unwrap();
-            stream.write_u8(0).await.unwrap();
-            stream.write_all(&frame[4..8]).await.unwrap();
-            stream.write_all(&body).await.unwrap();
-
-            if api_key != ApiKey::ApiVersion {
-                match failed_at {
-                    None => failed_at = Some(Instant::now()),
-                    Some(failed_at) => return failed_at.elapsed(),
-                }
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn a_failed_lookup_succeeds_once_resent_after_the_backoff() {
-        let timeout = Duration::from_secs(10);
-        for prefix in [false, true] {
-            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-            let port = listener.local_addr().unwrap().port();
-            let (mut sender, lookup_tx, shutdown_tx) =
-                sender_with_backoff(port, i32::MAX, 0, 100, 1000);
-            let server = tokio::spawn(fail_then_answer_lookups(listener));
-            let run = tokio::spawn(async move { sender.run().await });
-
-            if prefix {
-                let (result_tx, result_rx) = oneshot::channel();
-                let query = PrefixLookupQuery::new(
-                    table_path(),
-                    TableBucket::new(TABLE_ID, 0),
-                    1,
-                    Bytes::from_static(b"key"),
-                    result_tx,
-                );
-                lookup_tx.send(query.into()).await.unwrap();
-                let rows = tokio::time::timeout(timeout, result_rx)
-                    .await
-                    .expect("the prefix lookup completed")
-                    .unwrap()
-                    .unwrap();
-                assert_eq!(rows, [b"value".to_vec()]);
-            } else {
-                let (query, result_rx) = lookup(0);
-                lookup_tx.send(query.into()).await.unwrap();
-                let value = tokio::time::timeout(timeout, result_rx)
-                    .await
-                    .expect("the lookup completed")
-                    .unwrap()
-                    .unwrap();
-                assert_eq!(value.as_deref(), Some(b"value".as_slice()));
-            }
-
-            let resent_after = tokio::time::timeout(timeout, server)
-                .await
-                .expect("the lookup was resent")
-                .unwrap();
-            assert!(
-                resent_after >= Duration::from_millis(80),
-                "resent after {resent_after:?}"
-            );
-            shutdown_tx.send(true).unwrap();
-            tokio::time::timeout(timeout, run)
-                .await
-                .expect("the sender stopped")
-                .unwrap();
-        }
-    }
-
-    #[tokio::test]
-    async fn a_lookup_whose_caller_stopped_waiting_is_not_sent() {
-        let mut sender = sender(3);
-        // The test cluster has no bucket 1, so this lookup would wait for a leader.
-        let (query, result_rx) = lookup(1);
-        drop(result_rx);
-
-        sender
-            .dispatcher
-            .send_lookups(vec![query.into()], &mut sender.requests)
-            .await
-            .unwrap();
-
-        assert!(sender.queue.drain_all().is_empty());
-    }
-
-    #[tokio::test]
-    async fn sending_does_not_wait_for_the_server_to_answer() {
-        // Accepts connections and never answers.
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let (mut sender, _lookup_tx, _shutdown_tx) =
-            sender_on_port(listener.local_addr().unwrap().port(), 3);
-        let (query, mut result_rx) = lookup(0);
-
-        tokio::time::timeout(
-            Duration::from_secs(10),
-            sender
-                .dispatcher
-                .send_lookups(vec![query.into()], &mut sender.requests),
-        )
-        .await
-        .expect("sent without waiting for the server")
-        .unwrap();
-
-        let _connection = listener.accept().await.unwrap();
-        assert!(matches!(
-            result_rx.try_recv(),
-            Err(oneshot::error::TryRecvError::Empty)
-        ));
-        assert_eq!(sender.dispatcher.inflight_semaphore.available_permits(), 0);
-    }
-
-    #[tokio::test]
-    async fn closing_waits_for_the_requests_in_flight() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let (mut sender, lookup_tx, shutdown_tx) =
-            sender_on_port(listener.local_addr().unwrap().port(), 0);
-        let (query, result_rx) = lookup(0);
-        lookup_tx.send(query.into()).await.unwrap();
-        let run = tokio::spawn(async move { sender.run().await });
-        let (connection, _) = listener.accept().await.unwrap();
-
-        shutdown_tx.send(true).unwrap();
-        tokio::time::sleep(Duration::from_millis(200)).await;
-        assert!(!run.is_finished());
-
-        // The server goes away, so the request fails and returns its permit.
-        drop(connection);
-        tokio::time::timeout(Duration::from_secs(10), run)
-            .await
-            .expect("closed once the request failed")
-            .unwrap();
-        assert!(result_rx.await.unwrap().is_err());
-    }
-
-    #[tokio::test]
-    async fn dropping_the_sender_aborts_its_requests_in_flight() {
-        // Accepts connections and never answers.
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let (mut sender, _lookup_tx, _shutdown_tx) =
-            sender_on_port(listener.local_addr().unwrap().port(), 3);
-        let (query, _result_rx) = lookup(0);
-        tokio::time::timeout(
-            Duration::from_secs(10),
-            sender
-                .dispatcher
-                .send_lookups(vec![query.into()], &mut sender.requests),
-        )
-        .await
-        .expect("sent without waiting for the server")
-        .unwrap();
-        let (mut connection, _) = listener.accept().await.unwrap();
-
-        drop(sender);
-
-        let mut received = Vec::new();
-        tokio::time::timeout(
-            Duration::from_secs(10),
-            connection.read_to_end(&mut received),
-        )
-        .await
-        .expect("the client closed its connection")
-        .unwrap();
-    }
-}
+#[path = "tests/mod.rs"]
+mod tests;
