@@ -834,12 +834,8 @@ public class ZooKeeperClient implements AutoCloseable {
             TablePath tablePath,
             TableRegistration registration,
             int expectedTableVersion,
-            Map<String, VersionedData<PartitionRegistration>> backfills,
-            int expectedEpochVersion)
+            Map<String, VersionedData<PartitionRegistration>> backfills)
             throws Exception {
-        if (operation.getEpochVersion() != expectedEpochVersion) {
-            throw new CoordinatorEpochFencedException("Metadata operation epoch changed.");
-        }
         operation.multi(
                 tableAndPartitionBackfillOperations(
                         tablePath, registration, expectedTableVersion, backfills));

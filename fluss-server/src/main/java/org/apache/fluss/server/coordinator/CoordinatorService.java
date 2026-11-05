@@ -445,17 +445,11 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         } else {
             databaseDescriptor = DatabaseDescriptor.builder().build();
         }
-        return ddlMetadataManagerSupplier
+        ddlMetadataManagerSupplier
                 .get()
-                .runDatabaseDdl(
-                        request.getDatabaseName(),
-                        metadataManager -> {
-                            metadataManager.createDatabase(
-                                    request.getDatabaseName(),
-                                    databaseDescriptor,
-                                    request.isIgnoreIfExists());
-                            return CompletableFuture.completedFuture(response);
-                        });
+                .createDatabase(
+                        request.getDatabaseName(), databaseDescriptor, request.isIgnoreIfExists());
+        return CompletableFuture.completedFuture(response);
     }
 
     @Override
@@ -470,18 +464,11 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         DatabasePropertyChanges databasePropertyChanges =
                 toDatabasePropertyChanges(databaseChanges);
 
-        return ddlMetadataManagerSupplier
+        ddlMetadataManagerSupplier
                 .get()
-                .runDatabaseDdl(
-                        databaseName,
-                        metadataManager -> {
-                            metadataManager.alterDatabaseProperties(
-                                    databaseName,
-                                    databasePropertyChanges,
-                                    request.isIgnoreIfNotExists());
-
-                            return CompletableFuture.completedFuture(new AlterDatabaseResponse());
-                        });
+                .alterDatabaseProperties(
+                        databaseName, databasePropertyChanges, request.isIgnoreIfNotExists());
+        return CompletableFuture.completedFuture(new AlterDatabaseResponse());
     }
 
     private DatabasePropertyChanges toDatabasePropertyChanges(
@@ -512,17 +499,13 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     public CompletableFuture<DropDatabaseResponse> dropDatabase(DropDatabaseRequest request) {
         authorizeDatabase(OperationType.DROP, request.getDatabaseName());
         DropDatabaseResponse response = new DropDatabaseResponse();
-        return ddlMetadataManagerSupplier
+        ddlMetadataManagerSupplier
                 .get()
-                .runDatabaseDdl(
+                .dropDatabase(
                         request.getDatabaseName(),
-                        metadataManager -> {
-                            metadataManager.dropDatabase(
-                                    request.getDatabaseName(),
-                                    request.isIgnoreIfNotExists(),
-                                    request.isCascade());
-                            return CompletableFuture.completedFuture(response);
-                        });
+                        request.isIgnoreIfNotExists(),
+                        request.isCascade());
+        return CompletableFuture.completedFuture(response);
     }
 
     @Override
@@ -1185,14 +1168,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         authorizeTable(OperationType.DROP, tablePath);
 
         DropTableResponse response = new DropTableResponse();
-        return ddlMetadataManagerSupplier
-                .get()
-                .runTableDdl(
-                        tablePath,
-                        metadataManager -> {
-                            metadataManager.dropTable(tablePath, request.isIgnoreIfNotExists());
-                            return CompletableFuture.completedFuture(response);
-                        });
+        ddlMetadataManagerSupplier.get().dropTable(tablePath, request.isIgnoreIfNotExists());
+        return CompletableFuture.completedFuture(response);
     }
 
     @Override

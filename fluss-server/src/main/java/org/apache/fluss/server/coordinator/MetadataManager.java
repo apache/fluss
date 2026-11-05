@@ -110,7 +110,6 @@ public class MetadataManager {
     @Nullable private final ZooKeeperMetadataContext ddlContext;
     @Nullable private final ZooKeeperMetadataOperation ddlOperation;
     @Nullable private final DdlAdmission.Permit ddlPermit;
-    private final int coordinatorZkVersion;
 
     public static final Set<String> SENSITIVE_TABLE_OPTIONS = new HashSet<>();
 
@@ -134,7 +133,6 @@ public class MetadataManager {
         this.ddlContext = null;
         this.ddlOperation = null;
         this.ddlPermit = null;
-        this.coordinatorZkVersion = -1;
         this.zookeeperClient = zookeeperClient;
         this.maxPartitionNum = conf.get(ConfigOptions.MAX_PARTITION_NUM);
         this.maxBucketNum = conf.get(ConfigOptions.MAX_BUCKET_NUM);
@@ -146,8 +144,7 @@ public class MetadataManager {
             DdlAdmission admission,
             @Nullable ZooKeeperMetadataContext context,
             @Nullable ZooKeeperMetadataOperation operation,
-            @Nullable DdlAdmission.Permit permit,
-            int coordinatorZkVersion) {
+            @Nullable DdlAdmission.Permit permit) {
         this.zookeeperClient = source.zookeeperClient;
         this.maxPartitionNum = source.maxPartitionNum;
         this.maxBucketNum = source.maxBucketNum;
@@ -156,7 +153,6 @@ public class MetadataManager {
         this.ddlContext = context;
         this.ddlOperation = operation;
         this.ddlPermit = permit;
-        this.coordinatorZkVersion = coordinatorZkVersion;
     }
 
     /** Creates a metadata view bound to one coordinator leadership and ZooKeeper session. */
@@ -165,12 +161,12 @@ public class MetadataManager {
                 uncheck(
                         () -> zookeeperClient.newMetadataContext(coordinatorZkVersion),
                         "Failed to bind DDL metadata to coordinator leadership");
-        return new MetadataManager(
-                this, new DdlAdmission(), context, null, null, coordinatorZkVersion);
+        return new MetadataManager(this, new DdlAdmission(), context, null, null);
     }
 
+    /** Returns the captured epoch, or -1 when no fenced DDL operation is active. */
     int getCoordinatorZkVersion() {
-        return coordinatorZkVersion;
+        return ddlOperation == null ? -1 : ddlOperation.getEpochVersion();
     }
 
     /**
@@ -215,13 +211,7 @@ public class MetadataManager {
             ZooKeeperMetadataOperation operation =
                     ddlContext == null ? null : ddlContext.beginOperation();
             MetadataManager scoped =
-                    new MetadataManager(
-                            this,
-                            ddlAdmission,
-                            ddlContext,
-                            operation,
-                            permit,
-                            coordinatorZkVersion);
+                    new MetadataManager(this, ddlAdmission, ddlContext, operation, permit);
             return action.apply(scoped);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -1037,12 +1027,7 @@ public class MetadataManager {
                     tablePath, registration, version, backfills, expectedEpoch);
         } else {
             zookeeperClient.updateTableWithPartitionBucketCountBackfill(
-                    ddlOperation,
-                    tablePath,
-                    registration,
-                    version,
-                    backfills,
-                    coordinatorZkVersion);
+                    ddlOperation, tablePath, registration, version, backfills);
         }
     }
 
