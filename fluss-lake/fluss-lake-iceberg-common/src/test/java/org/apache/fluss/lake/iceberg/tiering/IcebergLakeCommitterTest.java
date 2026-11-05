@@ -18,6 +18,7 @@
 package org.apache.fluss.lake.iceberg.tiering;
 
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.lake.committer.LakeCommitResult;
 import org.apache.fluss.lake.committer.LakeCommitter.CommitContext;
 import org.apache.fluss.lake.iceberg.maintenance.IcebergRewriteDataFiles;
 import org.apache.fluss.lake.iceberg.maintenance.RewriteDataFileResult;
@@ -97,9 +98,10 @@ class IcebergLakeCommitterTest {
                         new CommitStateUnknownException(new IOException("response lost")), true);
         Table table = createTableWithSmallFiles();
         long rowsBefore = countRows(table);
+        long snapshotBefore = table.currentSnapshot().snapshotId();
         RewriteDataFileResult rewrite = planRewrite(table);
 
-        commitWithRewrite(failingCatalog, rewrite);
+        LakeCommitResult result = commitRewrites(failingCatalog, rewrite);
 
         // The rewrite snapshot is live, so the files it added must survive.
         Set<String> added = locationsOf(rewrite.addedDataFiles());
@@ -107,6 +109,7 @@ class IcebergLakeCommitterTest {
         table.refresh();
         assertThat(currentDataFiles(table)).isEqualTo(added);
         assertThat(countRows(table)).isEqualTo(rowsBefore);
+        assertFallsBackToDataCommit(table, result, snapshotBefore);
     }
 
     @Test
@@ -115,10 +118,11 @@ class IcebergLakeCommitterTest {
                 newFailingCatalog(new CommitFailedException("conflicting commit"), false);
         Table table = createTableWithSmallFiles();
         long rowsBefore = countRows(table);
+        long snapshotBefore = table.currentSnapshot().snapshotId();
         Set<String> filesBefore = currentDataFiles(table);
         RewriteDataFileResult rewrite = planRewrite(table);
 
-        commitWithRewrite(failingCatalog, rewrite);
+        LakeCommitResult result = commitRewrites(failingCatalog, rewrite);
 
         // The commit definitely failed, so the added files are orphans and are removed.
         Set<String> added = locationsOf(rewrite.addedDataFiles());
@@ -126,27 +130,86 @@ class IcebergLakeCommitterTest {
         table.refresh();
         assertThat(currentDataFiles(table)).isEqualTo(filesBefore);
         assertThat(countRows(table)).isEqualTo(rowsBefore);
+        assertFallsBackToDataCommit(table, result, snapshotBefore);
     }
 
-    /**
-     * Commits a tiering round that carries no new data but the given rewrite. The data commit
-     * succeeds and the failed rewrite falls back to it, so the round itself must not fail.
-     */
-    private void commitWithRewrite(
-            CommitFailureInjectingCatalog failingCatalog, RewriteDataFileResult rewrite)
+    @Test
+    void testRewriteDeletesAddedFilesWhenConflictingWithConcurrentDelete() throws Exception {
+        Table table = createTableWithSmallFiles();
+        RewriteDataFileResult rewrite = planRewrite(table);
+        // Another writer removes a file the rewrite replaces, so Iceberg rejects the rewrite
+        // with a ValidationException, without any injected failure.
+        DataFile concurrentlyDeleted = rewrite.deletedDataFiles().iterator().next();
+        table.newDelete().deleteFile(concurrentlyDeleted).commit();
+        table.refresh();
+        long rowsBefore = countRows(table);
+        long snapshotBefore = table.currentSnapshot().snapshotId();
+        Set<String> filesBefore = currentDataFiles(table);
+
+        LakeCommitResult result = commitRewrites(icebergCatalog, rewrite);
+
+        Set<String> added = locationsOf(rewrite.addedDataFiles());
+        assertThat(added).isNotEmpty().noneMatch(location -> exists(table, location));
+        table.refresh();
+        assertThat(currentDataFiles(table)).isEqualTo(filesBefore);
+        assertThat(countRows(table)).isEqualTo(rowsBefore);
+        assertFallsBackToDataCommit(table, result, snapshotBefore);
+    }
+
+    @Test
+    void testRewriteDeletesAddedFilesWhenFailingBeforeCommit() throws Exception {
+        Table table = createTableWithSmallFiles();
+        RewriteDataFileResult first = planRewrite(table);
+        table.newAppend().appendFile(writeDataFile(table, 100L)).commit();
+        table.refresh();
+        RewriteDataFileResult second = planRewrite(table);
+        long rowsBefore = countRows(table);
+        long snapshotBefore = table.currentSnapshot().snapshotId();
+        Set<String> filesBefore = currentDataFiles(table);
+
+        // Rewrites planned from different snapshots are rejected before the commit is sent.
+        LakeCommitResult result = commitRewrites(icebergCatalog, first, second);
+
+        Set<String> added = locationsOf(first.addedDataFiles());
+        added.addAll(locationsOf(second.addedDataFiles()));
+        assertThat(added).isNotEmpty().noneMatch(location -> exists(table, location));
+        table.refresh();
+        assertThat(currentDataFiles(table)).isEqualTo(filesBefore);
+        assertThat(countRows(table)).isEqualTo(rowsBefore);
+        assertFallsBackToDataCommit(table, result, snapshotBefore);
+    }
+
+    /** Commits a tiering round that carries no new data but the given rewrites. */
+    private LakeCommitResult commitRewrites(Catalog catalog, RewriteDataFileResult... rewrites)
             throws Exception {
         IcebergCatalogProvider provider =
                 new IcebergCatalogProvider(configuration) {
                     @Override
                     public Catalog get() {
-                        return failingCatalog;
+                        return catalog;
                     }
                 };
+        IcebergCommittable.Builder committable = IcebergCommittable.builder();
+        for (RewriteDataFileResult rewrite : rewrites) {
+            committable.addRewriteDataFileResult(rewrite);
+        }
         try (IcebergLakeCommitter committer = new IcebergLakeCommitter(provider, TABLE_PATH)) {
-            committer.commit(
-                    IcebergCommittable.builder().addRewriteDataFileResult(rewrite).build(),
+            return committer.commit(
+                    committable.build(),
                     new CommitContext(Collections.emptyMap(), Collections.emptyMap()));
         }
+    }
+
+    /**
+     * Asserts that the round did not fail but fell back to its own data commit, made on top of
+     * {@code parentSnapshotId}, as it does whenever the rewrite is not known to be committed.
+     */
+    private static void assertFallsBackToDataCommit(
+            Table table, LakeCommitResult result, long parentSnapshotId) {
+        assertThat(result.committedIsReadable()).isTrue();
+        Snapshot dataCommit = table.snapshot(result.getCommittedSnapshotId());
+        assertThat(dataCommit.operation()).isEqualTo(DataOperations.APPEND);
+        assertThat(dataCommit.parentId()).isEqualTo(parentSnapshotId);
     }
 
     private CommitFailureInjectingCatalog newFailingCatalog(

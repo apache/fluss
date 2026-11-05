@@ -182,10 +182,10 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
                                             rewriteDataFileResult.addedDataFiles().stream())
                             .map(ContentFile::location)
                             .collect(Collectors.toList());
-            // Like Iceberg's SnapshotProducer, only clean up when the commit definitely failed.
-            // Otherwise (CommitStateUnknownException on a REST 5xx/timeout in particular) the
-            // rewrite snapshot may be live and reference these files, so deleting them would
-            // corrupt the table; at worst they are left as orphans.
+            // Like Iceberg's SnapshotProducer with strict cleanup (as REST catalogs require), only
+            // clean up when the commit definitely failed. Otherwise (CommitStateUnknownException
+            // on a REST 5xx/timeout in particular) the rewrite snapshot may be live and reference
+            // these files, so deleting them would corrupt the table; at worst they are orphans.
             if (!commitAttempted || e instanceof CleanableFailure) {
                 LOG.error(
                         "Failed to commit rewrite files to iceberg table {}, delete rewrite added files {}.",
