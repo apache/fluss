@@ -257,6 +257,11 @@ impl Config {
                             FlussError::new_err(format!("Invalid value '{value}' for '{key}': {e}"))
                         })?;
                     }
+                    "connection.max-idle-time-ms" => {
+                        config.connection_max_idle_time_ms = value.parse::<u64>().map_err(|e| {
+                            FlussError::new_err(format!("Invalid value '{value}' for '{key}': {e}"))
+                        })?;
+                    }
                     "security.protocol" => {
                         config.security_protocol = value;
                     }
@@ -559,6 +564,19 @@ impl Config {
     #[setter]
     fn set_connect_timeout_ms(&mut self, timeout: u64) {
         self.inner.connect_timeout_ms = timeout;
+    }
+
+    /// Get the time in milliseconds after which idle cached connections are closed
+    #[getter]
+    fn connection_max_idle_time_ms(&self) -> u64 {
+        self.inner.connection_max_idle_time_ms
+    }
+
+    /// Set the time in milliseconds after which idle cached connections are closed, or 0 to
+    /// disable closing idle connections
+    #[setter]
+    fn set_connection_max_idle_time_ms(&mut self, max_idle_time: u64) {
+        self.inner.connection_max_idle_time_ms = max_idle_time;
     }
 
     /// Get the security protocol

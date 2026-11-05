@@ -38,6 +38,7 @@ Complete API reference for the Fluss Python client.
 | `lookup_retry_backoff_ms`             | `lookup.retry-backoff-ms`             | Get/set initial lookup retry backoff in ms, doubling per retry with ±20% jitter; `0` retries immediately (default `100`) |
 | `lookup_retry_max_backoff_ms`         | `lookup.retry-max-backoff-ms`         | Get/set lookup retry backoff cap in ms, applied before jitter; must be >= `lookup_retry_backoff_ms` (default `1000`) |
 | `connect_timeout_ms`                  | `connect-timeout`                     | Get/set TCP connect timeout in milliseconds                                             |
+| `connection_max_idle_time_ms`         | `connection.max-idle-time-ms`         | Get/set the time in ms after which idle cached connections are closed, failing the requests still waiting on them with a retriable error; `0` disables closing idle connections (default `600000`) |
 | `security_protocol`                   | `security.protocol`                   | Get/set security protocol (`"PLAINTEXT"` or `"sasl"`)                                   |
 | `security_sasl_mechanism`             | `security.sasl.mechanism`             | Get/set SASL mechanism (only `"PLAIN"` is supported)                                    |
 | `security_sasl_username`              | `security.sasl.username`              | Get/set SASL username (required when protocol is `"sasl"`)                              |

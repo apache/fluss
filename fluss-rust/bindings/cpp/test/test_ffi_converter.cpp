@@ -83,6 +83,17 @@ TEST(FfiConverterTest, WriterRetryBackoffConfiguration) {
     EXPECT_EQ(ffi_config.writer_retry_max_backoff_ms, 5000u);
 }
 
+TEST(FfiConverterTest, ConnectionMaxIdleTimeConfiguration) {
+    fluss::Configuration config;
+    EXPECT_EQ(fluss::utils::to_ffi_config(config).connection_max_idle_time_ms, 600000u);
+
+    config.connection_max_idle_time_ms = 60000;
+    EXPECT_EQ(fluss::utils::to_ffi_config(config).connection_max_idle_time_ms, 60000u);
+
+    config.connection_max_idle_time_ms = 0;
+    EXPECT_EQ(fluss::utils::to_ffi_config(config).connection_max_idle_time_ms, 0u);
+}
+
 TEST(FfiConverterTest, LookupRetryBackoffConfiguration) {
     fluss::Configuration config;
     EXPECT_EQ(config.lookup_retry_backoff_ms, 100u);

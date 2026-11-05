@@ -29,6 +29,7 @@ Complete API reference for the Fluss Rust client.
 | `scanner_log_fetch_wait_max_time_ms`  | `i32`           | `500`              | Maximum time (ms) the server may wait to satisfy min-bytes                           |
 | `scanner_log_fetch_max_bytes_for_bucket`| `i32`         | `1048576` (1 MB)   | Maximum bytes per fetch response per bucket for LogScanner                           |
 | `connect_timeout_ms`                  | `u64`           | `120000`           | TCP connect timeout in milliseconds                                                  |
+| `connection_max_idle_time_ms`         | `u64`           | `600000` (10 min)  | Idle cached connections are closed after this many milliseconds, failing the requests still waiting on them with a retriable error; `0` disables closing idle connections |
 | `security_protocol`                   | `String`        | `"PLAINTEXT"`      | `PLAINTEXT` (default) or `sasl` for SASL auth                                        |
 | `security_sasl_mechanism`             | `String`        | `"PLAIN"`          | SASL mechanism (only `PLAIN` is supported)                                           |
 | `security_sasl_username`              | `String`        | (empty)            | SASL username (required when protocol is `sasl`)                                     |

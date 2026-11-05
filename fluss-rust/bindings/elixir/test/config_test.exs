@@ -31,6 +31,14 @@ defmodule Fluss.ConfigTest do
     assert config.connect_timeout_ms == 30_000
   end
 
+  test "set_connection_max_idle_time_ms/2 sets the connection max idle time" do
+    config =
+      Fluss.Config.new("localhost:9123")
+      |> Fluss.Config.set_connection_max_idle_time_ms(0)
+
+    assert config.connection_max_idle_time_ms == 0
+  end
+
   test "set_lookup_batch_timeout_ms/2 sets the lookup batch timeout" do
     config =
       Fluss.Config.new("localhost:9123")
