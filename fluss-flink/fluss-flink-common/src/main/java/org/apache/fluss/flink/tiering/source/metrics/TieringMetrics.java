@@ -18,6 +18,7 @@
 package org.apache.fluss.flink.tiering.source.metrics;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.MetricNames;
 
 import org.apache.flink.metrics.Counter;
@@ -32,8 +33,8 @@ import org.apache.flink.runtime.metrics.groups.AbstractMetricGroup;
  * Metrics for the Flink-based tiering source.
  *
  * <p>All metrics are registered under group "fluss.tieringService", as a child of {@link
- * SourceReaderMetricGroup} for reader metrics or {@link SplitEnumeratorMetricGroup} for enumerator
- * metrics.
+ * SourceReaderMetricGroup} for reader metrics, {@link SplitEnumeratorMetricGroup} for enumerator
+ * metrics, or the committer operator's metric group for commit metrics.
  *
  * <p>The following metrics are available:
  *
@@ -44,6 +45,9 @@ import org.apache.flink.runtime.metrics.groups.AbstractMetricGroup;
  *       the counter using a 60-second sliding window.
  *   <li>{@code fluss.tieringService.readersAwaitingSplitRatio} - Gauge: fraction of source readers
  *       waiting for splits, reported by the enumerator.
+ *   <li>{@code fluss.tieringService.consecutiveCommitFailures} - Gauge: number of consecutive
+ *       tiering rounds of a table that failed to commit, scoped by the {@code database} and {@code
+ *       table} variables and reported by the committer once the table has failed a round.
  * </ul>
  */
 @Internal
@@ -52,6 +56,8 @@ public class TieringMetrics {
     // Metric group names
     public static final String FLUSS_METRIC_GROUP = "fluss";
     public static final String TIERING_SERVICE_GROUP = "tieringService";
+    public static final String DATABASE_GROUP = "database";
+    public static final String TABLE_GROUP = "table";
 
     private final Counter readBytesCounter;
 
@@ -84,5 +90,20 @@ public class TieringMetrics {
                 ((AbstractMetricGroup<?>) tieringServiceGroup).close();
             }
         };
+    }
+
+    /** Registers the consecutive commit failures of a table under the committer's metric group. */
+    public static void registerConsecutiveCommitFailures(
+            MetricGroup committerMetricGroup,
+            TablePath tablePath,
+            Gauge<Integer> consecutiveCommitFailures) {
+        committerMetricGroup
+                .addGroup(FLUSS_METRIC_GROUP)
+                .addGroup(TIERING_SERVICE_GROUP)
+                .addGroup(DATABASE_GROUP, tablePath.getDatabaseName())
+                .addGroup(TABLE_GROUP, tablePath.getTableName())
+                .gauge(
+                        MetricNames.TIERING_SERVICE_CONSECUTIVE_COMMIT_FAILURES,
+                        consecutiveCommitFailures);
     }
 }

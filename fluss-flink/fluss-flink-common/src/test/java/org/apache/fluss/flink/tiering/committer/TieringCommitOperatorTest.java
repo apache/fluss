@@ -81,6 +81,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
 import static org.apache.fluss.config.ConfigOptions.LAKE_TIERING_COMMIT_THREAD_NUM;
+import static org.apache.fluss.flink.tiering.committer.TieringCommitOperator.CONSECUTIVE_FAILURES_TO_LOG_ERROR;
 import static org.apache.fluss.lake.committer.LakeCommitter.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
 import static org.apache.fluss.record.TestData.DATA1_PARTITIONED_TABLE_DESCRIPTOR;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -305,6 +306,48 @@ class TieringCommitOperatorTest extends FlinkTestBase {
         assertThat(factory.release).isNotDone();
         awaitCommitEvent();
         assertThat(admin.getLatestLakeSnapshot(slowTable).get().getSnapshotId()).isEqualTo(1);
+    }
+
+    @Test
+    void testCountsConsecutiveCommitFailuresPerTable() throws Exception {
+        TablePath failingTable = TablePath.of("fluss", "consecutive_commit_failures");
+        TablePath healthyTable = TablePath.of("fluss", "consecutive_commit_failures_healthy");
+        long failingTableId = createTable(failingTable, DEFAULT_PK_TABLE_DESCRIPTOR);
+        long healthyTableId = createTable(healthyTable, DEFAULT_PK_TABLE_DESCRIPTOR);
+        TestingLakeTieringFactory.TestingLakeCommitter lakeCommitter =
+                new TestingLakeTieringFactory.TestingLakeCommitter();
+        reopenCommitter(new TestingLakeTieringFactory(lakeCommitter), new Configuration());
+
+        // Every round fails, as with a permanent conflict in the lake.
+        lakeCommitter.setCommitFailure(new IOException("Lake commit rejected"));
+        for (int round = 1; round <= CONSECUTIVE_FAILURES_TO_LOG_ERROR; round++) {
+            committerOperator.processElement(
+                    createTableBucketWriteResultStreamRecord(
+                            failingTable, new TableBucket(failingTableId, 0), 1, 1, 1, 1));
+            awaitCommitEvent();
+            assertThat(lastSourceEvent()).isInstanceOf(FailedTieringEvent.class);
+            assertThat(committerOperator.getConsecutiveCommitFailures(failingTable))
+                    .isEqualTo(round);
+        }
+
+        // A successful round of another table does not reset the count.
+        lakeCommitter.setCommitFailure(null);
+        committerOperator.processElement(
+                createTableBucketWriteResultStreamRecord(
+                        healthyTable, new TableBucket(healthyTableId, 0), 1, 1, 1, 1));
+        awaitCommitEvent();
+        assertThat(lastSourceEvent()).isInstanceOf(FinishedTieringEvent.class);
+        assertThat(committerOperator.getConsecutiveCommitFailures(healthyTable)).isZero();
+        assertThat(committerOperator.getConsecutiveCommitFailures(failingTable))
+                .isEqualTo(CONSECUTIVE_FAILURES_TO_LOG_ERROR);
+
+        // A successful round of the table itself resets it.
+        committerOperator.processElement(
+                createTableBucketWriteResultStreamRecord(
+                        failingTable, new TableBucket(failingTableId, 0), 1, 1, 1, 1));
+        awaitCommitEvent();
+        assertThat(lastSourceEvent()).isInstanceOf(FinishedTieringEvent.class);
+        assertThat(committerOperator.getConsecutiveCommitFailures(failingTable)).isZero();
     }
 
     @Test
@@ -857,6 +900,12 @@ class TieringCommitOperatorTest extends FlinkTestBase {
                     mailbox::hasMail, Duration.ofSeconds(10), "Missing commit callback");
             mailboxExecutor.yield();
         }
+    }
+
+    private Object lastSourceEvent() {
+        List<OperatorEvent> operatorEvents = mockOperatorEventGateway.getEventsSent();
+        return ((SourceEventWrapper) operatorEvents.get(operatorEvents.size() - 1))
+                .getSourceEvent();
     }
 
     private void verifyNoLakeSnapshot(TablePath tablePath) throws Exception {

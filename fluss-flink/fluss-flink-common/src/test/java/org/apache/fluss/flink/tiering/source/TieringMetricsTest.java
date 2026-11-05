@@ -18,14 +18,17 @@
 package org.apache.fluss.flink.tiering.source;
 
 import org.apache.fluss.flink.tiering.source.metrics.TieringMetrics;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.MetricNames;
 
 import org.apache.flink.metrics.Counter;
+import org.apache.flink.metrics.Gauge;
 import org.apache.flink.metrics.testutils.MetricListener;
 import org.apache.flink.runtime.metrics.groups.InternalSourceReaderMetricGroup;
 import org.junit.jupiter.api.Test;
 
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -49,5 +52,27 @@ class TieringMetricsTest {
                         MetricNames.TIERING_SERVICE_READ_BYTES);
         assertThat(counter).isPresent();
         assertThat(counter.get().getCount()).isEqualTo(300);
+    }
+
+    @Test
+    void testRegisterConsecutiveCommitFailures() {
+        MetricListener metricListener = new MetricListener();
+        AtomicInteger failures = new AtomicInteger(2);
+        TieringMetrics.registerConsecutiveCommitFailures(
+                metricListener.getMetricGroup(), TablePath.of("db", "tbl"), failures::get);
+
+        Optional<Gauge<Integer>> gauge =
+                metricListener.getGauge(
+                        TieringMetrics.FLUSS_METRIC_GROUP,
+                        TieringMetrics.TIERING_SERVICE_GROUP,
+                        TieringMetrics.DATABASE_GROUP,
+                        "db",
+                        TieringMetrics.TABLE_GROUP,
+                        "tbl",
+                        MetricNames.TIERING_SERVICE_CONSECUTIVE_COMMIT_FAILURES);
+        assertThat(gauge).isPresent();
+        assertThat(gauge.get().getValue()).isEqualTo(2);
+        failures.set(0);
+        assertThat(gauge.get().getValue()).isZero();
     }
 }

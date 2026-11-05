@@ -1332,7 +1332,7 @@ How to Use Flink Metrics, you can see [Flink Metrics](https://nightlies.apache.o
 ### Tiering Service Metrics
 
 These metrics are exposed by the Flink-based tiering source when running the Lake Tiering Service.
-All metrics are registered under the `fluss.tieringService` metric group, as a child of the Flink `SourceReaderMetricGroup` for reader metrics or `SplitEnumeratorMetricGroup` for enumerator metrics.
+All metrics are registered under the `fluss.tieringService` metric group, as a child of the Flink `SourceReaderMetricGroup` for reader metrics, `SplitEnumeratorMetricGroup` for enumerator metrics, or the committer operator's metric group for commit metrics.
 
 <table class="table table-bordered">
     <thead>
@@ -1360,6 +1360,12 @@ All metrics are registered under the `fluss.tieringService` metric group, as a c
             <td>readersAwaitingSplitRatio</td>
             <td>Flink Source Enumerator</td>
             <td>The current ratio (0–1) of readers tracked by the enumerator as waiting for a split to the source parallelism.</td>
+            <td>Gauge</td>
+        </tr>
+        <tr>
+            <td>consecutiveCommitFailures</td>
+            <td>Flink Committer Operator, per table (<code>database</code>, <code>table</code>)</td>
+            <td>The number of consecutive tiering rounds of the table that failed to commit; reset to 0 when a round commits. A failed round is retried in the next round without failing the job, so a growing value means the table's lake data no longer advances. Registered once the table has failed a round.</td>
             <td>Gauge</td>
         </tr>
     </tbody>

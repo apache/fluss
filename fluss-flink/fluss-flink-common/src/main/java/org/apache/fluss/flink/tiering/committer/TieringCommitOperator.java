@@ -29,6 +29,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.tiering.event.FailedTieringEvent;
 import org.apache.fluss.flink.tiering.event.FinishedTieringEvent;
 import org.apache.fluss.flink.tiering.source.TieringSource;
+import org.apache.fluss.flink.tiering.source.metrics.TieringMetrics;
 import org.apache.fluss.lake.committer.LakeCommitter;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.fluss.lake.writer.LakeWriter;
@@ -45,6 +46,8 @@ import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
 import org.apache.flink.streaming.api.operators.StreamOperatorParameters;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.streaming.runtime.tasks.mailbox.TaskMailbox.MailboxClosedException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -52,6 +55,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
@@ -85,6 +89,11 @@ public class TieringCommitOperator<WriteResult, Committable>
 
     private static final long serialVersionUID = 1L;
 
+    private static final Logger LOG = LoggerFactory.getLogger(TieringCommitOperator.class);
+
+    /** Consecutive failed rounds of a table from which its commit failures are logged at ERROR. */
+    @VisibleForTesting static final int CONSECUTIVE_FAILURES_TO_LOG_ERROR = 3;
+
     private final Configuration flussConfig;
     private final Configuration lakeTieringConfig;
     private final LakeTieringFactory<WriteResult, Committable> lakeTieringFactory;
@@ -104,6 +113,12 @@ public class TieringCommitOperator<WriteResult, Committable>
 
     // Table ID -> accumulator for the current tiering round.
     private final Map<Long, TableWriteResultAccumulator<WriteResult>> tableWriteResultAccumulators;
+
+    // Table path -> consecutive failed commit rounds. Updated on the mailbox thread, read by the
+    // metric reporters.
+    private final Map<TablePath, Integer> consecutiveCommitFailures = new ConcurrentHashMap<>();
+    // Mailbox-thread confined; a table's metric is registered on its first failed round.
+    private final Set<TablePath> tablesWithFailureMetric = new HashSet<>();
 
     /** Creates an operator that collects and commits table tiering rounds. */
     public TieringCommitOperator(
@@ -201,10 +216,10 @@ public class TieringCommitOperator<WriteResult, Committable>
                     try {
                         result = tieringCommitter.commitWriteResults(tableId, tablePath, results);
                     } catch (Exception e) {
-                        postCompletion(tableId, () -> reportFailed(tableId, e));
+                        postCompletion(tableId, () -> reportFailed(tableId, tablePath, e));
                         return;
                     }
-                    postCompletion(tableId, () -> reportFinished(tableId, result));
+                    postCompletion(tableId, () -> reportFinished(tableId, tablePath, result));
                 };
         commitExecutor.execute(
                 withUncaughtExceptionHandler(
@@ -232,7 +247,14 @@ public class TieringCommitOperator<WriteResult, Committable>
         }
     }
 
-    private void reportFinished(long tableId, TieringCommitResult<Committable> result) {
+    @VisibleForTesting
+    int getConsecutiveCommitFailures(TablePath tablePath) {
+        return consecutiveCommitFailures.getOrDefault(tablePath, 0);
+    }
+
+    private void reportFinished(
+            long tableId, TablePath tablePath, TieringCommitResult<Committable> result) {
+        consecutiveCommitFailures.remove(tablePath);
         if (result.getCommittable() != null) {
             output.collect(new StreamRecord<>(new CommittableMessage<>(result.getCommittable())));
         }
@@ -240,13 +262,34 @@ public class TieringCommitOperator<WriteResult, Committable>
                 new SourceEventWrapper(new FinishedTieringEvent(tableId, result.getStats())));
     }
 
-    private void reportFailed(long tableId, Exception cause) {
+    private void reportFailed(long tableId, TablePath tablePath, Exception cause) {
         operatorEventGateway.sendEventToCoordinator(
                 new SourceEventWrapper(
                         new FailedTieringEvent(tableId, ExceptionUtils.stringifyException(cause))));
-        LOG.warn(
-                "Fail to commit tiering write result, will try to tier again in next round.",
-                cause);
+        int failures = consecutiveCommitFailures.merge(tablePath, 1, Integer::sum);
+        if (tablesWithFailureMetric.add(tablePath)) {
+            TieringMetrics.registerConsecutiveCommitFailures(
+                    getMetricGroup(), tablePath, () -> getConsecutiveCommitFailures(tablePath));
+        }
+        // A permanent failure retries forever without failing the job, so escalate it to make a
+        // table that stopped tiering visible.
+        if (failures >= CONSECUTIVE_FAILURES_TO_LOG_ERROR) {
+            LOG.error(
+                    "Failed to commit the tiering round of table {} (id {}) {} times in a row, "
+                            + "its lake data does not advance until a commit succeeds. "
+                            + "Will try to tier it again in the next round.",
+                    tablePath,
+                    tableId,
+                    failures,
+                    cause);
+        } else {
+            LOG.warn(
+                    "Failed to commit the tiering round of table {} (id {}), "
+                            + "will try to tier it again in the next round.",
+                    tablePath,
+                    tableId,
+                    cause);
+        }
     }
 
     /** Collects one table's tiering round with constant-time validation of each result. */
