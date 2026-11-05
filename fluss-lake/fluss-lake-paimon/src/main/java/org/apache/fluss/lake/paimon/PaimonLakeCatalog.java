@@ -62,6 +62,7 @@ import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toFlussTableD
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimonSchema;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimonSchemaChanges;
+import static org.apache.fluss.lake.paimon.utils.PaimonConversions.validateAddedColumnAggregation;
 import static org.apache.fluss.lake.paimon.utils.PaimonTableValidation.checkTableIsEmpty;
 import static org.apache.fluss.lake.paimon.utils.PaimonTableValidation.isPaimonSchemaCompatible;
 import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
@@ -225,6 +226,16 @@ public class PaimonLakeCatalog implements LakeCatalog {
                                 remainingChanges));
             }
 
+            // Retried additions must also be checked when Paimon already contains the columns.
+            for (TableChange tableChange : changesToApply) {
+                if (tableChange instanceof TableChange.AddColumn) {
+                    validateAddedColumnAggregation(
+                            tablePath,
+                            fileStoreTable,
+                            (TableChange.AddColumn) tableChange,
+                            paimonSchemaChanges);
+                }
+            }
             if (!paimonSchemaChanges.isEmpty()) {
                 paimonCatalog.alterTable(toPaimon(tablePath), paimonSchemaChanges, false);
             }

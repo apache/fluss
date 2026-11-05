@@ -1149,6 +1149,8 @@ public class MetadataManager {
                                         .getLakeCatalogContainer()
                                         .getDefaultTableLakeOptions()));
             }
+        } catch (TableNotExistException e) {
+            throw e;
         } catch (Exception e) {
             throw new FlussRuntimeException(
                     String.format("Failed to get tables '%s'.", tablePaths), e);
@@ -1167,6 +1169,23 @@ public class MetadataManager {
             throw new TableNotExistException("Table '" + tablePath + "' does not exist.");
         }
         return optionalTable.get();
+    }
+
+    /**
+     * Returns the ZK registrations of the given partitions of a table, read in one batch.
+     * Partitions that are not registered are absent from the result.
+     */
+    public Map<String, PartitionRegistration> getPartitionRegistrations(
+            TablePath tablePath, Collection<String> partitionNames) {
+        try {
+            return zookeeperClient.getPartitionRegistrations(tablePath, partitionNames);
+        } catch (Exception e) {
+            throw new FlussRuntimeException(
+                    String.format(
+                            "Failed to get partitions %s of table '%s'.",
+                            partitionNames, tablePath),
+                    e);
+        }
     }
 
     /**

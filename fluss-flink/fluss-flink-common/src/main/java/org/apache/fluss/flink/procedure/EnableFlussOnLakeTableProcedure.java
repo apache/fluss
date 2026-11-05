@@ -129,6 +129,13 @@ public class EnableFlussOnLakeTableProcedure extends ProcedureBase {
             if (!snapshotId.isPresent()) {
                 return;
             }
+            // Existing primary-key data must be loaded into Fluss before lake reads are enabled.
+            if (tableInfo.hasPrimaryKey()) {
+                throw new UnsupportedOperationException(
+                        "Enabling Fluss on a Paimon primary-key table with an existing snapshot "
+                                + "requires Bulk Load, which is not supported by this procedure yet. "
+                                + "The Fluss table metadata remains lake-disabled.");
+            }
 
             try (FlussTableLakeSnapshotCommitter committer =
                     new FlussTableLakeSnapshotCommitter(

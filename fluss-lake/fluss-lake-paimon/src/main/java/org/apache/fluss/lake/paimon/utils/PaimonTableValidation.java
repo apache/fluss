@@ -53,6 +53,7 @@ public class PaimonTableValidation {
             CoreOptions.getOptions().stream()
                     .collect(Collectors.toMap(ConfigOption::key, option -> option));
 
+    /** Checks physical schema and immutable option compatibility. */
     public static boolean isPaimonSchemaCompatible(Schema existingSchema, Schema newSchema) {
         // FIP-27: newly generated schemas are always clean (no system columns). When the existing
         // table is a legacy table that still carries the three system columns (recognisable by the

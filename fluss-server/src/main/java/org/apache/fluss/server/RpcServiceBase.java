@@ -851,13 +851,14 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                 authorizedPartitions.add(path);
             }
         }
+        Map<PhysicalTablePath, PartitionMetadata> metadataFromCache =
+                metadataProvider.getPartitionsMetadataFromCache(authorizedPartitions);
         List<PartitionMetadata> partitionsMetadata = new ArrayList<>();
         List<PhysicalTablePath> unknownPartitions = new ArrayList<>();
         for (PhysicalTablePath partitionPath : authorizedPartitions) {
-            Optional<PartitionMetadata> metadataFromCache =
-                    metadataProvider.getPartitionMetadataFromCache(partitionPath);
-            if (metadataFromCache.isPresent()) {
-                partitionsMetadata.add(metadataFromCache.get());
+            PartitionMetadata cached = metadataFromCache.get(partitionPath);
+            if (cached != null) {
+                partitionsMetadata.add(cached);
             } else {
                 unknownPartitions.add(partitionPath);
             }

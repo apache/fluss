@@ -20,7 +20,10 @@ package org.apache.fluss.server.coordinator.event;
 import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.metrics.Gauge;
+import org.apache.fluss.metrics.Histogram;
+import org.apache.fluss.metrics.Metric;
 import org.apache.fluss.metrics.MetricNames;
+import org.apache.fluss.metrics.groups.AbstractMetricGroup;
 import org.apache.fluss.metrics.registry.NOPMetricRegistry;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.metadata.ServerInfo;
@@ -32,6 +35,10 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
@@ -80,13 +87,9 @@ class CoordinatorEventManagerTest {
                     }
                 };
 
-        // Create a fresh metric group per test to avoid gauge name collisions with other
-        // tests that share the static TestingMetricGroups.COORDINATOR_METRICS instance.
-        // AbstractMetricGroup.addMetric() rejects new gauges when a same-name gauge already
-        // exists (keeps the old one), which causes this test to read a stale gauge bound to
-        // a different CoordinatorEventManager instance.
+        TestingMetricRegistry registry = new TestingMetricRegistry();
         CoordinatorMetricGroup metricGroup =
-                new CoordinatorMetricGroup(NOPMetricRegistry.INSTANCE, "cluster1", "host", "0");
+                new CoordinatorMetricGroup(registry, "cluster1", "host", "0");
 
         CoordinatorEventManager manager = new CoordinatorEventManager(testProcessor, metricGroup);
         manager.start();
@@ -98,8 +101,8 @@ class CoordinatorEventManagerTest {
                     Duration.ofMinutes(1),
                     () -> assertThat(metricsUpdateCount.get()).isGreaterThan(0));
 
-            Gauge activeTabletServerCount =
-                    (Gauge) metricGroup.getMetrics().get(MetricNames.ACTIVE_TABLET_SERVER_COUNT);
+            Gauge<?> activeTabletServerCount =
+                    (Gauge<?>) registry.metrics.get(MetricNames.ACTIVE_TABLET_SERVER_COUNT);
             // The gauge reads the volatile tabletServerCount field which is updated
             // after the AccessContextEvent future completes. Use retry to handle
             // the brief window between metricsUpdateCount increment (inside the
@@ -114,6 +117,112 @@ class CoordinatorEventManagerTest {
         }
     }
 
+    @Test
+    void testMetricsUpdatedAfterLeadershipChanges() throws Exception {
+        TestingMetricRegistry registry = new TestingMetricRegistry();
+        CoordinatorMetricGroup metricGroup =
+                new CoordinatorMetricGroup(registry, "cluster1", "host", "0");
+        Map<String, Metric> previousMetrics = new HashMap<>();
+
+        try {
+            for (int term = 0; term < 3; term++) {
+                int tabletServerCount = 9 + term * 3;
+                CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
+                for (int id = 0; id < tabletServerCount; id++) {
+                    context.addLiveTabletServer(
+                            new ServerInfo(
+                                    id,
+                                    "rack0",
+                                    Endpoint.fromListenersString("CLIENT://host" + id + ":1000"),
+                                    ServerType.TABLET_SERVER));
+                }
+                CoordinatorEventManager manager =
+                        new CoordinatorEventManager(
+                                event ->
+                                        processAccessContext(
+                                                (AccessContextEvent<?>) event, context),
+                                metricGroup);
+                manager.start();
+                try {
+                    registry.metrics.forEach(
+                            (name, metric) -> {
+                                if (metric instanceof Gauge
+                                        && !name.equals(MetricNames.ACTIVE_COORDINATOR_COUNT)) {
+                                    assertThat(metric).isNotSameAs(previousMetrics.get(name));
+                                }
+                            });
+                    Gauge<?> activeTabletServerCount =
+                            (Gauge<?>) registry.metrics.get(MetricNames.ACTIVE_TABLET_SERVER_COUNT);
+                    retry(
+                            Duration.ofSeconds(10),
+                            () ->
+                                    assertThat(activeTabletServerCount.getValue())
+                                            .isEqualTo(tabletServerCount));
+                    Histogram eventQueueTime =
+                            (Histogram) registry.metrics.get(MetricNames.EVENT_QUEUE_TIME_MS);
+                    assertThat(eventQueueTime)
+                            .isNotSameAs(previousMetrics.get(MetricNames.EVENT_QUEUE_TIME_MS));
+                    assertThat(eventQueueTime.getCount()).isZero();
+                    AccessContextEvent<Void> event = new AccessContextEvent<>(ignored -> null);
+                    manager.put(event);
+                    event.getResultFuture().get(10, TimeUnit.SECONDS);
+                    assertThat(eventQueueTime.getCount()).isEqualTo(1);
+                    previousMetrics.clear();
+                    previousMetrics.putAll(registry.metrics);
+                } finally {
+                    manager.close();
+                }
+                assertThat(registry.metrics).isEmpty();
+                assertThat(registry.groups).isEmpty();
+            }
+        } finally {
+            metricGroup.close();
+        }
+    }
+
+    @Test
+    void testCloseUnregistersMetrics() {
+        TestingMetricRegistry registry = new TestingMetricRegistry();
+        CoordinatorMetricGroup metricGroup =
+                new CoordinatorMetricGroup(registry, "cluster1", "host", "0");
+        Gauge<Integer> serverMetric = metricGroup.gauge("serverMetric", () -> 42);
+        CoordinatorEventManager manager = new CoordinatorEventManager(event -> {}, metricGroup);
+
+        try {
+            assertThat(registry.metrics)
+                    .containsOnlyKeys(
+                            "serverMetric",
+                            MetricNames.EVENT_QUEUE_TIME_MS,
+                            MetricNames.ACTIVE_COORDINATOR_COUNT,
+                            MetricNames.ALIVE_COORDINATOR_COUNT,
+                            MetricNames.ACTIVE_TABLET_SERVER_COUNT,
+                            MetricNames.OFFLINE_BUCKET_COUNT,
+                            MetricNames.BUCKET_COUNT,
+                            MetricNames.TABLE_COUNT,
+                            MetricNames.LAKE_TABLE_COUNT,
+                            MetricNames.PARTITION_COUNT,
+                            MetricNames.REPLICAS_TO_DELETE_COUNT,
+                            MetricNames.PENDING_LEADER_ACTIVATION_COUNT);
+            registry.groups
+                    .values()
+                    .forEach(
+                            group -> {
+                                assertThat(group.getScopeComponents())
+                                        .containsExactly(metricGroup.getScopeComponents());
+                                assertThat(group.getAllVariables())
+                                        .isEqualTo(metricGroup.getAllVariables());
+                            });
+            manager.close();
+            manager.close();
+            assertThat(registry.metrics).containsOnlyKeys("serverMetric");
+            assertThat(registry.metrics.get("serverMetric")).isSameAs(serverMetric);
+            assertThat(metricGroup.isClosed()).isFalse();
+        } finally {
+            manager.close();
+            metricGroup.close();
+        }
+    }
+
     private static <T> void processAccessContext(
             AccessContextEvent<T> event, CoordinatorContext context) {
         try {
@@ -121,6 +230,27 @@ class CoordinatorEventManagerTest {
             event.getResultFuture().complete(result);
         } catch (Throwable t) {
             event.getResultFuture().completeExceptionally(t);
+        }
+    }
+
+    private static class TestingMetricRegistry extends NOPMetricRegistry {
+        private final Map<String, Metric> metrics = new ConcurrentHashMap<>();
+        private final Map<String, AbstractMetricGroup> groups = new ConcurrentHashMap<>();
+
+        @Override
+        public void register(Metric metric, String metricName, AbstractMetricGroup group) {
+            if ("coordinator".equals(group.getLogicalScope(input -> input, '.'))) {
+                metrics.put(metricName, metric);
+                groups.put(metricName, group);
+            }
+        }
+
+        @Override
+        public void unregister(Metric metric, String metricName, AbstractMetricGroup group) {
+            if ("coordinator".equals(group.getLogicalScope(input -> input, '.'))) {
+                metrics.remove(metricName, metric);
+                groups.remove(metricName, group);
+            }
         }
     }
 }
