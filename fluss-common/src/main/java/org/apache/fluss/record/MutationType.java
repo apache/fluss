@@ -20,7 +20,7 @@ package org.apache.fluss.record;
 import org.apache.fluss.annotation.PublicEvolving;
 
 /**
- * The mutation type of a {@link KvRecord} in V2 format.
+ * The explicit mutation type of a {@link KvRecord}.
  *
  * <p>This is a per-record field inside the KvRecord body, independent of the batch/request-level
  * {@link org.apache.fluss.rpc.protocol.MergeMode}.

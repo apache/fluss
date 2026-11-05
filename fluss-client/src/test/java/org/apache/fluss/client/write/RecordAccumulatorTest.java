@@ -750,7 +750,7 @@ class RecordAccumulatorTest {
     }
 
     @Test
-    void testOnlyRetractRecordCreatesV2FormatKvBatch() throws Exception {
+    void testOnlyRetractRecordCreatesBatchWithMutationType() throws Exception {
         RecordAccumulator accum = createTestRecordAccumulator(64 * 1024, Integer.MAX_VALUE);
 
         // build a cluster containing the pk table bucket.
@@ -805,7 +805,7 @@ class RecordAccumulatorTest {
         // table: V0 stays wire-compatible with servers only supporting PUT_KV version < 4.
         accum.append(upsertRecord, writeCallback, cluster);
         // the retract record cannot join the V0 batch, so it closes the
-        // V0 batch and creates a V2 batch; a following upsert joins the V2 batch.
+        // batch without mutation types and creates one with them; a following upsert joins it.
         accum.append(retractRecord, writeCallback, cluster);
         accum.append(upsertRecord, writeCallback, cluster);
 
@@ -814,7 +814,7 @@ class RecordAccumulatorTest {
         List<ReadyWriteBatch> batches = drained.get(node1.id());
         assertThat(batches).hasSize(1);
         KvWriteBatch firstBatch = (KvWriteBatch) batches.get(0).writeBatch();
-        assertThat(DefaultKvRecordBatch.pointToBytesView(firstBatch.build()).isV2Format())
+        assertThat(DefaultKvRecordBatch.pointToBytesView(firstBatch.build()).hasMutationType())
                 .isFalse();
         assertThat(firstBatch.getRecordCount()).isEqualTo(1);
 
@@ -823,7 +823,7 @@ class RecordAccumulatorTest {
         batches = drained.get(node1.id());
         assertThat(batches).hasSize(1);
         KvWriteBatch secondBatch = (KvWriteBatch) batches.get(0).writeBatch();
-        assertThat(DefaultKvRecordBatch.pointToBytesView(secondBatch.build()).isV2Format())
+        assertThat(DefaultKvRecordBatch.pointToBytesView(secondBatch.build()).hasMutationType())
                 .isTrue();
         assertThat(secondBatch.getRecordCount()).isEqualTo(2);
     }

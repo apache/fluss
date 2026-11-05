@@ -34,7 +34,7 @@ import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.KvRecord;
 import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.KvRecordTestUtils;
-import org.apache.fluss.record.KvRecordTestUtils.V2RecordEntry;
+import org.apache.fluss.record.KvRecordTestUtils.MutationRecordEntry;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.record.LogRecordReadContext;
@@ -561,7 +561,7 @@ class KvTabletMergeModeTest {
                 .isEqualTo(expectedLogs);
     }
 
-    // ==================== Per-Record MutationType RETRACT Tests (V2 format) ====================
+    // ==================== Per-Record MutationType RETRACT Tests ====================
 
     @Test
     void testRetractUnpairedOnExistingKey() throws Exception {
@@ -576,15 +576,15 @@ class KvTabletMergeModeTest {
 
         long endOffset = logTablet.localLogEndOffset();
 
-        // Send V2 batch: single RETRACT(20, "old") — no following upsert
+        // Send batch with mutation types: single RETRACT(20, "old") — no following upsert
         // count: 100-20=80, name: retract "old" → null (last_value retract semantics)
-        List<V2RecordEntry> entries =
+        List<MutationRecordEntry> entries =
                 Collections.singletonList(
-                        V2RecordEntry.of(
+                        MutationRecordEntry.of(
                                 MutationType.RETRACT,
                                 RETRACT_KV_RECORD_FACTORY.ofRecord(
                                         "k1".getBytes(), new Object[] {1, 20L, "old"})));
-        KvRecordBatch batch = kvRecordBatchFactory.ofV2Records(entries);
+        KvRecordBatch batch = kvRecordBatchFactory.ofRecordsWithMutationType(entries);
         kvTablet.putAsLeader(batch, null, MergeMode.DEFAULT);
 
         // Verify UB(old) + UA(intermediate) CDC entries
@@ -609,13 +609,13 @@ class KvTabletMergeModeTest {
         long startOffset = logTablet.localLogEndOffset();
 
         // A missing accumulator still participates in the field's retract rule.
-        List<V2RecordEntry> entries =
+        List<MutationRecordEntry> entries =
                 Collections.singletonList(
-                        V2RecordEntry.of(
+                        MutationRecordEntry.of(
                                 MutationType.RETRACT,
                                 RETRACT_KV_RECORD_FACTORY.ofRecord(
                                         "k1".getBytes(), new Object[] {1, 10L, "ghost"})));
-        KvRecordBatch batch = kvRecordBatchFactory.ofV2Records(entries);
+        KvRecordBatch batch = kvRecordBatchFactory.ofRecordsWithMutationType(entries);
         kvTablet.putAsLeader(batch, null, MergeMode.DEFAULT);
 
         MemoryLogRecords expectedLogs =
@@ -656,13 +656,13 @@ class KvTabletMergeModeTest {
 
         long endOffset = logTablet.localLogEndOffset();
 
-        List<V2RecordEntry> entries =
+        List<MutationRecordEntry> entries =
                 Collections.singletonList(
-                        V2RecordEntry.of(
+                        MutationRecordEntry.of(
                                 MutationType.RETRACT,
                                 lastValueKvRecordFactory.ofRecord(
                                         "k1".getBytes(), new Object[] {1, "hello"})));
-        KvRecordBatch batch = kvRecordBatchFactory.ofV2Records(entries);
+        KvRecordBatch batch = kvRecordBatchFactory.ofRecordsWithMutationType(entries);
         kvTablet.putAsLeader(batch, null, MergeMode.DEFAULT);
 
         LogRecords actualLogRecords = readLogRecords(endOffset);
@@ -696,14 +696,14 @@ class KvTabletMergeModeTest {
         KvRecordTestUtils.KvRecordFactory defaultKvRecordFactory =
                 KvRecordTestUtils.KvRecordFactory.of(defaultRowType);
 
-        // Send a V2 RETRACT record to a non-aggregation table
-        List<V2RecordEntry> entries =
+        // Send a RETRACT record to a non-aggregation table
+        List<MutationRecordEntry> entries =
                 Collections.singletonList(
-                        V2RecordEntry.of(
+                        MutationRecordEntry.of(
                                 MutationType.RETRACT,
                                 defaultKvRecordFactory.ofRecord(
                                         "k1".getBytes(), new Object[] {1, "old"})));
-        KvRecordBatch batch = kvRecordBatchFactory.ofV2Records(entries);
+        KvRecordBatch batch = kvRecordBatchFactory.ofRecordsWithMutationType(entries);
 
         assertThatThrownBy(() -> kvTablet.putAsLeader(batch, null, MergeMode.DEFAULT))
                 .isInstanceOf(InvalidRecordException.class)
@@ -714,7 +714,7 @@ class KvTabletMergeModeTest {
     @Test
     void testRetractRejectedForNonRetractableFunction() throws Exception {
         // AGG_SCHEMA has MAX which does not support retract
-        // Send a V2 RETRACT record — should be rejected
+        // Send a RETRACT record — should be rejected
         KvRecordTestUtils.KvRecordFactory aggKvRecordFactory =
                 KvRecordTestUtils.KvRecordFactory.of(AGG_ROW_TYPE);
 
@@ -725,13 +725,13 @@ class KvTabletMergeModeTest {
                                 "k1".getBytes(), new Object[] {1, 10L, 100, "Alice"}));
         kvTablet.putAsLeader(initBatch, null, MergeMode.DEFAULT);
 
-        List<V2RecordEntry> entries =
+        List<MutationRecordEntry> entries =
                 Collections.singletonList(
-                        V2RecordEntry.of(
+                        MutationRecordEntry.of(
                                 MutationType.RETRACT,
                                 aggKvRecordFactory.ofRecord(
                                         "k1".getBytes(), new Object[] {1, 5L, 50, "old"})));
-        KvRecordBatch batch = kvRecordBatchFactory.ofV2Records(entries);
+        KvRecordBatch batch = kvRecordBatchFactory.ofRecordsWithMutationType(entries);
 
         assertThatThrownBy(() -> kvTablet.putAsLeader(batch, null, MergeMode.DEFAULT))
                 .isInstanceOf(InvalidRecordException.class)
@@ -755,21 +755,21 @@ class KvTabletMergeModeTest {
         // Mixed batch: UPSERT(k2) + RETRACT(k1) + UPSERT(k1)
         // k2 is new → INSERT
         // k1: retract(20,"old") + upsert(30,"new") → 100-20+30=110
-        List<V2RecordEntry> entries =
+        List<MutationRecordEntry> entries =
                 Arrays.asList(
-                        V2RecordEntry.of(
+                        MutationRecordEntry.of(
                                 MutationType.UPSERT,
                                 RETRACT_KV_RECORD_FACTORY.ofRecord(
                                         "k2".getBytes(), new Object[] {2, 50L, "Bob"})),
-                        V2RecordEntry.of(
+                        MutationRecordEntry.of(
                                 MutationType.RETRACT,
                                 RETRACT_KV_RECORD_FACTORY.ofRecord(
                                         "k1".getBytes(), new Object[] {1, 20L, "old"})),
-                        V2RecordEntry.of(
+                        MutationRecordEntry.of(
                                 MutationType.UPSERT,
                                 RETRACT_KV_RECORD_FACTORY.ofRecord(
                                         "k1".getBytes(), new Object[] {1, 30L, "new"})));
-        KvRecordBatch batch = kvRecordBatchFactory.ofV2Records(entries);
+        KvRecordBatch batch = kvRecordBatchFactory.ofRecordsWithMutationType(entries);
         kvTablet.putAsLeader(batch, null, MergeMode.DEFAULT);
 
         // The retract and upsert each emit their own state transition for k1.
@@ -810,25 +810,25 @@ class KvTabletMergeModeTest {
 
         long endOffset = logTablet.localLogEndOffset();
 
-        List<V2RecordEntry> entries =
+        List<MutationRecordEntry> entries =
                 Arrays.asList(
-                        V2RecordEntry.of(
+                        MutationRecordEntry.of(
                                 MutationType.RETRACT,
                                 RETRACT_KV_RECORD_FACTORY.ofRecord(
                                         "k1".getBytes(), new Object[] {1, 20L, "old1"})),
-                        V2RecordEntry.of(
+                        MutationRecordEntry.of(
                                 MutationType.UPSERT,
                                 RETRACT_KV_RECORD_FACTORY.ofRecord(
                                         "k1".getBytes(), new Object[] {1, 30L, "new1"})),
-                        V2RecordEntry.of(
+                        MutationRecordEntry.of(
                                 MutationType.RETRACT,
                                 RETRACT_KV_RECORD_FACTORY.ofRecord(
                                         "k1".getBytes(), new Object[] {1, 10L, "old2"})),
-                        V2RecordEntry.of(
+                        MutationRecordEntry.of(
                                 MutationType.UPSERT,
                                 RETRACT_KV_RECORD_FACTORY.ofRecord(
                                         "k1".getBytes(), new Object[] {1, 50L, "new2"})));
-        KvRecordBatch batch = kvRecordBatchFactory.ofV2Records(entries);
+        KvRecordBatch batch = kvRecordBatchFactory.ofRecordsWithMutationType(entries);
         kvTablet.putAsLeader(batch, null, MergeMode.DEFAULT);
 
         // Verify changelog shows the transitions
@@ -876,17 +876,17 @@ class KvTabletMergeModeTest {
 
         long endOffset = logTablet.localLogEndOffset();
 
-        List<V2RecordEntry> entries =
+        List<MutationRecordEntry> entries =
                 Arrays.asList(
-                        V2RecordEntry.of(
+                        MutationRecordEntry.of(
                                 MutationType.RETRACT,
                                 SUM_KV_RECORD_FACTORY.ofRecord(
                                         "k1".getBytes(), new Object[] {1, retract})),
-                        V2RecordEntry.of(
+                        MutationRecordEntry.of(
                                 MutationType.UPSERT,
                                 SUM_KV_RECORD_FACTORY.ofRecord(
                                         "k1".getBytes(), new Object[] {1, upsert})));
-        KvRecordBatch batch = kvRecordBatchFactory.ofV2Records(entries);
+        KvRecordBatch batch = kvRecordBatchFactory.ofRecordsWithMutationType(entries);
         kvTablet.putAsLeader(batch, null, MergeMode.DEFAULT);
 
         LogRecords actualLogRecords = readLogRecords(endOffset);
@@ -925,9 +925,9 @@ class KvTabletMergeModeTest {
                 null,
                 MergeMode.DEFAULT);
         KvRecordBatch retract =
-                kvRecordBatchFactory.ofV2Records(
+                kvRecordBatchFactory.ofRecordsWithMutationType(
                         Collections.singletonList(
-                                V2RecordEntry.of(
+                                MutationRecordEntry.of(
                                         MutationType.RETRACT,
                                         SUM_KV_RECORD_FACTORY.ofRecord(
                                                 "k1".getBytes(), new Object[] {1, 30L}))),
@@ -947,9 +947,9 @@ class KvTabletMergeModeTest {
         assertThat(kvTablet.putAsLeader(retract, null, MergeMode.DEFAULT).duplicated()).isTrue();
         assertThat(logTablet.localLogEndOffset()).isEqualTo(endOffset);
         kvTablet.putAsLeader(
-                kvRecordBatchFactory.ofV2Records(
+                kvRecordBatchFactory.ofRecordsWithMutationType(
                         Collections.singletonList(
-                                V2RecordEntry.of(
+                                MutationRecordEntry.of(
                                         MutationType.RETRACT,
                                         SUM_KV_RECORD_FACTORY.ofRecord(
                                                 "k1".getBytes(), new Object[] {1, 5L}))),
@@ -996,9 +996,9 @@ class KvTabletMergeModeTest {
                 null,
                 MergeMode.DEFAULT);
         KvRecordBatch retract =
-                kvRecordBatchFactory.ofV2Records(
+                kvRecordBatchFactory.ofRecordsWithMutationType(
                         Collections.singletonList(
-                                V2RecordEntry.of(
+                                MutationRecordEntry.of(
                                         MutationType.RETRACT,
                                         factory.ofRecord("k1".getBytes(), new Object[] {1, 0L}))),
                         writerId,
@@ -1021,9 +1021,9 @@ class KvTabletMergeModeTest {
         assertThat(logTablet.localLogEndOffset()).isEqualTo(endOffset);
 
         kvTablet.putAsLeader(
-                kvRecordBatchFactory.ofV2Records(
+                kvRecordBatchFactory.ofRecordsWithMutationType(
                         Collections.singletonList(
-                                V2RecordEntry.of(
+                                MutationRecordEntry.of(
                                         MutationType.RETRACT,
                                         factory.ofRecord("k1".getBytes(), new Object[] {1, 2L}))),
                         writerId,
@@ -1060,22 +1060,22 @@ class KvTabletMergeModeTest {
 
         long endOffset = logTablet.localLogEndOffset();
 
-        // V2 batch: RETRACT(20) → RETRACT(20) → UPSERT(30) for same key
-        List<V2RecordEntry> entries =
+        // batch with mutation types: RETRACT(20) → RETRACT(20) → UPSERT(30) for same key
+        List<MutationRecordEntry> entries =
                 Arrays.asList(
-                        V2RecordEntry.of(
+                        MutationRecordEntry.of(
                                 MutationType.RETRACT,
                                 SUM_KV_RECORD_FACTORY.ofRecord(
                                         "k1".getBytes(), new Object[] {1, 20L})),
-                        V2RecordEntry.of(
+                        MutationRecordEntry.of(
                                 MutationType.RETRACT,
                                 SUM_KV_RECORD_FACTORY.ofRecord(
                                         "k1".getBytes(), new Object[] {1, 20L})),
-                        V2RecordEntry.of(
+                        MutationRecordEntry.of(
                                 MutationType.UPSERT,
                                 SUM_KV_RECORD_FACTORY.ofRecord(
                                         "k1".getBytes(), new Object[] {1, 30L})));
-        KvRecordBatch batch = kvRecordBatchFactory.ofV2Records(entries);
+        KvRecordBatch batch = kvRecordBatchFactory.ofRecordsWithMutationType(entries);
         kvTablet.putAsLeader(batch, null, MergeMode.DEFAULT);
 
         LogRecords actualLogRecords = readLogRecords(endOffset);
@@ -1121,15 +1121,15 @@ class KvTabletMergeModeTest {
         initTablets(schema, Collections.singletonMap("table.delete.behavior", deleteBehavior));
         KvRecordTestUtils.KvRecordFactory factory =
                 KvRecordTestUtils.KvRecordFactory.of(schema.getRowType());
-        List<V2RecordEntry> entries =
+        List<MutationRecordEntry> entries =
                 Arrays.asList(
-                        V2RecordEntry.of(
+                        MutationRecordEntry.of(
                                 MutationType.UPSERT,
                                 factory.ofRecord("k1".getBytes(), new Object[] {1, 5})),
-                        V2RecordEntry.of(
+                        MutationRecordEntry.of(
                                 MutationType.RETRACT,
                                 factory.ofRecord("k1".getBytes(), new Object[] {1, 5})),
-                        V2RecordEntry.of(
+                        MutationRecordEntry.of(
                                 MutationType.UPSERT,
                                 factory.ofRecord("k1".getBytes(), new Object[] {1, null})));
         long startOffset = logTablet.localLogEndOffset();
@@ -1137,7 +1137,7 @@ class KvTabletMergeModeTest {
         for (int end = 1; end <= entries.size(); end++) {
             if (end == entries.size() || (boundaries & (1 << (end - 1))) != 0) {
                 kvTablet.putAsLeader(
-                        kvRecordBatchFactory.ofV2Records(entries.subList(start, end)),
+                        kvRecordBatchFactory.ofRecordsWithMutationType(entries.subList(start, end)),
                         null,
                         MergeMode.DEFAULT);
                 start = end;
@@ -1176,51 +1176,51 @@ class KvTabletMergeModeTest {
         assertThat(index).isEqualTo(expectedTypes.length);
     }
 
-    // ==================== V2 Format Validation Tests ====================
+    // ==================== Mutation Type Validation Tests ====================
 
     @Test
-    void testV2DeleteWithRowThrows() throws Exception {
-        List<V2RecordEntry> entries =
+    void testDeleteWithMutationTypeAndRowThrows() throws Exception {
+        List<MutationRecordEntry> entries =
                 Collections.singletonList(
-                        V2RecordEntry.of(
+                        MutationRecordEntry.of(
                                 MutationType.DELETE,
                                 kvRecordFactory.ofRecord(
                                         "k1".getBytes(), new Object[] {1, 10L, 100, "Alice"})));
-        KvRecordBatch batch = kvRecordBatchFactory.ofV2Records(entries);
+        KvRecordBatch batch = kvRecordBatchFactory.ofRecordsWithMutationType(entries);
 
         assertThatThrownBy(() -> kvTablet.putAsLeader(batch, null, MergeMode.DEFAULT))
                 .isInstanceOf(InvalidRecordException.class)
-                .hasMessageContaining("V2 DELETE record must not carry a row value.");
+                .hasMessageContaining("DELETE record must not carry a row value.");
     }
 
     @Test
-    void testV2UpsertWithNullRowThrows() throws Exception {
-        // Build a V2 batch with UPSERT mutation type but null row value
+    void testUpsertWithMutationTypeAndNullRowThrows() throws Exception {
+        // Build a batch with mutation types with UPSERT mutation type but null row value
         KvRecordTestUtils.KvRecordFactory aggKvRecordFactory =
                 KvRecordTestUtils.KvRecordFactory.of(AGG_ROW_TYPE);
 
-        List<V2RecordEntry> entries =
+        List<MutationRecordEntry> entries =
                 Collections.singletonList(
-                        V2RecordEntry.of(
+                        MutationRecordEntry.of(
                                 MutationType.UPSERT,
                                 aggKvRecordFactory.ofRecord("k1".getBytes(), null)));
-        KvRecordBatch batch = kvRecordBatchFactory.ofV2Records(entries);
+        KvRecordBatch batch = kvRecordBatchFactory.ofRecordsWithMutationType(entries);
 
         assertThatThrownBy(() -> kvTablet.putAsLeader(batch, null, MergeMode.DEFAULT))
                 .isInstanceOf(InvalidRecordException.class)
-                .hasMessageContaining("V2 UPSERT record must carry a non-null row value.");
+                .hasMessageContaining("UPSERT record must carry a non-null row value.");
     }
 
     @Test
-    void testV2RetractWithNullRowThrows() throws Exception {
+    void testRetractWithNullRowThrows() throws Exception {
         initTablets(RETRACT_SAFE_SCHEMA);
 
-        List<V2RecordEntry> entries =
+        List<MutationRecordEntry> entries =
                 Collections.singletonList(
-                        V2RecordEntry.of(
+                        MutationRecordEntry.of(
                                 MutationType.RETRACT,
                                 RETRACT_KV_RECORD_FACTORY.ofRecord("k1".getBytes(), null)));
-        KvRecordBatch batch = kvRecordBatchFactory.ofV2Records(entries);
+        KvRecordBatch batch = kvRecordBatchFactory.ofRecordsWithMutationType(entries);
 
         assertThatThrownBy(() -> kvTablet.putAsLeader(batch, null, MergeMode.DEFAULT))
                 .isInstanceOf(InvalidRecordException.class)
@@ -1228,9 +1228,10 @@ class KvTabletMergeModeTest {
     }
 
     @Test
-    void testV2DeleteOnAggregationTable() throws Exception {
-        // Verify that V2 DELETE behaves the same as V0 delete on an aggregation table.
-        // Insert initial record, then send a V2 batch with MutationType.DELETE.
+    void testDeleteWithMutationTypeOnAggregationTable() throws Exception {
+        // Verify that an explicit DELETE behaves the same as an inferred delete on an aggregation
+        // table.
+        // Insert initial record, then send a batch with mutation types with MutationType.DELETE.
         // Must use DeleteBehavior.ALLOW so the delete is not silently dropped.
         Map<String, String> allowDelete = new HashMap<>();
         allowDelete.put("table.delete.behavior", "allow");
@@ -1245,13 +1246,13 @@ class KvTabletMergeModeTest {
 
         long endOffset = logTablet.localLogEndOffset();
 
-        // Send V2 batch with DELETE mutation type (null row value)
-        List<V2RecordEntry> entries =
+        // Send batch with mutation types with DELETE mutation type (null row value)
+        List<MutationRecordEntry> entries =
                 Collections.singletonList(
-                        V2RecordEntry.of(
+                        MutationRecordEntry.of(
                                 MutationType.DELETE,
                                 RETRACT_KV_RECORD_FACTORY.ofRecord("k1".getBytes(), null)));
-        KvRecordBatch batch = kvRecordBatchFactory.ofV2Records(entries);
+        KvRecordBatch batch = kvRecordBatchFactory.ofRecordsWithMutationType(entries);
         kvTablet.putAsLeader(batch, null, MergeMode.DEFAULT);
 
         // Verify DELETE CDC is produced — same behavior as V0 delete
@@ -1296,16 +1297,16 @@ class KvTabletMergeModeTest {
 
         long endOffset = logTablet.localLogEndOffset();
 
-        // Step 2: V2 RETRACT targeting only col_a (targetColumns = {0, 1} = id + col_a)
+        // Step 2: RETRACT targeting only col_a (targetColumns = {0, 1} = id + col_a)
         // retract col_a=30 → col_a: 100-30=70, col_b unchanged (200)
         int[] targetColumns = new int[] {0, 1}; // id and col_a
-        List<V2RecordEntry> retractEntries =
+        List<MutationRecordEntry> retractEntries =
                 Collections.singletonList(
-                        V2RecordEntry.of(
+                        MutationRecordEntry.of(
                                 MutationType.RETRACT,
                                 twoSumKvRecordFactory.ofRecord(
                                         "k1".getBytes(), new Object[] {1, 30L, null})));
-        KvRecordBatch retractBatch = kvRecordBatchFactory.ofV2Records(retractEntries);
+        KvRecordBatch retractBatch = kvRecordBatchFactory.ofRecordsWithMutationType(retractEntries);
         kvTablet.putAsLeader(retractBatch, targetColumns, MergeMode.DEFAULT);
 
         long afterRetractOffset = logTablet.localLogEndOffset();
@@ -1324,15 +1325,15 @@ class KvTabletMergeModeTest {
                 .assertCheckSum(true)
                 .isEqualTo(expectedRetractLogs);
 
-        // Step 3: V2 UPSERT targeting only col_a (upsert col_a=50)
+        // Step 3: UPSERT targeting only col_a (upsert col_a=50)
         // col_a: 70+50=120, col_b unchanged (200)
-        List<V2RecordEntry> upsertEntries =
+        List<MutationRecordEntry> upsertEntries =
                 Collections.singletonList(
-                        V2RecordEntry.of(
+                        MutationRecordEntry.of(
                                 MutationType.UPSERT,
                                 twoSumKvRecordFactory.ofRecord(
                                         "k1".getBytes(), new Object[] {1, 50L, null})));
-        KvRecordBatch upsertBatch = kvRecordBatchFactory.ofV2Records(upsertEntries);
+        KvRecordBatch upsertBatch = kvRecordBatchFactory.ofRecordsWithMutationType(upsertEntries);
         kvTablet.putAsLeader(upsertBatch, targetColumns, MergeMode.DEFAULT);
 
         // Verify CDC after upsert: UB(70,200) + UA(120,200)

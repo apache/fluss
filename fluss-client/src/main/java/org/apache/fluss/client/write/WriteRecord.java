@@ -110,7 +110,8 @@ public final class WriteRecord {
         checkNotNull(key, "key must not be null");
         checkNotNull(bucketKey, "bucketKey must not be null");
         checkArgument(writeFormat.isKv(), "writeFormat must be a KV format");
-        int estimatedSizeInBytes = DefaultKvRecord.sizeOfV2(key, row) + RECORD_BATCH_HEADER_SIZE;
+        int estimatedSizeInBytes =
+                DefaultKvRecord.sizeOfWithMutationType(key, row) + RECORD_BATCH_HEADER_SIZE;
         return new WriteRecord(
                 tableInfo,
                 tablePath,

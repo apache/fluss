@@ -49,15 +49,15 @@ import java.util.NoSuchElementException;
  * </ul>
  *
  * <p>The CRC covers the data from the schemaId to the end of the batch (i.e. all the bytes that
- * follow the CRC). Readers must validate the magic byte before decoding the record layout. PUT_KV
- * version negotiation prevents sending V2 batches to servers that only understand V0. The CRC-32C
- * (Castagnoli) polynomial is used for the computation.
+ * follow the CRC), including the attributes that select optional record fields. PUT_KV version
+ * negotiation prevents sending batches with mutation types to servers that cannot decode them. The
+ * CRC-32C (Castagnoli) polynomial is used for the computation.
  *
  * <p>The current attributes are given below:
  *
  * <pre>
  * -----------------------------------------------------------------------------------------------
- * | Unused (0-7)
+ * | Unused (1-7) | Has MutationType (0)
  * -----------------------------------------------------------------------------------------------
  * </pre>
  *
@@ -86,11 +86,11 @@ public class DefaultKvRecordBatch implements KvRecordBatch {
     static final int RECORDS_OFFSET = RECORDS_COUNT_OFFSET + RECORDS_COUNT_LENGTH;
     public static final int RECORD_BATCH_HEADER_SIZE = RECORDS_OFFSET;
 
-    /** Bit mask for V2 record format in the attributes byte. */
-    static final byte V2_FORMAT_ATTRIBUTE_MASK = 0x01;
+    /** Attribute flag indicating that each record carries a mutation type byte. */
+    static final byte HAS_MUTATION_TYPE_FLAG = 0x01;
 
     /** Mask of all attribute bits that this version understands. */
-    static final byte KNOWN_ATTRIBUTES_MASK = V2_FORMAT_ATTRIBUTE_MASK;
+    static final byte KNOWN_ATTRIBUTES_MASK = HAS_MUTATION_TYPE_FLAG;
 
     public static final int KV_OVERHEAD = LENGTH_OFFSET + LENGTH_LENGTH;
 
@@ -175,8 +175,16 @@ public class DefaultKvRecordBatch implements KvRecordBatch {
     }
 
     @Override
-    public boolean isV2Format() {
-        return (segment.get(position + ATTRIBUTES_OFFSET) & V2_FORMAT_ATTRIBUTE_MASK) != 0;
+    public boolean hasMutationType() {
+        return (segment.get(position + ATTRIBUTES_OFFSET) & HAS_MUTATION_TYPE_FLAG) != 0;
+    }
+
+    /**
+     * Reads the mutation type flag from a batch header at the buffer's current position without
+     * changing the buffer position.
+     */
+    public static boolean hasMutationType(ByteBuffer buffer) {
+        return (buffer.get(buffer.position() + ATTRIBUTES_OFFSET) & HAS_MUTATION_TYPE_FLAG) != 0;
     }
 
     public MemorySegment getMemorySegment() {
@@ -196,6 +204,7 @@ public class DefaultKvRecordBatch implements KvRecordBatch {
         if (getRecordCount() == 0) {
             return Collections.emptyIterator();
         }
+        final boolean hasMutationType = hasMutationType();
 
         return new KvRecordIterator() {
             final short schemaId = schemaId();
@@ -205,8 +214,10 @@ public class DefaultKvRecordBatch implements KvRecordBatch {
             @Override
             protected KvRecord readNext() {
                 KvRecord kvRecord;
-                if (DefaultKvRecordBatch.this.isV2Format()) {
-                    kvRecord = DefaultKvRecord.readFromV2(segment, position, schemaId, readContext);
+                if (hasMutationType) {
+                    kvRecord =
+                            DefaultKvRecord.readFromWithMutationType(
+                                    segment, position, schemaId, readContext);
                 } else {
                     kvRecord = DefaultKvRecord.readFrom(segment, position, schemaId, readContext);
                 }

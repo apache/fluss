@@ -1457,9 +1457,11 @@ Each retract is processed independently in the order received. An adjacent retra
 
 Retract is not idempotent: applying a SUM retract twice subtracts the contribution twice. The client requires `client.writer.enable-idempotence` so transport retries can use writer-batch deduplication. This deduplication applies within a writer session; application replay with a new writer requires a recovery protocol. Flink undo recovery restores checkpoint state using OVERWRITE and is distinct from normal retract processing.
 
-Recognized duplicate V2 batches return their original write offsets before field functions are reapplied. A retry therefore does not repeat division or element/key removal for a batch already accepted in the retained duplicate window.
+Recognized duplicate batches carrying mutation types return their original write offsets before field functions are reapplied. A retry therefore does not repeat division or element/key removal for a batch already accepted in the retained duplicate window.
 
-Retract requires PUT_KV API version 4 or later. The RPC connection queues writes until version negotiation completes, without consuming the write retry budget. If the negotiated version is below 4, a PUT_KV request containing any V2 batch fails with `UnsupportedVersionException` before transmission. This rejects the entire request, including any V0 batches grouped with it. Existing upsert and delete writes use V0 batches and remain compatible when sent in requests without V2 batches.
+KV batches retain magic 0. Attributes bit 0 indicates that each record carries an explicit MutationType byte, and the batch CRC covers that attribute. This extension leaves the persisted KV and changelog encodings unchanged.
+
+Retract requires PUT_KV API version 4 or later. The RPC connection queues writes until version negotiation completes, without consuming the write retry budget. If the negotiated version is below 4, a PUT_KV request containing any batch carrying mutation types fails with `UnsupportedVersionException` before transmission. This rejects the entire request, including any batches without mutation types grouped with it. Ordinary upsert and delete writes start batches without mutation types and remain compatible when sent in requests without mutation types.
 
 After schema evolution, fields absent from the input row do not participate in retract. This also applies when Flink pads an older input schema to the latest table schema. An explicitly supplied NULL still participates according to the field's aggregation function; for example, LAST_VALUE retract clears that field. Integer SUM uses the same fixed-width arithmetic as forward aggregation, including wraparound at the type boundary.
 

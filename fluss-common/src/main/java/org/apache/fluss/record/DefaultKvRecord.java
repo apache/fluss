@@ -38,7 +38,7 @@ import java.nio.ByteBuffer;
 
 /**
  * This class is an immutable kv record. Different from {@link IndexedLogRecord}, it isn't designed
- * for persistence. The V0 schema is as follows:
+ * for persistence. The layout without an explicit mutation type is as follows:
  *
  * <ul>
  *   <li>Length => int32
@@ -47,7 +47,7 @@ import java.nio.ByteBuffer;
  *   <li>Row => {@link BinaryRow}
  * </ul>
  *
- * <p>The V2 schema adds a MutationType byte after Length:
+ * <p>With the batch mutation type attribute set, a MutationType byte follows Length:
  *
  * <ul>
  *   <li>Length => int32
@@ -66,7 +66,7 @@ public class DefaultKvRecord implements KvRecord {
 
     static final int LENGTH_LENGTH = 4;
 
-    /** Size of the MutationType byte in V2 format. */
+    /** Size of the explicit MutationType byte. */
     static final int MUTATION_TYPE_LENGTH = 1;
 
     private final RowDecoder rowDecoder;
@@ -78,12 +78,14 @@ public class DefaultKvRecord implements KvRecord {
     private ByteBuffer key;
     private BinaryRow value;
 
-    // Null signals a legacy V0/V1 record so getMutationType() can fall back to
-    // row-presence heuristic without requiring a format migration.
+    // Records without an explicit mutation type infer it from row presence.
     @Nullable private MutationType mutationType;
 
-    /** Minimum V2 record body size: 1 byte MutationType + 1 byte varint key length. */
-    static final int MIN_V2_RECORD_SIZE = MUTATION_TYPE_LENGTH + 1;
+    /**
+     * Minimum record body size with a mutation type: 1 byte MutationType + 1 byte varint key
+     * length.
+     */
+    static final int MIN_RECORD_SIZE_WITH_MUTATION_TYPE = MUTATION_TYPE_LENGTH + 1;
 
     private DefaultKvRecord(RowDecoder rowDecoder) {
         this.rowDecoder = rowDecoder;
@@ -149,10 +151,8 @@ public class DefaultKvRecord implements KvRecord {
         return sizeWithoutLength(key, row) + LENGTH_LENGTH;
     }
 
-    // ----------------------- V2 format methods -------------------------------
-
     /**
-     * Write a V2 format KvRecord to the output view. V2 layout:
+     * Write a KvRecord carrying an explicit mutation type to the output view.
      *
      * <ul>
      *   <li>Length => int32 (covers MutationType + KeyLength + Key + Row)
@@ -162,10 +162,10 @@ public class DefaultKvRecord implements KvRecord {
      *   <li>Row => {@link BinaryRow} (absent when row is null)
      * </ul>
      */
-    public static int writeToV2(
+    public static int writeToWithMutationType(
             OutputView outputView, MutationType mutationType, byte[] key, @Nullable BinaryRow row)
             throws IOException {
-        int sizeInBytes = sizeWithoutLengthV2(key, row);
+        int sizeInBytes = sizeWithoutLengthWithMutationType(key, row);
 
         outputView.writeInt(sizeInBytes);
         outputView.writeByte(mutationType.getValue());
@@ -179,24 +179,24 @@ public class DefaultKvRecord implements KvRecord {
     }
 
     /**
-     * Read a V2 format KvRecord from the given memory segment. The MutationType byte is read and
-     * stored explicitly. Must set mutationType BEFORE pointTo so that readKeyAndRow knows to skip
-     * the extra byte.
+     * Read a KvRecord carrying an explicit mutation type from the given memory segment. The
+     * MutationType byte is read and stored explicitly. Must set mutationType BEFORE pointTo so that
+     * readKeyAndRow knows to skip the extra byte.
      */
-    public static KvRecord readFromV2(
+    public static KvRecord readFromWithMutationType(
             MemorySegment segment,
             int position,
             short schemaId,
             KvRecordBatch.ReadContext readContext) {
         int sizeInBytes = segment.getInt(position);
-        if (sizeInBytes < MIN_V2_RECORD_SIZE) {
+        if (sizeInBytes < MIN_RECORD_SIZE_WITH_MUTATION_TYPE) {
             throw new InvalidRecordException(
-                    "Invalid V2 KvRecord size: "
+                    "Invalid KvRecord size with mutation type: "
                             + sizeInBytes
                             + " at position "
                             + position
                             + ". Minimum size is "
-                            + MIN_V2_RECORD_SIZE
+                            + MIN_RECORD_SIZE_WITH_MUTATION_TYPE
                             + " bytes.");
         }
         DefaultKvRecord kvRecord = new DefaultKvRecord(readContext.getRowDecoder(schemaId));
@@ -218,14 +218,14 @@ public class DefaultKvRecord implements KvRecord {
     }
 
     /**
-     * Calculate the size of a V2 kv record written to batch, including {@link #LENGTH_LENGTH}. This
-     * is {@link #sizeOf(byte[], BinaryRow)} + 1 byte for MutationType.
+     * Calculate the size of a kv record carrying a mutation type, including {@link #LENGTH_LENGTH}.
+     * This is {@link #sizeOf(byte[], BinaryRow)} + 1 byte for MutationType.
      */
-    public static int sizeOfV2(byte[] key, @Nullable BinaryRow row) {
-        return sizeWithoutLengthV2(key, row) + LENGTH_LENGTH;
+    public static int sizeOfWithMutationType(byte[] key, @Nullable BinaryRow row) {
+        return sizeWithoutLengthWithMutationType(key, row) + LENGTH_LENGTH;
     }
 
-    private static int sizeWithoutLengthV2(byte[] key, @Nullable BinaryRow row) {
+    private static int sizeWithoutLengthWithMutationType(byte[] key, @Nullable BinaryRow row) {
         return MUTATION_TYPE_LENGTH + sizeWithoutLength(key, row);
     }
 
@@ -237,7 +237,7 @@ public class DefaultKvRecord implements KvRecord {
 
     private void readKeyAndRow() throws IOException {
         int currentOffset = offset + LENGTH_LENGTH;
-        // For V2 records, skip the MutationType byte (already read before pointTo).
+        // Skip the explicit mutation type byte, if present (already read before pointTo).
         if (mutationType != null) {
             currentOffset += MUTATION_TYPE_LENGTH;
         }
@@ -276,7 +276,7 @@ public class DefaultKvRecord implements KvRecord {
         if (mutationType != null) {
             return mutationType;
         }
-        // V0/V1 fallback: infer from row presence.
+        // Infer the mutation type from row presence when it is not explicit.
         return value == null ? MutationType.DELETE : MutationType.UPSERT;
     }
 

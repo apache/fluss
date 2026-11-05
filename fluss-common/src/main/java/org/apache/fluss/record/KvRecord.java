@@ -55,9 +55,9 @@ public interface KvRecord {
     int getSizeInBytes();
 
     /**
-     * Get the mutation type of this record. V0/V1 records infer the type from the row: {@link
-     * MutationType#UPSERT} for non-null row, {@link MutationType#DELETE} for null row. V2 records
-     * carry an explicit mutation type byte.
+     * Get the mutation type of this record. Records without an explicit mutation type infer it from
+     * the row: {@link MutationType#UPSERT} for a non-null row, {@link MutationType#DELETE} for a
+     * null row.
      */
     default MutationType getMutationType() {
         return getRow() == null ? MutationType.DELETE : MutationType.UPSERT;

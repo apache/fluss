@@ -344,15 +344,16 @@ class KvWriteBatchTest {
                 mergeMode);
     }
 
-    // ==================== V2 Format Tests ====================
+    // ==================== Mutation Type Tests ====================
 
     @Test
     void testV0BatchRejectsRetract() throws Exception {
-        KvWriteBatch v0Batch = createKvWriteBatch(new TableBucket(DATA1_TABLE_ID_PK, 0));
+        KvWriteBatch batchWithoutMutationType =
+                createKvWriteBatch(new TableBucket(DATA1_TABLE_ID_PK, 0));
 
         // UPSERT should succeed on V0 batch
         WriteRecord upsertRecord = createWriteRecord();
-        assertThat(v0Batch.tryAppend(upsertRecord, newWriteCallback())).isTrue();
+        assertThat(batchWithoutMutationType.tryAppend(upsertRecord, newWriteCallback())).isTrue();
 
         // RETRACT should be rejected on V0 batch
         WriteRecord retractRecord =
@@ -365,16 +366,17 @@ class KvWriteBatchTest {
                         WriteFormat.COMPACTED_KV,
                         null,
                         MergeMode.DEFAULT);
-        assertThat(v0Batch.tryAppend(retractRecord, newWriteCallback())).isFalse();
+        assertThat(batchWithoutMutationType.tryAppend(retractRecord, newWriteCallback())).isFalse();
 
         // Only the UPSERT record should be in the batch
-        assertThat(v0Batch.getRecordCount()).isEqualTo(1);
+        assertThat(batchWithoutMutationType.getRecordCount()).isEqualTo(1);
     }
 
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
-    void testV2MixedMutationRoundTrip(boolean retractFirst) throws Exception {
-        KvWriteBatch batch = createV2KvWriteBatch(new TableBucket(DATA1_TABLE_ID_PK, 0));
+    void testMixedMutationRoundTrip(boolean retractFirst) throws Exception {
+        KvWriteBatch batch =
+                createKvWriteBatchWithMutationType(new TableBucket(DATA1_TABLE_ID_PK, 0));
         MutationType[] mutationTypes =
                 retractFirst
                         ? new MutationType[] {MutationType.RETRACT, MutationType.UPSERT}
@@ -397,7 +399,7 @@ class KvWriteBatchTest {
 
         DefaultKvRecordBatch records = DefaultKvRecordBatch.pointToBytesView(batch.build());
         records.ensureValid();
-        assertThat(records.isV2Format()).isTrue();
+        assertThat(records.hasMutationType()).isTrue();
         assertThat(records.getRecordCount()).isEqualTo(2);
         KvRecordReadContext readContext =
                 KvRecordReadContext.createReadContext(
@@ -413,7 +415,7 @@ class KvWriteBatchTest {
         assertThat(iterator.hasNext()).isFalse();
     }
 
-    private KvWriteBatch createV2KvWriteBatch(TableBucket tb) throws Exception {
+    private KvWriteBatch createKvWriteBatchWithMutationType(TableBucket tb) throws Exception {
         PreAllocatedPagedOutputView outputView =
                 new PreAllocatedPagedOutputView(
                         Collections.singletonList(memoryPool.nextSegment()));

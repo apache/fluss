@@ -59,7 +59,7 @@ public class KvRecordBatchBuilder implements AutoCloseable {
     private int sizeInBytes;
     private volatile boolean isClosed;
     private final KvFormat kvFormat;
-    private final boolean v2Format;
+    private final boolean hasMutationType;
     private boolean aborted = false;
 
     private KvRecordBatchBuilder(
@@ -68,7 +68,7 @@ public class KvRecordBatchBuilder implements AutoCloseable {
             int writeLimit,
             AbstractPagedOutputView pagedOutputView,
             KvFormat kvFormat,
-            boolean v2Format) {
+            boolean hasMutationType) {
         checkArgument(
                 schemaId <= Short.MAX_VALUE,
                 "schemaId shouldn't be greater than the max value of short: " + Short.MAX_VALUE);
@@ -86,7 +86,7 @@ public class KvRecordBatchBuilder implements AutoCloseable {
         pagedOutputView.setPosition(RECORD_BATCH_HEADER_SIZE);
         this.sizeInBytes = RECORD_BATCH_HEADER_SIZE;
         this.kvFormat = kvFormat;
-        this.v2Format = v2Format;
+        this.hasMutationType = hasMutationType;
     }
 
     public static KvRecordBatchBuilder builder(
@@ -99,19 +99,25 @@ public class KvRecordBatchBuilder implements AutoCloseable {
             int writeLimit,
             AbstractPagedOutputView outputView,
             KvFormat kvFormat,
-            boolean v2Format) {
+            boolean hasMutationType) {
         return new KvRecordBatchBuilder(
-                schemaId, CURRENT_KV_MAGIC_VALUE, writeLimit, outputView, kvFormat, v2Format);
+                schemaId,
+                CURRENT_KV_MAGIC_VALUE,
+                writeLimit,
+                outputView,
+                kvFormat,
+                hasMutationType);
     }
 
     /**
      * Check if we have room for a new record containing the given row. The record size is computed
-     * according to the record format of this builder (V2 records have an extra MutationType byte).
-     * If no records have been appended, then this returns true.
+     * according to whether this builder includes the extra MutationType byte.
      */
     public boolean hasRoomFor(byte[] key, @Nullable BinaryRow row) {
         int recordSize =
-                v2Format ? DefaultKvRecord.sizeOfV2(key, row) : DefaultKvRecord.sizeOf(key, row);
+                hasMutationType
+                        ? DefaultKvRecord.sizeOfWithMutationType(key, row)
+                        : DefaultKvRecord.sizeOf(key, row);
         return sizeInBytes + recordSize <= writeLimit;
     }
 
@@ -130,8 +136,8 @@ public class KvRecordBatchBuilder implements AutoCloseable {
 
     /**
      * Append a KvRecord with an explicit {@link MutationType} to the batch. The record is written
-     * in the record format of this builder: V2 builders persist the mutation type as a per-record
-     * byte, while V0 builders encode it implicitly via row nullability and therefore only accept
+     * according to the batch attributes. Builders with mutation types persist a per-record byte.
+     * Builders without mutation types infer the operation from row nullability and only accept
      * {@link MutationType#UPSERT} and {@link MutationType#DELETE} consistent with the row.
      *
      * @param mutationType the mutation type of this record
@@ -140,16 +146,16 @@ public class KvRecordBatchBuilder implements AutoCloseable {
      */
     public void append(MutationType mutationType, byte[] key, @Nullable BinaryRow row)
             throws IOException {
-        if (!v2Format) {
+        if (!hasMutationType) {
             if (mutationType == MutationType.RETRACT) {
                 throw new IllegalStateException(
-                        "RETRACT records require a V2 format builder. "
-                                + "Use builder(..., v2Format=true).");
+                        "RETRACT records require a builder with mutation types. "
+                                + "Use builder(..., hasMutationType=true).");
             }
             if ((mutationType == MutationType.DELETE) != (row == null)) {
                 throw new IllegalArgumentException(
                         String.format(
-                                "Inconsistent mutation type %s for a %s row in V0 format, "
+                                "Inconsistent mutation type %s for a %s row without an explicit mutation type, "
                                         + "which encodes the mutation type via row nullability.",
                                 mutationType, row == null ? "null" : "non-null"));
             }
@@ -164,8 +170,8 @@ public class KvRecordBatchBuilder implements AutoCloseable {
                     "Tried to put a record, but KvRecordBatchBuilder is closed for record puts.");
         }
         int recordByteSizes =
-                v2Format
-                        ? DefaultKvRecord.writeToV2(
+                hasMutationType
+                        ? DefaultKvRecord.writeToWithMutationType(
                                 pagedOutputView, mutationType, key, validateRowFormat(row))
                         : DefaultKvRecord.writeTo(pagedOutputView, key, validateRowFormat(row));
         currentRecordNumber++;
@@ -267,7 +273,7 @@ public class KvRecordBatchBuilder implements AutoCloseable {
     }
 
     private byte computeAttributes() {
-        return v2Format ? DefaultKvRecordBatch.V2_FORMAT_ATTRIBUTE_MASK : 0;
+        return hasMutationType ? DefaultKvRecordBatch.HAS_MUTATION_TYPE_FLAG : 0;
     }
 
     /** Validate the row instance according to the kv format. */

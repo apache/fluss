@@ -85,15 +85,14 @@ public class CommonRpcMessageUtils {
                 && putKvRequest.getBucketsReqAt(0).hasOriginalPartitionName();
     }
 
-    /** Returns whether a put-KV request contains a V2 batch, inspecting only batch headers. */
-    public static boolean hasV2KvRecords(PutKvRequest request) {
+    /** Returns whether any batch in a put-KV request carries explicit mutation types. */
+    public static boolean hasKvMutationType(PutKvRequest request) {
         for (int i = 0; i < request.getBucketsReqsCount(); i++) {
             ByteBuf records = request.getBucketsReqAt(i).getRecordsSlice();
             int headerSize = DefaultKvRecordBatch.RECORD_BATCH_HEADER_SIZE;
             if (records.readableBytes() >= headerSize
-                    && DefaultKvRecordBatch.pointToByteBuffer(
-                                    records.nioBuffer(records.readerIndex(), headerSize))
-                            .isV2Format()) {
+                    && DefaultKvRecordBatch.hasMutationType(
+                            records.nioBuffer(records.readerIndex(), headerSize))) {
                 return true;
             }
         }

@@ -1130,11 +1130,9 @@ public final class RecordAccumulator {
                         writeRecord.getTargetColumns(),
                         writeRecord.getMergeMode(),
                         isHistoricalPartition,
-                        // Only RETRACT records require the V2 record format. Upsert/delete
-                        // records always start V0 batches (even on aggregation tables) to stay
-                        // wire-compatible with servers that only support PUT_KV version < 4.
-                        // A RETRACT record hitting a V0 batch cannot join it and re-enters
-                        // here to create a V2 batch; subsequent upserts can join that V2 batch.
+                        // Only RETRACT starts a batch with mutation types. Ordinary upsert/delete
+                        // records start batches without this attribute for compatibility with
+                        // older servers, but may join a batch that already carries mutation types.
                         writeRecord.getMutationType() == MutationType.RETRACT,
                         clock.milliseconds());
 

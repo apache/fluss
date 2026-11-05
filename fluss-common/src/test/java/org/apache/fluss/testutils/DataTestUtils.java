@@ -357,28 +357,28 @@ public class DataTestUtils {
     }
 
     /**
-     * Generate a KvRecord V2 format batch (with per-record MutationType byte) from the given key
-     * and values. The mutation type is inferred from the value: DELETE for null values, UPSERT
-     * otherwise.
+     * Generate a KvRecord mutation type format batch (with per-record MutationType byte) from the
+     * given key and values. The mutation type is inferred from the value: DELETE for null values,
+     * UPSERT otherwise.
      */
-    public static KvRecordBatch genKvRecordBatchV2(List<Tuple2<Object[], Object[]>> keyAndValues)
-            throws Exception {
+    public static KvRecordBatch genKvRecordBatchWithMutationType(
+            List<Tuple2<Object[], Object[]>> keyAndValues) throws Exception {
         CompactedKeyEncoder keyEncoder = new CompactedKeyEncoder(DATA1_KEY_TYPE);
         KvRecordTestUtils.KvRecordBatchFactory kvRecordBatchFactory =
                 KvRecordTestUtils.KvRecordBatchFactory.of(DEFAULT_SCHEMA_ID);
         KvRecordTestUtils.KvRecordFactory kvRecordFactory =
                 KvRecordTestUtils.KvRecordFactory.of(DATA1_ROW_TYPE);
-        List<KvRecordTestUtils.V2RecordEntry> entries = new ArrayList<>();
+        List<KvRecordTestUtils.MutationRecordEntry> entries = new ArrayList<>();
         for (Tuple2<Object[], Object[]> keyAndValue : keyAndValues) {
             KvRecord record =
                     kvRecordFactory.ofRecord(
                             keyEncoder.encodeKey(row(keyAndValue.f0)), keyAndValue.f1);
             entries.add(
-                    KvRecordTestUtils.V2RecordEntry.of(
+                    KvRecordTestUtils.MutationRecordEntry.of(
                             keyAndValue.f1 == null ? MutationType.DELETE : MutationType.UPSERT,
                             record));
         }
-        return kvRecordBatchFactory.ofV2Records(entries);
+        return kvRecordBatchFactory.ofRecordsWithMutationType(entries);
     }
 
     @SafeVarargs

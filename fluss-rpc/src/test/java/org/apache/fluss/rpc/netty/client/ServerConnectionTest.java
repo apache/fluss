@@ -460,16 +460,20 @@ public class ServerConnectionTest {
         }
     }
 
-    private static PutKvRequest recordFormatRequest(boolean v2) throws Exception {
+    private static PutKvRequest recordFormatRequest(boolean hasMutationType) throws Exception {
         PutKvRequest request = new PutKvRequest().setTableId(1L).setAcks(1).setTimeoutMs(10_000);
-        request.addBucketsReq().setBucketId(0).setRecordsBytesView(recordBytes(v2));
+        request.addBucketsReq().setBucketId(0).setRecordsBytesView(recordBytes(hasMutationType));
         return request;
     }
 
-    private static BytesView recordBytes(boolean v2) throws Exception {
+    private static BytesView recordBytes(boolean hasMutationType) throws Exception {
         try (KvRecordBatchBuilder builder =
                 KvRecordBatchBuilder.builder(
-                        1, 1024, new UnmanagedPagedOutputView(256), KvFormat.COMPACTED, v2)) {
+                        1,
+                        1024,
+                        new UnmanagedPagedOutputView(256),
+                        KvFormat.COMPACTED,
+                        hasMutationType)) {
             return builder.build();
         }
     }

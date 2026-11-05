@@ -66,7 +66,7 @@ class DefaultKvRecordBatchTest extends KvTestBase {
         assertThat(kvRecords.magic()).isEqualTo(magic);
         assertThat(kvRecords.isValid()).isTrue();
         assertThat(kvRecords.schemaId()).isEqualTo(schemaId);
-        assertThat(kvRecords.isV2Format()).isFalse();
+        assertThat(kvRecords.hasMutationType()).isFalse();
 
         // verify record.
         int i = 0;
@@ -86,7 +86,7 @@ class DefaultKvRecordBatchTest extends KvTestBase {
     }
 
     @Test
-    void testV2BatchMixedMutationTypes() throws Exception {
+    void testBatchWithMixedMutationTypes() throws Exception {
         KvRecordBatchBuilder builder =
                 KvRecordBatchBuilder.builder(
                         schemaId,
@@ -124,7 +124,7 @@ class DefaultKvRecordBatchTest extends KvTestBase {
 
         assertThat(batch.getRecordCount()).isEqualTo(3);
 
-        // V2 read context
+        // Read context for records with explicit mutation types
         KvRecordReadContext readContext =
                 KvRecordReadContext.createReadContext(
                         KvFormat.COMPACTED, new TestingSchemaGetter(1, DATA1_SCHEMA));
@@ -155,9 +155,9 @@ class DefaultKvRecordBatchTest extends KvTestBase {
     }
 
     @Test
-    void testV2FormatAttributeRoundTrip() throws Exception {
-        // V2 batch: isV2Format() should be true
-        KvRecordBatchBuilder v2Builder =
+    void testMutationTypeAttributeRoundTrip() throws Exception {
+        // Batches carrying mutation types set the corresponding attribute.
+        KvRecordBatchBuilder builderWithMutationType =
                 KvRecordBatchBuilder.builder(
                         schemaId,
                         Integer.MAX_VALUE,
@@ -173,31 +173,33 @@ class DefaultKvRecordBatchTest extends KvTestBase {
             row = writer.finishRow();
         }
 
-        v2Builder.append(MutationType.UPSERT, new byte[] {1}, row);
+        builderWithMutationType.append(MutationType.UPSERT, new byte[] {1}, row);
 
-        DefaultKvRecordBatch v2Batch = DefaultKvRecordBatch.pointToBytesView(v2Builder.build());
-        v2Batch.ensureValid();
-        assertThat(v2Batch.isV2Format()).isTrue();
-        assertThat(v2Batch.getRecordCount()).isEqualTo(1);
+        DefaultKvRecordBatch batchWithMutationType =
+                DefaultKvRecordBatch.pointToBytesView(builderWithMutationType.build());
+        batchWithMutationType.ensureValid();
+        assertThat(batchWithMutationType.hasMutationType()).isTrue();
+        assertThat(batchWithMutationType.getRecordCount()).isEqualTo(1);
 
-        v2Builder.close();
+        builderWithMutationType.close();
 
-        // V0 batch: isV2Format() should be false
-        KvRecordBatchBuilder v0Builder =
+        // Batches without mutation types leave the attribute unset.
+        KvRecordBatchBuilder builderWithoutMutationType =
                 KvRecordBatchBuilder.builder(
                         schemaId,
                         Integer.MAX_VALUE,
                         new UnmanagedPagedOutputView(100),
                         KvFormat.COMPACTED);
 
-        v0Builder.append(new byte[] {2}, row);
+        builderWithoutMutationType.append(new byte[] {2}, row);
 
-        DefaultKvRecordBatch v0Batch = DefaultKvRecordBatch.pointToBytesView(v0Builder.build());
-        v0Batch.ensureValid();
-        assertThat(v0Batch.isV2Format()).isFalse();
-        assertThat(v0Batch.getRecordCount()).isEqualTo(1);
+        DefaultKvRecordBatch batchWithoutMutationType =
+                DefaultKvRecordBatch.pointToBytesView(builderWithoutMutationType.build());
+        batchWithoutMutationType.ensureValid();
+        assertThat(batchWithoutMutationType.hasMutationType()).isFalse();
+        assertThat(batchWithoutMutationType.getRecordCount()).isEqualTo(1);
 
-        v0Builder.close();
+        builderWithoutMutationType.close();
     }
 
     @Test

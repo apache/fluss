@@ -901,7 +901,7 @@ public class ReplicaManager implements ServerReconfigurable {
             validateClientVersionForPkTable(apiVersion, replica.getTableInfo());
 
             KvRecordBatch records = putData.records();
-            validateKvBatchFormatForApiVersion(apiVersion, records, putData.tableBucket());
+            validateKvMutationTypeForApiVersion(apiVersion, records, putData.tableBucket());
             checkArgument(
                     records instanceof DefaultKvRecordBatch,
                     "Historical RPC write requires DefaultKvRecordBatch, but found %s.",
@@ -1698,7 +1698,7 @@ public class ReplicaManager implements ServerReconfigurable {
                 LOG.trace("Put records to local kv tablet for table bucket {}", tb);
                 Replica replica = getReplicaOrException(tb);
                 validateClientVersionForPkTable(apiVersion, replica.getTableInfo());
-                validateKvBatchFormatForApiVersion(apiVersion, entry.getValue(), tb);
+                validateKvMutationTypeForApiVersion(apiVersion, entry.getValue(), tb);
                 tableMetrics = replica.tableMetrics();
                 tableMetrics.totalPutKvRequests().inc();
                 LogAppendInfo appendInfo =
@@ -2771,18 +2771,15 @@ public class ReplicaManager implements ServerReconfigurable {
     }
 
     /**
-     * Rejects V2 format kv batches sent with an api version that does not declare V2 support.
-     * KvRecord V2 format (per-record MutationType byte) is introduced in PUT_KV api version 4, so a
-     * V2 batch under an older api version indicates a client/protocol inconsistency and must not be
-     * interpreted as V0.
+     * Rejects batches carrying mutation types when the PUT_KV API version does not support them.
      */
-    private void validateKvBatchFormatForApiVersion(
+    private void validateKvMutationTypeForApiVersion(
             short apiVersion, KvRecordBatch kvRecords, TableBucket tb) {
-        if (kvRecords.isV2Format() && apiVersion < 4) {
+        if (kvRecords.hasMutationType() && apiVersion < 4) {
             throw new InvalidRecordException(
                     String.format(
-                            "Received a V2 format kv record batch for bucket %s with PUT_KV api "
-                                    + "version %d, but V2 format requires api version >= 4.",
+                            "Received a kv record batch with mutation types for bucket %s with PUT_KV api "
+                                    + "version %d, but mutation types require api version >= 4.",
                             tb, apiVersion));
         }
     }

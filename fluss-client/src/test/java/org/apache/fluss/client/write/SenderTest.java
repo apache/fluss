@@ -194,7 +194,10 @@ final class SenderTest {
             metadataUpdater.updateCluster(cluster);
             sender.runOnce();
         }
-        failRequest(bucket, 0, new UnsupportedRequestVersionException("V2 requires PUT_KV 4"));
+        failRequest(
+                bucket,
+                0,
+                new UnsupportedRequestVersionException("Mutation types require PUT_KV 4"));
         assertThat(retract.get()).isInstanceOf(UnsupportedVersionException.class);
         assertThat(manager.nextSequence(bucket)).isEqualTo(retried ? 1 : 0);
 

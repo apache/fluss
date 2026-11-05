@@ -126,7 +126,7 @@ class DefaultKvRecordTest extends KvTestBase {
     @EnumSource(
             value = MutationType.class,
             names = {"UPSERT", "RETRACT"})
-    void testV2RowRoundTrip(MutationType mutation) throws Exception {
+    void testRowWithMutationTypeRoundTrip(MutationType mutation) throws Exception {
         KvRecordReadContext readContext =
                 KvRecordReadContext.createReadContext(
                         KvFormat.COMPACTED, new TestingSchemaGetter(1, DATA1_SCHEMA));
@@ -140,13 +140,13 @@ class DefaultKvRecordTest extends KvTestBase {
         }
 
         byte[] key = new byte[] {1, 2};
-        DefaultKvRecord.writeToV2(outputView, mutation, key, row);
+        DefaultKvRecord.writeToWithMutationType(outputView, mutation, key, row);
 
         KvRecord kvRecord =
-                DefaultKvRecord.readFromV2(
+                DefaultKvRecord.readFromWithMutationType(
                         MemorySegment.wrap(outputView.getCopyOfBuffer()), 0, schemaId, readContext);
 
-        // V2 size = V0 size + 1 byte for MutationType
+        // The explicit mutation type adds one byte.
         // 4 (length) + 1 (mutationType) + 1 (keyLen varint) + 2 (key) + 6 (row) = 14
         assertThat(kvRecord.getSizeInBytes()).isEqualTo(14);
         assertThat(keyToBytes(kvRecord)).isEqualTo(key);
@@ -155,16 +155,16 @@ class DefaultKvRecordTest extends KvTestBase {
     }
 
     @Test
-    void testV2DeleteRoundTrip() throws Exception {
+    void testDeleteWithMutationTypeRoundTrip() throws Exception {
         KvRecordReadContext readContext =
                 KvRecordReadContext.createReadContext(
                         KvFormat.COMPACTED, new TestingSchemaGetter(1, DATA1_SCHEMA));
 
         byte[] key = new byte[] {3, 4};
-        DefaultKvRecord.writeToV2(outputView, MutationType.DELETE, key, null);
+        DefaultKvRecord.writeToWithMutationType(outputView, MutationType.DELETE, key, null);
 
         KvRecord kvRecord =
-                DefaultKvRecord.readFromV2(
+                DefaultKvRecord.readFromWithMutationType(
                         MemorySegment.wrap(outputView.getCopyOfBuffer()), 0, schemaId, readContext);
 
         // 4 (length) + 1 (mutationType) + 1 (keyLen varint) + 2 (key) = 8
@@ -175,10 +175,10 @@ class DefaultKvRecordTest extends KvTestBase {
     }
 
     @Test
-    void testV2SizeOf() {
+    void testSizeOfWithMutationType() {
         byte[] key = new byte[] {1, 2};
-        // V2 size should be V0 size + 1 (MutationType byte)
-        assertThat(DefaultKvRecord.sizeOfV2(key, null))
+        // The explicit mutation type adds one byte.
+        assertThat(DefaultKvRecord.sizeOfWithMutationType(key, null))
                 .isEqualTo(DefaultKvRecord.sizeOf(key, null) + 1);
     }
 }

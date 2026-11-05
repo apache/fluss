@@ -84,19 +84,17 @@ public class KvRecordTestUtils {
         }
 
         /**
-         * Build a V2 format batch from a list of (MutationType, KvRecord) entries. V2 records carry
-         * an explicit MutationType byte per record.
+         * Build a batch from a list of (MutationType, KvRecord) entries. Records carry an explicit
+         * MutationType byte per record.
          */
-        public KvRecordBatch ofV2Records(List<V2RecordEntry> entries) throws IOException {
-            return ofV2Records(entries, NO_WRITER_ID, NO_BATCH_SEQUENCE);
+        public KvRecordBatch ofRecordsWithMutationType(List<MutationRecordEntry> entries)
+                throws IOException {
+            return ofRecordsWithMutationType(entries, NO_WRITER_ID, NO_BATCH_SEQUENCE);
         }
 
-        /**
-         * Build a V2 format batch from a list of (MutationType, KvRecord) entries with writer
-         * state.
-         */
-        public KvRecordBatch ofV2Records(
-                List<V2RecordEntry> entries, long writeClientId, int batchSequenceId)
+        /** Build a batch with mutation types and explicit writer state. */
+        public KvRecordBatch ofRecordsWithMutationType(
+                List<MutationRecordEntry> entries, long writeClientId, int batchSequenceId)
                 throws IOException {
             KvRecordBatchBuilder builder =
                     KvRecordBatchBuilder.builder(
@@ -105,7 +103,7 @@ public class KvRecordTestUtils {
                             new UnmanagedPagedOutputView(100),
                             KvFormat.COMPACTED,
                             true);
-            for (V2RecordEntry entry : entries) {
+            for (MutationRecordEntry entry : entries) {
                 builder.append(
                         entry.mutationType,
                         BytesUtils.toArray(entry.record.getKey()),
@@ -120,18 +118,21 @@ public class KvRecordTestUtils {
         }
     }
 
-    /** An entry pairing a {@link MutationType} with a {@link KvRecord} for V2 batch building. */
-    public static class V2RecordEntry {
+    /**
+     * An entry pairing a {@link MutationType} with a {@link KvRecord} for batch building with
+     * mutation types.
+     */
+    public static class MutationRecordEntry {
         public final MutationType mutationType;
         public final KvRecord record;
 
-        public V2RecordEntry(MutationType mutationType, KvRecord record) {
+        public MutationRecordEntry(MutationType mutationType, KvRecord record) {
             this.mutationType = mutationType;
             this.record = record;
         }
 
-        public static V2RecordEntry of(MutationType mutationType, KvRecord record) {
-            return new V2RecordEntry(mutationType, record);
+        public static MutationRecordEntry of(MutationType mutationType, KvRecord record) {
+            return new MutationRecordEntry(mutationType, record);
         }
     }
 

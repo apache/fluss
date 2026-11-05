@@ -165,7 +165,7 @@ public final class KvWriteProcessor {
             @Nullable String originalPartitionName,
             @Nullable HistoricalValueLookup historicalValueLookup)
             throws Exception {
-        if (kvRecords.isV2Format()) {
+        if (kvRecords.hasMutationType()) {
             // Replaying an accepted retract can change state or fail (for example, division by
             // zero after a later upsert). Resolve known duplicates before invoking aggregators.
             Optional<LogAppendInfo> duplicate =
@@ -331,8 +331,8 @@ public final class KvWriteProcessor {
             @Nullable String originalPartitionName,
             @Nullable HistoricalValueLookup historicalValueLookup)
             throws Exception {
-        if (kvRecords.isV2Format()) {
-            processV2KvRecords(
+        if (kvRecords.hasMutationType()) {
+            processKvRecordsWithMutationType(
                     kvRecords,
                     schemaIdOfNewData,
                     currentMerger,
@@ -385,7 +385,7 @@ public final class KvWriteProcessor {
         }
     }
 
-    private void processV2KvRecords(
+    private void processKvRecordsWithMutationType(
             KvRecordBatch kvRecords,
             short schemaIdOfNewData,
             RowMerger currentMerger,
@@ -411,7 +411,7 @@ public final class KvWriteProcessor {
                 case UPSERT:
                     if (value == null) {
                         throw new InvalidRecordException(
-                                "V2 UPSERT record must carry a non-null row value.");
+                                "UPSERT record must carry a non-null row value.");
                     }
                     logOffset =
                             processUpsert(
@@ -429,7 +429,7 @@ public final class KvWriteProcessor {
                 case DELETE:
                     if (value != null) {
                         throw new InvalidRecordException(
-                                "V2 DELETE record must not carry a row value.");
+                                "DELETE record must not carry a row value.");
                     }
                     logOffset =
                             processDeletion(

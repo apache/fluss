@@ -53,7 +53,7 @@ public class KvWriteBatch extends WriteBatch {
     private final KvRecordBatchBuilder recordsBuilder;
     private final @Nullable int[] targetColumns;
     private final MergeMode mergeMode;
-    private final boolean v2Format;
+    private final boolean hasMutationType;
 
     public KvWriteBatch(
             long tableId,
@@ -67,7 +67,7 @@ public class KvWriteBatch extends WriteBatch {
             @Nullable int[] targetColumns,
             MergeMode mergeMode,
             boolean isHistoricalPartition,
-            boolean v2Format,
+            boolean hasMutationType,
             long createdMs) {
         super(
                 tableId,
@@ -80,10 +80,11 @@ public class KvWriteBatch extends WriteBatch {
                 createdMs);
         this.outputView = outputView;
         this.recordsBuilder =
-                KvRecordBatchBuilder.builder(schemaId, writeLimit, outputView, kvFormat, v2Format);
+                KvRecordBatchBuilder.builder(
+                        schemaId, writeLimit, outputView, kvFormat, hasMutationType);
         this.targetColumns = targetColumns;
         this.mergeMode = mergeMode;
-        this.v2Format = v2Format;
+        this.hasMutationType = hasMutationType;
     }
 
     @Override
@@ -100,8 +101,8 @@ public class KvWriteBatch extends WriteBatch {
         }
         validateRecordConsistency(writeRecord);
 
-        // V0 batch cannot carry RETRACT records — caller must create a new V2 batch.
-        if (!v2Format && writeRecord.getMutationType() == MutationType.RETRACT) {
+        // RETRACT requires a batch with explicit mutation types.
+        if (!hasMutationType && writeRecord.getMutationType() == MutationType.RETRACT) {
             return false;
         }
 
@@ -111,7 +112,7 @@ public class KvWriteBatch extends WriteBatch {
         BinaryRow row = checkRow(writeRecord.getRow());
 
         // hasRoomFor() and append() are format-aware: the builder sizes and writes records
-        // according to its own record format (V0 or V2).
+        // according to whether the batch includes mutation types.
         if (!recordsBuilder.hasRoomFor(key, row) || isClosed()) {
             return false;
         } else {
