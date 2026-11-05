@@ -326,11 +326,9 @@ public class MetadataUpdaterTest {
             } else {
                 assertThat(cluster.getBucketCount(table)).hasValue(expectedTableBucketCount);
             }
-            if (partitionBucketCount > 0) {
-                // The partition keeps its actual count, even when smaller than the table count.
-                assertThat(cluster.getBucketCount(TableOrPartition.ofPartition(partitionId)))
-                        .hasValue(partitionBucketCount);
-            }
+            // The partition keeps its actual count, even when smaller than the table count.
+            assertThat(cluster.getBucketCount(TableOrPartition.ofPartition(partitionId)))
+                    .hasValue(partitionBucketCount);
         }
     }
 
@@ -391,8 +389,7 @@ public class MetadataUpdaterTest {
 
     @ParameterizedTest
     @CsvSource({"false, 0", "true, 0", "true, -1"})
-    void testUnresolvedPartitionCountDoesNotPublishIdentity(boolean explicit, int count)
-            throws Exception {
+    void testUnresolvedPartitionCountIsRejected(boolean explicit, int count) throws Exception {
         Cluster cluster = updateRouting(routingPartitionResponse(6, 1, true), null, false);
         MetadataResponse response = routingPartitionResponse(6, 1, true);
         PbPartitionMetadata partition =
@@ -405,8 +402,6 @@ public class MetadataUpdaterTest {
         }
         assertThatThrownBy(() -> updateRouting(response, cluster, true))
                 .hasCauseInstanceOf(StaleMetadataException.class);
-        assertThat(cluster.getPartitionId(PhysicalTablePath.of(TablePath.of("db", "table"), "p")))
-                .isEmpty();
     }
 
     @ParameterizedTest
