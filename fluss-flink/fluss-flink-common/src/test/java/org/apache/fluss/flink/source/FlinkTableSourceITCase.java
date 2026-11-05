@@ -1315,6 +1315,38 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
 
     @Test
     @MultiVersionTest
+    void testLookupFullCacheRejectsSecondaryIndexLookup() {
+        assumeThat(supportsLookupCustomShuffle()).isTrue();
+        tEnv.executeSql(
+                "CREATE TABLE lookup_full_secondary ("
+                        + " id INT NOT NULL, val INT, PRIMARY KEY (id) NOT ENFORCED"
+                        + ") WITH ('bucket.num' = '3', 'bucket.key' = 'id',"
+                        + " 'lookup.cache' = 'FULL', 'lookup.async' = 'false',"
+                        + " 'secondary-index.idx_val.columns' = 'val')");
+        RowTypeInfo probeType =
+                new RowTypeInfo(new TypeInformation[] {Types.INT}, new String[] {"val"});
+        DataStream<Row> probeStream =
+                execEnv.fromElements(Row.of(1)).returns(probeType).setParallelism(1);
+        Schema probeSchema =
+                Schema.newBuilder()
+                        .column("val", DataTypes.INT())
+                        .columnByExpression("proc", "PROCTIME()")
+                        .build();
+        tEnv.createTemporaryView(
+                "lookup_full_probe", tEnv.fromDataStream(probeStream, probeSchema));
+        assertThatThrownBy(
+                        () ->
+                                tEnv.explainSql(
+                                        "SELECT /*+ LOOKUP('table' = 'dim', 'shuffle' = 'true') */ "
+                                                + "src.val, dim.id FROM lookup_full_probe AS src "
+                                                + "JOIN lookup_full_secondary FOR SYSTEM_TIME AS OF src.proc AS dim "
+                                                + "ON src.val = dim.val"))
+                .hasStackTraceContaining(
+                        "Full lookup cache supports only primary-key and prefix lookups.");
+    }
+
+    @Test
+    @MultiVersionTest
     void testLookupFullCacheWithoutCustomShuffleFailsPlanning() {
         assumeThat(supportsLookupCustomShuffle()).isTrue();
         tEnv.executeSql(
