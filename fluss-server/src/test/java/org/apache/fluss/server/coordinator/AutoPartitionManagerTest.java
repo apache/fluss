@@ -24,6 +24,7 @@ import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
+import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
@@ -69,6 +70,7 @@ import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.stream.Stream;
 
@@ -185,6 +187,78 @@ class AutoPartitionManagerTest {
             release.countDown();
             checkThread.join(10000);
             eventThread.join(10000);
+            manager.close();
+        }
+    }
+
+    @Test
+    void testPartitionEventsDoNotRetryCompletedAutoCreationAfterManualDrop() throws Exception {
+        TableInfo table = createPartitionedTable(-1, 1, AutoPartitionTimeUnit.HOUR);
+        AtomicReference<AutoPartitionManager> managerRef = new AtomicReference<>();
+        MetadataManager metadataWithEvents =
+                new MetadataManager(
+                        zookeeperClient,
+                        new Configuration(),
+                        new LakeCatalogDynamicLoader(new Configuration(), null, true)) {
+                    @Override
+                    <T> T tryRunTableDdl(TablePath path, Function<MetadataManager, T> action) {
+                        return action.apply(this);
+                    }
+
+                    @Override
+                    public void createPartition(
+                            TablePath path,
+                            long tableId,
+                            String remoteDir,
+                            PartitionAssignment assignment,
+                            ResolvedPartitionSpec partition,
+                            boolean ignoreIfExists,
+                            int bucketCount) {
+                        metadataManager.createPartition(
+                                path,
+                                tableId,
+                                remoteDir,
+                                assignment,
+                                partition,
+                                ignoreIfExists,
+                                bucketCount);
+                        // Deliver the watcher event before the automatic pass publishes its cache.
+                        managerRef.get().addPartition(tableId, partition.getPartitionName());
+                    }
+                };
+        ManuallyTriggeredScheduledExecutorService executor =
+                new ManuallyTriggeredScheduledExecutorService();
+        ManualClock clock =
+                new ManualClock(
+                        LocalDateTime.parse("2025-04-26T00:00:00")
+                                .atZone(ZoneId.systemDefault())
+                                .toInstant()
+                                .toEpochMilli());
+        AutoPartitionManager manager =
+                new AutoPartitionManager(
+                        new TestingServerMetadataCache(3),
+                        metadataWithEvents,
+                        remoteDirDynamicLoader,
+                        new Configuration(),
+                        disabledCapacityController(),
+                        clock,
+                        executor);
+        managerRef.set(manager);
+        try {
+            manager.addAutoPartitionTable(table, true);
+            executor.triggerNonPeriodicScheduledTask();
+            assertThat(zookeeperClient.getPartitionRegistrations(table.getTablePath()).keySet())
+                    .containsExactly("2025042600");
+
+            metadataManager.dropPartition(
+                    table.getTablePath(),
+                    table.getTableId(),
+                    fromPartitionName(table.getPartitionKeys(), "2025042600"),
+                    false);
+            manager.removePartition(table.getTableId(), "2025042600");
+            executor.triggerNonPeriodicScheduledTasks();
+            assertThat(zookeeperClient.getPartitionRegistrations(table.getTablePath())).isEmpty();
+        } finally {
             manager.close();
         }
     }

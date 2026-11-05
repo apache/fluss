@@ -277,7 +277,7 @@ public class AutoPartitionManager implements AutoCloseable {
                                 true);
                         snapshot.partitions.remove(HISTORICAL_PARTITION_VALUE);
                     }
-                    publishSnapshot(tableInfo.getTableId(), snapshot, false);
+                    publishSnapshot(tableInfo.getTableId(), snapshot);
                     return null;
                 });
     }
@@ -422,7 +422,7 @@ public class AutoPartitionManager implements AutoCloseable {
                                     snapshot.partitions);
                             createPartitions(
                                     scoped, current, plannedCreateInstant, snapshot.partitions);
-                            publishSnapshot(tableId, snapshot, forceDoAutoPartition);
+                            publishSnapshot(tableId, snapshot);
                             return null;
                         });
             } catch (OperationNotAttemptedException e) {
@@ -459,8 +459,7 @@ public class AutoPartitionManager implements AutoCloseable {
         }
     }
 
-    private void publishSnapshot(
-            long tableId, PartitionSnapshot snapshot, boolean forceDoAutoPartition) {
+    private void publishSnapshot(long tableId, PartitionSnapshot snapshot) {
         inLock(
                 lock,
                 () -> {
@@ -468,9 +467,9 @@ public class AutoPartitionManager implements AutoCloseable {
                     if (current != snapshot.state
                             || current.version != snapshot.version
                             || isClosed.get()) {
-                        if (current != null && !isClosed.get()) {
-                            retryAutoPartition(tableId, forceDoAutoPartition, 1);
-                        }
+                        // Watcher events already updated the cache. Replaying completed DDL here
+                        // could recreate a partition removed after this pass; reload on the next
+                        // periodic pass if initialization was interrupted.
                         return;
                     }
                     current.partitions = snapshot.partitions;
