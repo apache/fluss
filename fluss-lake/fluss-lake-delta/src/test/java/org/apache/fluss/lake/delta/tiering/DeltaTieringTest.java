@@ -252,7 +252,11 @@ class DeltaTieringTest {
     void testCreateTable() throws Exception {
         DeltaLakeCatalog catalog = new DeltaLakeCatalog(configuration);
         TablePath tablePath = TablePath.of("fluss", "create");
-        TableDescriptor descriptor = logTableDescriptor(false);
+        TableDescriptor base = logTableDescriptor(false);
+        // a custom property without the delta. prefix is mirrored like the Fluss options
+        TableDescriptor descriptor =
+                base.withProperties(
+                        base.getProperties(), Collections.singletonMap("owner", "fluss-team"));
 
         catalog.createTable(tablePath, descriptor, new TestingLakeCatalogContext());
         Snapshot snapshot =
@@ -261,6 +265,11 @@ class DeltaTieringTest {
         assertThat(snapshot.getVersion()).isEqualTo(0L);
         assertThat(snapshot.getSchema().fieldNames()).containsExactly("a", "b", "c", "tags", "ts");
         assertThat(snapshot.getProtocol().getWriterFeatures()).contains("domainMetadata");
+        // Fluss properties are mirrored with the fluss. prefix, like Paimon and Iceberg do
+        assertThat(snapshot.getTableProperties())
+                .containsEntry("fluss." + ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")
+                .containsEntry("fluss.owner", "fluss-team")
+                .doesNotContainKeys(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "owner");
 
         // creating the same table again is a no-op
         catalog.createTable(tablePath, descriptor, new TestingLakeCatalogContext());
@@ -395,19 +404,46 @@ class DeltaTieringTest {
         TablePath tablePath = TablePath.of("fluss", "alter_properties");
         createTable(tablePath, false);
 
-        // Fluss-side options don't touch the Delta table
+        String freshnessKey = "fluss." + ConfigOptions.TABLE_DATALAKE_FRESHNESS.key();
+        String enabledKey = "fluss." + ConfigOptions.TABLE_DATALAKE_ENABLED.key();
+
+        // Fluss-side options are mirrored as fluss.* in one metadata-only commit, a key set and
+        // reset in the same request is not written
         catalog.alterTable(
                 tablePath,
                 Arrays.asList(
                         TableChange.set(ConfigOptions.TABLE_DATALAKE_FRESHNESS.key(), "1min"),
                         TableChange.reset(ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()),
-                        TableChange.set(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "false")),
+                        TableChange.set(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "false"),
+                        TableChange.set("owner", "fluss-team")),
                 new TestingLakeCatalogContext());
-        assertThat(
-                        TableManager.loadSnapshot(DeltaConfig.tablePath(configuration, tablePath))
-                                .build(engine)
-                                .getVersion())
-                .isEqualTo(0L);
+        Snapshot snapshot =
+                TableManager.loadSnapshot(DeltaConfig.tablePath(configuration, tablePath))
+                        .build(engine);
+        assertThat(snapshot.getVersion()).isEqualTo(1L);
+        assertThat(snapshot.getTableProperties())
+                .containsEntry(enabledKey, "false")
+                .containsEntry("fluss.owner", "fluss-team")
+                .doesNotContainKey(freshnessKey);
+        // the metadata-only commit keeps the table feature the committer relies on
+        assertThat(snapshot.getProtocol().getWriterFeatures()).contains("domainMetadata");
+
+        // reset removes the mirrored property, a set after reset keeps the last value
+        catalog.alterTable(
+                tablePath,
+                Arrays.asList(
+                        TableChange.reset("owner"),
+                        TableChange.reset(ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()),
+                        TableChange.set(ConfigOptions.TABLE_DATALAKE_FRESHNESS.key(), "3min")),
+                new TestingLakeCatalogContext());
+        snapshot =
+                TableManager.loadSnapshot(DeltaConfig.tablePath(configuration, tablePath))
+                        .build(engine);
+        assertThat(snapshot.getVersion()).isEqualTo(2L);
+        assertThat(snapshot.getTableProperties())
+                .containsEntry(freshnessKey, "3min")
+                .containsEntry(enabledKey, "false")
+                .doesNotContainKey("fluss.owner");
 
         assertThatThrownBy(
                         () ->
@@ -437,13 +473,19 @@ class DeltaTieringTest {
                         .build(),
                 new TestingLakeCatalogContext());
 
-        // replayed when datalake is enabled together with a property createTable already applied
+        // replayed when datalake is enabled together with a property createTable already applied,
+        // nothing to mirror so no commit is made
         catalog.alterTable(
                 tablePath,
                 Arrays.asList(
                         TableChange.set(retentionKey, retention),
                         TableChange.reset("delta.checkpointInterval")),
                 new TestingLakeCatalogContext());
+        assertThat(
+                        TableManager.loadSnapshot(DeltaConfig.tablePath(configuration, tablePath))
+                                .build(engine)
+                                .getVersion())
+                .isEqualTo(0L);
 
         for (TableChange change :
                 Arrays.asList(

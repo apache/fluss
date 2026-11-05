@@ -31,6 +31,7 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.types.DataTypeRoot;
 import org.apache.fluss.types.RowType;
 
+import io.delta.kernel.Operation;
 import io.delta.kernel.Snapshot;
 import io.delta.kernel.TableManager;
 import io.delta.kernel.Transaction;
@@ -43,9 +44,11 @@ import io.delta.kernel.utils.CloseableIterable;
 
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -66,6 +69,12 @@ public class DeltaLakeCatalog implements LakeCatalog {
             Collections.singletonMap("delta.feature." + DOMAIN_METADATA_FEATURE, "supported");
 
     private static final String DELTA_PROPERTY_PREFIX = "delta.";
+
+    /**
+     * Prefix of the Fluss table properties mirrored to the Delta table, same as for Paimon and
+     * Iceberg. Tiering never reads them back, they only show how the table is configured in Fluss.
+     */
+    static final String FLUSS_PROPERTY_PREFIX = "fluss.";
 
     private final Configuration options;
 
@@ -153,9 +162,10 @@ public class DeltaLakeCatalog implements LakeCatalog {
     }
 
     /**
-     * Only accepts changes that leave the Delta table as it is: tiering doesn't read Fluss-side
-     * options such as {@code table.datalake.freshness} from the Delta table, so they are not
-     * written to it.
+     * Mirrors Fluss-side option changes such as {@code table.datalake.freshness} to the {@code
+     * fluss.*} properties of the Delta table in one metadata-only commit. Changes of {@code
+     * delta.*} properties and of the schema are rejected, they would otherwise be recorded by Fluss
+     * but never reach the Delta table.
      */
     @Override
     public void alterTable(TablePath tablePath, List<TableChange> tableChanges, Context context)
@@ -178,18 +188,47 @@ public class DeltaLakeCatalog implements LakeCatalog {
         }
 
         String path = DeltaConfig.tablePath(options, tablePath);
-        Map<String, String> deltaProperties;
+        Engine engine = DeltaConfig.createEngine(options);
+        Snapshot snapshot;
         try {
-            deltaProperties =
-                    TableManager.loadSnapshot(path)
-                            .build(DeltaConfig.createEngine(options))
-                            .getTableProperties();
+            snapshot = TableManager.loadSnapshot(path).build(engine);
         } catch (TableNotFoundException e) {
             throw new TableNotExistException("Delta table " + path + " does not exist.", e);
         }
+        Map<String, String> deltaProperties = snapshot.getTableProperties();
         for (TableChange change : tableChanges) {
             checkDeltaPropertyUnchanged(change, deltaProperties);
         }
+
+        // Fold the changes in order so that the last change of a key wins and a key never ends
+        // up both added and removed in the same commit.
+        Map<String, String> added = new HashMap<>();
+        Set<String> removed = new HashSet<>();
+        for (TableChange change : tableChanges) {
+            if (change instanceof TableChange.SetOption) {
+                TableChange.SetOption option = (TableChange.SetOption) change;
+                if (!option.getKey().startsWith(DELTA_PROPERTY_PREFIX)) {
+                    String key = FLUSS_PROPERTY_PREFIX + option.getKey();
+                    removed.remove(key);
+                    added.put(key, option.getValue());
+                }
+            } else {
+                TableChange.ResetOption option = (TableChange.ResetOption) change;
+                if (!option.getKey().startsWith(DELTA_PROPERTY_PREFIX)) {
+                    String key = FLUSS_PROPERTY_PREFIX + option.getKey();
+                    added.remove(key);
+                    removed.add(key);
+                }
+            }
+        }
+        if (added.isEmpty() && removed.isEmpty()) {
+            return;
+        }
+        snapshot.buildUpdateTableTransaction(DeltaConfig.ENGINE_INFO, Operation.MANUAL_UPDATE)
+                .withTablePropertiesAdded(added)
+                .withTablePropertiesRemoved(removed)
+                .build(engine)
+                .commit(engine, CloseableIterable.emptyIterable());
     }
 
     /**
@@ -216,14 +255,22 @@ public class DeltaLakeCatalog implements LakeCatalog {
         }
     }
 
-    /** Passes the {@code delta.*} custom properties of the Fluss table to the Delta table. */
+    /**
+     * Passes the {@code delta.*} custom properties of the Fluss table to the Delta table as they
+     * are and mirrors every other Fluss property with the {@code fluss.} prefix.
+     */
     private static Map<String, String> tableProperties(TableDescriptor tableDescriptor) {
         Map<String, String> properties = new HashMap<>(DEFAULT_TABLE_PROPERTIES);
-        for (Map.Entry<String, String> entry : tableDescriptor.getCustomProperties().entrySet()) {
-            if (entry.getKey().startsWith(DELTA_PROPERTY_PREFIX)) {
-                properties.put(entry.getKey(), entry.getValue());
-            }
-        }
+        tableDescriptor.getProperties().forEach((k, v) -> putFlussProperty(k, v, properties));
+        tableDescriptor.getCustomProperties().forEach((k, v) -> putFlussProperty(k, v, properties));
         return properties;
+    }
+
+    private static void putFlussProperty(String key, String value, Map<String, String> properties) {
+        if (key.startsWith(DELTA_PROPERTY_PREFIX)) {
+            properties.put(key, value);
+        } else {
+            properties.put(FLUSS_PROPERTY_PREFIX + key, value);
+        }
     }
 }
