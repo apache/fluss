@@ -19,8 +19,6 @@ package org.apache.fluss.flink.source.lookup;
 
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
-import org.apache.fluss.client.lookup.Lookup;
-import org.apache.fluss.client.lookup.LookupType;
 import org.apache.fluss.client.lookup.Lookuper;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.config.Configuration;
@@ -107,26 +105,7 @@ public class FlinkLookupFunction extends LookupFunction {
         flussRowToFlinkRowConverter =
                 new FlussRowToFlinkRowConverter(FlinkConversions.toFlussRowType(outputRowType));
 
-        if (lookupNormalizer.getLookupType() == LookupType.SECONDARY_INDEX_LOOKUP) {
-            int[] lookupKeyIndexes = lookupNormalizer.getLookupKeyIndexes();
-            RowType lookupKeyRowType = FlinkUtils.projectRowType(flinkRowType, lookupKeyIndexes);
-            List<String> lookupColumns = lookupKeyRowType.getFieldNames();
-            String indexName =
-                    LookupNormalizer.findMatchingSecondaryIndexName(
-                            table.getTableInfo().getSchema(), lookupColumns);
-            lookuper = table.getSecondaryIndexLookuper(indexName);
-        } else {
-            Lookup lookup = table.newLookup();
-            if (lookupNormalizer.getLookupType() == LookupType.PREFIX_LOOKUP) {
-                int[] lookupKeyIndexes = lookupNormalizer.getLookupKeyIndexes();
-                RowType lookupKeyRowType =
-                        FlinkUtils.projectRowType(flinkRowType, lookupKeyIndexes);
-                lookup = lookup.lookupBy(lookupKeyRowType.getFieldNames());
-            } else if (insertIfNotExists) {
-                lookup = lookup.enableInsertIfNotExists();
-            }
-            lookuper = lookup.createLookuper();
-        }
+        lookuper = lookupNormalizer.createLookuper(table, flinkRowType, insertIfNotExists);
 
         LOG.info("end open.");
     }

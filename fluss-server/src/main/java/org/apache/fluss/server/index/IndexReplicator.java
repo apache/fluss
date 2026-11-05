@@ -413,8 +413,6 @@ public final class IndexReplicator implements AutoCloseable {
                 batches.add(
                         new IndexBatch(
                                 entry.getKey(),
-                                sourceReader.tableBucket(),
-                                lastProcessedOffset,
                                 encodedBatch.progressKey,
                                 encodedBatch.records,
                                 builders.get(entry.getKey()).retainedBytes(),

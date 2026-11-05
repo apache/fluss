@@ -192,6 +192,20 @@ class IndexPushReplicationITCase {
         byte[] newIndexKey = encodeIndexKey(f.indexSpec, "world", 1);
         assertIndexEntry(f.indexTableId, newIndexKey, targetBucket(f.indexSpec, "world", 1), true);
         assertIndexEntry(f.indexTableId, oldIndexKey, targetBucket(f.indexSpec, "hello", 1), false);
+
+        f.mainGateway
+                .putKv(
+                        newPutKvRequest(
+                                f.mainTableId, 0, 1, genKvRecordBatch(new Object[] {1, null})))
+                .get();
+        assertIndexEntry(f.indexTableId, newIndexKey, targetBucket(f.indexSpec, "world", 1), false);
+
+        f.mainGateway
+                .putKv(
+                        newPutKvRequest(
+                                f.mainTableId, 0, 1, genKvRecordBatch(new Object[] {1, "hello"})))
+                .get();
+        assertIndexEntry(f.indexTableId, oldIndexKey, targetBucket(f.indexSpec, "hello", 1), true);
     }
 
     /** Deleting a main-table row removes its Index Table entry. */
