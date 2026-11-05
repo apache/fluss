@@ -222,7 +222,7 @@ impl<'a> TableScan<'a> {
             self.conn.get_admin()?,
             latest,
         ));
-        Ok(LimitBatchScanner::new(
+        LimitBatchScanner::new(
             self.conn.get_connections(),
             self.metadata.clone(),
             self.table_info,
@@ -230,7 +230,7 @@ impl<'a> TableScan<'a> {
             self.projected_fields,
             table_bucket,
             limit,
-        ))
+        )
     }
 
     /// Projects the scan to only include specified columns by their indices.

@@ -596,4 +596,80 @@ mod batch_scanner_test {
             "create_record_batch_log_scanner must reject a configured limit"
         );
     }
+
+    /// Verify `into_record_batch_stream()` and `to_record_batch_reader()` on `LimitBatchScanner`.
+    #[tokio::test]
+    async fn batch_scanner_bare_record_batch_bridges() {
+        use arrow::record_batch::RecordBatchReader;
+        use futures::StreamExt;
+
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("admin");
+
+        let table_path = TablePath::new("fluss", "test_batch_scanner_bridges");
+        let descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("c1", DataTypes::int())
+                    .column("c2", DataTypes::string())
+                    .build()
+                    .expect("schema"),
+            )
+            .distributed_by(Some(1), vec!["c1".to_string()])
+            .build()
+            .expect("descriptor");
+        create_table(&admin, &table_path, &descriptor).await;
+
+        let table = connection.get_table(&table_path).await.expect("table");
+        let writer = table
+            .new_append()
+            .expect("append")
+            .create_writer()
+            .expect("writer");
+
+        let batch = record_batch!(
+            ("c1", Int32, [1, 2, 3]),
+            ("c2", Utf8, ["a", "b", "c"])
+        )
+        .unwrap();
+        writer.append_arrow_batch(batch).expect("append batch");
+        writer.flush().await.expect("flush");
+
+        let table_info = table.get_table_info();
+        let bucket = TableBucket::new(table_info.table_id, 0);
+
+        // Test into_record_batch_stream()
+        let scanner = table
+            .new_scan()
+            .limit(3)
+            .expect("limit")
+            .create_bucket_batch_scanner(bucket.clone())
+            .expect("create batch scanner");
+
+        assert_eq!(scanner.schema().fields().len(), 2);
+        let mut rb_stream = scanner.into_record_batch_stream();
+        assert_eq!(rb_stream.schema().fields().len(), 2);
+        let rb = rb_stream
+            .next()
+            .await
+            .expect("stream poll")
+            .expect("stream batch Ok");
+        assert!(rb.num_rows() > 0 && rb.num_rows() <= 3);
+        assert!(rb_stream.next().await.is_none());
+
+        // Test to_record_batch_reader()
+        let scanner2 = table
+            .new_scan()
+            .limit(3)
+            .expect("limit")
+            .create_bucket_batch_scanner(bucket.clone())
+            .expect("create batch scanner");
+
+        let mut sync_reader = scanner2.to_record_batch_reader(tokio::runtime::Handle::current());
+        assert_eq!(sync_reader.schema().fields().len(), 2);
+        let sync_rb = sync_reader.next().expect("sync reader batch Some").expect("sync reader batch Ok");
+        assert!(sync_rb.num_rows() > 0 && sync_rb.num_rows() <= 3);
+        assert!(sync_reader.next().is_none());
+    }
 }

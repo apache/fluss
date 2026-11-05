@@ -923,4 +923,75 @@ mod reader_test {
             .await
             .expect("Failed to drop table");
     }
+
+    #[tokio::test]
+    async fn record_batch_log_reader_bare_record_batch_bridges() {
+        use futures::StreamExt;
+
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("Failed to get admin");
+
+        let table_path = TablePath::new("fluss", "test_reader_bare_bridges");
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .column("name", DataTypes::string())
+                    .build()
+                    .expect("Failed to build schema"),
+            )
+            .build()
+            .expect("Failed to build table");
+        create_table(&admin, &table_path, &table_descriptor).await;
+
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("Failed to get table");
+        let writer = table
+            .new_append()
+            .expect("Failed to create append")
+            .create_writer()
+            .expect("Failed to create writer");
+        writer
+            .append_arrow_batch(
+                record_batch!(
+                    ("id", Int32, [1, 2, 3]),
+                    ("name", Utf8, ["a", "b", "c"])
+                )
+                .unwrap(),
+            )
+            .expect("Failed to append batch");
+        writer.flush().await.expect("Failed to flush");
+
+        let scanner = table
+            .new_scan()
+            .create_record_batch_log_scanner()
+            .expect("Failed to create scanner");
+        scanner
+            .subscribe(0, EARLIEST_OFFSET)
+            .await
+            .expect("Failed to subscribe");
+
+        let reader = RecordBatchLogReader::new_until_latest(scanner, &admin)
+            .await
+            .expect("Failed to create reader");
+
+        assert_eq!(reader.schema().fields().len(), 2);
+        let mut rb_stream = reader.into_record_batch_stream();
+        assert_eq!(rb_stream.schema().fields().len(), 2);
+
+        let mut rb_count = 0;
+        while let Some(rb_res) = rb_stream.next().await {
+            let rb = rb_res.expect("rb stream batch Ok");
+            rb_count += rb.num_rows();
+        }
+        assert_eq!(rb_count, 3);
+
+        admin
+            .drop_table(&table_path, false)
+            .await
+            .expect("Failed to drop table");
+    }
 }

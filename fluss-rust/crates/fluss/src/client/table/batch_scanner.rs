@@ -36,6 +36,7 @@ use crate::record::{
 };
 use crate::row::FixedSchemaDecoder;
 use crate::rpc::RpcClient;
+use crate::client::table::stream::RecordBatchStream;
 use crate::rpc::message::LimitScanRequest;
 use arrow::array::RecordBatch;
 use arrow::compute::concat_batches;
@@ -54,6 +55,7 @@ pub struct LimitBatchScanner {
     bucket: TableBucket,
     /// Taken on the first `next_batch` to run the scan; `None` afterward.
     pending: Option<PendingScan>,
+    schema: SchemaRef,
 }
 
 /// Request inputs captured at creation, consumed by the first `next_batch`.
@@ -75,8 +77,13 @@ impl LimitBatchScanner {
         projected_fields: Option<Vec<usize>>,
         bucket: TableBucket,
         limit: i32,
-    ) -> Self {
-        Self {
+    ) -> Result<Self> {
+        let full_schema = to_arrow_schema(table_info.get_row_type())?;
+        let schema = match &projected_fields {
+            None => full_schema,
+            Some(fields) => ArrowReadContext::project_schema(full_schema, fields)?,
+        };
+        Ok(Self {
             bucket,
             pending: Some(PendingScan {
                 rpc_client,
@@ -86,7 +93,13 @@ impl LimitBatchScanner {
                 projected_fields,
                 limit,
             }),
-        }
+            schema,
+        })
+    }
+
+    /// Returns the Arrow schema for batches produced by this scanner.
+    pub fn schema(&self) -> SchemaRef {
+        self.schema.clone()
     }
 
     /// Runs the scan on the first call and returns its batch, then `None`. Not
@@ -116,9 +129,72 @@ impl LimitBatchScanner {
         })
     }
 
+    /// Converts this scanner into a [`RecordBatchStream`] yielding bare Arrow [`RecordBatch`]es.
+    ///
+    /// This is an async bridge for DataFusion (`RecordBatchStreamAdapter`) and PyArrow interop.
+    pub fn into_record_batch_stream(self) -> RecordBatchStream {
+        use futures::StreamExt;
+        let schema = self.schema();
+        let stream = Box::pin(self.into_stream().map(|res| {
+            res.map(|scan_batch| scan_batch.into_batch())
+                .map_err(|e| arrow::error::ArrowError::ExternalError(Box::new(e)))
+        }));
+        RecordBatchStream::from_stream(stream, schema)
+    }
+
+    /// Convert this async scanner into a synchronous [`arrow::record_batch::RecordBatchReader`].
+    ///
+    /// The returned adapter calls [`tokio::runtime::Handle::block_on`] on each
+    /// iterator step. **Do not** call this from inside a Tokio worker thread
+    /// while the same runtime is driving async work (nested `block_on` can
+    /// panic or deadlock). Prefer [`next_batch`](LimitBatchScanner::next_batch)
+    /// in async Rust code. This is intended for sync/FFI boundaries (C++, some
+    /// Python call paths).
+    pub fn to_record_batch_reader(
+        self,
+        handle: tokio::runtime::Handle,
+    ) -> SyncRecordBatchLimitScanner {
+        SyncRecordBatchLimitScanner {
+            scanner: self,
+            handle,
+        }
+    }
+
     /// The bucket scanned by this `LimitBatchScanner`.
     pub fn bucket(&self) -> &TableBucket {
         &self.bucket
+    }
+}
+
+/// Synchronous adapter that implements [`arrow::record_batch::RecordBatchReader`]
+/// for [`LimitBatchScanner`].
+///
+/// Created via [`LimitBatchScanner::to_record_batch_reader`].
+/// Blocks the current thread on each `next()` call using the provided
+/// Tokio runtime handle.
+///
+/// The iterator yields plain [`RecordBatch`]es (bucket/offset metadata from
+/// [`ScanBatch`] is stripped to satisfy the Arrow trait contract).
+pub struct SyncRecordBatchLimitScanner {
+    scanner: LimitBatchScanner,
+    handle: tokio::runtime::Handle,
+}
+
+impl Iterator for SyncRecordBatchLimitScanner {
+    type Item = std::result::Result<RecordBatch, arrow::error::ArrowError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.handle.block_on(self.scanner.next_batch()) {
+            Ok(Some(scan_batch)) => Some(Ok(scan_batch.into_batch())),
+            Ok(None) => None,
+            Err(e) => Some(Err(arrow::error::ArrowError::ExternalError(Box::new(e)))),
+        }
+    }
+}
+
+impl arrow::record_batch::RecordBatchReader for SyncRecordBatchLimitScanner {
+    fn schema(&self) -> SchemaRef {
+        self.scanner.schema()
     }
 }
 
