@@ -39,6 +39,9 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -78,6 +81,43 @@ class FlussAdminSnapshotTest {
                     assertThat(selected.getLogOffset(0)).hasValue(60L + 20L * expectedSnapshot);
                 }
             }
+        }
+    }
+
+    @Test
+    void testSelectsSnapshotsIndependentlyForEachBucket() throws Exception {
+        GetLatestKvSnapshotsResponse latest = candidates();
+        latest.getLatestSnapshotsList().get(0).setSnapshotId(5L).setLogOffset(80L);
+        latest.addLatestSnapshot().setBucketId(1).setSnapshotId(3L).setLogOffset(120L);
+        latest.addLatestSnapshot().setBucketId(2).setSnapshotId(1L).setLogOffset(80L);
+
+        ListKvSnapshotsResponse retained = new ListKvSnapshotsResponse().setTableId(TABLE_ID);
+        retained.addActiveSnapshot().setBucketId(1).setSnapshotId(2L).setLogOffset(100L);
+        retained.addActiveSnapshot().setBucketId(0).setSnapshotId(4L).setLogOffset(60L);
+        retained.addActiveSnapshot().setBucketId(2).setSnapshotId(1L).setLogOffset(80L);
+        retained.addActiveSnapshot().setBucketId(1).setSnapshotId(1L).setLogOffset(80L);
+        retained.addActiveSnapshot().setBucketId(0).setSnapshotId(5L).setLogOffset(80L);
+        retained.addActiveSnapshot().setBucketId(1).setSnapshotId(3L).setLogOffset(120L);
+
+        Map<Integer, Long> visible = new HashMap<>();
+        visible.put(0, 100L);
+        visible.put(1, 90L);
+        visible.put(2, 70L);
+        Map<Integer, Long> start = new HashMap<>();
+        start.put(0, 60L);
+        start.put(1, 80L);
+        start.put(2, 0L);
+
+        try (FlussAdmin admin = newAdmin(latest, retained, visible, start, () -> {}, () -> {})) {
+            KvSnapshots selected = admin.getLatestKvSnapshots(TABLE).get(10, TimeUnit.SECONDS);
+            assertThat(selected.getTableId()).isEqualTo(TABLE_ID);
+            assertThat(selected.getPartitionId()).isEqualTo(PARTITION_ID);
+            assertThat(selected.getSnapshotId(0)).hasValue(5L);
+            assertThat(selected.getLogOffset(0)).hasValue(80L);
+            assertThat(selected.getSnapshotId(1)).hasValue(1L);
+            assertThat(selected.getLogOffset(1)).hasValue(80L);
+            assertThat(selected.getSnapshotId(2)).isEmpty();
+            assertThat(selected.getLogOffset(2)).isEmpty();
         }
     }
 
@@ -227,22 +267,37 @@ class FlussAdminSnapshotTest {
             long startOffset,
             Runnable prepare,
             Runnable readHistory) {
+        ListKvSnapshotsResponse retained = new ListKvSnapshotsResponse().setTableId(TABLE_ID);
+        if (snapshots.getLatestSnapshotsList().get(0).hasSnapshotId()) {
+            for (int id = 3; id >= 1; id--) {
+                retained.addActiveSnapshot()
+                        .setBucketId(0)
+                        .setSnapshotId(id)
+                        .setLogOffset(60L + 20L * id);
+            }
+        }
+        return newAdmin(
+                snapshots,
+                retained,
+                Collections.singletonMap(0, visibleOffset),
+                Collections.singletonMap(0, startOffset),
+                prepare,
+                readHistory);
+    }
+
+    private static FlussAdmin newAdmin(
+            GetLatestKvSnapshotsResponse snapshots,
+            ListKvSnapshotsResponse retained,
+            Map<Integer, Long> visibleOffsets,
+            Map<Integer, Long> startOffsets,
+            Runnable prepare,
+            Runnable readHistory) {
         ServerNode node = new ServerNode(1, "tablet", 9123, ServerType.TABLET_SERVER);
         TestingRpcClient client =
                 new TestingRpcClient(
                         (server, api) -> {
                             if (api == ApiKeys.LIST_KV_SNAPSHOTS) {
                                 readHistory.run();
-                                ListKvSnapshotsResponse retained =
-                                        new ListKvSnapshotsResponse().setTableId(TABLE_ID);
-                                if (snapshots.getLatestSnapshotsList().get(0).hasSnapshotId()) {
-                                    for (int id = 3; id >= 1; id--) {
-                                        retained.addActiveSnapshot()
-                                                .setBucketId(0)
-                                                .setSnapshotId(id)
-                                                .setLogOffset(60L + 20L * id);
-                                    }
-                                }
                                 return CompletableFuture.completedFuture(retained);
                             }
                             assertThat(api).isEqualTo(ApiKeys.GET_LATEST_KV_SNAPSHOTS);
@@ -276,12 +331,16 @@ class FlussAdminSnapshotTest {
                             public CompletableFuture<ListOffsetsResponse> listOffsets(
                                     ListOffsetsRequest request) {
                                 assertThat(request.getFollowerServerId()).isEqualTo(-1);
-                                long offset =
+                                Map<Integer, Long> offsets =
                                         request.getOffsetType() == OffsetSpec.LIST_LATEST_OFFSET
-                                                ? visibleOffset
-                                                : startOffset;
+                                                ? visibleOffsets
+                                                : startOffsets;
                                 ListOffsetsResponse response = new ListOffsetsResponse();
-                                response.addBucketsResp().setBucketId(0).setOffset(offset);
+                                for (int bucket : request.getBucketIds()) {
+                                    response.addBucketsResp()
+                                            .setBucketId(bucket)
+                                            .setOffset(offsets.get(bucket));
+                                }
                                 return CompletableFuture.completedFuture(response);
                             }
                         };
