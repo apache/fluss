@@ -24,6 +24,7 @@ import org.apache.fluss.client.tiering.TieringSplitGenerator;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.NetworkException;
+import org.apache.fluss.flink.sink.testutils.TestAdminAdapter;
 import org.apache.fluss.flink.tiering.TestingLakeTieringFactory;
 import org.apache.fluss.flink.tiering.event.FailedTieringEvent;
 import org.apache.fluss.flink.tiering.event.FinishedTieringEvent;
@@ -31,14 +32,20 @@ import org.apache.fluss.flink.tiering.event.TieringReachMaxDurationEvent;
 import org.apache.fluss.flink.tiering.source.TieringTestBase;
 import org.apache.fluss.flink.tiering.source.split.FlinkTieringSplit;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
+import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
+import org.apache.fluss.rpc.messages.LakeTieringHeartbeatRequest;
+import org.apache.fluss.rpc.messages.LakeTieringHeartbeatResponse;
 import org.apache.fluss.rpc.messages.PbLakeTableOffsetForBucket;
 import org.apache.fluss.rpc.messages.PbLakeTableSnapshotInfo;
+import org.apache.fluss.server.coordinator.TestCoordinatorGateway;
+import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
+import org.apache.fluss.types.DataTypes;
 
 import org.apache.flink.api.connector.source.SourceEvent;
 import org.apache.flink.api.connector.source.SplitsAssignment;
@@ -55,17 +62,25 @@ import javax.annotation.Nullable;
 
 import java.io.IOException;
 import java.time.Duration;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Queue;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 import static org.apache.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFSET;
 import static org.apache.fluss.config.ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE;
+import static org.apache.fluss.flink.tiering.source.TieringSourceOptions.EXCLUDED_TABLES;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -987,6 +1002,257 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                             split ->
                                     split.unwrap().getTableBucket().getTableId() == tableId
                                             && !split.unwrap().shouldSkipCurrentRound());
+        }
+    }
+
+    @Test
+    void testExcludedTablesDoNotPreventHealthyTableTiering() throws Throwable {
+        try (ExclusionFixture fixture = new ExclusionFixture("db.broken")) {
+            fixture.addTable(1, "db", "broken");
+            fixture.addTable(2, "db", "healthy");
+            fixture.addTable(3, "db", "broken");
+            fixture.requestTable();
+
+            assertThat(fixture.requestedTables).isEmpty();
+            assertThat(fixture.assignedTableIds()).isEmpty();
+            assertThat(fixture.timer.getActiveNonPeriodicScheduledTask())
+                    .singleElement()
+                    .satisfies(
+                            task ->
+                                    assertThat(task.getDelay(TimeUnit.MILLISECONDS))
+                                            .isEqualTo(1000L));
+
+            fixture.runContinuation();
+            assertThat(fixture.assignedTableIds()).containsExactly(2L);
+            assertThat(fixture.failureReport(1L).getFailedTablesList())
+                    .singleElement()
+                    .extracting(table -> table.getTableId(), table -> table.getTieringEpoch())
+                    .containsExactly(1L, 101L);
+
+            fixture.requestTable();
+            fixture.context.runPeriodicCallable(0);
+            assertThat(fixture.failureReport(3L).getTieringTablesList())
+                    .singleElement()
+                    .extracting(table -> table.getTableId(), table -> table.getTieringEpoch())
+                    .containsExactly(2L, 102L);
+            assertThat(fixture.requestedTables).containsExactly(TablePath.of("db", "healthy"));
+            assertThat(fixture.assignedTableIds()).containsExactly(2L);
+            assertThat(fixture.gateway.requests)
+                    .allSatisfy(request -> assertThat(request.getFinishedTablesList()).isEmpty());
+        }
+    }
+
+    @Test
+    void testEmptyAndExcludedTablesShareDelayedContinuation() throws Throwable {
+        try (ExclusionFixture fixture = new ExclusionFixture("db.broken,db.other")) {
+            fixture.addTable(1, "db", "empty");
+            fixture.emptyTableIds.add(1L);
+            fixture.addTable(2, "db", "broken");
+            fixture.addTable(3, "db", "other");
+            fixture.addTable(4, "db", "broken");
+
+            fixture.requestTable();
+            ScheduledFuture<?> continuation =
+                    fixture.timer.getActiveNonPeriodicScheduledTask().iterator().next();
+            fixture.requestTable();
+            assertThat(fixture.claims()).hasSize(2);
+            assertThat(fixture.timer.getActiveNonPeriodicScheduledTask())
+                    .containsExactly(continuation);
+
+            fixture.context.runPeriodicCallable(0);
+            assertThat(fixture.claims()).hasSize(3);
+            assertThat(fixture.timer.getActiveNonPeriodicScheduledTask())
+                    .containsExactly(continuation);
+            fixture.runContinuation();
+            assertThat(fixture.claims()).hasSize(4);
+            assertThat(fixture.timer.getActiveNonPeriodicScheduledTask()).hasSize(1);
+            assertThat(fixture.requestedTables).containsExactly(TablePath.of("db", "empty"));
+            assertThat(fixture.assignedTableIds()).isEmpty();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"", "other_db.broken", "db.broken_suffix", "db.Broken"})
+    void testUnmatchedTableIsAssigned(String exclusions) throws Exception {
+        try (ExclusionFixture fixture = new ExclusionFixture(exclusions)) {
+            fixture.addTable(1, "db", "broken");
+            fixture.requestTable();
+
+            assertThat(fixture.assignedTableIds()).containsExactly(1L);
+            assertThat(fixture.gateway.requests)
+                    .allSatisfy(request -> assertThat(request.getFailedTablesList()).isEmpty());
+        }
+    }
+
+    @Test
+    void testCloseReportsExclusionAndCancelsFurtherClaims() throws Throwable {
+        try (ExclusionFixture fixture = new ExclusionFixture("db.broken")) {
+            fixture.addTable(1, "db", "broken");
+            fixture.requestTable();
+            fixture.enumerator.close();
+
+            assertThat(fixture.failureReport(1L).getFailedTablesList())
+                    .singleElement()
+                    .extracting(table -> table.getTableId(), table -> table.getTieringEpoch())
+                    .containsExactly(1L, 101L);
+            fixture.runContinuation();
+            assertThat(fixture.claims()).hasSize(1);
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"broken", "db.broken.extra", "db.*", "db.", ".broken"})
+    void testInvalidExclusionFailsBeforeStarting(String excludedTable) {
+        assertThatThrownBy(() -> new ExclusionFixture(excludedTable))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    private static class ExclusionFixture implements AutoCloseable {
+        private final ExclusionContext context = new ExclusionContext();
+        private final ManuallyTriggeredScheduledExecutorService timer =
+                new ManuallyTriggeredScheduledExecutorService();
+        private final ExclusionGateway gateway = new ExclusionGateway();
+        private final Map<TablePath, TableInfo> tables = new HashMap<>();
+        private final List<TablePath> requestedTables = new ArrayList<>();
+        private final Set<Long> emptyTableIds = new HashSet<>();
+        private final TieringSourceEnumerator enumerator;
+
+        private ExclusionFixture(String exclusions) {
+            Configuration config = new Configuration();
+            if (!exclusions.isEmpty()) {
+                config.setString(EXCLUDED_TABLES.key(), exclusions);
+            }
+            TestAdminAdapter admin =
+                    new TestAdminAdapter() {
+                        @Override
+                        public CompletableFuture<TableInfo> getTableInfo(TablePath tablePath) {
+                            requestedTables.add(tablePath);
+                            return CompletableFuture.completedFuture(tables.get(tablePath));
+                        }
+                    };
+            TieringSplitGenerator generator =
+                    new TieringSplitGenerator(admin) {
+                        @Override
+                        public List<TieringSplit> generateTableSplits(TableInfo table) {
+                            if (emptyTableIds.contains(table.getTableId())) {
+                                return Collections.emptyList();
+                            }
+                            return Collections.singletonList(
+                                    new TieringLogSplit(
+                                            table.getTablePath(),
+                                            new TableBucket(table.getTableId(), 0),
+                                            null,
+                                            0,
+                                            1));
+                        }
+                    };
+            enumerator =
+                    new TieringSourceEnumerator(
+                            new Configuration(),
+                            config,
+                            context,
+                            new TestingLakeTieringFactory(),
+                            30_000L,
+                            timer);
+            enumerator.start(gateway, admin, generator);
+            context.registerSourceReader(0, 0, "localhost");
+            enumerator.addReader(0);
+        }
+
+        private void addTable(long id, String databaseName, String tableName) {
+            TablePath path = TablePath.of(databaseName, tableName);
+            TableDescriptor descriptor =
+                    TableDescriptor.builder()
+                            .schema(Schema.newBuilder().column("id", DataTypes.INT()).build())
+                            .distributedBy(1)
+                            .build();
+            TableInfo table = TableInfo.of(path, id, 0, descriptor, null, 0, 0);
+            tables.put(path, table);
+            gateway.pendingTables.add(table);
+        }
+
+        private void requestTable() {
+            enumerator.handleSplitRequest(0, "localhost");
+        }
+
+        private void runContinuation() throws Throwable {
+            timer.triggerNonPeriodicScheduledTasks();
+            while (!context.coordinatorCalls.isEmpty()) {
+                context.coordinatorCalls.remove().run();
+            }
+            while (!context.getOneTimeCallables().isEmpty()) {
+                context.runNextOneTimeCallable();
+            }
+        }
+
+        private List<LakeTieringHeartbeatRequest> claims() {
+            return gateway.requests.stream()
+                    .filter(request -> request.hasRequestTable() && request.isRequestTable())
+                    .collect(Collectors.toList());
+        }
+
+        private LakeTieringHeartbeatRequest failureReport(long tableId) {
+            return gateway.requests.stream()
+                    .filter(
+                            request ->
+                                    request.getFailedTablesList().stream()
+                                            .anyMatch(table -> table.getTableId() == tableId))
+                    .findFirst()
+                    .orElseThrow(
+                            () -> new AssertionError("No failure heartbeat for table " + tableId));
+        }
+
+        private List<Long> assignedTableIds() {
+            return context.getSplitsAssignmentSequence().stream()
+                    .flatMap(assignment -> assignment.assignment().get(0).stream())
+                    .map(split -> split.unwrap().getTableBucket().getTableId())
+                    .collect(Collectors.toList());
+        }
+
+        @Override
+        public void close() throws Exception {
+            enumerator.close();
+            context.close();
+        }
+    }
+
+    private static class ExclusionGateway extends TestCoordinatorGateway {
+        private final Queue<TableInfo> pendingTables = new ArrayDeque<>();
+        private final List<LakeTieringHeartbeatRequest> requests = new ArrayList<>();
+
+        @Override
+        public CompletableFuture<LakeTieringHeartbeatResponse> lakeTieringHeartbeat(
+                LakeTieringHeartbeatRequest request) {
+            requests.add(request);
+            LakeTieringHeartbeatResponse response =
+                    new LakeTieringHeartbeatResponse().setCoordinatorEpoch(1);
+            if (request.hasRequestTable() && request.isRequestTable()) {
+                TableInfo table = pendingTables.poll();
+                if (table != null) {
+                    TablePath path = table.getTablePath();
+                    response.setTieringTable()
+                            .setTableId(table.getTableId())
+                            .setTieringEpoch(table.getTableId() + 100)
+                            .setTablePath()
+                            .setDatabaseName(path.getDatabaseName())
+                            .setTableName(path.getTableName());
+                }
+            }
+            return CompletableFuture.completedFuture(response);
+        }
+    }
+
+    private static class ExclusionContext
+            extends FlussMockSplitEnumeratorContext<FlinkTieringSplit> {
+        private final Queue<Runnable> coordinatorCalls = new ArrayDeque<>();
+
+        private ExclusionContext() {
+            super(1);
+        }
+
+        @Override
+        public void runInCoordinatorThread(Runnable runnable) {
+            coordinatorCalls.add(runnable);
         }
     }
 }

@@ -19,10 +19,28 @@ package org.apache.fluss.flink.tiering;
 
 import org.junit.jupiter.api.Test;
 
+import static org.apache.fluss.flink.tiering.source.TieringSourceOptions.EXCLUDED_TABLES;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link FlussLakeTiering}. */
 class FlussLakeTieringTest {
+
+    @Test
+    void testExcludedTablesParsedFromArguments() {
+        FlussLakeTiering tiering =
+                new FlussLakeTiering(
+                        new String[] {
+                            "--fluss.bootstrap.servers",
+                            "localhost:9123",
+                            "--datalake.format",
+                            "paimon",
+                            "--tiering.excluded-tables",
+                            "db.problem_table, other_db.other_table"
+                        });
+
+        assertThat(tiering.lakeTieringConfig.get(EXCLUDED_TABLES))
+                .containsExactly("db.problem_table", "other_db.other_table");
+    }
 
     @Test
     void testMultipleDecoratorsApplied() {
