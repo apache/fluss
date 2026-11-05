@@ -37,7 +37,6 @@ import org.apache.fluss.metrics.Counter;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.row.arrow.ArrowWriterPool;
-import org.apache.fluss.row.encode.KeyPrefixLayout;
 import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.row.encode.ValueDecoder;
 import org.apache.fluss.row.encode.ValueEncoder;
@@ -51,6 +50,7 @@ import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.PreparedFlush;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKv;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKvBuilder;
+import org.apache.fluss.server.kv.rocksdb.RocksDBPrefixBloomUtils;
 import org.apache.fluss.server.kv.rocksdb.RocksDBResourceContainer;
 import org.apache.fluss.server.kv.rocksdb.RocksDBStatistics;
 import org.apache.fluss.server.kv.rocksdb.RocksDBStatisticsRegistry;
@@ -77,6 +77,7 @@ import org.apache.fluss.utils.clock.SystemClock;
 import io.github.fluss_contrib.rocksdb.AbstractCompactionFilter;
 import io.github.fluss_contrib.rocksdb.AbstractCompactionFilterFactory;
 import io.github.fluss_contrib.rocksdb.Cache;
+import io.github.fluss_contrib.rocksdb.PrefixLayout;
 import io.github.fluss_contrib.rocksdb.RateLimiter;
 import io.github.fluss_contrib.rocksdb.ReadOptions;
 import io.github.fluss_contrib.rocksdb.RocksIterator;
@@ -359,7 +360,7 @@ public final class KvTablet {
             TableInfo tableInfo)
             throws IOException {
         TableConfig tableConfig = tableInfo.getTableConfig();
-        KeyPrefixLayout prefixLayout = null;
+        PrefixLayout prefixLayout = null;
         if (serverConf.get(ConfigOptions.KV_USE_PREFIX_BLOOM_FILTER)) {
             if (HISTORICAL_PARTITION_VALUE.equals(tablePath.getPartitionName())) {
                 LOG.info(
@@ -367,7 +368,7 @@ public final class KvTablet {
                         tableBucket,
                         tablePath);
             } else {
-                prefixLayout = TableKeyPrefixLayoutResolver.resolve(tableInfo);
+                prefixLayout = RocksDBPrefixBloomUtils.createPrefixLayout(tableInfo);
             }
         }
         KvTablet tablet =
@@ -478,7 +479,7 @@ public final class KvTablet {
             AutoIncrementManager autoIncrementManager,
             Clock clock,
             TableConfig tableConfig,
-            @Nullable KeyPrefixLayout prefixLayout)
+            @Nullable PrefixLayout prefixLayout)
             throws IOException {
         checkNotNull(tableConfig, "tableConfig must not be null.");
         boolean historicalPartition =
@@ -624,7 +625,7 @@ public final class KvTablet {
             @Nullable
                     AbstractCompactionFilterFactory<? extends AbstractCompactionFilter<?>>
                             compactionFilterFactory,
-            @Nullable KeyPrefixLayout prefixLayout)
+            @Nullable PrefixLayout prefixLayout)
             throws IOException {
         @Nullable RocksDBResourceContainer rocksDBResourceContainer = null;
         boolean resourcesOwnedByBuilder = false;

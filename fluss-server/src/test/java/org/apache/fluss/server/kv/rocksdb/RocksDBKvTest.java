@@ -31,7 +31,6 @@ import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.encode.CompactedKeyEncoder;
 import org.apache.fluss.server.kv.KvCloseMode;
 import org.apache.fluss.server.kv.KvManager;
-import org.apache.fluss.server.kv.TableKeyPrefixLayoutResolver;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 
@@ -188,7 +187,7 @@ class RocksDBKvTest {
                         null,
                         null,
                         prefixBloomEnabled
-                                ? TableKeyPrefixLayoutResolver.resolve(
+                                ? RocksDBPrefixBloomUtils.createPrefixLayout(
                                         TableInfo.of(
                                                 TablePath.of("db", "table"),
                                                 1L,

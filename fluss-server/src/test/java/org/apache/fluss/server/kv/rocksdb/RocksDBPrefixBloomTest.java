@@ -30,15 +30,14 @@ import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.row.encode.CompactedKeyEncoder;
-import org.apache.fluss.row.encode.KeyPrefixLayout;
 import org.apache.fluss.server.kv.KvManager;
-import org.apache.fluss.server.kv.TableKeyPrefixLayoutResolver;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 
 import io.github.fluss_contrib.rocksdb.ColumnFamilyOptions;
 import io.github.fluss_contrib.rocksdb.FlushOptions;
+import io.github.fluss_contrib.rocksdb.PrefixLayout;
 import io.github.fluss_contrib.rocksdb.TickerType;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -151,7 +150,7 @@ class RocksDBPrefixBloomTest {
         assertThat(resolve(table)).isNotNull();
         TableInfo info =
                 TableInfo.of(TablePath.of("db", "table"), 1L, 1, table, "/tmp/fluss", 0L, 0L);
-        assertThat(TableKeyPrefixLayoutResolver.resolve(info)).isNotNull();
+        assertThat(RocksDBPrefixBloomUtils.createPrefixLayout(info)).isNotNull();
     }
 
     @ParameterizedTest(name = "{0}, partitioned={2}")
@@ -626,8 +625,8 @@ class RocksDBPrefixBloomTest {
                 id);
     }
 
-    private static KeyPrefixLayout resolve(TableDescriptor table) {
-        return TableKeyPrefixLayoutResolver.resolve(
+    private static PrefixLayout resolve(TableDescriptor table) {
+        return RocksDBPrefixBloomUtils.createPrefixLayout(
                 TableInfo.of(
                         TablePath.of("db", "table"),
                         1L,
