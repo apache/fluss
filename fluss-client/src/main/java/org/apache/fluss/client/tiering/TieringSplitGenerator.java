@@ -24,6 +24,7 @@ import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.client.metadata.LakeSnapshot;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
+import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
@@ -139,12 +140,25 @@ public class TieringSplitGenerator {
             String partitionName = partitionNameByIdEntry.getValue();
             boolean historicalPartition = HISTORICAL_PARTITION_VALUE.equals(partitionName);
             int partitionBucketCount = bucketCountById.get(partitionId);
-            Map<Integer, Long> latestBucketsOffset =
-                    bucketOffsetsRetriever.latestOffsets(
+            Map<Integer, Long> latestBucketsOffset;
+            try {
+                latestBucketsOffset =
+                        bucketOffsetsRetriever.latestOffsets(
+                                partitionName,
+                                IntStream.range(0, partitionBucketCount)
+                                        .boxed()
+                                        .collect(Collectors.toList()));
+            } catch (RuntimeException e) {
+                if (ExceptionUtils.findThrowable(e, PartitionNotExistException.class).isPresent()) {
+                    LOG.warn(
+                            "Partition {} of table {} was removed while generating tiering splits. Skipping it.",
                             partitionName,
-                            IntStream.range(0, partitionBucketCount)
-                                    .boxed()
-                                    .collect(Collectors.toList()));
+                            tableInfo.getTablePath(),
+                            e);
+                    continue;
+                }
+                throw e;
+            }
             KvSnapshots latestKvSnapshots = null;
             if (tableInfo.hasPrimaryKey()) {
                 if (historicalPartition) {
