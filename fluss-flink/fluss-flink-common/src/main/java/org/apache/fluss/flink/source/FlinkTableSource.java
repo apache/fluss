@@ -207,6 +207,45 @@ public class FlinkTableSource
             boolean isDataLakeEnabled,
             @Nullable MergeEngineType mergeEngineType,
             Map<String, String> tableOptions,
+            LeaseContext leaseContext) {
+        this(
+                tablePath,
+                flussConfig,
+                tableConfig,
+                tableOutputType,
+                primaryKeyIndexes,
+                bucketKeyIndexes,
+                partitionKeyIndexes,
+                streaming,
+                startupOptions,
+                lookupAsync,
+                insertIfNotExists,
+                cache,
+                scanPartitionDiscoveryIntervalMs,
+                isDataLakeEnabled,
+                mergeEngineType,
+                tableOptions,
+                leaseContext,
+                null);
+    }
+
+    public FlinkTableSource(
+            TablePath tablePath,
+            Configuration flussConfig,
+            TableConfig tableConfig,
+            org.apache.flink.table.types.logical.RowType tableOutputType,
+            int[] primaryKeyIndexes,
+            int[] bucketKeyIndexes,
+            int[] partitionKeyIndexes,
+            boolean streaming,
+            FlinkConnectorOptionsUtils.StartupOptions startupOptions,
+            boolean lookupAsync,
+            boolean insertIfNotExists,
+            @Nullable LookupCache cache,
+            long scanPartitionDiscoveryIntervalMs,
+            boolean isDataLakeEnabled,
+            @Nullable MergeEngineType mergeEngineType,
+            Map<String, String> tableOptions,
             LeaseContext leaseContext,
             @Nullable int[][] secondaryIndexes) {
         this(
@@ -794,6 +833,10 @@ public class FlinkTableSource
                         projectedFields,
                         secondaryIndexes);
         if (lookupCacheType == LookupOptions.LookupCacheType.FULL) {
+            if (lookupNormalizer.getLookupType() == LookupType.SECONDARY_INDEX_LOOKUP) {
+                throw new UnsupportedOperationException(
+                        "Full lookup cache supports only primary-key and prefix lookups.");
+            }
             int numBuckets = getResolvedNumBuckets();
             FlussLookupInputPartitioner bucketPartitioner =
                     createLookupInputPartitioner(lookupNormalizer);
