@@ -66,6 +66,9 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 import java.util.stream.Stream;
 
@@ -114,6 +117,98 @@ class AutoPartitionManagerTest {
     @AfterEach
     void afterEach() {
         ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupRoot();
+    }
+
+    @Test
+    void testPartitionEventsProceedDuringMetadataReadAndSurviveSnapshotPublication()
+            throws Exception {
+        TableInfo table = createPartitionedTable(-1, 0, AutoPartitionTimeUnit.HOUR);
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        MetadataManager blocked =
+                new MetadataManager(
+                        zookeeperClient,
+                        new Configuration(),
+                        new LakeCatalogDynamicLoader(new Configuration(), null, true)) {
+                    @Override
+                    <T> T tryRunTableDdl(TablePath path, Function<MetadataManager, T> action) {
+                        return action.apply(this);
+                    }
+
+                    @Override
+                    public TableInfo getTable(TablePath path) {
+                        entered.countDown();
+                        try {
+                            release.await();
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            throw new RuntimeException(e);
+                        }
+                        return metadataManager.getTable(path);
+                    }
+                };
+        ManuallyTriggeredScheduledExecutorService executor =
+                new ManuallyTriggeredScheduledExecutorService();
+        AutoPartitionManager manager =
+                new AutoPartitionManager(
+                        new TestingServerMetadataCache(3),
+                        blocked,
+                        remoteDirDynamicLoader,
+                        new Configuration(),
+                        disabledCapacityController(),
+                        new ManualClock(0L),
+                        executor);
+        FutureTask<Void> check =
+                new FutureTask<>(
+                        () -> {
+                            executor.triggerNonPeriodicScheduledTask();
+                            return null;
+                        });
+        FutureTask<Void> event =
+                new FutureTask<>(
+                        () -> {
+                            manager.addPartition(table.getTableId(), "2025041900");
+                            return null;
+                        });
+        Thread checkThread = new Thread(check);
+        Thread eventThread = new Thread(event);
+        try {
+            manager.addAutoPartitionTable(table, true);
+            checkThread.start();
+            assertThat(entered.await(10, TimeUnit.SECONDS)).isTrue();
+            eventThread.start();
+            event.get(10, TimeUnit.SECONDS);
+            release.countDown();
+            check.get(10, TimeUnit.SECONDS);
+            assertThat(manager.getPartitionsByTable(table.getTableId())).containsKey("2025041900");
+        } finally {
+            release.countDown();
+            checkThread.join(10000);
+            eventThread.join(10000);
+            manager.close();
+        }
+    }
+
+    @Test
+    void testHistoricalCleanupRemainsBestEffortAfterTableDeletion() throws Exception {
+        TableInfo table = createPartitionedTable(-1, 0, AutoPartitionTimeUnit.HOUR);
+        AutoPartitionManager manager =
+                new AutoPartitionManager(
+                        new TestingServerMetadataCache(3),
+                        metadataManager,
+                        remoteDirDynamicLoader,
+                        new Configuration(),
+                        disabledCapacityController(),
+                        new ManualClock(0L),
+                        new ManuallyTriggeredScheduledExecutorService());
+        try {
+            manager.addAutoPartitionTable(table, false);
+            metadataManager.dropTable(table.getTablePath(), false);
+            manager.dropHistoricalPartition(table);
+            assertThat(metadataManager.tableExists(table.getTablePath())).isFalse();
+        } finally {
+            manager.close();
+        }
     }
 
     static Stream<Arguments> parameters() {
