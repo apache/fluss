@@ -122,7 +122,7 @@ public abstract class ServerTestBase {
         configuration.setString(ConfigOptions.ADVERTISED_LISTENERS, "CLIENT://198.168.0.1:100");
         configuration.set(ConfigOptions.REMOTE_DATA_DIR, "/tmp/fluss/remote-data");
 
-        // set to small timout to verify the case that zk session is timeout
+        // set to small timeout to verify the case that zk session is timeout
         configuration.set(ConfigOptions.ZOOKEEPER_SESSION_TIMEOUT, Duration.ofMillis(500));
         configuration.set(ConfigOptions.ZOOKEEPER_CONNECTION_TIMEOUT, Duration.ofMillis(500));
         configuration.set(ConfigOptions.ZOOKEEPER_RETRY_WAIT, Duration.ofMillis(500));
