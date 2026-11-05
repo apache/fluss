@@ -22,8 +22,10 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.ConfigException;
-import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
@@ -56,6 +58,9 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  */
 @Internal
 public final class HistoricalPartitionTaskExecutor implements AutoCloseable {
+
+    private static final Logger LOG =
+            LoggerFactory.getLogger(HistoricalPartitionTaskExecutor.class);
 
     private static final Duration THREAD_KEEP_ALIVE = Duration.ofMinutes(10);
     private static final Duration SHUTDOWN_TIMEOUT = Duration.ofSeconds(10);
@@ -230,7 +235,8 @@ public final class HistoricalPartitionTaskExecutor implements AutoCloseable {
     /**
      * Rejects queued and new requests and waits for running tasks without interrupting their I/O.
      *
-     * @throws FlussRuntimeException if tasks do not terminate or the wait is interrupted
+     * <p>Timeouts and interrupted waits are logged without throwing so callers can continue closing
+     * other components.
      */
     @Override
     public void close() {
@@ -240,13 +246,17 @@ public final class HistoricalPartitionTaskExecutor implements AutoCloseable {
         // Wait for real task termination, which cancelled request futures do not guarantee.
         try {
             if (!executor.awaitTermination(SHUTDOWN_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)) {
-                throw new FlussRuntimeException(
-                        "Historical partition tasks did not finish within 10 seconds.");
+                LOG.warn(
+                        "Historical partition tasks did not finish within {} seconds. "
+                                + "Continuing shutdown without interrupting running tasks.",
+                        SHUTDOWN_TIMEOUT.getSeconds());
             }
         } catch (InterruptedException e) {
+            LOG.warn(
+                    "Interrupted while waiting for historical partition tasks to finish. "
+                            + "Continuing shutdown without interrupting running tasks.",
+                    e);
             Thread.currentThread().interrupt();
-            throw new FlussRuntimeException(
-                    "Interrupted while waiting for historical partition tasks to finish.", e);
         } finally {
             // CompletableFuture cancellation does not interrupt running tasks.
             pendingRequests.forEach(future -> future.cancel(true));

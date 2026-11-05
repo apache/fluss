@@ -20,7 +20,6 @@ package org.apache.fluss.server.replica.historical;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.ConfigException;
-import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.utils.function.SupplierWithException;
 
 import org.junit.jupiter.api.Test;
@@ -64,8 +63,8 @@ class HistoricalPartitionTaskExecutorTest {
             CompletableFuture<String> request =
                     taskExecutor.submit(() -> "accepted", () -> "throttled");
             try {
-                // Both timeout and interruption must be reported as shutdown failures.
-                assertThatThrownBy(taskExecutor::close).isInstanceOf(FlussRuntimeException.class);
+                // Neither timeout nor interruption should prevent the caller's remaining cleanup.
+                taskExecutor.close();
                 assertThat(request).isCancelled();
                 assertThat(taskExecutor.numInflightRequests()).isZero();
                 assertThat(executor.forcedShutdown).isFalse();
