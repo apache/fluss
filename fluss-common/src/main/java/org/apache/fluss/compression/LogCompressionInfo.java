@@ -20,6 +20,7 @@ package org.apache.fluss.compression;
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.CorruptMessageException;
 import org.apache.fluss.memory.MemorySegment;
 
 import com.github.luben.zstd.Zstd;
@@ -132,6 +133,9 @@ public class LogCompressionInfo {
     /**
      * Decompresses {@code length} bytes of {@code segment} starting at {@code offset} into a new
      * array of {@code uncompressedSize} bytes.
+     *
+     * @throws CorruptMessageException if the compressed bytes are invalid or don't decompress to
+     *     exactly {@code uncompressedSize} bytes
      */
     public static byte[] decompress(
             LogCompressionType type,
@@ -144,23 +148,28 @@ public class LogCompressionInfo {
         switch (type) {
             case ZSTD:
                 long read;
-                if (src.hasArray()) {
-                    read =
-                            Zstd.decompressByteArray(
-                                    dst,
-                                    0,
-                                    dst.length,
-                                    src.array(),
-                                    src.arrayOffset() + src.position(),
-                                    length);
-                } else {
-                    // zstd-jni only decompresses a direct buffer into a direct buffer
-                    byte[] heapSrc = new byte[length];
-                    src.get(heapSrc);
-                    read = Zstd.decompressByteArray(dst, 0, dst.length, heapSrc, 0, length);
+                try {
+                    if (src.hasArray()) {
+                        read =
+                                Zstd.decompressByteArray(
+                                        dst,
+                                        0,
+                                        dst.length,
+                                        src.array(),
+                                        src.arrayOffset() + src.position(),
+                                        length);
+                    } else {
+                        // zstd-jni only decompresses a direct buffer into a direct buffer
+                        byte[] heapSrc = new byte[length];
+                        src.get(heapSrc);
+                        read = Zstd.decompressByteArray(dst, 0, dst.length, heapSrc, 0, length);
+                    }
+                } catch (ZstdException e) {
+                    // zstd-jni reports some errors (e.g. an invalid frame) by throwing
+                    throw new CorruptMessageException("ZSTD decompression failed", e);
                 }
                 if (Zstd.isError(read) || read != uncompressedSize) {
-                    throw new IllegalStateException(
+                    throw new CorruptMessageException(
                             "ZSTD decompression failed: "
                                     + (Zstd.isError(read) ? Zstd.getErrorName(read) : read));
                 }
@@ -171,14 +180,14 @@ public class LogCompressionInfo {
                     while (pos < uncompressedSize) {
                         int n = lz4.read(dst, pos, uncompressedSize - pos);
                         if (n < 0) {
-                            throw new IllegalStateException(
+                            throw new CorruptMessageException(
                                     "LZ4 stream ended after " + pos + " bytes");
                         }
                         pos += n;
                     }
                     return dst;
                 } catch (IOException e) {
-                    throw new UncheckedIOException("LZ4 decompression failed", e);
+                    throw new CorruptMessageException("LZ4 decompression failed", e);
                 }
             default:
                 throw new IllegalArgumentException("Unsupported compression type: " + type);

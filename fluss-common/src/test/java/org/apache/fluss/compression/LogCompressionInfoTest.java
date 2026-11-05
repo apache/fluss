@@ -19,6 +19,7 @@ package org.apache.fluss.compression;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.CorruptMessageException;
 import org.apache.fluss.memory.MemorySegment;
 
 import org.junit.jupiter.api.Test;
@@ -110,6 +111,43 @@ class LogCompressionInfoTest {
         byte[] out = new byte[raw.length];
         // random bytes don't compress, so the output can't fit into fewer bytes than the input
         assertThat(info.compress(raw, 0, raw.length, out, 0, raw.length - 1)).isEqualTo(-1);
+    }
+
+    @ParameterizedTest
+    @EnumSource(
+            value = LogCompressionType.class,
+            names = {"LZ4_FRAME", "ZSTD"})
+    void testDecompressCorruptInput(LogCompressionType type) {
+        byte[] raw = new byte[4096];
+        LogCompressionInfo info =
+                new LogCompressionInfo(type, type == LogCompressionType.ZSTD ? 3 : -1);
+        byte[] out = new byte[raw.length];
+        int compressedLength = info.compress(raw, 0, raw.length, out, 0, raw.length);
+        assertThat(compressedLength).isPositive();
+
+        // valid compressed bytes, but the batch claims a different uncompressed size
+        assertThatThrownBy(
+                        () ->
+                                LogCompressionInfo.decompress(
+                                        type,
+                                        MemorySegment.wrap(out),
+                                        0,
+                                        compressedLength,
+                                        raw.length + 1))
+                .isInstanceOf(CorruptMessageException.class);
+
+        // bytes that are not a valid compressed stream
+        byte[] garbage = new byte[64];
+        new Random(7).nextBytes(garbage);
+        assertThatThrownBy(
+                        () ->
+                                LogCompressionInfo.decompress(
+                                        type,
+                                        MemorySegment.wrap(garbage),
+                                        0,
+                                        garbage.length,
+                                        raw.length))
+                .isInstanceOf(CorruptMessageException.class);
     }
 
     @Test
