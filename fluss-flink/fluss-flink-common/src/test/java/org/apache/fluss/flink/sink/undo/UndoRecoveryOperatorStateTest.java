@@ -144,6 +144,45 @@ public class UndoRecoveryOperatorStateTest extends FlinkTestBase {
         }
     }
 
+    @Test
+    void testCheckpointAfterUndoAdvancesIdleBucketBaseline() throws Exception {
+        AggTable table = createAggTable("idle_after_undo", 1);
+        UpsertResult committedWrite = upsert(table.tablePath, 1, 10L);
+        TableBucket bucket = committedWrite.getBucket();
+        OperatorSubtaskState checkpoint;
+        try (StateOperatorHarness seed =
+                new StateOperatorHarness(
+                        new StateSeedOperator(
+                                WriterState.complete(
+                                        table.tableId,
+                                        Collections.singletonMap(
+                                                bucket, committedWrite.getLogEndOffset()))))) {
+            seed.open();
+            checkpoint = seed.snapshot(1L, 1L);
+        }
+
+        upsert(table.tablePath, 1, 7L);
+        String producerId = uniqueProducerId("idle-after-undo");
+        OperatorSubtaskState recoveredCheckpoint;
+        long recoveredOffset;
+        try (UndoOperatorHarness recovering = createHarness(table, producerId)) {
+            recovering.initializeState(checkpoint);
+            recovering.open();
+            assertThat(lookupValue(table.tablePath, 1)).isEqualTo(10L);
+            recoveredOffset = latestOffset(table.tablePath, bucket);
+            assertThat(recovering.getBucketOffsets()).containsEntry(bucket, recoveredOffset);
+            recoveredCheckpoint = recovering.snapshot(2L, 2L);
+        }
+
+        try (UndoOperatorHarness restored = createHarness(table, producerId)) {
+            restored.initializeState(recoveredCheckpoint);
+            restored.open();
+            assertThat(restored.getBucketOffsets()).containsEntry(bucket, recoveredOffset);
+            assertThat(latestOffset(table.tablePath, bucket)).isEqualTo(recoveredOffset);
+            assertThat(lookupValue(table.tablePath, 1)).isEqualTo(10L);
+        }
+    }
+
     private AggTable createAggTable(String prefix, int numBuckets) throws Exception {
         TablePath tablePath =
                 TablePath.of(DEFAULT_DB, prefix + "_" + TABLE_SEQUENCE.incrementAndGet());
