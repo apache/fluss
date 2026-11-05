@@ -1065,6 +1065,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
                 ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key(), lakeTablePath.getTableName());
 
         long tableId = createPkTable(tablePath, tableProperties, Collections.emptyMap());
+        FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId);
         TableBucket tableBucket = new TableBucket(tableId, 0);
 
         List<InternalRow> initialRows = Arrays.asList(row(1, "v1"), row(2, "v2"));
