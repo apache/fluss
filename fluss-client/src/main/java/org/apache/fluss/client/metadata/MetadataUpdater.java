@@ -175,24 +175,39 @@ public class MetadataUpdater {
         }
     }
 
-    /** Merges the table mapping from an Admin response without requesting metadata again. */
+    /**
+     * Merges the table mapping from an Admin response without requesting metadata again,
+     * invalidating cached routing if the table has been replaced.
+     */
     public void ensureTableMapping(TableInfo tableInfo) {
         synchronized (this) {
-            if (cluster.getTableId(tableInfo.getTablePath())
-                    .filter(id -> id == tableInfo.getTableId())
-                    .isPresent()) {
+            Cluster currentCluster = cluster;
+            TablePath tablePath = tableInfo.getTablePath();
+            Optional<Long> currentTableId = currentCluster.getTableId(tablePath);
+            if (currentTableId.filter(id -> id == tableInfo.getTableId()).isPresent()) {
                 return;
             }
-            Map<TablePath, Long> tableIds = new HashMap<>(cluster.getTableIdByPath());
-            tableIds.put(tableInfo.getTablePath(), tableInfo.getTableId());
+            if (currentTableId.isPresent()) {
+                Set<PhysicalTablePath> pathsToInvalidate =
+                        new HashSet<>(currentCluster.getBucketLocationsByPath().keySet());
+                pathsToInvalidate.addAll(currentCluster.getPartitionIdByPath().keySet());
+                pathsToInvalidate.removeIf(path -> !path.getTablePath().equals(tablePath));
+                pathsToInvalidate.add(PhysicalTablePath.of(tablePath));
+                currentCluster =
+                        currentCluster.invalidPhysicalTableBucketAndPartitionMeta(
+                                pathsToInvalidate);
+            }
+            Map<TablePath, Long> tableIds = new HashMap<>(currentCluster.getTableIdByPath());
+            tableIds.put(tablePath, tableInfo.getTableId());
             cluster =
                     new Cluster(
-                            new HashMap<>(cluster.getAliveTabletServers()),
-                            cluster.getCoordinatorServer(),
-                            new HashMap<>(cluster.getBucketLocationsByPath()),
+                            new HashMap<>(currentCluster.getAliveTabletServers()),
+                            currentCluster.getCoordinatorServer(),
+                            new HashMap<>(currentCluster.getBucketLocationsByPath()),
                             tableIds,
-                            new HashMap<>(cluster.getPartitionIdByPath()),
-                            new HashMap<>(cluster.getBucketCountByTableOrPartition()));
+                            new HashMap<>(currentCluster.getPartitionIdByPath()),
+                            new HashMap<>(currentCluster.getBucketCountByTableOrPartition()),
+                            new HashMap<>(currentCluster.getBucketCountEpochByTableId()));
         }
     }
 
