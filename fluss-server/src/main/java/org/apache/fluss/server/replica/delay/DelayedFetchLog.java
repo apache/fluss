@@ -126,11 +126,22 @@ public class DelayedFetchLog extends DelayedOperation {
             FetchBucketStatus fetchBucketStatus = entry.getValue();
             LogOffsetMetadata fetchOffset = fetchBucketStatus.startOffsetMetadata;
             try {
+                if (!params.isFromFollower()
+                        && !fetchBucketStatus.previousFetchLogResultForBucket.fetchFromRemote()
+                        && fetchOffset == LogOffsetMetadata.UNKNOWN_OFFSET_METADATA) {
+                    Replica replica = replicaManager.getReplicaOrException(tb);
+                    // A remote-only range blocked by sync progress has no local offset metadata.
+                    if (replica.requiresSyncIndexVisibility()
+                            && replica.getClientLogHighWatermark()
+                                    > fetchBucketStatus.previousFetchLogResultForBucket
+                                            .getHighWatermark()) {
+                        return forceComplete();
+                    }
+                }
                 if (!fetchBucketStatus.previousFetchLogResultForBucket.fetchFromRemote()
                         && fetchOffset != LogOffsetMetadata.UNKNOWN_OFFSET_METADATA) {
                     Replica replica = replicaManager.getReplicaOrException(tb);
-                    LogOffsetSnapshot logOffsetSnapshot =
-                            replica.fetchOffsetSnapshot(params.fetchOnlyLeader());
+                    LogOffsetSnapshot logOffsetSnapshot = replica.fetchOffsetSnapshot(params);
                     LogOffsetMetadata endOffset;
                     if (params.isolation() == FetchIsolation.LOG_END) {
                         endOffset = logOffsetSnapshot.logEndOffset;
@@ -138,6 +149,12 @@ public class DelayedFetchLog extends DelayedOperation {
                         endOffset = logOffsetSnapshot.highWatermark;
                     } else {
                         throw new FlussRuntimeException("Unknown fetch isolation.");
+                    }
+
+                    if (!params.isFromFollower()
+                            && replica.requiresSyncIndexVisibility()
+                            && endOffset.getMessageOffset() <= fetchOffset.getMessageOffset()) {
+                        continue;
                     }
 
                     // Go directly to the check for Case E if the log offsets are the same. If

@@ -18,7 +18,7 @@
 use crate::rpc::api_key::ApiKey;
 use crate::rpc::frame::{ReadError, WriteError};
 use crate::rpc::message::{ReadType, RequestBody, WriteType};
-use crate::{PartitionId, TableId, impl_read_type, impl_write_type, proto};
+use crate::{impl_read_type, impl_write_type, proto, PartitionId, TableId};
 use bytes::{Buf, BufMut};
 use prost::Message;
 
@@ -33,8 +33,14 @@ impl ListKvSnapshotsRequest {
             inner_request: proto::ListKvSnapshotsRequest {
                 table_id,
                 partition_id,
+                include_log_offsets: None,
             },
         }
+    }
+
+    pub(crate) fn with_log_offsets(mut self) -> Self {
+        self.inner_request.include_log_offsets = Some(true);
+        self
     }
 }
 

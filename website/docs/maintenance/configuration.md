@@ -302,6 +302,36 @@ This behavior requires upgrading the Java client or the connector that bundles i
 It uses the existing server error code and requires no server protocol upgrade.
 The per-bucket backoff does not impose a cluster-wide bandwidth limit.
 
+## Secondary Index Lookup
+
+| Key | Default | Type | Description |
+|---|---|---|---|
+| `client.lookup.secondary-index.max-candidates` | `1024` | Integer | Maximum first-hop candidates per secondary-index lookup, before deduplication and main-table validation. Must be positive. Overflow fails the query without returning partial results. Ordinary lookups are unaffected. |
+
+Configure this option before creating the Java connection, or set it in Flink table options. It applies to secondary-index lookups made through that connection. Limited queries require TabletServers supporting `PREFIX_LOOKUP` version 2; the client fails the query if an older protocol is negotiated rather than silently dropping the bound.
+
+## Index Replication
+
+These TabletServer options control maintenance of [secondary indexes](../table-design/secondary-indexes.md).
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| index.replication.reader.threads | Integer | 8 | Number of reader workers that read and convert committed main-table WAL. Must be positive. |
+| index.replication.source.max-bytes | MemorySize | 2mb | Preferred maximum source WAL bytes read per replication window. The first complete log record batch may exceed this limit to ensure progress. Independent of the encoded request target size. Must be between 1 and 2147483647 bytes. |
+| index.replication.sender.threads | Integer | 2 | Number of sender workers that dispatch index batches. Must be positive. |
+| index.replication.request.target-bytes | MemorySize | 1mb | Preferred encoded payload size for aggregated RPC requests. Complete target batches may exceed this soft target. Must be positive. |
+| index.replication.buffer.max-bytes-per-main-bucket | MemorySize | 64mb | Soft backpressure threshold per leader main-table bucket. A complete window may exceed this threshold. Must be positive. |
+| index.replication.buffer.max-bytes | MemorySize | 512mb | Maximum retained index payload page bytes across one TabletServer, including construction, queued and in-flight batches. Source reads and temporary encoding objects are not included. Must be positive. |
+| index.replication.retry.backoff | Duration | 100ms | Base backoff before retrying source reads, window construction or batch sends. Must be positive and no greater than 10 seconds. |
+
+Source and index failures retain the replication task and its progress. Retries use exponential backoff with a multiplier of 2, 20% jitter and a maximum interval of 10 seconds. Failures are reported through ERROR logs and failure metrics until an administrator repairs the fault or adjusts the constraints. These options are captured when the replication components are constructed. Changed limits require recreating the affected components, such as by a rolling restart.
+
+A failed index window yields its staged payload and buffer accounting when its continuous failure duration plus the next backoff reaches a 10-second soft retention target. Retry state and replay boundaries survive yielding. After backoff, the task competes for buffer capacity and rebuilds the window from retained WAL. Only a fully acknowledged window advances source progress and resets that index's retry state. Capacity competition during construction releases the abandoned payload and waits for another capacity opportunity.
+
+The buffer budget accounts for payload pages owned by index replication, including construction, queued and active in-flight batches. RPC request references and transport buffers have their own lifecycle.
+
+The client option `client.lookup.continuation-threads` (Integer, default `4`) controls how many threads per connection continue secondary-index lookups after index candidates are returned. It must be positive.
+
 ## Metrics
 
 More metrics example could be found in [Observability - Metric Reporters](observability/metric-reporters.md).

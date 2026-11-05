@@ -26,6 +26,7 @@ import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.metadata.AggFunction;
 import org.apache.fluss.metadata.AggFunctionType;
 import org.apache.fluss.metadata.AggFunctions;
+import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.Schema;
@@ -41,6 +42,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.Collections;
 import java.util.HashMap;
@@ -53,6 +55,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for {@link TableDescriptorValidation}. */
 class TableDescriptorValidationTest {
+
+    private static final String INDEX_NAME = "idx_user";
 
     @Test
     void testSkipUnchangedUpsertsWithDefaultMergeBehavior() {
@@ -173,6 +177,33 @@ class TableDescriptorValidationTest {
                 .isInstanceOf(InvalidTableException.class)
                 .hasMessageContaining(ConfigOptions.TABLE_KV_TTL.key())
                 .hasMessageContaining("primary key");
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testKvTTLRejectsSecondaryIndexes(boolean eventTime) {
+        TableDescriptor.Builder builder =
+                TableDescriptor.builder()
+                        .schema(indexedSchema())
+                        .distributedBy(3)
+                        .property(ConfigOptions.TABLE_REPLICATION_FACTOR, 3)
+                        .property(ConfigOptions.TABLE_CHANGELOG_IMAGE, ChangelogImage.FULL)
+                        .property(
+                                ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION,
+                                KvValueLayout.TAGGED.version())
+                        .property(ConfigOptions.TABLE_KV_TTL.key(), "1 h");
+        if (eventTime) {
+            builder.property(ConfigOptions.TABLE_KV_TTL_TIME_COLUMN.key(), "user_id");
+        }
+        TableDescriptor descriptor = builder.build();
+
+        assertThatThrownBy(
+                        () ->
+                                TableDescriptorValidation.validateTableDescriptor(
+                                        descriptor, 100, null))
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining(ConfigOptions.TABLE_KV_TTL.key())
+                .hasMessageContaining("secondary indexes");
     }
 
     @ParameterizedTest
@@ -567,5 +598,165 @@ class TableDescriptorValidationTest {
                 "file://remote",
                 1L,
                 1L);
+    }
+
+    // -------------------------------------------------------------------------
+    // validateIndexSafeSchemaEvolution
+    // -------------------------------------------------------------------------
+
+    /** Baseline: PK (id), index on user_id, one unrelated trailing column info. */
+    private static Schema indexedSchema() {
+        return Schema.newBuilder()
+                .column("id", DataTypes.BIGINT())
+                .column("user_id", DataTypes.BIGINT())
+                .column("info", DataTypes.STRING())
+                .primaryKey("id")
+                .index(INDEX_NAME, "user_id")
+                .build();
+    }
+
+    @Test
+    void testAddColumnAtLastIsIndexSafe() {
+        Schema oldSchema = indexedSchema();
+        Schema newSchema =
+                Schema.newBuilder()
+                        .fromSchema(oldSchema)
+                        .column("extra", DataTypes.STRING())
+                        .build();
+
+        assertThatCode(
+                        () ->
+                                TableDescriptorValidation.validateIndexSafeSchemaEvolution(
+                                        oldSchema, newSchema))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void testUnchangedSchemaIsIndexSafe() {
+        Schema schema = indexedSchema();
+
+        assertThatCode(
+                        () ->
+                                TableDescriptorValidation.validateIndexSafeSchemaEvolution(
+                                        schema, schema))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void testRemovedIndexColumnIsRejected() {
+        Schema oldSchema = indexedSchema();
+        // Schema.Builder does not validate that index columns exist, so a schema whose
+        // index references a missing column is constructible (this is exactly the outcome
+        // a future DROP COLUMN of an indexed column would produce).
+        Schema newSchema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.BIGINT())
+                        .column("info", DataTypes.STRING())
+                        .primaryKey("id")
+                        .index(INDEX_NAME, "user_id")
+                        .build();
+
+        assertThatThrownBy(
+                        () ->
+                                TableDescriptorValidation.validateIndexSafeSchemaEvolution(
+                                        oldSchema, newSchema))
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining("removed or renamed")
+                .hasMessageContaining("[user_id]");
+    }
+
+    @Test
+    void testRemovedPrimaryKeyColumnIsRejected() {
+        Schema oldSchema = indexedSchema();
+        Schema newSchema =
+                Schema.newBuilder()
+                        .column("user_id", DataTypes.BIGINT())
+                        .column("info", DataTypes.STRING())
+                        .index(INDEX_NAME, "user_id")
+                        .build();
+
+        assertThatThrownBy(
+                        () ->
+                                TableDescriptorValidation.validateIndexSafeSchemaEvolution(
+                                        oldSchema, newSchema))
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining("removed or renamed")
+                .hasMessageContaining("[id]");
+    }
+
+    @Test
+    void testChangedIndexColumnTypeIsRejected() {
+        Schema oldSchema = indexedSchema();
+        Schema newSchema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.BIGINT())
+                        .column("user_id", DataTypes.STRING())
+                        .column("info", DataTypes.STRING())
+                        .primaryKey("id")
+                        .index(INDEX_NAME, "user_id")
+                        .build();
+
+        assertThatThrownBy(
+                        () ->
+                                TableDescriptorValidation.validateIndexSafeSchemaEvolution(
+                                        oldSchema, newSchema))
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining("changed type")
+                .hasMessageContaining("[user_id]");
+    }
+
+    @Test
+    void testShiftedKeyColumnPositionIsRejected() {
+        Schema oldSchema = indexedSchema();
+        // Same column set, reordered: both user_id (1 -> 0) and id (0 -> 1) shifted.
+        Schema newSchema =
+                Schema.newBuilder()
+                        .column("user_id", DataTypes.BIGINT())
+                        .column("id", DataTypes.BIGINT())
+                        .column("info", DataTypes.STRING())
+                        .primaryKey("id")
+                        .index(INDEX_NAME, "user_id")
+                        .build();
+
+        assertThatThrownBy(
+                        () ->
+                                TableDescriptorValidation.validateIndexSafeSchemaEvolution(
+                                        oldSchema, newSchema))
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining("shifted position")
+                .hasMessageContaining("user_id")
+                .hasMessageContaining("id");
+    }
+
+    @Test
+    void testDroppedTrailingNonKeyColumnIsIndexSafe() {
+        Schema oldSchema = indexedSchema();
+        // Dropping the trailing non-key column keeps positions of id/user_id unchanged.
+        Schema newSchema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.BIGINT())
+                        .column("user_id", DataTypes.BIGINT())
+                        .primaryKey("id")
+                        .index(INDEX_NAME, "user_id")
+                        .build();
+
+        assertThatCode(
+                        () ->
+                                TableDescriptorValidation.validateIndexSafeSchemaEvolution(
+                                        oldSchema, newSchema))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void testNoIndexSchemaAlwaysPasses() {
+        Schema oldSchema =
+                Schema.newBuilder().column("id", DataTypes.BIGINT()).primaryKey("id").build();
+        Schema newSchema = Schema.newBuilder().column("info", DataTypes.STRING()).build();
+
+        assertThatCode(
+                        () ->
+                                TableDescriptorValidation.validateIndexSafeSchemaEvolution(
+                                        oldSchema, newSchema))
+                .doesNotThrowAnyException();
     }
 }

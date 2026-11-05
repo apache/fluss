@@ -20,6 +20,7 @@ package org.apache.fluss.server.coordinator;
 import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
@@ -47,9 +48,68 @@ import java.util.Set;
 import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_ENABLED;
 import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link CoordinatorContext}. */
 class CoordinatorContextTest {
+
+    @Test
+    void testIndexCreationRequiresSupportFromEveryLiveRegistration() {
+        CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
+        ServerInfo first = indexServer(1);
+        ServerInfo second = indexServer(2);
+        context.setLiveTabletServers(Arrays.asList(first, second));
+
+        assertThatThrownBy(context::checkIndexTableCreationSupported)
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining("[1, 2]");
+        context.updateTabletServerIndexSupport(first, true);
+        context.updateTabletServerIndexSupport(second, false);
+        assertThatThrownBy(context::checkIndexTableCreationSupported).hasMessageContaining("[2]");
+        context.removeLiveTabletServer(second.id());
+        context.checkIndexTableCreationSupported();
+        context.addLiveTabletServer(second);
+        assertThatThrownBy(context::checkIndexTableCreationSupported).hasMessageContaining("[2]");
+        context.updateTabletServerIndexSupport(second, true);
+        context.checkIndexTableCreationSupported();
+    }
+
+    @Test
+    void testLateApiVersionsCannotApproveAnotherRegistration() {
+        CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
+        ServerInfo previous = indexServer(1);
+        ServerInfo current = indexServer(1);
+        context.addLiveTabletServer(previous);
+        context.removeLiveTabletServer(1);
+        context.updateTabletServerIndexSupport(previous, true);
+        context.addLiveTabletServer(current);
+        context.updateTabletServerIndexSupport(previous, true);
+        assertThatThrownBy(context::checkIndexTableCreationSupported).hasMessageContaining("[1]");
+        context.updateTabletServerIndexSupport(current, true);
+        context.updateTabletServerIndexSupport(previous, false);
+        context.checkIndexTableCreationSupported();
+    }
+
+    @Test
+    void testCoordinatorReloadDoesNotReuseApiVersions() {
+        CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
+        ServerInfo server = indexServer(1);
+        context.setLiveTabletServers(Collections.singletonList(server));
+        context.updateTabletServerIndexSupport(server, true);
+        context.checkIndexTableCreationSupported();
+        context.resetContext();
+        context.setLiveTabletServers(Collections.singletonList(indexServer(1)));
+        context.updateTabletServerIndexSupport(server, true);
+        assertThatThrownBy(context::checkIndexTableCreationSupported).hasMessageContaining("[1]");
+    }
+
+    private static ServerInfo indexServer(int id) {
+        return new ServerInfo(
+                id,
+                null,
+                Collections.singletonList(new Endpoint("localhost", 9000 + id, "FLUSS")),
+                ServerType.TABLET_SERVER);
+    }
 
     @Test
     void testCoordinatorStandbysExcludeActiveCoordinator() {
@@ -130,6 +190,20 @@ class CoordinatorContextTest {
 
         context.resetContext();
         assertThat(context.getKvBucketCount()).isZero();
+    }
+
+    @Test
+    void testRemovingOldTableKeepsSameNameReplacementMapping() {
+        CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
+        TablePath tablePath = TablePath.of("db", "table");
+
+        context.putTablePath(1L, tablePath);
+        context.putTablePath(2L, tablePath);
+        context.removeTable(1L);
+
+        assertThat(context.getTablePathById(1L)).isNull();
+        assertThat(context.getTablePathById(2L)).isEqualTo(tablePath);
+        assertThat(context.getTableIdByPath(tablePath)).isEqualTo(2L);
     }
 
     @Test

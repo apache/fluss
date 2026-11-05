@@ -32,20 +32,20 @@ import org.apache.fluss.row.encode.KeyEncoder;
 import org.apache.fluss.types.RowType;
 
 import javax.annotation.Nullable;
-import javax.annotation.concurrent.NotThreadSafe;
+import javax.annotation.concurrent.ThreadSafe;
 
 import java.time.Instant;
 import java.util.Collections;
-import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.apache.fluss.utils.PartitionUtils.isPastAutoPartition;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /** An implementation of {@link Lookuper} that lookups by primary key. */
-@NotThreadSafe
+@ThreadSafe
 class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
 
     private final KeyEncoder primaryKeyEncoder;
@@ -88,7 +88,7 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
                 tableInfo.getTablePath());
         this.numBuckets = tableInfo.getNumBuckets();
         this.insertIfNotExists = insertIfNotExists;
-        this.confirmedHistoricalPartitions = new HashSet<>();
+        this.confirmedHistoricalPartitions = ConcurrentHashMap.newKeySet();
 
         // the row type of the input lookup row
         RowType lookupRowType = tableInfo.getRowType().project(tableInfo.getPrimaryKeys());

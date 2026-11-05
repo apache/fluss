@@ -43,6 +43,7 @@ import org.apache.fluss.rpc.messages.LookupRequest;
 import org.apache.fluss.rpc.messages.PbApiVersion;
 import org.apache.fluss.rpc.messages.PbLookupReqForBucket;
 import org.apache.fluss.rpc.messages.PbTablePath;
+import org.apache.fluss.rpc.messages.PrefixLookupRequest;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.ProduceLogResponse;
 import org.apache.fluss.rpc.messages.PutKvRequest;
@@ -294,6 +295,36 @@ public class ServerConnectionTest {
                                         .get())
                 .rootCause()
                 .isInstanceOf(DisconnectException.class);
+    }
+
+    @Test
+    void testLimitedPrefixLookupRequiresVersionTwo() throws Exception {
+        ServerConnection connection =
+                new ServerConnection(
+                        bootstrap,
+                        serverNode,
+                        TestingClientMetricGroup.newInstance(),
+                        clientAuthenticator,
+                        (con, ignore) -> {});
+        try {
+            PrefixLookupRequest request = new PrefixLookupRequest().setTableId(1);
+            for (short version = 0; version < 2; version++) {
+                connection.validateVersionCompatibility(ApiKeys.PREFIX_LOOKUP, version, request);
+            }
+            request.setLimit(2).setFailOnLimitExceeded(true);
+            for (short version = 0; version < 2; version++) {
+                final short oldVersion = version;
+                assertThatThrownBy(
+                                () ->
+                                        connection.validateVersionCompatibility(
+                                                ApiKeys.PREFIX_LOOKUP, oldVersion, request))
+                        .isInstanceOf(UnsupportedVersionException.class)
+                        .hasMessageContaining("PREFIX_LOOKUP version 2");
+            }
+            connection.validateVersionCompatibility(ApiKeys.PREFIX_LOOKUP, (short) 2, request);
+        } finally {
+            connection.close().get();
+        }
     }
 
     @Test

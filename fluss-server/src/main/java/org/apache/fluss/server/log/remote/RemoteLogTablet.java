@@ -149,20 +149,18 @@ public class RemoteLogTablet {
     }
 
     /**
-     * Returns the expired segments based on the given time and lake log end offset.
+     * Returns expired segments whose exclusive end offset does not exceed the deletion boundary.
      *
-     * <p>Only segments that have been tiered to lake (i.e., remoteLogEndOffset <= lakeLogEndOffset)
-     * can be safely deleted. This ensures that we don't delete segments that haven't been tiered to
-     * lake yet.
+     * <p>The caller combines lake-tiering and committed index-recovery progress into this boundary.
      *
      * @param currentTimeMs the current time in milliseconds
-     * @param lakeLogEndOffset the log end offset that has been synced to lake, null if data lake is
-     *     disabled
+     * @param maxDeleteOffset the exclusive offset up to which logs may be deleted, or {@link
+     *     Long#MAX_VALUE} if only TTL constrains deletion
      * @param ttlMs the current table log TTL in milliseconds
      * @return list of expired segments that can be safely deleted
      */
     public List<RemoteLogSegment> expiredRemoteLogSegments(
-            long currentTimeMs, Long lakeLogEndOffset, long ttlMs) {
+            long currentTimeMs, long maxDeleteOffset, long ttlMs) {
         if (ttlMs <= 0) {
             return Collections.emptyList();
         }
@@ -176,13 +174,7 @@ public class RemoteLogTablet {
                         if (currentTimeMs - ts > ttlMs) {
                             for (UUID uuid : entry.getValue()) {
                                 RemoteLogSegment segment = idToRemoteLogSegment.get(uuid);
-                                if (lakeLogEndOffset != null) {
-                                    // if datalake is enabled, only include segments that have been
-                                    // tiered to lake.
-                                    if (segment.remoteLogEndOffset() <= lakeLogEndOffset) {
-                                        expiredSegments.add(segment);
-                                    }
-                                } else {
+                                if (segment.remoteLogEndOffset() <= maxDeleteOffset) {
                                     expiredSegments.add(segment);
                                 }
                             }

@@ -19,6 +19,7 @@ package org.apache.fluss.server.kv.rocksdb;
 
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.LookupLimitExceededException;
 import org.apache.fluss.metrics.Counter;
 import org.apache.fluss.metrics.Histogram;
 import org.apache.fluss.rocksdb.RocksDBOperationUtils;
@@ -348,6 +349,11 @@ public class RocksDBKv implements AutoCloseable {
 
         /** Seeks and collects values from the view fixed when this lookup was opened. */
         public List<byte[]> readAll() throws IOException {
+            return readAll(0, false);
+        }
+
+        /** Collects at most {@code limit} candidates; zero preserves unlimited reads. */
+        public List<byte[]> readAll(int limit, boolean failOnLimitExceeded) throws IOException {
             if (closed) {
                 throw new IOException("Prefix lookup is closed.");
             }
@@ -355,7 +361,14 @@ public class RocksDBKv implements AutoCloseable {
             try {
                 iterator.seek(prefixKey);
                 while (iterator.isValid()) {
+                    if (limit > 0 && values.size() == limit) {
+                        throw new LookupLimitExceededException(
+                                "Prefix lookup exceeded the candidate limit of " + limit + '.');
+                    }
                     values.add(iterator.value());
+                    if (limit > 0 && values.size() == limit && !failOnLimitExceeded) {
+                        break;
+                    }
                     iterator.next();
                 }
             } catch (RuntimeException e) {

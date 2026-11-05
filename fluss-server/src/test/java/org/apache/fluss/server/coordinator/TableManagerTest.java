@@ -19,6 +19,7 @@ package org.apache.fluss.server.coordinator;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableBucket;
@@ -97,6 +98,7 @@ class TableManagerTest {
     private ReplicaCapacityController replicaCapacityController;
     private TableManager tableManager;
     private TableLifecycleThrottler lifecycleThrottler;
+    private MetadataManager metadataManager;
     private TestingEventManager testingEventManager;
     private TestCoordinatorChannelManager testCoordinatorChannelManager;
 
@@ -147,7 +149,7 @@ class TableManagerTest {
         TableBucketStateMachine tableBucketStateMachine =
                 new TableBucketStateMachine(
                         coordinatorContext, coordinatorRequestBatch, zookeeperClient);
-        MetadataManager metadataManager =
+        metadataManager =
                 new MetadataManager(
                         zookeeperClient,
                         new Configuration(),
@@ -392,9 +394,16 @@ class TableManagerTest {
     @Test
     void testCreateAndDropPartition() throws Exception {
         // create a table
-        long tableId = zookeeperClient.getTableIdAndIncrement();
         TableAssignment assignment = TableAssignment.builder().build();
-        zookeeperClient.registerTableAssignment(tableId, assignment);
+        metadataManager.createDatabase(
+                DATA1_TABLE_PATH.getDatabaseName(), DatabaseDescriptor.EMPTY, true);
+        long tableId =
+                metadataManager.createTable(
+                        DATA1_TABLE_PATH,
+                        zookeeperClient.getDefaultRemoteDataDir(),
+                        DATA1_TABLE_DESCRIPTOR,
+                        assignment,
+                        false);
 
         coordinatorContext.putTableInfo(
                 TableInfo.of(
