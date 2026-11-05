@@ -250,7 +250,11 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                     .put(
                             partitionName,
                             new PartitionMetadata(
-                                    tableId, partitionName, partitionId, bucketMetadataList, bucketCount));
+                                    tableId,
+                                    partitionName,
+                                    partitionId,
+                                    bucketMetadataList,
+                                    bucketCount));
         }
 
         Map<PhysicalTablePath, PartitionMetadata> result = new HashMap<>();

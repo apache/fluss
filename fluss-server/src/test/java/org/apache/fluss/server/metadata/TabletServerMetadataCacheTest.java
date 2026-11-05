@@ -643,7 +643,11 @@ public class TabletServerMetadataCacheTest {
                 new TableMetadata(partitionTableInfo, Collections.emptyList()));
         serverMetadataCache.updatePartitionMetadata(
                 new PartitionMetadata(
-                        partitionTableId, partitionName1, partitionId1, initialBucketMetadata));
+                        partitionTableId,
+                        partitionName1,
+                        partitionId1,
+                        initialBucketMetadata,
+                        initialBucketMetadata.size()));
 
         // Then: the dropped table's partition must not be served
         assertThat(serverMetadataCache.getPartitionMetadata(partitionPath)).isEmpty();
@@ -674,16 +678,28 @@ public class TabletServerMetadataCacheTest {
                 new TableMetadata(partitionTableInfo, Collections.emptyList()));
         serverMetadataCache.updatePartitionMetadata(
                 new PartitionMetadata(
-                        partitionTableId, partitionName1, partitionId1, initialBucketMetadata));
+                        partitionTableId,
+                        partitionName1,
+                        partitionId1,
+                        initialBucketMetadata,
+                        initialBucketMetadata.size()));
         serverMetadataCache.updateTableMetadata(
                 new TableMetadata(recreatedTableInfo, Collections.emptyList()));
+        serverMetadataCache.updatePartitionMetadata(
+                new PartitionMetadata(
+                        recreatedTableId,
+                        partitionName1,
+                        partitionId1,
+                        initialBucketMetadata,
+                        initialBucketMetadata.size()));
 
         // Then: the new table id must not be served with the dropped table's partition id
         assertThat(serverMetadataCache.getPartitionMetadata(partitionPath)).isEmpty();
     }
 
-    @Test
-    void testGetPartitionsMetadataReadsRegistrationsOncePerTable() {
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testGetPartitionsMetadataReadsRegistrationsOncePerTable(boolean partialFirstPartition) {
         TestingMetadataManager metadataManager =
                 new TestingMetadataManager(Collections.singletonList(partitionTableInfo));
         serverMetadataCache = new TabletServerMetadataCache(metadataManager);
@@ -696,16 +712,30 @@ public class TabletServerMetadataCacheTest {
                 PhysicalTablePath.of(partitionedTablePath, partitionName2);
         serverMetadataCache.updatePartitionMetadata(
                 new PartitionMetadata(
-                        partitionTableId, partitionName1, partitionId1, initialBucketMetadata));
+                        partitionTableId,
+                        partitionName1,
+                        partitionId1,
+                        partialFirstPartition
+                                ? Collections.singletonList(initialBucketMetadata.get(0))
+                                : initialBucketMetadata,
+                        initialBucketMetadata.size()));
         serverMetadataCache.updatePartitionMetadata(
                 new PartitionMetadata(
-                        partitionTableId, partitionName2, partitionId2, initialBucketMetadata));
+                        partitionTableId,
+                        partitionName2,
+                        partitionId2,
+                        initialBucketMetadata,
+                        initialBucketMetadata.size()));
 
         Map<PhysicalTablePath, PartitionMetadata> partitionsMetadata =
                 serverMetadataCache.getPartitionsMetadata(
                         Arrays.asList(partitionPath1, partitionPath2));
 
-        assertThat(partitionsMetadata).containsOnlyKeys(partitionPath1, partitionPath2);
+        if (partialFirstPartition) {
+            assertThat(partitionsMetadata).containsOnlyKeys(partitionPath2);
+        } else {
+            assertThat(partitionsMetadata).containsOnlyKeys(partitionPath1, partitionPath2);
+        }
         assertThat(partitionsMetadata.get(partitionPath2).getPartitionId()).isEqualTo(partitionId2);
         assertThat(metadataManager.partitionRegistrationReads).isOne();
     }
