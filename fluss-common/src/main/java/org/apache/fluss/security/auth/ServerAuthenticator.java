@@ -96,6 +96,9 @@ public interface ServerAuthenticator extends Closeable {
      */
     FlussPrincipal createPrincipal();
 
+    /** Validates that the authenticated connection session is still valid. */
+    default void validateSession() throws AuthenticationException {}
+
     /** Close the authenticator. */
     default void close() throws IOException {}
 

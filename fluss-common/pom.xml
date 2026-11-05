@@ -51,6 +51,11 @@
             <artifactId>fluss-shaded-jackson</artifactId>
         </dependency>
 
+        <dependency>
+            <groupId>org.bitbucket.b_c</groupId>
+            <artifactId>jose4j</artifactId>
+        </dependency>
+
         <!-- Netty dependencies used for LogRecords -->
         <dependency>
             <groupId>org.apache.fluss</groupId>
