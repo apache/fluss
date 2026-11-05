@@ -113,10 +113,6 @@ final class IndexSpec {
         return indexName;
     }
 
-    IndexVisibility getVisibility() {
-        return visibility;
-    }
-
     boolean isSync() {
         return visibility == IndexVisibility.SYNC;
     }
@@ -127,10 +123,6 @@ final class IndexSpec {
 
     KvFormat getIndexKvFormat() {
         return indexKvFormat;
-    }
-
-    int[] getIdxColumnIndices() {
-        return idxColumnIndices.clone();
     }
 
     IndexEntry encodeEntry(InternalRow row) {

@@ -21,7 +21,6 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.exception.RecordTooLargeException;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.record.bytesview.BytesView;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.PbPutIndexReqForBucket;
 import org.apache.fluss.rpc.messages.PbPutIndexRespForBucket;
@@ -125,7 +124,6 @@ public final class IndexSender implements AutoCloseable {
     private final Set<Integer> creatingTargets = new HashSet<>();
     private volatile LifecyclePhase lifecyclePhase = LifecyclePhase.OPEN;
     private int outstandingAsyncOperations;
-    private long nextTargetGeneration;
 
     /**
      * Creates and starts an index sender.
@@ -212,7 +210,6 @@ public final class IndexSender implements AutoCloseable {
                 return;
             }
             lifecyclePhase = LifecyclePhase.CLOSING;
-            nextTargetGeneration++;
             targetsByServer.clear();
             creatingTargets.clear();
         } finally {
@@ -501,7 +498,7 @@ public final class IndexSender implements AutoCloseable {
                 } else if (failure != null || gateway == null || !leadersCurrent) {
                     addBatchActionsLocked(actions, batches, BatchDisposition.REQUEUE);
                 } else {
-                    target = new TargetContext(serverId, gateway, ++nextTargetGeneration);
+                    target = new TargetContext(serverId, gateway);
                     targetsByServer.put(serverId, target);
                 }
             } finally {
@@ -703,9 +700,7 @@ public final class IndexSender implements AutoCloseable {
     }
 
     private void invalidateTargetLocked(TargetContext target) {
-        if (targetsByServer.remove(target.serverId, target)) {
-            nextTargetGeneration++;
-        }
+        targetsByServer.remove(target.serverId, target);
     }
 
     private void registerAsyncOperationLocked() {
@@ -733,15 +728,10 @@ public final class IndexSender implements AutoCloseable {
     private static final class TargetContext {
         private final int serverId;
         private final TabletServerGateway gateway;
-        /**
-         * Sender-local identity; a new value is allocated only after exact-context invalidation.
-         */
-        private final long generation;
 
-        private TargetContext(int serverId, TabletServerGateway gateway, long generation) {
+        private TargetContext(int serverId, TabletServerGateway gateway) {
             this.serverId = serverId;
             this.gateway = gateway;
-            this.generation = generation;
         }
     }
 
@@ -781,16 +771,8 @@ public final class IndexSender implements AutoCloseable {
                 return;
             }
             try {
-                bucketSizer
-                        .clear()
-                        .setBucketId(batch.targetBucket().getBucket())
-                        .setSourceBucketId(batch.sourceBucket().getBucket())
-                        .setSourceEndOffset(batch.sourceEndOffset())
-                        .setProgressKey(batch.progressKey())
-                        .setRecordsBytesView(batch.encoded());
-                if (batch.sourceBucket().getPartitionId() != null) {
-                    bucketSizer.setSourcePartitionId(batch.sourceBucket().getPartitionId());
-                }
+                bucketSizer.clear();
+                fillBucketRequest(bucketSizer, batch);
                 int bucketBodyBytes = bucketSizer.totalSize();
                 if (bucketBodyBytes < 0) {
                     codecRepresentable = false;
@@ -1098,21 +1080,23 @@ public final class IndexSender implements AutoCloseable {
         long sourceTableId = batches.get(0).sourceBucket().getTableId();
         PutIndexRequest req = newPutIndexRequest(tableId, sourceTableId, (int) requestTimeoutMs);
         for (IndexBatch batch : batches) {
-            BytesView encoded = batch.encoded();
             checkArgument(
                     batch.sourceBucket().getTableId() == sourceTableId,
                     "A PutIndex request cannot mix source tables");
-            PbPutIndexReqForBucket pb =
-                    req.addBucketsReq().setBucketId(batch.targetBucket().getBucket());
-            pb.setSourceBucketId(batch.sourceBucket().getBucket())
-                    .setSourceEndOffset(batch.sourceEndOffset())
-                    .setProgressKey(batch.progressKey());
-            if (batch.sourceBucket().getPartitionId() != null) {
-                pb.setSourcePartitionId(batch.sourceBucket().getPartitionId());
-            }
-            pb.setRecordsBytesView(encoded);
+            fillBucketRequest(req.addBucketsReq(), batch);
         }
         return req;
+    }
+
+    private static void fillBucketRequest(PbPutIndexReqForBucket request, IndexBatch batch) {
+        request.setBucketId(batch.targetBucket().getBucket())
+                .setSourceBucketId(batch.sourceBucket().getBucket())
+                .setSourceEndOffset(batch.sourceEndOffset())
+                .setProgressKey(batch.progressKey())
+                .setRecordsBytesView(batch.encoded());
+        if (batch.sourceBucket().getPartitionId() != null) {
+            request.setSourcePartitionId(batch.sourceBucket().getPartitionId());
+        }
     }
 
     private static PutIndexRequest newPutIndexRequest(

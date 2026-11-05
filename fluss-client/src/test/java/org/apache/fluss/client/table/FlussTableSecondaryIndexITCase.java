@@ -1099,6 +1099,21 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
 
         createTable(tablePath, descriptor, true);
 
+        // Verify schema nullability via admin API
+        TableInfo tableInfo = admin.getTableInfo(tablePath).get();
+        Schema serverSchema = tableInfo.getSchema();
+        RowType rowType = serverSchema.getRowType();
+
+        assertThat(rowType.getField("name").getType().isNullable())
+                .as("Index column 'name' should remain nullable for sparse index")
+                .isTrue();
+        assertThat(rowType.getField("email").getType().isNullable())
+                .as("Index column 'email' should remain nullable for sparse index")
+                .isTrue();
+        assertThat(rowType.getField("id").getType().isNullable())
+                .as("Primary key 'id' should be NOT NULL")
+                .isFalse();
+
         try (Table table = conn.getTable(tablePath)) {
             UpsertWriter upsertWriter = table.newUpsert().createWriter();
 
@@ -1125,6 +1140,16 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
             LookupResult validResult = nameLookuper.lookup(row("ValidName")).get();
             assertThat(validResult.getRowList()).hasSize(1);
             assertThat(validResult.getRowList().get(0).getInt(0)).isEqualTo(4);
+            assertThat(
+                            table.getSecondaryIndexLookuper("idx_email")
+                                    .lookup(row("test1@example.com"))
+                                    .get()
+                                    .getRowList())
+                    .extracting(indexedRow -> indexedRow.getInt(0))
+                    .containsExactly(1);
+            assertThat(nameLookuper.lookup(row("TestName")).get().getRowList())
+                    .extracting(indexedRow -> indexedRow.getInt(0))
+                    .containsExactly(2);
         }
     }
 
@@ -1191,51 +1216,6 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
                     "Alice index entry should be deleted");
             assertThat(nameLookuper.lookup(row("Alice")).get().getRowList()).isEmpty();
         }
-    }
-
-    @Test
-    void testIndexColumnRemainsNullableForSparseIndex() throws Exception {
-        TablePath tablePath = TablePath.of(DB, "test_nullable_idx_col");
-
-        Schema schema =
-                Schema.newBuilder()
-                        .column("id", DataTypes.INT())
-                        .column("name", DataTypes.STRING())
-                        .column("email", DataTypes.STRING())
-                        .primaryKey("id")
-                        .index(
-                                "idx_name",
-                                IndexType.SECONDARY,
-                                Arrays.asList("name"),
-                                IndexVisibility.SYNC,
-                                3)
-                        .index(
-                                "idx_email",
-                                IndexType.SECONDARY,
-                                Arrays.asList("email"),
-                                IndexVisibility.SYNC,
-                                3)
-                        .build();
-
-        TableDescriptor descriptor =
-                TableDescriptor.builder().schema(schema).distributedBy(3, "id").build();
-
-        createTable(tablePath, descriptor, true);
-
-        // Verify schema nullability via admin API
-        TableInfo tableInfo = admin.getTableInfo(tablePath).get();
-        Schema serverSchema = tableInfo.getSchema();
-        RowType rowType = serverSchema.getRowType();
-
-        assertThat(rowType.getField("name").getType().isNullable())
-                .as("Index column 'name' should remain nullable for sparse index")
-                .isTrue();
-        assertThat(rowType.getField("email").getType().isNullable())
-                .as("Index column 'email' should remain nullable for sparse index")
-                .isTrue();
-        assertThat(rowType.getField("id").getType().isNullable())
-                .as("Primary key 'id' should be NOT NULL")
-                .isFalse();
     }
 
     private static TablePath indexTablePath(TablePath mainTablePath, String indexName) {

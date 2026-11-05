@@ -17,7 +17,11 @@
 
 package org.apache.fluss.flink.source.lookup;
 
+import org.apache.fluss.client.lookup.Lookup;
 import org.apache.fluss.client.lookup.LookupType;
+import org.apache.fluss.client.lookup.Lookuper;
+import org.apache.fluss.client.table.Table;
+import org.apache.fluss.flink.utils.FlinkUtils;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.utils.ArrayUtils;
 
@@ -112,6 +116,27 @@ public class LookupNormalizer implements Serializable {
     /** Returns the indexes of the normalized lookup keys. */
     public int[] getLookupKeyIndexes() {
         return lookupKeyIndexes;
+    }
+
+    Lookuper createLookuper(Table table, RowType flinkRowType, boolean insertIfNotExists) {
+        if (lookupType == LookupType.SECONDARY_INDEX_LOOKUP) {
+            RowType lookupKeyRowType = FlinkUtils.projectRowType(flinkRowType, lookupKeyIndexes);
+            List<String> lookupColumns = lookupKeyRowType.getFieldNames();
+            String indexName =
+                    LookupNormalizer.findMatchingSecondaryIndexName(
+                            table.getTableInfo().getSchema(), lookupColumns);
+            return table.getSecondaryIndexLookuper(indexName);
+        } else {
+            Lookup lookup = table.newLookup();
+            if (lookupType == LookupType.PREFIX_LOOKUP) {
+                RowType lookupKeyRowType =
+                        FlinkUtils.projectRowType(flinkRowType, lookupKeyIndexes);
+                lookup = lookup.lookupBy(lookupKeyRowType.getFieldNames());
+            } else if (insertIfNotExists) {
+                lookup = lookup.enableInsertIfNotExists();
+            }
+            return lookup.createLookuper();
+        }
     }
 
     /** Normalize the lookup key row to match the request key and the key fields order. */

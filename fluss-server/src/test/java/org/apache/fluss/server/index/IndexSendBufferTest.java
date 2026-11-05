@@ -129,8 +129,6 @@ class IndexSendBufferTest {
             IndexBatch batch =
                     new IndexBatch(
                             new TableBucket(2L, 0),
-                            owner.sourceBucket(),
-                            1L,
                             new byte[0],
                             new MemorySegmentBytesView(page, 0, 1),
                             4096,
@@ -301,8 +299,6 @@ class IndexSendBufferTest {
     private static IndexBatch batch(IndexReplicator owner, TableBucket target) {
         return new IndexBatch(
                 target,
-                owner.sourceBucket(),
-                1L,
                 new byte[0],
                 new MemorySegmentBytesView(MemorySegment.wrap(new byte[1]), 0, 1),
                 1L,
