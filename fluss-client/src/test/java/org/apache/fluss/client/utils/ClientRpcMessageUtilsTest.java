@@ -21,7 +21,9 @@ import org.apache.fluss.client.write.KvWriteBatch;
 import org.apache.fluss.client.write.ReadyWriteBatch;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.memory.PreAllocatedPagedOutputView;
+import org.apache.fluss.metadata.AggFunctions;
 import org.apache.fluss.metadata.BucketInfo;
+import org.apache.fluss.metadata.ColumnPath;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -31,12 +33,19 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.DescribeBucketsResponse;
 import org.apache.fluss.rpc.messages.ListPartitionInfosResponse;
+import org.apache.fluss.rpc.messages.PbAddNestedField;
 import org.apache.fluss.rpc.messages.PbBucketInfo;
 import org.apache.fluss.rpc.messages.PbKeyValue;
 import org.apache.fluss.rpc.messages.PbPartitionInfo;
 import org.apache.fluss.rpc.messages.PbPartitionSpec;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.protocol.MergeMode;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.Unpooled;
+import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.utils.json.DataTypeJsonSerde;
+import org.apache.fluss.utils.json.JsonSerdeUtils;
 
 import org.junit.jupiter.api.Test;
 
@@ -62,6 +71,69 @@ class ClientRpcMessageUtilsTest {
     private static final long TABLE_ID = DATA1_TABLE_ID_PK;
     private static final int ACKS = 1;
     private static final int TIMEOUT_MS = 30000;
+
+    @Test
+    void testNestedFieldRequestRoundTripPreservesOtherAlterOperations() {
+        DataType nestedType = DataTypes.ROW(DataTypes.FIELD("city", DataTypes.STRING()));
+        AlterTableRequest request =
+                ClientRpcMessageUtils.makeAlterTableRequest(
+                        DATA1_TABLE_PATH_PK,
+                        Arrays.asList(
+                                TableChange.addColumn(
+                                        "total",
+                                        DataTypes.BIGINT(),
+                                        null,
+                                        TableChange.ColumnPosition.last(),
+                                        AggFunctions.SUM()),
+                                TableChange.addNestedField(
+                                        ColumnPath.of("profile"),
+                                        "address",
+                                        nestedType,
+                                        "address comment"),
+                                TableChange.addNestedField(
+                                        ColumnPath.of(
+                                                ColumnPath.Segment.field("items"),
+                                                ColumnPath.Segment.arrayElement(),
+                                                ColumnPath.Segment.mapValue()),
+                                        "value",
+                                        DataTypes.STRING(),
+                                        null),
+                                TableChange.modifyBucketCount(8)),
+                        true);
+        ByteBuf buffer = Unpooled.buffer();
+        try {
+            request.writeTo(buffer);
+            AlterTableRequest decoded = new AlterTableRequest();
+            decoded.parseFrom(buffer, buffer.readableBytes());
+
+            assertThat(decoded.isIgnoreIfNotExists()).isTrue();
+            assertThat(decoded.getTablePath().getTableName())
+                    .isEqualTo(DATA1_TABLE_PATH_PK.getTableName());
+            assertThat(decoded.getModifyBucketCount().getNewBucketCount()).isEqualTo(8);
+            assertThat(decoded.getAddColumnsList()).hasSize(1);
+            assertThat(decoded.getAddColumnsList().get(0).getAggFunctionType()).isEqualTo("sum");
+            assertThat(decoded.getAddNestedFieldsList()).hasSize(2);
+            PbAddNestedField field = decoded.getAddNestedFieldsList().get(0);
+            assertThat(field.getParentPathsList()).hasSize(1);
+            assertThat(field.getParentPathsList().get(0).getSegmentType()).isZero();
+            assertThat(field.getParentPathsList().get(0).getName()).isEqualTo("profile");
+            assertThat(field.getFieldName()).isEqualTo("address");
+            assertThat(field.getComment()).isEqualTo("address comment");
+            assertThat(
+                            JsonSerdeUtils.readValue(
+                                    field.getDataTypeJson(), DataTypeJsonSerde.INSTANCE))
+                    .isEqualTo(nestedType);
+            PbAddNestedField specialPath = decoded.getAddNestedFieldsList().get(1);
+            assertThat(specialPath.hasComment()).isFalse();
+            assertThat(specialPath.getParentPathsList())
+                    .extracting(segment -> segment.getSegmentType())
+                    .containsExactly(0, 1, 2);
+            assertThat(specialPath.getParentPathsList().get(1).hasName()).isFalse();
+            assertThat(specialPath.getParentPathsList().get(2).hasName()).isFalse();
+        } finally {
+            buffer.release();
+        }
+    }
 
     @Test
     void testMakePutKvRequestWithConsistentMergeMode() throws Exception {

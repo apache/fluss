@@ -468,6 +468,7 @@ public class MetadataManager {
 
             // validate the table column changes
             if (!schemaChanges.isEmpty()) {
+                NestedSchemaChangeValidator.validate(table, schemaChanges);
                 Schema newSchema =
                         SchemaUpdate.applySchemaChanges(table.getSchema(), schemaChanges);
                 validateAlterTableSchema(table, newSchema);

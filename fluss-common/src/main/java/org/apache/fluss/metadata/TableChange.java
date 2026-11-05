@@ -25,6 +25,7 @@ import java.util.Objects;
 import java.util.Optional;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** {@link TableChange} represents the modification of the Fluss Table. */
 public interface TableChange {
@@ -60,6 +61,20 @@ public interface TableChange {
             ColumnPosition position,
             @Nullable AggFunction aggFunction) {
         return new AddColumn(columnName, dataType, comment, position, aggFunction);
+    }
+
+    /**
+     * A table change to add a nested field to the row type at the given parent path.
+     *
+     * <p>The new field must be nullable and is appended to the end of the parent row. Only ROW
+     * field paths are supported. Nested additions are not supported under primary key, bucket key
+     * or partition key columns, or for datalake-enabled tables.
+     *
+     * @return a TableChange represents the modification.
+     */
+    static AddNestedField addNestedField(
+            ColumnPath parentPath, String fieldName, DataType dataType, @Nullable String comment) {
+        return new AddNestedField(parentPath, fieldName, dataType, comment);
     }
 
     /**
@@ -357,6 +372,68 @@ public interface TableChange {
                 result += ", aggFunction=" + aggFunction;
             }
             return result + ", position=" + position + '}';
+        }
+    }
+
+    /** A table change to add a nested field. */
+    class AddNestedField implements SchemaChange {
+        private final ColumnPath parentPath;
+        private final String fieldName;
+        private final DataType dataType;
+        private final @Nullable String comment;
+
+        private AddNestedField(
+                ColumnPath parentPath,
+                String fieldName,
+                DataType dataType,
+                @Nullable String comment) {
+            this.parentPath = checkNotNull(parentPath, "Parent path must not be null.");
+            this.fieldName = checkNotNull(fieldName, "Nested field name must not be null.");
+            checkArgument(!fieldName.trim().isEmpty(), "Nested field name must not be empty.");
+            this.dataType = checkNotNull(dataType, "Nested field type must not be null.");
+            this.comment = comment;
+        }
+
+        /** Returns the path to the parent ROW. */
+        public ColumnPath getParentPath() {
+            return parentPath;
+        }
+
+        /** Returns the name of the field to add. */
+        public String getFieldName() {
+            return fieldName;
+        }
+
+        /** Returns the data type of the field to add. */
+        public DataType getDataType() {
+            return dataType;
+        }
+
+        /** Returns the optional comment of the field to add. */
+        @Nullable
+        public String getComment() {
+            return comment;
+        }
+
+        /** Returns the full path of the field to add. */
+        public String getFullPath() {
+            return parentPath.toString() + "." + fieldName;
+        }
+
+        @Override
+        public String toString() {
+            return "AddNestedField{"
+                    + "parentPath="
+                    + parentPath
+                    + ", fieldName='"
+                    + fieldName
+                    + '\''
+                    + ", dataType="
+                    + dataType
+                    + ", comment='"
+                    + comment
+                    + '\''
+                    + '}';
         }
     }
 
