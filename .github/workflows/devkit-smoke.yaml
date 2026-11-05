@@ -63,111 +63,23 @@ jobs:
 
       - name: Core smoke
         working-directory: devkit
-        run: |
-          set -euo pipefail
-          just build core
-          just up core
-          just run-sql examples/core/setup.sql
-          core_output=$(just run-sql examples/core/batch-scan.sql)
-          printf '%s\n' "$core_output"
-          grep -Fq 'Alice' <<<"$core_output"
-          grep -Fq 'Bob' <<<"$core_output"
-          grep -Fq 'alpha' <<<"$core_output"
-          grep -Fq 'beta' <<<"$core_output"
-          just clean
+        run: python3 -m unittest smoke_test.CoreSmoke
 
       - name: Gateway smoke
         working-directory: devkit
-        run: |
-          set -euo pipefail
-          just build gateway
-          just up gateway
-          curl -fsS -X POST \
-            -H 'Content-Type: application/json' \
-            http://localhost:8080/v1/clusters/default/databases/fluss/tables \
-            -d '{
-              "table_name": "gateway_events",
-              "columns": [
-                {"name": "event_id", "data_type": {"type": "BIGINT"}, "nullable": false},
-                {"name": "message", "data_type": {"type": "STRING"}, "nullable": false}
-              ],
-              "distribution": {"bucket_count": 1, "bucket_keys": []}
-            }'
-          curl -fsS \
-            http://localhost:8080/v1/clusters/default/databases/fluss/tables/gateway_events
-          curl -fsS -X POST \
-            -H 'Content-Type: application/json' \
-            http://localhost:8080/v1/clusters/default/databases/fluss/tables/gateway_events/records \
-            -d '{
-              "entries": [
-                {"id": "event-1", "append": {"event_id": "1", "message": "hello from Gateway"}}
-              ]
-            }'
-          just clean
+        run: python3 -m unittest smoke_test.GatewaySmoke
 
       - name: Paimon smoke
         working-directory: devkit
-        run: |
-          set -euo pipefail
-          just build paimon
-          just up paimon
-          just run-sql examples/lake/paimon/setup.sql
-          just run-sql examples/lake/paimon/union-read.sql
-          for attempt in {1..30}; do
-            lake_output=$(just run-sql examples/lake/paimon/lake-only-read.sql || true)
-            printf '%s\n' "$lake_output"
-            if grep -Fq 'Alice' <<<"$lake_output" && grep -Fq 'Bob' <<<"$lake_output"; then
-              break
-            fi
-            if [ "$attempt" -eq 30 ]; then
-              echo 'Paimon lake-only query did not return Alice and Bob' >&2
-              just logs tiering-submit 200
-              exit 1
-            fi
-            sleep 2
-          done
-          just clean
+        run: python3 -m unittest smoke_test.PaimonLakeSmoke
 
       - name: Iceberg smoke
         working-directory: devkit
-        run: |
-          set -euo pipefail
-          just build iceberg
-          just up iceberg
-          just run-sql examples/lake/iceberg/create-table.sql
-          just run-sql examples/lake/iceberg/write-data.sql
-          iceberg_output=''
-          for attempt in {1..30}; do
-            iceberg_output=$(just run-sql examples/lake/iceberg/query-lake.sql || true)
-            printf '%s\n' "$iceberg_output"
-            if grep -Eq '3.*6.*3' <<<"$iceberg_output"; then
-              break
-            fi
-            if [ "$attempt" -eq 30 ]; then
-              echo 'Iceberg lake query did not return the expected aggregate' >&2
-              just logs tiering-submit 200
-              exit 1
-            fi
-            sleep 2
-          done
-          just clean
+        run: python3 -m unittest smoke_test.IcebergLakeSmoke
 
       - name: Lance smoke
         working-directory: devkit
-        run: |
-          set -euo pipefail
-          just build lance
-          just up lance
-          just run-sql examples/lake/lance/create-table.sql
-          just run-sql examples/lake/lance/write-data.sql
-          python -m pip install --quiet 'pylance==0.33.0'
-          if ! python examples/lake/lance/read-data.py; then
-            just logs tiering-submit 200
-            just logs jobmanager 200
-            just logs taskmanager 200
-            exit 1
-          fi
-          just clean
+        run: python3 -m unittest smoke_test.LanceLakeSmoke
 
       - name: Clean up DevKit
         if: always()

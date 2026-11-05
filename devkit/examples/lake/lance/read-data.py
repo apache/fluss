@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import time
 
 import lance
@@ -26,7 +27,7 @@ for attempt in range(30):
             storage_options={
                 "aws_access_key_id": "rustfsadmin",
                 "aws_secret_access_key": "rustfsadmin",
-                "aws_endpoint": "http://127.0.0.1:9000",
+                "aws_endpoint": "http://127.0.0.1:%s" % os.environ.get("RUSTFS_API_PORT", "9000"),
                 "allow_http": "true",
             },
         )

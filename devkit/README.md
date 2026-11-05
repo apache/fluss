@@ -51,6 +51,37 @@ profile. `just up <profile>` checks the prepared artifacts, starts the runtime, 
 healthchecks, and runs the profile checks. Startup does not run Maven or Cargo, download
 dependencies, or detect source changes.
 
+### Run the Smoke Tests
+
+The CI smoke tests require Python 3.8 or later. Run all profiles with:
+
+```bash
+python3 -m unittest smoke_test
+```
+
+Select one profile by its class name:
+
+```bash
+python3 -m unittest smoke_test.CoreSmoke
+```
+
+Select one test by its method name:
+
+```bash
+python3 -m unittest smoke_test.CoreSmoke.test_batch_scan
+```
+
+Use `-k` to select names containing a word, such as all three Lake profiles:
+
+```bash
+python3 -m unittest -k Lake smoke_test
+```
+
+Each selected profile is built, started, and cleaned once. The smoke tests refuse to run while a
+DevKit profile is active; run `just clean` first if you are finished with that profile.
+Tests in one profile share its services, but each test must prepare its own data and must not
+depend on another test's result.
+
 ## Validate Your Change
 
 ### Core and Flink
