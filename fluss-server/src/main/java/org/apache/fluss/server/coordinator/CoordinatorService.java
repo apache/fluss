@@ -556,76 +556,82 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         tablePath.validate();
         String databaseName = tablePath.getDatabaseName();
 
-        return ddlMetadataManagerSupplier
-                .get()
-                .runDatabaseDdl(
-                        databaseName,
-                        metadataManager -> {
-                            boolean databaseExists = metadataManager.databaseExists(databaseName);
-                            if (databaseExists) {
-                                authorizeDatabase(OperationType.CREATE, databaseName);
-                            } else if (authorizer != null) {
-                                authorizer.authorize(
-                                        currentSession(), OperationType.CREATE, Resource.cluster());
+        MetadataManager metadata = ddlMetadataManagerSupplier.get();
+        authorizeCreateTableFromLake(metadata, databaseName);
+        validateSystemTableCreationCaller(tablePath, currentSession());
+        LakeCatalogDynamicLoader.LakeCatalogContainer lakeCatalogContainer =
+                lakeCatalogDynamicLoader.getLakeCatalogContainer();
+        if (!lakeCatalogContainer.isClusterDataLakeTableEnabled()
+                || lakeCatalogContainer.getDataLakeFormat() != DataLakeFormat.PAIMON
+                || lakeCatalogContainer.getLakeCatalog() == null) {
+            throw new InvalidTableException(
+                    "Creating a Fluss table on an existing lake table requires the cluster to "
+                            + "enable Paimon Lake Storage.");
+        }
+        TableDescriptor tableDescriptor =
+                mergeCreateTableFromLakeOptions(
+                        tablePath,
+                        lakeCatalogContainer.getLakeCatalog().getTableDescriptor(tablePath),
+                        request.getOptionsList());
+        CreateTableFromLakeResponse response =
+                metadata.runTableDdl(
+                        tablePath,
+                        scoped -> {
+                            if (!scoped.databaseExists(databaseName)) {
+                                return null;
                             }
-                            validateSystemTableCreationCaller(tablePath, currentSession());
-
-                            LakeCatalogDynamicLoader.LakeCatalogContainer lakeCatalogContainer =
-                                    lakeCatalogDynamicLoader.getLakeCatalogContainer();
-                            if (!lakeCatalogContainer.isClusterDataLakeTableEnabled()
-                                    || lakeCatalogContainer.getDataLakeFormat()
-                                            != DataLakeFormat.PAIMON
-                                    || lakeCatalogContainer.getLakeCatalog() == null) {
-                                throw new InvalidTableException(
-                                        "Creating a Fluss table on an existing lake table requires the cluster to "
-                                                + "enable Paimon Lake Storage.");
-                            }
-
-                            TableDescriptor tableDescriptor =
-                                    lakeCatalogContainer
-                                            .getLakeCatalog()
-                                            .getTableDescriptor(tablePath);
-                            tableDescriptor =
-                                    mergeCreateTableFromLakeOptions(
-                                            tablePath, tableDescriptor, request.getOptionsList());
-
-                            if (databaseExists && metadataManager.tableExists(tablePath)) {
-                                validateExistingTableFromLake(
-                                        tablePath,
-                                        metadataManager.getTable(tablePath),
-                                        tableDescriptor);
-                                throw new TableAlreadyExistException(
-                                        "Table " + tablePath + " already exists.");
-                            }
-
-                            if (!databaseExists) {
-                                metadataManager.createDatabase(
-                                        databaseName, DatabaseDescriptor.builder().build(), true);
-                            }
-                            createTableInternal(
-                                    metadataManager,
-                                    tablePath,
-                                    tableDescriptor,
-                                    false,
-                                    false,
-                                    lakeCatalogContainer);
-
-                            TableInfo tableInfo = metadataManager.getTable(tablePath);
-                            PbTableInfo pbTableInfo =
-                                    new PbTableInfo()
-                                            .setTableId(tableInfo.getTableId())
-                                            .setSchemaId(tableInfo.getSchemaId())
-                                            .setTableJson(
-                                                    tableInfo.toTableDescriptor().toJsonBytes())
-                                            .setCreatedTime(tableInfo.getCreatedTime())
-                                            .setModifiedTime(tableInfo.getModifiedTime())
-                                            .setBucketCountEpoch(tableInfo.getBucketCountEpoch());
-                            if (tableInfo.getRemoteDataDir() != null) {
-                                pbTableInfo.setRemoteDataDir(tableInfo.getRemoteDataDir());
-                            }
-                            return CompletableFuture.completedFuture(
-                                    new CreateTableFromLakeResponse().setTableInfo(pbTableInfo));
+                            authorizeCreateTableFromLake(scoped, databaseName);
+                            return createTableFromLake(
+                                    scoped, tablePath, tableDescriptor, lakeCatalogContainer);
                         });
+        if (response == null) {
+            // Do not upgrade a table permit while another table may hold the database busy.
+            response =
+                    metadata.runDatabaseDdl(
+                            databaseName,
+                            scoped -> {
+                                authorizeCreateTableFromLake(scoped, databaseName);
+                                scoped.createDatabase(
+                                        databaseName, DatabaseDescriptor.builder().build(), true);
+                                return createTableFromLake(
+                                        scoped, tablePath, tableDescriptor, lakeCatalogContainer);
+                            });
+        }
+        return CompletableFuture.completedFuture(response);
+    }
+
+    private void authorizeCreateTableFromLake(MetadataManager metadata, String databaseName) {
+        if (metadata.databaseExists(databaseName)) {
+            authorizeDatabase(OperationType.CREATE, databaseName);
+        } else if (authorizer != null) {
+            authorizer.authorize(currentSession(), OperationType.CREATE, Resource.cluster());
+        }
+    }
+
+    private CreateTableFromLakeResponse createTableFromLake(
+            MetadataManager metadata,
+            TablePath tablePath,
+            TableDescriptor tableDescriptor,
+            LakeCatalogDynamicLoader.LakeCatalogContainer lakeCatalogContainer) {
+        if (metadata.tableExists(tablePath)) {
+            validateExistingTableFromLake(tablePath, metadata.getTable(tablePath), tableDescriptor);
+            throw new TableAlreadyExistException("Table " + tablePath + " already exists.");
+        }
+        createTableInternal(
+                metadata, tablePath, tableDescriptor, false, false, lakeCatalogContainer);
+        TableInfo tableInfo = metadata.getTable(tablePath);
+        PbTableInfo pbTableInfo =
+                new PbTableInfo()
+                        .setTableId(tableInfo.getTableId())
+                        .setSchemaId(tableInfo.getSchemaId())
+                        .setTableJson(tableInfo.toTableDescriptor().toJsonBytes())
+                        .setCreatedTime(tableInfo.getCreatedTime())
+                        .setModifiedTime(tableInfo.getModifiedTime())
+                        .setBucketCountEpoch(tableInfo.getBucketCountEpoch());
+        if (tableInfo.getRemoteDataDir() != null) {
+            pbTableInfo.setRemoteDataDir(tableInfo.getRemoteDataDir());
+        }
+        return new CreateTableFromLakeResponse().setTableInfo(pbTableInfo);
     }
 
     private void createTableInternal(
