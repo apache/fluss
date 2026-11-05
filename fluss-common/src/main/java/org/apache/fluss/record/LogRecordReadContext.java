@@ -144,7 +144,7 @@ public class LogRecordReadContext
                 dataRowType = rowType;
                 selectedFields = projection.getProjection();
             }
-            target = new ReadTarget(schemaId, dataRowType, selectedFields);
+            target = new ReadTarget(schemaId, dataRowType, selectedFields, logFormat);
         }
 
         if (logFormat == LogFormat.ARROW) {
@@ -211,7 +211,7 @@ public class LogRecordReadContext
     public static LogRecordReadContext createArrowReadContext(
             RowType rowType, int schemaId, SchemaGetter schemaGetter) {
         int[] selectedFields = IntStream.range(0, rowType.getFieldCount()).toArray();
-        ReadTarget target = new ReadTarget(schemaId, rowType, selectedFields);
+        ReadTarget target = new ReadTarget(schemaId, rowType, selectedFields, LogFormat.ARROW);
         return createArrowReadContext(-1L, target, false, schemaGetter, null);
     }
 
@@ -222,7 +222,7 @@ public class LogRecordReadContext
             SchemaGetter schemaGetter,
             boolean projectionPushDowned) {
         int[] selectedFields = IntStream.range(0, rowType.getFieldCount()).toArray();
-        ReadTarget target = new ReadTarget(schemaId, rowType, selectedFields);
+        ReadTarget target = new ReadTarget(schemaId, rowType, selectedFields, LogFormat.ARROW);
         return createArrowReadContext(-1L, target, projectionPushDowned, schemaGetter, null);
     }
 
@@ -237,7 +237,7 @@ public class LogRecordReadContext
     public static LogRecordReadContext createIndexedReadContext(
             RowType rowType, int schemaId, SchemaGetter schemaGetter) {
         int[] selectedFields = IntStream.range(0, rowType.getFieldCount()).toArray();
-        ReadTarget target = new ReadTarget(schemaId, rowType, selectedFields);
+        ReadTarget target = new ReadTarget(schemaId, rowType, selectedFields, LogFormat.INDEXED);
         return createIndexedReadContext(-1L, target, schemaGetter);
     }
 
@@ -245,7 +245,7 @@ public class LogRecordReadContext
     public static LogRecordReadContext createCompactedRowReadContext(
             RowType rowType, int schemaId, SchemaGetter schemaGetter) {
         int[] selectedFields = IntStream.range(0, rowType.getFieldCount()).toArray();
-        ReadTarget target = new ReadTarget(schemaId, rowType, selectedFields);
+        ReadTarget target = new ReadTarget(schemaId, rowType, selectedFields, LogFormat.COMPACTED);
         return createCompactedRowReadContext(-1L, target, schemaGetter);
     }
 
@@ -301,7 +301,7 @@ public class LogRecordReadContext
                 id -> {
                     RowType batchRowType = schemaGetter.getSchema(id).getRowType();
                     int[] allFields = IntStream.range(0, batchRowType.getFieldCount()).toArray();
-                    return buildProjectedFieldGetters(batchRowType, allFields);
+                    return buildProjectedFieldGetters(batchRowType, allFields, logFormat);
                 });
     }
 
@@ -467,14 +467,17 @@ public class LogRecordReadContext
     // -------------------------------------------------------------------------
     //  Private helpers
     // -------------------------------------------------------------------------
-    static FieldGetter[] buildProjectedFieldGetters(RowType rowType, int[] selectedFields) {
+    static FieldGetter[] buildProjectedFieldGetters(
+            RowType rowType, int[] selectedFields, LogFormat logFormat) {
+        // ARROW already copies strings during deserialization;
+        // other formats reference pooled network buffers and need explicit copying.
+        boolean copyStrings = logFormat != LogFormat.ARROW;
         List<DataType> dataTypeList = rowType.getChildren();
         FieldGetter[] fieldGetters = new FieldGetter[selectedFields.length];
         for (int i = 0; i < fieldGetters.length; i++) {
-            // build deep field getter to support nested types
             fieldGetters[i] =
                     InternalRow.createDeepFieldGetter(
-                            dataTypeList.get(selectedFields[i]), selectedFields[i]);
+                            dataTypeList.get(selectedFields[i]), selectedFields[i], copyStrings);
         }
         return fieldGetters;
     }
@@ -504,11 +507,11 @@ public class LogRecordReadContext
         /** Pre-built field getters corresponding to {@link #selectedFields}. */
         final FieldGetter[] fieldGetters;
 
-        ReadTarget(int schemaId, RowType dataRowType, int[] selectedFields) {
+        ReadTarget(int schemaId, RowType dataRowType, int[] selectedFields, LogFormat logFormat) {
             this.schemaId = schemaId;
             this.dataRowType = dataRowType;
             this.selectedFields = selectedFields;
-            this.fieldGetters = buildProjectedFieldGetters(dataRowType, selectedFields);
+            this.fieldGetters = buildProjectedFieldGetters(dataRowType, selectedFields, logFormat);
         }
     }
 }

@@ -56,6 +56,8 @@ struct BatchScanner;
 struct UpsertWriter;
 struct Lookuper;
 struct PrefixLookuper;
+struct PendingLookup;
+struct PendingPrefixLookup;
 struct ScanResultInner;
 struct GenericRowInner;
 struct LookupResultInner;
@@ -1250,6 +1252,9 @@ class PrefixLookupResult {
 
    private:
     friend class PrefixLookuper;
+    friend class PendingPrefixLookup;
+    /// Takes ownership of `inner`, or returns its error.
+    Result Adopt(ffi::PrefixLookupResultInner* inner);
     std::shared_ptr<const detail::PrefixData> data_;
 };
 
@@ -1396,6 +1401,8 @@ class ArrowRecordBatch {
     // timestamp, which is the case for a limit scan because it merges several
     // log batches into one Arrow batch.
     static constexpr int64_t NO_COMMIT_TIMESTAMP = -1;
+    // No single source schema ID, including results of a limit scan.
+    static constexpr int32_t NO_SCHEMA_ID = -1;
 
     std::shared_ptr<arrow::RecordBatch> GetArrowRecordBatch() const { return batch_; }
 
@@ -1412,13 +1419,16 @@ class ArrowRecordBatch {
     int64_t GetLastOffset() const;
     // Epoch milliseconds, or NO_COMMIT_TIMESTAMP when unavailable.
     int64_t GetCommitTimestamp() const;
+    // Source log batch schema ID, or NO_SCHEMA_ID when unavailable.
+    int32_t GetSchemaId() const;
 
    private:
     friend class LogScanner;
     friend struct detail::ArrowBatchImporter;
     explicit ArrowRecordBatch(std::shared_ptr<arrow::RecordBatch> batch, int64_t table_id,
                               int64_t partition_id, int32_t bucket_id,
-                              int64_t base_offset, int64_t commit_timestamp) noexcept;
+                              int64_t base_offset, int64_t commit_timestamp,
+                              int32_t schema_id) noexcept;
 
     std::shared_ptr<arrow::RecordBatch> batch_{nullptr};
 
@@ -1429,6 +1439,7 @@ class ArrowRecordBatch {
     // Defaults to the sentinel so any future construction path that forgets to
     // set it reports "unknown" rather than an arbitrary value.
     int64_t commit_timestamp_{NO_COMMIT_TIMESTAMP};
+    int32_t schema_id_{NO_SCHEMA_ID};
 };
 
 struct ArrowRecordBatches {
@@ -1586,12 +1597,15 @@ class LookupResult : public detail::NamedGetters<LookupResult> {
 
    private:
     friend class Lookuper;
+    friend class PendingLookup;
     size_t Resolve(const std::string& name) const {
         if (!column_map_) {
             BuildColumnMap();
         }
         return detail::ResolveColumn(*column_map_, name);
     }
+    /// Takes ownership of `inner`, or returns its error.
+    Result Adopt(ffi::LookupResultInner* inner);
     void Destroy() noexcept;
     void BuildColumnMap() const;
     ffi::LookupResultInner* inner_{nullptr};
@@ -1631,12 +1645,16 @@ struct Configuration {
     int32_t writer_dynamic_batch_size_min{256 * 1024};
     // Bucket assigner for tables without bucket keys: "sticky" or "round_robin"
     std::string writer_bucket_no_key_assigner{"sticky"};
+    // Create a missing partition on write; if false, such writes fail with PARTITION_NOT_EXISTS
+    bool writer_dynamic_create_partition_enabled{true};
     // Number of remote log batches to prefetch during scanning
     size_t scanner_remote_log_prefetch_num{4};
     // Number of threads for downloading remote log data
     size_t remote_file_download_thread_num{3};
     // Remote log read concurrency within one file (streaming read path)
     size_t scanner_remote_log_read_concurrency{4};
+    // Parent directory for downloaded remote logs; empty uses the OS temporary directory plus `/fluss`
+    std::string scanner_io_tmp_dir;
     // Maximum number of records returned in a single call to Poll() for LogScanner
     size_t scanner_log_max_poll_records{500};
     // Maximum bytes per fetch response for LogScanner (16 MB)
@@ -1667,6 +1685,9 @@ struct Configuration {
     uint64_t writer_retry_max_backoff_ms{1000};
     // Connect timeout in milliseconds for TCP transport connect
     uint64_t connect_timeout_ms{15000};
+    // Close cached connections without reads or writes for this long (ms), failing the requests
+    // still waiting on them with a retriable error. 0 disables closing idle connections
+    uint64_t connection_max_idle_time_ms{600000};
     // Security protocol: "PLAINTEXT" (default, no auth) or "sasl" (SASL auth)
     std::string security_protocol{"PLAINTEXT"};
     // SASL mechanism (only "PLAIN" is supported)
@@ -1685,6 +1706,11 @@ struct Configuration {
     size_t lookup_max_inflight_requests{128};
     // Maximum number of lookup retries
     int32_t lookup_max_retries{std::numeric_limits<int32_t>::max()};
+    // Base delay (ms) before resending a lookup that failed with a retriable error
+    uint64_t lookup_retry_backoff_ms{100};
+    // Maximum lookup retry backoff (ms) after exponential growth, before +/-20% jitter;
+    // must be >= lookup_retry_backoff_ms
+    uint64_t lookup_retry_max_backoff_ms{1000};
 };
 
 class Connection {
@@ -2078,6 +2104,69 @@ class UpsertWriter {
     std::shared_ptr<ffi::WriteCallbackCapacity> callback_capacity_;
 };
 
+/// A lookup started by Lookuper::Lookup(pk_row, PendingLookup&). Move-only. Destroying it
+/// before Wait() returns abandons the lookup.
+class PendingLookup {
+   public:
+    PendingLookup() noexcept;
+    ~PendingLookup() noexcept;
+
+    PendingLookup(const PendingLookup&) = delete;
+    PendingLookup& operator=(const PendingLookup&) = delete;
+    PendingLookup(PendingLookup&& other) noexcept;
+    PendingLookup& operator=(PendingLookup&& other) noexcept;
+
+    /// True while the lookup is running. False once Wait() has returned its outcome, which can
+    /// be an error with any code, REQUEST_TIME_OUT included.
+    bool Available() const;
+
+    /// Blocks until the row arrives.
+    Result Wait(LookupResult& out);
+
+    /// Blocks for at most `timeout_ms`. If the wait runs out, it returns REQUEST_TIME_OUT and
+    /// the lookup keeps running. The lookup itself can also fail with REQUEST_TIME_OUT, which
+    /// ends it, so check Available() before waiting again.
+    Result Wait(LookupResult& out, int64_t timeout_ms);
+
+   private:
+    friend class Lookuper;
+    explicit PendingLookup(ffi::PendingLookup* pending) noexcept;
+    // A negative timeout_ms waits without limit.
+    Result DoWait(LookupResult& out, int64_t timeout_ms);
+    void Destroy() noexcept;
+    ffi::PendingLookup* pending_{nullptr};
+};
+
+/// A prefix lookup started by PrefixLookuper::PrefixLookup(prefix_row, PendingPrefixLookup&).
+/// Behaves like PendingLookup.
+class PendingPrefixLookup {
+   public:
+    PendingPrefixLookup() noexcept;
+    ~PendingPrefixLookup() noexcept;
+
+    PendingPrefixLookup(const PendingPrefixLookup&) = delete;
+    PendingPrefixLookup& operator=(const PendingPrefixLookup&) = delete;
+    PendingPrefixLookup(PendingPrefixLookup&& other) noexcept;
+    PendingPrefixLookup& operator=(PendingPrefixLookup&& other) noexcept;
+
+    /// True while the lookup is running, like PendingLookup::Available.
+    bool Available() const;
+
+    /// Blocks until the rows arrive.
+    Result Wait(PrefixLookupResult& out);
+
+    /// Blocks for at most `timeout_ms`, like PendingLookup::Wait.
+    Result Wait(PrefixLookupResult& out, int64_t timeout_ms);
+
+   private:
+    friend class PrefixLookuper;
+    explicit PendingPrefixLookup(ffi::PendingPrefixLookup* pending) noexcept;
+    // A negative timeout_ms waits without limit.
+    Result DoWait(PrefixLookupResult& out, int64_t timeout_ms);
+    void Destroy() noexcept;
+    ffi::PendingPrefixLookup* pending_{nullptr};
+};
+
 class Lookuper {
    public:
     Lookuper() noexcept;
@@ -2094,6 +2183,10 @@ class Lookuper {
     /// arrives. Thread-safe: threads may share one Lookuper, and their concurrent lookups
     /// go out in the same batches.
     Result Lookup(const GenericRow& pk_row, LookupResult& out) const;
+
+    /// Starts the lookup without blocking; `out` waits for its row. Lookups started this way
+    /// share batches too, so one thread can keep many in flight.
+    Result Lookup(const GenericRow& pk_row, PendingLookup& out) const;
 
    private:
     friend class Table;
@@ -2119,6 +2212,9 @@ class PrefixLookuper {
     /// Looks up all rows matching the prefix columns set on `prefix_row`, blocking until the
     /// result arrives. Thread-safe, like Lookuper::Lookup.
     Result PrefixLookup(const GenericRow& prefix_row, PrefixLookupResult& out) const;
+
+    /// Starts the lookup without blocking, like Lookuper::Lookup(pk_row, PendingLookup&).
+    Result PrefixLookup(const GenericRow& prefix_row, PendingPrefixLookup& out) const;
 
    private:
     friend class Table;

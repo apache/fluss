@@ -71,6 +71,7 @@ cluster at `127.0.0.1:9123`; override with `FLUSS_BOOTSTRAP_SERVERS`.
 ```bash
 uv run python example/log_table.py
 uv run python example/pk_table.py
+uv run python example/prefix_lookup.py
 uv run python example/complex_types.py
 uv run python example/partitioned_table.py
 uv run python example/partitioned_kv_table.py
@@ -130,6 +131,7 @@ bindings/python/
 ├── example/                       # Standalone, CI-checked examples
 │   ├── log_table.py
 │   ├── pk_table.py
+│   ├── prefix_lookup.py
 │   ├── complex_types.py
 │   ├── partitioned_table.py
 │   └── partitioned_kv_table.py

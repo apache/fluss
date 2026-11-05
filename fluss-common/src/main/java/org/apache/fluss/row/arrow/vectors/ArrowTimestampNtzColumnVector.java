@@ -56,10 +56,12 @@ public class ArrowTimestampNtzColumnVector implements TimestampNtzColumnVector {
             return TimestampNtz.fromMillis(((TimeStampMilliVector) valueVector).get(i));
         } else if (valueVector instanceof TimeStampMicroVector) {
             long micros = ((TimeStampMicroVector) valueVector).get(i);
-            return TimestampNtz.fromMillis(micros / 1000, (int) (micros % 1000) * 1000);
+            return TimestampNtz.fromMillis(
+                    Math.floorDiv(micros, 1_000L), (int) Math.floorMod(micros, 1_000L) * 1_000);
         } else {
             long nanos = ((TimeStampNanoVector) valueVector).get(i);
-            return TimestampNtz.fromMillis(nanos / 1_000_000, (int) (nanos % 1_000_000));
+            return TimestampNtz.fromMillis(
+                    Math.floorDiv(nanos, 1_000_000L), (int) Math.floorMod(nanos, 1_000_000L));
         }
     }
 

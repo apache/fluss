@@ -87,6 +87,70 @@ The following merge engines are supported:
 3. [Versioned Merge Engine](/table-design/merge-engines/versioned.md)
 4. [Aggregation Merge Engine](/table-design/merge-engines/aggregation.md)
 
+## Skip Unchanged Upserts
+
+Set `'table.upsert.skip-unchanged' = 'true'` to avoid redundant KV state writes and changelog records
+when an upsert produces the same serialized row as the stored value. The option defaults to `false`.
+The [default merge engine](/table-design/merge-engines/default.md) still produces the complete candidate
+row, including for [partial updates](#partial-update). Fluss skips the write and emits no changelog only
+when the candidate and stored row have the same schema ID and identical serialized row bytes. Otherwise,
+it stores the candidate and emits the normal changelog records.
+
+This can reduce KV writes and changelog volume when upstream data is replayed or retried with the same
+encoding. It compares representations, not logical field values: a different schema ID, floating-point
+encoding, or map entry order causes a normal update even if the rows represent the same values. A row
+written under an older schema is not treated as equal to a candidate written under a newer schema.
+
+| Stored row | Incoming operation | Result |
+|------------|--------------------|--------|
+| Absent | Insert/upsert | Store the incoming row and emit an insert changelog |
+| Present | Candidate has the same schema ID and row bytes | Keep the stored row and emit no changelog |
+| Present | Candidate has a different schema ID or row bytes | Store the candidate and emit the normal update changelog |
+| Present | Full-row delete | Delete the row and emit a delete changelog |
+| Absent | Full-row delete | No-op and emit no changelog |
+
+These delete results assume `table.delete.behavior = 'allow'` (the default). With `ignore`, Fluss skips
+deletes; with `disable`, it rejects them. For a partial update, Fluss merges the incoming fields into
+a complete candidate row before comparing it with the stored row. A partial delete removes the whole
+row if all non-target columns are null. Otherwise, it clears the target columns and suppresses the
+update only when the resulting candidate has the same schema ID and row bytes as the stored row.
+
+This option performs duplicate suppression, not version ordering. Replaying a historical row whose
+bytes differ from the current value still updates the row.
+
+The option is supported only for primary key tables with no `table.merge-engine` setting and
+`'table.changelog.image' = 'FULL'` (the default). It cannot be combined with `table.kv.ttl`.
+Like other tables without a merge engine, it does not support `MergeMode.OVERWRITE` writes;
+the server rejects them while this option is enabled. Set the option when creating the table;
+it cannot be changed with `ALTER TABLE`. Both processing-time and event-time row-level TTL are
+rejected. With processing-time TTL, skipping a write would prevent the row expiration time from
+refreshing. `WAL` image mode is rejected because finding unchanged values requires a stored-row
+lookup, removing the full-row WAL write optimization.
+
+In the required `FULL` changelog image mode, each upsert already looks up the existing value while
+holding the write lock. When a row exists, this option also compares its schema ID and bytes with
+the complete candidate row. The comparison adds cost even to updates that change the row. Measure
+throughput and latency with your workload before enabling it on a write-heavy table.
+For a historical partition, if the previous row is found only in the lake and matches the candidate,
+the skipped write leaves no local copy. Repeated identical writes may therefore repeat the lake lookup.
+
+For example:
+
+```sql title="Flink SQL"
+CREATE TABLE T (
+    k INT,
+    v STRING,
+    PRIMARY KEY (k) NOT ENFORCED
+) WITH (
+    'table.upsert.skip-unchanged' = 'true'
+);
+
+INSERT INTO T VALUES (1, 'v1');
+-- The same schema ID and serialized row bytes: no changelog is emitted.
+INSERT INTO T VALUES (1, 'v1');
+-- Different row bytes: a normal update changelog is emitted.
+INSERT INTO T VALUES (1, 'v2');
+```
 
 ## Change Data Feed
 

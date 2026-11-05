@@ -26,15 +26,20 @@ Complete API reference for the Fluss C++ client.
 | `writer_dynamic_batch_size_min`       | `int32_t`     | `262144` (256 KB)    | Lower bound for the dynamic batch size estimator (ignored when disabled)                 |
 | `writer_batch_timeout_ms`             | `int64_t`     | `100`                | Maximum time in ms to wait for a writer batch to fill up before sending                  |
 | `writer_bucket_no_key_assigner`       | `std::string` | `"sticky"`           | Bucket assignment strategy for tables without bucket keys: `"sticky"` or `"round_robin"` |
+| `writer_dynamic_create_partition_enabled` | `bool`    | `true`               | Create a partition that a write targets but that does not exist yet. When `false`, such writes fail with `PARTITION_NOT_EXISTS` |
 | `scanner_remote_log_prefetch_num`     | `size_t`      | `4`                  | Number of remote log segments to prefetch                                                |
 | `remote_file_download_thread_num`     | `size_t`      | `3`                  | Number of threads for remote log downloads                                               |
 | `scanner_remote_log_read_concurrency` | `size_t`      | `4`                  | Streaming read concurrency within a remote log file                                      |
+| `scanner_io_tmp_dir`                  | `std::string` | `""`                 | Parent for remote log downloads; empty uses the OS temporary directory plus `/fluss`                  |
 | `scanner_log_max_poll_records`        | `size_t`      | `500`                | Maximum number of records returned in a single Poll()                                    |
 | `scanner_log_fetch_max_bytes`         | `int32_t`     | `16777216` (16 MB)   | Maximum bytes per fetch response for LogScanner                                          |
 | `scanner_log_fetch_min_bytes`         | `int32_t`     | `1`                  | Minimum bytes the server must accumulate before returning a fetch response               |
 | `scanner_log_fetch_wait_max_time_ms`  | `int32_t`     | `500`                | Maximum time (ms) the server may wait to satisfy min-bytes                               |
 | `scanner_log_fetch_max_bytes_for_bucket`| `int32_t`   | `1048576` (1 MB)     | Maximum bytes per fetch response per bucket for LogScanner                               |
+| `lookup_retry_backoff_ms`             | `uint64_t`    | `100`                | Initial delay in ms before a lookup that failed with a retriable error is resent, doubling per retry with ±20% jitter; `0` resends immediately |
+| `lookup_retry_max_backoff_ms`         | `uint64_t`    | `1000`               | Cap in ms for the lookup retry delay, applied before jitter; must be >= `lookup_retry_backoff_ms` |
 | `connect_timeout_ms`                  | `uint64_t`    | `120000`             | TCP connect timeout in milliseconds                                                      |
+| `connection_max_idle_time_ms`         | `uint64_t`    | `600000` (10 min)    | Idle cached connections are closed after this many milliseconds, failing the requests still waiting on them with a retriable error; `0` disables closing idle connections |
 | `security_protocol`                   | `std::string` | `"PLAINTEXT"`        | `"PLAINTEXT"` (default) or `"sasl"` for SASL auth                                        |
 | `security_sasl_mechanism`             | `std::string` | `"PLAIN"`            | SASL mechanism (only `"PLAIN"` is supported)                                             |
 | `security_sasl_username`              | `std::string` | (empty)              | SASL username (required when protocol is `"sasl"`)                                       |
@@ -187,14 +192,43 @@ Performs point lookups by primary key. Obtained from `TableLookup::CreateLookupe
 | Method                                                              |  Description                |
 |---------------------------------------------------------------------|-----------------------------|
 | `Lookup(const GenericRow& pk_row, LookupResult& out) const -> Result` | Lookup a row by primary key |
+| `Lookup(const GenericRow& pk_row, PendingLookup& out) const -> Result` | Start a lookup without blocking; `out` waits for its row |
+
+Each blocking lookup waits for its batch, up to `lookup_batch_timeout_ms`. To look up many keys from one thread, start them all, then wait for each:
+
+```cpp
+std::vector<fluss::PendingLookup> pending(keys.size());
+for (size_t i = 0; i < keys.size(); ++i) {
+    if (!lookuper.Lookup(keys[i], pending[i]).Ok()) {
+        // This lookup did not start.
+    }
+}
+for (auto& lookup : pending) {
+    fluss::LookupResult result;
+    if (lookup.Available() && lookup.Wait(result).Ok() && result.Found()) {
+        // Use result.
+    }
+}
+```
+
+## `PendingLookup`
+
+A lookup started by `Lookuper::Lookup(pk_row, PendingLookup&)`. Move-only. Destroying it before `Wait` returns abandons the lookup.
+
+| Method | Description |
+|---|---|
+| `Wait(LookupResult& out) -> Result` | Block until the row arrives |
+| `Wait(LookupResult& out, int64_t timeout_ms) -> Result` | Block for at most `timeout_ms`. If the wait runs out, it returns `REQUEST_TIME_OUT` and the lookup keeps running. The lookup itself can also fail with `REQUEST_TIME_OUT`, which ends it, so check `Available()` before waiting again |
+| `Available() const -> bool` | True while the lookup is running. False once `Wait` has returned its outcome, which can be an error with any code, `REQUEST_TIME_OUT` included |
 
 ## `PrefixLookuper`
 
-Performs prefix (bucket-key) lookups, returning all rows whose primary key starts with the given prefix. Obtained from `Table::NewPrefixLookup()`. Like a `Lookuper`, it can be shared by threads. See the [Prefix Lookup example](./example/prefix-lookup.md).
+Performs prefix (bucket-key) lookups, returning all rows whose primary key starts with the given prefix. Obtained from `Table::NewPrefixLookup()`. Like a `Lookuper`, it can be shared by threads, and it can start a lookup without blocking. `PendingPrefixLookup` has the same methods as `PendingLookup`. See the [Prefix Lookup example](./example/prefix-lookup.md).
 
 | Method                                                                                |  Description                                  |
 |---------------------------------------------------------------------------------------|-----------------------------------------------|
 | `PrefixLookup(const GenericRow& prefix_row, PrefixLookupResult& out) const -> Result` | Look up all rows matching the prefix columns  |
+| `PrefixLookup(const GenericRow& prefix_row, PendingPrefixLookup& out) const -> Result` | Start a lookup without blocking; `out` waits for its rows |
 
 ## `LogScanner`
 
@@ -450,10 +484,16 @@ Read-only result of a prefix lookup — zero or more matched rows. Each row is a
 | `GetBaseOffset() -> int64_t`                                   | First record offset                  |
 | `GetLastOffset() -> int64_t`                                   | Last record offset                   |
 | `GetCommitTimestamp() -> int64_t`                              | Commit time in epoch milliseconds    |
+| `GetSchemaId() -> int32_t`                                     | Schema ID from the source log batch |
 
 `GetCommitTimestamp()` returns `ArrowRecordBatch::NO_COMMIT_TIMESTAMP` (`-1`)
 when the batch carries no single timestamp, which is the case for a limit scan
 because it merges several log batches into one Arrow batch.
+
+`GetSchemaId()` returns the ID of the schema the log batch was written with. It can
+differ from the schema of the batch's columns, because the scanner aligns every batch
+to the table schema it was created with. It returns `ArrowRecordBatch::NO_SCHEMA_ID`
+(`-1`) for a limit scan, which merges several log batches into one.
 
 ## `ArrowRecordBatches`
 

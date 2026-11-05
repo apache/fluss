@@ -33,7 +33,7 @@
   <a href="https://github.com/apache/fluss/actions/workflows/ci.yaml"><img src="https://github.com/apache/fluss/actions/workflows/ci.yaml/badge.svg?branch=main" alt="CI"></a>
   <a href="https://github.com/apache/fluss/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache%202-4EB1BA.svg" alt="License"></a>
   <a href="https://join.slack.com/t/apache-fluss/shared_invite/zt-473vgmvjr-cmIma~_iAA4cN02o5u2pDQ"><img src="https://img.shields.io/badge/slack-join_chat-brightgreen.svg?logo=slack" alt="Slack"></a>
-  <a href="https://deepwiki.com/apache/fluss"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
+  <a href="https://deepwiki.com/apache/fluss"><img src="https://devin.ai/assets/askdeepwiki.png" alt="Ask DeepWiki" height="20"></a>
 </p>
 
 <p align="center">
@@ -66,6 +66,7 @@ Prerequisites for building Apache Fluss:
 - Git
 - Maven (we require version >= 3.8.6)
 - Java 11
+- JDK 17, used as a Maven toolchain for the Iceberg 1.12 lake plugin (see [Building Fluss](https://fluss.apache.org/community/dev/building/))
 
 ```bash
 git clone https://github.com/apache/fluss.git

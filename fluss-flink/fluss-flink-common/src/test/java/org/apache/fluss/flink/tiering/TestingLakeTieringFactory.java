@@ -22,7 +22,7 @@ import org.apache.fluss.flink.tiering.source.TestingWriteResultSerializer;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
 import org.apache.fluss.lake.committer.CommitterInitContext;
 import org.apache.fluss.lake.committer.LakeCommitResult;
-import org.apache.fluss.lake.committer.LakeCommitter;
+import org.apache.fluss.lake.committer.PartitionMarkDoneCommitter;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.fluss.lake.writer.LakeWriter;
@@ -36,7 +36,6 @@ import javax.annotation.Nullable;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 
 /** An implementation of {@link LakeTieringFactory} for testing purpose. */
 public class TestingLakeTieringFactory
@@ -86,12 +85,17 @@ public class TestingLakeTieringFactory
     }
 
     @Override
-    public LakeCommitter<TestingWriteResult, TestingCommittable> createLakeCommitter(
+    public PartitionMarkDoneCommitter<TestingWriteResult, TestingCommittable> createLakeCommitter(
             CommitterInitContext committerInitContext) throws IOException {
         if (testingLakeCommitter == null) {
             this.testingLakeCommitter = new TestingLakeCommitter();
         }
         return testingLakeCommitter;
+    }
+
+    @Override
+    public boolean supportsPartitionMarkDone() {
+        return true;
     }
 
     @Override
@@ -142,11 +146,17 @@ public class TestingLakeTieringFactory
 
     /** A lake committer for testing purpose. */
     public static final class TestingLakeCommitter
-            implements LakeCommitter<TestingWriteResult, TestingCommittable> {
+            implements PartitionMarkDoneCommitter<TestingWriteResult, TestingCommittable> {
 
         private long currentSnapshot;
 
         @Nullable private final CommittedLakeSnapshot mockMissingCommittedLakeSnapshot;
+
+        private int markDonePreparations;
+
+        private boolean partitionMarkDoneEnabled;
+
+        @Nullable private LakeCommitResult commitResult;
 
         public TestingLakeCommitter() {
             this(null);
@@ -154,6 +164,16 @@ public class TestingLakeTieringFactory
 
         public TestingLakeCommitter(CommittedLakeSnapshot mockMissingCommittedLakeSnapshot) {
             this.mockMissingCommittedLakeSnapshot = mockMissingCommittedLakeSnapshot;
+        }
+
+        public void enablePartitionMarkDone() {
+            this.partitionMarkDoneEnabled = true;
+        }
+
+        @Override
+        public boolean preparePartitionMarkDone(TestingCommittable committable) {
+            markDonePreparations++;
+            return partitionMarkDoneEnabled && commitResult != null;
         }
 
         @Override
@@ -167,10 +187,11 @@ public class TestingLakeTieringFactory
         }
 
         @Override
-        public LakeCommitResult commit(
-                TestingCommittable committable, Map<String, String> snapshotProperties)
+        public LakeCommitResult commit(TestingCommittable committable, CommitContext context)
                 throws IOException {
-            return LakeCommitResult.committedIsReadable(++currentSnapshot);
+            return commitResult != null
+                    ? commitResult
+                    : LakeCommitResult.committedIsReadable(++currentSnapshot);
         }
 
         @Override
@@ -185,6 +206,15 @@ public class TestingLakeTieringFactory
                 return mockMissingCommittedLakeSnapshot;
             }
             return null;
+        }
+
+        /** Overrides the commit result, or restores the default when null. */
+        public void setCommitResult(@Nullable LakeCommitResult commitResult) {
+            this.commitResult = commitResult;
+        }
+
+        public int getMarkDonePreparations() {
+            return markDonePreparations;
         }
 
         @Override

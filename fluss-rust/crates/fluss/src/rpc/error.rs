@@ -19,6 +19,7 @@ use crate::rpc::api_key::ApiKey;
 use crate::rpc::api_version::ApiVersion;
 use prost::DecodeError;
 use std::sync::Arc;
+use std::time::Duration;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -41,6 +42,9 @@ pub enum RpcError {
 
     #[error("Connection is poisoned: {0}")]
     Poisoned(Arc<RpcError>),
+
+    #[error("Connection closed after {0:?} without reads or writes")]
+    IdleConnectionClosed(Duration),
 
     #[error(
         "Data left at the end of the message. Got {message_size} bytes but only read {read} bytes. api_key={api_key:?} api_version={api_version}"

@@ -17,8 +17,8 @@
 
 package org.apache.fluss.flink.tiering.committer;
 
+import org.apache.fluss.client.tiering.TableBucketWriteResult;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.flink.tiering.source.TableBucketWriteResult;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 
 import org.apache.flink.streaming.api.operators.AbstractStreamOperatorFactory;

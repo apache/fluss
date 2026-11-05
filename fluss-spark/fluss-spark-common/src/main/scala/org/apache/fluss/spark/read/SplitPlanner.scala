@@ -17,7 +17,6 @@
 
 package org.apache.fluss.spark.read
 
-import org.apache.fluss.client.{Connection, ConnectionFactory}
 import org.apache.fluss.client.admin.Admin
 import org.apache.fluss.client.initializer.{BucketOffsetsRetrieverImpl, OffsetsInitializer}
 import org.apache.fluss.client.metadata.{KvSnapshots, LakeSnapshot}
@@ -29,7 +28,7 @@ import org.apache.fluss.metadata.{LogFormat, PartitionInfo, ResolvedPartitionSpe
 import org.apache.fluss.predicate.{Predicate => FlussPredicate}
 import org.apache.fluss.spark.SparkFlussConf
 import org.apache.fluss.spark.read.lake.{FlussLakeInputPartition, FlussLakeUpsertInputPartition, FlussLakeUtils}
-import org.apache.fluss.spark.utils.SparkPartitionPredicate
+import org.apache.fluss.spark.utils.{FlussConnectionCache, SparkPartitionPredicate}
 import org.apache.fluss.utils.{ExceptionUtils, Preconditions}
 
 import org.apache.spark.sql.connector.read.InputPartition
@@ -42,12 +41,12 @@ import scala.collection.mutable
 
 /**
  * Plans Spark [[InputPartition]]s for a Fluss batch scan. The plan-time metadata RPCs (partition
- * listing, offset/kv-snapshot lookups) run on a connection opened lazily inside `plan()` and
- * released in its finally block. The lake-snapshot probe uses its own short-lived connection,
- * because it may be read earlier — at planning/description time via [[hasLakeSnapshot]] — possibly
- * before `plan()` runs or when it never runs at all. The planner does NOT rely on the enclosing
- * batch being closed, because the Spark DSv2 Batch interface exposes no `close()` lifecycle that
- * Spark would invoke.
+ * listing, offset/kv-snapshot lookups) run on a connection borrowed lazily inside `plan()` and
+ * returned to the connection cache in its finally block. The lake-snapshot probe uses its own
+ * connection lease, because it may be read earlier — at planning/description time via
+ * [[hasLakeSnapshot]] — possibly before `plan()` runs or when it never runs at all. The planner
+ * does NOT rely on the enclosing batch being closed, because the Spark DSv2 Batch interface exposes
+ * no `close()` lifecycle that Spark would invoke.
  *
  * Concrete planners probe for a readable lake snapshot (once, memoized) and branch inside `plan()`:
  *   - Lake-union branch (snapshot present): unions lake splits with a Fluss log-tail (append) or
@@ -98,9 +97,9 @@ sealed trait AppendSplitPlanner extends SplitPlanner
 sealed trait UpsertSplitPlanner extends SplitPlanner
 
 /**
- * Base implementation: lazily opens a Fluss client Connection + Admin for the plan-time metadata
- * RPCs and tears it down in [[close]] (scoped to a single `plan()` call, not to a Spark-managed
- * batch lifecycle). The lake-snapshot probe deliberately uses its own short-lived connection — see
+ * Base implementation: lazily borrows a Fluss client Connection + Admin for the plan-time metadata
+ * RPCs and returns its lease in [[close]] (scoped to a single `plan()` call, not to a Spark-managed
+ * batch lifecycle). The lake-snapshot probe deliberately uses its own connection lease — see
  * [[probeLakeSnapshot]] — since it can fire before or independently of `plan()`.
  *
  * Also centralizes the lake-snapshot probe: if data lake is enabled at the table level, try loading
@@ -114,18 +113,24 @@ abstract class AbstractSplitPlanner(
   extends SplitPlanner {
 
   // Fluss client connection scoped to plan()-time metadata RPCs (partition/offset/kv-snapshot
-  // lookups). Opened lazily on first use and released in plan()'s finally block. We deliberately do
+  // lookups). Borrowed lazily on first use and returned in plan()'s finally block. We deliberately do
   // NOT rely on the enclosing batch being closed: the Spark DSv2 Batch interface exposes no close()
-  // lifecycle, so the planner itself must release the connection once planning finishes. The probe
-  // does not use this connection (see probeLakeSnapshot). Not synchronized: Spark plans on a single
+  // lifecycle, so the planner itself must return the lease once planning finishes. The probe
+  // uses a separate lease (see probeLakeSnapshot). Not synchronized: Spark plans on a single
   // driver thread.
-  private var conn: Connection = _
+  private var connectionLease: FlussConnectionCache.Lease = _
   private var admin0: Admin = _
 
   protected def admin: Admin = {
     if (admin0 == null) {
-      conn = ConnectionFactory.createConnection(flussConfig)
-      admin0 = conn.getAdmin
+      connectionLease = FlussConnectionCache.acquire(flussConfig)
+      try {
+        admin0 = connectionLease.connection.getAdmin
+      } catch {
+        case error: Throwable =>
+          close()
+          throw error
+      }
     }
     admin0
   }
@@ -152,7 +157,7 @@ abstract class AbstractSplitPlanner(
   // Memoized lake-snapshot probe: computed at most once per planner instance. It can be triggered
   // as early as ScanBuilder.build()/EXPLAIN time, because FlussScan.scanType (via description())
   // reads hasLakeSnapshot — before plan() runs, or even when plan() never runs. The probe manages
-  // its own short-lived connection (see probeLakeSnapshot); this only caches the result. Not
+  // its own connection lease (see probeLakeSnapshot); this only caches the result. Not
   // synchronized: Spark plans on a single driver thread.
   private var probed = false
   private var cachedLakeSnapshot: Option[LakeSnapshot] = None
@@ -170,20 +175,20 @@ abstract class AbstractSplitPlanner(
    * disabled at the table level, OR the readable snapshot admin call reported no snapshot; Present =
    * snapshot to union with the Fluss tail. Other exceptions propagate.
    *
-   * The probe uses its own short-lived connection, closed before returning, independent of the
-   * plan-scoped [[admin]] connection. This is required because the probe can be read from
+   * The probe uses its own connection lease, returned to the cache before returning, independent of
+   * the plan-scoped [[admin]] connection. This is required because the probe can be read from
    * FlussScan.scanType/description() at planning (build) time — possibly before plan() runs, or
    * when plan() never runs at all (EXPLAIN, pruned/duplicated scans). Borrowing the plan-scoped
-   * connection here would leak it in exactly those cases, since that connection is only released in
+   * connection here would leak it in exactly those cases, since that connection is only returned in
    * plan()'s finally block.
    */
   protected def probeLakeSnapshot(): Option[LakeSnapshot] = {
     if (!tableInfo.getTableConfig.isDataLakeEnabled) {
       None
     } else {
-      val probeConn = ConnectionFactory.createConnection(flussConfig)
+      val probeLease = FlussConnectionCache.acquire(flussConfig)
       try {
-        val probeAdmin = probeConn.getAdmin
+        val probeAdmin = probeLease.connection.getAdmin
         try {
           Some(probeAdmin.getReadableLakeSnapshot(tablePath).get())
         } catch {
@@ -197,11 +202,9 @@ abstract class AbstractSplitPlanner(
             } else {
               throw e
             }
-        } finally {
-          probeAdmin.close()
         }
       } finally {
-        probeConn.close()
+        probeLease.close()
       }
     }
   }
@@ -219,17 +222,14 @@ abstract class AbstractSplitPlanner(
   }
 
   /**
-   * Releases the Fluss client connection. Idempotent and null-safe; it never forces the lazily
+   * Returns the Fluss client connection lease. Idempotent and null-safe; it never forces the lazily
    * opened connection into existence, so it is a no-op when no metadata access ever occurred.
    */
   override def close(): Unit = {
-    if (admin0 != null) {
-      admin0.close()
-      admin0 = null
-    }
-    if (conn != null) {
-      conn.close()
-      conn = null
+    admin0 = null
+    if (connectionLease != null) {
+      connectionLease.close()
+      connectionLease = null
     }
   }
 }

@@ -29,7 +29,15 @@ admin.CreateTable(table_path, descriptor, true);
 
 ### Writing to Partitioned Log Tables
 
-**Partitions must exist before writing data, otherwise the client will by default retry indefinitely.** Include partition column values in each row, the client routes records to the correct partition automatically.
+Include partition column values in each row, the client routes records to the correct partition automatically. A write to a partition that doesn't exist creates it, unless `writer_dynamic_create_partition_enabled` is `false`, in which case the write fails with `PARTITION_NOT_EXISTS`. The server still validates a created partition, e.g. its values and, from Fluss 1.0 on, whether it is within an auto-partitioned table's retention. With idempotence enabled, the default, a write already sent to a partition that was dropped meanwhile fails with `PARTITION_NOT_EXISTS` instead of re-creating it; writing it again creates the partition.
+
+:::warning
+Before Fluss 1.0, the server also creates a partition outside an auto-partitioned table's retention. The write succeeds, but the partition and its rows are deleted at the next auto-partition check (`auto-partition.check.interval`, 10 minutes by default).
+:::
+
+:::note
+Unlike the Java client, this client doesn't support [historical partition access](../../../table-design/data-distribution/partitioning.md#historical-partition-access) yet. With `table.datalake.historical-partition.enabled`, a write to an expired partition isn't routed to the table's `__historical__` partition, but handled as any other missing partition.
+:::
 
 ```cpp
 fluss::Table table;
@@ -133,13 +141,13 @@ admin.CreateTable(table_path, descriptor, true);
 
 ### Writing to Partitioned Primary Key Tables
 
-**Partitions must exist before upserting data, otherwise the client will by default retry indefinitely.**
+As with log tables, an upsert to a partition that doesn't exist creates it by default.
 
 ```cpp
 fluss::Table table;
 conn.GetTable(table_path, table);
 
-// Create partitions first
+// Optional: an upsert creates a missing partition by default
 admin.CreatePartition(table_path, {{"region", "APAC"}, {"zone", "1"}}, true);
 admin.CreatePartition(table_path, {{"region", "EMEA"}, {"zone", "2"}}, true);
 admin.CreatePartition(table_path, {{"region", "US"}, {"zone", "3"}}, true);

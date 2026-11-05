@@ -102,6 +102,13 @@ public class RebalanceManager {
     private final Map<TableBucket, RebalanceResultForBucket> finishedRebalanceTasks =
             new ConcurrentHashMap<>();
 
+    /**
+     * A mapping from table bucket to the bucket epoch its planned leader must acknowledge before
+     * the in-flight task completes.
+     */
+    private final Map<TableBucket, Integer> awaitedLeaderAckBucketEpochs =
+            new ConcurrentHashMap<>();
+
     private final GoalOptimizer goalOptimizer;
     private volatile long registerTime;
     private volatile @Nullable RebalanceStatus rebalanceStatus;
@@ -199,6 +206,7 @@ public class RebalanceManager {
         inProgressRebalanceTasks.clear();
         inProgressRebalanceTasksQueue.clear();
         finishedRebalanceTasks.clear();
+        awaitedLeaderAckBucketEpochs.clear();
         // Clear gate (bucket) first, then data (startMs).
         inflightTaskBucket = null;
         inflightTaskStartMs = -1;
@@ -236,6 +244,7 @@ public class RebalanceManager {
         if (inProgressRebalanceTasksQueue.contains(tableBucket)) {
             inProgressRebalanceTasksQueue.remove(tableBucket);
             RebalanceResultForBucket resultForBucket = inProgressRebalanceTasks.remove(tableBucket);
+            awaitedLeaderAckBucketEpochs.remove(tableBucket);
             checkNotNull(resultForBucket, "RebalanceResultForBucket is null.");
             finishedRebalanceTasks.put(
                     tableBucket,
@@ -323,6 +332,7 @@ public class RebalanceManager {
         rebalanceStatus = CANCELED;
         inProgressRebalanceTasksQueue.clear();
         inProgressRebalanceTasks.clear();
+        awaitedLeaderAckBucketEpochs.clear();
         // Clear gate (bucket) first, then data (startMs).
         inflightTaskBucket = null;
         inflightTaskStartMs = -1;
@@ -375,6 +385,27 @@ public class RebalanceManager {
         return null;
     }
 
+    /**
+     * Marks that the coordinator applied the final state of the in-flight task for the bucket. The
+     * task completes once the planned leader acknowledges a request with at least the given bucket
+     * epoch.
+     */
+    public void awaitLeaderAck(TableBucket tableBucket, int bucketEpoch) {
+        checkNotClosed();
+        if (inProgressRebalanceTasks.containsKey(tableBucket)) {
+            awaitedLeaderAckBucketEpochs.put(tableBucket, bucketEpoch);
+        }
+    }
+
+    /**
+     * Returns the bucket epoch the planned leader must acknowledge, or null if the task for the
+     * bucket is not waiting for the leader acknowledgement.
+     */
+    public @Nullable Integer getAwaitedLeaderAckBucketEpoch(TableBucket tableBucket) {
+        checkNotClosed();
+        return awaitedLeaderAckBucketEpochs.get(tableBucket);
+    }
+
     private void processNewRebalanceTask() {
         TableBucket tableBucket = inProgressRebalanceTasksQueue.peek();
         if (tableBucket != null && inProgressRebalanceTasks.containsKey(tableBucket)) {
@@ -410,6 +441,7 @@ public class RebalanceManager {
         rebalanceStatus = COMPLETED;
         inProgressRebalanceTasks.clear();
         inProgressRebalanceTasksQueue.clear();
+        awaitedLeaderAckBucketEpochs.clear();
 
         // Here, it will not clear finishedRebalanceTasks, because it will be used by
         // listRebalanceProgress. It will be cleared when next register.

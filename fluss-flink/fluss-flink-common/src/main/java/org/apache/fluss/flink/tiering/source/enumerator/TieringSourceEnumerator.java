@@ -22,17 +22,22 @@ import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.metadata.MetadataUpdater;
+import org.apache.fluss.client.tiering.TieringLogSplit;
+import org.apache.fluss.client.tiering.TieringSplit;
+import org.apache.fluss.client.tiering.TieringSplitGenerator;
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.metrics.FlinkMetricRegistry;
 import org.apache.fluss.flink.tiering.event.FailedTieringEvent;
 import org.apache.fluss.flink.tiering.event.FinishedTieringEvent;
 import org.apache.fluss.flink.tiering.event.TieringReachMaxDurationEvent;
-import org.apache.fluss.flink.tiering.source.split.TieringSplit;
-import org.apache.fluss.flink.tiering.source.split.TieringSplitGenerator;
+import org.apache.fluss.flink.tiering.source.metrics.TieringMetrics;
+import org.apache.fluss.flink.tiering.source.split.FlinkTieringSplit;
 import org.apache.fluss.flink.tiering.source.state.TieringSourceEnumeratorState;
 import org.apache.fluss.lake.committer.TieringStats;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.fluss.lake.writer.TieringTableValidator;
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.GatewayClientProxy;
@@ -45,6 +50,7 @@ import org.apache.fluss.rpc.messages.PbLakeTieringStats;
 import org.apache.fluss.rpc.messages.PbLakeTieringTableInfo;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
 import org.apache.fluss.utils.ExceptionUtils;
+import org.apache.fluss.utils.IOUtils;
 
 import org.apache.flink.api.connector.source.ReaderInfo;
 import org.apache.flink.api.connector.source.SourceEvent;
@@ -77,7 +83,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper.basicHeartBeat;
-import static org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper.failedTableHeartBeat;
 import static org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper.heartBeatWithRequestNewTieringTable;
 import static org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper.tieringTableHeartBeat;
 import static org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper.waitHeartbeatResponse;
@@ -97,7 +102,7 @@ import static org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnum
  * </ul>
  */
 public class TieringSourceEnumerator
-        implements SplitEnumerator<TieringSplit, TieringSourceEnumeratorState> {
+        implements SplitEnumerator<FlinkTieringSplit, TieringSourceEnumeratorState> {
 
     private static final Logger LOG = LoggerFactory.getLogger(TieringSourceEnumerator.class);
 
@@ -105,10 +110,12 @@ public class TieringSourceEnumerator
     private static final long EMPTY_TABLE_POLL_DELAY_MS = 1000L;
 
     private final Configuration flussConf;
-    private final SplitEnumeratorContext<TieringSplit> context;
+    private final Configuration lakeTieringConfig;
+    private final SplitEnumeratorContext<FlinkTieringSplit> context;
     private final LakeTieringFactory<?, ?> lakeTieringFactory;
     private final ScheduledExecutorService timerService;
     private final SplitEnumeratorMetricGroup enumeratorMetricGroup;
+    private final AutoCloseable tieringMetrics;
     private final long pollTieringTableIntervalMs;
     // Also inspected by asynchronous heartbeat requests.
     private final Deque<TieringSplit> pendingSplits;
@@ -136,11 +143,26 @@ public class TieringSourceEnumerator
 
     public TieringSourceEnumerator(
             Configuration flussConf,
-            SplitEnumeratorContext<TieringSplit> context,
+            SplitEnumeratorContext<FlinkTieringSplit> context,
             LakeTieringFactory<?, ?> lakeTieringFactory,
             long pollTieringTableIntervalMs) {
         this(
                 flussConf,
+                new Configuration(),
+                context,
+                lakeTieringFactory,
+                pollTieringTableIntervalMs);
+    }
+
+    public TieringSourceEnumerator(
+            Configuration flussConf,
+            Configuration lakeTieringConfig,
+            SplitEnumeratorContext<FlinkTieringSplit> context,
+            LakeTieringFactory<?, ?> lakeTieringFactory,
+            long pollTieringTableIntervalMs) {
+        this(
+                flussConf,
+                lakeTieringConfig,
                 context,
                 lakeTieringFactory,
                 pollTieringTableIntervalMs,
@@ -151,11 +173,13 @@ public class TieringSourceEnumerator
     @VisibleForTesting
     TieringSourceEnumerator(
             Configuration flussConf,
-            SplitEnumeratorContext<TieringSplit> context,
+            Configuration lakeTieringConfig,
+            SplitEnumeratorContext<FlinkTieringSplit> context,
             LakeTieringFactory<?, ?> lakeTieringFactory,
             long pollTieringTableIntervalMs,
             ScheduledExecutorService timerService) {
         this.flussConf = flussConf;
+        this.lakeTieringConfig = lakeTieringConfig;
         this.context = context;
         this.lakeTieringFactory = lakeTieringFactory;
         this.timerService = timerService;
@@ -167,6 +191,10 @@ public class TieringSourceEnumerator
         this.finishedTables = new ConcurrentHashMap<>();
         this.failedTableEpochs = new ConcurrentHashMap<>();
         this.tieringReachMaxDurationsTables = Collections.synchronizedSet(new TreeSet<>());
+        this.tieringMetrics =
+                TieringMetrics.registerReadersAwaitingSplitRatio(
+                        enumeratorMetricGroup,
+                        () -> (double) readersAwaitingSplit.size() / context.currentParallelism());
     }
 
     @Override
@@ -243,9 +271,9 @@ public class TieringSourceEnumerator
     }
 
     @Override
-    public void addSplitsBack(List<TieringSplit> splits, int subtaskId) {
+    public void addSplitsBack(List<FlinkTieringSplit> splits, int subtaskId) {
         readersAwaitingSplit.add(subtaskId);
-        pendingSplits.addAll(splits);
+        splits.forEach(split -> pendingSplits.addLast(split.unwrap()));
         assignSplits();
     }
 
@@ -415,7 +443,7 @@ public class TieringSourceEnumerator
                 }
                 TieringSplit tieringSplit = pendingSplits.pollFirst();
                 if (tieringSplit != null) {
-                    context.assignSplit(tieringSplit, nextAwaitingReader);
+                    context.assignSplit(new FlinkTieringSplit(tieringSplit), nextAwaitingReader);
                     LOG.info("Assigning split {} to readers {}", tieringSplit, nextAwaitingReader);
                     readersAwaitingSplit.remove(nextAwaitingReader);
                 }
@@ -490,16 +518,32 @@ public class TieringSourceEnumerator
                 ((TieringTableValidator) lakeTieringFactory).validateTable(tableInfo);
             }
             List<TieringSplit> tieringSplits = splitGenerator.generateTableSplits(tableInfo);
+            if (tieringSplits.isEmpty()
+                    && lakeTieringConfig.get(ConfigOptions.LAKE_TIERING_PARTITION_MARK_DONE_ENABLED)
+                    && lakeTieringFactory.supportsPartitionMarkDone()
+                    && tableInfo.isPartitioned()) {
+                // Let the committer check the lake table options without lake I/O here.
+                tieringSplits = new ArrayList<>();
+                tieringSplits.add(
+                        new TieringLogSplit(
+                                tablePath,
+                                new TableBucket(tableInfo.getTableId(), 0),
+                                null,
+                                0L,
+                                0L,
+                                1,
+                                true));
+            }
             // shuffle tiering split to avoid splits tiering skew
             // after introduce tiering max duration
             Collections.shuffle(tieringSplits);
-            tieringSplits = populateTieringRoundMetadata(tieringSplits);
+            List<TieringSplit> splitsWithMetadata = populateTieringRoundMetadata(tieringSplits);
             LOG.info(
                     "Generate Tiering {} splits for table {} with cost {}ms.",
-                    tieringSplits.size(),
+                    splitsWithMetadata.size(),
                     tieringTable.f2,
                     System.currentTimeMillis() - start);
-            if (tieringSplits.isEmpty()) {
+            if (splitsWithMetadata.isEmpty()) {
                 LOG.info(
                         "Generate Tiering splits for table {} is empty, no need to tier data.",
                         tieringTable.f2.getTableName());
@@ -508,7 +552,7 @@ public class TieringSourceEnumerator
                 // An empty round has no split or completion event to drive the next table.
                 requestTableAndAssign(EMPTY_TABLE_POLL_DELAY_MS);
             } else {
-                pendingSplits.addAll(tieringSplits);
+                pendingSplits.addAll(splitsWithMetadata);
 
                 timerService.schedule(
                         () ->
@@ -581,58 +625,41 @@ public class TieringSourceEnumerator
 
     @Override
     public void close() throws IOException {
+        // Repeated lifecycle calls are a no-op: the final report is attempted once and the
+        // resources are released once.
+        if (closed) {
+            return;
+        }
         closed = true;
         timerService.shutdownNow();
-        if (rpcClient != null) {
-            failedTableEpochs.putAll(tieringTableEpochs);
-            tieringTableEpochs.clear();
-            if (!failedTableEpochs.isEmpty()) {
-                reportFailedTable(basicHeartBeat(), failedTableEpochs);
-            }
-            try {
-                LOG.info("Closing Tiering Source Enumerator of at {}.", System.currentTimeMillis());
-                rpcClient.close();
-            } catch (Exception e) {
-                LOG.error("Failed to close Tiering Source enumerator.", e);
-            }
-        }
         try {
-            if (flussAdmin != null) {
-                LOG.info("Closing Fluss Admin client...");
-                flussAdmin.close();
+            if (coordinatorGateway != null) {
+                // The finished tables have to be flushed here: a table that produced no splits is
+                // removed from the in-flight epochs as soon as it is marked as finished, so it is
+                // neither part of tieringTableEpochs nor of failedTableEpochs at close time.
+                // Without flushing it explicitly, its completion would never reach the coordinator
+                // and the table remains in the Tiering state until the tiering service timeout
+                // expires. Tables that are still in flight are reported as failed so that the
+                // coordinator reschedules them.
+                Map<Long, TieringFinishInfo> currentFinishedTables = new HashMap<>(finishedTables);
+                Map<Long, Long> currentFailedTableEpochs = new HashMap<>(failedTableEpochs);
+                currentFailedTableEpochs.putAll(tieringTableEpochs);
+                if (!currentFinishedTables.isEmpty() || !currentFailedTableEpochs.isEmpty()) {
+                    waitHeartbeatResponse(
+                            coordinatorGateway.lakeTieringHeartbeat(
+                                    tieringTableHeartBeat(
+                                            basicHeartBeat(),
+                                            Collections.emptyMap(),
+                                            currentFinishedTables,
+                                            currentFailedTableEpochs,
+                                            flussCoordinatorEpoch)));
+                }
             }
-        } catch (Exception e) {
-            LOG.error("Failed to close Fluss Admin client.", e);
-        }
-        try {
-            if (connection != null) {
-                LOG.info("Closing Fluss connection...");
-                connection.close();
-            }
-        } catch (Exception e) {
-            LOG.error("Failed to close Fluss connection.", e);
-        }
-    }
-
-    /**
-     * Report failed table to Fluss coordinator via HeartBeat, this method should be called when
-     * {@link TieringSourceEnumerator} is closed or receives failed table from downstream lake
-     * committer.
-     */
-    private void reportFailedTable(
-            LakeTieringHeartbeatRequest heartbeatRequest, Map<Long, Long> failedTableEpochs)
-            throws FlinkRuntimeException {
-        try {
-            waitHeartbeatResponse(
-                    coordinatorGateway.lakeTieringHeartbeat(
-                            failedTableHeartBeat(
-                                    heartbeatRequest, failedTableEpochs, flussCoordinatorEpoch)));
-            LOG.info("Report failed table to Fluss Coordinator success");
-
-        } catch (Exception e) {
-            LOG.error("Errors happens when report failed table to Fluss cluster.", e);
-            throw new FlinkRuntimeException(
-                    "Errors happens when report failed table to Fluss cluster.", e);
+        } finally {
+            IOUtils.closeQuietly(tieringMetrics, "tiering metrics");
+            IOUtils.closeQuietly(rpcClient, "tiering RPC client");
+            IOUtils.closeQuietly(flussAdmin, "Fluss admin client");
+            IOUtils.closeQuietly(connection, "Fluss connection");
         }
     }
 

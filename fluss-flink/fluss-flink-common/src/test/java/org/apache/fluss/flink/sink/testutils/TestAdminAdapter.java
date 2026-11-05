@@ -18,6 +18,7 @@
 package org.apache.fluss.flink.sink.testutils;
 
 import org.apache.fluss.client.admin.Admin;
+import org.apache.fluss.client.admin.ClusterDescription;
 import org.apache.fluss.client.admin.ClusterHealth;
 import org.apache.fluss.client.admin.CreateAclsResult;
 import org.apache.fluss.client.admin.DropAclsResult;
@@ -140,6 +141,12 @@ public class TestAdminAdapter implements Admin {
     @Override
     public CompletableFuture<Void> createTable(
             TablePath tablePath, TableDescriptor tableDescriptor, boolean ignoreIfExists) {
+        throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
+    }
+
+    @Override
+    public CompletableFuture<TableInfo> createTableFromLake(
+            TablePath tablePath, Map<String, String> options) {
         throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
     }
 
@@ -351,6 +358,11 @@ public class TestAdminAdapter implements Admin {
 
     @Override
     public CompletableFuture<ClusterHealth> getClusterHealth() {
+        throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
+    }
+
+    @Override
+    public CompletableFuture<ClusterDescription> describeCluster() {
         throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
     }
 

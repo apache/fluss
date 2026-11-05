@@ -19,11 +19,15 @@
 
 package org.apache.fluss.client.admin;
 
+import org.apache.fluss.client.FlussConnection;
+import org.apache.fluss.cluster.ServerNode;
+import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.exception.TableNotPartitionedException;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.messages.ListPartitionInfosRequest;
@@ -32,16 +36,24 @@ import org.apache.fluss.rpc.messages.PbTablePath;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
 import static org.apache.fluss.metadata.DataLakeFormat.PAIMON;
 import static org.apache.fluss.record.TestData.DATA1_PARTITIONED_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR_PK;
+import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.tuple;
 
 /**
  * Additional integration tests for {@link FlussAdmin}.
@@ -164,6 +176,114 @@ class FlussAdmin2ITCase extends ClientToServerITCaseBase {
                 .doesNotContain(HISTORICAL_PARTITION_VALUE);
     }
 
+    @Test
+    void testDescribeClusterDuringRollingUpgrade() throws Exception {
+        TablePath tablePath = TablePath.of("test_db", "describe_cluster_table");
+        long tableId = createTable(tablePath, DATA1_TABLE_DESCRIPTOR_PK, true);
+        waitAllReplicasReady(tableId, 3);
+
+        // Phase 1: Cluster is healthy - every live server is reported, hosts replicas of the
+        // created table (replication factor 3 on 3 servers) and is green. The cluster is shared
+        // with other tests, so wait until residue from them (e.g. a recovering ISR) has settled
+        // before taking the snapshot asserted below.
+        waitUntil(
+                () ->
+                        admin.describeCluster().get().getTabletServerLoads().values().stream()
+                                .allMatch(FlussAdmin2ITCase::isServerGreen),
+                Duration.ofMinutes(1),
+                "All tablet servers should be green before the rolling upgrade starts");
+
+        ClusterDescription description = admin.describeCluster().get();
+        assertThat(description.getCoordinatorServer())
+                .contains(FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode());
+        assertThat(description.getTabletServers()).containsOnlyKeys(0, 1, 2);
+        Collection<TabletServerDescription> servers = description.getTabletServerLoads().values();
+        assertThat(servers).extracting(TabletServerDescription::getServerId).contains(0, 1, 2);
+        for (TabletServerDescription server : servers) {
+            assertThat(server.getNumReplicas()).isGreaterThan(0);
+            assertThat(isServerGreen(server)).isTrue();
+        }
+
+        // Phase 2: Stop one tablet server (simulate server crash during rolling upgrade). It must
+        // still be reported with its assigned replicas, but no longer green - an operator must
+        // not treat it as safe to remove.
+        int stoppedServerId = 0;
+        FLUSS_CLUSTER_EXTENSION.stopTabletServer(stoppedServerId);
+        try {
+            FLUSS_CLUSTER_EXTENSION.assertHasTabletServerNumber(2);
+
+            for (int bucket = 0; bucket < 3; bucket++) {
+                TableBucket tb = new TableBucket(tableId, bucket);
+                FLUSS_CLUSTER_EXTENSION.waitUntilReplicaShrinkFromIsr(tb, stoppedServerId);
+            }
+
+            description = admin.describeCluster().get();
+            assertThat(description.getTabletServers()).doesNotContainKey(stoppedServerId);
+            assertThat(description.getTabletServerLoads()).containsKey(stoppedServerId);
+            TabletServerDescription stopped =
+                    description.getTabletServerLoads().get(stoppedServerId);
+            assertThat(stopped.getNumReplicas()).isGreaterThan(0);
+            assertThat(stopped.getInSyncReplicas()).isLessThan(stopped.getNumReplicas());
+        } finally {
+            FLUSS_CLUSTER_EXTENSION.startTabletServer(stoppedServerId);
+        }
+
+        FLUSS_CLUSTER_EXTENSION.assertHasTabletServerNumber(3);
+
+        for (int bucket = 0; bucket < 3; bucket++) {
+            TableBucket tb = new TableBucket(tableId, bucket);
+            FLUSS_CLUSTER_EXTENSION.waitUntilReplicaExpandToIsr(tb, stoppedServerId);
+        }
+
+        waitUntil(
+                () ->
+                        admin.describeCluster().get().getTabletServerLoads().values().stream()
+                                .allMatch(FlussAdmin2ITCase::isServerGreen),
+                Duration.ofMinutes(1),
+                "All tablet servers should become green again after server restart");
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testClusterDiscoveryAfterCoordinatorServerRestart(boolean describeCluster)
+            throws Exception {
+        admin.addServerTag(Collections.singletonList(0), ServerTag.TEMPORARY_OFFLINE).get();
+        try {
+            ServerNode staleCoordinator = FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode();
+            assertThat(admin.describeCluster().get().getCoordinatorServer())
+                    .contains(staleCoordinator);
+
+            // Reuse the same admin with stale coordinator metadata after the address changes.
+            restartCoordinatorServer(FLUSS_CLUSTER_EXTENSION.getZooKeeperClient());
+            ServerNode newCoordinator = FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode();
+            assertThat(newCoordinator).isNotEqualTo(staleCoordinator);
+
+            List<ServerNode> serverNodes;
+            if (describeCluster) {
+                ClusterDescription description = admin.describeCluster().get();
+                assertThat(description.getCoordinatorServer()).contains(newCoordinator);
+                assertThat(description.getTabletServerLoads()).containsOnlyKeys(0, 1, 2);
+                assertThat(description.getTabletServers().values())
+                        .filteredOn(node -> node.serverTag() != null)
+                        .extracting(ServerNode::id, ServerNode::serverTag)
+                        .containsExactly(tuple(0, ServerTag.TEMPORARY_OFFLINE));
+                serverNodes = new ArrayList<>(description.getTabletServers().values());
+                serverNodes.add(description.getCoordinatorServer().get());
+            } else {
+                serverNodes = admin.getServerNodes().get();
+                assertThat(serverNodes).allMatch(node -> node.serverTag() == null);
+            }
+            List<ServerNode> expectedNodes = new ArrayList<>();
+            expectedNodes.add(newCoordinator);
+            expectedNodes.addAll(FLUSS_CLUSTER_EXTENSION.getTabletServerNodes());
+            assertThat(serverNodes).containsExactlyInAnyOrderElementsOf(expectedNodes);
+        } finally {
+            // Discovery can return fresh nodes without updating the cached mutation gateway.
+            ((FlussConnection) conn).getMetadataUpdater().refreshClusterUntilAvailable();
+            admin.removeServerTag(Collections.singletonList(0), ServerTag.TEMPORARY_OFFLINE).get();
+        }
+    }
+
     private static ListPartitionInfosRequest requestFor(
             TablePath tablePath, boolean includeSystemPartitions) {
         ListPartitionInfosRequest request =
@@ -176,5 +296,11 @@ class FlussAdmin2ITCase extends ClientToServerITCaseBase {
             request.setIncludeSystemPartitions(true);
         }
         return request;
+    }
+
+    private static boolean isServerGreen(TabletServerDescription server) {
+        return server.getInSyncReplicas() == server.getNumReplicas()
+                && server.getActiveLeaderReplicas() == server.getNumLeaderReplicas()
+                && server.getLeaderlessReplicas() == 0;
     }
 }

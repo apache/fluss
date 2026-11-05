@@ -78,6 +78,7 @@ import org.apache.fluss.server.metadata.TableMetadata;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.replica.ReplicaTestBase;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.lake.LakeTableHelper;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
@@ -1223,6 +1224,14 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
                 TABLE_PATH,
                 TableRegistration.newTable(TABLE_ID, DEFAULT_REMOTE_DATA_DIR, descriptor));
         zkClient.registerFirstSchema(TABLE_PATH, schema);
+        zkClient.registerPartitionAssignmentAndMetadata(
+                PARTITION_ID,
+                HISTORICAL_PARTITION,
+                new PartitionAssignment(TABLE_ID, Collections.emptyMap()),
+                DEFAULT_REMOTE_DATA_DIR,
+                TABLE_PATH,
+                TABLE_ID,
+                tableInfo.getNumBuckets());
 
         BucketMetadata bucketMetadata =
                 new BucketMetadata(

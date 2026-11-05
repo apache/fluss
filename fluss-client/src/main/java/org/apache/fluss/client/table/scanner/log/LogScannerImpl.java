@@ -31,6 +31,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.predicate.Predicate;
+import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
 import org.apache.fluss.types.RowType;
@@ -41,6 +42,7 @@ import javax.annotation.Nullable;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.ConcurrentModificationException;
+import java.util.function.BiPredicate;
 
 /**
  * The default impl of {@link LogScanner}.
@@ -162,6 +164,29 @@ public class LogScannerImpl extends AbstractLogScanner<ScanRecords> implements L
     @Override
     protected String notSubscribedMessage() {
         return "LogScanner is not subscribed any buckets.";
+    }
+
+    /**
+     * Polls records after filtering their borrowed rows, before copying selected rows. The filter
+     * must not retain a record or its row. Returned records own their row values as in normal
+     * polls. Consumed offsets include filtered records. Only unprojected scanners support this
+     * operation.
+     */
+    @Internal
+    public ScanRecords pollFiltered(
+            Duration timeout, BiPredicate<TableBucket, LogRecord> recordFilter) {
+        if (hasProjection) {
+            throw new UnsupportedOperationException(
+                    "Filtered polling requires an unprojected scanner.");
+        }
+        acquireAndEnsureOpen();
+        try {
+            logFetcher.setRecordFilter(recordFilter);
+            return poll(timeout);
+        } finally {
+            logFetcher.setRecordFilter(null);
+            release();
+        }
     }
 
     /**

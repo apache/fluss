@@ -279,7 +279,10 @@ public class RemoteLogFetcher implements Closeable {
                 localFile);
 
         boolean success = false;
-        try (InputStream inputStream = remoteLogStorage.fetchLogData(segment);
+        try (InputStream inputStream =
+                        remoteLogStorage.fetchLogData(
+                                remoteLogManager.remoteLogTablet(tableBucket).getRemoteLogDir(),
+                                segment);
                 OutputStream outputStream = Files.newOutputStream(localFile.toPath())) {
             IOUtils.copyBytes(inputStream, outputStream, false);
             success = true;

@@ -244,10 +244,10 @@ public class CompletedSnapshotStoreManager {
     }
 
     /**
-     * Returns active snapshot IDs per bucket for the given (tableId, partitionId) scope. For
-     * buckets with an in-memory {@link CompletedSnapshotStore}, the cached active set is returned
-     * (completed snapshots ∪ still-in-use snapshots, no retention truncation). For other buckets,
-     * snapshot IDs are read directly from ZK children (no per-snapshot payload fetch).
+     * Returns active snapshot IDs per bucket for the given (tableId, partitionId) scope. The result
+     * includes both cached snapshots and every persistent snapshot handle. A persistent handle may
+     * be visible before the in-memory store adopts it. Failure to read persistent handles fails the
+     * query so callers cannot mistake an uncertain result for an empty active set.
      */
     public Map<Integer, Set<Long>> getActiveSnapshotIdsByBucket(
             long tableId, @Nullable Long partitionId, int numBuckets) {
@@ -255,11 +255,9 @@ public class CompletedSnapshotStoreManager {
         for (int i = 0; i < numBuckets; i++) {
             TableBucket tb = new TableBucket(tableId, partitionId, i);
             CompletedSnapshotStore store = bucketCompletedSnapshotStores.get(tb);
-            Set<Long> ids;
+            Set<Long> ids = new HashSet<>(readActiveSnapshotIdsFromZk(tb));
             if (store != null) {
-                ids = store.getActiveSnapshotIds();
-            } else {
-                ids = readActiveSnapshotIdsFromZk(tb);
+                ids.addAll(store.getActiveSnapshotIds());
             }
             if (!ids.isEmpty()) {
                 result.put(i, ids);

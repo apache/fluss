@@ -84,6 +84,9 @@ import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.tablet.TestTabletServerGateway;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.server.testutils.TestingServerRestartUtils;
+import org.apache.fluss.server.testutils.TestingServerRestartUtils.RestartScenario;
+import org.apache.fluss.server.testutils.TestingServerRestartUtils.RestartTarget;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.ServerTags;
 import org.apache.fluss.types.DataTypeChecks;
@@ -91,6 +94,8 @@ import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 import javax.annotation.Nullable;
 
@@ -125,9 +130,11 @@ import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.row.encode.KvValueLayout.PLAIN;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.InternalRowAssert.assertThatRow;
+import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.entry;
 
 /**
  * Integration tests for {@link FlussAdmin}.
@@ -1162,8 +1169,37 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 .isInstanceOf(DatabaseNotExistException.class);
     }
 
-    @Test
-    void testListPartitionInfosAfterTabletServerRestart() throws Exception {
+    @ParameterizedTest
+    @EnumSource(RestartScenario.class)
+    void testCreateTableAfterCoordinatorServerRestart(RestartScenario restartScenario)
+            throws Exception {
+        TablePath tablePath =
+                TablePath.of(
+                        DEFAULT_TABLE_PATH.getDatabaseName(),
+                        "test_create_table_after_coordinator_server_restart");
+        ZooKeeperClient zkClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
+
+        TestingServerRestartUtils.restartServers(
+                FLUSS_CLUSTER_EXTENSION, RestartTarget.COORDINATOR, restartScenario);
+
+        if (restartScenario == RestartScenario.NEW_PORT) {
+            assertThatThrownBy(
+                            () ->
+                                    admin.createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, false)
+                                            .get())
+                    .isInstanceOf(ExecutionException.class)
+                    .hasCauseInstanceOf(NetworkException.class);
+            assertThat(zkClient.tableExist(tablePath)).isFalse();
+        }
+
+        admin.createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, true).get();
+        assertThat(zkClient.tableExist(tablePath)).isTrue();
+    }
+
+    @ParameterizedTest
+    @EnumSource(RestartScenario.class)
+    void testListPartitionInfosAfterTabletServerRestart(RestartScenario restartScenario)
+            throws Exception {
         String dbName = DEFAULT_TABLE_PATH.getDatabaseName();
         TablePath partitionedTablePath = TablePath.of(dbName, "test_retry_partitioned_table");
         admin.createTable(partitionedTablePath, DATA1_PARTITIONED_TABLE_DESCRIPTOR, true).get();
@@ -1174,12 +1210,8 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 admin.listPartitionInfos(partitionedTablePath).get();
         assertThat(partitionInfosBefore).isNotEmpty();
 
-        // Restart all tablet servers (they bind to new ports, making cached addresses stale).
-        for (int i = 0; i < FLUSS_CLUSTER_EXTENSION.getTabletServerNodes().size(); i++) {
-            FLUSS_CLUSTER_EXTENSION.stopTabletServer(i);
-            FLUSS_CLUSTER_EXTENSION.startTabletServer(i);
-        }
-        FLUSS_CLUSTER_EXTENSION.waitUntilAllGatewayHasSameMetadata();
+        TestingServerRestartUtils.restartServers(
+                FLUSS_CLUSTER_EXTENSION, RestartTarget.TABLET_SERVERS, restartScenario);
 
         // Second query using the same admin client should succeed after retry with metadata
         // refresh (verifies RetryableGatewayClientProxy convergence on stale addresses).
@@ -1188,21 +1220,29 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         assertThat(partitionInfosAfter).hasSize(partitionInfosBefore.size());
     }
 
-    @Test
-    void testKvSnapshotLeaseAfterCoordinatorServerRestart() throws Exception {
+    @ParameterizedTest
+    @EnumSource(RestartScenario.class)
+    void testKvSnapshotLeaseAfterCoordinatorServerRestart(RestartScenario restartScenario)
+            throws Exception {
         long tableId = admin.getTableInfo(DEFAULT_TABLE_PATH).get().getTableId();
         TableBucket tableBucket = new TableBucket(tableId, 0);
         Map<TableBucket, Long> snapshots = Collections.singletonMap(tableBucket, 0L);
-        KvSnapshotLease lease = admin.createKvSnapshotLease("test-retry-kv-snapshot-lease", 60000L);
+        KvSnapshotLease lease =
+                admin.createKvSnapshotLease(
+                        "test-retry-kv-snapshot-lease-" + restartScenario.name(), 60000L);
         ZooKeeperClient zkClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
 
         // Restart the coordinator server so that the lease uses a stale cached address.
-        restartCoordinatorServer(zkClient);
+        TestingServerRestartUtils.restartServers(
+                FLUSS_CLUSTER_EXTENSION, RestartTarget.COORDINATOR, restartScenario);
+
         lease.acquireSnapshots(snapshots).get();
         assertThat(zkClient.getKvSnapshotLeaseMetadata(lease.leaseId())).isPresent();
 
         // Verify that release also refreshes metadata and retries against the new coordinator.
-        restartCoordinatorServer(zkClient);
+        TestingServerRestartUtils.restartServers(
+                FLUSS_CLUSTER_EXTENSION, RestartTarget.COORDINATOR, restartScenario);
+
         lease.releaseSnapshots(Collections.singleton(tableBucket)).get();
         assertThat(zkClient.getKvSnapshotLeaseMetadata(lease.leaseId())).isNotPresent();
 
@@ -1210,20 +1250,11 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         lease.acquireSnapshots(snapshots).get();
         assertThat(zkClient.getKvSnapshotLeaseMetadata(lease.leaseId())).isPresent();
 
-        restartCoordinatorServer(zkClient);
-        FLUSS_CLUSTER_EXTENSION.waitUntilAllGatewayHasSameMetadata();
+        TestingServerRestartUtils.restartServers(
+                FLUSS_CLUSTER_EXTENSION, RestartTarget.COORDINATOR, restartScenario);
 
         lease.dropLease().get();
         assertThat(zkClient.getKvSnapshotLeaseMetadata(lease.leaseId())).isNotPresent();
-    }
-
-    private void restartCoordinatorServer(ZooKeeperClient zkClient) throws Exception {
-        FLUSS_CLUSTER_EXTENSION.stopCoordinatorServer();
-        waitUntil(
-                () -> !zkClient.getCoordinatorLeaderAddress().isPresent(),
-                Duration.ofMinutes(1),
-                "Coordinator server node still exists in ZooKeeper");
-        FLUSS_CLUSTER_EXTENSION.startCoordinatorServer();
     }
 
     @Test
@@ -2340,6 +2371,11 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         assertThat(zkClient.getServerTags().get().getServerTags())
                 .containsEntry(0, ServerTag.PERMANENT_OFFLINE)
                 .containsEntry(1, ServerTag.PERMANENT_OFFLINE);
+        // describeCluster reports the same tags, and no tag for server 2
+        assertThat(serverTagsOf(admin.describeCluster().get().getTabletServers().values()))
+                .containsOnly(
+                        entry(0, ServerTag.PERMANENT_OFFLINE),
+                        entry(1, ServerTag.PERMANENT_OFFLINE));
 
         // 3.add different server tag for server 0,2. error will be thrown and tag for 2 will not be
         // added.
@@ -2359,6 +2395,8 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         assertThat(serverTags)
                 .containsEntry(0, ServerTag.PERMANENT_OFFLINE)
                 .containsEntry(1, ServerTag.PERMANENT_OFFLINE);
+        assertThat(serverTagsOf(admin.describeCluster().get().getTabletServers().values()))
+                .isEqualTo(serverTags);
 
         // 4.remove server tag for server 100
         admin.removeServerTag(Collections.singletonList(100), ServerTag.PERMANENT_OFFLINE).get();
@@ -2376,6 +2414,8 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
 
         admin.removeServerTag(Arrays.asList(0, 1), ServerTag.PERMANENT_OFFLINE).get();
         assertThat(zkClient.getServerTags()).isNotPresent();
+        assertThat(serverTagsOf(admin.describeCluster().get().getTabletServers().values()))
+                .isEmpty();
 
         // restore after test, or else will influence other tests
         coordinatorContext.addLiveTabletServer(tmpServerInfo);
@@ -2394,6 +2434,17 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 .hasMessageContaining(
                         "Server tag PERMANENT_OFFLINE not exists for server 2, the current "
                                 + "server tag of this server is TEMPORARY_OFFLINE.");
+        assertThat(serverTagsOf(admin.describeCluster().get().getTabletServers().values()))
+                .containsOnly(entry(2, ServerTag.TEMPORARY_OFFLINE));
+        // clear server tag
+        admin.removeServerTag(Collections.singletonList(2), ServerTag.TEMPORARY_OFFLINE).get();
+    }
+
+    /** Returns the server tags of the tagged server nodes by server id. */
+    private static Map<Integer, ServerTag> serverTagsOf(Collection<ServerNode> serverNodes) {
+        return serverNodes.stream()
+                .filter(node -> node.serverTag() != null)
+                .collect(Collectors.toMap(ServerNode::id, ServerNode::serverTag));
     }
 
     @Test
@@ -2644,6 +2695,22 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                         .build();
         admin.createTable(tablePath6, tableDescriptor6, false).get();
         assertThat(admin.tableExists(tablePath6).get()).isTrue();
+
+        // Finish leader initialization before teardown deletes the schemas needed by KV recovery.
+        for (TablePath tablePath :
+                Arrays.asList(
+                        DEFAULT_TABLE_PATH,
+                        tablePath2,
+                        tablePath3,
+                        tablePath4,
+                        tablePath5,
+                        tablePath6)) {
+            TableInfo tableInfo = admin.getTableInfo(tablePath).get();
+            for (int bucket = 0; bucket < tableInfo.getNumBuckets(); bucket++) {
+                FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(
+                        new TableBucket(tableInfo.getTableId(), bucket));
+            }
+        }
     }
 
     // ==================== Table Statistics Tests ====================
@@ -2831,6 +2898,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         TableDescriptor logTableDescriptor =
                 TableDescriptor.builder().schema(logSchema).distributedBy(3).build();
         long tableId = createTable(logTablePath, logTableDescriptor, true);
+        FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId);
 
         // Create a KvSnapshotLease
         KvSnapshotLease lease = admin.createKvSnapshotLease("test-lease-log", 60000);
@@ -2904,10 +2972,16 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         waitAllReplicasReady(tableId, 3);
 
         // Phase 1: Cluster is healthy — status should be GREEN.
-        ClusterHealth health = admin.getClusterHealth().get();
-        assertThat(health.getStatus()).isEqualTo(ClusterHealthStatus.GREEN);
-        assertThat(health.getNumReplicas()).isEqualTo(health.getInSyncReplicas());
-        assertThat(health.getNumLeaderReplicas()).isEqualTo(health.getActiveLeaderReplicas());
+        // Wait for previous table deletions and coordinator-side leader activation to settle.
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    ClusterHealth health = admin.getClusterHealth().get();
+                    assertThat(health.getStatus()).isEqualTo(ClusterHealthStatus.GREEN);
+                    assertThat(health.getNumReplicas()).isEqualTo(health.getInSyncReplicas());
+                    assertThat(health.getNumLeaderReplicas())
+                            .isEqualTo(health.getActiveLeaderReplicas());
+                });
 
         // Phase 2: Stop one tablet server (simulate server crash during rolling upgrade).
         int stoppedServerId = 0;

@@ -34,8 +34,11 @@ import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.ConfigEntry;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.InvalidServerTypeException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
+import org.apache.fluss.exception.NotCoordinatorLeaderException;
 import org.apache.fluss.exception.PartitionNotExistException;
+import org.apache.fluss.exception.RetriableException;
 import org.apache.fluss.metadata.BucketInfo;
 import org.apache.fluss.metadata.DatabaseChange;
 import org.apache.fluss.metadata.DatabaseDescriptor;
@@ -67,12 +70,15 @@ import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.CancelRebalanceRequest;
 import org.apache.fluss.rpc.messages.CreateAclsRequest;
 import org.apache.fluss.rpc.messages.CreateDatabaseRequest;
+import org.apache.fluss.rpc.messages.CreateTableFromLakeRequest;
+import org.apache.fluss.rpc.messages.CreateTableFromLakeResponse;
 import org.apache.fluss.rpc.messages.CreateTableRequest;
 import org.apache.fluss.rpc.messages.DatabaseExistsRequest;
 import org.apache.fluss.rpc.messages.DatabaseExistsResponse;
 import org.apache.fluss.rpc.messages.DeleteProducerOffsetsRequest;
 import org.apache.fluss.rpc.messages.DescribeBucketsRequest;
 import org.apache.fluss.rpc.messages.DescribeClusterConfigsRequest;
+import org.apache.fluss.rpc.messages.DescribeClusterRequest;
 import org.apache.fluss.rpc.messages.DropAclsRequest;
 import org.apache.fluss.rpc.messages.DropDatabaseRequest;
 import org.apache.fluss.rpc.messages.DropTableRequest;
@@ -99,8 +105,10 @@ import org.apache.fluss.rpc.messages.ListRemoteLogManifestsRequest;
 import org.apache.fluss.rpc.messages.ListTablesRequest;
 import org.apache.fluss.rpc.messages.ListTablesResponse;
 import org.apache.fluss.rpc.messages.PbAlterConfig;
+import org.apache.fluss.rpc.messages.PbKeyValue;
 import org.apache.fluss.rpc.messages.PbListOffsetsRespForBucket;
 import org.apache.fluss.rpc.messages.PbPartitionInfo;
+import org.apache.fluss.rpc.messages.PbTableInfo;
 import org.apache.fluss.rpc.messages.PbTablePath;
 import org.apache.fluss.rpc.messages.PbTableStatsRespForBucket;
 import org.apache.fluss.rpc.messages.RebalanceRequest;
@@ -158,6 +166,15 @@ public class FlussAdmin implements Admin {
 
     private final AdminGateway gateway;
     private final AdminReadOnlyGateway readOnlyGateway;
+
+    /**
+     * Retries on the coordinator after a metadata refresh, so that a stale coordinator address is
+     * recovered. Only use it for idempotent read requests, because it retries on any {@link
+     * RetriableException}. Non-idempotent writes go through {@link #gateway}, which only retries
+     * errors that are guaranteed to be raised before the request is executed.
+     */
+    private final AdminGateway retryableCoordinatorGateway;
+
     private final MetadataUpdater metadataUpdater;
 
     /**
@@ -169,21 +186,37 @@ public class FlussAdmin implements Admin {
                     1, new ExecutorThreadFactory("fluss-admin-metadata-refresh"));
 
     public FlussAdmin(RpcClient client, MetadataUpdater metadataUpdater) {
-        // TODO: AdminGateway includes non-idempotent write operations (createTable, dropTable,
-        //  createDatabase, etc.). Wrapping it with RetryableGatewayClientProxy is unsafe because
-        //  a request may succeed on the server while the response is lost (surfacing as a
-        //  RetriableException), causing a duplicate mutation on retry. A future phase should
-        //  introduce idempotent retry semantics (e.g., request-id deduplication) before enabling
-        //  retry on the write gateway.
-        this.gateway =
+        AdminGateway rawGateway =
                 GatewayClientProxy.createGatewayProxy(
                         metadataUpdater::getCoordinatorServer, client, AdminGateway.class);
+        // Refresh metadata for recoverable failures, but don't retry generic network errors because
+        // a non-idempotent write may already have succeeded. NotCoordinatorLeaderException is safe
+        // to retry because the standby rejects the request before invoking the coordinator API,
+        // and InvalidServerTypeException is raised during the handshake before sending the request.
+        this.gateway =
+                RetryableGatewayClientProxy.createRetryableGatewayProxy(
+                        rawGateway,
+                        metadataUpdater::refreshClusterUntilAvailable,
+                        refreshExecutor,
+                        cause ->
+                                cause instanceof NotCoordinatorLeaderException
+                                        || cause instanceof RetriableException,
+                        cause ->
+                                cause instanceof NotCoordinatorLeaderException
+                                        || cause instanceof InvalidServerTypeException,
+                        AdminGateway.class);
         AdminGateway rawReadOnlyGateway =
                 GatewayClientProxy.createGatewayProxy(
                         metadataUpdater::getRandomTabletServer, client, AdminGateway.class);
         this.readOnlyGateway =
                 RetryableGatewayClientProxy.createRetryableGatewayProxy(
                         rawReadOnlyGateway,
+                        metadataUpdater::refreshClusterUntilAvailable,
+                        refreshExecutor,
+                        AdminGateway.class);
+        this.retryableCoordinatorGateway =
+                RetryableGatewayClientProxy.createRetryableGatewayProxy(
+                        rawGateway,
                         metadataUpdater::refreshClusterUntilAvailable,
                         refreshExecutor,
                         AdminGateway.class);
@@ -320,6 +353,31 @@ public class FlussAdmin implements Admin {
     }
 
     @Override
+    public CompletableFuture<TableInfo> createTableFromLake(
+            TablePath tablePath, Map<String, String> options) {
+        tablePath.validate();
+        checkNotNull(options, "options must not be null");
+
+        List<PbKeyValue> optionList = new ArrayList<>(options.size());
+        for (Map.Entry<String, String> option : options.entrySet()) {
+            optionList.add(
+                    new PbKeyValue()
+                            .setKey(checkNotNull(option.getKey(), "option key must not be null"))
+                            .setValue(
+                                    checkNotNull(
+                                            option.getValue(), "option value must not be null")));
+        }
+
+        CreateTableFromLakeRequest request = new CreateTableFromLakeRequest();
+        request.addAllOptions(optionList)
+                .setTablePath()
+                .setDatabaseName(tablePath.getDatabaseName())
+                .setTableName(tablePath.getTableName());
+        return gateway.createTableFromLake(request)
+                .thenApply(response -> toTableInfo(tablePath, response));
+    }
+
+    @Override
     public CompletableFuture<Void> alterTable(
             TablePath tablePath, List<TableChange> tableChanges, boolean ignoreIfNotExists) {
         tablePath.validate();
@@ -347,11 +405,11 @@ public class FlussAdmin implements Admin {
                 .getTableInfo(request)
                 .thenApply(
                         r ->
-                                TableInfo.of(
+                                toTableInfo(
                                         tablePath,
                                         r.getTableId(),
                                         r.getSchemaId(),
-                                        TableDescriptor.fromJsonBytes(r.getTableJson()),
+                                        r.getTableJson(),
                                         // For backward compatibility, results returned by old
                                         // clusters do not include the remote data dir
                                         r.hasRemoteDataDir() ? r.getRemoteDataDir() : null,
@@ -1116,10 +1174,51 @@ public class FlussAdmin implements Admin {
         }
     }
 
+    private static TableInfo toTableInfo(
+            TablePath tablePath, CreateTableFromLakeResponse response) {
+        PbTableInfo pbTableInfo = response.getTableInfo();
+        return toTableInfo(
+                tablePath,
+                pbTableInfo.getTableId(),
+                pbTableInfo.getSchemaId(),
+                pbTableInfo.getTableJson(),
+                pbTableInfo.hasRemoteDataDir() ? pbTableInfo.getRemoteDataDir() : null,
+                pbTableInfo.getCreatedTime(),
+                pbTableInfo.getModifiedTime(),
+                pbTableInfo.hasBucketCountEpoch() ? pbTableInfo.getBucketCountEpoch() : 0L);
+    }
+
+    private static TableInfo toTableInfo(
+            TablePath tablePath,
+            long tableId,
+            int schemaId,
+            byte[] tableJson,
+            @Nullable String remoteDataDir,
+            long createdTime,
+            long modifiedTime,
+            long bucketCountEpoch) {
+        return TableInfo.of(
+                tablePath,
+                tableId,
+                schemaId,
+                TableDescriptor.fromJsonBytes(tableJson),
+                remoteDataDir,
+                createdTime,
+                modifiedTime,
+                bucketCountEpoch);
+    }
+
     @Override
     public CompletableFuture<ClusterHealth> getClusterHealth() {
         return gateway.getClusterHealth(new GetClusterHealthRequest())
                 .thenApply(ClientRpcMessageUtils::toClusterHealth);
+    }
+
+    @Override
+    public CompletableFuture<ClusterDescription> describeCluster() {
+        return retryableCoordinatorGateway
+                .describeCluster(new DescribeClusterRequest())
+                .thenApply(ClientRpcMessageUtils::toClusterDescription);
     }
 
     @VisibleForTesting

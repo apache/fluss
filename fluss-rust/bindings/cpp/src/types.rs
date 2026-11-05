@@ -751,6 +751,7 @@ pub fn core_scan_batches_to_ffi(
             bucket_id: batch.bucket().bucket_id(),
             base_offset: batch.base_offset(),
             commit_timestamp: batch.commit_timestamp(),
+            schema_id: batch.schema_id(),
         });
     }
 
@@ -765,6 +766,31 @@ mod tests {
     use fluss::metadata::{DataField, DataType, DataTypes, DecimalType, RowType, Schema};
     use fluss::row::{Datum, Decimal, GenericRow};
     use std::borrow::Cow;
+
+    #[test]
+    fn arrow_batch_conversion_preserves_source_schema_id() {
+        use arrow::datatypes::{DataType as ArrowType, Field, Schema as ArrowSchema};
+        use arrow::record_batch::RecordBatch;
+        use std::sync::Arc;
+
+        let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "id",
+            ArrowType::Int32,
+            true,
+        )]));
+        for schema_id in [fluss::record::NO_SCHEMA_ID, 0, i32::from(i16::MAX)] {
+            let batch = fluss::record::ScanBatch::new(
+                fluss::metadata::TableBucket::new(1, 0),
+                RecordBatch::new_empty(schema.clone()),
+                0,
+            )
+            .with_schema_id(schema_id);
+            let converted = super::core_scan_batches_to_ffi(&[batch]).unwrap();
+            assert_eq!(converted.batches[0].schema_id, schema_id);
+            let ffi_batch = &converted.batches[0];
+            crate::free_arrow_ffi_structures(ffi_batch.array_ptr, ffi_batch.schema_ptr);
+        }
+    }
 
     /// Asserts that STRING/BYTES values were resolved without copying: either
     /// the input row was returned as-is (fast path) or the resolved values

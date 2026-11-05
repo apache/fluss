@@ -37,9 +37,6 @@ import org.apache.fluss.rpc.messages.PbServerNode;
 import org.apache.fluss.rpc.messages.PbTableMetadata;
 import org.apache.fluss.rpc.messages.PbTablePath;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import javax.annotation.Nullable;
 
 import java.util.ArrayList;
@@ -55,8 +52,6 @@ import java.util.concurrent.TimeoutException;
 
 /** Utils for metadata for client. */
 public class MetadataUtils {
-
-    private static final Logger LOG = LoggerFactory.getLogger(MetadataUtils.class);
 
     private static final Random randOffset = new Random();
 

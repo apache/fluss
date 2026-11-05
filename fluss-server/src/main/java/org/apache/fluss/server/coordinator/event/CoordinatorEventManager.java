@@ -23,6 +23,7 @@ import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metrics.DescriptiveStatisticsHistogram;
 import org.apache.fluss.metrics.Histogram;
 import org.apache.fluss.metrics.MetricNames;
+import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaState;
 import org.apache.fluss.server.metrics.group.CoordinatorEventMetricGroup;
@@ -54,6 +55,7 @@ public final class CoordinatorEventManager implements EventManager {
 
     private final EventProcessor eventProcessor;
     private final CoordinatorMetricGroup coordinatorMetricGroup;
+    private final MetricGroup eventManagerMetricGroup;
 
     private final LinkedBlockingQueue<QueuedEvent> queue = new LinkedBlockingQueue<>();
     private final CoordinatorEventThread thread =
@@ -86,29 +88,31 @@ public final class CoordinatorEventManager implements EventManager {
             EventProcessor eventProcessor, CoordinatorMetricGroup coordinatorMetricGroup) {
         this.eventProcessor = eventProcessor;
         this.coordinatorMetricGroup = coordinatorMetricGroup;
+        this.eventManagerMetricGroup = coordinatorMetricGroup.createEventManagerMetricGroup();
         registerMetrics();
     }
 
     private void registerMetrics() {
         eventQueueTime =
-                coordinatorMetricGroup.histogram(
+                eventManagerMetricGroup.histogram(
                         MetricNames.EVENT_QUEUE_TIME_MS,
-                        new DescriptiveStatisticsHistogram(WINDOW_SIZE));
+                        new DescriptiveStatisticsHistogram(
+                                WINDOW_SIZE, DescriptiveStatisticsHistogram.DEFAULT_MAX_AGE));
 
         // Register coordinator metrics
-        coordinatorMetricGroup.gauge(MetricNames.ACTIVE_COORDINATOR_COUNT, () -> 1);
-        coordinatorMetricGroup.gauge(
+        eventManagerMetricGroup.gauge(MetricNames.ACTIVE_COORDINATOR_COUNT, () -> 1);
+        eventManagerMetricGroup.gauge(
                 MetricNames.ALIVE_COORDINATOR_COUNT, () -> aliveCoordinatorServerCount);
-        coordinatorMetricGroup.gauge(
+        eventManagerMetricGroup.gauge(
                 MetricNames.ACTIVE_TABLET_SERVER_COUNT, () -> tabletServerCount);
-        coordinatorMetricGroup.gauge(MetricNames.OFFLINE_BUCKET_COUNT, () -> offlineBucketCount);
-        coordinatorMetricGroup.gauge(MetricNames.BUCKET_COUNT, () -> bucketCount);
-        coordinatorMetricGroup.gauge(MetricNames.TABLE_COUNT, () -> tableCount);
-        coordinatorMetricGroup.gauge(MetricNames.LAKE_TABLE_COUNT, () -> lakeTableCount);
-        coordinatorMetricGroup.gauge(MetricNames.PARTITION_COUNT, () -> partitionCount);
-        coordinatorMetricGroup.gauge(
+        eventManagerMetricGroup.gauge(MetricNames.OFFLINE_BUCKET_COUNT, () -> offlineBucketCount);
+        eventManagerMetricGroup.gauge(MetricNames.BUCKET_COUNT, () -> bucketCount);
+        eventManagerMetricGroup.gauge(MetricNames.TABLE_COUNT, () -> tableCount);
+        eventManagerMetricGroup.gauge(MetricNames.LAKE_TABLE_COUNT, () -> lakeTableCount);
+        eventManagerMetricGroup.gauge(MetricNames.PARTITION_COUNT, () -> partitionCount);
+        eventManagerMetricGroup.gauge(
                 MetricNames.REPLICAS_TO_DELETE_COUNT, () -> replicasToDeleteCount);
-        coordinatorMetricGroup.gauge(
+        eventManagerMetricGroup.gauge(
                 MetricNames.PENDING_LEADER_ACTIVATION_COUNT, () -> pendingLeaderActivationCount);
     }
 
@@ -212,6 +216,8 @@ public final class CoordinatorEventManager implements EventManager {
             thread.awaitShutdown();
         } catch (InterruptedException e) {
             LOG.error("Fail to close coordinator event thread.");
+        } finally {
+            eventManagerMetricGroup.close();
         }
     }
 

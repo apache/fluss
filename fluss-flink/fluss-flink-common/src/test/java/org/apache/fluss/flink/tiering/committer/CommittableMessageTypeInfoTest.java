@@ -18,10 +18,19 @@
 package org.apache.fluss.flink.tiering.committer;
 
 import org.apache.flink.api.common.typeutils.TypeInformationTestBase;
+import org.junit.jupiter.api.Test;
+
+import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link CommittableMessageTypeInfo}. */
 class CommittableMessageTypeInfoTest
         extends TypeInformationTestBase<CommittableMessageTypeInfo<?>> {
+
+    @Test
+    void testTypeClassMatchesCommittableMessage() {
+        assertThat(CommittableMessageTypeInfo.of(TestingCommittableSerializer::new).getTypeClass())
+                .isEqualTo(CommittableMessage.class);
+    }
 
     @SuppressWarnings("rawtypes")
     @Override
