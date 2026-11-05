@@ -19,6 +19,7 @@ package org.apache.fluss.server.kv;
 
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.compression.ArrowCompressionInfo;
+import org.apache.fluss.compression.LogCompressionInfo;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.TableConfig;
@@ -217,6 +218,7 @@ public final class KvTablet {
             KvFormat kvFormat,
             RowMerger rowMerger,
             ArrowCompressionInfo arrowCompressionInfo,
+            LogCompressionInfo compactedLogCompressionInfo,
             SchemaGetter schemaGetter,
             ChangelogImage changelogImage,
             KvValueLayout kvValueLayout,
@@ -263,6 +265,7 @@ public final class KvTablet {
                         kvFormat,
                         rowMerger,
                         arrowCompressionInfo,
+                        compactedLogCompressionInfo,
                         schemaGetter,
                         changelogImage,
                         autoIncrementManager,
@@ -526,6 +529,7 @@ public final class KvTablet {
                 kvFormat,
                 rowMerger,
                 arrowCompressionInfo,
+                tableConfig.getCompactedLogCompressionInfo(),
                 schemaGetter,
                 changelogImage,
                 kvValueLayout,

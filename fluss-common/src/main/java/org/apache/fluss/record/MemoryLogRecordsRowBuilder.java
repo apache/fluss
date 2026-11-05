@@ -17,21 +17,30 @@
 
 package org.apache.fluss.record;
 
+import org.apache.fluss.compression.LogCompressionInfo;
+import org.apache.fluss.compression.LogCompressionType;
 import org.apache.fluss.memory.AbstractPagedOutputView;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.memory.MemorySegmentOutputView;
 import org.apache.fluss.record.bytesview.BytesView;
+import org.apache.fluss.record.bytesview.MemorySegmentBytesView;
 import org.apache.fluss.record.bytesview.MultiBytesView;
 import org.apache.fluss.utils.crc.Crc32C;
 
 import java.io.IOException;
+import java.util.List;
 
+import static org.apache.fluss.record.DefaultLogRecordBatch.APPEND_ONLY_FLAG_MASK;
 import static org.apache.fluss.record.LogRecordBatchFormat.BASE_OFFSET_LENGTH;
+import static org.apache.fluss.record.LogRecordBatchFormat.COMPRESSION_CODEC_SHIFT;
 import static org.apache.fluss.record.LogRecordBatchFormat.LENGTH_LENGTH;
+import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V1;
 import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V2;
+import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V3;
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_BATCH_SEQUENCE;
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_LEADER_EPOCH;
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
+import static org.apache.fluss.record.LogRecordBatchFormat.UNCOMPRESSED_SIZE_LENGTH;
 import static org.apache.fluss.record.LogRecordBatchFormat.crcOffset;
 import static org.apache.fluss.record.LogRecordBatchFormat.lastOffsetDeltaOffset;
 import static org.apache.fluss.record.LogRecordBatchFormat.recordBatchHeaderSize;
@@ -50,6 +59,7 @@ public abstract class MemoryLogRecordsRowBuilder<T> implements AutoCloseable {
     protected final AbstractPagedOutputView pagedOutputView;
     protected final MemorySegment firstSegment;
     protected final boolean appendOnly;
+    protected final LogCompressionInfo compressionInfo;
 
     private BytesView builtBuffer = null;
     private long writerId;
@@ -58,6 +68,11 @@ public abstract class MemoryLogRecordsRowBuilder<T> implements AutoCloseable {
     private int sizeInBytes;
     private volatile boolean isClosed;
     private boolean aborted = false;
+    // the whole V3 batch (header + compressed records), set once the records have been compressed;
+    // the array may be larger than compressedBatchSize
+    private MemorySegment compressedBatch;
+    private int compressedBatchSize;
+    private boolean compressionAttempted = false;
 
     protected MemoryLogRecordsRowBuilder(
             long baseLogOffset,
@@ -66,7 +81,26 @@ public abstract class MemoryLogRecordsRowBuilder<T> implements AutoCloseable {
             byte magic,
             AbstractPagedOutputView pagedOutputView,
             boolean appendOnly) {
+        this(
+                baseLogOffset,
+                schemaId,
+                writeLimit,
+                magic,
+                pagedOutputView,
+                appendOnly,
+                LogCompressionInfo.NO_COMPRESSION);
+    }
+
+    protected MemoryLogRecordsRowBuilder(
+            long baseLogOffset,
+            int schemaId,
+            int writeLimit,
+            byte magic,
+            AbstractPagedOutputView pagedOutputView,
+            boolean appendOnly,
+            LogCompressionInfo compressionInfo) {
         this.appendOnly = appendOnly;
+        this.compressionInfo = compressionInfo;
         checkArgument(
                 schemaId <= Short.MAX_VALUE,
                 "schemaId shouldn't be greater than the max value of short: " + Short.MAX_VALUE);
@@ -130,11 +164,27 @@ public abstract class MemoryLogRecordsRowBuilder<T> implements AutoCloseable {
         if (builtBuffer != null) {
             return builtBuffer;
         }
-        writeBatchHeader();
-        builtBuffer =
-                MultiBytesView.builder()
-                        .addMemorySegmentByteViewList(pagedOutputView.getWrittenSegments())
-                        .build();
+        if (!compressionAttempted) {
+            compressionAttempted = true;
+            compressRecords();
+        }
+        if (compressedBatch != null) {
+            writeBatchHeader(
+                    compressedBatch,
+                    compressedBatchSize,
+                    LOG_MAGIC_VALUE_V3,
+                    compressionInfo.getCompressionType());
+            builtBuffer =
+                    MultiBytesView.builder()
+                            .addBytes(compressedBatch, 0, compressedBatchSize)
+                            .build();
+        } else {
+            writeBatchHeader(firstSegment, sizeInBytes, magic, LogCompressionType.NONE);
+            builtBuffer =
+                    MultiBytesView.builder()
+                            .addMemorySegmentByteViewList(pagedOutputView.getWrittenSegments())
+                            .build();
+        }
         return builtBuffer;
     }
 
@@ -182,21 +232,94 @@ public abstract class MemoryLogRecordsRowBuilder<T> implements AutoCloseable {
     }
 
     // ----------------------- internal methods -------------------------------
-    private void writeBatchHeader() throws IOException {
+    /**
+     * Compresses the records section into {@link #compressedBatch}, a {@link
+     * LogRecordBatchFormat#LOG_MAGIC_VALUE_V3} batch. The batch stays uncompressed, with its
+     * original magic, if compression is disabled, the batch is empty, or compression doesn't make
+     * the batch smaller. So a compressed batch is never larger than the uncompressed size that was
+     * accounted for it.
+     */
+    private void compressRecords() {
+        if (compressionInfo.getCompressionType() == LogCompressionType.NONE
+                || currentRecordNumber == 0) {
+            return;
+        }
+        int compressedDataOffset =
+                recordBatchHeaderSize(LOG_MAGIC_VALUE_V3) + UNCOMPRESSED_SIZE_LENGTH;
+        int maxCompressedLength = sizeInBytes - 1 - compressedDataOffset;
+        if (maxCompressedLength <= 0) {
+            return;
+        }
+        int headerSize = recordBatchHeaderSize(magic);
+        int recordsSize = sizeInBytes - headerSize;
+        byte[] records;
+        int recordsOffset;
+        List<MemorySegmentBytesView> writtenSegments = pagedOutputView.getWrittenSegments();
+        MemorySegment firstWritten = writtenSegments.get(0).getMemorySegment();
+        if (writtenSegments.size() == 1 && !firstWritten.isOffHeap()) {
+            records = firstWritten.getArray();
+            recordsOffset = writtenSegments.get(0).getPosition() + headerSize;
+        } else {
+            records = copyRecords(writtenSegments, headerSize, recordsSize);
+            recordsOffset = 0;
+        }
+        // compress directly into the final batch, the header is written in build()
+        byte[] batch = new byte[compressedDataOffset + maxCompressedLength];
+        int compressedLength =
+                compressionInfo.compress(
+                        records,
+                        recordsOffset,
+                        recordsSize,
+                        batch,
+                        compressedDataOffset,
+                        maxCompressedLength);
+        if (compressedLength < 0) {
+            return;
+        }
+        compressedBatchSize = compressedDataOffset + compressedLength;
+        compressedBatch = MemorySegment.wrap(batch);
+        compressedBatch.putInt(compressedDataOffset - UNCOMPRESSED_SIZE_LENGTH, recordsSize);
+    }
+
+    private static byte[] copyRecords(
+            List<MemorySegmentBytesView> segments, int skipBytes, int recordsSize) {
+        byte[] records = new byte[recordsSize];
+        int skip = skipBytes;
+        int pos = 0;
+        for (MemorySegmentBytesView view : segments) {
+            int start = view.getPosition();
+            int length = view.getBytesLength();
+            if (skip >= length) {
+                skip -= length;
+                continue;
+            }
+            view.getMemorySegment().get(start + skip, records, pos, length - skip);
+            pos += length - skip;
+            skip = 0;
+        }
+        return records;
+    }
+
+    private void writeBatchHeader(
+            MemorySegment target,
+            int batchSize,
+            byte batchMagic,
+            LogCompressionType compressionType)
+            throws IOException {
         // pagedOutputView doesn't support seek to previous segment,
         // so we create a new output view on the first segment
-        MemorySegmentOutputView outputView = new MemorySegmentOutputView(firstSegment);
+        MemorySegmentOutputView outputView = new MemorySegmentOutputView(target);
         outputView.setPosition(0);
         // update header.
         outputView.writeLong(baseLogOffset);
-        outputView.writeInt(sizeInBytes - BASE_OFFSET_LENGTH - LENGTH_LENGTH);
-        outputView.writeByte(magic);
+        outputView.writeInt(batchSize - BASE_OFFSET_LENGTH - LENGTH_LENGTH);
+        outputView.writeByte(batchMagic);
 
         // write empty timestamp which will be overridden on server side
         outputView.writeLong(0);
 
         // write empty leaderEpoch which will be overridden on server side
-        if (magic >= LOG_MAGIC_VALUE_V2) {
+        if (batchMagic >= LOG_MAGIC_VALUE_V2) {
             outputView.writeInt(NO_LEADER_EPOCH);
         }
 
@@ -204,10 +327,12 @@ public abstract class MemoryLogRecordsRowBuilder<T> implements AutoCloseable {
         outputView.writeUnsignedInt(0);
 
         outputView.writeShort((short) schemaId);
-        // write attributes (currently only appendOnly flag)
-        outputView.writeBoolean(appendOnly);
+        // write attributes: appendOnly flag and compression codec
+        outputView.writeByte(
+                (appendOnly ? APPEND_ONLY_FLAG_MASK : 0)
+                        | (compressionType.id() << COMPRESSION_CODEC_SHIFT));
         // skip write attribute byte for now.
-        outputView.setPosition(lastOffsetDeltaOffset(magic));
+        outputView.setPosition(lastOffsetDeltaOffset(batchMagic));
         if (currentRecordNumber > 0) {
             outputView.writeInt(currentRecordNumber - 1);
         } else {
@@ -218,10 +343,22 @@ public abstract class MemoryLogRecordsRowBuilder<T> implements AutoCloseable {
         outputView.writeLong(writerId);
         outputView.writeInt(batchSequence);
         outputView.writeInt(currentRecordNumber);
+        if (batchMagic >= LOG_MAGIC_VALUE_V1) {
+            // row-based batches don't write statistics
+            outputView.writeInt(0);
+        }
 
         // Update crc.
-        long crc = Crc32C.compute(pagedOutputView.getWrittenSegments(), schemaIdOffset(magic));
-        outputView.setPosition(crcOffset(magic));
+        long crc;
+        if (target == firstSegment) {
+            crc = Crc32C.compute(pagedOutputView.getWrittenSegments(), schemaIdOffset(batchMagic));
+        } else {
+            int schemaIdOffset = schemaIdOffset(batchMagic);
+            crc =
+                    Crc32C.compute(
+                            target.wrap(0, batchSize), schemaIdOffset, batchSize - schemaIdOffset);
+        }
+        outputView.setPosition(crcOffset(batchMagic));
         outputView.writeUnsignedInt(crc);
     }
 }

@@ -104,4 +104,21 @@ public class LogRecordBatchFormatTest {
         assertThat(statisticsDataOffset(magic)).isEqualTo(56);
         assertThat(recordBatchHeaderSize(magic)).isEqualTo(56);
     }
+
+    @Test
+    void testLogRecordBatchFormatForMagicV3() {
+        // V3 has the same header layout as V2
+        byte magic = (byte) 3;
+        assertThat(leaderEpochOffset(magic)).isEqualTo(21);
+        assertThat(crcOffset(magic)).isEqualTo(25);
+        assertThat(schemaIdOffset(magic)).isEqualTo(29);
+        assertThat(attributeOffset(magic)).isEqualTo(31);
+        assertThat(lastOffsetDeltaOffset(magic)).isEqualTo(32);
+        assertThat(writeClientIdOffset(magic)).isEqualTo(36);
+        assertThat(batchSequenceOffset(magic)).isEqualTo(44);
+        assertThat(recordsCountOffset(magic)).isEqualTo(48);
+        assertThat(statisticsLengthOffset(magic)).isEqualTo(52);
+        assertThat(statisticsDataOffset(magic)).isEqualTo(56);
+        assertThat(recordBatchHeaderSize(magic)).isEqualTo(56);
+    }
 }
