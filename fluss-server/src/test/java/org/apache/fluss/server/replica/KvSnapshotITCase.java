@@ -27,7 +27,6 @@ import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.server.coordinator.CoordinatorService;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
-import org.apache.fluss.server.kv.snapshot.ZooKeeperCompletedSnapshotHandleStore;
 import org.apache.fluss.server.tablet.TabletServer;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.testutils.KvTestUtils;
@@ -54,7 +53,6 @@ import static org.apache.fluss.testutils.DataTestUtils.genKvRecordBatch;
 import static org.apache.fluss.testutils.DataTestUtils.genKvRecords;
 import static org.apache.fluss.testutils.DataTestUtils.getKeyValuePairs;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
-import static org.apache.fluss.testutils.common.CommonTestUtils.waitValue;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** ITCase for kv doing snapshot. */
@@ -69,15 +67,11 @@ class KvSnapshotITCase {
                     .setClusterConf(initConfig())
                     .build();
 
-    private ZooKeeperCompletedSnapshotHandleStore completedSnapshotHandleStore;
     private CoordinatorService coordinatorService;
     private String remoteDataDir;
 
     @BeforeEach
     void beforeEach() {
-        completedSnapshotHandleStore =
-                new ZooKeeperCompletedSnapshotHandleStore(
-                        FLUSS_CLUSTER_EXTENSION.getZooKeeperClient());
         this.coordinatorService =
                 FLUSS_CLUSTER_EXTENSION.getCoordinatorServer().getCoordinatorService();
         remoteDataDir = FLUSS_CLUSTER_EXTENSION.getRemoteDataDir();
@@ -124,12 +118,11 @@ class KvSnapshotITCase {
 
             // wait for snapshot is available
             final long snapshot1Id = 0;
+            final long snapshot1LogOffset = 2;
+            waitUntilKvDataFlushed(tb, snapshot1LogOffset);
             CompletedSnapshot completedSnapshot =
-                    waitValue(
-                                    () -> completedSnapshotHandleStore.get(tb, snapshot1Id),
-                                    Duration.ofMinutes(2),
-                                    "Fail to wait for the snapshot 0 for bucket " + tb)
-                            .retrieveCompleteSnapshot();
+                    FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tb);
+            assertThat(completedSnapshot.getSnapshotID()).isEqualTo(snapshot1Id);
 
             // check snapshot
             List<Tuple2<byte[], byte[]>> expectedKeyValues =
@@ -137,7 +130,7 @@ class KvSnapshotITCase {
                             genKvRecords(
                                     Tuple2.of("k1", new Object[] {1, "k1"}),
                                     Tuple2.of("k2", new Object[] {2, "k2"})));
-            KvTestUtils.checkSnapshot(completedSnapshot, expectedKeyValues, 2);
+            KvTestUtils.checkSnapshot(completedSnapshot, expectedKeyValues, snapshot1LogOffset);
             bucketKvSnapshotDirs.add(
                     new File(completedSnapshot.getSnapshotLocation().getParent().getPath()));
 
@@ -152,12 +145,10 @@ class KvSnapshotITCase {
 
             // wait for next snapshot is available
             final long snapshot2Id = 1;
-            completedSnapshot =
-                    waitValue(
-                                    () -> completedSnapshotHandleStore.get(tb, snapshot2Id),
-                                    Duration.ofMinutes(2),
-                                    "Fail to wait for the snapshot 0 for bucket " + tb)
-                            .retrieveCompleteSnapshot();
+            final long snapshot2LogOffset = 6;
+            waitUntilKvDataFlushed(tb, snapshot2LogOffset);
+            completedSnapshot = FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tb);
+            assertThat(completedSnapshot.getSnapshotID()).isEqualTo(snapshot2Id);
 
             // check snapshot
             expectedKeyValues =
@@ -165,7 +156,7 @@ class KvSnapshotITCase {
                             genKvRecords(
                                     Tuple2.of("k1", new Object[] {1, "k11"}),
                                     Tuple2.of("k3", new Object[] {3, "k3"})));
-            KvTestUtils.checkSnapshot(completedSnapshot, expectedKeyValues, 6);
+            KvTestUtils.checkSnapshot(completedSnapshot, expectedKeyValues, snapshot2LogOffset);
 
             // check min retain offset
             for (TabletServer server : FLUSS_CLUSTER_EXTENSION.getTabletServers()) {
@@ -204,11 +195,23 @@ class KvSnapshotITCase {
         }
     }
 
+    private void waitUntilKvDataFlushed(TableBucket tableBucket, long expectedLogOffset) {
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        assertThat(
+                                        FLUSS_CLUSTER_EXTENSION
+                                                .waitAndGetLeaderReplica(tableBucket)
+                                                .getLogHighWatermark())
+                                .as("Leader high watermark for %s", tableBucket)
+                                .isGreaterThanOrEqualTo(expectedLogOffset));
+    }
+
     private static Configuration initConfig() {
         Configuration conf = new Configuration();
         conf.setInt(ConfigOptions.DEFAULT_REPLICATION_FACTOR, 3);
-        // set a shorter interval for test
-        conf.set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofSeconds(1));
+        // Disable auto-snapshot so the test controls exactly when each snapshot is triggered.
+        conf.set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofHours(1));
 
         return conf;
     }
