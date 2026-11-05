@@ -55,7 +55,8 @@ public class CoordinatorMetricGroup extends AbstractMetricGroup {
     private final Map<Class<? extends CoordinatorEvent>, CoordinatorEventMetricGroup>
             eventMetricGroups = new ConcurrentHashMap<>();
 
-    private final RebalanceMetrics rebalanceMetrics;
+    // Registered lazily via registerRebalanceMetrics(); guarded by that method's monitor.
+    private @Nullable RebalanceMetrics rebalanceMetrics;
 
     public CoordinatorMetricGroup(
             MetricRegistry registry, String clusterId, String hostname, String serverId) {
@@ -63,7 +64,6 @@ public class CoordinatorMetricGroup extends AbstractMetricGroup {
         this.clusterId = clusterId;
         this.hostname = hostname;
         this.serverId = serverId;
-        this.rebalanceMetrics = new RebalanceMetrics(this);
     }
 
     @Override
@@ -94,9 +94,24 @@ public class CoordinatorMetricGroup extends AbstractMetricGroup {
         };
     }
 
-    /** Returns the rebalance metrics for this coordinator server. */
-    public RebalanceMetrics getRebalanceMetrics() {
+    /**
+     * Registers the rebalance metrics of this coordinator server and returns them.
+     *
+     * <p>The metrics are not registered by the constructor, so that a group created outside the
+     * server startup path does not carry them. The server registers them explicitly on startup;
+     * anywhere else they are registered on first use. They outlive individual coordinator
+     * leadership terms and are unregistered when this group is closed.
+     */
+    public synchronized RebalanceMetrics registerRebalanceMetrics() {
+        if (rebalanceMetrics == null) {
+            rebalanceMetrics = new RebalanceMetrics(this);
+        }
         return rebalanceMetrics;
+    }
+
+    /** Returns the rebalance metrics of this coordinator server, registering them if needed. */
+    public RebalanceMetrics getRebalanceMetrics() {
+        return registerRebalanceMetrics();
     }
 
     // ------------------------------------------------------------------------

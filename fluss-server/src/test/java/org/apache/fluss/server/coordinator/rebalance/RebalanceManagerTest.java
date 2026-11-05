@@ -155,6 +155,7 @@ public class RebalanceManagerTest {
         metricRegistry = new RecordingMetricRegistry();
         coordinatorMetricGroup =
                 new CoordinatorMetricGroup(metricRegistry, "cluster", "host", "coordinator");
+        coordinatorMetricGroup.registerRebalanceMetrics();
         metricClock = new ManualClock(0L);
         rebalanceManager =
                 new RebalanceManager(
@@ -683,6 +684,7 @@ public class RebalanceManagerTest {
     void testRebalanceMetricsRegisteredOnStandby() {
         CoordinatorMetricGroup standbyGroup =
                 new CoordinatorMetricGroup(metricRegistry, "cluster", "standby", "standby");
+        standbyGroup.registerRebalanceMetrics();
         try {
             assertThat(standbyGroup.getMetrics().values())
                     .hasSize(10)
@@ -759,7 +761,10 @@ public class RebalanceManagerTest {
     }
 
     private static CoordinatorMetricGroup createCoordinatorMetricGroup() {
-        return new CoordinatorMetricGroup(NOPMetricRegistry.INSTANCE, "cluster", "host", "0");
+        CoordinatorMetricGroup metricGroup =
+                new CoordinatorMetricGroup(NOPMetricRegistry.INSTANCE, "cluster", "host", "0");
+        metricGroup.registerRebalanceMetrics();
+        return metricGroup;
     }
 
     private CoordinatorEventProcessor buildCoordinatorEventProcessor() {
