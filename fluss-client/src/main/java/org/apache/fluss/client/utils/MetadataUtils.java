@@ -236,6 +236,7 @@ public class MetadataUtils {
                                 cluster.getBucketCount(TableOrPartition.ofTable(tableId))
                                         .orElse(null);
                         if (epoch < previousEpoch) {
+                            // A delayed response must retain the newer cached count and locations.
                             epoch = previousEpoch;
                             if (previousCount == null) {
                                 throw new StaleMetadataException(
@@ -299,6 +300,8 @@ public class MetadataUtils {
                             epoch = cluster.getBucketCountEpoch(tableId).getAsLong();
                         }
                         if (epoch != null && epoch == 0L) {
+                            // At epoch zero all partitions share the table count. The first rescale
+                            // atomically persists existing partition counts and advances the epoch.
                             bucketCount =
                                     newBucketCountByTableOrPartition.get(
                                             TableOrPartition.ofTable(tableId));

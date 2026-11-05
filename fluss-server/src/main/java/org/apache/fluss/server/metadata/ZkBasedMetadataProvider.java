@@ -94,7 +94,7 @@ public abstract class ZkBasedMetadataProvider implements MetadataProvider {
             // Read the table epoch before registrations: the first rescale atomically backfills
             // legacy partition counts together with advancing that epoch.
             Map<TablePath, TableRegistration> tables =
-                    zkClient.getTableRegistrations(
+                    zkClient.getRawTableRegistrations(
                             partitionPaths.stream()
                                     .map(PhysicalTablePath::getTablePath)
                                     .collect(Collectors.toSet()));

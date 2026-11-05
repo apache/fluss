@@ -164,7 +164,7 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
             List<BucketMetadata> bucketMetadataList =
                     tableInfo.isPartitioned()
                             ? new ArrayList<>(buckets.values())
-                            : completeBucketMetadata(buckets, tableInfo.getNumBuckets());
+                            : getCompleteBucketMetadata(buckets, tableInfo.getNumBuckets());
             if (bucketMetadataList == null) {
                 return Optional.empty();
             }
@@ -240,7 +240,7 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                 continue;
             }
             List<BucketMetadata> bucketMetadataList =
-                    completeBucketMetadata(
+                    getCompleteBucketMetadata(
                             snapshot.getBucketMetadataForPartition(partitionId), bucketCount);
             if (bucketMetadataList == null) {
                 continue;
@@ -651,8 +651,11 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                 });
     }
 
+    /**
+     * Returns the complete bucket metadata list, or null if the bucket IDs do not cover the layout.
+     */
     @Nullable
-    private static List<BucketMetadata> completeBucketMetadata(
+    private static List<BucketMetadata> getCompleteBucketMetadata(
             Map<Integer, BucketMetadata> buckets, int bucketCount) {
         if (bucketCount <= 0 || buckets.size() != bucketCount) {
             return null;
