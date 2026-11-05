@@ -18,10 +18,10 @@
 package org.apache.fluss.rpc.netty.server;
 
 import org.apache.fluss.security.acl.FlussPrincipal;
+import org.apache.fluss.shaded.guava32.com.google.common.collect.ImmutableList;
 
 import java.io.Serializable;
 import java.net.InetAddress;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
@@ -31,8 +31,7 @@ public class Session implements Serializable {
     private final String listenerName;
     private final boolean isInternal;
     private final InetAddress inetAddress;
-    private final FlussPrincipal principal;
-    private final List<FlussPrincipal> additionalPrincipals;
+    private final List<FlussPrincipal> principals;
 
     public Session(
             short apiVersion,
@@ -40,24 +39,26 @@ public class Session implements Serializable {
             boolean isInternal,
             InetAddress inetAddress,
             FlussPrincipal principal) {
-        this(apiVersion, listenerName, isInternal, inetAddress, principal, Collections.emptyList());
+        this(
+                apiVersion,
+                listenerName,
+                isInternal,
+                inetAddress,
+                Collections.singletonList(principal));
     }
 
-    /** Creates a session with the primary and additional authenticated principals. */
+    /** Creates a session with an immutable snapshot of the authenticated principals. */
     public Session(
             short apiVersion,
             String listenerName,
             boolean isInternal,
             InetAddress inetAddress,
-            FlussPrincipal principal,
-            List<FlussPrincipal> additionalPrincipals) {
+            Iterable<FlussPrincipal> principals) {
         this.apiVersion = apiVersion;
         this.listenerName = listenerName;
         this.isInternal = isInternal;
         this.inetAddress = inetAddress;
-        this.principal = principal;
-        this.additionalPrincipals =
-                Collections.unmodifiableList(new ArrayList<>(additionalPrincipals));
+        this.principals = ImmutableList.copyOf(principals);
     }
 
     public short getApiVersion() {
@@ -72,13 +73,14 @@ public class Session implements Serializable {
         return inetAddress;
     }
 
+    /** Returns the client identity used for logging, user metrics, and resource ownership. */
     public FlussPrincipal getPrincipal() {
-        return principal;
+        return principals.isEmpty() ? null : principals.get(0);
     }
 
-    /** Returns additional principals associated with the authenticated identity. */
-    public List<FlussPrincipal> getAdditionalPrincipals() {
-        return additionalPrincipals;
+    /** Returns all authenticated principals used for authorization. */
+    public List<FlussPrincipal> getPrincipals() {
+        return principals;
     }
 
     public boolean isInternal() {

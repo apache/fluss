@@ -23,6 +23,8 @@ import org.apache.fluss.security.acl.FlussPrincipal;
 
 import javax.annotation.Nullable;
 
+import java.util.Collections;
+
 /** A {@link AuthenticationPlugin} that is used to test authentication plugin identifier. */
 public class TestIdentifierAuthenticationPlugin
         implements ClientAuthenticationPlugin, ServerAuthenticationPlugin {
@@ -73,8 +75,8 @@ public class TestIdentifierAuthenticationPlugin
         }
 
         @Override
-        public FlussPrincipal createPrincipal() {
-            return null;
+        public Iterable<FlussPrincipal> createPrincipals() {
+            return Collections.singletonList(FlussPrincipal.ANONYMOUS);
         }
 
         @Override

@@ -134,9 +134,8 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
                             buffer,
                             listenerName,
                             isInternal,
-                            authenticator.isCompleted() ? authenticator.createPrincipal() : null,
                             authenticator.isCompleted()
-                                    ? authenticator.createAdditionalPrincipals()
+                                    ? authenticator.createPrincipals()
                                     : Collections.emptyList(),
                             ((InetSocketAddress) ctx.channel().remoteAddress()).getAddress(),
                             future);

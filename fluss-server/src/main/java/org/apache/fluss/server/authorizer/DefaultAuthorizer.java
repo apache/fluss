@@ -173,21 +173,21 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
 
     @Override
     public boolean authorizeAction(Session session, Action action) {
-        FlussPrincipal principal = session.getPrincipal();
-        return isSuperUser(principal)
+        return isSuperUser(session.getPrincipals())
                 || aclsAllowAccess(
                         action.getResource(),
-                        principal,
-                        session.getAdditionalPrincipals(),
+                        session.getPrincipals(),
                         action.getOperation(),
                         session.getInetAddress().getHostAddress(),
                         matchingAcls(action.getResource()));
     }
 
-    private boolean isSuperUser(FlussPrincipal principal) {
-        for (FlussPrincipal superUser : superUsers) {
-            if (superUser.matches(principal, principalIgnoreCase)) {
-                return true;
+    private boolean isSuperUser(List<FlussPrincipal> principals) {
+        for (FlussPrincipal principal : principals) {
+            for (FlussPrincipal superUser : superUsers) {
+                if (superUser.matches(principal, principalIgnoreCase)) {
+                    return true;
+                }
             }
         }
         return false;
@@ -346,13 +346,11 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
             OperationType operationType,
             Resource resource,
             Map<Resource, VersionedAcls> aclCacheSnapshot) {
-        FlussPrincipal principal = session.getPrincipal();
         return session.isInternal()
-                || isSuperUser(principal)
+                || isSuperUser(session.getPrincipals())
                 || aclsAllowAccess(
                         resource,
-                        principal,
-                        session.getAdditionalPrincipals(),
+                        session.getPrincipals(),
                         operationType,
                         session.getInetAddress().getHostAddress(),
                         matchingAcls(resource, aclCacheSnapshot));
@@ -539,8 +537,7 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
             Resource resource, FlussPrincipal principal, OperationType operation, String host) {
         return aclsAllowAccess(
                 resource,
-                principal,
-                Collections.emptyList(),
+                Collections.singletonList(principal),
                 operation,
                 host,
                 matchingAcls(resource));
@@ -548,19 +545,17 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
 
     private boolean aclsAllowAccess(
             Resource resource,
-            FlussPrincipal principal,
-            List<FlussPrincipal> additionalPrincipals,
+            List<FlussPrincipal> principals,
             OperationType operation,
             String host,
             Set<AccessControlEntry> accessControlEntries) {
         return isEmptyAclAndAuthorized(resource, accessControlEntries)
-                || allowAclExists(resource, principal, operation, host, accessControlEntries)
-                || additionalPrincipals.stream()
+                || principals.stream()
                         .anyMatch(
-                                additionalPrincipal ->
+                                principal ->
                                         allowAclExists(
                                                 resource,
-                                                additionalPrincipal,
+                                                principal,
                                                 operation,
                                                 host,
                                                 accessControlEntries));

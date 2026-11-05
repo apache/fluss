@@ -23,8 +23,6 @@ import org.apache.fluss.security.acl.FlussPrincipal;
 
 import java.io.Closeable;
 import java.io.IOException;
-import java.util.Collections;
-import java.util.List;
 
 /**
  * Authenticator for server side.
@@ -93,22 +91,15 @@ public interface ServerAuthenticator extends Closeable {
     boolean isCompleted();
 
     /**
-     * Create principal from authenticated token for later authorization.(this can only invoke if is
-     * complete).
-     */
-    FlussPrincipal createPrincipal();
-
-    /**
-     * Creates additional principals (such as groups or roles) associated with the authenticated
-     * identity. These principals are evaluated during ACL matching but are not considered for
-     * superuser checks.
+     * Creates the principals associated with the authenticated token for authorization. This method
+     * may only be invoked after authentication completes.
      *
-     * <p>Implementations must return a non-null list with no {@code null} elements; return an empty
-     * list when there are none.
+     * <p>The iterable must be non-null and non-empty, with no {@code null} elements. All principals
+     * participate equally in ACL and superuser checks. The first principal identifies the client
+     * for logging, user metrics, and resource ownership; subsequent principals may represent groups
+     * or roles.
      */
-    default List<FlussPrincipal> createAdditionalPrincipals() {
-        return Collections.emptyList();
-    }
+    Iterable<FlussPrincipal> createPrincipals();
 
     /** Close the authenticator. */
     default void close() throws IOException {}

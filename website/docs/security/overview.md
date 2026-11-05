@@ -79,9 +79,9 @@ For example:
 * User `guest` might only be allowed to consume messages from a specific table.
 
 ### Fluss Principal – The Bridge Between Authentication and Authorization
-Once a client successfully authenticates, Fluss creates a primary **Fluss Principal**, which represents the authenticated identity. Authentication may also provide additional principals such as groups or roles.
+Once a client successfully authenticates, Fluss creates one or more **Fluss Principals**, representing the authenticated user and any groups or roles.
 
-The principal type indicates the category of the principal (e.g., "User", "Group", "Role"), while the name identifies the specific entity within that category. The default authorizer evaluates ACLs against the primary and additional principals, while superuser checks use only the primary principal.
+The principal type indicates the category of the principal (e.g., "User", "Group", "Role"), while the name identifies the specific entity within that category. The default authorizer evaluates all authenticated principals equally: access is granted when any principal matches an applicable ACL or a configured superuser. The first principal identifies the client for logging, user metrics, and resource ownership.
 Example usage:
 * `new FlussPrincipal("admin", "User")` – A standard user principal.
 * `new FlussPrincipal("admins", "Group")` – A group-based principal for authorization.

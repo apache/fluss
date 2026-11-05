@@ -110,8 +110,9 @@ public class AuthenticationTest {
                 new NettyClient(clientConfig, TestingClientMetricGroup.newInstance())) {
             verifyGetTableNamesList(nettyClient, mutualAuthServerNode);
             assertThat(service.getLastSession().getPrincipal()).isEqualTo(FlussPrincipal.ANONYMOUS);
-            assertThat(service.getLastSession().getAdditionalPrincipals())
+            assertThat(service.getLastSession().getPrincipals())
                     .containsExactly(
+                            FlussPrincipal.ANONYMOUS,
                             new FlussPrincipal("data-engineers", "Group"),
                             new FlussPrincipal("table-reader", "Role"));
         }

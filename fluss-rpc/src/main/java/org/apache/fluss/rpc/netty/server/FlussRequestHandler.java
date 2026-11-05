@@ -62,8 +62,7 @@ public class FlussRequestHandler implements RequestHandler<FlussRequest> {
                             request.getListenerName(),
                             request.isInternal(),
                             request.getAddress(),
-                            request.getPrincipal(),
-                            request.getAdditionalPrincipals()));
+                            request.getPrincipals()));
             // check if the coordinator server is the current leader if the API is a coordinator
             // TODO: we should only check coordinator APIs instead of all APIs
             if (isCoordinator && api.getApiKey() != ApiKeys.API_VERSIONS) {

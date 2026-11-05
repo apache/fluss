@@ -21,6 +21,7 @@ import org.apache.fluss.rpc.messages.ApiMessage;
 import org.apache.fluss.rpc.protocol.ApiMethod;
 import org.apache.fluss.rpc.protocol.RequestType;
 import org.apache.fluss.security.acl.FlussPrincipal;
+import org.apache.fluss.shaded.guava32.com.google.common.collect.ImmutableList;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import org.apache.fluss.shaded.netty4.io.netty.util.ReferenceCountUtil;
 
@@ -28,8 +29,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.net.InetAddress;
-import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
@@ -47,8 +46,7 @@ public final class FlussRequest implements RpcRequest {
     private final ByteBuf buffer;
     private final String listenerName;
     private final boolean isInternal;
-    private final FlussPrincipal principal;
-    private final List<FlussPrincipal> additionalPrincipals;
+    private final List<FlussPrincipal> principals;
     private final InetAddress address;
     private final CompletableFuture<ApiMessage> responseFuture;
 
@@ -58,6 +56,7 @@ public final class FlussRequest implements RpcRequest {
     private volatile long requestCompletedTimeMs;
     private volatile boolean cancelled = false;
 
+    /** Creates a request with an immutable snapshot of the authenticated principals. */
     public FlussRequest(
             short apiKey,
             short apiVersion,
@@ -67,36 +66,7 @@ public final class FlussRequest implements RpcRequest {
             ByteBuf buffer,
             String listenerName,
             boolean isInternal,
-            FlussPrincipal principal,
-            InetAddress address,
-            CompletableFuture<ApiMessage> responseFuture) {
-        this(
-                apiKey,
-                apiVersion,
-                requestId,
-                apiMethod,
-                message,
-                buffer,
-                listenerName,
-                isInternal,
-                principal,
-                Collections.emptyList(),
-                address,
-                responseFuture);
-    }
-
-    /** Creates a request with the primary and additional authenticated principals. */
-    public FlussRequest(
-            short apiKey,
-            short apiVersion,
-            int requestId,
-            ApiMethod apiMethod,
-            ApiMessage message,
-            ByteBuf buffer,
-            String listenerName,
-            boolean isInternal,
-            FlussPrincipal principal,
-            List<FlussPrincipal> additionalPrincipals,
+            Iterable<FlussPrincipal> principals,
             InetAddress address,
             CompletableFuture<ApiMessage> responseFuture) {
         this.apiKey = apiKey;
@@ -107,9 +77,7 @@ public final class FlussRequest implements RpcRequest {
         this.buffer = checkNotNull(buffer);
         this.responseFuture = responseFuture;
         this.isInternal = isInternal;
-        this.principal = principal;
-        this.additionalPrincipals =
-                Collections.unmodifiableList(new ArrayList<>(additionalPrincipals));
+        this.principals = ImmutableList.copyOf(principals);
         this.address = address;
         this.listenerName = listenerName;
         this.startTimeMs = System.currentTimeMillis();
@@ -194,12 +162,9 @@ public final class FlussRequest implements RpcRequest {
         return address;
     }
 
-    public FlussPrincipal getPrincipal() {
-        return principal;
-    }
-
-    public List<FlussPrincipal> getAdditionalPrincipals() {
-        return additionalPrincipals;
+    /** Returns the authenticated principals associated with this request. */
+    public List<FlussPrincipal> getPrincipals() {
+        return principals;
     }
 
     public boolean isInternal() {
