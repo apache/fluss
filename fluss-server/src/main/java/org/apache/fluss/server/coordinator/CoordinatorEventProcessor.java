@@ -494,6 +494,19 @@ public class CoordinatorEventProcessor implements EventProcessor {
                                 partitionId,
                                 PhysicalTablePath.of(tableInfo.getTablePath(), partition.getKey()),
                                 partitionInfo);
+                        // A path may be recreated between the table and partition reads. A legacy
+                        // count cannot be inferred from another table identity's default.
+                        if (partition.getValue().getBucketCount() == null
+                                && partition.getValue().getTableId() != tableInfo.getTableId()) {
+                            continue;
+                        }
+                        coordinatorContext.putPartitionBucketCount(
+                                partition.getValue().toTablePartition(),
+                                partition
+                                        .getValue()
+                                        .getBucketCountOrDefault(
+                                                tableInfo.getNumBuckets(),
+                                                tableInfo.getBucketCountEpoch()));
                     }
                 }
                 // if the table is auto partition, put the partitions info

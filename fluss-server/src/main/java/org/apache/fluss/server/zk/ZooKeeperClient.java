@@ -864,6 +864,21 @@ public class ZooKeeperClient implements AutoCloseable {
                 "tables registration");
     }
 
+    /**
+     * Gets raw table registrations in a batch without filling default fields such as the remote
+     * data directory. Missing or empty nodes are absent from the result. Other ZooKeeper read
+     * failures are propagated to the caller.
+     */
+    public Map<TablePath, TableRegistration> getRawTableRegistrations(
+            Collection<TablePath> tablePaths) throws Exception {
+        Map<String, TablePath> paths =
+                tablePaths.stream().collect(Collectors.toMap(TableZNode::path, path -> path));
+        return processGetDataResponsesOrThrow(
+                getDataInBackground(paths.keySet()),
+                response -> paths.get(response.getPath()),
+                data -> data == null || data.length == 0 ? null : TableZNode.decode(data));
+    }
+
     /** Get the latest schema for given tables in ZK. */
     public Map<TablePath, SchemaInfo> getLatestSchemas(Collection<TablePath> tablePaths)
             throws Exception {
@@ -1232,6 +1247,21 @@ public class ZooKeeperClient implements AutoCloseable {
 
         return getPartitionZNodeData(
                 path2PartitionPathMap, PartitionRegistration::toTablePartition);
+    }
+
+    /** Gets registrations for the requested physical partitions in one batch. */
+    public Map<PhysicalTablePath, PartitionRegistration> getPartitionRegistrations(
+            Collection<PhysicalTablePath> partitionPaths) throws Exception {
+        Map<String, PhysicalTablePath> paths =
+                partitionPaths.stream()
+                        .collect(
+                                toMap(
+                                        p ->
+                                                PartitionZNode.path(
+                                                        p.getTablePath(),
+                                                        checkNotNull(p.getPartitionName())),
+                                        p -> p));
+        return getPartitionZNodeData(paths, registration -> registration);
     }
 
     private <K, V> Map<K, V> getPartitionZNodeData(

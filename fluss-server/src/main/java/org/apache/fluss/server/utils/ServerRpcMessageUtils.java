@@ -665,7 +665,8 @@ public class ServerRpcMessageUtils {
                         .setRemoteDataDir(tableInfo.getRemoteDataDir())
                         .setCreatedTime(tableInfo.getCreatedTime())
                         .setModifiedTime(tableInfo.getModifiedTime())
-                        .setBucketCountEpoch(tableInfo.getBucketCountEpoch());
+                        .setBucketCountEpoch(tableInfo.getBucketCountEpoch())
+                        .setBucketCount(tableInfo.getNumBuckets());
         TablePath tablePath = tableInfo.getTablePath();
         pbTableMetadata
                 .setTablePath()
@@ -685,14 +686,8 @@ public class ServerRpcMessageUtils {
         pbPartitionMetadata.addAllBucketMetadatas(
                 toPbBucketMetadata(partitionMetadata.getBucketMetadataList()));
         Integer bucketCount = partitionMetadata.getBucketCount();
-        int effectiveBucketCount =
-                bucketCount != null
-                        ? bucketCount
-                        : partitionMetadata.getBucketMetadataList().size();
-        // 0 means the partition assignment is not known yet, not a zero-bucket layout;
-        // omitting the field keeps the client on its table-level fallback instead of 0.
-        if (effectiveBucketCount > 0) {
-            pbPartitionMetadata.setBucketCount(effectiveBucketCount);
+        if (bucketCount != null && bucketCount > 0) {
+            pbPartitionMetadata.setBucketCount(bucketCount);
         }
         return pbPartitionMetadata;
     }

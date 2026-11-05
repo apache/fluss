@@ -281,6 +281,7 @@ public class LogFetcherITCase extends ClientToServerITCaseBase {
                         oldCluster.getBucketLocationsByPath(),
                         oldCluster.getTableIdByPath(),
                         oldCluster.getPartitionIdByPath(),
+                        Collections.emptyMap(),
                         Collections.emptyMap());
         metadataUpdater = new MetadataUpdater(rpcClient, clientConf, newCluster);
 

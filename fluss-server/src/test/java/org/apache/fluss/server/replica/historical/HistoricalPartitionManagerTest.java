@@ -1256,7 +1256,8 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
                                         TABLE_ID,
                                         HISTORICAL_PARTITION,
                                         PARTITION_ID,
-                                        Collections.singletonList(bucketMetadata)))));
+                                        Collections.singletonList(bucketMetadata),
+                                        null))));
 
         CompletableFuture<List<NotifyLeaderAndIsrResultForBucket>> leaderFuture =
                 new CompletableFuture<>();

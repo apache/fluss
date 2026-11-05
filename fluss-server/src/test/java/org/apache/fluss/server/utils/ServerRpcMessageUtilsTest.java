@@ -78,6 +78,26 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /** Tests for {@link ServerRpcMessageUtils}. */
 class ServerRpcMessageUtilsTest {
 
+    @Test
+    void testUnknownPartitionCountRemainsAbsentOnWire() {
+        PartitionMetadata partition =
+                new PartitionMetadata(
+                        1,
+                        "p",
+                        2,
+                        Collections.singletonList(
+                                new BucketMetadata(0, null, null, Collections.emptyList())),
+                        null);
+        UpdateMetadataRequest request =
+                makeUpdateMetadataRequest(
+                        null,
+                        null,
+                        Collections.emptySet(),
+                        Collections.emptyList(),
+                        Collections.singletonList(partition));
+        assertThat(request.getPartitionMetadatasList().get(0).hasBucketCount()).isFalse();
+    }
+
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
     void testFetchLogResponsePreservesRemoteLogTabletDir(boolean partitioned) {
@@ -303,7 +323,8 @@ class ServerRpcMessageUtilsTest {
                                 2, 2, 4, Arrays.asList(2, 3), Collections.emptyList(), 5));
         TableMetadata tableMetadata = new TableMetadata(DATA1_TABLE_INFO, bucketMetadata);
         PartitionMetadata partitionMetadata =
-                new PartitionMetadata(DATA1_TABLE_INFO.getTableId(), "p1", 10L, bucketMetadata);
+                new PartitionMetadata(
+                        DATA1_TABLE_INFO.getTableId(), "p1", 10L, bucketMetadata, null);
 
         UpdateMetadataRequest request =
                 makeUpdateMetadataRequest(
@@ -314,6 +335,7 @@ class ServerRpcMessageUtilsTest {
                         Collections.singletonList(partitionMetadata));
 
         PbTableMetadata pbTableMetadata = request.getTableMetadatasList().get(0);
+        assertThat(pbTableMetadata.getBucketCount()).isEqualTo(DATA1_TABLE_INFO.getNumBuckets());
         assertAuthoritativeWireMetadata(pbTableMetadata.getBucketMetadatasList());
         PbPartitionMetadata pbPartitionMetadata = request.getPartitionMetadatasList().get(0);
         assertAuthoritativeWireMetadata(pbPartitionMetadata.getBucketMetadatasList());
