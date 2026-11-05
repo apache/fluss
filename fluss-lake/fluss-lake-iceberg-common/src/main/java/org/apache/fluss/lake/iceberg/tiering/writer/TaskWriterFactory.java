@@ -19,12 +19,20 @@
 package org.apache.fluss.lake.iceberg.tiering.writer;
 
 import org.apache.iceberg.FileFormat;
+import org.apache.iceberg.PartitionSpec;
 import org.apache.iceberg.Schema;
+import org.apache.iceberg.StructLike;
 import org.apache.iceberg.Table;
 import org.apache.iceberg.TableProperties;
+import org.apache.iceberg.TableUtil;
 import org.apache.iceberg.data.GenericAppenderFactory;
 import org.apache.iceberg.data.Record;
+import org.apache.iceberg.deletes.EqualityDeleteWriter;
+import org.apache.iceberg.deletes.PositionDeleteWriter;
+import org.apache.iceberg.encryption.EncryptedOutputFile;
+import org.apache.iceberg.io.DataWriter;
 import org.apache.iceberg.io.FileAppenderFactory;
+import org.apache.iceberg.io.FileWriterFactory;
 import org.apache.iceberg.io.OutputFileFactory;
 import org.apache.iceberg.io.TaskWriter;
 import org.apache.iceberg.util.PropertyUtil;
@@ -80,6 +88,45 @@ public class TaskWriterFactory {
                 columns.add(schema.findField(fieldId).name());
             }
             Schema deleteSchema = schema.select(columns);
+            if (TableUtil.formatVersion(table) >= 3) {
+                // GenericFileWriterFactory is not public in Iceberg 1.10. Adapt the existing
+                // appender factory to the rolling writer API shared with Iceberg 1.12.
+                FileWriterFactory<Record> writerFactory =
+                        new FileWriterFactory<Record>() {
+                            @Override
+                            public DataWriter<Record> newDataWriter(
+                                    EncryptedOutputFile file,
+                                    PartitionSpec spec,
+                                    StructLike partition) {
+                                return appenderFactory.newDataWriter(file, format, partition);
+                            }
+
+                            @Override
+                            public EqualityDeleteWriter<Record> newEqualityDeleteWriter(
+                                    EncryptedOutputFile file,
+                                    PartitionSpec spec,
+                                    StructLike partition) {
+                                return appenderFactory.newEqDeleteWriter(file, format, partition);
+                            }
+
+                            @Override
+                            public PositionDeleteWriter<Record> newPositionDeleteWriter(
+                                    EncryptedOutputFile file,
+                                    PartitionSpec spec,
+                                    StructLike partition) {
+                                throw new UnsupportedOperationException(
+                                        "V3 position deletes must use DVs");
+                            }
+                        };
+                return new GenericRecordDVWriter(
+                        table,
+                        deleteSchema,
+                        format,
+                        writerFactory,
+                        targetFileSize,
+                        partition,
+                        bucket);
+            }
             return new GenericRecordDeltaWriter(
                     table,
                     deleteSchema,
