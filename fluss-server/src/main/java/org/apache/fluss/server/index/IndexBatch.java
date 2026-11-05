@@ -41,8 +41,6 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 final class IndexBatch {
 
     private final TableBucket targetBucket;
-    private final TableBucket sourceBucket;
-    private final long sourceEndOffset;
     private final byte[] progressKey;
     private final BytesView encoded;
     private final long retainedBytes;
@@ -55,16 +53,11 @@ final class IndexBatch {
 
     IndexBatch(
             TableBucket targetBucket,
-            TableBucket sourceBucket,
-            long sourceEndOffset,
             byte[] progressKey,
             BytesView encoded,
             long retainedBytes,
             IndexReplicationWindow window) {
         this.targetBucket = checkNotNull(targetBucket, "targetBucket");
-        this.sourceBucket = checkNotNull(sourceBucket, "sourceBucket");
-        checkArgument(sourceEndOffset >= 0, "sourceEndOffset must not be negative");
-        this.sourceEndOffset = sourceEndOffset;
         this.progressKey = checkNotNull(progressKey, "progressKey");
         this.encoded = checkNotNull(encoded, "encoded");
         checkArgument(
@@ -72,6 +65,7 @@ final class IndexBatch {
                 "retainedBytes must cover the encoded payload");
         this.retainedBytes = retainedBytes;
         this.window = checkNotNull(window, "window");
+        checkArgument(window.windowEndOffset() >= 0, "sourceEndOffset must not be negative");
         this.attempts = 0;
     }
 
@@ -80,11 +74,11 @@ final class IndexBatch {
     }
 
     TableBucket sourceBucket() {
-        return sourceBucket;
+        return window.sourceBucket();
     }
 
     long sourceEndOffset() {
-        return sourceEndOffset;
+        return window.windowEndOffset();
     }
 
     byte[] progressKey() {

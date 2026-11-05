@@ -188,24 +188,6 @@ public final class IndexReplicationSupervisor {
         }
     }
 
-    // ------------------------------------------------------------------------------------
-    // Index-pushed-offset
-    // ------------------------------------------------------------------------------------
-
-    /** Returns the current sync index-pushed-offset, or {@code -1L} if no replicator is active. */
-    public long getSyncIndexPushedOffset() {
-        IndexReplicator r = this.indexReplicator;
-        return r != null ? r.getSyncIndexPushedOffset() : -1L;
-    }
-
-    /**
-     * Returns the conservative all-index replay floor, or {@code -1L} if no replicator is active.
-     */
-    public long getAllIndexPushedOffset() {
-        IndexReplicator r = this.indexReplicator;
-        return r != null ? r.getAllIndexPushedOffset() : -1L;
-    }
-
     /** Returns how long the active replicator has been behind without advancing. */
     public long noProgressTimeMs() {
         IndexReplicator r = this.indexReplicator;

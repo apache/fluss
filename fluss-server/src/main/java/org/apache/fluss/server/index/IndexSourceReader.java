@@ -70,25 +70,6 @@ public final class IndexSourceReader implements AutoCloseable {
     interface RemoteFetcher extends AutoCloseable {
         Iterable<LogRecordBatch> fetch(long startOffset, long localLogStartOffset) throws Exception;
 
-        default RemoteRead fetchBounded(long startOffset, long localLogStartOffset)
-                throws Exception {
-            Iterable<LogRecordBatch> batches = fetch(startOffset, localLogStartOffset);
-            return new RemoteRead() {
-                @Override
-                public java.util.Iterator<LogRecordBatch> iterator() {
-                    return batches.iterator();
-                }
-
-                @Override
-                public void close() {}
-            };
-        }
-
-        @Override
-        void close();
-    }
-
-    interface RemoteRead extends Iterable<LogRecordBatch>, AutoCloseable {
         @Override
         void close();
     }
@@ -224,10 +205,7 @@ public final class IndexSourceReader implements AutoCloseable {
             long localLogStartOffset,
             int maxBytes) {
         RemoteFetcher remoteFetcher = null;
-        RemoteRead remoteRead = null;
-        Throwable taskFailure = null;
         boolean localHandoffStarted = false;
-        boolean remoteFailureCounted = false;
         try {
             remoteFetcher = getOrOpenRemoteFetcher();
             if (closed.get()) {
@@ -238,8 +216,7 @@ public final class IndexSourceReader implements AutoCloseable {
 
             long remoteEnd = Math.min(localLogStartOffset, highWatermark);
             BatchCollector collector = new BatchCollector(nextOffset, highWatermark, maxBytes);
-            remoteRead = remoteFetcher.fetchBounded(nextOffset, localLogStartOffset);
-            collector.collect(remoteRead, remoteEnd);
+            collector.collect(remoteFetcher.fetch(nextOffset, localLogStartOffset), remoteEnd);
             if (!collector.limitReached() && collector.nextOffset() < remoteEnd) {
                 throw corruption(
                         "remote WAL ended at expected offset "
@@ -249,8 +226,7 @@ public final class IndexSourceReader implements AutoCloseable {
             }
 
             AutoCloseable resultResource =
-                    remoteReadResource(
-                            remoteRead, remoteFetcher, collector.nextOffset() == remoteEnd);
+                    remoteSessionResource(remoteFetcher, collector.nextOffset() == remoteEnd);
             collector.attachResource(resultResource);
 
             ReadResult result;
@@ -267,7 +243,6 @@ public final class IndexSourceReader implements AutoCloseable {
             } else {
                 result = collector.finish(resultResource);
             }
-            remoteRead = null;
             if (closed.get() || future.isCancelled()) {
                 result.close();
                 future.cancel(true);
@@ -275,34 +250,15 @@ public final class IndexSourceReader implements AutoCloseable {
                 result.close();
             }
         } catch (Throwable failure) {
-            taskFailure = failure;
-        } finally {
-            if (remoteRead != null) {
-                try {
-                    remoteRead.close();
-                } catch (Throwable closeFailure) {
-                    if (metrics != null) {
-                        metrics.indexReplicationFailures().inc();
-                        remoteFailureCounted = true;
-                    }
-                    if (taskFailure == null) {
-                        taskFailure = closeFailure;
-                    } else {
-                        taskFailure.addSuppressed(closeFailure);
-                    }
-                }
+            if (metrics != null && !localHandoffStarted) {
+                metrics.indexReplicationFailures().inc();
             }
-            if (taskFailure != null) {
-                if (metrics != null && !localHandoffStarted && !remoteFailureCounted) {
-                    metrics.indexReplicationFailures().inc();
-                }
-                if (remoteFetcher != null) {
-                    discardRemoteFetcher(remoteFetcher);
-                }
-                pendingRemoteRead.compareAndSet(future, null);
-                if (!future.isCancelled()) {
-                    future.completeExceptionally(taskFailure);
-                }
+            if (remoteFetcher != null) {
+                discardRemoteFetcher(remoteFetcher);
+            }
+            pendingRemoteRead.compareAndSet(future, null);
+            if (!future.isCancelled()) {
+                future.completeExceptionally(failure);
             }
         }
     }
@@ -326,18 +282,13 @@ public final class IndexSourceReader implements AutoCloseable {
         }
     }
 
-    private AutoCloseable remoteReadResource(
-            RemoteRead remoteRead, RemoteFetcher remoteFetcher, boolean retireSession) {
+    private AutoCloseable remoteSessionResource(
+            RemoteFetcher remoteFetcher, boolean retireSession) {
         return () -> {
             try {
-                try {
-                    if (retireSession) {
-                        // Closing the fetcher first prevents iterator release from caching the
-                        // final segment after the result's batch views have been consumed.
-                        discardRemoteFetcher(remoteFetcher);
-                    }
-                } finally {
-                    remoteRead.close();
+                if (retireSession) {
+                    // Retire the session after the result's batch views have been consumed.
+                    discardRemoteFetcher(remoteFetcher);
                 }
             } catch (RuntimeException | Error failure) {
                 if (metrics != null) {
