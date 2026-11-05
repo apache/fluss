@@ -52,6 +52,7 @@ import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.server.zk.data.bulkload.BulkLoadDataState;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
+import org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.ChildData;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 
 import org.slf4j.Logger;
@@ -125,8 +126,6 @@ public class CoordinatorRequestBatch {
     private final CoordinatorContext coordinatorContext;
     private final ZooKeeperClient zooKeeperClient;
 
-    private final Map<String, ZooKeeperClient.DataWithStat> targetMetadata = new HashMap<>();
-
     public CoordinatorRequestBatch(
             CoordinatorChannelManager coordinatorChannelManager,
             EventManager eventManager,
@@ -139,7 +138,6 @@ public class CoordinatorRequestBatch {
     }
 
     public void newBatch() {
-        targetMetadata.clear();
         if (!notifyLeaderAndIsrRequestMap.isEmpty()) {
             throw new IllegalStateException(
                     String.format(
@@ -181,7 +179,6 @@ public class CoordinatorRequestBatch {
 
     /** Discards an incomplete batch before an authoritative drop transition starts. */
     public void discardIncompleteBatch() {
-        targetMetadata.clear();
         notifyLeaderAndIsrRequestMap.clear();
         stopReplicaRequestMap.clear();
         updateMetadataRequestTabletServerSet.clear();
@@ -231,8 +228,6 @@ public class CoordinatorRequestBatch {
                         t);
             }
             throw new IllegalStateException(t);
-        } finally {
-            targetMetadata.clear();
         }
     }
 
@@ -829,8 +824,8 @@ public class CoordinatorRequestBatch {
         try {
             return readTargetMetadata(physicalPath, tableBucket);
         } catch (KeeperException.NoNodeException e) {
-            // Metadata deletion precedes admission of the drop event. A late leader response
-            // can arrive during that gap; the deleted target must not be activated again.
+            // A cache miss may observe deletion before the drop event is processed. Do not
+            // manufacture ACTIVE metadata when the authoritative read reports a missing target.
             return null;
         } catch (Exception e) {
             throw new IllegalStateException(
@@ -841,10 +836,12 @@ public class CoordinatorRequestBatch {
     private BulkLoadTargetMetadata readTargetMetadata(PhysicalTablePath path, TableBucket bucket)
             throws Exception {
         String nodePath = metadataPath(path);
-        ZooKeeperClient.DataWithStat metadata = targetMetadata.get(nodePath);
+        // External DDL becomes visible through watcher invalidation; this cache is not a DDL fence.
+        ChildData metadata = coordinatorContext.getTargetMetadata(nodePath);
         if (metadata == null) {
-            metadata = zooKeeperClient.getDataWithStat(nodePath);
-            targetMetadata.put(nodePath, metadata);
+            ZooKeeperClient.DataWithStat read = zooKeeperClient.getDataWithStat(nodePath);
+            metadata = new ChildData(nodePath, read.getStat(), read.getData());
+            coordinatorContext.cacheTargetMetadata(metadata);
         }
         BulkLoadDataState state;
         if (path.getPartitionName() == null) {

@@ -17,6 +17,8 @@
 
 package org.apache.fluss.server.coordinator;
 
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.NetworkException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
@@ -27,12 +29,15 @@ import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
 import org.apache.fluss.rpc.messages.PbNotifyLeaderAndIsrReqForBucket;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
+import org.apache.fluss.server.zk.CuratorFrameworkWithUnhandledErrorListener;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZkEpoch;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.TableRegistration;
+import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.server.zk.data.bulkload.BulkLoadDataState;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 
@@ -70,6 +75,69 @@ class CoordinatorRequestBatchTest {
                         .getCustomExtension()
                         .getZooKeeperClient(NOPErrorHandler.INSTANCE);
         coordinatorContext = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testReusesTargetMetadataAcrossBatches(boolean partitioned) throws Exception {
+        TablePath path = TablePath.of("db1", "reused_metadata_" + partitioned);
+        long tableId = 700L;
+        zookeeperClient.registerTable(
+                path,
+                TableRegistration.newTable(
+                        tableId, DEFAULT_REMOTE_DATA_DIR, DATA1_TABLE_DESCRIPTOR));
+        PhysicalTablePath target =
+                partitioned ? PhysicalTablePath.of(path, "p0") : PhysicalTablePath.of(path);
+        TableBucket bucket = new TableBucket(tableId, partitioned ? 701L : null, 0);
+        if (partitioned) {
+            zookeeperClient
+                    .getCuratorClient()
+                    .create()
+                    .creatingParentsIfNeeded()
+                    .forPath(
+                            ZkData.PartitionZNode.path(path, "p0"),
+                            ZkData.PartitionZNode.encode(
+                                    new PartitionRegistration(
+                                            tableId, 701L, DEFAULT_REMOTE_DATA_DIR, 1)));
+        }
+        coordinatorContext.putTablePath(tableId, path);
+        AtomicInteger reads = new AtomicInteger();
+        // This view shares the extension-owned Curator client; it does not open another session.
+        Configuration countingConfiguration = new Configuration();
+        countingConfiguration.setString(ConfigOptions.REMOTE_DATA_DIR, DEFAULT_REMOTE_DATA_DIR);
+        ZooKeeperClient counting =
+                new ZooKeeperClient(
+                        new CuratorFrameworkWithUnhandledErrorListener(
+                                zookeeperClient.getCuratorClient(), (message, failure) -> {}),
+                        countingConfiguration) {
+                    @Override
+                    public DataWithStat getDataWithStat(String nodePath) throws Exception {
+                        reads.incrementAndGet();
+                        return super.getDataWithStat(nodePath);
+                    }
+                };
+        CoordinatorRequestBatch batch =
+                new CoordinatorRequestBatch(
+                        new TestCoordinatorChannelManager(),
+                        newSynchronousAccessContextEventManager(),
+                        coordinatorContext,
+                        counting);
+        for (int generation = 0; generation < 2; generation++) {
+            coordinatorContext.putTablePath(tableId, path);
+            for (int i = 0; i < 3; i++) {
+                batch.newBatch();
+                batch.addNotifyLeaderRequestForTabletServers(
+                        Collections.emptySet(),
+                        target,
+                        bucket,
+                        Collections.emptyList(),
+                        new LeaderAndIsr(
+                                0, 0, Collections.singletonList(0), Collections.emptyList(), 0, 0));
+                batch.sendRequestToTabletServers(0);
+            }
+            assertThat(reads).hasValue(generation + 1);
+            coordinatorContext.resetContext();
+        }
     }
 
     /**

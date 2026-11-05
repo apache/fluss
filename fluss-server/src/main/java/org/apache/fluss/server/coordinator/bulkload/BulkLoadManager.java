@@ -121,7 +121,7 @@ public final class BulkLoadManager {
             EventManager eventManager,
             CompletedSnapshotStoreManager completedSnapshotStoreManager) {
         this.zkClient = checkNotNull(zkClient);
-        this.metadataStore = new BulkLoadMetadataStore(zkClient);
+        this.metadataStore = new BulkLoadMetadataStore(zkClient, coordinatorContext);
         this.configuration = checkNotNull(configuration);
         this.coordinatorContext = checkNotNull(coordinatorContext);
         this.metadataManager = checkNotNull(metadataManager);

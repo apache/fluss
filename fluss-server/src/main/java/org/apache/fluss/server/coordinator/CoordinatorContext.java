@@ -31,6 +31,8 @@ import org.apache.fluss.server.metadata.RegisteredTabletServer;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.zk.ZkEpoch;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.server.zk.data.ZkData;
+import org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.ChildData;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.slf4j.Logger;
@@ -97,6 +99,8 @@ public class CoordinatorContext {
     private final Map<Long, TablePath> tablePathById = new HashMap<>();
     private final Map<TablePath, Long> tableIdByPath = new HashMap<>();
     private final Map<Long, TableInfo> tableInfoById = new HashMap<>();
+
+    private final Map<String, ChildData> targetMetadata = new HashMap<>();
 
     private final Map<TableBucket, LeaderAndIsr> bucketLeaderAndIsr = new HashMap<>();
     private final Set<TableBucket> kvBuckets = new HashSet<>();
@@ -440,6 +444,22 @@ public class CoordinatorContext {
                                     }
                                 }));
         return replicasInServer;
+    }
+
+    /** Returns the cached registration snapshot for ordinary replica notifications. */
+    @Nullable
+    public ChildData getTargetMetadata(String path) {
+        return targetMetadata.get(path);
+    }
+
+    /** Caches registration data and its version from one read or successful write. */
+    public void cacheTargetMetadata(ChildData metadata) {
+        targetMetadata.put(metadata.getPath(), metadata);
+    }
+
+    /** Invalidates a registration before a local write or after a watcher notification. */
+    public void invalidateTargetMetadata(String path) {
+        targetMetadata.remove(path);
     }
 
     public void putTablePath(long tableId, TablePath tablePath) {
@@ -817,6 +837,7 @@ public class CoordinatorContext {
         TablePath tablePath = tablePathById.remove(tableId);
         if (tablePath != null) {
             tableIdByPath.remove(tablePath);
+            invalidateTargetMetadata(ZkData.TableZNode.path(tablePath));
         }
         tableInfoById.remove(tableId);
     }
@@ -845,6 +866,10 @@ public class CoordinatorContext {
                 pathByPartitionId.remove(tablePartition.getPartitionId());
         if (physicalTablePath != null) {
             partitionIdByPath.remove(physicalTablePath);
+            invalidateTargetMetadata(
+                    ZkData.PartitionZNode.path(
+                            physicalTablePath.getTablePath(),
+                            physicalTablePath.getPartitionName()));
         }
     }
 
@@ -879,6 +904,7 @@ public class CoordinatorContext {
         tablePathById.clear();
         tableIdByPath.clear();
         tableInfoById.clear();
+        targetMetadata.clear();
         pathByPartitionId.clear();
         partitionIdByPath.clear();
         kvBuckets.clear();

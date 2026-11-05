@@ -19,6 +19,7 @@ package org.apache.fluss.server.coordinator.bulkload;
 
 import org.apache.fluss.metadata.BulkLoadHandle;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.coordinator.bulkload.BulkLoadReplicaConvergence.ReplicaConvergenceContext;
 import org.apache.fluss.server.metadata.RegisteredTabletServer;
 import org.apache.fluss.server.zk.ZooKeeperClient;
@@ -32,6 +33,7 @@ import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.server.zk.data.bulkload.BulkLoadDataState;
 import org.apache.fluss.server.zk.data.bulkload.BulkLoadTransaction;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.api.transaction.CuratorOp;
+import org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.ChildData;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.data.Stat;
 
 import javax.annotation.Nullable;
@@ -54,9 +56,11 @@ final class BulkLoadMetadataStore {
 
     private final ZooKeeperClient zkClient;
     private final ZooKeeperOp zkOp;
+    private final CoordinatorContext coordinatorContext;
 
-    BulkLoadMetadataStore(ZooKeeperClient zkClient) {
+    BulkLoadMetadataStore(ZooKeeperClient zkClient, CoordinatorContext coordinatorContext) {
         this.zkClient = checkNotNull(zkClient);
+        this.coordinatorContext = checkNotNull(coordinatorContext);
         this.zkOp = new ZooKeeperOp(zkClient.getCuratorClient());
     }
 
@@ -73,15 +77,12 @@ final class BulkLoadMetadataStore {
             operations.add(zkOp.createOp(transactionParentPath(handle), new byte[0]));
         }
         operations.add(zkOp.createOp(transactionPath(handle), encodeTransaction(transaction)));
+        byte[] registrationData =
+                encodeRegistration(
+                        registration.getValue(), BulkLoadDataState.LOADING, handle.getBulkLoadId());
         operations.add(
-                zkOp.updateOp(
-                        registration.getPath(),
-                        encodeRegistration(
-                                registration.getValue(),
-                                BulkLoadDataState.LOADING,
-                                handle.getBulkLoadId()),
-                        registration.getVersion()));
-        zkClient.submitCheckedMulti(operations);
+                zkOp.updateOp(registration.getPath(), registrationData, registration.getVersion()));
+        submitRegistrationChange(operations, registration.getPath(), registrationData);
         return new Versioned<>(transaction, transactionPath(handle), 0, 0L);
     }
 
@@ -137,22 +138,40 @@ final class BulkLoadMetadataStore {
                             confirmed.assignment.getPath(), confirmed.assignment.getVersion()));
             addRegistrationChecks(operations, confirmed);
         }
+        byte[] registrationData = null;
         if (replacement.getMetadataVersion() != current.getValue().getMetadataVersion()) {
+            registrationData =
+                    encodeRegistration(
+                            registration.getValue(),
+                            BulkLoadDataState.ACTIVE,
+                            replacement.getState().isTerminal()
+                                    ? null
+                                    : replacement.getBulkLoadId());
             operations.add(
                     zkOp.updateOp(
-                            registration.getPath(),
-                            encodeRegistration(
-                                    registration.getValue(),
-                                    BulkLoadDataState.ACTIVE,
-                                    replacement.getState().isTerminal()
-                                            ? null
-                                            : replacement.getBulkLoadId()),
-                            registration.getVersion()));
+                            registration.getPath(), registrationData, registration.getVersion()));
         }
         operations.add(
                 zkOp.updateOp(
                         current.getPath(), encodeTransaction(replacement), current.getVersion()));
-        return transactionResult(replacement, zkClient.submitCheckedMulti(operations));
+        Map<String, Stat> result =
+                registrationData == null
+                        ? zkClient.submitCheckedMulti(operations)
+                        : submitRegistrationChange(
+                                operations, registration.getPath(), registrationData);
+        return transactionResult(replacement, result);
+    }
+
+    private Map<String, Stat> submitRegistrationChange(
+            List<CuratorOp> operations, String path, byte[] data) throws Exception {
+        coordinatorContext.invalidateTargetMetadata(path);
+        Map<String, Stat> result = zkClient.submitCheckedMulti(operations);
+        coordinatorContext.cacheTargetMetadata(
+                new ChildData(
+                        path,
+                        checkNotNull(result.get(path), "Missing registration write result."),
+                        data));
+        return result;
     }
 
     private List<CuratorOp> beginOperations(int coordinatorEpochVersion) throws Exception {

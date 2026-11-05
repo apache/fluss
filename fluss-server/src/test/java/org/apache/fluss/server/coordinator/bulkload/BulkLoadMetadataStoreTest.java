@@ -74,6 +74,7 @@ import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.server.zk.data.bulkload.BulkLoadDataState;
 import org.apache.fluss.server.zk.data.bulkload.BulkLoadTransaction;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.api.transaction.CuratorOp;
+import org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.ChildData;
 import org.apache.fluss.shaded.guava32.com.google.common.hash.Hashing;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.data.Stat;
@@ -139,7 +140,6 @@ class BulkLoadMetadataStoreTest {
     @BeforeEach
     void setUp() throws Exception {
         zkClient = ZOOKEEPER.getCustomExtension().createZooKeeperClient(NOPErrorHandler.INSTANCE);
-        store = new BulkLoadMetadataStore(zkClient);
         remoteDataDir = tempDir.toUri().toString();
         configuration = new Configuration();
         configuration.setString(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
@@ -147,6 +147,7 @@ class BulkLoadMetadataStoreTest {
         channelManager = new TestCoordinatorChannelManager();
         metadataManager = new MetadataManager(zkClient, configuration, catalogLoader);
         context = new CoordinatorContext(zkClient.fenceBecomeCoordinatorLeader("bulkload-test"));
+        store = new BulkLoadMetadataStore(zkClient, context);
         context.setCoordinatorServerInfo(
                 new ServerInfo(
                         0,
@@ -256,6 +257,7 @@ class BulkLoadMetadataStoreTest {
         assertThat(fixture.registration().getValue().bulkLoadId).isNull();
 
         assertThat(fixture.transaction().getValue()).isEqualTo(committed.getValue());
+        assertCachedRegistration(fixture.registrationPath);
     }
 
     @Test
@@ -496,9 +498,14 @@ class BulkLoadMetadataStoreTest {
                         serverData.getStat().getVersion(),
                         serverData.getStat().getEphemeralOwner()));
 
+        String firstRegistrationPath = ZkData.TableZNode.path(firstPath);
+        ZooKeeperClient.DataWithStat active = zkClient.getDataWithStat(firstRegistrationPath);
+        context.cacheTargetMetadata(
+                new ChildData(firstRegistrationPath, active.getStat(), active.getData()));
         uncertainZkClient.failNextCheckedMultiAndReadAfterCommit();
         CompletableFuture<BeginBulkLoadResponse> uncertainBegin = begin(manager, firstPath);
         assertThat(uncertainBegin).isCompletedExceptionally();
+        assertThat(context.getTargetMetadata(firstRegistrationPath)).isNull();
         Versioned<TableRegistration> firstOwned =
                 observed(ZkData.TableZNode.path(firstPath), ZkData.TableZNode::decode);
         assertThat(firstOwned.getValue().dataState).isEqualTo(BulkLoadDataState.LOADING);
@@ -616,6 +623,14 @@ class BulkLoadMetadataStoreTest {
                 .isEqualTo(assignment.getData());
     }
 
+    private void assertCachedRegistration(String path) throws Exception {
+        ChildData cached = context.getTargetMetadata(path);
+        ZooKeeperClient.DataWithStat actual = zkClient.getDataWithStat(path);
+        assertThat(cached).isNotNull();
+        assertThat(cached.getData()).isEqualTo(actual.getData());
+        assertThat(cached.getStat().getVersion()).isEqualTo(actual.getStat().getVersion());
+    }
+
     private BulkLoadManager manager(ZooKeeperClient client) {
         return new BulkLoadManager(
                 client,
@@ -690,6 +705,7 @@ class BulkLoadMetadataStoreTest {
                         null,
                         null),
                 fixture.coordinatorEpochVersion);
+        assertCachedRegistration(fixture.registrationPath);
         create(ZkData.BucketIdZNode.path(fixture.tableBucket), new byte[0]);
         return fixture;
     }
