@@ -35,10 +35,13 @@ import org.apache.fluss.testutils.common.CheckedThread;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
@@ -94,6 +97,9 @@ class MetadataInitializationTest {
         assertThat(updated.getPartitionIdByPath()).isEqualTo(original.getPartitionIdByPath());
         assertThat(updated.getBucketCountByTableOrPartition())
                 .isEqualTo(original.getBucketCountByTableOrPartition());
+        assertThat(updated.getBucketCountEpochByTableId())
+                .containsExactlyEntriesOf(Collections.singletonMap(OTHER_TABLE_ID, 2L));
+        assertThat(original.getBucketCountEpoch(OTHER_TABLE_ID)).hasValue(2L);
         assertThat(original.getTableIdByPath())
                 .containsExactlyEntriesOf(
                         Collections.singletonMap(OTHER_TABLE_PATH, OTHER_TABLE_ID));
@@ -111,18 +117,64 @@ class MetadataInitializationTest {
         assertThat(updater.getCluster()).isSameAs(original);
     }
 
-    @Test
-    void testReplacesOldTableIdAndReverseMapping() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testReplacesOldTableIdAndInvalidatesRouting(boolean partitioned) {
         long oldTableId = TABLE_ID - 1;
-        Cluster original = cluster(Collections.singletonMap(TABLE_PATH, oldTableId));
+        Cluster unrelated = cluster(Collections.singletonMap(OTHER_TABLE_PATH, OTHER_TABLE_ID));
+        Map<TablePath, Long> tableIds = new HashMap<>(unrelated.getTableIdByPath());
+        tableIds.put(TABLE_PATH, oldTableId);
+        PhysicalTablePath oldPath =
+                partitioned
+                        ? PhysicalTablePath.of(TABLE_PATH, "p1")
+                        : PhysicalTablePath.of(TABLE_PATH);
+        TableBucket oldBucket = new TableBucket(oldTableId, partitioned ? 52L : null, 0);
+        Map<PhysicalTablePath, List<BucketLocation>> locations =
+                new HashMap<>(unrelated.getBucketLocationsByPath());
+        locations.put(
+                oldPath,
+                Collections.singletonList(
+                        new BucketLocation(oldPath, oldBucket, 1, new int[] {1})));
+        Map<PhysicalTablePath, Long> partitionIds = new HashMap<>(unrelated.getPartitionIdByPath());
+        Map<TableOrPartition, Integer> bucketCounts =
+                new HashMap<>(unrelated.getBucketCountByTableOrPartition());
+        bucketCounts.put(TableOrPartition.ofTable(oldTableId), 1);
+        if (partitioned) {
+            partitionIds.put(oldPath, oldBucket.getPartitionId());
+            bucketCounts.put(TableOrPartition.ofPartition(oldBucket.getPartitionId()), 1);
+            // Partition IDs may remain cached after their bucket locations are invalidated.
+            partitionIds.put(PhysicalTablePath.of(TABLE_PATH, "p2"), 53L);
+            bucketCounts.put(TableOrPartition.ofPartition(53L), 1);
+        }
+        Cluster original =
+                new Cluster(
+                        unrelated.getAliveTabletServers(),
+                        COORDINATOR,
+                        locations,
+                        tableIds,
+                        partitionIds,
+                        bucketCounts,
+                        unrelated.getBucketCountEpochByTableId());
         MetadataUpdater updater = new MetadataUpdater(noRpcClient(), new Configuration(), original);
 
         updater.ensureTableMapping(tableInfo());
 
-        assertThat(updater.getCluster().getTableId(TABLE_PATH)).hasValue(TABLE_ID);
-        assertThat(updater.getCluster().getTablePath(TABLE_ID)).hasValue(TABLE_PATH);
-        assertThat(updater.getCluster().getTablePath(oldTableId)).isEmpty();
+        Cluster updated = updater.getCluster();
+        assertThat(updated.getTableId(TABLE_PATH)).hasValue(TABLE_ID);
+        assertThat(updated.getTablePath(TABLE_ID)).hasValue(TABLE_PATH);
+        assertThat(updated.getTablePath(oldTableId)).isEmpty();
+        assertThat(updated.getTableId(OTHER_TABLE_PATH)).hasValue(OTHER_TABLE_ID);
+        assertThat(updated.getBucketLocationsByPath())
+                .isEqualTo(unrelated.getBucketLocationsByPath());
+        assertThat(updated.getPartitionIdByPath()).isEqualTo(unrelated.getPartitionIdByPath());
+        assertThat(updated.getBucketCountByTableOrPartition())
+                .isEqualTo(unrelated.getBucketCountByTableOrPartition());
+        assertThat(updated.getBucketCountEpochByTableId())
+                .containsExactlyEntriesOf(Collections.singletonMap(OTHER_TABLE_ID, 2L));
         assertThat(original.getTablePath(oldTableId)).hasValue(TABLE_PATH);
+        assertThat(original.getBucketLocation(oldBucket)).isPresent();
+        assertThat(original.getPartitionIdByPath()).isEqualTo(partitionIds);
+        assertThat(original.getBucketCountByTableOrPartition()).isEqualTo(bucketCounts);
     }
 
     @Test
@@ -132,6 +184,8 @@ class MetadataInitializationTest {
         response.addTabletServer().setNodeId(1).setHost("localhost").setPort(9080);
         response.addTableMetadata()
                 .setTableId(100L)
+                .setBucketCount(1)
+                .setBucketCountEpoch(0L)
                 .setTablePath()
                 .setDatabaseName(refreshedTable.getDatabaseName())
                 .setTableName(refreshedTable.getTableName());
@@ -209,6 +263,7 @@ class MetadataInitializationTest {
                 Collections.singletonMap(partitionPath, Collections.singletonList(bucket)),
                 tableMappings,
                 Collections.singletonMap(partitionPath, PARTITION_ID),
-                bucketCounts);
+                bucketCounts,
+                Collections.singletonMap(OTHER_TABLE_ID, 2L));
     }
 }
