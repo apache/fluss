@@ -20,9 +20,11 @@ package org.apache.fluss.server.replica.historical;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.ConfigException;
+import org.apache.fluss.utils.function.SupplierWithException;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.ArrayList;
@@ -34,12 +36,84 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for {@link HistoricalPartitionTaskExecutor}. */
 class HistoricalPartitionTaskExecutorTest {
+
+    @ParameterizedTest
+    @EnumSource(ShutdownFailure.class)
+    void testCloseCancelsRequestsWithoutForcingShutdown(ShutdownFailure failure) {
+        ManualExecutor executor = new ManualExecutor();
+        AtomicInteger waits = new AtomicInteger();
+        executor.terminationResult =
+                () -> {
+                    assertThat(waits.incrementAndGet()).isOne();
+                    if (failure == ShutdownFailure.INTERRUPTED) {
+                        throw new InterruptedException("Simulated shutdown interruption.");
+                    }
+                    return false; // Simulate TIMEOUT without actually waiting ten seconds.
+                };
+
+        try (HistoricalPartitionTaskExecutor taskExecutor =
+                new HistoricalPartitionTaskExecutor(configuration(1), executor)) {
+            CompletableFuture<String> request =
+                    taskExecutor.submit(() -> "accepted", () -> "throttled");
+            try {
+                // Neither timeout nor interruption should prevent the caller's remaining cleanup.
+                taskExecutor.close();
+                assertThat(request).isCancelled();
+                assertThat(taskExecutor.numInflightRequests()).isZero();
+                assertThat(executor.forcedShutdown).isFalse();
+                assertThat(Thread.currentThread().isInterrupted())
+                        .isEqualTo(failure == ShutdownFailure.INTERRUPTED);
+            } finally {
+                //noinspection ResultOfMethodCallIgnored -- clear the interrupt set by this test
+                Thread.interrupted();
+                executor.terminationResult = executor::isTerminated;
+                executor.runAll();
+            }
+        }
+    }
+
+    @Test
+    void testCloseRejectsQueuedAndNewRequests() {
+        ManualExecutor executor = new ManualExecutor();
+        try (HistoricalPartitionTaskExecutor taskExecutor =
+                new HistoricalPartitionTaskExecutor(configuration(3), executor)) {
+            List<String> executed = new ArrayList<>();
+            CompletableFuture<Boolean> unordered =
+                    taskExecutor.submit(() -> executed.add("unordered"), () -> false);
+            CompletableFuture<Boolean> first =
+                    taskExecutor.submitOrdered("key", () -> executed.add("first"), () -> false);
+            CompletableFuture<Boolean> next =
+                    taskExecutor.submitOrdered("key", () -> executed.add("next"), () -> false);
+            executor.terminationResult =
+                    () -> {
+                        executor.runAll();
+                        return executor.isTerminated();
+                    };
+
+            taskExecutor.close();
+
+            assertThat(executed).isEmpty();
+            assertThatThrownBy(unordered::join)
+                    .hasCauseInstanceOf(RejectedExecutionException.class);
+            assertThatThrownBy(first::join).hasCauseInstanceOf(RejectedExecutionException.class);
+            assertThatThrownBy(next::join).hasCauseInstanceOf(RejectedExecutionException.class);
+            assertThat(taskExecutor.numInflightRequests()).isZero();
+            assertThatThrownBy(() -> taskExecutor.submit(() -> "accepted", () -> "throttled"))
+                    .isInstanceOf(RejectedExecutionException.class);
+            assertThatThrownBy(
+                            () ->
+                                    taskExecutor.submitOrdered(
+                                            "key", () -> "accepted", () -> "throttled"))
+                    .isInstanceOf(RejectedExecutionException.class);
+        }
+    }
 
     @Test
     void testSharedRequestLimit() throws Exception {
@@ -253,9 +327,17 @@ class HistoricalPartitionTaskExecutorTest {
         return conf;
     }
 
+    private enum ShutdownFailure {
+        TIMEOUT,
+        INTERRUPTED
+    }
+
     private static final class ManualExecutor extends AbstractExecutorService {
         private final BlockingQueue<Runnable> tasks = new LinkedBlockingQueue<>();
         private volatile boolean shutdown;
+        private boolean forcedShutdown;
+        private SupplierWithException<Boolean, InterruptedException> terminationResult =
+                this::isTerminated;
 
         @Override
         public void shutdown() {
@@ -265,6 +347,7 @@ class HistoricalPartitionTaskExecutorTest {
         @Override
         public List<Runnable> shutdownNow() {
             shutdown = true;
+            forcedShutdown = true;
             List<Runnable> remainingTasks = new ArrayList<>();
             tasks.drainTo(remainingTasks);
             return remainingTasks;
@@ -281,8 +364,9 @@ class HistoricalPartitionTaskExecutorTest {
         }
 
         @Override
-        public boolean awaitTermination(long timeout, TimeUnit unit) {
-            return isTerminated();
+        public boolean awaitTermination(long timeout, TimeUnit unit) throws InterruptedException {
+            assertThat(unit.toSeconds(timeout)).isEqualTo(10);
+            return terminationResult.get();
         }
 
         @Override
@@ -301,6 +385,13 @@ class HistoricalPartitionTaskExecutorTest {
 
         private int numQueuedTasks() {
             return tasks.size();
+        }
+
+        private void runAll() {
+            Runnable task;
+            while ((task = tasks.poll()) != null) {
+                task.run();
+            }
         }
     }
 }

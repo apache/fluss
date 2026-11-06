@@ -22,8 +22,10 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.ConfigException;
-import org.apache.fluss.utils.ExecutorUtils;
 import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
@@ -36,6 +38,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -56,6 +59,9 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 @Internal
 public final class HistoricalPartitionTaskExecutor implements AutoCloseable {
 
+    private static final Logger LOG =
+            LoggerFactory.getLogger(HistoricalPartitionTaskExecutor.class);
+
     private static final Duration THREAD_KEEP_ALIVE = Duration.ofMinutes(10);
     private static final Duration SHUTDOWN_TIMEOUT = Duration.ofSeconds(10);
     private static final String THREAD_NAME_PREFIX = "historical-partition-io";
@@ -63,9 +69,10 @@ public final class HistoricalPartitionTaskExecutor implements AutoCloseable {
     private volatile int maxQueuedHistoricalRequests;
     // Shared by lookup and write tasks, including tasks waiting in the executor queue.
     private final AdjustableSemaphore requestPermits;
-    // Keep accepted requests so close() can cancel work that remains after executor shutdown.
+    // Keep accepted requests so close() can cancel any remaining futures.
     private final Set<CompletableFuture<?>> pendingRequests;
     private final ExecutorService executor;
+    private volatile boolean closed;
     private volatile int maxThreadPoolSize;
     private final Object orderedTasksLock = new Object();
 
@@ -115,13 +122,14 @@ public final class HistoricalPartitionTaskExecutor implements AutoCloseable {
     public <T> CompletableFuture<T> submit(Supplier<T> task, Supplier<T> throttledResult) {
         checkNotNull(task, "task must not be null.");
         checkNotNull(throttledResult, "throttledResult must not be null.");
+        checkOpen();
         if (!requestPermits.tryAcquire()) {
             return CompletableFuture.completedFuture(throttledResult.get());
         }
 
         CompletableFuture<T> future;
         try {
-            future = CompletableFuture.supplyAsync(task, executor);
+            future = CompletableFuture.supplyAsync(() -> runTask(task), executor);
         } catch (RuntimeException e) {
             requestPermits.release();
             throw e;
@@ -140,6 +148,7 @@ public final class HistoricalPartitionTaskExecutor implements AutoCloseable {
         checkNotNull(orderingKey, "orderingKey must not be null.");
         checkNotNull(task, "task must not be null.");
         checkNotNull(throttledResult, "throttledResult must not be null.");
+        checkOpen();
         if (!requestPermits.tryAcquire()) {
             return CompletableFuture.completedFuture(throttledResult.get());
         }
@@ -150,9 +159,9 @@ public final class HistoricalPartitionTaskExecutor implements AutoCloseable {
             synchronized (orderedTasksLock) {
                 CompletableFuture<Void> previousTail = orderedTaskTails.get(orderingKey);
                 if (previousTail == null) {
-                    future = CompletableFuture.supplyAsync(task, executor);
+                    future = CompletableFuture.supplyAsync(() -> runTask(task), executor);
                 } else {
-                    future = previousTail.thenApplyAsync(ignored -> task.get(), executor);
+                    future = previousTail.thenApplyAsync(ignored -> runTask(task), executor);
                 }
                 // Convert success or failure into a normal completion used only for sequencing.
                 tail = future.handle((ignored, error) -> null);
@@ -223,11 +232,47 @@ public final class HistoricalPartitionTaskExecutor implements AutoCloseable {
         }
     }
 
+    /**
+     * Rejects queued and new requests and waits for running tasks without interrupting their I/O.
+     *
+     * <p>Timeouts and interrupted waits are logged without throwing so callers can continue closing
+     * other components.
+     */
     @Override
     public void close() {
-        ExecutorUtils.gracefulShutdown(
-                SHUTDOWN_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS, executor);
-        pendingRequests.forEach(future -> future.cancel(true));
+        closed = true;
+        executor.shutdown();
+        // ExecutorUtils.gracefulShutdown() may interrupt WAL I/O through shutdownNow().
+        // Wait for real task termination, which cancelled request futures do not guarantee.
+        try {
+            if (!executor.awaitTermination(SHUTDOWN_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)) {
+                LOG.warn(
+                        "Historical partition tasks did not finish within {} seconds. "
+                                + "Continuing shutdown without interrupting running tasks.",
+                        SHUTDOWN_TIMEOUT.getSeconds());
+            }
+        } catch (InterruptedException e) {
+            LOG.warn(
+                    "Interrupted while waiting for historical partition tasks to finish. "
+                            + "Continuing shutdown without interrupting running tasks.",
+                    e);
+            Thread.currentThread().interrupt();
+        } finally {
+            // CompletableFuture cancellation does not interrupt running tasks.
+            pendingRequests.forEach(future -> future.cancel(true));
+        }
+    }
+
+    private <T> T runTask(Supplier<T> task) {
+        // Queued requests must not start additional lake I/O after shutdown begins.
+        checkOpen();
+        return task.get();
+    }
+
+    private void checkOpen() {
+        if (closed) {
+            throw new RejectedExecutionException("Historical partition executor is shut down.");
+        }
     }
 
     private static ExecutorService createHistoricalPartitionExecutor(int maxThreadPoolSize) {
