@@ -17,13 +17,26 @@
 
 package org.apache.fluss.utils;
 
+import org.apache.fluss.config.ConfigOption;
+
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.Set;
 
+import static org.apache.fluss.config.ConfigBuilder.key;
+
 /** Utility constants and helpers shared by the Global Secondary Index Table layer. */
 public final class IndexTableUtils {
+
+    /** Persisted ownership link of an internal Index Table. */
+    public static final ConfigOption<Long> TABLE_INDEX_META_MAIN_TABLE_ID =
+            key("table.index-meta.main-table-id")
+                    .longType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The main table id associated with an internal Index Table. "
+                                    + "This option is managed by the system.");
 
     /**
      * Single system column appended to partitioned Index Tables. Carries the source main table's

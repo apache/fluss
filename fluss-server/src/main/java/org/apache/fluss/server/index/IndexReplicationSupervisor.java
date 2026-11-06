@@ -265,7 +265,8 @@ public final class IndexReplicationSupervisor {
                         onProgress,
                         replicatorPool.retryBackoff(),
                         SystemClock.getInstance(),
-                        metrics);
+                        metrics,
+                        replicatorPool.maxTransportRequestBytes());
         // Register with the read pool; the pool worker will catch up on any WAL entries already
         // committed before this replicator was created.
         installIndexReplicator(replicator);
@@ -325,7 +326,7 @@ public final class IndexReplicationSupervisor {
         if (r == null) {
             return;
         }
-        replicatorPool.unregister(tableBucket);
+        replicatorPool.unregister(tableBucket, r);
         try {
             r.close();
         } catch (Exception e) {

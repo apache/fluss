@@ -113,6 +113,10 @@ final class IndexReplicationWindow {
         return retry.remainingDelayNanos() == 0;
     }
 
+    synchronized boolean isAcknowledged() {
+        return admitted && remaining == 0;
+    }
+
     boolean isActive() {
         return !terminal;
     }

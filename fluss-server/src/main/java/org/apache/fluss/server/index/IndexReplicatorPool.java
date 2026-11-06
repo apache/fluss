@@ -27,8 +27,6 @@ import org.slf4j.LoggerFactory;
 
 import javax.annotation.concurrent.ThreadSafe;
 
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Condition;
@@ -42,45 +40,53 @@ import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
  * leader-side {@link IndexReplicator}s on this server, mirroring the {@code ReplicaFetcherManager}
  * fixed-worker model.
  *
- * <p>Each replicator is assigned to a worker by {@code tableBucket.hashCode() % N}; the worker
- * fairly polls every replicator it owns. {@link IndexReplicator#poll()} reads at most one window
- * per call and is a no-op while a window is in flight, so the loop naturally idles once every
- * replicator is caught up or blocked, at which point the worker awaits a back-off until signalled
- * (HW advance, registration, or window completion).
+ * <p>Each source bucket has a fixed owning worker. The scheduling strategy runs a bounded round of
+ * that worker's sources; completed reads are decoded and staged on the same worker. Remote reads
+ * and acknowledgements wake the worker without running construction on their completion threads.
+ * Idle workers await a signal or the existing backoff interval.
  */
 @Internal
 @ThreadSafe
 public final class IndexReplicatorPool implements AutoCloseable {
 
-    static final long MAX_RETRY_BACKOFF_MS = 10_000L;
+    private static final long INITIAL_RETRY_BACKOFF_MS = 100L;
 
     private static final Logger LOG = LoggerFactory.getLogger(IndexReplicatorPool.class);
 
     private final ReplicatorWorker[] workers;
+    private final IndexReplicationScheduler scheduler;
     private final int maxWindowBytes;
+    private final long maxTransportRequestBytes;
     private final ExponentialBackoff retryBackoff;
     private final Executor remoteReadExecutor;
 
     public IndexReplicatorPool(
             int numWorkers,
             int maxWindowBytes,
-            long retryBackoffMs,
+            long maxRetryBackoffMs,
             long backoffMs,
-            Executor remoteReadExecutor) {
+            Executor remoteReadExecutor,
+            long maxTransportRequestBytes) {
+        checkArgument(maxTransportRequestBytes > 0, "maxTransportRequestBytes must be positive");
         checkArgument(numWorkers > 0, "numWorkers must be positive");
         checkArgument(maxWindowBytes > 0, "maxWindowBytes must be positive");
         checkArgument(backoffMs > 0, "backoffMs must be positive");
         checkArgument(
-                retryBackoffMs > 0 && retryBackoffMs <= MAX_RETRY_BACKOFF_MS,
-                "retryBackoffMs must be between 1 and %s milliseconds, but was %s",
-                MAX_RETRY_BACKOFF_MS,
-                retryBackoffMs);
+                maxRetryBackoffMs >= INITIAL_RETRY_BACKOFF_MS
+                        && maxRetryBackoffMs <= Integer.MAX_VALUE,
+                "maxRetryBackoffMs must be between %s and %s milliseconds, but was %s",
+                INITIAL_RETRY_BACKOFF_MS,
+                Integer.MAX_VALUE,
+                maxRetryBackoffMs);
         this.maxWindowBytes = maxWindowBytes;
-        this.retryBackoff = new ExponentialBackoff(retryBackoffMs, 2, MAX_RETRY_BACKOFF_MS, 0.2);
+        this.maxTransportRequestBytes = maxTransportRequestBytes;
+        this.retryBackoff =
+                new ExponentialBackoff(INITIAL_RETRY_BACKOFF_MS, 2, maxRetryBackoffMs, 0.2);
         this.remoteReadExecutor = remoteReadExecutor;
+        this.scheduler = new FairIndexReplicationScheduler(numWorkers);
         this.workers = new ReplicatorWorker[numWorkers];
         for (int i = 0; i < numWorkers; i++) {
-            this.workers[i] = new ReplicatorWorker("index-replicator-pool-" + i, backoffMs);
+            this.workers[i] = new ReplicatorWorker("index-replicator-pool-" + i, i, backoffMs);
             this.workers[i].start();
         }
         LOG.info("IndexReplicatorPool started with {} workers", numWorkers);
@@ -89,6 +95,10 @@ public final class IndexReplicatorPool implements AutoCloseable {
     /** Maximum number of WAL bytes a replicator reads per window. */
     public int maxWindowBytes() {
         return maxWindowBytes;
+    }
+
+    long maxTransportRequestBytes() {
+        return maxTransportRequestBytes;
     }
 
     /** Retry policy shared by source reads and index-window construction. */
@@ -112,12 +122,14 @@ public final class IndexReplicatorPool implements AutoCloseable {
     public void register(TableBucket tableBucket, IndexReplicator replicator) {
         ReplicatorWorker worker = workerFor(tableBucket);
         replicator.setWakeupSignal(worker::wakeup);
-        worker.add(tableBucket, replicator);
+        replicator.setScheduler(scheduler);
+        scheduler.register(worker.workerId, replicator);
+        worker.wakeup();
     }
 
-    /** Unregisters the replicator for the given bucket, if any. */
-    public void unregister(TableBucket tableBucket) {
-        workerFor(tableBucket).remove(tableBucket);
+    /** Unregisters the bucket only if it still belongs to the expected replicator. */
+    public void unregister(TableBucket tableBucket, IndexReplicator expectedSource) {
+        scheduler.unregister(workerFor(tableBucket).workerId, expectedSource);
     }
 
     /** Wakes the worker owning the given bucket so it polls promptly (e.g. on HW advance). */
@@ -145,27 +157,19 @@ public final class IndexReplicatorPool implements AutoCloseable {
         }
     }
 
-    /** A worker that fairly polls all replicators assigned to it. */
-    private static final class ReplicatorWorker extends ShutdownableThread {
+    /** Runs the scheduling strategy for the sources assigned to one worker. */
+    private final class ReplicatorWorker extends ShutdownableThread {
 
         private final long backoffMs;
-        private final Map<TableBucket, IndexReplicator> replicators = new ConcurrentHashMap<>();
+        private final int workerId;
         private final ReentrantLock lock = new ReentrantLock();
         private final Condition condition = lock.newCondition();
         private boolean wakeupRequested;
 
-        ReplicatorWorker(String name, long backoffMs) {
+        ReplicatorWorker(String name, int workerId, long backoffMs) {
             super(name, false);
             this.backoffMs = backoffMs;
-        }
-
-        void add(TableBucket tableBucket, IndexReplicator replicator) {
-            replicators.put(tableBucket, replicator);
-            wakeup();
-        }
-
-        void remove(TableBucket tableBucket) {
-            replicators.remove(tableBucket);
+            this.workerId = workerId;
         }
 
         void wakeup() {
@@ -179,16 +183,7 @@ public final class IndexReplicatorPool implements AutoCloseable {
 
         @Override
         public void doWork() {
-            boolean didWork = false;
-            for (IndexReplicator replicator : replicators.values()) {
-                try {
-                    if (replicator.poll()) {
-                        didWork = true;
-                    }
-                } catch (Throwable t) {
-                    LOG.error("Error polling index replicator", t);
-                }
-            }
+            boolean didWork = scheduler.pollWorker(workerId);
             if (!didWork) {
                 inLock(
                         lock,

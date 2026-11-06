@@ -369,6 +369,8 @@ public final class IndexSourceReader implements AutoCloseable {
     public static final class ReadResult implements AutoCloseable {
         private final List<SourceBatchSlice> batches;
         private final long nextOffset;
+        private final boolean byteLimited;
+        private final long bytes;
         @Nullable private final AutoCloseable resource;
         @Nullable private final Runnable onClose;
         private final AtomicBoolean closed = new AtomicBoolean();
@@ -376,16 +378,23 @@ public final class IndexSourceReader implements AutoCloseable {
         private ReadResult(
                 List<SourceBatchSlice> batches,
                 long nextOffset,
+                boolean byteLimited,
                 @Nullable AutoCloseable resource,
                 @Nullable Runnable onClose) {
             this.batches = Collections.unmodifiableList(new ArrayList<>(batches));
+            long size = 0;
+            for (SourceBatchSlice batch : batches) {
+                size += batch.delegate.sizeInBytes();
+            }
+            this.bytes = size;
             this.nextOffset = nextOffset;
+            this.byteLimited = byteLimited;
             this.resource = resource;
             this.onClose = onClose;
         }
 
         private static ReadResult empty(long nextOffset) {
-            return new ReadResult(Collections.emptyList(), nextOffset, null, null);
+            return new ReadResult(Collections.emptyList(), nextOffset, false, null, null);
         }
 
         List<SourceBatchSlice> batches() {
@@ -394,6 +403,26 @@ public final class IndexSourceReader implements AutoCloseable {
 
         public long nextOffset() {
             return nextOffset;
+        }
+
+        long bytes() {
+            return bytes;
+        }
+
+        /** A smaller complete-batch prefix, or zero when this input cannot be split. */
+        int smallerReadBytes() {
+            if (batches.size() <= 1) {
+                return 0;
+            }
+            long bytes = 0;
+            for (int i = 0; i < batches.size() / 2; i++) {
+                bytes += batches.get(i).delegate.sizeInBytes();
+            }
+            return (int) Math.min(Integer.MAX_VALUE, bytes);
+        }
+
+        boolean isByteLimited() {
+            return byteLimited;
         }
 
         @Override
@@ -510,7 +539,7 @@ public final class IndexSourceReader implements AutoCloseable {
             CompletableFuture<ReadResult> future = pendingRemoteRead.get();
             Runnable onClose =
                     future == null ? null : () -> pendingRemoteRead.compareAndSet(future, null);
-            return new ReadResult(batches, nextOffset, resource, onClose);
+            return new ReadResult(batches, nextOffset, byteLimitReached, resource, onClose);
         }
 
         private void attachResource(AutoCloseable resource) {
