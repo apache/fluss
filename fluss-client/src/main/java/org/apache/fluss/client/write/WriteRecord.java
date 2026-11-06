@@ -204,6 +204,7 @@ public final class WriteRecord {
 
     private final @Nullable byte[] key;
     private final @Nullable byte[] bucketKey;
+    private final @Nullable Integer bucketId;
     private final @Nullable InternalRow row;
     private final WriteFormat writeFormat;
 
@@ -232,6 +233,31 @@ public final class WriteRecord {
             @Nullable int[] targetColumns,
             int estimatedSizeInBytes,
             MergeMode mergeMode) {
+        this(
+                tableInfo,
+                physicalTablePath,
+                key,
+                bucketKey,
+                row,
+                writeFormat,
+                targetColumns,
+                estimatedSizeInBytes,
+                mergeMode,
+                null);
+    }
+
+    private WriteRecord(
+            TableInfo tableInfo,
+            PhysicalTablePath physicalTablePath,
+            @Nullable byte[] key,
+            @Nullable byte[] bucketKey,
+            @Nullable InternalRow row,
+            WriteFormat writeFormat,
+            @Nullable int[] targetColumns,
+            int estimatedSizeInBytes,
+            MergeMode mergeMode,
+            @Nullable Integer bucketId) {
+        this.bucketId = bucketId;
         this.tableInfo = tableInfo;
         this.physicalTablePath = physicalTablePath;
         this.key = key;
@@ -241,6 +267,27 @@ public final class WriteRecord {
         this.targetColumns = targetColumns;
         this.estimatedSizeInBytes = estimatedSizeInBytes;
         this.mergeMode = mergeMode;
+    }
+
+    /** Returns a copy of this record with an explicit target bucket. */
+    public WriteRecord withBucket(int bucketId) {
+        checkArgument(bucketId >= 0, "Bucket id must be non-negative, but was %s.", bucketId);
+        return new WriteRecord(
+                tableInfo,
+                physicalTablePath,
+                key,
+                bucketKey,
+                row,
+                writeFormat,
+                targetColumns,
+                estimatedSizeInBytes,
+                mergeMode,
+                bucketId);
+    }
+
+    /** Returns the explicit target bucket, or null for automatic routing. */
+    public @Nullable Integer getBucketId() {
+        return bucketId;
     }
 
     public PhysicalTablePath getPhysicalTablePath() {

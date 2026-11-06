@@ -53,4 +53,13 @@ class TypedAppendWriterImpl<T> implements TypedAppendWriter<T> {
         InternalRow row = pojoToRowConverter.toRow(record);
         return delegate.append(row);
     }
+
+    @Override
+    public CompletableFuture<AppendResult> append(T record, int bucketId) {
+        if (record instanceof InternalRow) {
+            return delegate.append((InternalRow) record, bucketId);
+        }
+        InternalRow row = pojoToRowConverter.toRow(record);
+        return delegate.append(row, bucketId);
+    }
 }

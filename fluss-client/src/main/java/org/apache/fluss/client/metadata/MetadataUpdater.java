@@ -240,30 +240,50 @@ public class MetadataUpdater {
         updateMetadata(updateTablePaths, updatePartitionPath, null);
     }
 
+    /**
+     * Refreshes one physical table and returns the snapshot produced by its metadata request.
+     * Returns null on a retriable failure or when only the bootstrap server list was refreshed.
+     */
+    @Nullable
+    public Cluster updatePhysicalTableMetadata(PhysicalTablePath physicalTablePath) {
+        return physicalTablePath.getPartitionName() == null
+                ? updateMetadataWithResult(
+                        Collections.singleton(physicalTablePath.getTablePath()), null, null)
+                : updateMetadataWithResult(null, Collections.singleton(physicalTablePath), null);
+    }
+
     @VisibleForTesting
     public void updateMetadata(
             @Nullable Set<TablePath> tablePaths,
             @Nullable Collection<PhysicalTablePath> tablePartitionNames,
             @Nullable Collection<Long> tablePartitionIds)
             throws PartitionNotExistException {
+        updateMetadataWithResult(tablePaths, tablePartitionNames, tablePartitionIds);
+    }
+
+    @Nullable
+    private synchronized Cluster updateMetadataWithResult(
+            @Nullable Set<TablePath> tablePaths,
+            @Nullable Collection<PhysicalTablePath> tablePartitionNames,
+            @Nullable Collection<Long> tablePartitionIds) {
         ServerNode serverNode =
                 getOneAvailableTabletServerNode(cluster, unavailableTabletServerIds);
         try {
-            synchronized (this) {
-                if (serverNode == null) {
-                    LOG.info(
-                            "No available tablet server to update metadata, try to re-initialize cluster using bootstrap server.");
-                    cluster = initializeCluster(conf, rpcClient);
-                } else {
-                    cluster =
-                            sendMetadataRequestAndRebuildCluster(
-                                    cluster,
-                                    rpcClient,
-                                    tablePaths,
-                                    tablePartitionNames,
-                                    tablePartitionIds,
-                                    serverNode);
-                }
+            Cluster refreshed = null;
+            if (serverNode == null) {
+                LOG.info(
+                        "No available tablet server to update metadata, try to re-initialize cluster using bootstrap server.");
+                cluster = initializeCluster(conf, rpcClient);
+            } else {
+                refreshed =
+                        sendMetadataRequestAndRebuildCluster(
+                                cluster,
+                                rpcClient,
+                                tablePaths,
+                                tablePartitionNames,
+                                tablePartitionIds,
+                                serverNode);
+                cluster = refreshed;
             }
 
             Map<Integer, ServerNode> aliveTabletServers = cluster.getAliveTabletServers();
@@ -273,6 +293,7 @@ public class MetadataUpdater {
                         "After update metadata, unavailable tabletServer set: {}",
                         unavailableTabletServerIds);
             }
+            return refreshed;
         } catch (Exception e) {
             Throwable t = stripExecutionException(e);
             if (t instanceof RetriableException || t instanceof TimeoutException) {
@@ -291,6 +312,7 @@ public class MetadataUpdater {
                 throw new FlussRuntimeException("Failed to update metadata", t);
             }
         }
+        return null;
     }
 
     /**
