@@ -72,6 +72,10 @@ public abstract class WriteBatch {
     // tell a stale/reordered OutOfOrderSequence response (state advanced while in flight) apart
     // from a genuine one (no progress since send).
     private int lastAckedSequenceAtSend = IdempotenceBucketEntry.NO_LAST_ACKED_BATCH_SEQUENCE;
+    // The bucket that the idempotence manager tracks this batch for after assigning it a batch
+    // sequence. The write target may no longer know its partition, e.g. after the table was
+    // re-created.
+    @Nullable private volatile TableBucket idempotenceBucket;
 
     public WriteBatch(
             long tableId,
@@ -162,6 +166,15 @@ public abstract class WriteBatch {
 
     public boolean hasBatchSequence() {
         return batchSequence() != NO_BATCH_SEQUENCE;
+    }
+
+    void setIdempotenceBucket(TableBucket tableBucket) {
+        this.idempotenceBucket = tableBucket;
+    }
+
+    @Nullable
+    TableBucket idempotenceBucket() {
+        return idempotenceBucket;
     }
 
     public void resetWriterState(long writerId, int batchSequence) {

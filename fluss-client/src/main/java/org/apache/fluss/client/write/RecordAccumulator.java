@@ -60,6 +60,7 @@ import java.util.Collections;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -68,6 +69,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Predicate;
 
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_BATCH_SEQUENCE;
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
@@ -311,6 +313,9 @@ public final class RecordAccumulator {
         BucketAndWriteBatches context =
                 writeBatches.computeIfAbsent(
                         path, k -> createBucketAndWriteBatches(tableInfo, path, cluster));
+        if (tableInfo.getTableId() > context.tableInfo.getTableId()) {
+            switchToTable(context, tableInfo, cluster);
+        }
         checkAndCacheHistoricalPartitionEnabled(tableInfo);
         RecordAppendResult appendResult;
         if (context.bucketCount == null) {
@@ -365,12 +370,45 @@ public final class RecordAccumulator {
                                     .orElse(null);
         }
         return new BucketAndWriteBatches(
+                tableInfo,
                 partitionId,
                 bucketCount,
                 tempBucketCount,
                 bucketAssignerFactory.createBucketAssigner(tableInfo, path),
                 tableInfo.isPartitioned(),
                 path);
+    }
+
+    /** Returns the table info of the table instance that writes to {@code path} are routed to. */
+    TableInfo getTableInfo(PhysicalTablePath path) {
+        return checkNotNull(writeBatches.get(path), "Write target for %s must exist.", path)
+                .tableInfo;
+    }
+
+    /**
+     * Switches {@code context} to a re-created instance of its table before the first record for it
+     * is routed, as the re-created table may distribute records differently. As for a new write
+     * target, a partition's bucket layout is then resolved again. Batches of the dropped table fail
+     * when the layout is resolved or when they are drained.
+     */
+    private void switchToTable(
+            BucketAndWriteBatches context, TableInfo tableInfo, Cluster cluster) {
+        synchronized (context) {
+            // Historical routing manages the targets that it routes writes to itself.
+            if (tableInfo.getTableId() <= context.tableInfo.getTableId()
+                    || context.isHistoricalWriteTarget()) {
+                return;
+            }
+            context.bucketAssigner =
+                    bucketAssignerFactory.createBucketAssigner(tableInfo, context.targetPath);
+            context.tempBucketCount =
+                    cluster.getBucketCount(TableOrPartition.ofTable(tableInfo.getTableId()))
+                            .orElse(tableInfo.getNumBuckets());
+            context.partitionId = null;
+            context.bucketCount = context.isPartitionedTable ? null : context.tempBucketCount;
+            // Publish last, so appends for the re-created table route with the fields above.
+            context.tableInfo = tableInfo;
+        }
     }
 
     /**
@@ -394,6 +432,7 @@ public final class RecordAccumulator {
         Set<Integer> readyNodes = new HashSet<>();
         long nextReadyCheckDelayMs = Long.MAX_VALUE;
         Set<PhysicalTablePath> unknownLeaderTables = new HashSet<>();
+        Map<PhysicalTablePath, Long> recreatedPartitionPreviousIds = new HashMap<>();
         // Go table by table so that we can get queue sizes for buckets in a table and calculate
         // cumulative frequency table (used in bucket assigner).
 
@@ -403,6 +442,7 @@ public final class RecordAccumulator {
                             bucketAndWriteBatches,
                             readyNodes,
                             unknownLeaderTables,
+                            recreatedPartitionPreviousIds,
                             cluster,
                             nextReadyCheckDelayMs);
         }
@@ -412,11 +452,16 @@ public final class RecordAccumulator {
         // Keep the normal polling cadence for idle writers and unresolved metadata.
         if (!readyNodes.isEmpty()
                 || !unknownLeaderTables.isEmpty()
+                || !recreatedPartitionPreviousIds.isEmpty()
                 || nextReadyCheckDelayMs == Long.MAX_VALUE) {
             nextReadyCheckDelayMs = Math.min(nextReadyCheckDelayMs, batchTimeoutMs);
         }
 
-        return new ReadyCheckResult(readyNodes, nextReadyCheckDelayMs, unknownLeaderTables);
+        return new ReadyCheckResult(
+                readyNodes,
+                nextReadyCheckDelayMs,
+                unknownLeaderTables,
+                recreatedPartitionPreviousIds);
     }
 
     /**
@@ -489,6 +534,7 @@ public final class RecordAccumulator {
         int bucketCount = tableInfo.getNumBuckets();
         BucketAndWriteBatches resolvedTarget =
                 new BucketAndWriteBatches(
+                        tableInfo,
                         targetPartitionId,
                         bucketCount,
                         bucketCount,
@@ -619,13 +665,79 @@ public final class RecordAccumulator {
     }
 
     /** Aborts incomplete batches whose current RPC target is {@code targetPath}. */
-    void abortBatches(PhysicalTablePath targetPath, Exception reason) {
+    int abortBatches(PhysicalTablePath targetPath, Exception reason) {
+        return abortBatches(targetPath, batch -> true, reason);
+    }
+
+    /**
+     * Aborts incomplete batches that match {@code filter} and whose current RPC target is {@code
+     * targetPath}, and returns how many it aborted.
+     *
+     * <p>Queued batches stop being tracked by the idempotence manager here. The caller detaches the
+     * batches that are still in flight from its requests and from the idempotence manager.
+     */
+    int abortBatches(PhysicalTablePath targetPath, Predicate<WriteBatch> filter, Exception reason) {
+        int numAborted = 0;
         for (WriteBatch batch : incomplete.copyAll()) {
             BucketAndWriteBatches writeTarget = writeBatches.get(batch.physicalTablePath());
-            if (writeTarget != null && writeTarget.targetPath.equals(targetPath)) {
-                abortBatch(reason, batch);
+            if (writeTarget == null
+                    || !writeTarget.targetPath.equals(targetPath)
+                    || !filter.test(batch)) {
+                continue;
+            }
+            AbortResult result = abortBatch(reason, batch);
+            if (result != AbortResult.ALREADY_COMPLETED) {
+                numAborted++;
+            }
+            // A batch re-enqueued for a retry keeps the sequence it was sent with.
+            if (result == AbortResult.ABORTED_QUEUED && idempotenceManager.idempotenceEnabled()) {
+                idempotenceManager.removeInFlightBatch(batch);
             }
         }
+        return numAborted;
+    }
+
+    /**
+     * Marks the bucket layout of the write target for {@code targetPath} as unresolved after its
+     * partition was dropped. As for a new partition, queued batches and appends then keep the
+     * dropped partition's bucket count until the layout is resolved again, and batches that don't
+     * fit the bucket count of the partition found next fail with {@link BucketRescaleException}.
+     */
+    void invalidateBucketLayout(PhysicalTablePath targetPath) {
+        BucketAndWriteBatches writeTarget =
+                checkNotNull(
+                        writeBatches.get(targetPath),
+                        "Write target for %s must exist.",
+                        targetPath);
+        synchronized (writeTarget) {
+            Integer bucketCount = writeTarget.bucketCount;
+            if (bucketCount != null) {
+                writeTarget.tempBucketCount = bucketCount;
+                writeTarget.partitionId = null;
+                // Publish last, so appends that see the unresolved layout route with the count
+                // above.
+                writeTarget.bucketCount = null;
+            }
+        }
+    }
+
+    /**
+     * Returns whether an incomplete batch whose current RPC target is {@code targetPath} has been
+     * assigned a batch sequence, i.e. it may have been sent by an idempotent writer.
+     */
+    boolean hasSequencedBatches(PhysicalTablePath targetPath) {
+        if (!idempotenceManager.idempotenceEnabled()) {
+            return false;
+        }
+        for (WriteBatch batch : incomplete.copyAll()) {
+            BucketAndWriteBatches writeTarget = writeBatches.get(batch.physicalTablePath());
+            if (writeTarget != null
+                    && writeTarget.targetPath.equals(targetPath)
+                    && batch.hasBatchSequence()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Abort all incomplete batches (whether they have been sent or not). */
@@ -635,15 +747,16 @@ public final class RecordAccumulator {
         }
     }
 
-    private void abortBatch(final Exception reason, WriteBatch batch) {
+    private AbortResult abortBatch(final Exception reason, WriteBatch batch) {
         Deque<WriteBatch> deque = getDequeOrThrow(batch.physicalTablePath(), batch.bucketId());
         boolean aborted;
+        boolean queued;
         synchronized (deque) {
             aborted = batch.trySetAborted();
             if (aborted) {
                 batch.abortRecordAppends();
             }
-            deque.remove(batch);
+            queued = deque.remove(batch);
         }
 
         // A response may have completed the batch after abortAllBatches() took its snapshot. In
@@ -655,6 +768,10 @@ public final class RecordAccumulator {
         } finally {
             deallocate(batch);
         }
+        if (!aborted) {
+            return AbortResult.ALREADY_COMPLETED;
+        }
+        return queued ? AbortResult.ABORTED_QUEUED : AbortResult.ABORTED_IN_FLIGHT;
     }
 
     /** Get the deque for the given table-bucket, or throw exception if it doesn't exist. */
@@ -802,6 +919,7 @@ public final class RecordAccumulator {
             BucketAndWriteBatches bucketAndWriteBatches,
             Set<Integer> readyNodes,
             Set<PhysicalTablePath> unknownLeaderTables,
+            Map<PhysicalTablePath, Long> recreatedPartitionPreviousIds,
             Cluster cluster,
             long nextReadyCheckDelayMs) {
         PhysicalTablePath targetPath = bucketAndWriteBatches.targetPath;
@@ -811,14 +929,26 @@ public final class RecordAccumulator {
                         : null;
         Long tableId = cluster.getTableId(targetPath.getTablePath()).orElse(null);
         if (tableId == null || (bucketAndWriteBatches.isPartitionedTable && partitionId == null)) {
-            unknownLeaderTables.add(targetPath);
+            // A target stays registered after its batches fail, e.g. because its partition was
+            // dropped. Without queued batches it needs no metadata, and recovering it could
+            // re-create a dropped partition that no write needs.
+            if (hasQueuedBatches(bucketAndWriteBatches)) {
+                unknownLeaderTables.add(targetPath);
+            }
+            return nextReadyCheckDelayMs;
+        }
+        if (isRecreatedPartition(bucketAndWriteBatches, tableId, partitionId)) {
+            recreatedPartitionPreviousIds.put(targetPath, bucketAndWriteBatches.partitionId);
             return nextReadyCheckDelayMs;
         }
         if (bucketAndWriteBatches.bucketCount == null) {
             Integer actualBucketCount =
                     cluster.getBucketCount(TableOrPartition.of(tableId, partitionId)).orElse(null);
             if (actualBucketCount == null) {
-                unknownLeaderTables.add(targetPath);
+                // As for a missing partition ID above, an idle target needs no metadata.
+                if (hasQueuedBatches(bucketAndWriteBatches)) {
+                    unknownLeaderTables.add(targetPath);
+                }
                 return nextReadyCheckDelayMs;
             }
             // Resolve both values from this snapshot. Do not cache a partition ID while its count
@@ -890,11 +1020,48 @@ public final class RecordAccumulator {
         return nextReadyCheckDelayMs;
     }
 
+    /**
+     * Returns whether the layout of {@code context} was resolved for a partition that was dropped
+     * and re-created since, i.e. metadata maps its path to a different partition ID now.
+     */
+    private boolean isRecreatedPartition(
+            BucketAndWriteBatches context, long tableId, @Nullable Long partitionId) {
+        Long resolvedPartitionId = context.partitionId;
+        return context.bucketCount != null
+                && resolvedPartitionId != null
+                && !resolvedPartitionId.equals(partitionId)
+                // Until a record for a re-created table switches the target, the batches of the
+                // dropped table fail when they are drained.
+                && context.tableInfo.getTableId() == tableId
+                // Historical routing updates the partition ID of its target itself.
+                && !isHistoricalPartitionEnabled(context.targetPath.getTablePath());
+    }
+
     private void applyNewBucketCount(
             BucketAndWriteBatches context, @Nullable Long partitionId, int newBucketCount) {
         List<WriteBatch> aborted = new ArrayList<>();
+        List<WriteBatch> droppedTableBatches = new ArrayList<>();
+        long tableId;
         synchronized (context) {
+            tableId = context.tableInfo.getTableId();
             if (context.bucketCount == null) {
+                // Batches of a dropped table were routed with its layout, so they don't decide the
+                // layout of the re-created one.
+                for (Deque<WriteBatch> deque : context.batches.values()) {
+                    synchronized (deque) {
+                        Iterator<WriteBatch> iterator = deque.iterator();
+                        while (iterator.hasNext()) {
+                            WriteBatch batch = iterator.next();
+                            if (batch.tableId() != tableId) {
+                                iterator.remove();
+                                if (batch.trySetAborted()) {
+                                    batch.abortRecordAppends();
+                                    droppedTableBatches.add(batch);
+                                }
+                            }
+                        }
+                    }
+                }
                 boolean failBatches =
                         context.tempBucketCount != newBucketCount
                                 && (isHashAssigner(context.bucketAssigner)
@@ -925,6 +1092,17 @@ public final class RecordAccumulator {
             }
         }
 
+        for (WriteBatch batch : droppedTableBatches) {
+            if (idempotenceManager.idempotenceEnabled()) {
+                idempotenceManager.removeInFlightBatch(batch);
+            }
+            try {
+                batch.completeAbort(
+                        newTableRecreatedException(context.targetPath, batch.tableId(), tableId));
+            } finally {
+                deallocate(batch);
+            }
+        }
         if (!aborted.isEmpty()) {
             BucketRescaleException failure =
                     new BucketRescaleException(
@@ -958,6 +1136,17 @@ public final class RecordAccumulator {
                     if (!entry.getValue().isEmpty()) {
                         return true;
                     }
+                }
+            }
+        }
+        return false;
+    }
+
+    private boolean hasQueuedBatches(BucketAndWriteBatches context) {
+        for (Deque<WriteBatch> deque : context.batches.values()) {
+            synchronized (deque) {
+                if (!deque.isEmpty()) {
+                    return true;
                 }
             }
         }
@@ -1036,24 +1225,42 @@ public final class RecordAccumulator {
             throws Exception {
         // Tentative routing resolution and historical target switches must wait for registration.
         // Resolved normal buckets append independently using only their deque locks.
-        if (context.bucketCount == null
-                || isHistoricalPartitionEnabled(record.getPhysicalTablePath().getTablePath())) {
-            synchronized (context) {
-                return appendNewBatch(
-                        record, callback, cluster, context, bucketId, bucketCount, segments);
+        if (context.bucketCount != null
+                && !isHistoricalPartitionEnabled(record.getPhysicalTablePath().getTablePath())) {
+            RecordAppendResult result =
+                    appendNewBatch(
+                            record,
+                            callback,
+                            cluster,
+                            context,
+                            bucketId,
+                            bucketCount,
+                            segments,
+                            true);
+            if (result != null) {
+                return result;
             }
         }
-        return appendNewBatch(record, callback, cluster, context, bucketId, bucketCount, segments);
+        synchronized (context) {
+            return appendNewBatch(
+                    record, callback, cluster, context, bucketId, bucketCount, segments, false);
+        }
     }
 
-    private RecordAppendResult appendNewBatch(
+    /**
+     * Appends the record to a new batch, unless {@code requireResolvedLayout} is set and the layout
+     * is no longer resolved with the bucket count that the record is routed with. In that case it
+     * returns null, and the caller retries under the context lock.
+     */
+    private @Nullable RecordAppendResult appendNewBatch(
             WriteRecord writeRecord,
             WriteCallback callback,
             Cluster cluster,
             BucketAndWriteBatches context,
             int bucketId,
             int bucketCount,
-            List<MemorySegment> segments)
+            List<MemorySegment> segments,
+            boolean requireResolvedLayout)
             throws Exception {
         // Memory allocation runs without locks, so the count may have been resolved meanwhile.
         int currentBucketCount = context.routingBucketCount();
@@ -1066,6 +1273,14 @@ public final class RecordAccumulator {
         Deque<WriteBatch> deque =
                 context.batches.computeIfAbsent(bucketId, k -> new ArrayDeque<>());
         synchronized (deque) {
+            // Without the context lock, the layout may have been invalidated after the count was
+            // read, see invalidateBucketLayout(). A batch added after it was resolved again would
+            // keep the dropped partition's count.
+            Integer resolvedBucketCount = context.bucketCount;
+            if (requireResolvedLayout
+                    && (resolvedBucketCount == null || resolvedBucketCount != bucketCount)) {
+                return null;
+            }
             RecordAppendResult appendResult = tryAppend(writeRecord, callback, bucketCount, deque);
             if (appendResult != null) {
                 // Somebody else found us a batch while we were allocating memory.
@@ -1319,17 +1534,12 @@ public final class RecordAccumulator {
                         tableBucket.getTableId(),
                         staleBatches.size());
                 TableNotExistException reason =
-                        new TableNotExistException(
-                                String.format(
-                                        "Table '%s' has been dropped and re-created with a new table ID (old: %d, new: %d). "
-                                                + "Further writes to the old table instance cannot proceed. "
-                                                + "Please recreate the writer with the new table metadata.",
-                                        physicalTablePath,
-                                        oldStaleTableId,
-                                        tableBucket.getTableId()),
-                                null,
-                                true);
+                        newTableRecreatedException(
+                                physicalTablePath, oldStaleTableId, tableBucket.getTableId());
                 for (WriteBatch staleBatch : staleBatches) {
+                    if (idempotenceManager.idempotenceEnabled()) {
+                        idempotenceManager.removeInFlightBatch(staleBatch);
+                    }
                     abortBatch(reason, staleBatch);
                 }
                 continue;
@@ -1613,13 +1823,21 @@ public final class RecordAccumulator {
         public final long nextReadyCheckDelayMs;
         public final Set<PhysicalTablePath> unknownLeaderTables;
 
+        /**
+         * The write targets whose partition was dropped and re-created since their bucket layout
+         * was resolved, mapped to the ID of the dropped partition.
+         */
+        public final Map<PhysicalTablePath, Long> recreatedPartitionPreviousIds;
+
         public ReadyCheckResult(
                 Set<Integer> readyNodes,
                 long nextReadyCheckDelayMs,
-                Set<PhysicalTablePath> unknownLeaderTables) {
+                Set<PhysicalTablePath> unknownLeaderTables,
+                Map<PhysicalTablePath, Long> recreatedPartitionPreviousIds) {
             this.readyNodes = readyNodes;
             this.nextReadyCheckDelayMs = nextReadyCheckDelayMs;
             this.unknownLeaderTables = unknownLeaderTables;
+            this.recreatedPartitionPreviousIds = recreatedPartitionPreviousIds;
         }
     }
 
@@ -1663,18 +1881,46 @@ public final class RecordAccumulator {
         throttle.clearBackoffs();
     }
 
+    private static TableNotExistException newTableRecreatedException(
+            PhysicalTablePath path, long droppedTableId, long tableId) {
+        return new TableNotExistException(
+                String.format(
+                        "Table '%s' has been dropped and re-created with a new table ID (old: %d, new: %d). "
+                                + "Further writes to the old table instance cannot proceed. "
+                                + "Please recreate the writer with the new table metadata.",
+                        path, droppedTableId, tableId),
+                null,
+                true);
+    }
+
+    /** How {@link #abortBatch} found a batch that it was asked to abort. */
+    private enum AbortResult {
+        /** The batch had already completed, e.g. because a response arrived meanwhile. */
+        ALREADY_COMPLETED,
+        ABORTED_QUEUED,
+        /** The batch was aborted after it was drained, e.g. while its request was in flight. */
+        ABORTED_IN_FLIGHT
+    }
+
     /** Per table bucket and write batches. */
     private static class BucketAndWriteBatches {
         public final boolean isPartitionedTable;
 
         /**
-         * The temporary bucket count used for routing before the authoritative bucket count is
-         * known.
+         * The table info of the table instance that the target routes to, i.e. the newest one that
+         * records were appended for. Table IDs only increase, so appends that still hold a dropped
+         * instance don't switch the target back to it.
          */
-        private final int tempBucketCount;
+        private volatile TableInfo tableInfo;
+
+        /**
+         * The temporary bucket count used for routing before the authoritative bucket count is
+         * known. After the partition is dropped, it is the count of the dropped partition.
+         */
+        private volatile int tempBucketCount;
 
         /** The bucket assigner to assign record to bucket id for the given path. */
-        private final BucketAssigner bucketAssigner;
+        private volatile BucketAssigner bucketAssigner;
 
         /** The physical partition used for metadata lookup, leader discovery, and write RPCs. */
         private volatile PhysicalTablePath targetPath;
@@ -1687,12 +1933,14 @@ public final class RecordAccumulator {
         public final Map<Integer, Deque<WriteBatch>> batches = new CopyOnWriteMap<>();
 
         private BucketAndWriteBatches(
+                TableInfo tableInfo,
                 @Nullable Long partitionId,
                 @Nullable Integer bucketCount,
                 int tempBucketCount,
                 BucketAssigner bucketAssigner,
                 boolean isPartitionedTable,
                 PhysicalTablePath targetPath) {
+            this.tableInfo = tableInfo;
             this.partitionId = partitionId;
             this.bucketCount = bucketCount;
             this.tempBucketCount = tempBucketCount;

@@ -20,6 +20,7 @@ package org.apache.fluss.client.write;
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
@@ -31,6 +32,7 @@ import org.apache.fluss.utils.ExceptionUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 
 import java.util.List;
@@ -52,6 +54,7 @@ public class DynamicPartitionCreator {
     private final boolean dynamicPartitionEnabled;
     private final Admin admin;
     private final Consumer<Throwable> fatalErrorHandler;
+    private final PartitionCreationListener partitionCreationListener;
 
     private final Set<PhysicalTablePath> inflightPartitionsToCreate = ConcurrentHashMap.newKeySet();
 
@@ -59,11 +62,13 @@ public class DynamicPartitionCreator {
             MetadataUpdater metadataUpdater,
             Admin admin,
             boolean dynamicPartitionEnabled,
-            Consumer<Throwable> fatalErrorHandler) {
+            Consumer<Throwable> fatalErrorHandler,
+            PartitionCreationListener partitionCreationListener) {
         this.metadataUpdater = metadataUpdater;
         this.admin = admin;
         this.dynamicPartitionEnabled = dynamicPartitionEnabled;
         this.fatalErrorHandler = fatalErrorHandler;
+        this.partitionCreationListener = partitionCreationListener;
     }
 
     /** Ensures the partition exists, creating it asynchronously when enabled. */
@@ -98,21 +103,38 @@ public class DynamicPartitionCreator {
                         resolvedPartitionSpec.toPartitionSpec(),
                         partitionKeys,
                         autoPartitionStrategy);
-
-                // create partition if not exists.
-                // partition may not exist, we should try to create it.
-                if (inflightPartitionsToCreate.add(physicalTablePath)) {
-                    // if the partition is not in inflightPartitionsToCreate, we should create it.
-                    // this means that the partition is not being created by other threads.
-                    LOG.info("Dynamically creating partition for {}", physicalTablePath);
-                    createPartition(physicalTablePath, partitionKeys);
-                } else {
-                    // if the partition is already in inflightPartitionsToCreate, we should skip
-                    // creating it.
-                    LOG.debug(
-                            "Partition {} is already being created, skipping.", physicalTablePath);
-                }
+                createPartitionOnce(physicalTablePath, tableInfo);
             }
+        }
+    }
+
+    /**
+     * Creates a partition that refreshed metadata reports as missing while writes are queued for
+     * it, e.g. because it was dropped after the writes were appended.
+     *
+     * <p>Unlike a new partition, the partition is only validated by the coordinator, as the
+     * auto-partition settings of {@code tableInfo} may predate changes to the table. As for any
+     * partition, the result is reported to the {@link PartitionCreationListener}, unless the
+     * asynchronous creation request fails for another reason than the partition being invalid.
+     *
+     * @throws PartitionNotExistException if dynamic partition creation is disabled
+     */
+    public void createMissingPartitionAsync(
+            PhysicalTablePath physicalTablePath, TableInfo tableInfo) {
+        if (!dynamicPartitionEnabled) {
+            throw new PartitionNotExistException(
+                    String.format("Table partition '%s' does not exist.", physicalTablePath));
+        }
+        createPartitionOnce(physicalTablePath, tableInfo);
+    }
+
+    private void createPartitionOnce(PhysicalTablePath physicalTablePath, TableInfo tableInfo) {
+        // Register the creation atomically, so at most one creation per partition is in flight.
+        if (inflightPartitionsToCreate.add(physicalTablePath)) {
+            LOG.info("Dynamically creating partition for {}", physicalTablePath);
+            createPartition(physicalTablePath, tableInfo);
+        } else {
+            LOG.debug("Partition {} is already being created, skipping.", physicalTablePath);
         }
     }
 
@@ -136,33 +158,52 @@ public class DynamicPartitionCreator {
         return idExist;
     }
 
-    private void createPartition(PhysicalTablePath physicalTablePath, List<String> partitionKeys) {
+    private void createPartition(PhysicalTablePath physicalTablePath, TableInfo tableInfo) {
         String partitionName = physicalTablePath.getPartitionName();
         TablePath tablePath = physicalTablePath.getTablePath();
         checkArgument(partitionName != null, "Partition name shouldn't be null.");
         ResolvedPartitionSpec resolvedPartitionSpec =
-                ResolvedPartitionSpec.fromPartitionName(partitionKeys, partitionName);
+                ResolvedPartitionSpec.fromPartitionName(
+                        tableInfo.getPartitionKeys(), partitionName);
+        long tableId = tableInfo.getTableId();
 
         admin.createPartition(tablePath, resolvedPartitionSpec.toPartitionSpec(), true)
                 .whenComplete(
                         (ignore, throwable) -> {
-                            if (throwable != null) {
+                            Throwable cause =
+                                    throwable == null ? null : stripCompletionException(throwable);
+                            if (cause instanceof InvalidPartitionException) {
+                                onPartitionCreationCompleted(
+                                        physicalTablePath,
+                                        tableId,
+                                        (InvalidPartitionException) cause);
+                            } else if (throwable != null) {
                                 // If encounter TooManyPartitionsException or
                                 // TooManyBucketsException, we should set
                                 // cachedCreatePartitionException to make the next createPartition
                                 // call failed.
                                 onPartitionCreationFailed(physicalTablePath, throwable);
                             } else {
-                                onPartitionCreationSuccess(physicalTablePath);
+                                onPartitionCreationSuccess(physicalTablePath, tableId);
                             }
                         });
     }
 
-    private void onPartitionCreationSuccess(PhysicalTablePath physicalTablePath) {
-        inflightPartitionsToCreate.remove(physicalTablePath);
+    private void onPartitionCreationSuccess(PhysicalTablePath physicalTablePath, long tableId) {
+        onPartitionCreationCompleted(physicalTablePath, tableId, null);
         // TODO: trigger to update metadata here when metadataUpdater supports async update
         // metadataUpdater.checkAndUpdatePartitionMetadata(physicalTablePath);
         LOG.info("Successfully created partition {}", physicalTablePath);
+    }
+
+    private void onPartitionCreationCompleted(
+            PhysicalTablePath physicalTablePath,
+            long tableId,
+            @Nullable InvalidPartitionException rejection) {
+        // Report the result before a later creation of the partition can complete.
+        partitionCreationListener.onPartitionCreationCompleted(
+                physicalTablePath, tableId, rejection);
+        inflightPartitionsToCreate.remove(physicalTablePath);
     }
 
     private void onPartitionCreationFailed(
@@ -172,5 +213,25 @@ public class DynamicPartitionCreator {
                 new FlussRuntimeException(
                         "Failed to dynamically create partition " + physicalTablePath,
                         stripCompletionException(throwable)));
+    }
+
+    /**
+     * Receives the result of a request to create a partition, whichever write requested it, unless
+     * the request failed for another reason than the partition being invalid.
+     */
+    @FunctionalInterface
+    public interface PartitionCreationListener {
+
+        /**
+         * Called when a request to create a partition for the table with ID {@code tableId}
+         * completes.
+         *
+         * @param rejection null if the partition was created, otherwise why the coordinator refused
+         *     to create it as invalid
+         */
+        void onPartitionCreationCompleted(
+                PhysicalTablePath physicalTablePath,
+                long tableId,
+                @Nullable InvalidPartitionException rejection);
     }
 }
