@@ -90,7 +90,7 @@ class IndexReplicationDeferredRecoveryTest extends ReplicaTestBase {
         IndexSendBuffer sendBuffer = replicaManager.getIndexSendBuffer();
 
         // 2. Pre-condition: nothing has been staged for this source bucket yet.
-        assertThat(sendBuffer.pendingBytes(sourceBucket)).isZero();
+        assertThat(sendBuffer.pendingBytes()).isZero();
         assertThat(sendBuffer.buckets()).isEmpty();
 
         // 3. Publish the index table metadata through the production metadata-update entry point.
@@ -144,7 +144,7 @@ class IndexReplicationDeferredRecoveryTest extends ReplicaTestBase {
         // 5. The deferred replicator must now be running and staging encoded index batches.
         retry(
                 Duration.ofSeconds(30),
-                () -> assertThat(sendBuffer.pendingBytes(sourceBucket)).isGreaterThan(0L));
+                () -> assertThat(sendBuffer.pendingBytes()).isGreaterThan(0L));
     }
 
     private static Schema mainSchema() {

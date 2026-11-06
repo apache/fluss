@@ -317,12 +317,13 @@ These TabletServer options control maintenance of [secondary indexes](../table-d
 | Option | Type | Default | Description |
 |---|---|---|---|
 | index.replication.reader.threads | Integer | 8 | Number of reader workers that read and convert committed main-table WAL. Must be positive. |
-| index.replication.source.max-bytes | MemorySize | 2mb | Preferred maximum source WAL bytes read per replication window. The first complete log record batch may exceed this limit to ensure progress. Independent of the encoded request target size. Must be between 1 and 2147483647 bytes. |
+| index.replication.source.max-bytes | MemorySize | 8mb | Preferred maximum source WAL bytes read per replication window. The first complete log record batch may exceed this limit to ensure progress. Independent of the encoded request target size. Must be between 1 and 2147483647 bytes. |
 | index.replication.sender.threads | Integer | 2 | Number of sender workers that dispatch index batches. Must be positive. |
 | index.replication.request.target-bytes | MemorySize | 1mb | Preferred encoded payload size for aggregated RPC requests. Complete target batches may exceed this soft target. Must be positive. |
-| index.replication.buffer.max-bytes-per-main-bucket | MemorySize | 64mb | Soft backpressure threshold per leader main-table bucket. A complete window may exceed this threshold. Must be positive. |
 | index.replication.buffer.max-bytes | MemorySize | 512mb | Maximum retained index payload page bytes across one TabletServer, including construction, queued and in-flight batches. Source reads and temporary encoding objects are not included. Must be positive. |
-| index.replication.retry.backoff | Duration | 100ms | Base backoff before retrying source reads, window construction or batch sends. Must be positive and no greater than 10 seconds. |
+| index.replication.retry-backoff-max | Duration | 10s | Maximum retry delay for source reads, window construction or batch sends. Retries start at 100ms, double after consecutive failures and use 20% jitter, capped at this maximum. Setting 100ms uses a fixed delay without jitter. Replication progress resets the backoff; yielding payload memory does not. Independent of the 10-second soft payload-retention target. Must be between 100ms and 2147483647ms. |
+
+Reader workers rotate among tables and source buckets. All source buckets share the TabletServer payload budget, with capacity scheduled among waiting tables and source buckets when contended.
 
 Source and index failures retain the replication task and its progress. Retries use exponential backoff with a multiplier of 2, 20% jitter and a maximum interval of 10 seconds. Failures are reported through ERROR logs and failure metrics until an administrator repairs the fault or adjusts the constraints. These options are captured when the replication components are constructed. Changed limits require recreating the affected components, such as by a rolling restart.
 

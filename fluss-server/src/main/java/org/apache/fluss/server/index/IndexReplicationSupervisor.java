@@ -325,7 +325,7 @@ public final class IndexReplicationSupervisor {
         if (r == null) {
             return;
         }
-        replicatorPool.unregister(tableBucket);
+        replicatorPool.unregister(tableBucket, r);
         try {
             r.close();
         } catch (Exception e) {

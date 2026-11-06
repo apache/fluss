@@ -79,7 +79,7 @@ class IndexPushOrderingITCase {
         Configuration conf = new Configuration();
         conf.setInt(ConfigOptions.DEFAULT_REPLICATION_FACTOR, REPLICATION_FACTOR);
         conf.set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofHours(1));
-        conf.set(ConfigOptions.INDEX_REPLICATION_RETRY_BACKOFF, Duration.ofMillis(10));
+        conf.set(ConfigOptions.INDEX_REPLICATION_RETRY_BACKOFF_MAX, Duration.ofMillis(100));
         conf.set(ConfigOptions.INDEX_REPLICATION_SOURCE_MAX_BYTES, MemorySize.parse("64b"));
         // Stopping the target bucket's replicas may also take down a source follower, so the source
         // high watermark only advances once that follower drops out of the ISR.

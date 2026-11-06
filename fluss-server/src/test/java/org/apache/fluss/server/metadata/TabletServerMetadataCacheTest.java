@@ -32,6 +32,7 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.zk.data.PartitionRegistration;
+import org.apache.fluss.utils.IndexTableUtils;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -168,7 +169,7 @@ public class TabletServerMetadataCacheTest {
                 TableDescriptor.builder()
                         .schema(DATA1_TABLE_INFO.getSchema())
                         .distributedBy(1)
-                        .property(ConfigOptions.TABLE_INDEX_META_MAIN_TABLE_ID, DATA1_TABLE_ID)
+                        .property(IndexTableUtils.TABLE_INDEX_META_MAIN_TABLE_ID, DATA1_TABLE_ID)
                         .build();
         TableMetadata index =
                 new TableMetadata(
@@ -226,7 +227,7 @@ public class TabletServerMetadataCacheTest {
                 TableDescriptor.builder()
                         .schema(DATA1_TABLE_INFO.getSchema())
                         .distributedBy(1)
-                        .property(ConfigOptions.TABLE_INDEX_META_MAIN_TABLE_ID, DATA1_TABLE_ID)
+                        .property(IndexTableUtils.TABLE_INDEX_META_MAIN_TABLE_ID, DATA1_TABLE_ID)
                         .build();
         serverMetadataCache.updateTableMetadata(
                 new TableMetadata(DATA1_TABLE_INFO, initialBucketMetadata));

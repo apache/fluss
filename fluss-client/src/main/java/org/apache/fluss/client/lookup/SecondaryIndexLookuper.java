@@ -48,7 +48,7 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  * Two-hop {@link Lookuper} for a Global Secondary Index.
  *
  * <p>Hop 1: prefix-scan the Index Table by the provided {@code lookupKey} to obtain candidate Index
- * Table rows (each carrying the base table's primary key in trailing positions).
+ * Table rows, each carrying the base table's complete logical primary key.
  *
  * <p>Hop 2: extract the logical basePK via {@code basePkExtractorFromIndexRow}, deduplicate
  * physical candidates by that key, and point-get the main table once per key. The deduplication

@@ -160,7 +160,7 @@ class IndexLeaderFailStopTest extends ReplicaTestBase {
         Replica replica = replicaManager.getReplicaOrException(tableBucket);
         assertThat(replica.isLeader()).isFalse();
         assertThat(replica.getKvTablet()).isNull();
-        assertThat(replicaManager.getIndexSendBuffer().pendingBytes(tableBucket)).isZero();
+        assertThat(replicaManager.getIndexSendBuffer().pendingBytes()).isZero();
         assertThat(replicaManager.getIndexSendBuffer().buckets()).isEmpty();
     }
 

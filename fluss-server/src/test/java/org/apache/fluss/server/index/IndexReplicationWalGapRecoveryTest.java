@@ -61,12 +61,12 @@ class IndexReplicationWalGapRecoveryTest {
                         (startOffset, localLogStartOffset) -> Collections.emptyList());
 
         try (IndexReplicator replicator = replicator(emptyRemoteWal, sendBuffer)) {
-            assertThat(replicator.poll()).isFalse();
+            assertThat(replicator.poll()).isTrue();
             assertThat(remoteFetches).hasValue(1);
             retry(
                     Duration.ofSeconds(5),
                     () -> {
-                        assertThat(replicator.poll()).isFalse();
+                        replicator.poll();
                         assertThat(remoteFetches.get()).isGreaterThanOrEqualTo(2);
                     });
 
@@ -90,13 +90,13 @@ class IndexReplicationWalGapRecoveryTest {
                         });
 
         try (IndexReplicator replicator = replicator(unavailableRemoteWal, sendBuffer)) {
-            assertThat(replicator.poll()).isFalse();
+            assertThat(replicator.poll()).isTrue();
             assertThat(remoteFetches).hasValue(1);
 
             retry(
                     Duration.ofSeconds(5),
                     () -> {
-                        assertThat(replicator.poll()).isFalse();
+                        replicator.poll();
                         assertThat(remoteFetches.get()).isGreaterThanOrEqualTo(2);
                     });
 
@@ -114,14 +114,19 @@ class IndexReplicationWalGapRecoveryTest {
         IndexSourceReader sourceReader =
                 new IndexSourceReader(
                         gappedSourceLog(), remoteFetcherFactory, Runnable::run, readContext);
-        return new IndexReplicator(
-                sourceReader,
-                Collections.singletonList(syncIndexSpec()),
-                sendBuffer,
-                readContext,
-                PUSHED_OFFSET,
-                1024,
-                (syncOffset, allOffset) -> {});
+        IndexReplicator replicator =
+                new IndexReplicator(
+                        sourceReader,
+                        Collections.singletonList(syncIndexSpec()),
+                        sendBuffer,
+                        readContext,
+                        PUSHED_OFFSET,
+                        1024,
+                        (syncOffset, allOffset) -> {});
+        IndexReplicationScheduler scheduler = new FairIndexReplicationScheduler();
+        replicator.setScheduler(scheduler);
+        scheduler.register(0, replicator);
+        return replicator;
     }
 
     /** A source log whose early segments are gone, so {@code [0, 5)} is only reachable remotely. */

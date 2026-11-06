@@ -233,7 +233,7 @@ class FlussAdminSecondaryIndexITCase extends ClientToServerITCaseBase {
                                         .primaryKey("id")
                                         .build())
                         .distributedBy(1, "id")
-                        .property(ConfigOptions.TABLE_INDEX_META_MAIN_TABLE_ID, 1L)
+                        .property(IndexTableUtils.TABLE_INDEX_META_MAIN_TABLE_ID, 1L)
                         .build();
 
         assertThatThrownBy(() -> admin.createTable(tablePath, descriptor, false).get())

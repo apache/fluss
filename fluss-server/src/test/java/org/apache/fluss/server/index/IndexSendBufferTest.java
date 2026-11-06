@@ -60,7 +60,7 @@ class IndexSendBufferTest {
 
     @Test
     void competingConstructionYieldsItsPagesSoAnotherReaderCanFinish() throws Exception {
-        IndexSendBuffer buffer = new IndexSendBuffer(4096, 8192);
+        IndexSendBuffer buffer = new IndexSendBuffer(8192);
         CountDownLatch allocated = new CountDownLatch(2);
         CountDownLatch released = new CountDownLatch(1);
         ExecutorService readers = Executors.newFixedThreadPool(2);
@@ -105,7 +105,7 @@ class IndexSendBufferTest {
 
     @Test
     void admissionBackpressureWakesReadersAfterAcknowledgement() {
-        IndexSendBuffer buffer = new IndexSendBuffer(1, 1);
+        IndexSendBuffer buffer = new IndexSendBuffer(1);
         AtomicInteger wakeups = new AtomicInteger();
         buffer.setCapacityListener(wakeups::incrementAndGet);
         try (IndexReplicator owner = owner(buffer, 0)) {
@@ -121,7 +121,7 @@ class IndexSendBufferTest {
 
     @Test
     void constructionReservationTransfersToAdmissionAndReleasesOnAck() {
-        IndexSendBuffer buffer = new IndexSendBuffer(1, 4096);
+        IndexSendBuffer buffer = new IndexSendBuffer(4096);
         try (IndexReplicator owner = owner(buffer, 0);
                 IndexSendBuffer.Reservation reservation = buffer.newReservation()) {
             MemorySegment page = reservation.allocatePage(4096);
@@ -147,7 +147,7 @@ class IndexSendBufferTest {
 
     @Test
     void abandonedConstructionReleasesBudgetAndWakesWaiters() {
-        IndexSendBuffer buffer = new IndexSendBuffer(4096, 4096);
+        IndexSendBuffer buffer = new IndexSendBuffer(4096);
         AtomicInteger wakeups = new AtomicInteger();
         buffer.setCapacityListener(wakeups::incrementAndGet);
         try (IndexSendBuffer.Reservation first = buffer.newReservation();

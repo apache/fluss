@@ -51,9 +51,9 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  * per-bucket order without a second sender-owned registry.
  *
  * <p>The buffer has no knowledge of leaders, RPC, or retry policy. It owns per-bucket ordering,
- * claims, and pending-byte accounting. It tracks total pending (un-acknowledged) retained bytes as
- * a hard admission bound. Per-source accounting supports soft backpressure. Retiring windows after
- * sustained failures returns shared capacity so other source buckets can compete for it.
+ * claims, and pending-byte accounting. It accounts for retained payload pages during construction,
+ * queuing and active delivery against a shared hard budget. Retiring windows after sustained
+ * failures returns shared capacity so other source buckets can compete for it.
  *
  * <p>Lock order is {@code window} then the per-bucket {@code deque}. Code inside a {@code deque}
  * critical section may only read volatile or atomic state of a window or batch: calling a {@code
@@ -69,9 +69,6 @@ public final class IndexSendBuffer {
     /** The front batch currently claimed for sending, at most one per target bucket. */
     private final ConcurrentMap<TableBucket, IndexBatch> claimedBatches = new ConcurrentHashMap<>();
 
-    /** Soft backpressure threshold for one producing source bucket. */
-    private final long maxPendingBytes;
-
     /** Hard upper bound on pending retained bytes across this TabletServer sendBuffer. */
     private final long maxTotalPendingBytes;
 
@@ -84,22 +81,17 @@ public final class IndexSendBuffer {
     private final AtomicBoolean waitingForCapacity = new AtomicBoolean();
     @Nullable private volatile Runnable capacityListener;
 
-    /** Pending retained bytes grouped by the source main-table bucket that produced them. */
-    private final ConcurrentMap<TableBucket, Long> pendingBytesBySource = new ConcurrentHashMap<>();
-
     /** Optional callback fired when a target bucket may have work ready for sending. */
     @Nullable private volatile Consumer<TableBucket> appendListener;
 
-    /** Creates an sendBuffer with no back-pressure bound (primarily for tests). */
+    /** Creates a buffer with no backpressure bound (primarily for tests). */
     public IndexSendBuffer() {
-        this(Long.MAX_VALUE, Long.MAX_VALUE);
+        this(Long.MAX_VALUE);
     }
 
-    /** Creates an sendBuffer with separate per-producer and TabletServer-wide bounds. */
-    public IndexSendBuffer(long maxPendingBytes, long maxTotalPendingBytes) {
-        checkArgument(maxPendingBytes > 0, "maxPendingBytes must be positive");
+    /** Creates a buffer with a TabletServer-wide retained payload budget. */
+    public IndexSendBuffer(long maxTotalPendingBytes) {
         checkArgument(maxTotalPendingBytes > 0, "maxTotalPendingBytes must be positive");
-        this.maxPendingBytes = maxPendingBytes;
         this.maxTotalPendingBytes = maxTotalPendingBytes;
     }
 
@@ -243,18 +235,6 @@ public final class IndexSendBuffer {
                 }
             }
 
-            try {
-                pendingBytesBySource.compute(
-                        window.sourceBucket(),
-                        (ignoredOwner, ownerBytes) ->
-                                ownerBytes == null
-                                        ? windowBytes
-                                        : Math.addExact(ownerBytes, windowBytes));
-            } catch (RuntimeException | Error failure) {
-                pendingBytes.addAndGet(-windowBytes);
-                throw failure;
-            }
-
             return true;
         }
     }
@@ -316,28 +296,13 @@ public final class IndexSendBuffer {
         return full;
     }
 
-    /**
-     * Returns {@code true} when the given source main-table bucket has reached its pending-byte
-     * back-pressure bound. The bound is intentionally scoped to the producer so one unhealthy
-     * target index bucket cannot stop unrelated main-table buckets from reading WAL.
-     */
-    public boolean isFull(TableBucket source) {
-        boolean full = pendingBytes(source) >= maxPendingBytes;
-        if (full) {
-            waitingForCapacity.set(true);
-        }
-        return full;
+    boolean hasPageCapacity(int pageSize) {
+        return pendingBytes.get() <= maxTotalPendingBytes - pageSize;
     }
 
     /** Total retained payload page bytes, including construction, queued and in-flight batches. */
     public long pendingBytes() {
         return pendingBytes.get();
-    }
-
-    /** Retained bytes currently pending for the given source main-table bucket. */
-    public long pendingBytes(TableBucket source) {
-        Long sourcePendingBytes = pendingBytesBySource.get(source);
-        return sourcePendingBytes == null ? 0L : sourcePendingBytes;
     }
 
     /** Snapshot of the buckets currently tracked. May include buckets that have just drained. */
@@ -490,15 +455,9 @@ public final class IndexSendBuffer {
     /** Release pending-byte accounting for a batch that reached a terminal state. */
     private void release(IndexBatch batch) {
         if (batch.markReleased()) {
-            releaseReservedBytes(batch.window().sourceBucket(), batch.retainedBytes());
+            pendingBytes.addAndGet(-batch.retainedBytes());
+            notifyCapacityAvailable();
         }
-    }
-
-    private void releaseReservedBytes(TableBucket source, long bytes) {
-        pendingBytesBySource.computeIfPresent(
-                source, (ignored, current) -> current == bytes ? null : current - bytes);
-        pendingBytes.addAndGet(-bytes);
-        notifyCapacityAvailable();
     }
 
     private void notifyCapacityAvailable() {
@@ -520,7 +479,8 @@ public final class IndexSendBuffer {
                     throw new RecordTooLargeException(
                             "Index replication window needs at least "
                                     + (bytes + pageSize)
-                                    + " retained bytes, exceeding index.replication.buffer.max-bytes="
+                                    + " retained bytes, exceeding"
+                                    + " index.replication.buffer.max-bytes="
                                     + maxTotalPendingBytes);
                 }
                 while (true) {

@@ -86,8 +86,6 @@ class IndexPushFailoverITCase {
         Configuration conf = new Configuration();
         conf.setInt(ConfigOptions.DEFAULT_REPLICATION_FACTOR, 3);
         conf.set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofHours(1));
-        // Keep a failed target batch visible in its deque long enough for the causal retry check.
-        conf.set(ConfigOptions.INDEX_REPLICATION_RETRY_BACKOFF, Duration.ofSeconds(1));
         return conf;
     }
 

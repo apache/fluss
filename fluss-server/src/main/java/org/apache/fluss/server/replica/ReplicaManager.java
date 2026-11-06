@@ -359,14 +359,12 @@ public class ReplicaManager implements ServerReconfigurable {
                 sourceMaxBytes);
         this.indexSendBuffer =
                 new IndexSendBuffer(
-                        conf.get(ConfigOptions.INDEX_REPLICATION_MAIN_BUCKET_BUFFER_MAX_BYTES)
-                                .getBytes(),
                         conf.get(ConfigOptions.INDEX_REPLICATION_BUFFER_MAX_BYTES).getBytes());
         this.indexReplicatorPool =
                 new IndexReplicatorPool(
                         conf.getInt(ConfigOptions.INDEX_REPLICATION_READER_THREADS),
                         (int) sourceMaxBytes,
-                        conf.get(ConfigOptions.INDEX_REPLICATION_RETRY_BACKOFF).toMillis(),
+                        conf.get(ConfigOptions.INDEX_REPLICATION_RETRY_BACKOFF_MAX).toMillis(),
                         INDEX_REPLICATION_WORKER_BACKOFF_MS,
                         ioExecutor);
         indexSendBuffer.setCapacityListener(indexReplicatorPool::wakeup);
