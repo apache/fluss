@@ -162,6 +162,14 @@ public class DefaultSecurityTokenManager implements SecurityTokenManager {
     long calculateRenewalDelay(Clock clock, long nextRenewal) {
         long now = clock.millis();
         long renewalDelay = Math.round(tokensRenewalTimeRatio * (nextRenewal - now));
+        if (renewalDelay <= 0) {
+            LOG.warn(
+                    "Calculated a non-positive token renewal delay of {} ms. "
+                            + "This may indicate clock skew. Retrying token renewal in {} ms.",
+                    renewalDelay,
+                    renewalRetryBackoffPeriod);
+            return renewalRetryBackoffPeriod;
+        }
         LOG.debug(
                 "Calculated delay on renewal is {}, based on next renewal {} and the ratio {}, and current time {}",
                 renewalDelay,

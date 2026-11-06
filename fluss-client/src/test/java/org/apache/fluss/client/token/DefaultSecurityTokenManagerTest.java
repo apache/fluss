@@ -87,4 +87,17 @@ class DefaultSecurityTokenManagerTest {
         Clock constantClock = Clock.fixed(ofEpochMilli(100), ZoneId.systemDefault());
         assertThat(securityTokenManager.calculateRenewalDelay(constantClock, 200)).isEqualTo(50);
     }
+
+    @Test
+    void calculateRenewalDelayShouldUseRetryBackoffForExpiredToken() {
+        Configuration configuration = new Configuration();
+        configuration.set(ConfigOptions.FILESYSTEM_SECURITY_TOKEN_RENEWAL_TIME_RATIO, 0.5);
+        configuration.set(FILESYSTEM_SECURITY_TOKEN_RENEWAL_RETRY_BACKOFF, Duration.ofMillis(100));
+        DefaultSecurityTokenManager securityTokenManager =
+                new DefaultSecurityTokenManager(configuration, null);
+
+        Clock constantClock = Clock.fixed(ofEpochMilli(200), ZoneId.systemDefault());
+        assertThat(securityTokenManager.calculateRenewalDelay(constantClock, 200)).isEqualTo(100);
+        assertThat(securityTokenManager.calculateRenewalDelay(constantClock, 100)).isEqualTo(100);
+    }
 }
