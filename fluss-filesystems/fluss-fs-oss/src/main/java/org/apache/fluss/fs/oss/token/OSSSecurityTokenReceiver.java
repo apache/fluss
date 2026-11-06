@@ -29,7 +29,9 @@ import org.apache.hadoop.fs.aliyun.oss.Constants;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Collections;
 import java.util.Map;
+import java.util.Set;
 
 /** Security token receiver for OSS filesystem. */
 public class OSSSecurityTokenReceiver implements SecurityTokenReceiver {
@@ -79,6 +81,11 @@ public class OSSSecurityTokenReceiver implements SecurityTokenReceiver {
     @Override
     public String scheme() {
         return OSSFileSystemPlugin.SCHEME;
+    }
+
+    @Override
+    public Set<String> getFallbackSchemes() {
+        return Collections.singleton("ossj");
     }
 
     @Override

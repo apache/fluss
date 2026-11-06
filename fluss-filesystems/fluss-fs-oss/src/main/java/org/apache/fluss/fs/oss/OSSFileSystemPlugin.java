@@ -35,6 +35,8 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.lang.reflect.Field;
 import java.net.URI;
+import java.util.Collections;
+import java.util.Set;
 
 import static org.apache.hadoop.fs.aliyun.oss.Constants.ACCESS_KEY_ID;
 import static org.apache.hadoop.fs.aliyun.oss.Constants.CREDENTIALS_PROVIDER_KEY;
@@ -63,6 +65,11 @@ public class OSSFileSystemPlugin implements FileSystemPlugin {
     @Override
     public String getScheme() {
         return SCHEME;
+    }
+
+    @Override
+    public Set<String> getFallbackSchemes() {
+        return Collections.singleton("ossj");
     }
 
     @Override
