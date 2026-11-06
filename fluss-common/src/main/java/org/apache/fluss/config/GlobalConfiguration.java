@@ -152,9 +152,10 @@ public class GlobalConfiguration {
      * library.
      *
      * @param file the YAML file to read from
+     * @return the configuration parsed from the given file
      * @see <a href="http://www.yaml.org/spec/1.2/spec.html">YAML 1.2 specification</a>
      */
-    private static Configuration loadYAMLResource(File file) {
+    public static Configuration loadYAMLResource(File file) {
         final Configuration config = new Configuration();
 
         try (BufferedReader reader =

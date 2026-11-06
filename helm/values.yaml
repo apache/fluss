@@ -204,9 +204,64 @@ coordinator:
   tolerations: []
   topologySpreadConstraints: []
 
+# Embedded-Flink lake tiering service. The tiering service is stateless and
+# runs the tiering job on an embedded Flink runtime inside a single JVM
+# process, so no separate Flink cluster is needed. Progress is persisted
+# through lake snapshots tracked by Fluss, not through Flink checkpoint
+# state, so the service needs no checkpoint storage either.
+embeddedTiering:
+  enabled: false
+  # Each replica is an independent tiering instance claiming tables from the coordinator;
+  # raise this to spread tables across instances, and parallelism.default to scale one instance.
+  numberOfReplicas: 1
+  # Seconds to wait after SIGTERM before the tiering pod is force-killed. The tiering job is
+  # stateless (progress persists in Fluss lake snapshots), so this only needs to cover a clean
+  # shutdown of the embedded Flink runtime. Keep it above that runtime's own shutdown budget:
+  # the embedded runtime waits up to cluster.services.shutdown-timeout (30s by default) for its
+  # services to close, so a grace period equal to that budget can SIGKILL a shutdown that is
+  # still making progress.
+  terminationGracePeriodSeconds: 60
+  image:
+    registry: ""
+    repository: apache/fluss-tiering
+    # Defaults to the chart appVersion when empty.
+    tag: ""
+    pullPolicy: IfNotPresent
+    # Pull secrets come from the top-level image.pullSecrets, shared with the server images.
+  # Rendered into /opt/fluss/conf/tiering.yaml in the tiering pod. Keys with
+  # the fluss., datalake., or lake.tiering. prefix configure the tiering
+  # service (Fluss bootstrap servers, lake catalog, tiering behavior); every
+  # other key configures the embedded Flink runtime, e.g.
+  # parallelism.default or taskmanager.numberOfTaskSlots. datalake.format
+  # must be set when the service is enabled.
+  configurationOverrides:
+    # The default install runs the tiering service single-threaded; scale it by raising both keys.
+    parallelism.default: 1
+    taskmanager.numberOfTaskSlots: 1
+    datalake.format: paimon
+    datalake.paimon.metastore: filesystem
+    datalake.paimon.warehouse: /tmp/paimon
+    # fluss.bootstrap.servers defaults to this release's coordinator client
+    # listener. Override it here to tier for a Fluss cluster outside this
+    # release, e.g. fluss.bootstrap.servers: fluss.example.com:9124.
+  extraVolumes: []
+  extraVolumeMounts: []
+  extraEnv: []
+  envFrom: []
+  annotations: {}
+  podAnnotations: {}
+  podLabels: {}
+  # podDisruptionBudget is omitted on purpose: the tiering worker is stateless and freely
+  # disruptible (progress lives in lake snapshots), so no PDB is needed.
+  affinity: {}
+  nodeSelector: {}
+  tolerations: []
+  topologySpreadConstraints: []
+
 # Kubernetes cluster domain for chart-owned in-cluster DNS (CLIENT advertised FQDN).
 clusterDomain: cluster.local
 
+# Fluss listener configurations
 listeners:
   internal:
     port: 9123
@@ -310,11 +365,21 @@ metrics:
   jmx:
     port: 9250
 
-resources: {}
-  # We usually recommend not to specify default resources and to leave this as a conscious
-  # choice for the user. This also increases chances charts run on environments with little
-  # resources, such as Minikube. If you do want to specify resources, uncomment the following
-  # lines, adjust them as necessary, and remove the curly braces after 'resources:'.
+resources:
+  # The tiering service ships bounded defaults, unlike the server components: it runs
+  # a full embedded Flink runtime in a single JVM, and its default JVM memory settings
+  # (a percentage of the container memory limit as heap) are only predictable when the
+  # limit is set. Override or clear these values like any other chart values.
+  embeddedTiering:
+    requests:
+      cpu: 1
+      memory: 1Gi
+    limits:
+      cpu: 2
+      memory: 2Gi
+  # The Fluss server components default to no resources; this is a conscious choice to keep the
+  # chart runnable in environments with few resources, such as Minikube. If you do want to
+  # specify resources for them, add them here:
   # coordinatorServer:
   #   limits:
   #     cpu: 100m
