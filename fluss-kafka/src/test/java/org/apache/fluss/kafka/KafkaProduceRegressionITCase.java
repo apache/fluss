@@ -561,6 +561,61 @@ class KafkaProduceRegressionITCase {
         }
     }
 
+    @Test
+    void testOneRequestWritingBareAndQualifiedNamesKeepsOnlyFirstWrite() throws Exception {
+        TablePath path = TablePath.of(DATABASE, "bare_qualified_collision");
+        String qualified = path.toString();
+        String bare = path.getTableName();
+        try (Connection connection = ConnectionFactory.createConnection(CLUSTER.getClientConfig());
+                Admin admin = connection.getAdmin()) {
+            try {
+                createTable(admin, path, 3);
+                MetadataResponsePartition partition =
+                        waitForTopic(qualified).data().topics().find(qualified).partitions().get(0);
+                ServerNode node =
+                        CLUSTER.getTabletServerNodes("KAFKA").stream()
+                                .filter(candidate -> candidate.id() == partition.leaderId())
+                                .findFirst()
+                                .get();
+                // One wire request addresses one table through both of its names; the gateway
+                // must answer each name instead of dropping the first write and hanging.
+                ProduceResponse response;
+                try (Socket socket = connect(node, 5000)) {
+                    response =
+                            (ProduceResponse)
+                                    sendRequest(
+                                            socket,
+                                            twoNameProduceRequest(
+                                                    bare, "first", qualified, "second"));
+                }
+                assertThat(response.data().responses())
+                        .extracting(topic -> topic.name())
+                        .containsExactly(bare, qualified);
+                assertThat(
+                                response.data()
+                                        .responses()
+                                        .find(bare)
+                                        .partitionResponses()
+                                        .get(0)
+                                        .errorCode())
+                        .isEqualTo(Errors.NONE.code());
+                assertThat(
+                                response.data()
+                                        .responses()
+                                        .find(qualified)
+                                        .partitionResponses()
+                                        .get(0)
+                                        .errorCode())
+                        .isEqualTo(Errors.INVALID_REQUEST.code());
+                // The first name's record is written exactly once; the rejected name appends
+                // nothing.
+                assertValues(connection, path, "first");
+            } finally {
+                admin.dropTable(path, true).get();
+            }
+        }
+    }
+
     private static MetadataResponse waitForTopic(String topic) {
         return waitForTopic(topic, 1);
     }
@@ -615,6 +670,32 @@ class KafkaProduceRegressionITCase {
                                 new ProduceRequestData.TopicProduceDataCollection(
                                         Collections.singletonList(topicData).iterator())),
                 (short) 11);
+    }
+
+    /** Builds one Produce request writing one value under each of two topic names. */
+    private static ProduceRequest twoNameProduceRequest(
+            String firstName, String firstValue, String secondName, String secondValue) {
+        ProduceRequestData data = new ProduceRequestData().setAcks((short) 1).setTimeoutMs(5000);
+        for (int i = 0; i < 2; i++) {
+            String name = i == 0 ? firstName : secondName;
+            String value = i == 0 ? firstValue : secondValue;
+            data.topicData()
+                    .add(
+                            new ProduceRequestData.TopicProduceData()
+                                    .setName(name)
+                                    .setPartitionData(
+                                            Collections.singletonList(
+                                                    new ProduceRequestData.PartitionProduceData()
+                                                            .setIndex(0)
+                                                            .setRecords(
+                                                                    MemoryRecords.withRecords(
+                                                                            Compression.NONE,
+                                                                            new SimpleRecord(
+                                                                                    value.getBytes(
+                                                                                            StandardCharsets
+                                                                                                    .UTF_8)))))));
+        }
+        return new ProduceRequest(data, (short) 11);
     }
 
     private static void rebalanceLeader(
