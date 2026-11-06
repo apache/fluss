@@ -27,12 +27,18 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.exception.AuthorizationException;
+import org.apache.fluss.exception.InvalidConsumerGroupIdException;
 import org.apache.fluss.exception.NoRebalanceInProgressException;
 import org.apache.fluss.exception.SecurityDisabledException;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.security.acl.AccessControlEntryFilter;
+import org.apache.fluss.security.acl.AclBindingFilter;
+import org.apache.fluss.security.acl.Resource;
+import org.apache.fluss.security.acl.ResourceFilter;
+import org.apache.fluss.security.acl.ResourceType;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.ServerTags;
@@ -295,6 +301,71 @@ public abstract class FlinkProcedureITCase {
                                         .wait())
                 .hasMessageContaining(
                         "Wildcard 'ANY' can only be used for filtering, not for adding ACL entries.");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"default-consumer", "Default_consumer-1", "*", "fluss-cluster"})
+    void testConsumerGroupAcls(String groupId) throws Exception {
+        String sqlResource = "group." + groupId;
+        tEnv.executeSql(
+                        String.format(
+                                "CALL %s.sys.add_acl('GROUP.%s', 'ALLOW', 'User:group-consumer', 'DESCRIBE', '*')",
+                                CATALOG_NAME, groupId))
+                .await();
+        AclBindingFilter filter =
+                new AclBindingFilter(
+                        new ResourceFilter(ResourceType.GROUP, groupId),
+                        AccessControlEntryFilter.ANY);
+        assertThat(admin.listAcls(filter).get())
+                .singleElement()
+                .satisfies(
+                        binding ->
+                                assertThat(binding.getResource())
+                                        .isEqualTo(Resource.group(groupId)));
+
+        String listAcl = String.format("CALL %s.sys.list_acl('%s')", CATALOG_NAME, sqlResource);
+        try (CloseableIterator<Row> rows = tEnv.executeSql(listAcl).collect()) {
+            assertCallResult(
+                    rows,
+                    new String[] {
+                        String.format(
+                                "+I[resource=\"%s\";permission=\"ALLOW\";principal=\"User:group-consumer\";operation=\"DESCRIBE\";host=\"*\"]",
+                                sqlResource)
+                    });
+        }
+
+        tEnv.executeSql(
+                        String.format(
+                                "CALL %s.sys.drop_acl('%s', 'ALLOW', 'User:group-consumer', 'DESCRIBE', '*')",
+                                CATALOG_NAME, sqlResource))
+                .await();
+        assertThat(admin.listAcls(filter).get()).isEmpty();
+        try (CloseableIterator<Row> rows = tEnv.executeSql(listAcl).collect()) {
+            assertCallResult(rows, new String[0]);
+        }
+    }
+
+    @Test
+    void testInvalidConsumerGroupAclNames() {
+        for (String groupId :
+                Arrays.asList(
+                        "",
+                        "default.consumer",
+                        "default/consumer",
+                        "default:consumer",
+                        "消费组",
+                        "__internal",
+                        "default-*")) {
+            for (String procedure : Arrays.asList("add_acl", "drop_acl", "list_acl")) {
+                String sql =
+                        String.format(
+                                "CALL %s.sys.%s('group.%s', 'ALLOW', 'User:group-consumer', 'DESCRIBE', '*')",
+                                CATALOG_NAME, procedure, groupId);
+                assertThatThrownBy(() -> tEnv.executeSql(sql).await())
+                        .rootCause()
+                        .isInstanceOf(InvalidConsumerGroupIdException.class);
+            }
+        }
     }
 
     @Test

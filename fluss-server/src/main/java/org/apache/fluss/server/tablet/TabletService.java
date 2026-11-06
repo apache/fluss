@@ -191,6 +191,7 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toLookupData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toPrefixLookupData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toProduceLogDataForBuckets;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toPutKvDataForBuckets;
+import static org.apache.fluss.utils.ConsumerGroupUtils.validateGroupId;
 
 /** An RPC Gateway service for tablet server. */
 public final class TabletService extends RpcServiceBase
@@ -813,8 +814,17 @@ public final class TabletService extends RpcServiceBase
     @Override
     public CompletableFuture<FindConsumerGroupOwnerResponse> findConsumerGroupOwner(
             FindConsumerGroupOwnerRequest request) {
+        // Copy request/session values before returning: the request buffer is released after this
+        // method and the current session is bound to the RPC worker thread.
+        final String groupId = request.getGroupId();
+        final String listenerName = currentListenerName();
+        validateGroupId(groupId);
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), DESCRIBE, Resource.group(groupId));
+        }
+
         return groupManager
-                .findOwner(request.getGroupId(), currentListenerName())
+                .findOwner(groupId, listenerName)
                 .thenApply(ServerRpcMessageUtils::makeFindConsumerGroupOwnerResponse);
     }
 

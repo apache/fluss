@@ -26,6 +26,7 @@ import org.apache.fluss.security.acl.OperationType;
 import org.apache.fluss.security.acl.PermissionType;
 import org.apache.fluss.security.acl.Resource;
 import org.apache.fluss.security.acl.ResourceFilter;
+import org.apache.fluss.security.acl.ResourceType;
 
 import org.apache.flink.table.annotation.ArgumentHint;
 import org.apache.flink.table.annotation.DataTypeHint;
@@ -108,10 +109,15 @@ public class ListAclProcedure extends AbstractAclProcedure {
                 ace.getPrincipal() != null
                         ? (ace.getPrincipal().getType() + ":" + ace.getPrincipal().getName())
                         : null;
-        String resourceName =
-                FLUSS_CLUSTER.equals(resource.getName())
-                        ? "cluster"
-                        : "cluster." + resource.getName();
+        String resourceName;
+        if (resource.getType() == ResourceType.GROUP) {
+            resourceName = "group." + resource.getName();
+        } else {
+            resourceName =
+                    FLUSS_CLUSTER.equals(resource.getName())
+                            ? "cluster"
+                            : "cluster." + resource.getName();
+        }
 
         return String.join(
                 ";",
