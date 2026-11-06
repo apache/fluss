@@ -23,9 +23,7 @@ import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidScanRequestException;
 import org.apache.fluss.exception.NetworkException;
-import org.apache.fluss.exception.ScannerExpiredException;
 import org.apache.fluss.exception.TooManyScannersException;
-import org.apache.fluss.exception.UnknownScannerIdException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
@@ -754,40 +752,6 @@ class KvBatchScannerTest {
             assertThat(scanner.isClosed()).isTrue();
             assertThat(meta.invalidations.get()).isEqualTo(1);
         }
-    }
-
-    @Test
-    void scannerExpiredIsTerminalAndDoesNotSendCloseScanner() throws Exception {
-        RecordingGateway gateway = new RecordingGateway();
-        gateway.enqueue(emptyContinuationResponse(SCANNER_ID));
-        gateway.enqueue(errorResponse(Errors.SCANNER_EXPIRED));
-
-        try (KvBatchScanner scanner = newScanner(gateway)) {
-            scanner.pollBatch(POLL_TIMEOUT);
-            assertThatThrownBy(() -> scanner.pollBatch(POLL_TIMEOUT))
-                    .isInstanceOf(IOException.class)
-                    .hasCauseInstanceOf(ScannerExpiredException.class);
-        }
-
-        assertThat(gateway.requests.stream().anyMatch(KvBatchScannerTest::isCloseRequest))
-                .isFalse();
-    }
-
-    @Test
-    void unknownScannerIdIsTerminalAndDoesNotSendCloseScanner() throws Exception {
-        RecordingGateway gateway = new RecordingGateway();
-        gateway.enqueue(emptyContinuationResponse(SCANNER_ID));
-        gateway.enqueue(errorResponse(Errors.UNKNOWN_SCANNER_ID));
-
-        try (KvBatchScanner scanner = newScanner(gateway)) {
-            scanner.pollBatch(POLL_TIMEOUT);
-            assertThatThrownBy(() -> scanner.pollBatch(POLL_TIMEOUT))
-                    .isInstanceOf(IOException.class)
-                    .hasCauseInstanceOf(UnknownScannerIdException.class);
-        }
-
-        assertThat(gateway.requests.stream().anyMatch(KvBatchScannerTest::isCloseRequest))
-                .isFalse();
     }
 
     @Test

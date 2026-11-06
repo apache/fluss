@@ -33,6 +33,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -70,10 +71,11 @@ public final class Cluster {
         this.aliveTabletServersById = Collections.unmodifiableMap(aliveTabletServersById);
         this.aliveTabletServers =
                 Collections.unmodifiableList(new ArrayList<>(aliveTabletServersById.values()));
-        this.tableIdByPath = Collections.unmodifiableMap(tableIdByPath);
-        this.partitionsIdByPath = Collections.unmodifiableMap(partitionsIdByPath);
+        this.tableIdByPath = Collections.unmodifiableMap(new LinkedHashMap<>(tableIdByPath));
+        this.partitionsIdByPath =
+                Collections.unmodifiableMap(new LinkedHashMap<>(partitionsIdByPath));
         this.bucketCountByTableOrPartition =
-                Collections.unmodifiableMap(bucketCountByTableOrPartition);
+                Collections.unmodifiableMap(new HashMap<>(bucketCountByTableOrPartition));
 
         // Index the bucket locations by table path, and index bucket location by bucket.
         // Note that this code is performance sensitive if there are a large number of buckets,
@@ -109,7 +111,8 @@ public final class Cluster {
         }
 
         Map<Long, String> tmpPartitionNameById = new HashMap<>();
-        for (Map.Entry<PhysicalTablePath, Long> partitionAndId : partitionsIdByPath.entrySet()) {
+        for (Map.Entry<PhysicalTablePath, Long> partitionAndId :
+                this.partitionsIdByPath.entrySet()) {
             tmpPartitionNameById.put(
                     partitionAndId.getValue(), partitionAndId.getKey().getPartitionName());
         }
@@ -119,11 +122,40 @@ public final class Cluster {
         this.availableLocationsByPath = Collections.unmodifiableMap(tmpAvailableLocationsByPath);
 
         Map<Long, TablePath> tempPathByTableId = new HashMap<>();
-        tableIdByPath.forEach(((tablePath, tableId) -> tempPathByTableId.put(tableId, tablePath)));
+        this.tableIdByPath.forEach(
+                ((tablePath, tableId) -> tempPathByTableId.put(tableId, tablePath)));
         this.pathByTableId = Collections.unmodifiableMap(tempPathByTableId);
     }
 
+    private Cluster(
+            Map<Integer, ServerNode> aliveTabletServersById,
+            @Nullable ServerNode coordinatorServer,
+            Cluster previous) {
+        this.coordinatorServer = coordinatorServer;
+        this.aliveTabletServersById =
+                Collections.unmodifiableMap(new LinkedHashMap<>(aliveTabletServersById));
+        this.aliveTabletServers =
+                Collections.unmodifiableList(new ArrayList<>(this.aliveTabletServersById.values()));
+        this.availableLocationsByPath = previous.availableLocationsByPath;
+        this.availableLocationByBucket = previous.availableLocationByBucket;
+        this.tableIdByPath = previous.tableIdByPath;
+        this.pathByTableId = previous.pathByTableId;
+        this.partitionsIdByPath = previous.partitionsIdByPath;
+        this.partitionNameById = previous.partitionNameById;
+        this.bucketCountByTableOrPartition = previous.bucketCountByTableOrPartition;
+    }
+
+    /** Creates a snapshot with updated nodes and the existing table and bucket metadata. */
+    public Cluster withNodes(
+            Map<Integer, ServerNode> aliveTabletServersById,
+            @Nullable ServerNode coordinatorServer) {
+        return new Cluster(aliveTabletServersById, coordinatorServer, this);
+    }
+
     public Cluster invalidPhysicalTableBucketMeta(Set<PhysicalTablePath> physicalTablesToInvalid) {
+        if (!hasBucketMetadata(physicalTablesToInvalid)) {
+            return this;
+        }
         // should remove invalid tables from current availableLocationsByPath
         Map<PhysicalTablePath, List<BucketLocation>> newBucketLocationsByPath = new HashMap<>();
         // copy the metadata from current availableLocationsByPath to newBucketLocationsByPath
@@ -171,9 +203,17 @@ public final class Cluster {
     public Cluster invalidPhysicalTableBucketAndPartitionMeta(
             Set<PhysicalTablePath> physicalTablesToInvalid) {
         Cluster cluster = invalidPhysicalTableBucketMeta(physicalTablesToInvalid);
-        Map<PhysicalTablePath, Long> newPartitionsIdByPath = new HashMap<>(partitionsIdByPath);
+        Map<PhysicalTablePath, Long> newPartitionsIdByPath = null;
         for (PhysicalTablePath physicalTablePath : physicalTablesToInvalid) {
-            newPartitionsIdByPath.remove(physicalTablePath);
+            if (partitionsIdByPath.containsKey(physicalTablePath)) {
+                if (newPartitionsIdByPath == null) {
+                    newPartitionsIdByPath = new HashMap<>(partitionsIdByPath);
+                }
+                newPartitionsIdByPath.remove(physicalTablePath);
+            }
+        }
+        if (newPartitionsIdByPath == null) {
+            return cluster;
         }
         return new Cluster(
                 new HashMap<>(aliveTabletServersById),
@@ -182,6 +222,30 @@ public final class Cluster {
                 new HashMap<>(tableIdByPath),
                 newPartitionsIdByPath,
                 new HashMap<>(cluster.bucketCountByTableOrPartition));
+    }
+
+    private boolean hasBucketMetadata(Set<PhysicalTablePath> physicalTables) {
+        for (PhysicalTablePath path : physicalTables) {
+            if (availableLocationsByPath.containsKey(path)) {
+                return true;
+            }
+            if (path.getPartitionName() == null) {
+                Long tableId = tableIdByPath.get(path.getTablePath());
+                if (tableId != null
+                        && bucketCountByTableOrPartition.containsKey(
+                                TableOrPartition.ofTable(tableId))) {
+                    return true;
+                }
+            } else {
+                Long partitionId = partitionsIdByPath.get(path);
+                if (partitionId != null
+                        && bucketCountByTableOrPartition.containsKey(
+                                TableOrPartition.ofPartition(partitionId))) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     @Nullable

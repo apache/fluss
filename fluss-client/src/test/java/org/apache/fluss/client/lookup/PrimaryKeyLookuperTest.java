@@ -25,6 +25,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.PartitionNotExistException;
+import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
@@ -47,6 +48,7 @@ import org.apache.fluss.types.DataTypes;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -58,6 +60,8 @@ import java.util.concurrent.TimeUnit;
 
 import static org.apache.fluss.client.metadata.TestingMetadataUpdater.COORDINATOR;
 import static org.apache.fluss.client.metadata.TestingMetadataUpdater.NODE1;
+import static org.apache.fluss.client.metadata.TestingMetadataUpdater.NODE2;
+import static org.apache.fluss.client.metadata.TestingMetadataUpdater.NODE3;
 import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -175,6 +179,54 @@ class PrimaryKeyLookuperTest {
                     .hasCauseInstanceOf(InvalidBucketRoutingException.class)
                     .hasMessageContaining("Routing bucket count is unavailable")
                     .hasMessageContaining("bucketCountEpoch 1");
+        } finally {
+            lookupClient.close(Duration.ofSeconds(5));
+        }
+    }
+
+    @Test
+    void testUnavailablePartitionMetadataDoesNotTriggerHistoricalFallback() throws Exception {
+        TableInfo tableInfo = createTableInfo();
+        ControllableLookupGateway gateway = new ControllableLookupGateway();
+        TestingMetadataUpdater updater =
+                new TestingMetadataUpdater(
+                        COORDINATOR,
+                        Arrays.asList(NODE1, NODE2, NODE3),
+                        Collections.singletonMap(TABLE_PATH, tableInfo),
+                        Collections.singletonMap(NODE1.id(), gateway),
+                        new Configuration()) {
+                    @Override
+                    public boolean checkAndUpdatePartitionMetadata(PhysicalTablePath path) {
+                        return getCluster().getPartitionId(path).isPresent();
+                    }
+                };
+        updater.updateCluster(
+                createCluster()
+                        .invalidPhysicalTableBucketAndPartitionMeta(
+                                Collections.singleton(PARTITION_A_PATH)));
+
+        LookupClient lookupClient = new LookupClient(new Configuration(), updater);
+        try {
+            PrimaryKeyLookuper lookuper =
+                    new PrimaryKeyLookuper(
+                            tableInfo,
+                            new TestingSchemaGetter(tableInfo.getSchemaId(), tableInfo.getSchema()),
+                            updater,
+                            lookupClient,
+                            false);
+            GenericRow key = GenericRow.of(1, BinaryString.fromString(PARTITION_A));
+            assertThatThrownBy(() -> lookuper.lookup(key).get(5, TimeUnit.SECONDS))
+                    .hasCauseInstanceOf(StaleMetadataException.class);
+            assertThat(gateway.pendingLookups).isEmpty();
+
+            updater.updateCluster(createCluster());
+            CompletableFuture<LookupResult> retry = lookuper.lookup(key);
+            PendingLookup lookup = gateway.pollLookup();
+            assertThat(lookup).isNotNull();
+            assertThat(lookup.request.getBucketsReqAt(0).getPartitionId())
+                    .isEqualTo(ACTIVE_PARTITION_ID);
+            lookup.respondEmpty();
+            assertThat(retry.get(5, TimeUnit.SECONDS).getRowList()).isEmpty();
         } finally {
             lookupClient.close(Duration.ofSeconds(5));
         }

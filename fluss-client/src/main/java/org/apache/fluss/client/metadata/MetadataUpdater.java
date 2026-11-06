@@ -32,6 +32,7 @@ import org.apache.fluss.exception.RetriableException;
 import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableOrPartition;
 import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.GatewayClientProxy;
@@ -39,11 +40,13 @@ import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
+import org.apache.fluss.rpc.messages.MetadataResponse;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
+import javax.annotation.concurrent.GuardedBy;
 
 import java.net.InetSocketAddress;
 import java.util.Collection;
@@ -54,10 +57,13 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArraySet;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.client.utils.MetadataUtils.getOneAvailableTabletServerNode;
+import static org.apache.fluss.client.utils.MetadataUtils.rebuildCluster;
+import static org.apache.fluss.client.utils.MetadataUtils.sendMetadataRequest;
 import static org.apache.fluss.client.utils.MetadataUtils.sendMetadataRequestAndRebuildCluster;
 import static org.apache.fluss.utils.ExceptionUtils.stripExecutionException;
 
@@ -71,7 +77,17 @@ public class MetadataUpdater {
     private final Configuration conf;
     private final RpcClient rpcClient;
     private final Set<Integer> unavailableTabletServerIds = new CopyOnWriteArraySet<>();
+    private final Object clusterLock = new Object();
     protected volatile Cluster cluster;
+
+    // The RPC monitor serializes refreshes; this set only lives for the current request.
+    @GuardedBy("clusterLock")
+    @Nullable
+    private Set<PhysicalTablePath> invalidatedDuringUpdate;
+
+    @GuardedBy("clusterLock")
+    @Nullable
+    private Set<TableOrPartition> invalidatedIdsDuringUpdate;
 
     public MetadataUpdater(Configuration conf, RpcClient rpcClient) {
         this(rpcClient, conf, initializeCluster(conf, rpcClient));
@@ -253,16 +269,9 @@ public class MetadataUpdater {
                 if (serverNode == null) {
                     LOG.info(
                             "No available tablet server to update metadata, try to re-initialize cluster using bootstrap server.");
-                    cluster = initializeCluster(conf, rpcClient);
+                    reinitializeCluster();
                 } else {
-                    cluster =
-                            sendMetadataRequestAndRebuildCluster(
-                                    cluster,
-                                    rpcClient,
-                                    tablePaths,
-                                    tablePartitionNames,
-                                    tablePartitionIds,
-                                    serverNode);
+                    updateCluster(serverNode, tablePaths, tablePartitionNames, tablePartitionIds);
                 }
             }
 
@@ -320,7 +329,7 @@ public class MetadataUpdater {
                 synchronized (this) {
                     LOG.info(
                             "No available tablet server to refresh metadata, re-initializing cluster using bootstrap server.");
-                    cluster = initializeCluster(conf, rpcClient);
+                    reinitializeCluster();
                 }
                 unavailableTabletServerIds.removeIf(cluster.getAliveTabletServers()::containsKey);
                 return;
@@ -328,9 +337,7 @@ public class MetadataUpdater {
 
             try {
                 synchronized (this) {
-                    cluster =
-                            sendMetadataRequestAndRebuildCluster(
-                                    cluster, rpcClient, null, null, null, serverNode);
+                    updateCluster(serverNode, null, null, null);
                 }
                 // Refresh succeeded against a live server, the cluster node list is now up to date.
                 unavailableTabletServerIds.removeIf(cluster.getAliveTabletServers()::containsKey);
@@ -350,6 +357,48 @@ public class MetadataUpdater {
                     throw new FlussRuntimeException("Failed to refresh metadata", t);
                 }
             }
+        }
+    }
+
+    private void updateCluster(
+            ServerNode serverNode,
+            @Nullable Set<TablePath> tablePaths,
+            @Nullable Collection<PhysicalTablePath> tablePartitionNames,
+            @Nullable Collection<Long> tablePartitionIds)
+            throws ExecutionException, InterruptedException, TimeoutException {
+        synchronized (clusterLock) {
+            invalidatedDuringUpdate = new HashSet<>();
+            invalidatedIdsDuringUpdate = new HashSet<>();
+        }
+        try {
+            MetadataResponse response =
+                    sendMetadataRequest(
+                            rpcClient,
+                            tablePaths,
+                            tablePartitionNames,
+                            tablePartitionIds,
+                            serverNode);
+            synchronized (clusterLock) {
+                cluster =
+                        rebuildCluster(
+                                cluster,
+                                true,
+                                response,
+                                invalidatedDuringUpdate,
+                                invalidatedIdsDuringUpdate);
+            }
+        } finally {
+            synchronized (clusterLock) {
+                invalidatedDuringUpdate = null;
+                invalidatedIdsDuringUpdate = null;
+            }
+        }
+    }
+
+    private void reinitializeCluster() {
+        Cluster initialized = initializeCluster(conf, rpcClient);
+        synchronized (clusterLock) {
+            cluster = initialized;
         }
     }
 
@@ -463,7 +512,32 @@ public class MetadataUpdater {
     /** Invalid the bucket metadata for the given physical table paths. */
     public void invalidPhysicalTableBucketMeta(Set<PhysicalTablePath> physicalTablesToInvalid) {
         if (!physicalTablesToInvalid.isEmpty()) {
-            cluster = cluster.invalidPhysicalTableBucketMeta(physicalTablesToInvalid);
+            synchronized (clusterLock) {
+                cluster = cluster.invalidPhysicalTableBucketMeta(physicalTablesToInvalid);
+                recordInvalidation(physicalTablesToInvalid);
+            }
+        }
+    }
+
+    /** Invalidates bucket metadata by ID, even when the path is no longer cached. */
+    public void invalidPhysicalTableBucketMetaByIds(
+            @Nullable Collection<Long> tableIds,
+            @Nullable Collection<TablePartition> tablePartitions) {
+        synchronized (clusterLock) {
+            if (invalidatedIdsDuringUpdate != null) {
+                if (tableIds != null) {
+                    tableIds.forEach(
+                            id -> invalidatedIdsDuringUpdate.add(TableOrPartition.ofTable(id)));
+                }
+                if (tablePartitions != null) {
+                    tablePartitions.forEach(
+                            partition ->
+                                    invalidatedIdsDuringUpdate.add(
+                                            TableOrPartition.ofPartition(
+                                                    partition.getPartitionId())));
+                }
+            }
+            invalidPhysicalTableBucketMeta(getPhysicalTablePathByIds(tableIds, tablePartitions));
         }
     }
 
@@ -471,7 +545,18 @@ public class MetadataUpdater {
     public void invalidPhysicalTableBucketAndPartitionMeta(
             Set<PhysicalTablePath> physicalTablesToInvalid) {
         if (!physicalTablesToInvalid.isEmpty()) {
-            cluster = cluster.invalidPhysicalTableBucketAndPartitionMeta(physicalTablesToInvalid);
+            synchronized (clusterLock) {
+                cluster =
+                        cluster.invalidPhysicalTableBucketAndPartitionMeta(physicalTablesToInvalid);
+                recordInvalidation(physicalTablesToInvalid);
+            }
+        }
+    }
+
+    @GuardedBy("clusterLock")
+    private void recordInvalidation(Set<PhysicalTablePath> physicalTables) {
+        if (invalidatedDuringUpdate != null) {
+            invalidatedDuringUpdate.addAll(physicalTables);
         }
     }
 

@@ -28,7 +28,6 @@ import org.apache.fluss.exception.InvalidMetadataException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.RetriableException;
-import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
@@ -621,9 +620,7 @@ class LookupSender implements Runnable {
     }
 
     private void invalidTableOrPartitions(TableOrPartitions tableOrPartitions) {
-        Set<PhysicalTablePath> physicalTablePaths =
-                metadataUpdater.getPhysicalTablePathByIds(
-                        tableOrPartitions.tableIds, tableOrPartitions.tablePartitions);
-        metadataUpdater.invalidPhysicalTableBucketMeta(physicalTablePaths);
+        metadataUpdater.invalidPhysicalTableBucketMetaByIds(
+                tableOrPartitions.tableIds, tableOrPartitions.tablePartitions);
     }
 }
