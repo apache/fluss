@@ -20,11 +20,15 @@ package org.apache.fluss.lake.lance.utils;
 import org.apache.fluss.lake.lance.tiering.ShadedArrowBatchWriter;
 import org.apache.fluss.row.GenericArray;
 import org.apache.fluss.row.GenericRow;
+import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
+import org.apache.arrow.vector.DecimalVector;
+import org.apache.arrow.vector.TimeStampMicroVector;
+import org.apache.arrow.vector.TimeStampMilliVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.complex.FixedSizeListVector;
 import org.apache.arrow.vector.types.pojo.Schema;
@@ -32,6 +36,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -191,6 +197,99 @@ class ArrowDataConverterTest {
                 assertThat((Float) values2.get(0)).isEqualTo(7.0f);
                 assertThat((Float) values2.get(1)).isEqualTo(8.0f);
                 assertThat((Float) values2.get(2)).isEqualTo(9.0f);
+            }
+        }
+    }
+
+    @Test
+    void testConvertDecimalColumn() {
+        RowType rowType = DataTypes.ROW(DataTypes.FIELD("amount", DataTypes.DECIMAL(20, 4)));
+        Schema nonShadedSchema = LanceArrowUtils.toArrowSchema(rowType);
+
+        BigDecimal[] data = {
+            new BigDecimal("1234567890.1234"),
+            new BigDecimal("-9876543210.9876"),
+            new BigDecimal("0.0001")
+        };
+
+        try (ShadedArrowBatchWriter writer = new ShadedArrowBatchWriter(shadedAllocator, rowType)) {
+            for (BigDecimal value : data) {
+                GenericRow row = new GenericRow(1);
+                row.setField(0, org.apache.fluss.row.Decimal.fromBigDecimal(value, 20, 4));
+                writer.writeRow(row);
+            }
+            writer.finish();
+
+            try (VectorSchemaRoot nonShadedRoot =
+                    ArrowDataConverter.convertToNonShaded(
+                            writer.getShadedRoot(), nonShadedAllocator, nonShadedSchema)) {
+                assertThat(nonShadedRoot.getRowCount()).isEqualTo(data.length);
+                DecimalVector vector = (DecimalVector) nonShadedRoot.getVector("amount");
+                for (int i = 0; i < data.length; i++) {
+                    // BigDecimal.compareTo ignores scale representation but preserves value.
+                    assertThat(vector.getObject(i)).isEqualByComparingTo(data[i]);
+                }
+            }
+        }
+    }
+
+    @Test
+    void testConvertTimestampLtzMillisColumn() {
+        RowType rowType = DataTypes.ROW(DataTypes.FIELD("event_time", DataTypes.TIMESTAMP_LTZ(3)));
+        Schema nonShadedSchema = LanceArrowUtils.toArrowSchema(rowType);
+
+        long[] millis = {1_700_000_000_000L, 1_700_000_001_000L, 1_700_000_002_500L};
+
+        try (ShadedArrowBatchWriter writer = new ShadedArrowBatchWriter(shadedAllocator, rowType)) {
+            for (long ms : millis) {
+                GenericRow row = new GenericRow(1);
+                row.setField(0, TimestampLtz.fromEpochMillis(ms));
+                writer.writeRow(row);
+            }
+            writer.finish();
+
+            try (VectorSchemaRoot nonShadedRoot =
+                    ArrowDataConverter.convertToNonShaded(
+                            writer.getShadedRoot(), nonShadedAllocator, nonShadedSchema)) {
+                assertThat(nonShadedRoot.getRowCount()).isEqualTo(millis.length);
+                TimeStampMilliVector vector =
+                        (TimeStampMilliVector) nonShadedRoot.getVector("event_time");
+                for (int i = 0; i < millis.length; i++) {
+                    assertThat(vector.get(i)).isEqualTo(millis[i]);
+                }
+            }
+        }
+    }
+
+    @Test
+    void testConvertTimestampLtzMicrosColumn() {
+        RowType rowType = DataTypes.ROW(DataTypes.FIELD("event_time", DataTypes.TIMESTAMP_LTZ(6)));
+        Schema nonShadedSchema = LanceArrowUtils.toArrowSchema(rowType);
+
+        long[] millis = {1_700_000_000_000L, 1_700_000_000_123L};
+        int[] nanoOfMillis = {456_000, 789_000};
+
+        try (ShadedArrowBatchWriter writer = new ShadedArrowBatchWriter(shadedAllocator, rowType)) {
+            for (int i = 0; i < millis.length; i++) {
+                GenericRow row = new GenericRow(1);
+                row.setField(
+                        0,
+                        TimestampLtz.fromInstant(
+                                Instant.ofEpochMilli(millis[i]).plusNanos(nanoOfMillis[i])));
+                writer.writeRow(row);
+            }
+            writer.finish();
+
+            try (VectorSchemaRoot nonShadedRoot =
+                    ArrowDataConverter.convertToNonShaded(
+                            writer.getShadedRoot(), nonShadedAllocator, nonShadedSchema)) {
+                assertThat(nonShadedRoot.getRowCount()).isEqualTo(millis.length);
+                TimeStampMicroVector vector =
+                        (TimeStampMicroVector) nonShadedRoot.getVector("event_time");
+                for (int i = 0; i < millis.length; i++) {
+                    long expectedMicros = millis[i] * 1_000L + nanoOfMillis[i] / 1_000L;
+                    assertThat(vector.get(i)).isEqualTo(expectedMicros);
+                }
             }
         }
     }
