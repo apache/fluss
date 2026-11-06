@@ -326,7 +326,7 @@ class TieringCommitOperatorTest extends FlinkTestBase {
                             failingTable, new TableBucket(failingTableId, 0), 1, 1, 1, 1));
             awaitCommitEvent();
             assertThat(lastSourceEvent()).isInstanceOf(FailedTieringEvent.class);
-            assertThat(committerOperator.getConsecutiveCommitFailures(failingTable))
+            assertThat(committerOperator.getConsecutiveCommitFailures(failingTableId))
                     .isEqualTo(round);
         }
 
@@ -337,8 +337,8 @@ class TieringCommitOperatorTest extends FlinkTestBase {
                         healthyTable, new TableBucket(healthyTableId, 0), 1, 1, 1, 1));
         awaitCommitEvent();
         assertThat(lastSourceEvent()).isInstanceOf(FinishedTieringEvent.class);
-        assertThat(committerOperator.getConsecutiveCommitFailures(healthyTable)).isZero();
-        assertThat(committerOperator.getConsecutiveCommitFailures(failingTable))
+        assertThat(committerOperator.getConsecutiveCommitFailures(healthyTableId)).isZero();
+        assertThat(committerOperator.getConsecutiveCommitFailures(failingTableId))
                 .isEqualTo(CONSECUTIVE_FAILURES_TO_LOG_ERROR);
 
         // A successful round of the table itself resets it.
@@ -347,7 +347,40 @@ class TieringCommitOperatorTest extends FlinkTestBase {
                         failingTable, new TableBucket(failingTableId, 0), 1, 1, 1, 1));
         awaitCommitEvent();
         assertThat(lastSourceEvent()).isInstanceOf(FinishedTieringEvent.class);
-        assertThat(committerOperator.getConsecutiveCommitFailures(failingTable)).isZero();
+        assertThat(committerOperator.getConsecutiveCommitFailures(failingTableId)).isZero();
+    }
+
+    @Test
+    void testRemovesCommitFailuresOfDroppedTables() throws Exception {
+        TablePath droppedTable = TablePath.of("fluss", "commit_failures_dropped");
+        TablePath recreatedTable = TablePath.of("fluss", "commit_failures_recreated");
+        TablePath failingTable = TablePath.of("fluss", "commit_failures_still_failing");
+        long droppedTableId = createTable(droppedTable, DEFAULT_PK_TABLE_DESCRIPTOR);
+        long recreatedTableId = createTable(recreatedTable, DEFAULT_PK_TABLE_DESCRIPTOR);
+        long failingTableId = createTable(failingTable, DEFAULT_PK_TABLE_DESCRIPTOR);
+        TestingLakeTieringFactory.TestingLakeCommitter lakeCommitter =
+                new TestingLakeTieringFactory.TestingLakeCommitter();
+        reopenCommitter(new TestingLakeTieringFactory(lakeCommitter), new Configuration());
+        lakeCommitter.setCommitFailure(new IOException("Lake commit rejected"));
+        failRound(droppedTable, droppedTableId);
+        failRound(recreatedTable, recreatedTableId);
+
+        // Neither table gets another round to reset its count once dropped, so the next table
+        // that starts failing triggers the cleanup.
+        admin.dropTable(droppedTable, false).get();
+        admin.dropTable(recreatedTable, false).get();
+        createTable(recreatedTable, DEFAULT_PK_TABLE_DESCRIPTOR);
+        failRound(failingTable, failingTableId);
+        CommonTestUtils.waitUntil(
+                () -> {
+                    while (mailboxExecutor.tryYield()) {}
+                    return committerOperator.getConsecutiveCommitFailures(droppedTableId) == 0
+                            && committerOperator.getConsecutiveCommitFailures(recreatedTableId)
+                                    == 0;
+                },
+                Duration.ofSeconds(10),
+                "Failure counts of dropped tables were not removed.");
+        assertThat(committerOperator.getConsecutiveCommitFailures(failingTableId)).isOne();
     }
 
     @Test
@@ -900,6 +933,14 @@ class TieringCommitOperatorTest extends FlinkTestBase {
                     mailbox::hasMail, Duration.ofSeconds(10), "Missing commit callback");
             mailboxExecutor.yield();
         }
+    }
+
+    private void failRound(TablePath tablePath, long tableId) throws Exception {
+        committerOperator.processElement(
+                createTableBucketWriteResultStreamRecord(
+                        tablePath, new TableBucket(tableId, 0), 1, 1, 1, 1));
+        awaitCommitEvent();
+        assertThat(lastSourceEvent()).isInstanceOf(FailedTieringEvent.class);
     }
 
     private Object lastSourceEvent() {
