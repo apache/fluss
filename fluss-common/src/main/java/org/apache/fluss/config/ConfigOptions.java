@@ -1165,12 +1165,13 @@ public class ConfigOptions {
                     .defaultValue(8)
                     .withDescription(
                             "Number of reader worker threads in the server-global index replicator pool. "
+                                    + "Also bounds concurrently admitted source read/construction cycles. "
                                     + "The value must be positive.");
 
     public static final ConfigOption<MemorySize> INDEX_REPLICATION_SOURCE_MAX_BYTES =
             key("index.replication.source.max-bytes")
                     .memoryType()
-                    .defaultValue(MemorySize.parse("2mb"))
+                    .defaultValue(MemorySize.parse("8mb"))
                     .withDescription(
                             "Preferred maximum source WAL bytes read per index replication window. "
                                     + "The first complete log record batch may exceed this limit to ensure progress. "
@@ -1180,27 +1181,22 @@ public class ConfigOptions {
     public static final ConfigOption<Integer> INDEX_REPLICATION_SENDER_THREADS =
             key("index.replication.sender.threads")
                     .intType()
-                    .defaultValue(2)
+                    .defaultValue(1)
                     .withDescription(
                             "Number of sender worker threads that dispatch derived index batches. "
                                     + "The value must be positive.");
 
-    public static final ConfigOption<Duration> INDEX_REPLICATION_RETRY_BACKOFF =
-            key("index.replication.retry.backoff")
+    public static final ConfigOption<Duration> INDEX_REPLICATION_RETRY_BACKOFF_MAX =
+            key("index.replication.retry-backoff-max")
                     .durationType()
-                    .defaultValue(Duration.ofMillis(100))
+                    .defaultValue(Duration.ofSeconds(10))
                     .withDescription(
-                            "The base backoff before retrying index source reads, window construction or batch sends. "
-                                    + "The value must be positive and must not exceed 10 seconds.");
-
-    public static final ConfigOption<MemorySize> INDEX_REPLICATION_MAIN_BUCKET_BUFFER_MAX_BYTES =
-            key("index.replication.buffer.max-bytes-per-main-bucket")
-                    .memoryType()
-                    .defaultValue(MemorySize.parse("64mb"))
-                    .withDescription(
-                            "Soft backpressure threshold for retained index payload bytes per leader main-table bucket. "
-                                    + "A complete window may exceed this threshold. "
-                                    + "The value must be positive.");
+                            "The maximum delay before retrying index source reads, window construction or batch sends. "
+                                    + "Retries start at 100ms, double after consecutive failures and use 20% jitter, "
+                                    + "without exceeding this maximum. Setting this to 100ms uses a fixed delay without jitter. "
+                                    + "Replication progress resets the backoff; yielding payload memory does not. "
+                                    + "This does not change the 10-second soft payload-retention target. "
+                                    + "Must be between 100ms and 2147483647ms.");
 
     public static final ConfigOption<MemorySize> INDEX_REPLICATION_BUFFER_MAX_BYTES =
             key("index.replication.buffer.max-bytes")
@@ -2546,13 +2542,6 @@ public class ConfigOptions {
                     .defaultValue(Duration.ofSeconds(5))
                     .withDescription(
                             "The maximum time to wait for all replicas to acknowledge an offset commit.");
-    public static final ConfigOption<Long> TABLE_INDEX_META_MAIN_TABLE_ID =
-            key("table.index-meta.main-table-id")
-                    .longType()
-                    .noDefaultValue()
-                    .withDescription(
-                            "The main table id associated with an internal Index Table. "
-                                    + "This option is managed by the system.");
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for Kv

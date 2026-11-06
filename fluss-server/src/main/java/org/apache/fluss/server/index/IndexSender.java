@@ -106,6 +106,9 @@ public final class IndexSender implements AutoCloseable {
     private final LeaderResolver leaderResolver;
     private final Function<Integer, TabletServerGateway> gatewayFactory;
     private final TabletServerMetricGroup metrics;
+    /** Timeout used by replication requests and their exact prepublication size check. */
+    public static final long DEFAULT_REQUEST_TIMEOUT_MS = 30_000L;
+
     private final SenderWorker[] workers;
     private final AtomicBoolean bucketRescanRequired = new AtomicBoolean();
 
@@ -813,7 +816,7 @@ public final class IndexSender implements AutoCloseable {
         }
     }
 
-    private static RequestSizeAccumulator newRequestSizeAccumulator(
+    static RequestSizeAccumulator newRequestSizeAccumulator(
             long tableId, long sourceTableId, long requestTimeoutMs) {
         return new RequestSizeAccumulator(tableId, sourceTableId, requestTimeoutMs);
     }

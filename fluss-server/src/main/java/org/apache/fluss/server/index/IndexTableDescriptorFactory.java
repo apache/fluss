@@ -115,7 +115,7 @@ public final class IndexTableDescriptorFactory {
                         .kvFormat(KvFormat.COMPACTED)
                         .logFormat(LogFormat.COMPACTED)
                         .property(ConfigOptions.TABLE_CHANGELOG_IMAGE, ChangelogImage.WAL)
-                        .property(ConfigOptions.TABLE_INDEX_META_MAIN_TABLE_ID, mainTableId)
+                        .property(IndexTableUtils.TABLE_INDEX_META_MAIN_TABLE_ID, mainTableId)
                         .property(
                                 ConfigOptions.TABLE_KV_FORMAT_VERSION,
                                 ConfigOptions.KV_FORMAT_VERSION_2);
