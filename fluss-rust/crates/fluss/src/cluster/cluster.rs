@@ -584,6 +584,7 @@ mod tests {
     use super::*;
     use crate::metadata::{DataTypes, Schema};
     use crate::proto::{PbPartitionMetadata, PbServerNode, PbTableMetadata, PbTablePath};
+    use crate::test_utils::{pb_bucket, pb_metadata_response, pb_table_metadata};
 
     fn make_coordinator() -> ServerNode {
         ServerNode::new(
@@ -1071,73 +1072,6 @@ mod tests {
             cluster.bucket_count(TableOrPartition::Partition(20)),
             Some(3)
         );
-    }
-
-    fn pb_table_metadata(
-        table_name: &str,
-        table_id: TableId,
-        partitioned: bool,
-        bucket_metadata: Vec<PbBucketMetadata>,
-    ) -> PbTableMetadata {
-        let mut descriptor = TableDescriptor::builder().schema(
-            Schema::builder()
-                .column("id", DataTypes::int())
-                .column("p", DataTypes::string())
-                .build()
-                .unwrap(),
-        );
-        if partitioned {
-            descriptor = descriptor.partitioned_by(vec!["p"]);
-        }
-        let descriptor = descriptor
-            .distributed_by(Some(4), vec!["id".to_string()])
-            .build()
-            .unwrap();
-        PbTableMetadata {
-            table_path: PbTablePath {
-                database_name: "db".to_string(),
-                table_name: table_name.to_string(),
-            },
-            table_id,
-            schema_id: 1,
-            table_json: serde_json::to_vec(&descriptor.serialize_json().unwrap()).unwrap(),
-            bucket_metadata,
-            created_time: 0,
-            modified_time: 0,
-            remote_data_dir: None,
-            bucket_count_epoch: None,
-            bucket_count: None,
-        }
-    }
-
-    fn pb_bucket(bucket_id: i32) -> PbBucketMetadata {
-        PbBucketMetadata {
-            bucket_id,
-            leader_id: Some(1),
-            replica_id: vec![1],
-            leader_epoch: None,
-            bucket_epoch: None,
-            isr: vec![1],
-        }
-    }
-
-    fn pb_metadata_response(
-        table_metadata: Vec<PbTableMetadata>,
-        partition_metadata: Vec<PbPartitionMetadata>,
-    ) -> MetadataResponse {
-        MetadataResponse {
-            coordinator_server: None,
-            tablet_servers: vec![PbServerNode {
-                node_id: 1,
-                host: "ts1".to_string(),
-                port: 9123,
-                listeners: None,
-                rack: None,
-                server_tag: None,
-            }],
-            table_metadata,
-            partition_metadata,
-        }
     }
 
     #[test]
