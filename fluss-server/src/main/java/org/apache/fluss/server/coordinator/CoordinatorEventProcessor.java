@@ -21,8 +21,8 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.cluster.rebalance.RebalanceInfo;
 import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
-import org.apache.fluss.cluster.rebalance.RebalanceProgress;
 import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
@@ -59,6 +59,7 @@ import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotResponse;
 import org.apache.fluss.rpc.messages.CommitRemoteLogManifestResponse;
 import org.apache.fluss.rpc.messages.ControlledShutdownResponse;
 import org.apache.fluss.rpc.messages.ListRebalanceProgressResponse;
+import org.apache.fluss.rpc.messages.ListRebalancesResponse;
 import org.apache.fluss.rpc.messages.PbCommitLakeTableSnapshotRespForTable;
 import org.apache.fluss.rpc.messages.RebalanceResponse;
 import org.apache.fluss.rpc.messages.RemoveServerTagByRackResponse;
@@ -85,6 +86,7 @@ import org.apache.fluss.server.coordinator.event.DropTableEvent;
 import org.apache.fluss.server.coordinator.event.EventProcessor;
 import org.apache.fluss.server.coordinator.event.FencedCoordinatorEvent;
 import org.apache.fluss.server.coordinator.event.ListRebalanceProgressEvent;
+import org.apache.fluss.server.coordinator.event.ListRebalancesEvent;
 import org.apache.fluss.server.coordinator.event.NewCoordinatorEvent;
 import org.apache.fluss.server.coordinator.event.NewTabletServerEvent;
 import org.apache.fluss.server.coordinator.event.NotifyKvSnapshotOffsetEvent;
@@ -173,6 +175,7 @@ import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.Repl
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.ReplicaMigrationStarted;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeAdjustIsrResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeListRebalanceProgressResponse;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeListRebalancesResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeRebalanceResponse;
 import static org.apache.fluss.utils.concurrent.FutureUtils.completeFromCallable;
 
@@ -347,11 +350,13 @@ public class CoordinatorEventProcessor implements EventProcessor {
         // start table manager
         tableManager.startup();
 
+        // Queue the rebalance recovery before the event thread starts, so a client request that
+        // arrives from now on is processed after the recovered task.
+        rebalanceManager.startup();
+
         // start the event manager which will then process the event
         coordinatorEventManager.start();
 
-        // start rebalance manager.
-        rebalanceManager.startup();
         rebalanceManager.start();
     }
 
@@ -801,11 +806,16 @@ public class CoordinatorEventProcessor implements EventProcessor {
                     rebalanceEvent.getRespCallback(), () -> processRebalance(rebalanceEvent));
         } else if (event instanceof RecoverRebalanceEvent) {
             RecoverRebalanceEvent recoverRebalanceEvent = (RecoverRebalanceEvent) event;
-            RebalanceTask rebalanceTask = recoverRebalanceEvent.getRebalanceTask();
-            rebalanceManager.registerRebalance(
-                    rebalanceTask.getRebalanceId(),
-                    rebalanceTask.getExecutePlan(),
-                    rebalanceTask.getRebalanceStatus());
+            if (rebalanceManager.getRebalanceId() == null) {
+                rebalanceManager.registerRebalance(recoverRebalanceEvent.getRebalanceTask());
+            } else {
+                // The RPC server is up before startup() runs, so a rebalance request queued in
+                // that window already replaced the znode and the recovered task is stale.
+                LOG.warn(
+                        "Skip recovering rebalance task {} because rebalance task {} is current.",
+                        recoverRebalanceEvent.getRebalanceTask().getRebalanceId(),
+                        rebalanceManager.getRebalanceId());
+            }
         } else if (event instanceof CancelRebalanceEvent) {
             CancelRebalanceEvent cancelRebalanceEvent = (CancelRebalanceEvent) event;
             completeFromCallable(
@@ -832,11 +842,9 @@ public class CoordinatorEventProcessor implements EventProcessor {
                         resumeDropEvent.getTableId(), resumeDropEvent.getPartitionId());
             }
         } else if (event instanceof ListRebalanceProgressEvent) {
-            ListRebalanceProgressEvent listRebalanceProgressEvent =
-                    (ListRebalanceProgressEvent) event;
-            completeFromCallable(
-                    listRebalanceProgressEvent.getRespCallback(),
-                    () -> processListRebalanceProgress(listRebalanceProgressEvent));
+            processListRebalanceProgress((ListRebalanceProgressEvent) event);
+        } else if (event instanceof ListRebalancesEvent) {
+            processListRebalances((ListRebalancesEvent) event);
         } else if (event instanceof AccessContextEvent) {
             AccessContextEvent<?> accessContextEvent = (AccessContextEvent<?>) event;
             processAccessContext(accessContextEvent);
@@ -1667,10 +1675,9 @@ public class CoordinatorEventProcessor implements EventProcessor {
                     rebalanceManager.generateRebalanceTask(rebalanceEvent.getGoalsByPriority());
 
             // 2. execute rebalance plan.
-            Map<TableBucket, RebalancePlanForBucket> executePlan = rebalanceTask.getExecutePlan();
-            zooKeeperClient.registerRebalanceTask(rebalanceTask);
-            rebalanceManager.registerRebalance(
-                    rebalanceTask.getRebalanceId(), executePlan, RebalanceStatus.NOT_STARTED);
+            zooKeeperClient.registerRebalanceTask(
+                    rebalanceTask, coordinatorContext.getCoordinatorZkVersion());
+            rebalanceManager.registerRebalance(rebalanceTask);
         } catch (Exception e) {
             throw new RebalanceFailureException(
                     String.format(
@@ -1693,11 +1700,52 @@ public class CoordinatorEventProcessor implements EventProcessor {
         return response;
     }
 
-    private ListRebalanceProgressResponse processListRebalanceProgress(
-            ListRebalanceProgressEvent event) {
-        RebalanceProgress rebalanceProgress =
-                rebalanceManager.listRebalanceProgress(event.getRabalanceId());
-        return makeListRebalanceProgressResponse(rebalanceProgress);
+    private void processListRebalanceProgress(ListRebalanceProgressEvent event) {
+        CompletableFuture<ListRebalanceProgressResponse> callback = event.getRespCallback();
+        String rebalanceId = event.getRabalanceId();
+        try {
+            if (!rebalanceManager.isHistorical(rebalanceId)) {
+                callback.complete(
+                        makeListRebalanceProgressResponse(
+                                rebalanceManager.listRebalanceProgress(rebalanceId)));
+                return;
+            }
+            // A historical id is read from ZooKeeper, so read it on the ioExecutor rather than
+            // block the event loop (same as processListRebalances).
+            ioExecutor.execute(
+                    () ->
+                            completeFromCallable(
+                                    callback,
+                                    () ->
+                                            makeListRebalanceProgressResponse(
+                                                    rebalanceManager.historicalRebalanceProgress(
+                                                            rebalanceId))));
+        } catch (Throwable t) {
+            callback.completeExceptionally(t);
+        }
+    }
+
+    private void processListRebalances(ListRebalancesEvent event) {
+        CompletableFuture<ListRebalancesResponse> callback = event.getRespCallback();
+        try {
+            // Snapshot the current rebalance on the event thread (where it mutates), then read the
+            // ZK-backed history on the ioExecutor: this involves IO operation (ZK), so we must not
+            // block the event loop on it.
+            RebalanceInfo currentRebalance = rebalanceManager.currentRebalanceInfo();
+            ioExecutor.execute(
+                    () ->
+                            completeFromCallable(
+                                    callback,
+                                    () ->
+                                            makeListRebalancesResponse(
+                                                    rebalanceManager.listRebalances(
+                                                            currentRebalance))));
+        } catch (Throwable t) {
+            // On shutdown the snapshot throws (manager closed) and execute() throws
+            // RejectedExecutionException. The event manager only logs escaping throwables, so
+            // completing here is what stops the client blocking until the RPC times out.
+            callback.completeExceptionally(t);
+        }
     }
 
     /**

@@ -41,6 +41,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.apache.fluss.testutils.common.FlussAssertions.assertThatFuture;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatNoException;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for the utility methods in {@link FutureUtils}. */
 class FutureUtilsTest {
@@ -546,5 +547,22 @@ class FutureUtilsTest {
 
         Runnable catchingRunnable = FutureUtils.catchingAndLoggingThrowables(task);
         assertThatNoException().isThrownBy(catchingRunnable::run);
+    }
+
+    @Test
+    void testCompleteFromCallableCompletesFutureOnError() {
+        CompletableFuture<Void> future = new CompletableFuture<>();
+        StackOverflowError error = new StackOverflowError("test");
+
+        assertThatThrownBy(
+                        () ->
+                                FutureUtils.completeFromCallable(
+                                        future,
+                                        () -> {
+                                            throw error;
+                                        }))
+                .isSameAs(error);
+        assertThat(future).isCompletedExceptionally();
+        assertThatThrownBy(future::get).hasCause(error);
     }
 }
