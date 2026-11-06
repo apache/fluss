@@ -23,6 +23,8 @@ import org.apache.fluss.plugin.Plugin;
 
 import java.io.IOException;
 import java.net.URI;
+import java.util.Collections;
+import java.util.Set;
 
 /**
  * A plugin to create file systems.
@@ -35,10 +37,16 @@ public interface FileSystemPlugin extends Plugin {
     /** Gets the scheme of the file system created by this plugin. */
     String getScheme();
 
+    /** Gets schemes this plugin supports when no plugin declares them as its primary scheme. */
+    default Set<String> getFallbackSchemes() {
+        return Collections.emptySet();
+    }
+
     /**
      * Creates a new file system for the given file system URI. The URI describes the type of file
      * system (via its scheme) and optionally the authority (for example the host) of the file
-     * system.
+     * system. The returned file system must support paths with this scheme, including fallback
+     * schemes.
      *
      * @param fsUri The URI that describes the file system.
      * @param configuration the configuration used to create the file system.
