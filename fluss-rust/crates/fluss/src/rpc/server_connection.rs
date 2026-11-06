@@ -1732,6 +1732,28 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_metadata_version_negotiates_with_legacy_servers() {
+        for server_max in [0, 1] {
+            let negotiated = server_api_versions(&[PbApiVersion {
+                api_key: 1024,
+                min_version: 0,
+                max_version: server_max,
+            }]);
+            let expected = if cfg!(feature = "kv-snapshot") {
+                server_max as i16
+            } else {
+                0
+            };
+            assert_eq!(
+                negotiated
+                    .highest_available_version(ApiKey::GetKvSnapshotMetadata)
+                    .unwrap(),
+                ApiVersion(expected),
+            );
+        }
+    }
+
+    #[test]
     fn server_api_versions_returns_error_for_out_of_range_api_key() {
         let api_key = i32::from(i16::MAX) + 1;
         let error = ServerApiVersions::new(&[PbApiVersion {

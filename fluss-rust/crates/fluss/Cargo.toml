@@ -41,6 +41,7 @@ storage-fs = ["opendal/services-fs"]
 storage-s3 = ["opendal/services-s3"]
 storage-oss = ["opendal/services-oss"]
 integration_tests = []
+kv-snapshot = ["dep:rocksdb"]
 
 [dependencies]
 arrow = { workspace = true }
@@ -76,6 +77,7 @@ scopeguard = "1.2.0"
 delegate = "0.13.5"
 strum = "0.26"
 strum_macros = "0.26"
+rocksdb = { version = "0.24", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 jiff = { workspace = true, features = ["js"] }

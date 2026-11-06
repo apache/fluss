@@ -136,17 +136,19 @@ pub struct Config {
     #[arg(long, default_value_t = DEFAULT_PREFETCH_NUM)]
     pub scanner_remote_log_prefetch_num: usize,
 
-    /// Maximum concurrent remote log downloads
-    /// Default: 3 (matching Java REMOTE_FILE_DOWNLOAD_THREAD_NUM)
+    /// Maximum concurrent remote log downloads per scanner and KV snapshot file downloads
+    /// shared by a connection. These two download paths have separate concurrency budgets.
+    /// Default: 3 (matching Java REMOTE_FILE_DOWNLOAD_THREAD_NUM).
+    /// With `kv-snapshot`, must not exceed `tokio::sync::Semaphore::MAX_PERMITS`.
     #[arg(long, default_value_t = DEFAULT_DOWNLOAD_THREADS)]
     pub remote_file_download_thread_num: usize,
 
-    /// Intra-file remote log read concurrency for each remote segment download.
+    /// Intra-file read concurrency for remote log and KV snapshot downloads.
     /// Download path always uses streaming reader.
     #[arg(long, default_value_t = DEFAULT_SCANNER_REMOTE_LOG_READ_CONCURRENCY)]
     pub scanner_remote_log_read_concurrency: usize,
 
-    /// Parent directory for downloaded remote logs. None uses the OS temporary directory plus `/fluss`.
+    /// Parent directory for downloaded remote logs and KV snapshots. None uses the OS temporary directory plus `/fluss`.
     /// Missing parent directories are created when a remote file is downloaded.
     #[arg(long)]
     pub scanner_io_tmp_dir: Option<String>,
@@ -463,6 +465,13 @@ impl Config {
         if self.remote_file_download_thread_num == 0 {
             return Err("remote_file_download_thread_num must be > 0".to_string());
         }
+        #[cfg(feature = "kv-snapshot")]
+        if self.remote_file_download_thread_num > tokio::sync::Semaphore::MAX_PERMITS {
+            return Err(format!(
+                "remote_file_download_thread_num must be <= {} with kv-snapshot enabled",
+                tokio::sync::Semaphore::MAX_PERMITS
+            ));
+        }
         // scanner_log_max_poll_records: validation intentionally omitted to match Java behavior.
         // Java allows 0 — tracked in https://github.com/apache/fluss/issues/3068
         if self.scanner_log_fetch_min_bytes <= 0 {
@@ -656,6 +665,18 @@ mod tests {
             remote_file_download_thread_num: 0,
             ..Config::default()
         };
+        assert!(config.validate_scanner().is_err());
+    }
+
+    #[test]
+    #[cfg(feature = "kv-snapshot")]
+    fn test_remote_file_download_thread_num_upper_bound() {
+        let mut config = Config {
+            remote_file_download_thread_num: tokio::sync::Semaphore::MAX_PERMITS,
+            ..Config::default()
+        };
+        assert!(config.validate_scanner().is_ok());
+        config.remote_file_download_thread_num += 1;
         assert!(config.validate_scanner().is_err());
     }
 
