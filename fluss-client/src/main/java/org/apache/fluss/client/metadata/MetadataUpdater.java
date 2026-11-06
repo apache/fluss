@@ -32,6 +32,7 @@ import org.apache.fluss.exception.RetriableException;
 import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.GatewayClientProxy;
@@ -48,6 +49,7 @@ import javax.annotation.Nullable;
 import java.net.InetSocketAddress;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -170,6 +172,42 @@ public class MetadataUpdater {
                         .collect(Collectors.toSet());
         if (!needUpdateTablePaths.isEmpty()) {
             updateMetadata(needUpdateTablePaths, null, null);
+        }
+    }
+
+    /**
+     * Merges the table mapping from an Admin response without requesting metadata again,
+     * invalidating cached routing if the table has been replaced.
+     */
+    public void ensureTableMapping(TableInfo tableInfo) {
+        synchronized (this) {
+            Cluster currentCluster = cluster;
+            TablePath tablePath = tableInfo.getTablePath();
+            Optional<Long> currentTableId = currentCluster.getTableId(tablePath);
+            if (currentTableId.filter(id -> id == tableInfo.getTableId()).isPresent()) {
+                return;
+            }
+            if (currentTableId.isPresent()) {
+                Set<PhysicalTablePath> pathsToInvalidate =
+                        new HashSet<>(currentCluster.getBucketLocationsByPath().keySet());
+                pathsToInvalidate.addAll(currentCluster.getPartitionIdByPath().keySet());
+                pathsToInvalidate.removeIf(path -> !path.getTablePath().equals(tablePath));
+                pathsToInvalidate.add(PhysicalTablePath.of(tablePath));
+                currentCluster =
+                        currentCluster.invalidPhysicalTableBucketAndPartitionMeta(
+                                pathsToInvalidate);
+            }
+            Map<TablePath, Long> tableIds = new HashMap<>(currentCluster.getTableIdByPath());
+            tableIds.put(tablePath, tableInfo.getTableId());
+            cluster =
+                    new Cluster(
+                            new HashMap<>(currentCluster.getAliveTabletServers()),
+                            currentCluster.getCoordinatorServer(),
+                            new HashMap<>(currentCluster.getBucketLocationsByPath()),
+                            tableIds,
+                            new HashMap<>(currentCluster.getPartitionIdByPath()),
+                            new HashMap<>(currentCluster.getBucketCountByTableOrPartition()),
+                            new HashMap<>(currentCluster.getBucketCountEpochByTableId()));
         }
     }
 

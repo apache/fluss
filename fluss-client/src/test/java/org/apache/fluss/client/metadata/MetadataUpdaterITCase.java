@@ -30,6 +30,9 @@ import org.apache.fluss.client.table.writer.AppendWriter;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.metadata.PartitionSpec;
+import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
@@ -42,6 +45,7 @@ import org.apache.fluss.server.coordinator.TestCoordinatorGateway;
 import org.apache.fluss.server.metadata.TableMetadata;
 import org.apache.fluss.server.tablet.TabletServer;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
@@ -63,6 +67,7 @@ import static org.apache.fluss.client.utils.MetadataUtils.sendMetadataRequestAnd
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
 import static org.apache.fluss.testutils.DataTestUtils.row;
+import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** IT test for update metadata of {@link MetadataUpdater}. */
@@ -219,6 +224,76 @@ class MetadataUpdaterITCase {
                             null,
                             null,
                             null);
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testFirstWriteWithOnlyTableMapping(boolean partitioned) throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "mapping_only_" + partitioned);
+        TableDescriptor.Builder builder =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.INT())
+                                        .column("region", DataTypes.STRING())
+                                        .build())
+                        .distributedBy(1);
+        if (partitioned) {
+            builder.partitionedBy("region");
+        }
+        try (Connection connection =
+                        ConnectionFactory.createConnection(
+                                FLUSS_CLUSTER_EXTENSION.getClientConfig());
+                Admin admin = connection.getAdmin()) {
+            admin.createTable(tablePath, builder.build().withReplicationFactor(1), false).get();
+            if (partitioned) {
+                admin.createPartition(
+                                tablePath,
+                                new PartitionSpec(Collections.singletonMap("region", "p1")),
+                                false)
+                        .get();
+            }
+            try (Table table = connection.getTable(tablePath)) {
+                MetadataUpdater updater = ((FlussConnection) connection).getMetadataUpdater();
+                assertThat(updater.getCluster().getTableId(tablePath))
+                        .hasValue(table.getTableInfo().getTableId());
+                assertThat(updater.getCluster().getBucketLocationsByPath()).isEmpty();
+                table.newAppend().createWriter().append(row(1, "p1")).get();
+                try (Connection readerConnection =
+                                ConnectionFactory.createConnection(
+                                        FLUSS_CLUSTER_EXTENSION.getClientConfig());
+                        Table readerTable = readerConnection.getTable(tablePath);
+                        LogScanner scanner = readerTable.newScan().createLogScanner()) {
+                    assertThat(
+                                    ((FlussConnection) readerConnection)
+                                            .getMetadataUpdater()
+                                            .getCluster()
+                                            .getBucketLocationsByPath())
+                            .isEmpty();
+                    if (partitioned) {
+                        scanner.subscribeFromBeginning(
+                                updater.getPartitionIdOrElseThrow(
+                                        PhysicalTablePath.of(tablePath, "p1")),
+                                0);
+                    } else {
+                        scanner.subscribeFromBeginning(0);
+                    }
+                    waitUntil(
+                            () -> {
+                                ScanRecords records = scanner.poll(Duration.ofMillis(100));
+                                if (records.isEmpty()) {
+                                    return false;
+                                }
+                                assertThat(records.count()).isEqualTo(1);
+                                assertThat(records.iterator().next().getRow().getInt(0))
+                                        .isEqualTo(1);
+                                return true;
+                            },
+                            Duration.ofSeconds(10),
+                            "Record was not read after loading bucket metadata");
+                }
+            }
         }
     }
 
