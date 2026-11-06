@@ -1082,15 +1082,6 @@ class FlussLogReadITCase {
         return configuration;
     }
 
-    //    private void createTable(String name, Schema schema, int buckets) throws Exception {
-    //        admin.createTable(
-    //                        TablePath.of("fluss", name),
-    //
-    // TableDescriptor.builder().schema(schema).distributedBy(buckets).build(),
-    //                        false)
-    //                .get(30, TimeUnit.SECONDS);
-    //    }
-
     private void createTable(String name, Schema schema, int buckets) throws Exception {
         TablePath tablePath = TablePath.of("fluss", name);
 
