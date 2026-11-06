@@ -21,11 +21,15 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.cluster.Cluster;
+import org.apache.fluss.exception.InvalidMetadataException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
+import org.apache.fluss.exception.ScannerExpiredException;
+import org.apache.fluss.exception.UnknownScannerIdException;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TableOrPartition;
+import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.DefaultValueRecordBatch;
 import org.apache.fluss.record.ValueRecord;
@@ -56,6 +60,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.OptionalLong;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -127,8 +133,7 @@ public final class KvBatchScanner implements BatchScanner {
             try {
                 openScanner();
             } catch (Exception e) {
-                terminate();
-                throw new IOException("Failed to open scanner for bucket " + bucket, e);
+                throw failScan("Failed to open scanner for bucket " + bucket, e);
             }
         }
 
@@ -138,12 +143,7 @@ public final class KvBatchScanner implements BatchScanner {
         } catch (TimeoutException e) {
             return CloseableIterator.emptyIterator();
         } catch (Exception e) {
-            // TODO: we should retry continuation requests on transient networks errors, but
-            //  for simplicity we currently fail the whole scan. Retrying here would require robust
-            //  handling of duplicate continuations (e.g. call_seq_id rollback) to avoid skipping or
-            //  repeating rows.
-            terminate();
-            throw new IOException(e);
+            throw failScan("Failed to scan bucket " + bucket, e);
         }
         inFlight = null;
 
@@ -162,7 +162,11 @@ public final class KvBatchScanner implements BatchScanner {
 
             boolean hasMore = response.hasHasMoreResults() && response.isHasMoreResults();
             if (hasMore) {
-                sendContinuation();
+                try {
+                    sendContinuation();
+                } catch (Exception e) {
+                    throw failScan("Failed to continue scanner for bucket " + bucket, e);
+                }
             } else {
                 drained = true;
             }
@@ -264,38 +268,46 @@ public final class KvBatchScanner implements BatchScanner {
             try {
                 openScanner();
             } catch (Exception e) {
-                terminate();
-                throw new IOException(
-                        "Failed to open scanner for bucket " + bucket + " on retry", e);
+                throw failScan("Failed to open scanner for bucket " + bucket + " on retry", e);
             }
             return CloseableIterator.emptyIterator();
         }
 
-        // Refresh metadata so the next caller-driven attempt resolves the new leader. Auto-
-        // restarting here would silently swap the RocksDB snapshot, breaking snapshot isolation.
-        if (error == Errors.NOT_LEADER_OR_FOLLOWER) {
+        throw failScan("Failed to scan bucket " + bucket, error.exception(message));
+    }
+
+    private IOException failScan(String message, Throwable failure) {
+        while ((failure instanceof ExecutionException || failure instanceof CompletionException)
+                && failure.getCause() != null) {
+            failure = failure.getCause();
+        }
+        boolean sessionGone =
+                failure instanceof ScannerExpiredException
+                        || failure instanceof UnknownScannerIdException;
+        if (failure instanceof InvalidMetadataException || sessionGone) {
+            // Invalidate routing for a caller-created scanner; reopening here would change the
+            // snapshot.
             try {
-                metadataUpdater.checkAndUpdateMetadata(tablePath, bucket);
-            } catch (Exception refreshFailure) {
-                LOG.debug(
-                        "Metadata refresh after NotLeaderOrFollower failed for bucket {}.",
-                        bucket,
-                        refreshFailure);
+                metadataUpdater.invalidPhysicalTableBucketMetaByIds(
+                        bucket.getPartitionId() == null
+                                ? Collections.singleton(bucket.getTableId())
+                                : null,
+                        bucket.getPartitionId() == null
+                                ? null
+                                : Collections.singleton(
+                                        new TablePartition(
+                                                bucket.getTableId(), bucket.getPartitionId())));
+            } catch (Exception e) {
+                LOG.debug("Failed to invalidate bucket metadata for {}.", bucket, e);
             }
-            terminate();
-            throw new IOException(error.exception(message));
         }
-
-        // The server-side session is already gone; skip close_scanner.
-        if (error == Errors.SCANNER_EXPIRED || error == Errors.UNKNOWN_SCANNER_ID) {
+        if (sessionGone) {
+            // The server-side session is already gone; skip close_scanner.
             scannerId = null;
-            closed.set(true);
             drained = true;
-            throw new IOException(error.exception(message));
         }
-
         terminate();
-        throw new IOException(error.exception(message));
+        return new IOException(message, failure);
     }
 
     private void terminate() {

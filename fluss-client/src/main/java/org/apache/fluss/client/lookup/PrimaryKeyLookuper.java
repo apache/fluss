@@ -22,6 +22,7 @@ import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.table.getter.PartitionGetter;
 import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.PartitionNotExistException;
+import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.SchemaGetter;
@@ -138,7 +139,7 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
                 bucketCount = routing.getBucketCount();
             } catch (PartitionNotExistException e) {
                 return mayFallbackToHistoricalLookup(bkBytes, pkBytes, originalPartitionName);
-            } catch (InvalidBucketRoutingException e) {
+            } catch (InvalidBucketRoutingException | StaleMetadataException e) {
                 return completedExceptionally(e);
             }
         }
