@@ -187,6 +187,7 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toLookupData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toPrefixLookupData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toProduceLogDataForBuckets;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toPutKvDataForBuckets;
+import static org.apache.fluss.utils.ConsumerGroupUtils.validateGroupId;
 
 /** An RPC Gateway service for tablet server. */
 public final class TabletService extends RpcServiceBase
@@ -812,7 +813,10 @@ public final class TabletService extends RpcServiceBase
         // method and the current session is bound to the RPC worker thread.
         final String groupId = request.getGroupId();
         final String listenerName = currentListenerName();
-        groupManager.validateGroupId(groupId);
+        validateGroupId(groupId);
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), DESCRIBE, Resource.group(groupId));
+        }
 
         return consumerOffsetTableManager
                 .ensureTableAsync()

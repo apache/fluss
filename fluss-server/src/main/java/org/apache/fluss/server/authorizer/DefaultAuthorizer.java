@@ -105,6 +105,7 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
                     return Sets.newHashSet(res, Resource.database(split[0]), Resource.cluster());
                 });
         mapping.put(ResourceType.DATABASE, res -> Sets.newHashSet(res, Resource.cluster()));
+        mapping.put(ResourceType.GROUP, res -> Sets.newHashSet(res, Resource.cluster()));
         mapping.put(ResourceType.CLUSTER, Sets::newHashSet);
         RESOURCE_MAPPING = Collections.unmodifiableMap(mapping);
 
@@ -663,7 +664,7 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
     private void authorizeAclOperation(Session session, Collection<Resource> resources) {
         resources.forEach(
                 resource -> {
-                    // The minimum granularity of ACL operation permissions is Database.
+                    // Table ACLs are managed at database scope; group ACLs use the group itself.
                     authorize(
                             session,
                             OperationType.ALL,

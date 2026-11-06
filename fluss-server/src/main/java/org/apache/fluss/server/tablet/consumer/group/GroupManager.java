@@ -20,7 +20,8 @@ package org.apache.fluss.server.tablet.consumer.group;
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.bucketing.FlussBucketingFunction;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.exception.InvalidConsumerGroupIdException;
+
+import static org.apache.fluss.utils.ConsumerGroupUtils.validateGroupId;
 
 /** Validates consumer group ids and maps them to consumer-offset table buckets. */
 @Internal
@@ -45,13 +46,5 @@ public final class GroupManager {
         validateGroupId(groupId);
         byte[] bucketKey = ConsumerOffsetSchema.encodeGroupPrefix(groupId);
         return FlussBucketingFunction.bucketForRowKey(bucketKey, bucketCount);
-    }
-
-    /** Validates a consumer group id before routing or accessing its offsets. */
-    public void validateGroupId(String groupId) {
-        if (groupId == null || groupId.isEmpty()) {
-            throw new InvalidConsumerGroupIdException(
-                    "Consumer group id must not be null or empty.");
-        }
     }
 }

@@ -42,6 +42,9 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.net.InetAddress;
 import java.time.Duration;
@@ -206,9 +209,12 @@ public class DefaultAuthorizerTest {
         assertThat(authorizer.authorizeActions(session, actions)).containsExactly(false, true);
     }
 
-    @Test
-    void testAclModificationRequiresAllPermission() throws Exception {
-        Resource resource = Resource.database("database1");
+    @ParameterizedTest
+    @EnumSource(
+            value = ResourceType.class,
+            names = {"DATABASE", "GROUP"})
+    void testAclModificationRequiresAllPermission(ResourceType type) throws Exception {
+        Resource resource = new Resource(type, "database1");
         Session alterSession = createSession("alter-user", "192.168.1.1");
         Session allSession = createSession("all-user", "192.168.1.1");
         AclBinding targetAcl = createAclBinding(resource, "target-user", "*", READ);
@@ -234,7 +240,7 @@ public class DefaultAuthorizerTest {
 
         AclBindingFilter targetAclFilter =
                 new AclBindingFilter(
-                        new ResourceFilter(DATABASE, "database1"),
+                        new ResourceFilter(resource.getType(), resource.getName()),
                         new AccessControlEntryFilter(
                                 targetAcl.getAccessControlEntry().getPrincipal(),
                                 "*",
@@ -381,6 +387,10 @@ public class DefaultAuthorizerTest {
                 Resource.database("database1"), READ, Collections.singletonList(DESCRIBE));
         testOperationTypeImplicationsOfAllow(
                 Resource.table("database2", "table1"), WRITE, Collections.singletonList(DESCRIBE));
+        testOperationTypeImplicationsOfAllow(
+                Resource.group("group1"), WRITE, Collections.singletonList(DESCRIBE));
+        testOperationTypeImplicationsOfAllow(
+                Resource.group("group1"), READ, Collections.singletonList(DESCRIBE));
     }
 
     private void testOperationTypeImplicationsOfAllow(
@@ -410,8 +420,10 @@ public class DefaultAuthorizerTest {
     @Test
     void testAclInheritanceOnResourceType() throws Exception {
         testResourceTypeImplicationsOfAllow(
-                ResourceType.CLUSTER, Arrays.asList(DATABASE, ResourceType.TABLE));
+                ResourceType.CLUSTER,
+                Arrays.asList(DATABASE, ResourceType.TABLE, ResourceType.GROUP));
         testResourceTypeImplicationsOfAllow(DATABASE, Collections.singleton(ResourceType.TABLE));
+        testResourceTypeImplicationsOfAllow(ResourceType.GROUP, Collections.emptyList());
     }
 
     private void testResourceTypeImplicationsOfAllow(
@@ -447,9 +459,77 @@ public class DefaultAuthorizerTest {
                 return Resource.database("database1");
             case TABLE:
                 return Resource.table("database1", "table1");
+            case GROUP:
+                return Resource.group("database1-group1");
             default:
                 return null;
         }
+    }
+
+    @Test
+    void testGroupPermissionsAreIndependentOfTablesAndOtherGroups() throws Exception {
+        Session session = createSession("user1", "192.168.1.1");
+        Resource group = Resource.group("database1-group1");
+        authorizer.addAcls(
+                createRootUserSession(),
+                Collections.singletonList(
+                        createAclBinding(
+                                Resource.database("database1"), "user1", "*", OperationType.ALL)));
+        assertThat(authorizer.isAuthorized(session, WRITE, group)).isFalse();
+
+        authorizer.addAcls(
+                createRootUserSession(),
+                Collections.singletonList(createAclBinding(group, "user1", "*", WRITE)));
+        assertThat(authorizer.isAuthorized(session, WRITE, group)).isTrue();
+        assertThat(authorizer.isAuthorized(session, DESCRIBE, group)).isTrue();
+        assertThat(authorizer.isAuthorized(session, READ, group)).isFalse();
+        assertThat(authorizer.isAuthorized(session, WRITE, Resource.group("database1-group2")))
+                .isFalse();
+        assertThat(authorizer.isAuthorized(createSession("user2", "192.168.1.1"), WRITE, group))
+                .isFalse();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"Default_consumer-1", "*"})
+    void testGroupAclPersistsAndSynchronizes(String name) throws Exception {
+        Session session = createSession("user1", "192.168.1.1");
+        Resource group = Resource.group(name);
+        Resource target = Resource.group("Default_consumer-1");
+        AccessControlEntry entry = createAclEntry("user1", "*", WRITE);
+        addAcls(authorizer, group, Collections.singleton(entry));
+        retry(
+                Duration.ofMinutes(1),
+                () -> assertThat(authorizer2.isAuthorized(session, WRITE, target)).isTrue());
+        assertThat(zooKeeperClient.listResourcesByType(ResourceType.GROUP))
+                .containsExactly(group.getName());
+
+        deleteAclChangeNotifications();
+        try (Authorizer reloaded = AuthorizerLoader.createAuthorizer(configuration, null, null)) {
+            reloaded.startup();
+            assertThat(reloaded.isAuthorized(session, WRITE, target)).isTrue();
+            assertThat(listAcls(reloaded, group)).containsExactly(entry);
+            dropAcls(authorizer, group, Collections.singleton(entry));
+            retry(
+                    Duration.ofMinutes(1),
+                    () -> {
+                        assertThat(authorizer2.isAuthorized(session, WRITE, target)).isFalse();
+                        assertThat(reloaded.isAuthorized(session, WRITE, target)).isFalse();
+                    });
+        }
+    }
+
+    @Test
+    void testGroupWildcardDoesNotGrantTablePermissions() throws Exception {
+        Session session = createSession("user1", "192.168.1.1");
+        addAcls(
+                authorizer,
+                Resource.group(Resource.WILDCARD_RESOURCE),
+                Collections.singleton(createAclEntry("user1", "*", WRITE)));
+        assertThat(authorizer.isAuthorized(session, WRITE, Resource.group("group1"))).isTrue();
+        assertThat(authorizer.isAuthorized(session, WRITE, Resource.group("group2"))).isTrue();
+        assertThat(authorizer.isAuthorized(session, WRITE, Resource.table("database1", "group1")))
+                .isFalse();
+        assertThat(authorizer.isAuthorized(session, WRITE, Resource.cluster())).isFalse();
     }
 
     @Test

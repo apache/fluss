@@ -21,6 +21,8 @@ import org.apache.fluss.metadata.TablePath;
 
 import java.util.Objects;
 
+import static org.apache.fluss.utils.ConsumerGroupUtils.validateGroupId;
+
 /**
  * Represents a resource object with type and name, used for ACL (Access Control List) management.
  *
@@ -35,6 +37,9 @@ public class Resource {
     private final String name;
 
     public Resource(ResourceType type, String name) {
+        if (type == ResourceType.GROUP && !WILDCARD_RESOURCE.equals(name)) {
+            validateGroupId(name);
+        }
         this.type = type;
         this.name = name;
     }
@@ -88,5 +93,10 @@ public class Resource {
 
     public static Resource table(TablePath tablePath) {
         return table(tablePath.getDatabaseName(), tablePath.getTableName());
+    }
+
+    /** Returns a consumer-group resource, or the wildcard resource for {@code "*"}. */
+    public static Resource group(String groupId) {
+        return new Resource(ResourceType.GROUP, groupId);
     }
 }
