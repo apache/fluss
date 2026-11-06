@@ -724,35 +724,6 @@ impl LogRecordBatch {
         Ok(LogRecordIterator::Arrow(iterator))
     }
 
-    pub fn records_for_remote_log(&self, read_context: &ReadContext) -> Result<LogRecordIterator> {
-        self.ensure_header_complete()?;
-        if self.record_count() == 0 {
-            return Ok(LogRecordIterator::empty());
-        }
-
-        let (change_types, arrow_data) = self.decode_change_types()?;
-        let record_batch = read_context.record_batch_for_remote_log(arrow_data)?;
-        let log_record_iterator = match record_batch {
-            None => LogRecordIterator::empty(),
-            Some(record_batch) => {
-                self.ensure_record_count(record_batch.num_rows())?;
-                let arrow_reader = ArrowReader::new_with_fluss_row_type(
-                    Arc::new(record_batch),
-                    read_context.row_type_arc(),
-                    read_context.fluss_row_type().cloned(),
-                )?;
-                let iterator = ArrowLogRecordIterator::new(
-                    arrow_reader,
-                    self.base_log_offset(),
-                    self.commit_timestamp(),
-                    change_types,
-                )?;
-                LogRecordIterator::Arrow(iterator)
-            }
-        };
-        Ok(log_record_iterator)
-    }
-
     /// Returns the record batch directly without creating an iterator.
     /// This is more efficient when you need the entire batch rather than
     /// iterating row-by-row.
@@ -833,19 +804,23 @@ mod tests {
         let (row_type, data) = build_append_only_batch(&[(1, "a"), (2, "b")]);
         let schema = to_arrow_schema(&row_type)?;
         let row_type = Arc::new(row_type);
-        let contexts = [
-            ReadContext::new(schema.clone(), row_type.clone(), false),
-            ReadContext::with_projection_pushdown(
-                schema.clone(),
-                Arc::new(row_type.project(&[1])?),
-                vec![1],
-                true,
-            )?,
-            ReadContext::new(schema.clone(), row_type.clone(), true)
-                .with_target_schema_alignment(schema.clone(), Arc::from([-1, 1])),
-            ReadContext::new(schema.clone(), row_type, true)
-                .with_target_schema_alignment(schema, Arc::from([-1, -1])),
-        ];
+        let contexts =
+            [
+                ReadContext::new(schema.clone(), row_type.clone(), false),
+                ReadContext::with_projection_pushdown(
+                    schema.clone(),
+                    Arc::new(row_type.project(&[1])?),
+                    vec![1],
+                    true,
+                )?,
+                ReadContext::new(schema.clone(), row_type.clone(), true)
+                    .with_target_schema_alignment(schema.clone(), Arc::from([-1, 1]), true),
+                ReadContext::new(schema.clone(), row_type, true).with_target_schema_alignment(
+                    schema,
+                    Arc::from([-1, -1]),
+                    true,
+                ),
+            ];
         for count in [1_i32, 3, -1, 2] {
             for changelog in [false, true] {
                 let mut bytes = if changelog {
