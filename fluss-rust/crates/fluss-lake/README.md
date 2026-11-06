@@ -26,12 +26,14 @@ limitations under the License.
 # use fluss::metadata::TablePath;
 # use fluss_lake::{FlussLakeTable};
 # async fn capture_read_context(connection: Arc<FlussConnection>, path: &TablePath) -> fluss_lake::Result<()> {
-let table = FlussLakeTable::open(connection, path).await?;
+let table = FlussLakeTable::new(connection, path);
 let context = table.capture_read_context().await?;
 // Reuse this object across scans; engines own cross-process task transport.
 # Ok(())
 # }
 ```
+
+`FlussLakeTable::new()` is synchronous and performs no I/O. Each explicit capture queries current metadata and produces an independent boundary set; the table handle does not cache a context. Missing tables and invalid lake configuration are reported during capture. In the subsequent scan API, ordinary callers use `scan.plan()` to capture boundaries after safe partition pruning; explicit capture is for sharing boundaries or engine-native planning.
 
 The context freezes table/schema identity and half-open log ranges `[start, stop)`. Lake-enabled tables additionally carry the physical lake mapping, format and optional readable snapshot. Non-lake tables skip the lake snapshot lookup. Projection and row predicates belong to the subsequent planning layer. `capture_read_context()` captures table-wide boundaries; `capture_read_context_with_partition_scope()` captures a restricted partition scope before querying offsets. Actual per-partition bucket counts are preserved. The context contains no credentials or physical lake-file tasks, is not a global transactional snapshot and does not acquire a retention lease.
 
@@ -59,17 +61,9 @@ The `partition_filter` map records the captured scope. Lake planning must apply 
 
 ## Boundaries from a Java coordinator
 
-Java coordinators use `org.apache.fluss.client.metadata.UnionReadBoundaryPlanner` in `fluss-client`. It captures structured boundaries using the supplied Admin client, without opening lake files or depending on Flink.
+Java coordinators can use the existing Admin APIs: `getReadableLakeSnapshot()` supplies the lake snapshot and matching bucket seams, and offset queries supply concrete log boundaries. The Flink connector's `LakeSplitGenerator.generateHybridLakeFlussSplits()` already composes lake and log tasks; adapters can reuse that planning path where suitable. It is not a Rust context producer: the adapter must preserve the selected snapshot, schema, source identities and per-partition bucket counts, resolve offset sentinels, and map fields to the Rust boundary types. Engines own transport; Java lake payloads are not interchangeable with Rust lake payloads.
 
-```java
-UnionReadContext context = UnionReadBoundaryPlanner.captureReadContext(admin, tablePath);
-UnionReadContext scoped = UnionReadBoundaryPlanner.captureReadContext(admin, tablePath, scope);
-for (UnionReadContext.LogRange range : scoped.getLogRanges()) {
-    // Build engine-owned tasks using the bucket identity and [start, stop).
-}
-```
-
-The result exposes the frozen schema, lake mapping/snapshot, partition scope and per-bucket ranges. It contains no arbitrary table properties or credentials. Capture applies the scope before querying offsets, uses each partition's bucket count, and rechecks partition IDs and table identity. Only confirmed removed partitions are skipped. The caller owns Admin. Capture blocks the planning thread and queries partitions sequentially; do not invoke it from Admin RPC callbacks. Interrupted waits abort capture without cancelling issued RPCs. Request timeouts follow client configuration.
+This PR adds no Java API or Java-to-Rust conversion layer. A dedicated Java boundary-capture API can follow when a concrete connector needs a client-only entry point without Flink connector dependencies.
 
 ## Engine-owned transport
 
