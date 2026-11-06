@@ -81,7 +81,6 @@ public class LogTieringTask implements Runnable {
     private final Object commitLock = new Object();
     private final ZooKeeperClient zkClient;
     private volatile PendingCommit pendingCommit;
-    private boolean refreshRequired;
     private boolean running;
 
     public LogTieringTask(
@@ -160,14 +159,7 @@ public class LogTieringTask implements Runnable {
     }
 
     private void cleanupRetired(PendingCommit batch) {
-        if (batch.confirmed) {
-            if (batch.phase == CommitPhase.PUBLISH) {
-                batch.cleanupSegments =
-                        segmentsToDeleteAfterCommit(
-                                batch.previous, batch.uploadedSegments, batch.manifest);
-                batch.cleanupIndex = 0;
-            }
-        } else if (batch.submitted && batch.phase != CommitPhase.CLEANUP) {
+        if (batch.state == CommitState.COMMITTING) {
             LOG.warn(
                     "Retaining unresolved manifest {} for retired task {}.",
                     batch.manifestPath,
@@ -190,9 +182,6 @@ public class LogTieringTask implements Runnable {
         try {
             if (isCancelled()) {
                 return;
-            }
-            if (refreshRequired && batch == null) {
-                refreshManifest();
             }
             if (batch == null) {
                 LogTablet log = replica.getLogTablet();
@@ -228,7 +217,6 @@ public class LogTieringTask implements Runnable {
                         batch.manifestPath =
                                 remoteLogStorage.writeRemoteLogManifestSnapshot(
                                         remoteLog.getRemoteLogDir(), batch.manifest);
-                        batch.phase = CommitPhase.COMMIT;
                     }
                 } catch (Exception e) {
                     try {
@@ -237,6 +225,9 @@ public class LogTieringTask implements Runnable {
                         e.addSuppressed(cleanupFailure);
                     }
                     throw e;
+                }
+                if (batch.manifestPath != null && !commitPending(batch)) {
+                    return;
                 }
             }
             resumePending(batch);
@@ -253,12 +244,12 @@ public class LogTieringTask implements Runnable {
     }
 
     private void resumePending(PendingCommit batch) throws Exception {
-        if (batch.phase == CommitPhase.COMMIT) {
+        if (batch.state == CommitState.COMMITTING) {
             if (!commitPending(batch)) {
                 return;
             }
         }
-        if (batch.phase == CommitPhase.PUBLISH) {
+        if (batch.state == CommitState.PUBLISHING) {
             synchronized (commitLock) {
                 if (cancelled) {
                     return;
@@ -272,13 +263,10 @@ public class LogTieringTask implements Runnable {
                         batch.manifest.getRemoteLogEndOffset(),
                         batch.manifest.getHighestCopiedEndOffset());
                 log.updateRemoteLogSize(batch.manifest.getRemoteLogSize());
-                batch.cleanupSegments =
-                        segmentsToDeleteAfterCommit(
-                                batch.previous, batch.uploadedSegments, batch.manifest);
-                batch.phase = CommitPhase.CLEANUP;
+                batch.state = CommitState.CLEANING;
             }
         }
-        if (batch.phase == CommitPhase.CLEANUP) {
+        if (batch.state == CommitState.CLEANING || batch.state == CommitState.UNSUBMITTED) {
             cleanupPending(batch);
         }
     }
@@ -297,10 +285,10 @@ public class LogTieringTask implements Runnable {
                 throw e;
             }
         }
-        if (!batch.confirmed && batch.manifestPath != null) {
+        if (batch.state == CommitState.UNSUBMITTED && batch.manifestPath != null) {
             remoteLogStorage.deleteRemoteLogManifestSnapshot(batch.manifestPath);
         }
-        if (batch.confirmed && !cancelled) {
+        if (batch.state == CommitState.CLEANING && !cancelled) {
             // This method reads the currently published boundary; it performs I/O outside
             // commitLock.
             replica.getLogTablet().deleteSegmentsAlreadyExistsInRemote();
@@ -311,31 +299,6 @@ public class LogTieringTask implements Runnable {
                 pendingCommit = null;
             }
         }
-    }
-
-    private void refreshManifest() throws Exception {
-        Optional<RemoteLogManifestHandle> handle = zkClient.getRemoteLogManifestHandle(tableBucket);
-        RemoteLogManifest manifest =
-                handle.isPresent()
-                        ? remoteLogStorage.readRemoteLogManifestSnapshot(
-                                handle.get().getRemoteLogManifestPath())
-                        : new RemoteLogManifest(physicalTablePath, tableBucket, new ArrayList<>());
-        synchronized (commitLock) {
-            if (cancelled) {
-                return;
-            }
-            remoteLog.loadRemoteLogManifest(
-                    manifest, handle.map(h -> h.getRemoteLogManifestPath().toString()).orElse(""));
-            replica.getLogTablet()
-                    .publishRemoteLogOffsets(
-                            manifest.getRemoteLogStartOffset(),
-                            manifest.getRemoteLogEndOffset(),
-                            manifest.getHighestCopiedEndOffset());
-            replica.getLogTablet().updateRemoteLogSize(manifest.getRemoteLogSize());
-            copiedOffset = findCopiedOffset(replica.getLogTablet());
-            refreshRequired = false;
-        }
-        replica.getLogTablet().deleteSegmentsAlreadyExistsInRemote();
     }
 
     private List<EnrichedLogSegment> candidateToCopyLogSegments(LogTablet log) {
@@ -456,6 +419,7 @@ public class LogTieringTask implements Runnable {
     }
 
     private boolean commitPending(PendingCommit batch) throws Exception {
+        boolean previouslySubmitted = batch.state == CommitState.COMMITTING;
         for (int attempt = 1; attempt <= 10; attempt++) {
             CommitRemoteLogManifestRequest request =
                     makeCommitRemoteLogManifestRequest(
@@ -474,41 +438,29 @@ public class LogTieringTask implements Runnable {
                     if (cancelled) {
                         return false;
                     }
-                    batch.submitted = true;
+                    batch.state = CommitState.COMMITTING;
                     response = coordinatorGateway.commitRemoteLogManifest(request);
                 }
                 if (response.get().isCommitSuccess()) {
-                    batch.confirmed = true;
-                    batch.phase = CommitPhase.PUBLISH;
+                    preparePublication(batch);
                     return true;
                 }
-                if (batch.legacy) {
-                    // v0 false also covers an uncertain ZooKeeper write.
-                    batch.unknown = true;
-                    return false;
-                }
-                if (batch.unknown) {
-                    return resolveUnknownRejection(batch);
-                }
-                refreshRequired = true;
-                batch.phase = CommitPhase.CLEANUP;
-                return true;
+                return batch.legacy ? false : resolveCommitResult(batch);
             } catch (InterruptedException e) {
-                batch.unknown = true;
                 throw e;
             } catch (Exception e) {
                 Throwable cause = ExceptionUtils.stripExecutionException(e);
                 if (cause instanceof UnsupportedVersionException && !batch.legacy) {
                     // The transport rejects conditional v1 requests before dispatch to a v0 peer.
-                    if (batch.unknown) {
+                    if (previouslySubmitted) {
                         // An uncertain conditional submission must not be replayed unconditionally.
                         return false;
                     }
-                    batch.submitted = false;
+                    batch.state = CommitState.UNSUBMITTED;
                     batch.legacy = true;
                     continue;
                 }
-                batch.unknown = true;
+                previouslySubmitted = true;
                 LOG.debug(
                         "Remote log commit attempt {} for {} has an unknown outcome.",
                         attempt,
@@ -516,15 +468,18 @@ public class LogTieringTask implements Runnable {
                         e);
             }
         }
-        return false;
+        return batch.legacy ? false : resolveCommitResult(batch);
     }
 
-    private boolean resolveUnknownRejection(PendingCommit batch) throws Exception {
+    private boolean resolveCommitResult(PendingCommit batch) throws Exception {
         Optional<RemoteLogManifestHandle> handle = zkClient.getRemoteLogManifestHandle(tableBucket);
         String currentPath = handle.map(h -> h.getRemoteLogManifestPath().toString()).orElse("");
-        if (currentPath.equals(batch.expectedPath)
-                || currentPath.equals(batch.manifestPath.toString())) {
-            // A transient validation failure did not move the head. Keep the same upload owner.
+        if (currentPath.equals(batch.manifestPath.toString())) {
+            preparePublication(batch);
+            return true;
+        }
+        if (currentPath.equals(batch.expectedPath)) {
+            // The request may still execute against this predecessor. Keep the same upload owner.
             return false;
         }
         RemoteLogManifest current =
@@ -539,9 +494,14 @@ public class LogTieringTask implements Runnable {
         batch.manifest = current;
         batch.manifestPath =
                 handle.map(RemoteLogManifestHandle::getRemoteLogManifestPath).orElse(null);
-        batch.confirmed = true;
-        batch.phase = CommitPhase.PUBLISH;
+        preparePublication(batch);
         return true;
+    }
+
+    private void preparePublication(PendingCommit batch) {
+        batch.cleanupSegments =
+                segmentsToDeleteAfterCommit(batch.previous, batch.uploadedSegments, batch.manifest);
+        batch.state = CommitState.PUBLISHING;
     }
 
     private List<RemoteLogSegment> segmentsToDeleteAfterCommit(
@@ -657,10 +617,11 @@ public class LogTieringTask implements Runnable {
         return this.getClass() + "[" + tableBucket + "]";
     }
 
-    private enum CommitPhase {
-        COMMIT,
-        PUBLISH,
-        CLEANUP
+    private enum CommitState {
+        UNSUBMITTED,
+        COMMITTING,
+        PUBLISHING,
+        CLEANING
     }
 
     /** One owned upload and cleanup set; no streams or local files are retained between rounds. */
@@ -675,10 +636,7 @@ public class LogTieringTask implements Runnable {
         private int cleanupIndex;
         private RemoteLogManifest manifest;
         private FsPath manifestPath;
-        private CommitPhase phase = CommitPhase.CLEANUP;
-        private boolean unknown;
-        private boolean submitted;
-        private boolean confirmed;
+        private CommitState state = CommitState.UNSUBMITTED;
         private boolean legacy;
 
         private PendingCommit(RemoteLogManifest previous, String expectedPath) {

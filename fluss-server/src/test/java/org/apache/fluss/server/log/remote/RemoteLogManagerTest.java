@@ -256,12 +256,10 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
                     @Override
                     public CompletableFuture<CommitRemoteLogManifestResponse>
                             commitRemoteLogManifest(CommitRemoteLogManifestRequest request) {
-                        CompletableFuture<CommitRemoteLogManifestResponse> result =
-                                super.commitRemoteLogManifest(request);
                         return loseResponse.get()
                                 ? FutureUtils.completedExceptionally(
                                         new IOException("lost response"))
-                                : result;
+                                : super.commitRemoteLogManifest(request);
                     }
                 };
         RemoteLogTablet remoteLog = buildRemoteLogTablet(log);
@@ -283,14 +281,12 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
                 Arrays.stream(remoteDir.getFileSystem().listStatus(remoteDir))
                         .map(file -> file.getPath().getName())
                         .collect(Collectors.toList());
-        FsPath manifestPath =
-                zkClient.getRemoteLogManifestHandle(bucket).get().getRemoteLogManifestPath();
+        assertThat(zkClient.getRemoteLogManifestHandle(bucket)).isEmpty();
         task.run();
         assertThat(remoteDir.getFileSystem().listStatus(remoteDir))
                 .extracting(file -> file.getPath().getName())
                 .containsExactlyInAnyOrderElementsOf(uploadedFiles);
-        assertThat(zkClient.getRemoteLogManifestHandle(bucket).get().getRemoteLogManifestPath())
-                .isEqualTo(manifestPath);
+        assertThat(zkClient.getRemoteLogManifestHandle(bucket)).isEmpty();
         assertThat(log.getLogDir().list()).containsExactlyInAnyOrderElementsOf(localFiles);
         loseResponse.set(false);
         task.run();
@@ -351,13 +347,14 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         LogTablet log = replicaManager.getReplicaOrException(bucket).getLogTablet();
         addMultiSegmentsToLogTablet(log, 5);
         AtomicInteger mode = new AtomicInteger();
+        AtomicReference<CommitRemoteLogManifestRequest> delayed = new AtomicReference<>();
         TestCoordinatorGateway gateway =
                 new TestCoordinatorGateway(zkClient) {
                     @Override
                     public CompletableFuture<CommitRemoteLogManifestResponse>
                             commitRemoteLogManifest(CommitRemoteLogManifestRequest request) {
                         if (mode.get() == 0) {
-                            super.commitRemoteLogManifest(request).join();
+                            delayed.set(request);
                             return FutureUtils.completedExceptionally(
                                     new IOException("lost response"));
                         }
@@ -376,6 +373,12 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
                         manualClock,
                         Integer.MAX_VALUE);
         task.run();
+        assertThat(
+                        new TestCoordinatorGateway(zkClient)
+                                .commitRemoteLogManifest(delayed.get())
+                                .join()
+                                .isCommitSuccess())
+                .isTrue();
         FsPath firstPath =
                 zkClient.getRemoteLogManifestHandle(bucket).get().getRemoteLogManifestPath();
         RemoteLogManifest first = remoteLogStorage.readRemoteLogManifestSnapshot(firstPath);
@@ -519,22 +522,22 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
     }
 
     @Test
-    void testRejectedUploadCleanupIsRetriedBeforeNewUploads() throws Exception {
+    void testUnsubmittedUploadCleanupIsRetriedBeforeNewUploads() throws Exception {
         TableBucket bucket = makeTableBucket(false);
         makeLogTableAsLeader(bucket, false);
         LogTablet log = replicaManager.getReplicaOrException(bucket).getLogTablet();
         addMultiSegmentsToLogTablet(log, 5);
-        testCoordinatorGateway.commitRemoteLogManifestFail.set(true);
+        remoteLogStorage.writeManifestFail.set(true);
         remoteLogStorage.deleteSegmentFail.set(true);
         remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
         List<String> uploaded = new ArrayList<>(listRemoteLogFiles(bucket));
         assertThat(uploaded).hasSize(4);
         remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
         assertThat(listRemoteLogFiles(bucket)).containsExactlyInAnyOrderElementsOf(uploaded);
+        remoteLogStorage.writeManifestFail.set(false);
         remoteLogStorage.deleteSegmentFail.set(false);
         remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
         assertThat(listRemoteLogFiles(bucket)).isEmpty();
-        testCoordinatorGateway.commitRemoteLogManifestFail.set(false);
         remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
         assertThat(remoteLogManager.remoteLogTablet(bucket).allRemoteLogSegments()).hasSize(4);
     }
@@ -597,8 +600,8 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
     @ParameterizedTest
     @CsvSource({
         "negative-response, 1, false",
-        "lost-then-rejected, 2, false",
-        "lost-responses, 10, false",
+        "lost-then-rejected, 2, true",
+        "lost-responses, 10, true",
         "lost-then-success, 2, true",
         "late-commit, 10, false"
     })
@@ -732,11 +735,13 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         List<RemoteLogSegment> remoteLogSegmentList =
                 remoteLogManager.relevantRemoteLogSegments(tb, 0L);
         assertThat(remoteLogSegmentList).isEmpty();
-        // A conditional rejection before writing permits rollback of this never-ambiguous batch.
-        assertThat(listRemoteLogFiles(tb)).isEmpty();
+        // The unchanged predecessor retains the same upload until submission can succeed.
+        List<String> uploaded = new ArrayList<>(listRemoteLogFiles(tb));
+        assertThat(uploaded).hasSize(4);
         testCoordinatorGateway.commitRemoteLogManifestFail.set(false);
         remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
         assertThat(remoteLogManager.relevantRemoteLogSegments(tb, 0L)).hasSize(4);
+        assertThat(listRemoteLogFiles(tb)).containsExactlyInAnyOrderElementsOf(uploaded);
     }
 
     @ParameterizedTest
