@@ -30,6 +30,16 @@ set -o pipefail
 IMAGE="${TIERING_IMAGE:-fluss-tiering:dev}"
 CONTAINER="fluss-tiering-smoke-$$-${RANDOM}"
 SMOKE_DIR="$(mktemp -d)"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+REPOSITORY_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd -P)"
+# The Flink artifacts carry the minor version pinned by flink.minor.version.
+flink_version="$(sed -n 's/.*<flink.minor.version>\(.*\)<\/flink.minor.version>.*/\1/p' "${REPOSITORY_ROOT}/fluss-flink/fluss-flink-common/pom.xml" | head -n 1)"
+flink_version="${TIERING_FLINK_VERSION:-${flink_version}}"
+flink_minor="${flink_version%.*}"
+if [[ -z "${flink_version}" || "${flink_minor}" == "${flink_version}" ]]; then
+    echo "Could not determine flink.minor.version from ${REPOSITORY_ROOT}/fluss-flink/fluss-flink-common/pom.xml." >&2
+    exit 1
+fi
 
 cleanup() {
     docker rm --force "${CONTAINER}" >/dev/null 2>&1 || true
@@ -41,13 +51,12 @@ trap cleanup EXIT
 # of any of them fails the smoke test.
 expected_jar_prefixes=(
     "fluss-flink-tiering-"
-    "fluss-flink-1.20-"
+    "fluss-flink-${flink_minor}-"
     "fluss-lake-paimon-"
     "fluss-lake-iceberg-"
     "fluss-lake-lance-"
     "paimon-bundle-"
-    # The 1.20 suffix tracks the Dockerfile base image and the flink-flink-1.20 module in prepare_build.sh.
-    "iceberg-flink-runtime-1.20-"
+    "iceberg-flink-runtime-${flink_minor}-"
     "flink-shaded-hadoop-2-uber-"
 )
 bundled_jars="$(docker run --rm "${IMAGE}" bash -c 'ls /opt/flink/lib')"

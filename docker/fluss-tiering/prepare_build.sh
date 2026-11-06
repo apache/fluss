@@ -45,6 +45,11 @@ paimon_version="$(sed -n 's/.*<paimon.version>\(.*\)<\/paimon.version>.*/\1/p' "
 iceberg_version="$(sed -n 's/.*<iceberg.version>\(.*\)<\/iceberg.version>.*/\1/p' "${REPOSITORY_ROOT}/pom.xml")"
 # Matches the flink-shaded-hadoop-2-uber version shipped with the Fluss server distribution.
 hadoop_version="$(grep -A1 '<artifactId>flink-shaded-hadoop-2-uber</artifactId>' "${REPOSITORY_ROOT}/fluss-dist/pom.xml" | sed -n 's/.*<version>\(.*\)<\/version>.*/\1/p')"
+# The bundled Flink artifacts, the image base tag, and the smoke-test jar prefixes all follow one
+# Flink version, so read it from the module that pins flink.minor.version.
+flink_version="$(sed -n 's/.*<flink.minor.version>\(.*\)<\/flink.minor.version>.*/\1/p' "${REPOSITORY_ROOT}/fluss-flink/fluss-flink-common/pom.xml" | head -n 1)"
+flink_version="${TIERING_FLINK_VERSION:-${flink_version}}"
+flink_minor="${flink_version%.*}"
 
 if [[ -z "${fluss_version}" ]]; then
     echo "Could not determine the Fluss version from ${REPOSITORY_ROOT}/pom.xml." >&2
@@ -52,6 +57,10 @@ if [[ -z "${fluss_version}" ]]; then
 fi
 if [[ -z "${hadoop_version}" ]]; then
     echo "Could not determine the flink-shaded-hadoop-2-uber version from ${REPOSITORY_ROOT}/fluss-dist/pom.xml." >&2
+    exit 1
+fi
+if [[ -z "${flink_version}" || "${flink_minor}" == "${flink_version}" ]]; then
+    echo "Could not determine flink.minor.version from ${REPOSITORY_ROOT}/fluss-flink/fluss-flink-common/pom.xml." >&2
     exit 1
 fi
 
@@ -125,19 +134,17 @@ resolve_jar() {
     verify_downloaded_jar "${LIB_DIR}/${jar}" "${remote_url}.sha1"
 }
 
-# The fluss-flink-1.20 module and the iceberg-flink-runtime-1.20 artifact below track the
-# Flink version of the Dockerfile base image and the fluss-flink-1.20 build commands in
-# fluss-flink/fluss-flink-tiering/src/README.md and
-# website/docs/streaming-lakehouse/tiering-service.md; change them all together.
+# The Flink artifacts below follow flink.minor.version, which the Dockerfile base tag and the jar
+# prefixes in smoke-test.sh also follow; change that one version instead of the individual names.
 # When changing the bundled jars, update expected_jar_prefixes in smoke-test.sh.
 resolve_jar org.apache.fluss fluss-flink-tiering "${fluss_version}" "fluss-flink-tiering-${fluss_version}.jar"
-resolve_jar org.apache.fluss fluss-flink-1.20 "${fluss_version}" "fluss-flink-1.20-${fluss_version}.jar"
+resolve_jar org.apache.fluss "fluss-flink-${flink_minor}" "${fluss_version}" "fluss-flink-${flink_minor}-${fluss_version}.jar"
 resolve_jar org.apache.fluss fluss-lake-paimon "${fluss_version}" "fluss-lake-paimon-${fluss_version}.jar"
 resolve_jar org.apache.fluss fluss-lake-iceberg "${fluss_version}" "fluss-lake-iceberg-${fluss_version}.jar"
 resolve_jar org.apache.fluss fluss-lake-lance "${fluss_version}" "fluss-lake-lance-${fluss_version}.jar"
 
 resolve_jar org.apache.paimon paimon-bundle "${paimon_version}" "paimon-bundle-${paimon_version}.jar"
-resolve_jar org.apache.iceberg iceberg-flink-runtime-1.20 "${iceberg_version}" "iceberg-flink-runtime-1.20-${iceberg_version}.jar"
+resolve_jar org.apache.iceberg "iceberg-flink-runtime-${flink_minor}" "${iceberg_version}" "iceberg-flink-runtime-${flink_minor}-${iceberg_version}.jar"
 resolve_jar org.apache.flink flink-shaded-hadoop-2-uber "${hadoop_version}" "flink-shaded-hadoop-2-uber-${hadoop_version}.jar"
 
 if [[ -e "${BUILD_DIR}/lib" || -L "${BUILD_DIR}/lib" ]]; then

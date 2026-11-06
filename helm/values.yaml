@@ -216,8 +216,11 @@ embeddedTiering:
   numberOfReplicas: 1
   # Seconds to wait after SIGTERM before the tiering pod is force-killed. The tiering job is
   # stateless (progress persists in Fluss lake snapshots), so this only needs to cover a clean
-  # shutdown of the embedded Flink runtime.
-  terminationGracePeriodSeconds: 30
+  # shutdown of the embedded Flink runtime. Keep it above that runtime's own shutdown budget:
+  # the embedded runtime waits up to cluster.services.shutdown-timeout (30s by default) for its
+  # services to close, so a grace period equal to that budget can SIGKILL a shutdown that is
+  # still making progress.
+  terminationGracePeriodSeconds: 60
   image:
     registry: ""
     repository: apache/fluss-tiering

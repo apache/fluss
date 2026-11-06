@@ -29,12 +29,14 @@
 # The image is built from this directory as the build context:
 #   docker buildx build --file Dockerfile --tag fluss-tiering:dev .
 #
-# The Flink version of the base image must change together with the fluss-flink-1.20 module
-# and the iceberg-flink-runtime-1.20 artifact in prepare_build.sh, the jar prefixes in
-# smoke-test.sh, and the fluss-flink-1.20 build commands in
+# The Flink version of the base image is passed in by build.sh, which reads
+# flink.minor.version from fluss-flink/fluss-flink-common/pom.xml. It must change
+# together with the iceberg-flink-runtime artifact in prepare_build.sh, the jar
+# prefixes in smoke-test.sh, and the fluss-flink-1.20 build commands in
 # fluss-flink/fluss-flink-tiering/src/README.md and
 # website/docs/streaming-lakehouse/tiering-service.md.
-FROM flink:1.20.3-scala_2.12-java17
+ARG FLINK_VERSION=1.20.3
+FROM flink:${FLINK_VERSION}-scala_2.12-java17
 
 ARG FLUSS_VERSION=dev
 ARG VCS_REF=unknown
