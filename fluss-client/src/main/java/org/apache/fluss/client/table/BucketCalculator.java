@@ -113,6 +113,12 @@ public final class BucketCalculator {
         return create(tableInfo, rowType, primaryKeyEncoder);
     }
 
+    /** Returns the bucketing function of the table, shared by writers and readers. */
+    public static BucketingFunction bucketingFunctionFor(TableInfo tableInfo) {
+        checkNotNull(tableInfo, "tableInfo is null");
+        return BucketingFunction.of(tableInfo.getTableConfig().getDataLakeFormat().orElse(null));
+    }
+
     private static BucketCalculator create(
             TableInfo tableInfo, RowType rowType, @Nullable KeyEncoder primaryKeyEncoder) {
         checkArgument(
@@ -136,7 +142,7 @@ public final class BucketCalculator {
         }
 
         return new BucketCalculator(
-                bucketKeyEncoder, primaryKeyEncoder, BucketingFunction.of(lakeFormat));
+                bucketKeyEncoder, primaryKeyEncoder, bucketingFunctionFor(tableInfo));
     }
 
     /** Encodes the bucket key from the configured row layout. */

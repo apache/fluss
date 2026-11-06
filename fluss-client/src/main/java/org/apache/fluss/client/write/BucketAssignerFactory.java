@@ -17,7 +17,7 @@
 
 package org.apache.fluss.client.write;
 
-import org.apache.fluss.bucketing.BucketingFunction;
+import org.apache.fluss.client.table.BucketCalculator;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -36,9 +36,7 @@ interface BucketAssignerFactory {
                 conf.get(ConfigOptions.CLIENT_WRITER_BUCKET_NO_KEY_ASSIGNER);
         return (tableInfo, path) -> {
             if (!tableInfo.getBucketKeys().isEmpty()) {
-                return new HashBucketAssigner(
-                        BucketingFunction.of(
-                                tableInfo.getTableConfig().getDataLakeFormat().orElse(null)));
+                return new HashBucketAssigner(BucketCalculator.bucketingFunctionFor(tableInfo));
             } else if (noKeyAssigner == ConfigOptions.NoKeyAssigner.ROUND_ROBIN) {
                 return new RoundRobinBucketAssigner(path);
             } else if (noKeyAssigner == ConfigOptions.NoKeyAssigner.STICKY) {
