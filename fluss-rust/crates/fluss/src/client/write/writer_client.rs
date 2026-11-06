@@ -130,7 +130,7 @@ impl WriterClient {
         physical_table_path: &Arc<PhysicalTablePath>,
         table_info: &TableInfo,
     ) -> Result<i32> {
-        let cluster = self.metadata.get_cluster();
+        let cluster = self.metadata.load_cluster();
         Self::check_table_cached(&cluster, physical_table_path.get_table_path())?;
         self.accumulate
             .routing_bucket_count(physical_table_path, table_info, &cluster)
@@ -168,7 +168,7 @@ impl WriterClient {
             });
         }
         let physical_table_path = &record.physical_table_path;
-        let cluster = self.metadata.get_cluster();
+        let cluster = self.metadata.load_cluster();
         // Before the bucket assigner panics on a missing table.
         Self::check_table_cached(&cluster, physical_table_path.get_table_path())?;
         let bucket_key = record.bucket_key.as_ref();

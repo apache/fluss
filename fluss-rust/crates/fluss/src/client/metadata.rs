@@ -22,8 +22,9 @@ use crate::proto::MetadataResponse;
 use crate::rpc::message::{GetTableRequest, UpdateMetadataRequest};
 use crate::rpc::{RpcClient, ServerConnection};
 use crate::{PartitionId, TableId};
+use arc_swap::{ArcSwap, Guard};
 use log::{info, warn};
-use parking_lot::RwLock;
+use parking_lot::{Mutex, MutexGuard, RwLock};
 use std::collections::HashSet;
 use std::future::Future;
 use std::net::{SocketAddr, ToSocketAddrs};
@@ -35,7 +36,9 @@ const MAX_BOOTSTRAP_RETRIES: usize = 3;
 const BOOTSTRAP_RETRY_INTERVAL_MS: u64 = 100;
 
 pub struct Metadata {
-    cluster: RwLock<Arc<Cluster>>,
+    cluster: ArcSwap<Cluster>,
+    /// Build the next cluster under it, otherwise concurrent changes get lost.
+    changing: Mutex<()>,
     unavailable_tablet_server_ids: RwLock<HashSet<i32>>,
     connections: Arc<RpcClient>,
     bootstrap: Arc<str>,
@@ -53,7 +56,8 @@ impl Metadata {
         let cluster = Self::init_cluster(bootstrap, connections.clone()).await?;
         let (cluster_version_tx, _) = watch::channel(0);
         Ok(Metadata {
-            cluster: RwLock::new(Arc::new(cluster)),
+            cluster: ArcSwap::from_pointee(cluster),
+            changing: Mutex::new(()),
             unavailable_tablet_server_ids: RwLock::new(HashSet::new()),
             connections,
             bootstrap: bootstrap.into(),
@@ -247,42 +251,46 @@ impl Metadata {
 
     pub(crate) async fn reinit_cluster(&self) -> Result<()> {
         let cluster = Self::init_cluster(&self.bootstrap, self.connections.clone()).await?;
-        self.replace_cluster(cluster);
-        self.notify_cluster_changed();
+        let changing = self.changing.lock();
+        self.replace_cluster(&changing, cluster);
         Ok(())
     }
 
-    fn replace_cluster(&self, cluster: Cluster) {
-        let mut guard = self.cluster.write();
+    fn replace_cluster(&self, changing: &MutexGuard<'_, ()>, cluster: Cluster) {
         // A successful refresh may advertise new addresses for previously failed servers.
         self.unavailable_tablet_server_ids
             .write()
             .retain(|id| cluster.get_tablet_server(*id).is_none());
         self.connections
             .disconnect_superseded_endpoints(&cluster.get_server_nodes());
-        *guard = Arc::new(cluster);
+        self.swap_cluster(changing, cluster);
+    }
+
+    fn swap_cluster(&self, _changing: &MutexGuard<'_, ()>, cluster: Cluster) {
+        self.cluster.store(Arc::new(cluster));
+        self.notify_cluster_changed();
+    }
+
+    fn invalidate(&self, build: impl FnOnce(&Cluster) -> Option<Cluster>) -> bool {
+        let changing = self.changing.lock();
+        let Some(cluster) = build(&self.cluster.load()) else {
+            return false;
+        };
+        self.swap_cluster(&changing, cluster);
+        true
     }
 
     pub fn invalidate_server(&self, server_id: &i32, table_ids: Vec<i64>) {
-        {
-            let mut cluster_guard = self.cluster.write();
-            let updated_cluster = cluster_guard.invalidate_server(server_id, table_ids);
-            *cluster_guard = Arc::new(updated_cluster);
-        }
-        self.notify_cluster_changed();
+        self.invalidate(|cluster| Some(cluster.invalidate_server(server_id, table_ids)));
     }
 
     pub fn invalidate_physical_table_meta(
         &self,
         physical_tables_to_invalid: &HashSet<PhysicalTablePath>,
     ) {
-        {
-            let mut cluster_guard = self.cluster.write();
-            let updated_cluster =
-                cluster_guard.invalidate_physical_table_meta(physical_tables_to_invalid);
-            *cluster_guard = Arc::new(updated_cluster);
-        }
-        self.notify_cluster_changed();
+        self.invalidate(|cluster| {
+            Some(cluster.invalidate_physical_table_meta(physical_tables_to_invalid))
+        });
     }
 
     /// Drops the cached leaders of `partition_path` if it still resolves to `partition_id` of
@@ -294,19 +302,14 @@ impl Metadata {
         table_id: Option<TableId>,
         partition_id: Option<PartitionId>,
     ) -> bool {
-        {
-            let mut cluster_guard = self.cluster.write();
-            if cluster_guard.get_table_id(partition_path.get_table_path()) != table_id
-                || cluster_guard.get_partition_id(partition_path) != partition_id
+        self.invalidate(|cluster| {
+            if cluster.get_table_id(partition_path.get_table_path()) != table_id
+                || cluster.get_partition_id(partition_path) != partition_id
             {
-                return false;
+                return None;
             }
-            let updated_cluster = cluster_guard
-                .invalidate_physical_table_meta(&HashSet::from([partition_path.clone()]));
-            *cluster_guard = Arc::new(updated_cluster);
-        }
-        self.notify_cluster_changed();
-        true
+            Some(cluster.invalidate_physical_table_meta(&HashSet::from([partition_path.clone()])))
+        })
     }
 
     /// Fetches the table id from the cluster, bypassing the local cache.
@@ -315,10 +318,7 @@ impl Metadata {
     /// reports `TableNotExist` so callers can tell a dropped table apart from
     /// a transient failure.
     pub async fn fetch_table_id(&self, table_path: &TablePath) -> Result<Option<TableId>> {
-        let maybe_server = {
-            let guard = self.cluster.read();
-            guard.get_one_available_server().cloned()
-        };
+        let maybe_server = self.cluster.load().get_one_available_server().cloned();
         let server = maybe_server.ok_or_else(|| Error::UnexpectedError {
             message: "No available server to fetch table metadata".to_string(),
             source: None,
@@ -334,20 +334,14 @@ impl Metadata {
 
     /// Drops the cached id, info, partitions and bucket locations of `table_path`.
     pub fn evict_table_metadata(&self, table_path: &TablePath) {
-        {
-            let mut cluster_guard = self.cluster.write();
-            let updated_cluster = cluster_guard.evict_table(table_path);
-            *cluster_guard = Arc::new(updated_cluster);
-        }
-        self.notify_cluster_changed();
+        self.invalidate(|cluster| Some(cluster.evict_table(table_path)));
     }
 
     pub async fn update(&self, metadata_response: MetadataResponse) -> Result<()> {
-        let origin_cluster = self.cluster.read().clone();
-        let new_cluster =
-            Cluster::from_metadata_response(metadata_response, Some(&origin_cluster))?;
-        self.replace_cluster(new_cluster);
-        self.notify_cluster_changed();
+        let changing = self.changing.lock();
+        let cluster =
+            Cluster::from_metadata_response(metadata_response, Some(&self.cluster.load()))?;
+        self.replace_cluster(&changing, cluster);
         Ok(())
     }
 
@@ -357,12 +351,11 @@ impl Metadata {
         physical_table_paths: &HashSet<&Arc<PhysicalTablePath>>,
         partition_ids: Vec<i64>,
     ) -> Result<()> {
-        let maybe_server = {
-            let guard = self.cluster.read();
-            guard
-                .get_one_available_server_excluding(&self.unavailable_tablet_server_ids.read())
-                .cloned()
-        };
+        let maybe_server = self
+            .cluster
+            .load()
+            .get_one_available_server_excluding(&self.unavailable_tablet_server_ids.read())
+            .cloned();
 
         let server = match maybe_server {
             Some(s) => s,
@@ -425,7 +418,7 @@ impl Metadata {
     }
 
     pub async fn check_and_update_table_metadata(&self, table_paths: &[TablePath]) -> Result<()> {
-        let cluster_binding = self.cluster.read().clone();
+        let cluster_binding = self.cluster.load_full();
         let need_update_table_paths: HashSet<&TablePath> = table_paths
             .iter()
             .filter(|table_path| cluster_binding.opt_get_table(table_path).is_none())
@@ -444,7 +437,7 @@ impl Metadata {
         table_path: &TablePath,
         partition_ids: &[PartitionId],
     ) -> Result<()> {
-        let cluster_binding = self.cluster.read().clone();
+        let cluster_binding = self.cluster.load_full();
         let need_update_partition_ids: Vec<PartitionId> = partition_ids
             .iter()
             .filter(|partition_id| cluster_binding.get_partition_name(**partition_id).is_none())
@@ -494,8 +487,13 @@ impl Metadata {
     }
 
     pub fn get_cluster(&self) -> Arc<Cluster> {
-        let guard = self.cluster.read();
-        guard.clone()
+        self.cluster.load_full()
+    }
+
+    /// For short reads on hot paths, unlike `get_cluster` does not clone the `Arc`.
+    /// Do not hold it for long, e.g. across `.await`, use `get_cluster` there.
+    pub(crate) fn load_cluster(&self) -> Guard<Arc<Cluster>> {
+        self.cluster.load()
     }
 
     const MAX_RETRY_TIMES: u8 = 3;
@@ -527,7 +525,7 @@ impl Metadata {
                     .await?;
                 }
 
-                let cluster = self.cluster.read();
+                let cluster = self.cluster.load();
                 let leader = cluster.leader_for(table_bucket);
 
                 if leader.is_some() {
@@ -540,8 +538,7 @@ impl Metadata {
     }
 
     fn get_leader_for(&self, table_bucket: &TableBucket) -> Option<ServerNode> {
-        let cluster = self.cluster.read();
-        cluster.leader_for(table_bucket).cloned()
+        self.cluster.load().leader_for(table_bucket).cloned()
     }
 }
 
@@ -550,7 +547,8 @@ impl Metadata {
     pub(crate) fn new_for_test(cluster: Arc<Cluster>) -> Self {
         let (cluster_version_tx, _) = watch::channel(0);
         Metadata {
-            cluster: RwLock::new(cluster),
+            cluster: ArcSwap::new(cluster),
+            changing: Mutex::new(()),
             unavailable_tablet_server_ids: RwLock::new(HashSet::new()),
             connections: Arc::new(RpcClient::new()),
             bootstrap: Arc::from(""),
@@ -965,6 +963,33 @@ mod tests {
         assert!(cluster.get_table_id(&table_path).is_none());
         assert!(cluster.opt_get_table(&table_path).is_none());
         assert!(cluster.leader_for(&TableBucket::new(1, 0)).is_none());
+    }
+
+    #[test]
+    fn update_waits_for_a_running_invalidation() {
+        let table_path = TablePath::new("db", "tbl");
+        let metadata = Metadata::new_for_test(build_cluster_arc(&table_path, 1, 1));
+        let physical_path = PhysicalTablePath::of(Arc::new(table_path));
+        std::thread::scope(|s| {
+            // An invalidation that is still building the next cluster.
+            let running = metadata.changing.lock();
+            let update =
+                s.spawn(|| futures::executor::block_on(metadata.update(server_metadata(&[1], 0))));
+            std::thread::sleep(Duration::from_millis(50));
+            assert!(!update.is_finished());
+            let next = metadata
+                .load_cluster()
+                .invalidate_physical_table_meta(&HashSet::from([physical_path]));
+            metadata.swap_cluster(&running, next);
+            drop(running);
+            update.join().unwrap().unwrap();
+        });
+        assert!(
+            metadata
+                .get_cluster()
+                .leader_for(&TableBucket::new(1, 0))
+                .is_none()
+        );
     }
 
     #[test]
