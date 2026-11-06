@@ -80,6 +80,9 @@ public interface RemoteLogStorage extends Closeable {
      * existing content already written, it should be overwritten, and do not throw {@link
      * RemoteStorageException}
      *
+     * <p>When this method returns or throws, no upload started by this invocation may still write
+     * segment files. Callers may then safely clean up a failed copy.
+     *
      * @param remoteLogDir the assigned remote log directory.
      * @param remoteLogSegment the remote log segment.
      * @param logSegmentFiles files to be copied to remote storage.
