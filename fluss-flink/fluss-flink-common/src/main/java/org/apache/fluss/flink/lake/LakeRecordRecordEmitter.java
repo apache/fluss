@@ -52,12 +52,10 @@ public class LakeRecordRecordEmitter<OUT> {
                 return;
             }
 
-            // set current split index
-            lakeSnapshotAndFlussLogSplitState.setCurrentLakeSplitIndex(
-                    recordAndPos.getCurrentSplitIndex());
-
-            // set records to skip to state
+            // record is from a lake split, set the read position within it to state
             if (recordAndPos.readRecordsCount() > 0) {
+                lakeSnapshotAndFlussLogSplitState.setCurrentLakeSplitIndex(
+                        recordAndPos.getCurrentSplitIndex());
                 lakeSnapshotAndFlussLogSplitState.setRecordsToSkip(recordAndPos.readRecordsCount());
             }
 
