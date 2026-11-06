@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::TableId;
 use crate::client::WriteRecord;
 use crate::cluster::{BucketLocation, Cluster, ServerNode, ServerType};
 use crate::compression::{
@@ -22,10 +23,14 @@ use crate::compression::{
     DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
 };
 use crate::metadata::{
-    DataField, DataTypes, PhysicalTablePath, RowType, Schema, TableBucket, TableDescriptor,
-    TableInfo, TableOrPartition, TablePath,
+    DataField, DataTypes, JsonSerde, PhysicalTablePath, RowType, Schema, TableBucket,
+    TableDescriptor, TableInfo, TableOrPartition, TablePath,
 };
 use crate::metrics::{LABEL_DATABASE, LABEL_TABLE, ScannerMetrics};
+use crate::proto::{
+    MetadataResponse, PbBucketMetadata, PbPartitionMetadata, PbServerNode, PbTableMetadata,
+    PbTablePath,
+};
 use crate::record::{
     APPEND_ONLY_FLAG_MASK, ATTRIBUTES_OFFSET, ArrowBatchConfig, CRC_LENGTH, CRC_OFFSET, ChangeType,
     LENGTH_LENGTH, LENGTH_OFFSET, LOG_MAGIC_VALUE_V1, LOG_OVERHEAD, MAGIC_OFFSET,
@@ -283,4 +288,71 @@ pub(crate) fn splice_change_type_vector(
     let crc = crc32c(&data[SCHEMA_ID_OFFSET..]);
     data[CRC_OFFSET..CRC_OFFSET + CRC_LENGTH].copy_from_slice(&crc.to_le_bytes());
     data
+}
+
+pub(crate) fn pb_table_metadata(
+    table_name: &str,
+    table_id: TableId,
+    partitioned: bool,
+    bucket_metadata: Vec<PbBucketMetadata>,
+) -> PbTableMetadata {
+    let mut descriptor = TableDescriptor::builder().schema(
+        Schema::builder()
+            .column("id", DataTypes::int())
+            .column("p", DataTypes::string())
+            .build()
+            .unwrap(),
+    );
+    if partitioned {
+        descriptor = descriptor.partitioned_by(vec!["p"]);
+    }
+    let descriptor = descriptor
+        .distributed_by(Some(4), vec!["id".to_string()])
+        .build()
+        .unwrap();
+    PbTableMetadata {
+        table_path: PbTablePath {
+            database_name: "db".to_string(),
+            table_name: table_name.to_string(),
+        },
+        table_id,
+        schema_id: 1,
+        table_json: serde_json::to_vec(&descriptor.serialize_json().unwrap()).unwrap(),
+        bucket_metadata,
+        created_time: 0,
+        modified_time: 0,
+        remote_data_dir: None,
+        bucket_count_epoch: None,
+        bucket_count: None,
+    }
+}
+
+pub(crate) fn pb_bucket(bucket_id: i32) -> PbBucketMetadata {
+    PbBucketMetadata {
+        bucket_id,
+        leader_id: Some(1),
+        replica_id: vec![1],
+        leader_epoch: None,
+        bucket_epoch: None,
+        isr: vec![1],
+    }
+}
+
+pub(crate) fn pb_metadata_response(
+    table_metadata: Vec<PbTableMetadata>,
+    partition_metadata: Vec<PbPartitionMetadata>,
+) -> MetadataResponse {
+    MetadataResponse {
+        coordinator_server: None,
+        tablet_servers: vec![PbServerNode {
+            node_id: 1,
+            host: "ts1".to_string(),
+            port: 9123,
+            listeners: None,
+            rack: None,
+            server_tag: None,
+        }],
+        table_metadata,
+        partition_metadata,
+    }
 }
