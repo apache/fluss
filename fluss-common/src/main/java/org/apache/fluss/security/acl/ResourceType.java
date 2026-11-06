@@ -40,10 +40,10 @@ import org.apache.fluss.annotation.PublicEvolving;
  * Enumeration representing resource types used in ACL management. Permission hierarchies are
  * defined as follows:
  *
- * <p>1. CLUSTER permissions implicitly include database and consumer-group permissions under the
- * same operation. 2. DATABASE permissions implicitly include permissions on tables in that
- * database. Consumer groups do not belong to a database. 3. ANY matches all resource types and is
- * only used for lookup.
+ * <p>1. CLUSTER permissions implicitly include database permissions under the same operation. 2.
+ * DATABASE permissions implicitly include permissions on tables in that database. 3. GROUP
+ * permissions are independent of CLUSTER, DATABASE, and TABLE permissions. 4. ANY matches all
+ * resource types and is only used for lookup.
  *
  * <p>This hierarchy ensures that higher-level permissions automatically grant access to lower-level
  * resources within the same operation.

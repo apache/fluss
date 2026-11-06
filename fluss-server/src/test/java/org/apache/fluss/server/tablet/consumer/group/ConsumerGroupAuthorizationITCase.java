@@ -23,6 +23,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.AuthorizationException;
 import org.apache.fluss.exception.InvalidConsumerGroupIdException;
 import org.apache.fluss.rpc.GatewayClientProxy;
+import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.CreateAclsRequest;
 import org.apache.fluss.rpc.messages.DropAclsRequest;
@@ -45,10 +46,10 @@ import org.apache.fluss.server.testutils.FlussClusterExtension;
 
 import org.apache.commons.lang3.StringUtils;
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
 import java.util.Arrays;
@@ -59,6 +60,8 @@ import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toPbAclBindingFilt
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toPbAclInfos;
 import static org.apache.fluss.security.acl.OperationType.ALL;
 import static org.apache.fluss.security.acl.OperationType.DESCRIBE;
+import static org.apache.fluss.security.acl.OperationType.READ;
+import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newGetTableInfoRequest;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -69,24 +72,26 @@ class ConsumerGroupAuthorizationITCase {
     private static final String GROUP_ID = "default-consumer";
     private static final Duration WAIT_TIMEOUT = Duration.ofMinutes(1);
 
-    private final FlussClusterExtension cluster =
-            FlussClusterExtension.builder()
-                    .setNumOfTabletServers(1)
-                    .setCoordinatorServerListeners("FLUSS://localhost:0, CLIENT://localhost:0")
-                    .setTabletServerListeners("FLUSS://localhost:0, CLIENT://localhost:0")
-                    .setClusterConf(
-                            new Configuration()
-                                    .set(ConfigOptions.AUTHORIZER_ENABLED, true)
-                                    .set(ConfigOptions.OFFSETS_TABLE_NUM_BUCKETS, 1)
-                                    .set(ConfigOptions.OFFSETS_TABLE_REPLICATION_FACTOR, 1))
-                    .build();
-
+    private FlussClusterExtension cluster;
     private NettyClient client;
     private TabletServerGateway clientGateway;
     private ServerNode clientNode;
 
-    @BeforeEach
-    void setUp() throws Exception {
+    private void startCluster(boolean bypassGroupAcls) throws Exception {
+        cluster =
+                FlussClusterExtension.builder()
+                        .setNumOfTabletServers(1)
+                        .setCoordinatorServerListeners("FLUSS://localhost:0, CLIENT://localhost:0")
+                        .setTabletServerListeners("FLUSS://localhost:0, CLIENT://localhost:0")
+                        .setClusterConf(
+                                new Configuration()
+                                        .set(ConfigOptions.AUTHORIZER_ENABLED, true)
+                                        .set(
+                                                ConfigOptions.AUTHORIZER_GROUP_ACL_BYPASS_ENABLED,
+                                                bypassGroupAcls)
+                                        .set(ConfigOptions.OFFSETS_TABLE_NUM_BUCKETS, 1)
+                                        .set(ConfigOptions.OFFSETS_TABLE_REPLICATION_FACTOR, 1))
+                        .build();
         cluster.start();
         clientNode = cluster.getTabletServerNodes("CLIENT").get(0);
         // Keep external requests from reusing the cluster's internal-listener connections.
@@ -103,12 +108,17 @@ class ConsumerGroupAuthorizationITCase {
                 client.close();
             }
         } finally {
-            cluster.close();
+            if (cluster != null) {
+                cluster.close();
+            }
         }
     }
 
     @Test
     void testFindOwnerRequiresGroupDescribeBeforeInitializingSystemTable() throws Exception {
+        startCluster(false);
+        assertOwnerDiscoveryDenied(GROUP_ID);
+        grant(ALL, Resource.cluster());
         grant(ALL, Resource.table("default", "consumer"));
         grant(DESCRIBE, Resource.group("other-group"));
 
@@ -122,27 +132,12 @@ class ConsumerGroupAuthorizationITCase {
             value = OperationType.class,
             names = {"DESCRIBE", "READ", "WRITE"})
     void testFindOwnerWithGroupPermission(OperationType operation) throws Exception {
+        startCluster(false);
         List<AclBinding> bindings = grant(operation, Resource.group(GROUP_ID));
         assertThat(cluster.getZooKeeperClient().tableExist(SystemTables.CONSUMER_OFFSETS))
                 .isFalse();
 
-        retry(
-                WAIT_TIMEOUT,
-                () ->
-                        assertThat(
-                                        clientGateway.findConsumerGroupOwner(
-                                                new FindConsumerGroupOwnerRequest()
-                                                        .setGroupId(GROUP_ID)))
-                                .succeedsWithin(WAIT_TIMEOUT)
-                                .satisfies(
-                                        response -> {
-                                            assertThat(response.getOwner().getNodeId())
-                                                    .isEqualTo(clientNode.id());
-                                            assertThat(response.getOwner().getHost())
-                                                    .isEqualTo(clientNode.host());
-                                            assertThat(response.getOwner().getPort())
-                                                    .isEqualTo(clientNode.port());
-                                        }));
+        assertOwnerDiscoveryAllowed();
         assertOwnerDiscoveryDenied("other-group");
 
         AclBindingFilter filter =
@@ -159,8 +154,10 @@ class ConsumerGroupAuthorizationITCase {
         assertOwnerDiscoveryDenied(GROUP_ID);
     }
 
-    @Test
-    void testInvalidGroupNamesAreRejectedByRpc() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testInvalidGroupNamesAreRejectedByRpc(boolean bypassGroupAcls) throws Exception {
+        startCluster(bypassGroupAcls);
         for (String groupId :
                 Arrays.asList(
                         "",
@@ -216,16 +213,88 @@ class ConsumerGroupAuthorizationITCase {
                 .isFalse();
     }
 
+    @Test
+    void testGroupAclBypassPreservesTableAndAclAdministrationChecks() throws Exception {
+        startCluster(true);
+        assertOwnerDiscoveryAllowed();
+        List<AclBinding> bindings =
+                grant(new FlussPrincipal("other-user", "USER"), READ, Resource.group(GROUP_ID));
+        assertOwnerDiscoveryAllowed();
+
+        assertThatThrownBy(
+                        () ->
+                                clientGateway
+                                        .getTableInfo(
+                                                newGetTableInfoRequest(
+                                                        SystemTables.CONSUMER_OFFSETS))
+                                        .get())
+                .rootCause()
+                .isInstanceOf(AuthorizationException.class);
+
+        CoordinatorGateway externalCoordinator =
+                GatewayClientProxy.createGatewayProxy(
+                        () -> cluster.getCoordinatorServerNode("CLIENT"),
+                        client,
+                        CoordinatorGateway.class);
+        assertThatThrownBy(
+                        () ->
+                                externalCoordinator
+                                        .createAcls(
+                                                new CreateAclsRequest()
+                                                        .addAllAcls(toPbAclInfos(bindings)))
+                                        .get())
+                .rootCause()
+                .isInstanceOf(AuthorizationException.class);
+        AclBindingFilter groupFilter =
+                new AclBindingFilter(
+                        new ResourceFilter(ResourceType.GROUP, GROUP_ID),
+                        AccessControlEntryFilter.ANY);
+        assertThatThrownBy(
+                        () ->
+                                externalCoordinator
+                                        .dropAcls(
+                                                new DropAclsRequest()
+                                                        .addAllAclFilters(
+                                                                toPbAclBindingFilters(
+                                                                        Collections.singletonList(
+                                                                                groupFilter))))
+                                        .get())
+                .rootCause()
+                .isInstanceOf(AuthorizationException.class);
+    }
+
+    private void assertOwnerDiscoveryAllowed() throws Exception {
+        retry(
+                WAIT_TIMEOUT,
+                () ->
+                        assertThat(
+                                        clientGateway.findConsumerGroupOwner(
+                                                new FindConsumerGroupOwnerRequest()
+                                                        .setGroupId(GROUP_ID)))
+                                .succeedsWithin(WAIT_TIMEOUT)
+                                .satisfies(
+                                        response -> {
+                                            assertThat(response.getOwner().getNodeId())
+                                                    .isEqualTo(clientNode.id());
+                                            assertThat(response.getOwner().getHost())
+                                                    .isEqualTo(clientNode.host());
+                                            assertThat(response.getOwner().getPort())
+                                                    .isEqualTo(clientNode.port());
+                                        }));
+    }
+
     private List<AclBinding> grant(OperationType operation, Resource resource) throws Exception {
+        return grant(FlussPrincipal.ANONYMOUS, operation, resource);
+    }
+
+    private List<AclBinding> grant(
+            FlussPrincipal principal, OperationType operation, Resource resource) throws Exception {
         List<AclBinding> bindings =
                 Collections.singletonList(
                         new AclBinding(
                                 resource,
                                 new AccessControlEntry(
-                                        FlussPrincipal.ANONYMOUS,
-                                        "*",
-                                        operation,
-                                        PermissionType.ALLOW)));
+                                        principal, "*", operation, PermissionType.ALLOW)));
         cluster.newCoordinatorClient()
                 .createAcls(new CreateAclsRequest().addAllAcls(toPbAclInfos(bindings)))
                 .get();

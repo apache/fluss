@@ -38,8 +38,9 @@ import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.utils.ExceptionUtils;
 
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.RegisterExtension;
 
 import java.time.Duration;
 import java.util.concurrent.ExecutionException;
@@ -55,8 +56,8 @@ class ConsumerOffsetTableITCase {
     private static final String INTERNAL_LISTENER = "INTERNAL";
     private static final String CLIENT_LISTENER = "CLIENT";
 
-    @RegisterExtension
-    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
+    // The server caches system-table initialization, so each test needs a fresh cluster.
+    private final FlussClusterExtension cluster =
             FlussClusterExtension.builder()
                     .setNumOfTabletServers(1)
                     .setCoordinatorServerListeners(
@@ -70,16 +71,23 @@ class ConsumerOffsetTableITCase {
                     .setClusterConf(clusterConfiguration())
                     .build();
 
+    @BeforeEach
+    void setUp() throws Exception {
+        cluster.start();
+    }
+
+    @AfterEach
+    void tearDown() throws Exception {
+        cluster.close();
+    }
+
     @Test
     void testInternalCreationIgnoresKvRestrictionAndClusterDataLakeFormat() throws Exception {
         String groupId = "group-with-cluster-lake-format";
         ensureConsumerOffsetTable(groupId);
 
         TableRegistration tableRegistration =
-                FLUSS_CLUSTER_EXTENSION
-                        .getZooKeeperClient()
-                        .getTable(SystemTables.CONSUMER_OFFSETS)
-                        .get();
+                cluster.getZooKeeperClient().getTable(SystemTables.CONSUMER_OFFSETS).get();
         TableConfig tableConfig = tableRegistration.getTableConfig();
         assertThat(tableConfig.getDataLakeFormat()).isEmpty();
         assertThat(tableRegistration.properties)
@@ -100,12 +108,10 @@ class ConsumerOffsetTableITCase {
     void testExternalRequestCannotCreateSystemTable() throws Exception {
         // RpcClient caches connections by server uid, so close a possible internal-listener
         // connection before connecting to the same coordinator through the client listener.
-        FLUSS_CLUSTER_EXTENSION
-                .getRpcClient()
-                .disconnect(FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode(CLIENT_LISTENER).uid())
+        cluster.getRpcClient()
+                .disconnect(cluster.getCoordinatorServerNode(CLIENT_LISTENER).uid())
                 .get();
-        AdminGateway externalGateway =
-                FLUSS_CLUSTER_EXTENSION.newCoordinatorClient(CLIENT_LISTENER);
+        AdminGateway externalGateway = cluster.newCoordinatorClient(CLIENT_LISTENER);
         TableDescriptor tableDescriptor = newConsumerOffsetTableDescriptor();
 
         assertSystemTableCreationRejected(
@@ -121,10 +127,9 @@ class ConsumerOffsetTableITCase {
                 externalGateway, SystemTables.CONSUMER_OFFSETS, tableDescriptor, true);
     }
 
-    private static void ensureConsumerOffsetTable(String groupId) throws Exception {
-        ServerNode tabletServer = FLUSS_CLUSTER_EXTENSION.getTabletServerNodes().iterator().next();
-        TabletServerGateway gateway =
-                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(tabletServer.id());
+    private void ensureConsumerOffsetTable(String groupId) throws Exception {
+        ServerNode tabletServer = cluster.getTabletServerNodes().iterator().next();
+        TabletServerGateway gateway = cluster.newTabletServerClientForNode(tabletServer.id());
 
         retry(
                 Duration.ofMinutes(1),
@@ -136,6 +141,10 @@ class ConsumerOffsetTableITCase {
                                                         .setGroupId(groupId))
                                         .get();
                         assertThat(response.getOwner().getNodeId()).isEqualTo(tabletServer.id());
+                        assertThat(
+                                        cluster.getZooKeeperClient()
+                                                .tableExist(SystemTables.CONSUMER_OFFSETS))
+                                .isTrue();
                     } catch (ExecutionException e) {
                         Throwable cause = ExceptionUtils.stripExecutionException(e);
                         if (cause instanceof ConsumerGroupOwnerNotAvailableException

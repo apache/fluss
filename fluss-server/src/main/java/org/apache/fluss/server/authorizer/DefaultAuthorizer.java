@@ -105,7 +105,7 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
                     return Sets.newHashSet(res, Resource.database(split[0]), Resource.cluster());
                 });
         mapping.put(ResourceType.DATABASE, res -> Sets.newHashSet(res, Resource.cluster()));
-        mapping.put(ResourceType.GROUP, res -> Sets.newHashSet(res, Resource.cluster()));
+        mapping.put(ResourceType.GROUP, Sets::newHashSet);
         mapping.put(ResourceType.CLUSTER, Sets::newHashSet);
         RESOURCE_MAPPING = Collections.unmodifiableMap(mapping);
 
@@ -124,6 +124,7 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
 
     private final Set<FlussPrincipal> superUsers;
     private final boolean principalIgnoreCase;
+    private final boolean groupAclBypassEnabled;
 
     private final ZooKeeperClient zooKeeperClient;
     private final ZkNodeChangeNotificationWatcher aclChangeNotificationWatcher;
@@ -142,6 +143,8 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
         this.superUsers = parseSuperUsers(configuration);
         this.principalIgnoreCase =
                 configuration.get(ConfigOptions.SECURITY_ACL_PRINCIPAL_IGNORE_CASE);
+        this.groupAclBypassEnabled =
+                configuration.get(ConfigOptions.AUTHORIZER_GROUP_ACL_BYPASS_ENABLED);
         if (context.getZooKeeperClient().isPresent()) {
             this.zooKeeperClient = context.getZooKeeperClient().get();
         } else {
@@ -176,6 +179,7 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
     public boolean authorizeAction(Session session, Action action) {
         FlussPrincipal principal = session.getPrincipal();
         return isSuperUser(principal)
+                || (groupAclBypassEnabled && action.getResource().getType() == ResourceType.GROUP)
                 || aclsAllowAccess(
                         action.getResource(),
                         principal,
@@ -248,6 +252,11 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
                         .collect(Collectors.toList());
 
         synchronized (lock) {
+            if (aclBindingFilters.stream()
+                    .anyMatch(
+                            filter -> filter.getResourceFilter().getType() == ResourceType.GROUP)) {
+                authorize(session, OperationType.ALTER, Resource.cluster());
+            }
             Map<Resource, VersionedAcls> aclCacheSnapshot = aclCache;
             Set<Resource> resources = new HashSet<>(aclCacheSnapshot.keySet());
             Map<Resource, List<Tuple2<AclBindingFilter, Integer>>> resourcesToUpdate =
@@ -321,12 +330,23 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
 
     @Override
     public Collection<AclBinding> listAcls(Session session, AclBindingFilter aclBindingFilter) {
+        if (aclBindingFilter.getResourceFilter().getType() == ResourceType.GROUP) {
+            authorize(session, OperationType.DESCRIBE, Resource.cluster());
+        }
         Map<Resource, VersionedAcls> aclCacheSnapshot = aclCache;
         Set<AclBinding> aclBindings = new HashSet<>();
 
         aclCacheSnapshot.forEach(
                 (resource, aclSet) -> {
-                    if (isAuthorized(session, OperationType.DESCRIBE, resource, aclCacheSnapshot)) {
+                    Resource permissionResource =
+                            resource.getType() == ResourceType.GROUP
+                                    ? Resource.cluster()
+                                    : resource;
+                    if (isAuthorized(
+                            session,
+                            OperationType.DESCRIBE,
+                            permissionResource,
+                            aclCacheSnapshot)) {
                         aclSet.acls.forEach(
                                 acl -> {
                                     AclBinding aclBinding = new AclBinding(resource, acl);
@@ -664,14 +684,18 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
     private void authorizeAclOperation(Session session, Collection<Resource> resources) {
         resources.forEach(
                 resource -> {
-                    // Table ACLs are managed at database scope; group ACLs use the group itself.
-                    authorize(
-                            session,
-                            OperationType.ALL,
-                            resource.getType() != ResourceType.TABLE
-                                    ? resource
-                                    : Resource.database(
-                                            resource.getName().split(TABLE_SPLITTER)[0]));
+                    // Group ACL administration always checks Cluster, outside the Group bypass.
+                    if (resource.getType() == ResourceType.GROUP) {
+                        authorize(session, OperationType.ALTER, Resource.cluster());
+                    } else {
+                        authorize(
+                                session,
+                                OperationType.ALL,
+                                resource.getType() != ResourceType.TABLE
+                                        ? resource
+                                        : Resource.database(
+                                                resource.getName().split(TABLE_SPLITTER)[0]));
+                    }
                 });
     }
 

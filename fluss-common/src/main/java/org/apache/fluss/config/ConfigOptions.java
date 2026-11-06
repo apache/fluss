@@ -309,6 +309,18 @@ public class ConfigOptions {
                                     + "The default value is `default`, which indicates the built-in authorizer implementation. "
                                     + "Custom authorizers can be implemented by providing a matching plugin identifier.");
 
+    /** Controls whether the default authorizer bypasses consumer-group operation checks. */
+    public static final ConfigOption<Boolean> AUTHORIZER_GROUP_ACL_BYPASS_ENABLED =
+            key("authorizer.group-acl-bypass.enabled")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Whether the built-in default authorizer bypasses ACL checks for "
+                                    + "consumer-group operations, even when Group ACLs exist. "
+                                    + "Table permissions, group ID validation, and ACL administration "
+                                    + "remain enforced. Custom authorizers are unaffected. "
+                                    + "Changes take effect after restarting the servers.");
+
     public static final ConfigOption<String> SUPER_USERS =
             key("super.users")
                     .stringType()
