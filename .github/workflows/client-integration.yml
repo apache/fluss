@@ -194,6 +194,11 @@ jobs:
         env:
           RUST_LOG: DEBUG
           RUST_BACKTRACE: full
+      - name: UnionRead boundary integration tests
+        run: cargo test --locked -p fluss-lake --features integration_tests --test test_prepare
+        env:
+          RUST_LOG: DEBUG
+          RUST_BACKTRACE: full
 
   gateway-integration:
     needs: [detect-changes, build-server-image]

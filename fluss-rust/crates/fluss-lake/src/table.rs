@@ -1,0 +1,134 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+//! Table entry point for capturing reusable UnionRead source boundaries.
+
+use crate::error::planning_client_error;
+use crate::{FlussLakeError, FlussLakeReadContext, Result};
+use fluss::client::FlussConnection;
+use fluss::metadata::{PartitionSpec, TableInfo, TablePath};
+use std::collections::HashMap;
+use std::fmt::{Debug, Formatter};
+use std::sync::Arc;
+
+/// Reusable table handle for capturing bounded source inputs.
+#[derive(Clone)]
+pub struct FlussLakeTable {
+    connection: Arc<FlussConnection>,
+    table_path: TablePath,
+}
+
+impl FlussLakeTable {
+    /// Creates a reusable table handle without fetching metadata or capturing boundaries.
+    ///
+    /// Table existence and configuration are checked by
+    /// [`Self::capture_read_context`] or its partition-scoped variant.
+    pub fn new(connection: Arc<FlussConnection>, table_path: &TablePath) -> Self {
+        Self {
+            connection,
+            table_path: table_path.clone(),
+        }
+    }
+
+    /// Captures table-wide source boundaries without planning lake files.
+    ///
+    /// The result may be shared by scans with different projections and
+    /// predicates, including separate references to the table in one query.
+    /// This does not open a lake catalog or acquire a retention lease.
+    pub async fn capture_read_context(&self) -> Result<FlussLakeReadContext> {
+        self.capture_read_context_with_partition_scope(&PartitionSpec::new(
+            HashMap::<String, String>::new(),
+        ))
+        .await
+    }
+
+    /// Captures only partitions matching an exact, possibly partial spec.
+    ///
+    /// Scope selection happens before offset queries and also constrains lake
+    /// planning. This is an input restriction, not an optional pruning hint. An empty spec selects
+    /// the whole table. Non-partition keys are rejected; values must use the
+    /// same encoding as Fluss partition metadata. General SQL predicates
+    /// remain the engine's responsibility.
+    pub async fn capture_read_context_with_partition_scope(
+        &self,
+        scope: &PartitionSpec,
+    ) -> Result<FlussLakeReadContext> {
+        let admin = self
+            .connection
+            .get_admin()
+            .map_err(|error| planning_client_error("create Fluss admin client", error))?;
+        let table_info = admin
+            .get_table_info(&self.table_path)
+            .await
+            .map_err(|error| planning_client_error("get table metadata", error))?;
+        validate_readable_table(&table_info)?;
+        crate::boundary::freeze_read_context(&admin, &table_info, scope).await
+    }
+}
+
+impl Debug for FlussLakeTable {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("FlussLakeTable")
+            .field("table_path", &self.table_path)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Resolve the physical lake name without changing the logical Fluss identity.
+pub(crate) fn resolve_lake_table_path(table_info: &TableInfo) -> Result<TablePath> {
+    let database = table_info
+        .properties
+        .get("table.datalake.database-name")
+        .map(String::as_str)
+        .unwrap_or(table_info.table_path.database());
+    let table = table_info
+        .properties
+        .get("table.datalake.table-name")
+        .map(String::as_str)
+        .unwrap_or(table_info.table_path.table());
+    if database.is_empty() || table.is_empty() {
+        return Err(FlussLakeError::PlanningFailed(
+            "lake database and table names must not be empty".to_string(),
+        ));
+    }
+    Ok(TablePath::new(database, table))
+}
+
+pub(crate) fn validate_readable_table(table_info: &TableInfo) -> Result<()> {
+    match table_info.table_config.is_datalake_enabled() {
+        Ok(true) => {}
+        Ok(false) => return Ok(()),
+        Err(error) => {
+            return Err(FlussLakeError::NotLakeReadable(format!(
+                "table {} has an invalid lake configuration: {error}",
+                table_info.table_path
+            )));
+        }
+    }
+    match table_info.table_config.get_datalake_format() {
+        Ok(Some(_)) => Ok(()),
+        Ok(None) => Err(FlussLakeError::NotLakeReadable(format!(
+            "table {} does not define table.datalake.format",
+            table_info.table_path
+        ))),
+        Err(error) => Err(FlussLakeError::NotLakeReadable(format!(
+            "table {} has an invalid lake configuration: {error}",
+            table_info.table_path
+        ))),
+    }
+}
