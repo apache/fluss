@@ -22,6 +22,10 @@ import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.FlussConnection;
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.table.Table;
+import org.apache.fluss.client.table.scanner.log.LogScanner;
+import org.apache.fluss.client.table.scanner.log.ScanRecords;
+import org.apache.fluss.client.table.writer.AppendWriter;
+import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
 import org.apache.fluss.client.table.scanner.log.LogScannerImpl;
@@ -30,6 +34,10 @@ import org.apache.fluss.client.table.writer.AppendWriter;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.metadata.PartitionSpec;
+import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
@@ -42,12 +50,14 @@ import org.apache.fluss.server.coordinator.TestCoordinatorGateway;
 import org.apache.fluss.server.metadata.TableMetadata;
 import org.apache.fluss.server.tablet.TabletServer;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.time.Duration;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -62,6 +72,8 @@ import java.util.stream.IntStream;
 import static org.apache.fluss.client.utils.MetadataUtils.sendMetadataRequestAndRebuildCluster;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
+import static org.apache.fluss.testutils.DataTestUtils.row;
+import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -219,6 +231,71 @@ class MetadataUpdaterITCase {
                             null,
                             null,
                             null);
+        }
+    }
+
+    @Test
+    void testPartitionWriteRecoversMissingTableMapping() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "partition_mapping_recovery");
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.INT())
+                                        .column("region", DataTypes.STRING())
+                                        .build())
+                        .partitionedBy("region")
+                        .distributedBy(1)
+                        .build()
+                        .withReplicationFactor(1);
+        try (Connection connection =
+                        ConnectionFactory.createConnection(
+                                FLUSS_CLUSTER_EXTENSION.getClientConfig());
+                Admin admin = connection.getAdmin()) {
+            admin.createTable(tablePath, descriptor, false).get();
+            admin.createPartition(
+                            tablePath,
+                            new PartitionSpec(Collections.singletonMap("region", "p1")),
+                            false)
+                    .get();
+            try (Table table = connection.getTable(tablePath)) {
+                AppendWriter writer = table.newAppend().createWriter();
+                MetadataUpdater updater = ((FlussConnection) connection).getMetadataUpdater();
+                Cluster nodes = updater.getCluster();
+                // Reproduce an initialized writer whose cache only contains server information.
+                updater.cluster =
+                        new Cluster(
+                                nodes.getAliveTabletServers(),
+                                nodes.getCoordinatorServer(),
+                                Collections.emptyMap(),
+                                Collections.emptyMap(),
+                                Collections.emptyMap(),
+                                Collections.emptyMap());
+                assertThat(updater.getCluster().getTableId(tablePath)).isEmpty();
+
+                writer.append(row(1, "p1")).get();
+                long tableId = table.getTableInfo().getTableId();
+                assertThat(updater.getCluster().getTableId(tablePath)).hasValue(tableId);
+                assertThat(updater.getCluster().getTablePath(tableId)).hasValue(tablePath);
+                long partitionId =
+                        updater.getPartitionIdOrElseThrow(PhysicalTablePath.of(tablePath, "p1"));
+                try (LogScanner scanner = table.newScan().createLogScanner()) {
+                    scanner.subscribeFromBeginning(partitionId, 0);
+                    waitUntil(
+                            () -> {
+                                ScanRecords records = scanner.poll(Duration.ofMillis(100));
+                                if (records.isEmpty()) {
+                                    return false;
+                                }
+                                assertThat(records.count()).isEqualTo(1);
+                                assertThat(records.iterator().next().getRow().getInt(0))
+                                        .isEqualTo(1);
+                                return true;
+                            },
+                            Duration.ofSeconds(10),
+                            "Record was not read after metadata recovery");
+                }
+            }
         }
     }
 
