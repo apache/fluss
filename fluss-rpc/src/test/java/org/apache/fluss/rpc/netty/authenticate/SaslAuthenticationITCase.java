@@ -28,6 +28,9 @@ import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.metrics.util.NOPMetricsGroup;
 import org.apache.fluss.rpc.TestingTabletGatewayService;
+import org.apache.fluss.rpc.messages.ApiMessage;
+import org.apache.fluss.rpc.messages.ApiVersionsRequest;
+import org.apache.fluss.rpc.messages.ApiVersionsResponse;
 import org.apache.fluss.rpc.messages.ListTablesRequest;
 import org.apache.fluss.rpc.messages.ListTablesResponse;
 import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
@@ -43,6 +46,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.Collections;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 
 import static org.apache.fluss.utils.NetUtils.getAvailablePort;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -86,17 +90,51 @@ public class SaslAuthenticationITCase {
     }
 
     @Test
-    void testClientLackMechanism() {
-        String jaasClientInfo =
-                "org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required username=\"admin\" password=\"wrong-secret\";";
+    void testClientLackMechanism() throws Exception {
         Configuration clientConfig = new Configuration();
         clientConfig.setString("client.security.protocol", "sasl");
         clientConfig.setString("client.security.sasl.mechanism", "FAKE");
-        clientConfig.setString("client.security.sasl.jaas.config", jaasClientInfo);
-        assertThatThrownBy(() -> testAuthentication(clientConfig))
-                .cause()
-                .isExactlyInstanceOf(AuthenticationException.class)
-                .hasMessage("Unable to find a matching SASL mechanism for FAKE");
+        clientConfig.setString("client.security.sasl.jaas.config", CLIENT_JAAS_INFO);
+
+        CompletableFuture<Void> allowApiVersionsResponse = new CompletableFuture<>();
+        TestingAuthenticateGatewayService service =
+                new TestingAuthenticateGatewayService() {
+                    @Override
+                    public CompletableFuture<ApiVersionsResponse> apiVersions(
+                            ApiVersionsRequest request) {
+                        return allowApiVersionsResponse.thenCompose(
+                                ignored -> super.apiVersions(request));
+                    }
+                };
+        MetricGroup metricGroup = NOPMetricsGroup.newInstance();
+        try (NetUtils.Port port = getAvailablePort();
+                NettyServer nettyServer =
+                        new NettyServer(
+                                getDefaultServerConfig(),
+                                Collections.singletonList(
+                                        new Endpoint("localhost", port.getPort(), "CLIENT")),
+                                service,
+                                metricGroup,
+                                RequestsMetrics.createCoordinatorServerRequestMetrics(
+                                        metricGroup));
+                NettyClient nettyClient =
+                        new NettyClient(clientConfig, TestingClientMetricGroup.newInstance())) {
+            nettyServer.start();
+            ServerNode serverNode =
+                    new ServerNode(1, "localhost", port.getPort(), ServerType.TABLET_SERVER);
+            ListTablesRequest request = new ListTablesRequest().setDatabaseName("test-database");
+            CompletableFuture<ApiMessage> response =
+                    nettyClient.sendRequest(serverNode, ApiKeys.LIST_TABLES, request);
+
+            // Keep the request pending until authentication initialization can begin.
+            assertThat(response).isNotDone();
+            allowApiVersionsResponse.complete(null);
+            assertThatThrownBy(response::get)
+                    .isInstanceOf(ExecutionException.class)
+                    .cause()
+                    .isExactlyInstanceOf(AuthenticationException.class)
+                    .hasMessage("Unable to find a matching SASL mechanism for FAKE");
+        }
     }
 
     @Test
@@ -105,7 +143,7 @@ public class SaslAuthenticationITCase {
                 "org.apache.fluss.security.auth.sasl.jaas.FakeLoginModule required username=\"admin\" password=\"wrong-secret\";";
         Configuration clientConfig = new Configuration();
         clientConfig.setString("client.security.protocol", "sasl");
-        clientConfig.setString("client.security.sasl.mechanism", "FAKE");
+        clientConfig.setString("client.security.sasl.mechanism", "PLAIN");
         clientConfig.setString("client.security.sasl.jaas.config", jaasClientInfo);
         assertThatThrownBy(() -> testAuthentication(clientConfig))
                 .isExactlyInstanceOf(AuthenticationException.class)
@@ -115,16 +153,17 @@ public class SaslAuthenticationITCase {
 
     @Test
     void testClientMechanismNotMatchServer() {
-        String jaasClientInfo =
-                " org.apache.fluss.security.auth.sasl.jaas.DigestLoginModule required username=\"admin\" password=\"wrong-secret\";";
         Configuration clientConfig = new Configuration();
         clientConfig.setString("client.security.protocol", "sasl");
-        clientConfig.setString("client.security.sasl.mechanism", "DIGEST-MD5");
-        clientConfig.setString("client.security.sasl.jaas.config", jaasClientInfo);
-        assertThatThrownBy(() -> testAuthentication(clientConfig))
+        clientConfig.setString("client.security.sasl.mechanism", "PLAIN");
+        clientConfig.setString("client.security.sasl.jaas.config", CLIENT_JAAS_INFO);
+        Configuration serverConfig = getDefaultServerConfig();
+        serverConfig.setString("security.sasl.enabled.mechanisms", "FAKE");
+        assertThatThrownBy(() -> testAuthentication(clientConfig, serverConfig))
+                .cause()
                 .isExactlyInstanceOf(AuthenticationException.class)
                 .hasMessageContaining(
-                        "Only 'org.apache.fluss.security.auth.sasl.plain.PlainLoginModule' is supported in 'client.security.sasl.jaas.config'.");
+                        "SASL server enables [FAKE] while protocol of client is 'PLAIN'");
     }
 
     @Test

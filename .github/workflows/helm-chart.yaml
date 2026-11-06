@@ -44,10 +44,16 @@ jobs:
       - name: "Checkout code"
         uses: actions/checkout@v6
 
+      - name: "Set up Helm"
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.3.1
+
       - name: "Lint Helm chart"
         run: helm lint ./helm
 
+      # Helm 4 verifies plugin signatures by default, and helm-unittest is not signed.
       - name: "Run helm-unittest"
         run: |
-          helm plugin install https://github.com/helm-unittest/helm-unittest
+          helm plugin install --verify=false --version v1.2.1 https://github.com/helm-unittest/helm-unittest
           helm unittest ./helm

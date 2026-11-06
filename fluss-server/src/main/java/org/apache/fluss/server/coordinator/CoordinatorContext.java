@@ -19,6 +19,7 @@ package org.apache.fluss.server.coordinator;
 
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.cluster.rebalance.ServerTag;
+import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableBucketReplica;
@@ -29,6 +30,7 @@ import org.apache.fluss.server.coordinator.statemachine.BucketState;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaState;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.zk.ZkEpoch;
+import org.apache.fluss.server.zk.data.CoordinatorAddress;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.utils.types.Tuple2;
 
@@ -41,6 +43,7 @@ import javax.annotation.concurrent.NotThreadSafe;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -69,7 +72,8 @@ public class CoordinatorContext {
     // a success deletion.
     private final Map<TableBucketReplica, Integer> failDeleteNumbers = new HashMap<>();
 
-    private final Set<String> liveCoordinatorServers = new HashSet<>();
+    // coordinator id -> registered address, for all live coordinators including the active one
+    private final Map<String, CoordinatorAddress> liveCoordinatorServers = new HashMap<>();
     private final Map<Integer, ServerInfo> liveTabletServers = new HashMap<>();
     private final Set<Integer> shuttingDownTabletServers = new HashSet<>();
 
@@ -84,9 +88,11 @@ public class CoordinatorContext {
     // a map of partition assignment, <table_id, partition_id> -> <bucket, bucket_replicas>
     private final Map<TablePartition, Map<Integer, List<Integer>>> partitionAssignments =
             new HashMap<>();
+    private final Map<TablePartition, Integer> partitionBucketCounts = new HashMap<>();
     // a map from partition_id -> physicalTablePath
     private final Map<Long, PhysicalTablePath> pathByPartitionId = new HashMap<>();
     private final Map<PhysicalTablePath, Long> partitionIdByPath = new HashMap<>();
+    private final Map<Long, PartitionInfo> partitionInfoById = new HashMap<>();
 
     // a map from table_id to the table path
     private final Map<Long, TablePath> tablePathById = new HashMap<>();
@@ -131,6 +137,9 @@ public class CoordinatorContext {
 
     private ServerInfo coordinatorServerInfo = null;
 
+    /** The id of the active coordinator, used to tell it apart from the standby coordinators. */
+    @Nullable private String coordinatorServerId = null;
+
     public CoordinatorContext(ZkEpoch zkEpoch) {
         this.coordinatorEpoch = zkEpoch.getCoordinatorEpoch();
         this.coordinatorEpochZkVersion = zkEpoch.getCoordinatorEpochZkVersion();
@@ -145,16 +154,16 @@ public class CoordinatorContext {
     }
 
     public Set<String> getLiveCoordinatorServers() {
-        return liveCoordinatorServers;
+        return Collections.unmodifiableSet(liveCoordinatorServers.keySet());
     }
 
-    public void setLiveCoordinators(Set<String> servers) {
+    public void setLiveCoordinators(Collection<CoordinatorAddress> servers) {
         liveCoordinatorServers.clear();
-        liveCoordinatorServers.addAll(servers);
+        servers.forEach(this::addLiveCoordinator);
     }
 
-    public void addLiveCoordinator(String serverId) {
-        this.liveCoordinatorServers.add(serverId);
+    public void addLiveCoordinator(CoordinatorAddress server) {
+        this.liveCoordinatorServers.put(server.getId(), server);
     }
 
     public void removeLiveCoordinator(String serverId) {
@@ -195,6 +204,22 @@ public class CoordinatorContext {
 
     public void setCoordinatorServerInfo(ServerInfo coordinatorServerInfo) {
         this.coordinatorServerInfo = coordinatorServerInfo;
+    }
+
+    public void setCoordinatorServerId(String coordinatorServerId) {
+        this.coordinatorServerId = coordinatorServerId;
+    }
+
+    /**
+     * Returns the live coordinators other than the active one, sorted by coordinator id. A
+     * coordinator is live while its registration in ZooKeeper exists; this does not imply that it
+     * is ready to take over leadership.
+     */
+    public List<CoordinatorAddress> getCoordinatorStandbys() {
+        return liveCoordinatorServers.values().stream()
+                .filter(server -> !server.getId().equals(coordinatorServerId))
+                .sorted(Comparator.comparing(CoordinatorAddress::getId))
+                .collect(Collectors.toList());
     }
 
     public void addLiveTabletServer(ServerInfo serverInfo) {
@@ -404,9 +429,21 @@ public class CoordinatorContext {
         this.tableInfoById.put(tableInfo.getTableId(), tableInfo);
     }
 
-    public void putPartition(long partitionId, PhysicalTablePath physicalTablePath) {
+    public void putPartition(
+            long partitionId, PhysicalTablePath physicalTablePath, PartitionInfo partitionInfo) {
         this.pathByPartitionId.put(partitionId, physicalTablePath);
         this.partitionIdByPath.put(physicalTablePath, partitionId);
+        this.partitionInfoById.put(partitionId, partitionInfo);
+    }
+
+    /** Stores a partition's logical count independently of its bucket locations. */
+    public void putPartitionBucketCount(TablePartition partition, int bucketCount) {
+        partitionBucketCounts.put(partition, bucketCount);
+    }
+
+    /** Returns the partition's registered count, or null before it has been loaded. */
+    public @Nullable Integer getPartitionBucketCount(TablePartition partition) {
+        return partitionBucketCounts.get(partition);
     }
 
     public TableInfo getTableInfoById(long tableId) {
@@ -444,6 +481,10 @@ public class CoordinatorContext {
 
     public Optional<Long> getPartitionId(PhysicalTablePath physicalTablePath) {
         return Optional.ofNullable(partitionIdByPath.get(physicalTablePath));
+    }
+
+    public PartitionInfo getPartitionInfoById(long partitionId) {
+        return partitionInfoById.get(partitionId);
     }
 
     public Map<Integer, List<Integer>> getTableAssignment(long tableId) {
@@ -577,6 +618,11 @@ public class CoordinatorContext {
                             }
                         });
         return allReplicas;
+    }
+
+    public boolean hasPartitionsToDelete(long tableId) {
+        return partitionsToBeDeleted.stream()
+                .anyMatch(partition -> partition.getTableId() == tableId);
     }
 
     /**
@@ -752,6 +798,7 @@ public class CoordinatorContext {
     }
 
     public void removeTable(long tableId) {
+        partitionBucketCounts.keySet().removeIf(partition -> partition.getTableId() == tableId);
         tablesToBeDeleted.remove(tableId);
         Map<Integer, List<Integer>> assignment = tableAssignments.remove(tableId);
         if (assignment != null) {
@@ -775,6 +822,7 @@ public class CoordinatorContext {
     }
 
     public void removePartition(TablePartition tablePartition) {
+        partitionBucketCounts.remove(tablePartition);
         partitionsToBeDeleted.remove(tablePartition);
         Map<Integer, List<Integer>> assignment = partitionAssignments.remove(tablePartition);
         if (assignment != null) {
@@ -799,6 +847,8 @@ public class CoordinatorContext {
         if (physicalTablePath != null) {
             partitionIdByPath.remove(physicalTablePath);
         }
+
+        partitionInfoById.remove(tablePartition.getPartitionId());
     }
 
     public void initSeverTags(Map<Integer, ServerTag> initialServerTags) {
@@ -824,6 +874,7 @@ public class CoordinatorContext {
     private void clearTablesState() {
         tableAssignments.clear();
         partitionAssignments.clear();
+        partitionBucketCounts.clear();
         bucketLeaderAndIsr.clear();
         replicasOnOffline.clear();
         pendingLeaderActivationBuckets.clear();
@@ -844,6 +895,7 @@ public class CoordinatorContext {
         liveCoordinatorServers.clear();
         shuttingDownTabletServers.clear();
         serverTags.clear();
+        partitionInfoById.clear();
     }
 
     public int getTotalPartitionCount() {

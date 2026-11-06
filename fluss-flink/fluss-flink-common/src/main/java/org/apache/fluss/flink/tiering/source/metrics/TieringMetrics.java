@@ -21,15 +21,19 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.metrics.MetricNames;
 
 import org.apache.flink.metrics.Counter;
+import org.apache.flink.metrics.Gauge;
 import org.apache.flink.metrics.MeterView;
 import org.apache.flink.metrics.MetricGroup;
 import org.apache.flink.metrics.groups.SourceReaderMetricGroup;
+import org.apache.flink.metrics.groups.SplitEnumeratorMetricGroup;
+import org.apache.flink.runtime.metrics.groups.AbstractMetricGroup;
 
 /**
- * A collection class for handling metrics in Tiering source reader.
+ * Metrics for the Flink-based tiering source.
  *
- * <p>All metrics are registered under group "fluss.tieringService", which is a child group of
- * {@link org.apache.flink.metrics.groups.OperatorMetricGroup}.
+ * <p>All metrics are registered under group "fluss.tieringService", as a child of {@link
+ * SourceReaderMetricGroup} for reader metrics or {@link SplitEnumeratorMetricGroup} for enumerator
+ * metrics.
  *
  * <p>The following metrics are available:
  *
@@ -38,6 +42,8 @@ import org.apache.flink.metrics.groups.SourceReaderMetricGroup;
  *       since the job started (actual Fluss records size).
  *   <li>{@code fluss.tieringService.readBytesPerSecond} - Meter: bytes-per-second rate derived from
  *       the counter using a 60-second sliding window.
+ *   <li>{@code fluss.tieringService.readersAwaitingSplitRatio} - Gauge: fraction of source readers
+ *       waiting for splits, reported by the enumerator.
  * </ul>
  */
 @Internal
@@ -63,5 +69,20 @@ public class TieringMetrics {
     /** Records bytes read from Fluss records. Called per batch or record processing. */
     public void recordBytesRead(long bytes) {
         readBytesCounter.inc(bytes);
+    }
+
+    /** Registers the waiting reader ratio and returns a handle to close its metric subgroup. */
+    public static AutoCloseable registerReadersAwaitingSplitRatio(
+            SplitEnumeratorMetricGroup metricGroup, Gauge<Double> readersAwaitingSplitRatio) {
+        MetricGroup tieringServiceGroup =
+                metricGroup.addGroup(FLUSS_METRIC_GROUP).addGroup(TIERING_SERVICE_GROUP);
+        tieringServiceGroup.gauge(
+                MetricNames.TIERING_SERVICE_READERS_AWAITING_SPLIT_RATIO,
+                readersAwaitingSplitRatio);
+        return () -> {
+            if (tieringServiceGroup instanceof AbstractMetricGroup) {
+                ((AbstractMetricGroup<?>) tieringServiceGroup).close();
+            }
+        };
     }
 }

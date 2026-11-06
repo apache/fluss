@@ -24,6 +24,7 @@ import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
 import org.apache.fluss.client.table.scanner.log.ScanRecords;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.flink.sink.shuffle.DistributionMode;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
@@ -1343,6 +1344,73 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
     }
 
     @Test
+    @MultiVersionTest
+    void testSkipUnchangedUpsertsSupportsMutations() throws Exception {
+        String tableName = "skipUnchangedUpsertsTable";
+        tBatchEnv.executeSql(
+                String.format(
+                        "create table %s ("
+                                + " a int not null,"
+                                + " b bigint null, "
+                                + " c string null, "
+                                + " primary key (a) not enforced"
+                                + ") with ('table.upsert.skip-unchanged' = 'true')",
+                        tableName));
+
+        tBatchEnv
+                .executeSql(
+                        String.format(
+                                "INSERT INTO %s VALUES (1, 10, 'initial'), (2, 20, 'delete')",
+                                tableName))
+                .await();
+
+        // Verify that the Flink sink accepts partial updates with unchanged writes skipped.
+        tBatchEnv
+                .executeSql(String.format("INSERT INTO %s (a, c) VALUES (1, 'partial')", tableName))
+                .await();
+
+        // Verify that row-level UPDATE and DELETE statements are accepted as well.
+        tBatchEnv.executeSql(String.format("UPDATE %s SET b = 11 WHERE a = 1", tableName)).await();
+        tBatchEnv.executeSql(String.format("DELETE FROM %s WHERE a = 2", tableName)).await();
+
+        CloseableIterator<Row> rowIter =
+                tBatchEnv.executeSql(String.format("SELECT * FROM %s", tableName)).collect();
+        assertResultsIgnoreOrder(rowIter, Collections.singletonList("+I[1, 11, partial]"), true);
+    }
+
+    @Test
+    @MultiVersionTest
+    void testSkipUnchangedUpsertsRejectsWalImage() {
+        assertThatThrownBy(
+                        () ->
+                                tBatchEnv.executeSql(
+                                        "create table skip_unchanged_wal ("
+                                                + "a int not null, b string, primary key (a) not enforced"
+                                                + ") with ('table.upsert.skip-unchanged' = 'true', "
+                                                + "'table.changelog.image' = 'wal')"))
+                .rootCause()
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining("table.upsert.skip-unchanged")
+                .hasMessageContaining("table.changelog.image");
+    }
+
+    @Test
+    @MultiVersionTest
+    void testSkipUnchangedUpsertsRejectsKvTtl() {
+        assertThatThrownBy(
+                        () ->
+                                tBatchEnv.executeSql(
+                                        "create table skip_unchanged_ttl ("
+                                                + "a int not null, b string, primary key (a) not enforced"
+                                                + ") with ('table.upsert.skip-unchanged' = 'true', "
+                                                + "'table.kv.ttl' = '1 h')"))
+                .rootCause()
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining("table.upsert.skip-unchanged")
+                .hasMessageContaining("table.kv.ttl");
+    }
+
+    @Test
     void testVersionMergeEngineWithTypeBigint() throws Exception {
         tEnv.executeSql(
                 "create table merge_engine_with_version (a int not null primary key not enforced,"
@@ -1622,6 +1690,40 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                         "+U[1, [c, d], [1, 2]]",
                         "+I[2, [y, z], [1]]");
         assertResultsIgnoreOrder(rowIter, expectedRows, true);
+    }
+
+    @Test
+    void testCollectionAggregation() throws Exception {
+        tEnv.executeSql(
+                "create table collection_agg ("
+                        + "id int not null primary key not enforced, "
+                        + "tags array<string>, "
+                        + "events array<string>, "
+                        + "attributes map<string, int>"
+                        + ") with ("
+                        + "'table.merge-engine' = 'aggregation', "
+                        + "'fields.tags.agg' = 'collect', "
+                        + "'fields.tags.collect.distinct' = 'true', "
+                        + "'fields.events.agg' = 'collect', "
+                        + "'fields.attributes.agg' = 'merge_map')");
+
+        tEnv.executeSql(
+                        "INSERT INTO collection_agg VALUES "
+                                + "(1, ARRAY['b', 'a', 'b'], ARRAY['x', 'x'], MAP['a', 1])")
+                .await();
+        tEnv.executeSql(
+                        "INSERT INTO collection_agg VALUES "
+                                + "(1, ARRAY['a', 'c'], ARRAY['y'], MAP['a', 2])")
+                .await();
+
+        CloseableIterator<Row> rowIter = tEnv.executeSql("SELECT * FROM collection_agg").collect();
+        assertResultsIgnoreOrder(
+                rowIter,
+                Arrays.asList(
+                        "+I[1, [b, a], [x, x], {a=1}]",
+                        "-U[1, [b, a], [x, x], {a=1}]",
+                        "+U[1, [b, a, c], [x, x, y], {a=2}]"),
+                true);
     }
 
     @Test

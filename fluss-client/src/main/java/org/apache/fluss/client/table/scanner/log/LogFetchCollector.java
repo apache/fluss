@@ -28,10 +28,12 @@ import org.apache.fluss.record.LogRecordBatch;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 
 import java.util.List;
 import java.util.Map;
+import java.util.function.BiPredicate;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -46,6 +48,7 @@ import java.util.Map;
 @Internal
 public class LogFetchCollector extends AbstractLogFetchCollector<ScanRecord, ScanRecords> {
     private static final Logger LOG = LoggerFactory.getLogger(LogFetchCollector.class);
+    @Nullable private BiPredicate<TableBucket, LogRecord> recordFilter;
 
     public LogFetchCollector(
             LogScannerStatus logScannerStatus,
@@ -54,9 +57,22 @@ public class LogFetchCollector extends AbstractLogFetchCollector<ScanRecord, Sca
         super(LOG, logScannerStatus, conf, metadataUpdater);
     }
 
+    void setRecordFilter(@Nullable BiPredicate<TableBucket, LogRecord> recordFilter) {
+        this.recordFilter = recordFilter;
+    }
+
     @Override
     protected List<ScanRecord> doFetchRecords(CompletedFetch nextInLineFetch, int maxRecords) {
-        return nextInLineFetch.fetchRecords(maxRecords);
+        return nextInLineFetch.fetchRecords(
+                maxRecords,
+                recordFilter == null
+                        ? null
+                        : record -> recordFilter.test(nextInLineFetch.tableBucket, record));
+    }
+
+    @Override
+    protected int fetchedRecordCount(CompletedFetch fetch, List<ScanRecord> records) {
+        return fetch.lastFetchRecordCount();
     }
 
     @Override

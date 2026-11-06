@@ -47,6 +47,7 @@ import org.apache.fluss.server.log.remote.RemoteLogTablet;
 import org.apache.fluss.server.log.remote.RemoteLogTestBase;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.tablet.TabletService;
+import org.apache.fluss.server.tablet.consumer.group.GroupManager;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.IOUtils;
 
@@ -192,8 +193,9 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
         oldLeaderLog.updateHighWatermark(oldLeaderLog.localLogEndOffset());
         newLeaderLog.updateHighWatermark(newLeaderLog.localLogEndOffset());
 
+        // Both replicas upload into the directory assigned to the same target bucket.
         RemoteLogSegment oldLeaderSegment =
-                copyLogSegmentToRemote(oldLeaderLog, remoteLogStorage, 0);
+                copySegmentToRemoteForBucket(oldLeaderLog, 0, targetBucket);
         RemoteLogSegment newLeaderSegment =
                 copySegmentToRemoteForBucket(newLeaderLog, sameStart ? 0 : 1, targetBucket);
         assertThat(oldLeaderSegment.remoteLogStartOffset()).isZero();
@@ -223,7 +225,9 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
                                     Collections.emptyList(),
                                     Collections.singletonList(newLeaderSegment));
         }
-        FsPath originalManifestPath = remoteLogStorage.writeRemoteLogManifestSnapshot(manifest);
+        FsPath originalManifestPath =
+                remoteLogStorage.writeRemoteLogManifestSnapshot(
+                        FlussPaths.remoteLogDir(conf), manifest);
         RemoteLogTablet tablet = remoteLogManager.remoteLogTablet(targetBucket);
         tablet.loadRemoteLogManifest(
                 remoteLogStorage.readRemoteLogManifestSnapshot(originalManifestPath));
@@ -253,14 +257,17 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
                 .containsExactlyElementsOf(
                         sameStart ? Collections.singletonList(30L) : Arrays.asList(10L, 30L));
 
-        FsPath normalizedManifestPath = remoteLogStorage.writeRemoteLogManifestSnapshot(normalized);
+        FsPath normalizedManifestPath =
+                remoteLogStorage.writeRemoteLogManifestSnapshot(
+                        FlussPaths.remoteLogDir(conf), normalized);
         tablet.loadRemoteLogManifest(
                 remoteLogStorage.readRemoteLogManifestSnapshot(normalizedManifestPath));
         // Loading and writing the logical view leaves the old snapshot and its physical files
         // intact.
         assertThat(remoteLogStorage.readRemoteLogManifestSnapshot(originalManifestPath))
                 .isEqualTo(manifest);
-        try (InputStream oldSegmentData = remoteLogStorage.fetchLogData(oldLeaderSegment)) {
+        try (InputStream oldSegmentData =
+                remoteLogStorage.fetchLogData(FlussPaths.remoteLogDir(conf), oldLeaderSegment)) {
             assertThat(oldSegmentData.read()).isNotEqualTo(-1);
         }
 
@@ -306,7 +313,8 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
                         executor,
                         scannerManager,
                         testCoordinatorGateway,
-                        "CLIENT");
+                        "CLIENT",
+                        GroupManager.from(conf));
         try (RpcServer server =
                 RpcServer.create(
                         conf,
@@ -1178,7 +1186,7 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
                         .tableBucket(targetBucket)
                         .physicalTablePath(sourceLog.getPhysicalTablePath())
                         .build();
-        remoteLogStorage.copyLogSegmentFiles(remoteSegment, files);
+        remoteLogStorage.copyLogSegmentFiles(FlussPaths.remoteLogDir(conf), remoteSegment, files);
         return remoteSegment;
     }
 }

@@ -20,7 +20,7 @@ use crate::async_nif;
 use crate::atoms::{client_err, to_nif_err};
 use crate::row_convert;
 use crate::table::TableResource;
-use crate::write_handle::WriteHandleResource;
+use crate::write_handle;
 use fluss::client::AppendWriter;
 use fluss::metadata::Column;
 use rustler::{Env, ResourceArc, Term};
@@ -57,10 +57,11 @@ fn append_writer_append<'a>(
     env: Env<'a>,
     writer: ResourceArc<AppendWriterResource>,
     values: Term<'a>,
-) -> Result<ResourceArc<WriteHandleResource>, rustler::Error> {
+) -> Result<Term<'a>, rustler::Error> {
     let row = row_convert::term_to_row(env, values, &writer.columns).map_err(client_err)?;
-    let future = writer.inner.append(&row).map_err(to_nif_err)?;
-    Ok(ResourceArc::new(WriteHandleResource::new(future)))
+    write_handle::queue_write(env, move |deadline| {
+        writer.inner.append_with_deadline(&row, deadline)
+    })
 }
 
 #[rustler::nif]

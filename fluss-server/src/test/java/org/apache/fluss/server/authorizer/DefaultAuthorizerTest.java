@@ -53,6 +53,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -527,6 +528,85 @@ public class DefaultAuthorizerTest {
         addAcls(authorizer, commonResource, Collections.singleton(acl2));
         assertThat(listAcls(authorizer, commonResource))
                 .isEqualTo(new HashSet<>(Arrays.asList(acl1, acl2)));
+    }
+
+    @Test
+    void testVersionedAclsAreImmutable() {
+        AccessControlEntry acl = createAclEntry("user1", "host-1", READ);
+        Set<AccessControlEntry> source = new HashSet<>(Collections.singleton(acl));
+        DefaultAuthorizer.VersionedAcls versionedAcls =
+                new DefaultAuthorizer.VersionedAcls(1, source);
+
+        source.clear();
+
+        assertThat(versionedAcls.acls).containsExactly(acl);
+        assertThatThrownBy(versionedAcls.acls::clear)
+                .isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    @Test
+    void testListAclsUsesImmutableSnapshotWithoutBlockingUpdatesOrAuthorization() throws Exception {
+        Resource existingResource = Resource.database("foo-" + UUID.randomUUID());
+        Resource addedResource = Resource.database("foo-" + UUID.randomUUID());
+        FlussPrincipal principal = new FlussPrincipal("user1", "User");
+        AccessControlEntry originalAcl =
+                new AccessControlEntry(principal, "host-1", READ, PermissionType.ALLOW);
+        AccessControlEntry addedAcl =
+                new AccessControlEntry(
+                        new FlussPrincipal("user2", "User"), "host-2", WRITE, PermissionType.ALLOW);
+        addAcls(authorizer, existingResource, Collections.singleton(originalAcl));
+
+        CountDownLatch filterEntered = new CountDownLatch(1);
+        CountDownLatch continueListing = new CountDownLatch(1);
+        AclBindingFilter blockingFilter =
+                new AclBindingFilter(ResourceFilter.ANY, AccessControlEntryFilter.ANY) {
+                    @Override
+                    public boolean matches(AclBinding binding) {
+                        filterEntered.countDown();
+                        try {
+                            if (!continueListing.await(10, TimeUnit.SECONDS)) {
+                                throw new AssertionError(
+                                        "Timed out waiting to continue ACL listing");
+                            }
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            throw new AssertionError("Interrupted while listing ACLs", e);
+                        }
+                        return true;
+                    }
+                };
+
+        ExecutorService executor = Executors.newFixedThreadPool(3);
+        try {
+            Future<Collection<AclBinding>> listFuture =
+                    executor.submit(
+                            () -> authorizer.listAcls(createRootUserSession(), blockingFilter));
+            assertThat(filterEntered.await(10, TimeUnit.SECONDS)).isTrue();
+
+            Future<?> updateFuture =
+                    executor.submit(
+                            () ->
+                                    addAcls(
+                                            authorizer,
+                                            addedResource,
+                                            Collections.singleton(addedAcl)));
+            Future<Boolean> authorizationFuture =
+                    executor.submit(
+                            () ->
+                                    authorizer.aclsAllowAccess(
+                                            existingResource, principal, READ, "host-1"));
+
+            updateFuture.get(10, TimeUnit.SECONDS);
+            assertThat(authorizationFuture.get(10, TimeUnit.SECONDS)).isTrue();
+            continueListing.countDown();
+            assertThat(listFuture.get(10, TimeUnit.SECONDS))
+                    .containsExactly(new AclBinding(existingResource, originalAcl));
+            assertThat(listAcls(authorizer, existingResource)).containsExactly(originalAcl);
+            assertThat(listAcls(authorizer, addedResource)).containsExactly(addedAcl);
+        } finally {
+            continueListing.countDown();
+            executor.shutdownNow();
+        }
     }
 
     @Test

@@ -104,6 +104,7 @@ class ClusterTest {
                             new HashMap<>(cluster.getBucketLocationsByPath()),
                             new HashMap<>(cluster.getTableIdByPath()),
                             Collections.emptyMap(),
+                            Collections.emptyMap(),
                             Collections.emptyMap());
         }
 
@@ -133,6 +134,7 @@ class ClusterTest {
                         new HashMap<>(initialCluster.getBucketLocationsByPath()),
                         new HashMap<>(initialCluster.getTableIdByPath()),
                         Collections.singletonMap(DATA1_PHYSICAL_TABLE_PATH_PA_2024, partitionId),
+                        Collections.emptyMap(),
                         Collections.emptyMap());
 
         assertThat(cluster.getPartitionId(DATA1_PHYSICAL_TABLE_PATH_PA_2024)).hasValue(partitionId);
@@ -167,7 +169,8 @@ class ClusterTest {
                         Collections.emptyMap(),
                         Collections.singletonMap(DATA1_TABLE_PATH, DATA1_TABLE_ID),
                         Collections.emptyMap(),
-                        bucketCounts);
+                        bucketCounts,
+                        Collections.emptyMap());
 
         assertThat(cluster.getBucketCountOrFallback(DATA1_TABLE_INFO, null)).isEqualTo(5);
         assertThat(cluster.getBucketCountOrFallback(DATA1_TABLE_INFO, partitionId)).isEqualTo(7);
@@ -178,6 +181,7 @@ class ClusterTest {
                         COORDINATOR_SERVER,
                         Collections.emptyMap(),
                         Collections.singletonMap(DATA1_TABLE_PATH, DATA1_TABLE_ID),
+                        Collections.emptyMap(),
                         Collections.emptyMap(),
                         Collections.emptyMap());
         assertThat(clusterWithoutBucketCount.getBucketCountOrFallback(DATA1_TABLE_INFO, null))
@@ -264,6 +268,7 @@ class ClusterTest {
                 COORDINATOR_SERVER,
                 tablePathToBucketLocations,
                 tablePathToTableId,
+                Collections.emptyMap(),
                 Collections.emptyMap(),
                 Collections.emptyMap());
     }

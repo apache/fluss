@@ -17,6 +17,7 @@
 
 package org.apache.fluss.flink.tiering.source;
 
+import org.apache.fluss.client.tiering.TieringWriterInitContext;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;

@@ -27,10 +27,12 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import javax.security.sasl.SaslClient;
 import javax.security.sasl.SaslException;
 import javax.security.sasl.SaslServer;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -76,6 +78,52 @@ public class PlainSaslServerTest {
     public void testNoAuthorizationIdSpecified() throws SaslException {
         assertThat(saslServer.evaluateResponse(saslMessage("", USER_A, PASSWORD_A))).isEmpty();
         assertThat(saslServer.evaluateResponse(saslMessage("", USER_B, PASSWORD_B))).isEmpty();
+    }
+
+    @Test
+    public void testClientServerAuthentication() throws Exception {
+        JaasContext clientContext =
+                JaasContext.loadClientContext(
+                        PlainLoginModule.class.getName()
+                                + " required username=\""
+                                + USER_A
+                                + "\" password=\""
+                                + PASSWORD_A
+                                + "\";");
+        LoginManager clientLoginManager = LoginManager.acquireLoginManager(clientContext);
+        try {
+            SaslClient saslClient =
+                    SaslServerFactory.createSaslClient(
+                            "PLAIN", "127.0.0.1", Collections.emptyMap(), clientLoginManager);
+            assertThat(saslClient).isNotNull();
+            try {
+                assertThat(saslServer).isInstanceOf(PlainSaslServer.class);
+                assertThat(saslClient.hasInitialResponse()).isTrue();
+                byte[] response = saslClient.evaluateChallenge(new byte[0]);
+                assertThat(saslServer.evaluateResponse(response)).isEmpty();
+                assertThat(saslClient.isComplete()).isTrue();
+                assertThat(saslServer.isComplete()).isTrue();
+                assertThat(saslServer.getAuthorizationID()).isEqualTo(USER_A);
+            } finally {
+                saslClient.dispose();
+            }
+        } finally {
+            clientLoginManager.release();
+        }
+    }
+
+    @Test
+    public void testUnsupportedServerMechanism() {
+        assertThatThrownBy(
+                        () ->
+                                SaslServerFactory.createSaslServer(
+                                        "SCRAM-SHA-256",
+                                        "127.0.0.1",
+                                        Collections.emptyMap(),
+                                        loginManager,
+                                        Collections.emptyList()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Unsupported mechanism: SCRAM-SHA-256");
     }
 
     @Test

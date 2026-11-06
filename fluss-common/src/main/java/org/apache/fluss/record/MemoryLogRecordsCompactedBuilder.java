@@ -18,6 +18,7 @@
 package org.apache.fluss.record;
 
 import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.compression.LogCompressionInfo;
 import org.apache.fluss.memory.AbstractPagedOutputView;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.row.compacted.CompactedRow;
@@ -38,19 +39,38 @@ public class MemoryLogRecordsCompactedBuilder extends MemoryLogRecordsRowBuilder
             int writeLimit,
             byte magic,
             AbstractPagedOutputView pagedOutputView,
-            boolean appendOnly) {
-        super(baseLogOffset, schemaId, writeLimit, magic, pagedOutputView, appendOnly);
+            boolean appendOnly,
+            LogCompressionInfo compressionInfo) {
+        super(
+                baseLogOffset,
+                schemaId,
+                writeLimit,
+                magic,
+                pagedOutputView,
+                appendOnly,
+                compressionInfo);
     }
 
     public static MemoryLogRecordsCompactedBuilder builder(
             int schemaId, int writeLimit, AbstractPagedOutputView outputView, boolean appendOnly) {
+        return builder(
+                schemaId, writeLimit, outputView, appendOnly, LogCompressionInfo.NO_COMPRESSION);
+    }
+
+    public static MemoryLogRecordsCompactedBuilder builder(
+            int schemaId,
+            int writeLimit,
+            AbstractPagedOutputView outputView,
+            boolean appendOnly,
+            LogCompressionInfo compressionInfo) {
         return new MemoryLogRecordsCompactedBuilder(
                 BUILDER_DEFAULT_OFFSET,
                 schemaId,
                 writeLimit,
                 CURRENT_LOG_MAGIC_VALUE,
                 outputView,
-                appendOnly);
+                appendOnly,
+                compressionInfo);
     }
 
     @VisibleForTesting
@@ -61,8 +81,33 @@ public class MemoryLogRecordsCompactedBuilder extends MemoryLogRecordsRowBuilder
             byte magic,
             AbstractPagedOutputView outputView)
             throws IOException {
+        return builder(
+                baseLogOffset,
+                schemaId,
+                writeLimit,
+                magic,
+                outputView,
+                false,
+                LogCompressionInfo.NO_COMPRESSION);
+    }
+
+    @VisibleForTesting
+    public static MemoryLogRecordsCompactedBuilder builder(
+            long baseLogOffset,
+            int schemaId,
+            int writeLimit,
+            byte magic,
+            AbstractPagedOutputView outputView,
+            boolean appendOnly,
+            LogCompressionInfo compressionInfo) {
         return new MemoryLogRecordsCompactedBuilder(
-                baseLogOffset, schemaId, writeLimit, magic, outputView, false);
+                baseLogOffset,
+                schemaId,
+                writeLimit,
+                magic,
+                outputView,
+                appendOnly,
+                compressionInfo);
     }
 
     @Override

@@ -183,6 +183,39 @@ class RowMergerCreateTest {
     }
 
     @Test
+    void testSkipUnchangedUsesDefaultRowMerger() {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("value", DataTypes.STRING())
+                        .primaryKey("id")
+                        .build();
+
+        Configuration conf = new Configuration();
+        conf.setBoolean(ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED.key(), true);
+        TableConfig tableConfig = new TableConfig(conf);
+
+        RowMerger merger =
+                RowMerger.create(tableConfig, KvFormat.COMPACTED, createSchemaGetter(schema));
+
+        assertThat(merger).isInstanceOf(DefaultRowMerger.class);
+        // delete is supported and defaults to ALLOW
+        assertThat(merger.deleteBehavior()).isEqualTo(DeleteBehavior.ALLOW);
+
+        // The merger constructs the candidate. The KV write path decides whether to skip it.
+        BinaryRow oldRow = compactedRow(schema.getRowType(), new Object[] {1, "a"});
+        BinaryRow newRow = compactedRow(schema.getRowType(), new Object[] {1, "a"});
+        BinaryValue oldValue = toBinaryValue(oldRow);
+        BinaryValue sameValue = toBinaryValue(newRow);
+        assertThat(merger.merge(oldValue, sameValue)).isSameAs(sameValue);
+
+        // changed write returns the new value
+        BinaryValue changed =
+                toBinaryValue(compactedRow(schema.getRowType(), new Object[] {1, "b"}));
+        assertThat(merger.merge(oldValue, changed)).isSameAs(changed);
+    }
+
+    @Test
     void testCreateAggregateRowMergerWithCompositePrimaryKeyAndMultipleAggTypes() {
         // Create schema with composite primary key and various aggregation function types
         Schema schema =

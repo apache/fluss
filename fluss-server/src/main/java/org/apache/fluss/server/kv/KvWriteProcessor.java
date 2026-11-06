@@ -19,7 +19,9 @@ package org.apache.fluss.server.kv;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.compression.ArrowCompressionInfo;
+import org.apache.fluss.compression.LogCompressionInfo;
 import org.apache.fluss.exception.DeletionDisabledException;
+import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.SchemaNotExistException;
 import org.apache.fluss.memory.MemorySegmentPool;
 import org.apache.fluss.metadata.ChangelogImage;
@@ -102,6 +104,7 @@ public final class KvWriteProcessor {
     // This avoids creating a new instance on every putAsLeader call
     private final RowMerger overwriteRowMerger;
     private final ArrowCompressionInfo arrowCompressionInfo;
+    private final LogCompressionInfo compactedLogCompressionInfo;
     private final SchemaGetter schemaGetter;
     // the changelog image mode for this tablet
     private final ChangelogImage changelogImage;
@@ -111,6 +114,7 @@ public final class KvWriteProcessor {
     private final ValueDecoder lakeValueDecoder;
     @Nullable private final RowTtlTimestampProvider rowTtlTimestampProvider;
     private final Clock clock;
+    private final boolean skipUnchangedUpsert;
 
     /** Creates a KV write processor. */
     public KvWriteProcessor(
@@ -121,13 +125,15 @@ public final class KvWriteProcessor {
             KvFormat kvFormat,
             RowMerger rowMerger,
             ArrowCompressionInfo arrowCompressionInfo,
+            LogCompressionInfo compactedLogCompressionInfo,
             SchemaGetter schemaGetter,
             ChangelogImage changelogImage,
             AutoIncrementManager autoIncrementManager,
             KvStateValueEncoder stateValueEncoder,
             ValueDecoder valueDecoder,
             @Nullable RowTtlTimestampProvider rowTtlTimestampProvider,
-            Clock clock) {
+            Clock clock,
+            boolean skipUnchangedUpsert) {
         this.tableBucket = tableBucket;
         this.logTablet = logTablet;
         this.arrowWriterProvider = arrowWriterProvider;
@@ -139,6 +145,7 @@ public final class KvWriteProcessor {
         // on every putAsLeader call. Used for undo recovery scenarios.
         this.overwriteRowMerger = new DefaultRowMerger(kvFormat, DeleteBehavior.ALLOW);
         this.arrowCompressionInfo = arrowCompressionInfo;
+        this.compactedLogCompressionInfo = compactedLogCompressionInfo;
         this.schemaGetter = schemaGetter;
         this.changelogImage = changelogImage;
         this.autoIncrementManager = autoIncrementManager;
@@ -147,6 +154,7 @@ public final class KvWriteProcessor {
         this.lakeValueDecoder = new ValueDecoder(schemaGetter, kvFormat, KvValueLayout.PLAIN);
         this.rowTtlTimestampProvider = rowTtlTimestampProvider;
         this.clock = clock;
+        this.skipUnchangedUpsert = skipUnchangedUpsert;
     }
 
     /** Processes a KV batch against the supplied state and appends its WAL. */
@@ -267,6 +275,11 @@ public final class KvWriteProcessor {
 
     private WriteContext createWriteContext(
             KvRecordBatch kvRecords, @Nullable int[] targetColumns, MergeMode mergeMode) {
+        if (skipUnchangedUpsert && mergeMode == MergeMode.OVERWRITE) {
+            throw new InvalidTableException(
+                    "MergeMode.OVERWRITE cannot be used with table.upsert.skip-unchanged enabled.");
+        }
+
         SchemaInfo schemaInfo = schemaGetter.getLatestSchemaInfo();
         Schema latestSchema = schemaInfo.getSchema();
         short latestSchemaId = (short) schemaInfo.getSchemaId();
@@ -374,6 +387,14 @@ public final class KvWriteProcessor {
 
         BinaryValue newValue = currentMerger.delete(oldValue);
 
+        boolean skipWrite =
+                skipUnchangedUpsert
+                        && newValue != null
+                        && BytewiseRowEqualizer.equals(oldValue, newValue);
+        if (skipWrite) {
+            return logOffset;
+        }
+
         // if newValue is null, it means the row should be deleted
         if (newValue == null) {
             return applyDelete(
@@ -417,7 +438,11 @@ public final class KvWriteProcessor {
 
         BinaryValue newValue = currentMerger.merge(oldValue, currentValue);
 
-        if (newValue == oldValue) {
+        boolean skipWrite =
+                skipUnchangedUpsert
+                        ? BytewiseRowEqualizer.equals(oldValue, newValue)
+                        : newValue == oldValue;
+        if (skipWrite) {
             // no actual change, skip this record
             return logOffset;
         }
@@ -540,7 +565,8 @@ public final class KvWriteProcessor {
                 }
                 return new IndexWalBuilder(schemaId, memorySegmentPool);
             case COMPACTED:
-                return new CompactedWalBuilder(schemaId, rowType, memorySegmentPool);
+                return new CompactedWalBuilder(
+                        schemaId, rowType, memorySegmentPool, compactedLogCompressionInfo);
             case ARROW:
                 return new ArrowWalBuilder(
                         schemaId,
@@ -552,7 +578,8 @@ public final class KvWriteProcessor {
                                 Integer.MAX_VALUE,
                                 rowType,
                                 arrowCompressionInfo),
-                        memorySegmentPool);
+                        memorySegmentPool,
+                        false);
             default:
                 throw new IllegalArgumentException("Unsupported log format: " + logFormat);
         }

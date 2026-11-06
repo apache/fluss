@@ -29,6 +29,7 @@ import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.replica.ReplicaTestBase;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.utils.FlussPaths;
 
 import org.junit.jupiter.api.BeforeEach;
 
@@ -95,8 +96,8 @@ public class RemoteLogTestBase extends ReplicaTestBase {
         return replica;
     }
 
-    protected static RemoteLogSegment copyLogSegmentToRemote(
-            LogTablet logTablet, RemoteLogStorage remoteLogStorage, int segmentIndex)
+    protected RemoteLogSegment copyLogSegmentToRemote(
+            LogTablet logTablet, DefaultRemoteLogStorage remoteLogStorage, int segmentIndex)
             throws Exception {
         PhysicalTablePath tp = logTablet.getPhysicalTablePath();
         TableBucket tb = logTablet.getTableBucket();
@@ -125,15 +126,19 @@ public class RemoteLogTestBase extends ReplicaTestBase {
                         .physicalTablePath(tp)
                         .build();
 
-        remoteLogStorage.copyLogSegmentFiles(remoteLogSegment, logSegmentFiles);
+        remoteLogStorage.copyLogSegmentFiles(
+                FlussPaths.remoteLogDir(conf), remoteLogSegment, logSegmentFiles);
         return remoteLogSegment;
     }
 
     protected RemoteLogTablet buildRemoteLogTablet(LogTablet logTablet) {
-        return new RemoteLogTablet(logTablet.getPhysicalTablePath(), logTablet.getTableBucket());
+        return new RemoteLogTablet(
+                logTablet.getPhysicalTablePath(),
+                logTablet.getTableBucket(),
+                FlussPaths.remoteLogDir(conf));
     }
 
-    protected static List<RemoteLogSegment> createRemoteLogSegmentList(LogTablet logTablet) {
+    protected List<RemoteLogSegment> createRemoteLogSegmentList(LogTablet logTablet) {
         return logTablet.getSegments().stream()
                 .map(
                         segment -> {

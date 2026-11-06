@@ -45,6 +45,9 @@ public class TestFileSystem extends LocalFileSystem {
     private static final Map<FsPath, Integer> currentUnclosedOutputStream =
             new ConcurrentHashMap<>();
 
+    // number of upcoming create() calls that throw an IOException
+    private static final AtomicInteger createFailuresRemaining = new AtomicInteger(0);
+
     private final Configuration configuration;
 
     public TestFileSystem(Configuration configuration) {
@@ -73,9 +76,17 @@ public class TestFileSystem extends LocalFileSystem {
         return super.open(f);
     }
 
+    /** Makes the next {@code failures} calls to {@link #create} throw an {@link IOException}. */
+    public static void failNextCreates(int failures) {
+        createFailuresRemaining.set(failures);
+    }
+
     @Override
     public FSDataOutputStream create(final FsPath filePath, final WriteMode overwrite)
             throws IOException {
+        if (createFailuresRemaining.getAndUpdate(n -> Math.max(0, n - 1)) > 0) {
+            throw new IOException("Injected create failure for " + filePath);
+        }
         currentUnclosedOutputStream.compute(filePath, (k, v) -> v == null ? 1 : v + 1);
         LocalDataOutputStream stream = (LocalDataOutputStream) super.create(filePath, overwrite);
         return new TestOutputStream(stream, filePath);

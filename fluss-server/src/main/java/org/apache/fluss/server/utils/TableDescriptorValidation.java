@@ -18,6 +18,7 @@
 package org.apache.fluss.server.utils;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.compression.LogCompressionType;
 import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOption;
 import org.apache.fluss.config.ConfigOptions;
@@ -32,6 +33,7 @@ import org.apache.fluss.metadata.AggFunction;
 import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DeleteBehavior;
+import org.apache.fluss.metadata.KafkaTableSchema;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.MergeEngineType;
@@ -122,6 +124,8 @@ public class TableDescriptorValidation {
             }
         }
 
+        KafkaTableSchema.validate(tableDescriptor);
+
         // check distribution
         checkDistribution(tableDescriptor, maxBucketNum);
         checkPrimaryKey(tableDescriptor);
@@ -129,7 +133,9 @@ public class TableDescriptorValidation {
         checkReplicationFactor(tableConf);
         checkLogFormat(tableConf, hasPrimaryKey);
         checkArrowCompression(tableConf);
+        checkCompactedCompression(tableConf);
         checkMergeEngine(tableConf, hasPrimaryKey, schema);
+        checkUpsertSkipUnchanged(tableConf, hasPrimaryKey);
         checkDeleteBehavior(tableConf, hasPrimaryKey);
         checkTieredLog(tableConf);
         checkHistoricalPartition(tableDescriptor, tableConf);
@@ -155,6 +161,10 @@ public class TableDescriptorValidation {
         } else {
             validateNoAggregationFunctions(newSchema);
         }
+        TableDescriptor updated =
+                TableDescriptor.builder(table.toTableDescriptor()).schema(newSchema).build();
+        KafkaTableSchema.validate(updated);
+        KafkaTableSchema.validateTablePath(table.getTablePath(), updated);
     }
 
     private static void checkTableLakeFormatMatchesCluster(
@@ -163,21 +173,16 @@ public class TableDescriptorValidation {
             return;
         }
 
-        if (!tableConf.get(ConfigOptions.TABLE_DATALAKE_ENABLED)) {
-            return;
-        }
-
         Optional<DataLakeFormat> tableDataLakeFormat =
                 tableConf.getOptional(ConfigOptions.TABLE_DATALAKE_FORMAT);
         if (tableDataLakeFormat.isPresent() && tableDataLakeFormat.get() != clusterDataLakeFormat) {
             throw new InvalidConfigException(
                     String.format(
-                            "'%s' ('%s') must match cluster '%s' ('%s') when '%s' is enabled.",
+                            "'%s' ('%s') must match cluster '%s' ('%s').",
                             ConfigOptions.TABLE_DATALAKE_FORMAT.key(),
                             tableDataLakeFormat.get(),
                             ConfigOptions.DATALAKE_FORMAT.key(),
-                            clusterDataLakeFormat,
-                            ConfigOptions.TABLE_DATALAKE_ENABLED.key()));
+                            clusterDataLakeFormat));
         }
     }
 
@@ -253,9 +258,9 @@ public class TableDescriptorValidation {
                 tableConf
                         .getOptional(ConfigOptions.TABLE_DATALAKE_FORMAT)
                         .orElse(clusterDataLakeFormat);
-        if (dataLakeFormat != DataLakeFormat.PAIMON) {
+        if (dataLakeFormat != DataLakeFormat.PAIMON && dataLakeFormat != DataLakeFormat.ICEBERG) {
             throw new InvalidConfigException(
-                    "Custom lake table path is only supported for Paimon.");
+                    "Custom lake table path is only supported for Paimon and Iceberg.");
         }
     }
 
@@ -460,6 +465,10 @@ public class TableDescriptorValidation {
             throw new InvalidTableException("Bucket number must be set.");
         }
         int bucketCount = tableDescriptor.getTableDistribution().get().getBucketCount().get();
+        if (bucketCount <= 0) {
+            throw new InvalidTableException(
+                    String.format("Bucket count must be greater than 0, but is %s.", bucketCount));
+        }
         if (bucketCount > maxBucketNum) {
             throw new TooManyBucketsException(
                     String.format(
@@ -532,9 +541,29 @@ public class TableDescriptorValidation {
     }
 
     private static void checkArrowCompression(Configuration tableConf) {
-        if (tableConf.containsKey(ConfigOptions.TABLE_LOG_ARROW_COMPRESSION_ZSTD_LEVEL.key())) {
-            int compressionLevel =
-                    tableConf.get(ConfigOptions.TABLE_LOG_ARROW_COMPRESSION_ZSTD_LEVEL);
+        checkZstdCompressionLevel(tableConf, ConfigOptions.TABLE_LOG_ARROW_COMPRESSION_ZSTD_LEVEL);
+    }
+
+    private static void checkCompactedCompression(Configuration tableConf) {
+        if (tableConf.get(ConfigOptions.TABLE_LOG_COMPACTED_COMPRESSION_TYPE)
+                        != LogCompressionType.NONE
+                && tableConf.get(ConfigOptions.TABLE_LOG_FORMAT) != LogFormat.COMPACTED) {
+            throw new InvalidConfigException(
+                    String.format(
+                            "'%s' is only supported for tables with '%s' = '%s', but the log format is '%s'.",
+                            ConfigOptions.TABLE_LOG_COMPACTED_COMPRESSION_TYPE.key(),
+                            ConfigOptions.TABLE_LOG_FORMAT.key(),
+                            LogFormat.COMPACTED,
+                            tableConf.get(ConfigOptions.TABLE_LOG_FORMAT)));
+        }
+        checkZstdCompressionLevel(
+                tableConf, ConfigOptions.TABLE_LOG_COMPACTED_COMPRESSION_ZSTD_LEVEL);
+    }
+
+    private static void checkZstdCompressionLevel(
+            Configuration tableConf, ConfigOption<Integer> levelOption) {
+        if (tableConf.containsKey(levelOption.key())) {
+            int compressionLevel = tableConf.get(levelOption);
             if (compressionLevel < 1 || compressionLevel > 22) {
                 throw new InvalidConfigException(
                         "Invalid ZSTD compression level: "
@@ -601,6 +630,35 @@ public class TableDescriptorValidation {
                 // Validate aggregation function parameters for aggregation merge engine
                 validateAggregationFunctionParameters(schema);
             }
+        }
+    }
+
+    private static void checkUpsertSkipUnchanged(Configuration tableConf, boolean hasPrimaryKey) {
+        if (!tableConf.get(ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED)) {
+            return;
+        }
+        String option = ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED.key();
+        if (!hasPrimaryKey) {
+            throw new InvalidConfigException(
+                    String.format("'%s' is only supported for primary key tables.", option));
+        }
+        if (tableConf.getOptional(ConfigOptions.TABLE_MERGE_ENGINE).isPresent()) {
+            throw new InvalidConfigException(
+                    String.format(
+                            "'%s' cannot be combined with '%s'.",
+                            option, ConfigOptions.TABLE_MERGE_ENGINE.key()));
+        }
+        if (tableConf.get(ConfigOptions.TABLE_CHANGELOG_IMAGE) == ChangelogImage.WAL) {
+            throw new InvalidConfigException(
+                    String.format(
+                            "'%s' requires '%s' to be FULL.",
+                            option, ConfigOptions.TABLE_CHANGELOG_IMAGE.key()));
+        }
+        if (tableConf.getOptional(ConfigOptions.TABLE_KV_TTL).isPresent()) {
+            throw new InvalidConfigException(
+                    String.format(
+                            "'%s' cannot be combined with '%s'.",
+                            option, ConfigOptions.TABLE_KV_TTL.key()));
         }
     }
 

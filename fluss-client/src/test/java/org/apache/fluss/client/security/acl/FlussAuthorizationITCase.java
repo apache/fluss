@@ -53,6 +53,7 @@ import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.ControlledShutdownRequest;
+import org.apache.fluss.rpc.messages.DescribeClusterRequest;
 import org.apache.fluss.rpc.messages.GetKvSnapshotMetadataRequest;
 import org.apache.fluss.rpc.messages.InitWriterRequest;
 import org.apache.fluss.rpc.messages.InitWriterResponse;
@@ -788,6 +789,39 @@ public class FlussAuthorizationITCase {
                                                     })))
                                     .doesNotThrowAnyException());
         }
+    }
+
+    @Test
+    void testDescribeClusterAuthorization() throws Exception {
+        assertThat(guestAdmin.getServerNodes().get()).hasSize(4);
+        assertThatThrownBy(
+                        () ->
+                                ((FlussAdmin) guestAdmin)
+                                        .getAdminGateway()
+                                        .describeCluster(new DescribeClusterRequest())
+                                        .get())
+                .rootCause()
+                .isInstanceOf(AuthorizationException.class)
+                .hasMessageContaining("DESCRIBE")
+                .hasMessageContaining("CLUSTER");
+        assertThatThrownBy(() -> guestAdmin.describeCluster().get())
+                .rootCause()
+                .isInstanceOf(AuthorizationException.class);
+        rootAdmin
+                .createAcls(
+                        Collections.singletonList(
+                                new AclBinding(
+                                        Resource.cluster(),
+                                        new AccessControlEntry(
+                                                guestPrincipal,
+                                                "*",
+                                                OperationType.DESCRIBE,
+                                                PermissionType.ALLOW))))
+                .all()
+                .get();
+        assertThat(guestAdmin.describeCluster().get().getTabletServers()).hasSize(3);
+        assertThat(guestAdmin.describeCluster().get().getTabletServerLoads()).hasSize(3);
+        assertThat(guestAdmin.getServerNodes().get()).hasSize(4);
     }
 
     @Test

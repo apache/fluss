@@ -55,6 +55,159 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class TableDescriptorValidationTest {
 
     @Test
+    void testSkipUnchangedUpsertsWithDefaultMergeBehavior() {
+        TableDescriptorValidation.validateTableDescriptor(
+                pkTableWithProperty(ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED.key(), "true"),
+                100,
+                null);
+    }
+
+    @Test
+    void testCompactedCompressionZstdLevel() {
+        TableDescriptorValidation.validateTableDescriptor(
+                logTableWithProperty(
+                        ConfigOptions.TABLE_LOG_COMPACTED_COMPRESSION_ZSTD_LEVEL.key(), "22"),
+                100,
+                null);
+        assertThatThrownBy(
+                        () ->
+                                TableDescriptorValidation.validateTableDescriptor(
+                                        logTableWithProperty(
+                                                ConfigOptions
+                                                        .TABLE_LOG_COMPACTED_COMPRESSION_ZSTD_LEVEL
+                                                        .key(),
+                                                "0"),
+                                        100,
+                                        null))
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining("Invalid ZSTD compression level: 0");
+    }
+
+    @Test
+    void testCompactedCompressionRequiresCompactedLogFormat() {
+        // the default log format is ARROW
+        assertThatThrownBy(
+                        () ->
+                                TableDescriptorValidation.validateTableDescriptor(
+                                        logTableWithProperty(
+                                                ConfigOptions.TABLE_LOG_COMPACTED_COMPRESSION_TYPE
+                                                        .key(),
+                                                "ZSTD"),
+                                        100,
+                                        null))
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining(
+                        "'table.log.compacted.compression.type' is only supported for tables with "
+                                + "'table.log.format' = 'COMPACTED', but the log format is 'ARROW'.");
+
+        // NONE is allowed for every log format
+        TableDescriptorValidation.validateTableDescriptor(
+                logTableWithProperty(
+                        ConfigOptions.TABLE_LOG_COMPACTED_COMPRESSION_TYPE.key(), "NONE"),
+                100,
+                null);
+    }
+
+    @Test
+    void testSkipUnchangedUpsertsRequiresPrimaryKey() {
+        assertThatThrownBy(
+                        () ->
+                                TableDescriptorValidation.validateTableDescriptor(
+                                        logTableWithProperty(
+                                                ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED.key(),
+                                                "true"),
+                                        100,
+                                        null))
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining(ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED.key())
+                .hasMessageContaining("primary key");
+    }
+
+    @Test
+    void testSkipUnchangedUpsertsRejectsMergeEngine() {
+        assertThatThrownBy(
+                        () ->
+                                TableDescriptorValidation.validateTableDescriptor(
+                                        pkTableWithProperties(
+                                                ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED.key(),
+                                                "true",
+                                                ConfigOptions.TABLE_MERGE_ENGINE.key(),
+                                                "first_row"),
+                                        100,
+                                        null))
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining(ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED.key())
+                .hasMessageContaining(ConfigOptions.TABLE_MERGE_ENGINE.key());
+    }
+
+    @Test
+    void testSkipUnchangedUpsertsRejectsWalImage() {
+        assertThatThrownBy(
+                        () ->
+                                TableDescriptorValidation.validateTableDescriptor(
+                                        pkTableWithProperties(
+                                                ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED.key(),
+                                                "true",
+                                                ConfigOptions.TABLE_CHANGELOG_IMAGE.key(),
+                                                "WAL"),
+                                        100,
+                                        null))
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining(ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED.key())
+                .hasMessageContaining(ConfigOptions.TABLE_CHANGELOG_IMAGE.key())
+                .hasMessageContaining("FULL");
+    }
+
+    @Test
+    void testSkipUnchangedUpsertsRejectsKvTtl() {
+        assertThatThrownBy(
+                        () ->
+                                TableDescriptorValidation.validateTableDescriptor(
+                                        pkTableWithProperties(
+                                                ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED.key(),
+                                                "true",
+                                                ConfigOptions.TABLE_KV_TTL.key(),
+                                                "1 h"),
+                                        100,
+                                        null))
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining(ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED.key())
+                .hasMessageContaining(ConfigOptions.TABLE_KV_TTL.key());
+    }
+
+    @Test
+    void testSkipUnchangedUpsertsCannotBeAltered() {
+        assertThatThrownBy(
+                        () ->
+                                TableDescriptorValidation.validateAlterTableProperties(
+                                        plainTableInfo(),
+                                        Collections.singleton(
+                                                ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED.key())))
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining(ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED.key());
+    }
+
+    @Test
+    void testRejectNonPositiveBucketCount() {
+        for (int bucketCount : new int[] {0, -1}) {
+            TableDescriptor tableDescriptor =
+                    TableDescriptor.builder()
+                            .schema(TestData.DATA1_SCHEMA)
+                            .distributedBy(bucketCount)
+                            .build()
+                            .withReplicationFactor(3);
+
+            assertThatThrownBy(
+                            () ->
+                                    TableDescriptorValidation.validateTableDescriptor(
+                                            tableDescriptor, 100, null))
+                    .isInstanceOf(InvalidTableException.class)
+                    .hasMessageContaining("Bucket count must be greater than 0")
+                    .hasMessageContaining(String.valueOf(bucketCount));
+        }
+    }
+
+    @Test
     void testCreateLogTableWithKvTTLFails() {
         assertThatThrownBy(
                         () ->
@@ -155,6 +308,19 @@ class TableDescriptorValidationTest {
                 .isInstanceOf(InvalidConfigException.class)
                 .hasMessageContaining(ConfigOptions.TABLE_KV_TTL.key())
                 .hasMessageContaining("exceeds");
+    }
+
+    @Test
+    void testCustomLakePathRejectedForUnsupportedFormat() {
+        assertThatThrownBy(
+                        () ->
+                                validate(
+                                        tableDescriptorWithLakeName(
+                                                ConfigOptions.TABLE_DATALAKE_DATABASE_NAME,
+                                                "lance_db"),
+                                        DataLakeFormat.LANCE))
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining("only supported for Paimon and Iceberg");
     }
 
     @Test
@@ -293,16 +459,15 @@ class TableDescriptorValidationTest {
         assertThatCode(() -> validate(tableDescriptor, DataLakeFormat.PAIMON))
                 .doesNotThrowAnyException();
 
-        // custom lake paths are not supported for Iceberg
-        assertThatThrownBy(
+        // custom lake paths are now supported for Iceberg
+        assertThatCode(
                         () ->
                                 validate(
                                         tableDescriptorWithLakeName(
                                                 ConfigOptions.TABLE_DATALAKE_TABLE_NAME,
                                                 "lake_table"),
                                         DataLakeFormat.ICEBERG))
-                .isInstanceOf(InvalidConfigException.class)
-                .hasMessageContaining("Custom lake table path is only supported for Paimon");
+                .doesNotThrowAnyException();
     }
 
     @Test
@@ -329,6 +494,22 @@ class TableDescriptorValidationTest {
                 .property(ConfigOptions.TABLE_REPLICATION_FACTOR, 1)
                 .property(ConfigOptions.TABLE_MERGE_ENGINE, MergeEngineType.AGGREGATION)
                 .build();
+    }
+
+    @Test
+    void testLakeFormatMustMatchClusterWhenLakeIsDisabled() {
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(TestData.DATA1_SCHEMA)
+                        .distributedBy(1)
+                        .property(ConfigOptions.TABLE_REPLICATION_FACTOR, 1)
+                        .property(ConfigOptions.TABLE_DATALAKE_FORMAT, DataLakeFormat.ICEBERG)
+                        .build();
+
+        assertThatThrownBy(() -> validate(tableDescriptor, DataLakeFormat.PAIMON))
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining(ConfigOptions.TABLE_DATALAKE_FORMAT.key())
+                .hasMessageContaining("must match");
     }
 
     private static Stream<Arguments> supportedKvTTLTimeColumnTypes() {

@@ -57,7 +57,9 @@ fluss-spark/fluss-spark-3.4,\
 MODULES_LAKE="\
 fluss-lake,\
 fluss-lake/fluss-lake-paimon,\
+fluss-lake/fluss-lake-iceberg-common,\
 fluss-lake/fluss-lake-iceberg,\
+fluss-lake/fluss-lake-iceberg-1.12,\
 fluss-lake/fluss-lake-lance,\
 fluss-lake/fluss-lake-hudi
 "

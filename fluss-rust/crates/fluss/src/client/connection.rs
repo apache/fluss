@@ -50,22 +50,22 @@ impl FlussConnection {
             .map_err(|msg| Error::IllegalArgument { message: msg })?;
         arg.validate_writer()
             .map_err(|msg| Error::IllegalArgument { message: msg })?;
+        arg.validate_lookup()
+            .map_err(|msg| Error::IllegalArgument { message: msg })?;
 
-        let timeout = Duration::from_millis(arg.connect_timeout_ms);
         // connect_timeout_ms: no lower-bound validation to match Java behavior.
         // Java allows 0 — tracked in https://github.com/apache/fluss/issues/3068
-        let connections = if arg.is_sasl_enabled() {
-            Arc::new(
-                RpcClient::new()
-                    .with_sasl(
-                        arg.security_sasl_username.clone(),
-                        arg.security_sasl_password.clone(),
-                    )
-                    .with_timeout(timeout),
-            )
-        } else {
-            Arc::new(RpcClient::new().with_timeout(timeout))
-        };
+        let timeout = Duration::from_millis(arg.connect_timeout_ms);
+        let mut connections = RpcClient::new()
+            .with_timeout(timeout)
+            .with_max_idle_time(Duration::from_millis(arg.connection_max_idle_time_ms));
+        if arg.is_sasl_enabled() {
+            connections = connections.with_sasl(
+                arg.security_sasl_username.clone(),
+                arg.security_sasl_password.clone(),
+            );
+        }
+        let connections = Arc::new(connections);
         let metadata = Metadata::new(arg.bootstrap_servers.as_str(), connections.clone()).await?;
 
         Ok(FlussConnection {
@@ -143,7 +143,11 @@ impl FlussConnection {
         }
 
         // 4. Initialize the client since we are certain it doesn't exist yet.
-        let new_client = Arc::new(WriterClient::new(self.args.clone(), self.metadata.clone())?);
+        let new_client = Arc::new(WriterClient::new(
+            self.args.clone(),
+            self.metadata.clone(),
+            self.get_admin()?,
+        )?);
 
         // 5. Store and return the newly created client.
         *writer_guard = Some(new_client.clone());

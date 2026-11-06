@@ -142,6 +142,7 @@ fn _fluss(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Register constants
     m.add("EARLIEST_OFFSET", fcore::client::EARLIEST_OFFSET)?;
     m.add("NO_COMMIT_TIMESTAMP", fcore::record::NO_COMMIT_TIMESTAMP)?;
+    m.add("NO_SCHEMA_ID", fcore::record::NO_SCHEMA_ID)?;
 
     // Register exception types and error codes
     m.add_class::<FlussError>()?;

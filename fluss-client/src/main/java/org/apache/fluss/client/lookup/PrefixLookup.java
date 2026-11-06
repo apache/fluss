@@ -32,11 +32,8 @@ import java.util.List;
 public class PrefixLookup {
 
     /**
-     * Currently, For non-partitioned table, the lookupColumnNames can only be the field of bucket
-     * key.
-     *
-     * <p>For partitioned table, the lookupColumnNames exclude partition fields should be a prefix
-     * of primary key exclude partition fields.
+     * The bucket key fields, optionally followed by the next primary key fields, plus all partition
+     * fields for a partitioned table.
      *
      * <p>See {@link PrefixKeyLookuper#lookup(InternalRow)} for more details.
      */

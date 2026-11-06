@@ -161,6 +161,7 @@ class ArrowWalBuilderTest {
                         maxSizeInBytes,
                         DATA1_ROW_TYPE,
                         DEFAULT_COMPRESSION),
-                memorySegmentPool);
+                memorySegmentPool,
+                false);
     }
 }

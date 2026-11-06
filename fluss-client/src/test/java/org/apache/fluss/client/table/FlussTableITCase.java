@@ -32,6 +32,7 @@ import org.apache.fluss.client.table.writer.DeleteResult;
 import org.apache.fluss.client.table.writer.TableWriter;
 import org.apache.fluss.client.table.writer.UpsertResult;
 import org.apache.fluss.client.table.writer.UpsertWriter;
+import org.apache.fluss.compression.LogCompressionType;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
@@ -50,12 +51,18 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.ChangeType;
+import org.apache.fluss.record.DefaultLogRecordBatch;
+import org.apache.fluss.record.FileLogRecords;
+import org.apache.fluss.record.LogRecordBatch;
+import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.ProjectedRow;
 import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.row.indexed.IndexedRow;
+import org.apache.fluss.server.log.LogSegment;
+import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.types.BigIntType;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
@@ -70,6 +77,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.annotation.Nullable;
 
+import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -81,6 +89,7 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
 import static org.apache.fluss.client.table.scanner.batch.BatchScanUtils.collectRows;
+import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V3;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA_PK;
@@ -1164,7 +1173,28 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         verifyAppendOrPut(false, "COMPACTED", "COMPACTED");
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"LZ4_FRAME", "ZSTD"})
+    void testAppendAndPollCompressedCompacted(String compressionType) throws Exception {
+        verifyAppendOrPut(true, "COMPACTED", null, compressionType);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"LZ4_FRAME", "ZSTD"})
+    void testPutAndPollCompressedCompacted(String compressionType) throws Exception {
+        verifyAppendOrPut(false, "COMPACTED", "COMPACTED", compressionType);
+    }
+
     void verifyAppendOrPut(boolean append, String logFormat, @Nullable String kvFormat)
+            throws Exception {
+        verifyAppendOrPut(append, logFormat, kvFormat, null);
+    }
+
+    void verifyAppendOrPut(
+            boolean append,
+            String logFormat,
+            @Nullable String kvFormat,
+            @Nullable String compactedCompressionType)
             throws Exception {
         Schema schema =
                 append
@@ -1186,9 +1216,19 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         if (kvFormat != null) {
             builder.kvFormat(KvFormat.fromString(kvFormat));
         }
+        if (compactedCompressionType != null) {
+            builder.property(
+                    ConfigOptions.TABLE_LOG_COMPACTED_COMPRESSION_TYPE.key(),
+                    compactedCompressionType);
+        }
         TableDescriptor tableDescriptor = builder.build();
-        createTable(DATA1_TABLE_PATH, tableDescriptor, false);
+        long tableId = createTable(DATA1_TABLE_PATH, tableDescriptor, false);
 
+        // compression only pays off for batches that are not tiny, so use longer values
+        String valuePrefix =
+                compactedCompressionType == null
+                        ? "hello, friend"
+                        : String.join("", Collections.nCopies(20, "hello, friend "));
         int expectedSize = 30;
         try (Table table = conn.getTable(DATA1_TABLE_PATH)) {
             TableWriter tableWriter;
@@ -1198,7 +1238,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                 tableWriter = table.newUpsert().createWriter();
             }
             for (int i = 0; i < expectedSize; i++) {
-                String value = i % 2 == 0 ? "hello, friend" + i : null;
+                String value = i % 2 == 0 ? valuePrefix + i : null;
                 GenericRow row = row(i, 100, value, i * 10L);
                 if (tableWriter instanceof AppendWriter) {
                     ((AppendWriter) tableWriter).append(row);
@@ -1230,7 +1270,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                     assertThat(scanRecord.getRow().getInt(1)).isEqualTo(100);
                     if (count % 2 == 0) {
                         assertThat(scanRecord.getRow().getString(2).toString())
-                                .isEqualTo("hello, friend" + count);
+                                .isEqualTo(valuePrefix + count);
                     } else {
                         // check null values
                         assertThat(scanRecord.getRow().isNullAt(2)).isTrue();
@@ -1240,7 +1280,47 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                 }
             }
             assertThat(count).isEqualTo(expectedSize);
+
+            if (compactedCompressionType != null) {
+                assertBatchesCompressed(
+                        tableId,
+                        table.getTableInfo().getNumBuckets(),
+                        LogCompressionType.valueOf(compactedCompressionType));
+            }
         }
+    }
+
+    /**
+     * Asserts that the stored log batches of the table use the given compression. Small batches may
+     * be stored uncompressed when compression doesn't make them smaller, so at least one must be
+     * compressed.
+     */
+    private static void assertBatchesCompressed(
+            long tableId, int numBuckets, LogCompressionType compressionType) throws Exception {
+        int compressedBatches = 0;
+        for (int bucket = 0; bucket < numBuckets; bucket++) {
+            Replica replica =
+                    FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(
+                            new TableBucket(tableId, bucket));
+            for (LogSegment segment : replica.getLogTablet().logSegments()) {
+                FileLogRecords fileRecords = segment.getFileLogRecords();
+                ByteBuffer buffer = ByteBuffer.allocate(fileRecords.sizeInBytes());
+                // readInto flips the buffer
+                fileRecords.readInto(buffer, 0);
+                for (LogRecordBatch batch : MemoryLogRecords.pointToByteBuffer(buffer).batches()) {
+                    LogCompressionType stored = ((DefaultLogRecordBatch) batch).compressionType();
+                    assertThat(stored).isIn(compressionType, LogCompressionType.NONE);
+                    if (stored == compressionType) {
+                        // only compressed batches use the new magic
+                        assertThat(batch.magic()).isEqualTo(LOG_MAGIC_VALUE_V3);
+                        compressedBatches++;
+                    } else {
+                        assertThat(batch.magic()).isEqualTo(LogRecordBatch.CURRENT_LOG_MAGIC_VALUE);
+                    }
+                }
+            }
+        }
+        assertThat(compressedBatches).isGreaterThan(0);
     }
 
     @ParameterizedTest
@@ -1633,6 +1713,140 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                         .withSchema(doProjection ? rowType.project(new int[] {0}) : rowType)
                         .isEqualTo(expectedScanRows.get(i));
             }
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testSkipUnchangedUpsertsIsOptIn(boolean skipUnchanged) throws Exception {
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(DATA1_SCHEMA_PK)
+                        .property(ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED, skipUnchanged)
+                        .build();
+        RowType rowType = DATA1_SCHEMA_PK.getRowType();
+        TablePath tablePath =
+                TablePath.of("test_db_1", "test_skip_unchanged_upserts_" + skipUnchanged);
+        createTable(tablePath, tableDescriptor, false);
+
+        try (Table table = conn.getTable(tablePath)) {
+            UpsertWriter upsertWriter = table.newUpsert().createWriter();
+            // insert a row
+            upsertWriter.upsert(row(0, "v0"));
+            // value-identical upserts: should be no-ops that emit no changelog
+            upsertWriter.upsert(row(0, "v0"));
+            upsertWriter.upsert(row(0, "v0"));
+            // a field differs: should emit an update changelog
+            upsertWriter.upsert(row(0, "v1"));
+            // delete the row: should emit a delete changelog
+            upsertWriter.delete(row(0, "v1"));
+            upsertWriter.flush();
+
+            // Identical writes emit changelog only when suppression is disabled.
+            List<ScanRecord> expected = new ArrayList<>();
+            expected.add(new ScanRecord(-1, -1, ChangeType.INSERT, row(0, "v0")));
+            if (!skipUnchanged) {
+                for (int i = 0; i < 2; i++) {
+                    expected.add(new ScanRecord(-1, -1, ChangeType.UPDATE_BEFORE, row(0, "v0")));
+                    expected.add(new ScanRecord(-1, -1, ChangeType.UPDATE_AFTER, row(0, "v0")));
+                }
+            }
+            expected.add(new ScanRecord(-1, -1, ChangeType.UPDATE_BEFORE, row(0, "v0")));
+            expected.add(new ScanRecord(-1, -1, ChangeType.UPDATE_AFTER, row(0, "v1")));
+            expected.add(new ScanRecord(-1, -1, ChangeType.DELETE, row(0, "v1")));
+
+            LogScanner logScanner = table.newScan().createLogScanner();
+            logScanner.subscribeFromBeginning(0);
+            List<ScanRecord> actualLogRecords = new ArrayList<>(expected.size());
+            while (actualLogRecords.size() < expected.size()) {
+                ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
+                scanRecords.forEach(actualLogRecords::add);
+            }
+            assertThat(logScanner.poll(Duration.ofSeconds(1))).isEmpty();
+            logScanner.close();
+
+            assertThat(actualLogRecords).hasSize(expected.size());
+            for (int i = 0; i < actualLogRecords.size(); i++) {
+                ScanRecord actual = actualLogRecords.get(i);
+                assertThat(actual.getChangeType()).isEqualTo(expected.get(i).getChangeType());
+                assertThatRow(actual.getRow())
+                        .withSchema(rowType)
+                        .isEqualTo(expected.get(i).getRow());
+            }
+        }
+    }
+
+    @Test
+    void testSkipUnchangedPartialUpdatesAndDeletes() throws Exception {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("name", DataTypes.STRING())
+                        .column("data", DataTypes.STRING())
+                        .primaryKey("id")
+                        .build();
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .distributedBy(1, "id")
+                        .property(ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED, true)
+                        .build();
+        RowType rowType = schema.getRowType();
+        TablePath tablePath = TablePath.of("test_db_1", "test_skip_unchanged_partial_update");
+        createTable(tablePath, tableDescriptor, false);
+
+        try (Table table = conn.getTable(tablePath)) {
+            UpsertWriter fullWriter = table.newUpsert().createWriter();
+            fullWriter.upsert(row(0, "v0", "kept")).get();
+
+            UpsertWriter keyOnlyWriter = table.newUpsert().partialUpdate("id").createWriter();
+            // A primary-key-only partial upsert leaves the complete row unchanged.
+            keyOnlyWriter.upsert(row(0, null, null)).get();
+
+            UpsertWriter partialWriter =
+                    table.newUpsert().partialUpdate("id", "name").createWriter();
+            // unchanged partial upsert: no changelog
+            partialWriter.upsert(row(0, "v0", null)).get();
+            // changed partial upsert: normal update changelog
+            partialWriter.upsert(row(0, "v1", null)).get();
+            // unchanged partial upsert: no changelog
+            partialWriter.upsert(row(0, "v1", null)).get();
+            // changed partial delete: clears name and emits an update changelog
+            partialWriter.delete(row(0, "v1", null)).get();
+            // unchanged partial delete: no changelog
+            partialWriter.delete(row(0, null, null)).get();
+            partialWriter.flush();
+
+            List<ScanRecord> expected = new ArrayList<>();
+            expected.add(new ScanRecord(-1, -1, ChangeType.INSERT, row(0, "v0", "kept")));
+            expected.add(new ScanRecord(-1, -1, ChangeType.UPDATE_BEFORE, row(0, "v0", "kept")));
+            expected.add(new ScanRecord(-1, -1, ChangeType.UPDATE_AFTER, row(0, "v1", "kept")));
+            expected.add(new ScanRecord(-1, -1, ChangeType.UPDATE_BEFORE, row(0, "v1", "kept")));
+            expected.add(new ScanRecord(-1, -1, ChangeType.UPDATE_AFTER, row(0, null, "kept")));
+
+            LogScanner logScanner = table.newScan().createLogScanner();
+            logScanner.subscribeFromBeginning(0);
+            List<ScanRecord> actualLogRecords = new ArrayList<>(expected.size());
+            while (actualLogRecords.size() < expected.size()) {
+                ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
+                scanRecords.forEach(actualLogRecords::add);
+            }
+            assertThat(logScanner.poll(Duration.ofSeconds(1))).isEmpty();
+            logScanner.close();
+
+            assertThat(actualLogRecords).hasSize(expected.size());
+            for (int i = 0; i < actualLogRecords.size(); i++) {
+                ScanRecord actual = actualLogRecords.get(i);
+                assertThat(actual.getChangeType()).isEqualTo(expected.get(i).getChangeType());
+                assertThatRow(actual.getRow())
+                        .withSchema(rowType)
+                        .isEqualTo(expected.get(i).getRow());
+            }
+
+            Lookuper lookuper = table.newLookup().createLookuper();
+            assertThatRow(lookuper.lookup(row(0)).get().getSingletonRow())
+                    .withSchema(rowType)
+                    .isEqualTo(row(0, null, "kept"));
         }
     }
 

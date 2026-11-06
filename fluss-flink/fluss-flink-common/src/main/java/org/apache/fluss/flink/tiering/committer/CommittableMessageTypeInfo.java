@@ -18,7 +18,6 @@
 package org.apache.fluss.flink.tiering.committer;
 
 import org.apache.fluss.flink.adapter.TypeInformationAdapter;
-import org.apache.fluss.flink.tiering.source.TableBucketWriteResult;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 
 import org.apache.flink.api.common.typeinfo.TypeInformation;
@@ -70,7 +69,7 @@ public class CommittableMessageTypeInfo<Committable>
     @SuppressWarnings({"unchecked", "rawtypes"})
     @Override
     public Class<CommittableMessage<Committable>> getTypeClass() {
-        return (Class) TableBucketWriteResult.class;
+        return (Class) CommittableMessage.class;
     }
 
     @Override

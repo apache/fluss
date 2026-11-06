@@ -27,6 +27,7 @@ on:
       - 'helm/**'
       - 'fluss-rust/**'
       - 'fluss-gateway/**'
+      - 'fluss-spark/**'
       - '**/*.md'
   pull_request:
     paths-ignore:
@@ -34,6 +35,7 @@ on:
       - 'helm/**'
       - 'fluss-rust/**'
       - 'fluss-gateway/**'
+      - 'fluss-spark/**'
       - '**/*.md'
 
 concurrency:
@@ -60,4 +62,5 @@ jobs:
     name: "Java 11"
     uses: ./.github/workflows/ci-template.yaml
     with:
-        java-version: "11"
+      java-version: "11"
+      modules: '["core","flink1","flink2","lake"]'

@@ -17,6 +17,7 @@
 
 package org.apache.fluss.flink.adapter;
 
+import org.apache.flink.table.connector.source.LookupTableSource;
 import org.apache.flink.table.connector.source.abilities.SupportsLookupCustomShuffle;
 
 import java.util.Optional;
@@ -33,6 +34,11 @@ public interface SupportsLookupCustomShuffleAdapter extends SupportsLookupCustom
         return partitionerAdapter.isPresent()
                 ? Optional.of(partitionerAdapter.get())
                 : Optional.empty();
+    }
+
+    /** Returns whether the planner has installed the source's custom lookup shuffle. */
+    default boolean preferCustomShuffle(LookupTableSource.LookupContext context) {
+        return context.preferCustomShuffle();
     }
 
     /** Returns the version-neutral custom partitioner prepared for the current lookup. */

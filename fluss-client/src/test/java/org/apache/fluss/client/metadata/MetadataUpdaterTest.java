@@ -18,13 +18,16 @@
 package org.apache.fluss.client.metadata;
 
 import org.apache.fluss.client.utils.MetadataUtils;
+import org.apache.fluss.client.utils.TestingRpcClient;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TableOrPartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.RpcClient;
@@ -43,10 +46,14 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeoutException;
 
+import static org.apache.fluss.record.TestData.DATA1_PARTITIONED_TABLE_DESCRIPTOR;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
+import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.buildMetadataResponse;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -139,7 +146,8 @@ public class MetadataUpdaterTest {
                 Collections.emptyMap(),
                 Collections.singletonMap(TABLE_PATH, 1L),
                 Collections.singletonMap(PARTITION_PATH, 2L),
-                Collections.singletonMap(TableOrPartition.ofPartition(2L), bucketCount));
+                Collections.singletonMap(TableOrPartition.ofPartition(2L), bucketCount),
+                Collections.emptyMap());
     }
 
     private static MetadataResponse partitionMetadata(int bucketCount) {
@@ -154,6 +162,35 @@ public class MetadataUpdaterTest {
                 .setPartitionName(PARTITION_PATH.getPartitionName())
                 .setBucketCount(bucketCount);
         return response;
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testLegacyTableCountDoesNotDependOnLocations(boolean partialUpdate) throws Exception {
+        MetadataResponse response = new MetadataResponse();
+        response.addTabletServer().setNodeId(1).setHost("localhost").setPort(8080);
+        PbTableMetadata table =
+                response.addTableMetadata()
+                        .setTableId(1)
+                        .setTableJson(DATA1_TABLE_DESCRIPTOR.withBucketCount(3).toJsonBytes());
+        table.setTablePath().setDatabaseName("db").setTableName("table");
+        table.addBucketMetadata().setBucketId(0);
+        AdminReadOnlyGateway gateway =
+                new TestCoordinatorGateway() {
+                    @Override
+                    public CompletableFuture<MetadataResponse> metadata(MetadataRequest request) {
+                        return CompletableFuture.completedFuture(response);
+                    }
+                };
+        Cluster cluster =
+                MetadataUtils.sendMetadataRequestAndRebuildCluster(
+                        gateway,
+                        partialUpdate,
+                        partialUpdate ? Cluster.empty() : null,
+                        null,
+                        null,
+                        null);
+        assertThat(cluster.getBucketCount(TableOrPartition.ofTable(1))).hasValue(3);
     }
 
     @Test
@@ -180,6 +217,69 @@ public class MetadataUpdaterTest {
                 .hasMessageContaining("The metadata is stale.");
     }
 
+    @Test
+    void testRetryDisconnectsOnlyFailedBootstrapEndpoint() throws Exception {
+        ServerNode failedNode = new ServerNode(-1, "bootstrap-a", 9001, ServerType.UNKNOWN);
+        ServerNode otherNode = new ServerNode(-1, "bootstrap-b", 9002, ServerType.UNKNOWN);
+
+        // Bootstrap endpoints share a UID despite having different addresses.
+        assertThat(failedNode.uid()).isEqualTo(otherNode.uid());
+
+        TestingRpcClient rpcClient =
+                new TestingRpcClient(
+                        (node, apiKey) -> {
+                            throw new AssertionError("Requests should go through the test gateway");
+                        });
+        AdminReadOnlyGateway gateway = new TestingAdminReadOnlyGateway(1);
+
+        // The first attempt fails and the next attempt succeeds.
+        Cluster cluster =
+                MetadataUpdater.tryToInitializeClusterWithRetries(
+                        rpcClient, failedNode, gateway, 1);
+
+        assertThat(cluster).isNotNull();
+
+        assertThat(rpcClient.getDisconnectedNodes()).containsExactly(failedNode);
+        assertThat(rpcClient.getDisconnectedServerUids()).isEmpty();
+    }
+
+    @Test
+    void testInitializeClusterDisconnectsOnlyFailedBootstrapEndpoint() {
+        Configuration configuration = new Configuration();
+        configuration.set(
+                ConfigOptions.BOOTSTRAP_SERVERS,
+                Arrays.asList("localhost:19001", "localhost:19002"));
+
+        ServerNode failedNode = new ServerNode(-1, "localhost", 19001, ServerType.UNKNOWN);
+        ServerNode healthyNode = new ServerNode(-1, "localhost", 19002, ServerType.UNKNOWN);
+
+        assertThat(failedNode.uid()).isEqualTo(healthyNode.uid());
+
+        TestingRpcClient rpcClient =
+                new TestingRpcClient(
+                        (node, apiKey) -> {
+                            assertThat(apiKey).isEqualTo(ApiKeys.GET_METADATA);
+                            if (node.equals(failedNode)) {
+                                throw new StaleMetadataException("Bootstrap endpoint unavailable");
+                            }
+                            assertThat(node).isEqualTo(healthyNode);
+                            return CompletableFuture.completedFuture(
+                                    buildMetadataResponse(
+                                            CS_NODE,
+                                            Collections.singleton(TS_NODE),
+                                            Collections.emptyList(),
+                                            Collections.emptyList()));
+                        });
+
+        MetadataUpdater updater = new MetadataUpdater(configuration, rpcClient);
+
+        assertThat(updater.getCluster().getCoordinatorServer()).isEqualTo(CS_NODE);
+        assertThat(updater.getCluster().getAliveTabletServerList()).containsExactly(TS_NODE);
+
+        assertThat(rpcClient.getDisconnectedNodes()).containsExactly(failedNode);
+        assertThat(rpcClient.getDisconnectedServerUids()).isEmpty();
+    }
+
     @ParameterizedTest
     @CsvSource({"true, 0", "true, 3", "false, 0", "false, 3"})
     void testMetadataBucketCountCompatibility(boolean partialUpdate, int tableBucketCount)
@@ -196,7 +296,13 @@ public class MetadataUpdaterTest {
                 .setHost(TS_NODE.host())
                 .setPort(TS_NODE.port());
 
-        PbTableMetadata tableMetadata = response.addTableMetadata().setTableId(tableId);
+        PbTableMetadata tableMetadata =
+                response.addTableMetadata()
+                        .setTableId(tableId)
+                        .setTableJson(
+                                DATA1_PARTITIONED_TABLE_DESCRIPTOR
+                                        .withBucketCount(3)
+                                        .toJsonBytes());
         tableMetadata
                 .setTablePath()
                 .setDatabaseName(tablePath.getDatabaseName())
@@ -235,6 +341,7 @@ public class MetadataUpdaterTest {
                         Collections.emptyMap(),
                         Collections.emptyMap(),
                         Collections.emptyMap(),
+                        Collections.emptyMap(),
                         Collections.emptyMap());
         AdminReadOnlyGateway gateway =
                 new TestCoordinatorGateway() {
@@ -253,20 +360,20 @@ public class MetadataUpdaterTest {
                         null,
                         null);
 
-        assertThat(updatedCluster.getBucketCount(TableOrPartition.ofTable(tableId))).hasValue(4);
+        assertThat(updatedCluster.getBucketCount(TableOrPartition.ofTable(tableId))).hasValue(3);
         assertThat(updatedCluster.getBucketCount(TableOrPartition.ofPartition(legacyPartitionId)))
-                .hasValue(2);
+                .hasValue(3);
         assertThat(updatedCluster.getBucketCount(TableOrPartition.ofPartition(explicitPartitionId)))
                 .hasValue(4);
         assertThat(
                         updatedCluster.getBucketCount(
                                 TableOrPartition.ofPartition(unassignedPartitionId)))
-                .isEmpty();
+                .hasValue(3);
     }
 
     @ParameterizedTest
     @ValueSource(ints = {0, 2, 4, 8})
-    void testPartitionMetadataOnlyIncreasesTableBucketCount(int initialTableBucketCount)
+    void testPartitionMetadataDoesNotChangeTableDefault(int initialTableBucketCount)
             throws Exception {
         long tableId = 1L;
         long partitionId = 2L;
@@ -281,16 +388,17 @@ public class MetadataUpdaterTest {
                         Collections.emptyMap(),
                         initialTableBucketCount == 0
                                 ? Collections.emptyMap()
-                                : Collections.singletonMap(table, initialTableBucketCount));
+                                : Collections.singletonMap(table, initialTableBucketCount),
+                        Collections.emptyMap());
 
         int expectedTableBucketCount = initialTableBucketCount;
-        for (int partitionBucketCount : new int[] {4, 2, 0, 6}) {
+        for (int partitionBucketCount : new int[] {4, 2, 6}) {
             MetadataResponse response = new MetadataResponse();
             response.addTabletServer()
                     .setNodeId(TS_NODE.id())
                     .setHost(TS_NODE.host())
                     .setPort(TS_NODE.port());
-            // A partition-only refresh must also update the cached table-level count.
+            // A partition-only refresh cannot establish the current table default.
             response.addPartitionMetadata()
                     .setTableId(tableId)
                     .setPartitionId(partitionId)
@@ -316,14 +424,211 @@ public class MetadataUpdaterTest {
                 assertThat(previousCluster.getBucketCount(table))
                         .hasValue(expectedTableBucketCount);
             }
-            expectedTableBucketCount = Math.max(expectedTableBucketCount, partitionBucketCount);
-            assertThat(cluster.getBucketCount(table)).hasValue(expectedTableBucketCount);
-            if (partitionBucketCount > 0) {
-                // The partition keeps its actual count, even when smaller than the table count.
-                assertThat(cluster.getBucketCount(TableOrPartition.ofPartition(partitionId)))
-                        .hasValue(partitionBucketCount);
+            if (expectedTableBucketCount == 0) {
+                assertThat(cluster.getBucketCount(table)).isEmpty();
+            } else {
+                assertThat(cluster.getBucketCount(table)).hasValue(expectedTableBucketCount);
             }
+            // The partition keeps its actual count, even when smaller than the table count.
+            assertThat(cluster.getBucketCount(TableOrPartition.ofPartition(partitionId)))
+                    .hasValue(partitionBucketCount);
         }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testExplicitCountDoesNotDependOnAvailableLocations(boolean partialUpdate)
+            throws Exception {
+        MetadataResponse response = routingResponse(3, 0, true);
+        response.getTableMetadatasList().get(0).getBucketMetadatasList().get(0).setLeaderId(1);
+        Cluster cluster =
+                updateRouting(response, partialUpdate ? Cluster.empty() : null, partialUpdate);
+        assertThat(cluster.getBucketCount(TableOrPartition.ofTable(1))).hasValue(3);
+        assertThat(
+                        cluster.getAvailableBucketsForPhysicalTablePath(
+                                PhysicalTablePath.of(TablePath.of("db", "table"))))
+                .hasSize(1);
+    }
+
+    @Test
+    void testCurrentServerWithoutTableCountSupportsMixedPartitions() throws Exception {
+        MetadataResponse response = routingPartitionResponse(6, 1, false);
+        response.addPartitionMetadata()
+                .setTableId(1)
+                .setPartitionId(2)
+                .setPartitionName("old")
+                .setBucketCount(3);
+        response.addPartitionMetadata()
+                .setTableId(1)
+                .setPartitionId(3)
+                .setPartitionName("new")
+                .setBucketCount(6);
+        Cluster cluster = updateRouting(response, null, false);
+        assertThat(cluster.getBucketCount(TableOrPartition.ofTable(1))).hasValue(6);
+        assertThat(cluster.getBucketCount(TableOrPartition.ofPartition(2))).hasValue(3);
+        assertThat(cluster.getBucketCount(TableOrPartition.ofPartition(3))).hasValue(6);
+    }
+
+    @Test
+    void testEpochOrdersGrowthAndShrinkageWithoutDroppingPartitionUpdates() throws Exception {
+        Cluster cluster = updateRouting(routingPartitionResponse(3, 0, true), null, false);
+        cluster = updateRouting(routingPartitionResponse(6, 1, true), cluster, true);
+        cluster = updateRouting(routingPartitionResponse(2, 2, true), cluster, true);
+        assertThat(cluster.getBucketCount(TableOrPartition.ofTable(1))).hasValue(2);
+        MetadataResponse delayed = routingPartitionResponse(6, 1, false);
+        delayed.addPartitionMetadata()
+                .setTableId(1)
+                .setPartitionId(2)
+                .setPartitionName("old")
+                .setBucketCount(6);
+        cluster = updateRouting(delayed, cluster, true);
+        assertThat(cluster.getBucketCount(TableOrPartition.ofTable(1))).hasValue(2);
+        assertThat(cluster.getBucketCountEpoch(1)).hasValue(2);
+        assertThat(cluster.getBucketCount(TableOrPartition.ofPartition(2))).hasValue(6);
+        Cluster stable = cluster;
+        assertThatThrownBy(() -> updateRouting(routingResponse(6, 2, true), stable, true))
+                .hasCauseInstanceOf(StaleMetadataException.class);
+    }
+
+    @ParameterizedTest
+    @CsvSource({"false, 0", "true, 0", "true, -1"})
+    void testUnresolvedPartitionCountIsRejected(boolean explicit, int count) throws Exception {
+        Cluster cluster = updateRouting(routingPartitionResponse(6, 1, true), null, false);
+        MetadataResponse response = routingPartitionResponse(6, 1, true);
+        PbPartitionMetadata partition =
+                response.addPartitionMetadata()
+                        .setTableId(1)
+                        .setPartitionId(2)
+                        .setPartitionName("p");
+        if (explicit) {
+            partition.setBucketCount(count);
+        }
+        assertThatThrownBy(() -> updateRouting(response, cluster, true))
+                .hasCauseInstanceOf(StaleMetadataException.class);
+    }
+
+    @ParameterizedTest
+    @CsvSource({"0, 0", "-1, 0", "3, -1"})
+    void testInvalidExplicitLayoutIsNotTreatedAsLegacy(int count, long epoch) {
+        MetadataResponse response = routingResponse(3, 0, true);
+        response.getTableMetadatasList().get(0).setBucketCount(count).setBucketCountEpoch(epoch);
+        assertThatThrownBy(() -> updateRouting(response, null, false))
+                .hasCauseInstanceOf(StaleMetadataException.class);
+    }
+
+    @Test
+    void testInvalidationRetainsEpochAgainstStaleTableInfo() throws Exception {
+        TablePath path = TablePath.of("db", "table");
+        Cluster cluster =
+                updateRouting(routingResponse(3, 1, true), null, false)
+                        .invalidPhysicalTableBucketMeta(
+                                Collections.singleton(PhysicalTablePath.of(path)));
+        TableInfo stale =
+                TableInfo.of(path, 1, 0, DATA1_TABLE_DESCRIPTOR, DEFAULT_REMOTE_DATA_DIR, 0, 0);
+        assertThatThrownBy(() -> cluster.getBucketCountOrFallback(stale, null))
+                .isInstanceOf(InvalidBucketRoutingException.class);
+        assertThat(cluster.getBucketCountEpoch(1)).hasValue(1);
+    }
+
+    private static MetadataResponse routingResponse(int count, long epoch, boolean explicit) {
+        MetadataResponse response = new MetadataResponse();
+        response.addTabletServer().setNodeId(1).setHost("localhost").setPort(8080);
+        PbTableMetadata table =
+                response.addTableMetadata()
+                        .setTableId(1)
+                        .setTableJson(DATA1_TABLE_DESCRIPTOR.withBucketCount(count).toJsonBytes())
+                        .setBucketCountEpoch(epoch);
+        table.setTablePath().setDatabaseName("db").setTableName("table");
+        table.addBucketMetadata().setBucketId(0);
+        if (explicit) {
+            table.setBucketCount(count);
+        }
+        return response;
+    }
+
+    @Test
+    void testPartitionOnlyLegacyResponseUsesCachedTableCount() throws Exception {
+        MetadataResponse tableResponse = routingPartitionResponse(3, 0, false);
+        tableResponse.getTableMetadatasList().get(0).clearBucketCountEpoch();
+        Cluster cachedCluster = updateRouting(tableResponse, null, false);
+        assertThat(cachedCluster.getBucketCount(TableOrPartition.ofTable(1))).hasValue(3);
+        assertThat(cachedCluster.getBucketCountEpoch(1)).hasValue(0);
+
+        MetadataResponse partitionResponse = new MetadataResponse();
+        partitionResponse.addTabletServer().setNodeId(1).setHost("localhost").setPort(8080);
+        partitionResponse
+                .addPartitionMetadata()
+                .setTableId(1)
+                .setPartitionId(2)
+                .setPartitionName("p")
+                .addBucketMetadata()
+                .setBucketId(0)
+                .setLeaderId(1);
+
+        Cluster updatedCluster = updateRouting(partitionResponse, cachedCluster, true);
+
+        assertThat(updatedCluster.getBucketCount(TableOrPartition.ofTable(1))).hasValue(3);
+        assertThat(updatedCluster.getBucketCountEpoch(1)).hasValue(0);
+        assertThat(updatedCluster.getBucketCount(TableOrPartition.ofPartition(2))).hasValue(3);
+        assertThat(
+                        updatedCluster
+                                .getBucketLocationsByPath()
+                                .get(PhysicalTablePath.of("db", "table", "p")))
+                .hasSize(1);
+    }
+
+    @Test
+    void testExplicitCountWithoutEpochDoesNotEnableLegacyFallback() {
+        MetadataResponse response = routingPartitionResponse(6, 1, true);
+        response.getTableMetadatasList().get(0).clearBucketCountEpoch();
+        response.addPartitionMetadata().setTableId(1).setPartitionId(2).setPartitionName("p");
+        assertThatThrownBy(() -> updateRouting(response, null, false))
+                .hasCauseInstanceOf(StaleMetadataException.class);
+    }
+
+    private static MetadataResponse routingPartitionResponse(
+            int count, long epoch, boolean explicit) {
+        MetadataResponse response = routingResponse(count, epoch, explicit);
+        response.getTableMetadatasList()
+                .get(0)
+                .setTableJson(
+                        DATA1_PARTITIONED_TABLE_DESCRIPTOR.withBucketCount(count).toJsonBytes());
+        return response;
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testPartitionWithoutParentMetadataIsNotPublished(boolean partialUpdate) {
+        MetadataResponse response = new MetadataResponse();
+        response.addTabletServer().setNodeId(1).setHost("localhost").setPort(8080);
+        response.addPartitionMetadata()
+                .setTableId(1)
+                .setPartitionId(2)
+                .setPartitionName("p")
+                .setBucketCount(3);
+        assertThatThrownBy(
+                        () ->
+                                updateRouting(
+                                        response,
+                                        partialUpdate ? Cluster.empty() : null,
+                                        partialUpdate))
+                .hasCauseInstanceOf(StaleMetadataException.class);
+    }
+
+    private static Cluster updateRouting(MetadataResponse response, Cluster origin, boolean partial)
+            throws Exception {
+        return MetadataUtils.sendMetadataRequestAndRebuildCluster(
+                new TestCoordinatorGateway() {
+                    @Override
+                    public CompletableFuture<MetadataResponse> metadata(MetadataRequest request) {
+                        return CompletableFuture.completedFuture(response);
+                    }
+                },
+                partial,
+                origin,
+                null,
+                null,
+                null);
     }
 
     private static final class TestingAdminReadOnlyGateway extends TestCoordinatorGateway {

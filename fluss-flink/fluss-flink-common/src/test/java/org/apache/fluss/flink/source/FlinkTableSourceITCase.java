@@ -1240,17 +1240,173 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
         assertResultsIgnoreOrder(collected, expected, true);
     }
 
+    @ParameterizedTest
+    @MethodSource("lookupArgs")
+    void testPrefixLookupWithMultipleKeys(Caching caching, boolean async) throws Exception {
+        String dim =
+                prepareDimTableAndSourceTable(
+                        caching,
+                        async,
+                        new String[] {"name", "address", "id"},
+                        new String[] {"name"},
+                        null);
+        String dimJoinQuery =
+                String.format(
+                        "SELECT a, b, h.address FROM src JOIN %s FOR SYSTEM_TIME AS OF src.proc as h"
+                                + " ON src.b = h.name AND h.address = CONCAT('address', CAST(src.a AS STRING))",
+                        dim);
+
+        CloseableIterator<Row> collected = tEnv.executeSql(dimJoinQuery).collect();
+        List<String> expected = Arrays.asList("+I[1, name1, address1]", "+I[2, name2, address2]");
+        assertResultsIgnoreOrder(collected, expected, true);
+    }
+
     @Test
-    void testLookupFullCacheThrowException() {
+    @MultiVersionTest
+    void testLookupFullCacheWithoutCustomShuffleFailsPlanning() {
+        assumeThat(supportsLookupCustomShuffle()).isTrue();
         tEnv.executeSql(
-                "create table lookup_join_throw_table"
-                        + " (a int not null primary key not enforced, b varchar)"
-                        + " with ('lookup.cache' = 'FULL')");
-        // should throw exception
-        assertThatThrownBy(() -> tEnv.executeSql("select * from lookup_join_throw_table"))
-                .cause()
-                .isInstanceOf(UnsupportedOperationException.class)
-                .hasMessage("Full lookup caching is not supported yet.");
+                "CREATE TABLE lookup_full_without_shuffle ("
+                        + " id INT NOT NULL, name STRING, PRIMARY KEY (id) NOT ENFORCED"
+                        + ") WITH ('bucket.num' = '4', 'bucket.key' = 'id',"
+                        + " 'lookup.cache' = 'FULL')");
+        RowTypeInfo probeType =
+                new RowTypeInfo(new TypeInformation[] {Types.INT}, new String[] {"id"});
+        DataStream<Row> probeStream =
+                execEnv.fromElements(Row.of(1)).returns(probeType).setParallelism(1);
+        Schema probeSchema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .columnByExpression("proc", "PROCTIME()")
+                        .build();
+        tEnv.createTemporaryView(
+                "lookup_full_probe", tEnv.fromDataStream(probeStream, probeSchema));
+
+        assertThatThrownBy(
+                        () ->
+                                tEnv.explainSql(
+                                        "SELECT src.id, dim.name FROM lookup_full_probe AS src "
+                                                + "JOIN lookup_full_without_shuffle "
+                                                + "FOR SYSTEM_TIME AS OF src.proc AS dim "
+                                                + "ON src.id = dim.id"))
+                .hasStackTraceContaining("preferCustomShuffle=true");
+    }
+
+    @Test
+    @MultiVersionTest
+    void testLookupFullCacheWithBucketShuffle() throws Exception {
+        assumeThat(supportsLookupCustomShuffle()).isTrue();
+        int bucketCount = 3;
+        int parallelism = 4;
+        int numRows = 40;
+        String dim = "lookup_full_dim";
+        // Prune the middle column to exercise projection before converting lookup results.
+        tEnv.executeSql(
+                String.format(
+                        "CREATE TABLE %s ("
+                                + " id INT NOT NULL, unused_payload STRING, name STRING,"
+                                + " PRIMARY KEY (id) NOT ENFORCED"
+                                + ") WITH ('bucket.num' = '%d', 'bucket.key' = 'id',"
+                                + " 'lookup.cache' = 'FULL', 'lookup.async' = 'false')",
+                        dim, bucketCount));
+        try (Table dimTable = conn.getTable(TablePath.of(DEFAULT_DB, dim))) {
+            UpsertWriter writer = dimTable.newUpsert().createWriter();
+            for (int id = 0; id < numRows; id++) {
+                writer.upsert(row(id, "unused-" + id, "name" + id));
+            }
+            writer.flush();
+        }
+
+        RowTypeInfo probeType =
+                new RowTypeInfo(new TypeInformation[] {Types.INT}, new String[] {"id"});
+        DataStream<Row> probeStream =
+                execEnv.fromSequence(0, numRows - 1)
+                        .setParallelism(parallelism)
+                        .map(id -> Row.of(id.intValue()))
+                        .returns(probeType)
+                        .setParallelism(parallelism);
+        Schema probeSchema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .columnByExpression("proc", "PROCTIME()")
+                        .build();
+        tEnv.createTemporaryView(
+                "lookup_full_probe", tEnv.fromDataStream(probeStream, probeSchema));
+
+        String query =
+                String.format(
+                        "SELECT /*+ LOOKUP('table' = 'dim', 'shuffle' = 'true') */ "
+                                + "src.id, dim.name FROM lookup_full_probe AS src "
+                                + "JOIN %s FOR SYSTEM_TIME AS OF src.proc AS dim "
+                                + "ON src.id = dim.id",
+                        dim);
+        assertThat(tEnv.explainSql(query)).contains("shuffle=[true]");
+
+        List<String> expected = new ArrayList<>();
+        for (int id = 0; id < numRows; id++) {
+            expected.add("+I[" + id + ", name" + id + "]");
+        }
+        assertResultsIgnoreOrder(tEnv.executeSql(query).collect(), expected, true);
+    }
+
+    /** Full cache with a prefix lookup: join only on the bucket key of a composite primary key. */
+    @Test
+    @MultiVersionTest
+    void testLookupFullCachePrefixLookupWithBucketShuffle() throws Exception {
+        assumeThat(supportsLookupCustomShuffle()).isTrue();
+        int bucketCount = 3;
+        int parallelism = 4;
+        int numRows = 20;
+        String dim = "lookup_full_prefix_dim";
+        tEnv.executeSql(
+                String.format(
+                        "CREATE TABLE %s ("
+                                + " id INT NOT NULL, name STRING, PRIMARY KEY (id, name) NOT ENFORCED"
+                                + ") WITH ('bucket.num' = '%d', 'bucket.key' = 'id',"
+                                + " 'lookup.cache' = 'FULL', 'lookup.async' = 'false')",
+                        dim, bucketCount));
+        // two rows share the same bucket-key prefix (id) within the primary key (id, name)
+        try (Table dimTable = conn.getTable(TablePath.of(DEFAULT_DB, dim))) {
+            UpsertWriter writer = dimTable.newUpsert().createWriter();
+            for (int id = 0; id < numRows; id++) {
+                writer.upsert(row(id, "name" + id + "_a"));
+                writer.upsert(row(id, "name" + id + "_b"));
+            }
+            writer.flush();
+        }
+
+        RowTypeInfo probeType =
+                new RowTypeInfo(new TypeInformation[] {Types.INT}, new String[] {"id"});
+        DataStream<Row> probeStream =
+                execEnv.fromSequence(0, numRows - 1)
+                        .setParallelism(parallelism)
+                        .map(id -> Row.of(id.intValue()))
+                        .returns(probeType)
+                        .setParallelism(parallelism);
+        Schema probeSchema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .columnByExpression("proc", "PROCTIME()")
+                        .build();
+        tEnv.createTemporaryView(
+                "lookup_full_prefix_probe", tEnv.fromDataStream(probeStream, probeSchema));
+
+        // join only on the bucket-key prefix (id): every probe row matches two dim rows
+        String query =
+                String.format(
+                        "SELECT /*+ LOOKUP('table' = 'dim', 'shuffle' = 'true') */ "
+                                + "src.id, dim.name FROM lookup_full_prefix_probe AS src "
+                                + "JOIN %s FOR SYSTEM_TIME AS OF src.proc AS dim "
+                                + "ON src.id = dim.id",
+                        dim);
+        assertThat(tEnv.explainSql(query)).contains("shuffle=[true]");
+
+        List<String> expected = new ArrayList<>();
+        for (int id = 0; id < numRows; id++) {
+            expected.add("+I[" + id + ", name" + id + "_a]");
+            expected.add("+I[" + id + ", name" + id + "_b]");
+        }
+        assertResultsIgnoreOrder(tEnv.executeSql(query).collect(), expected, true);
     }
 
     @ParameterizedTest
@@ -1444,13 +1600,17 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                         + "and p_time=TIME '12:55:00' and p_ts_ntz=TIMESTAMP '2025-10-12 12:55:00.001' "
                         + "and p_ts_ltz=TO_TIMESTAMP_LTZ(4001, 3)";
         String plan = tEnv.explainSql(query);
-        assertThat(plan)
+        assertThat(withLowerCaseAnd(plan))
                 .contains(
                         "TableSourceScan(table=[[testcatalog, defaultdb, all_type_partitioned_table, "
                                 + "filter=[and(and(and(and(and(and(and(and(and(and(<(p_int, 11), "
                                 + "=(p_bigint, 99999:BIGINT)), =(p_bytes, X'4869':VARBINARY(2147483647))), "
                                 + "=(p_string, _UTF-16LE'hello':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\")), "
-                                + "=(p_float, 1.25E1:FLOAT)), =(p_double, 7.88E0:DOUBLE)), =(p_date, 2025-10-12)), "
+                                + "=(p_float, ")
+                // the FLOAT literal is printed as 1.25E1 before Flink 2.4 and as 12.5E0 since.
+                // TODO: assert the literal again when no longer support Flink versions before 2.4.
+                .contains(
+                        ":FLOAT)), =(p_double, 7.88E0:DOUBLE)), =(p_date, 2025-10-12)), "
                                 + "=(p_time, 12:55:00)), =(p_ts_ntz, 2025-10-12 12:55:00.001:TIMESTAMP(6))), "
                                 + "=(p_ts_ltz, 1970-01-01 00:00:04.001:TIMESTAMP_WITH_LOCAL_TIME_ZONE(6))), NOT(p_bool))]]], "
                                 + "fields=[id, p_bool, p_int, p_bigint, p_bytes, p_string, p_float, p_double, p_date, p_time, p_ts_ntz, p_ts_ltz])")
@@ -1515,7 +1675,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
 
         String plan2 =
                 tEnv.explainSql("select * from multi_partitioned_table where c ='2025' and d ='3'");
-        assertThat(plan2)
+        assertThat(withLowerCaseAnd(plan2))
                 .contains(
                         "TableSourceScan(table=[[testcatalog, defaultdb, multi_partitioned_table, "
                                 + "filter=[and(=(c, _UTF-16LE'2025':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\"), "
@@ -1646,7 +1806,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                         "select a,c,d from combined_filters_table where c ='2025' and d > 200");
 
         // assert both partition filter and record batch filter are pushed down
-        assertThat(plan)
+        assertThat(withLowerCaseAnd(plan))
                 .contains(
                         "TableSourceScan(table=[[testcatalog, defaultdb, combined_filters_table, "
                                 + "filter=[and(=(c, _UTF-16LE'2025':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\"), >(d, 200))], "
@@ -1865,7 +2025,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                 "select id, amount, region from alter_stats_test "
                         + "where amount >= 1000 and region = 'Beijing'";
         String plan3b = tEnv.explainSql(query3b);
-        assertThat(plan3b)
+        assertThat(withLowerCaseAnd(plan3b))
                 .contains(
                         "filter=[and(>=(amount, 1000), "
                                 + "=(region, _UTF-16LE'Beijing':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\"))]");
@@ -1889,7 +2049,8 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                 "select id, amount from alter_stats_test "
                         + "where amount >= 500 and amount < 1500";
         String plan4 = tEnv.explainSql(query4);
-        assertThat(plan4).contains("filter=[and(>=(amount, 500), <(amount, 1500))]");
+        assertThat(withLowerCaseAnd(plan4))
+                .contains("filter=[and(>=(amount, 500), <(amount, 1500))]");
 
         List<String> expected4 = new ArrayList<>();
         // Phase 1 rows: amount in {500, 600, 700, 800, 900}
@@ -1987,7 +2148,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
 
         String query1 = "select * from partitioned_table_in where c in ('2025','2026')";
         String plan = tEnv.explainSql(query1);
-        assertThat(plan)
+        assertThat(withoutStringLiteralTypes(plan))
                 .contains(
                         "TableSourceScan(table=[[testcatalog, defaultdb, partitioned_table_in, filter=[OR(=(c, _UTF-16LE'2025'), =(c, _UTF-16LE'2026'))]]], fields=[a, b, c])");
 
@@ -2039,7 +2200,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
         String query1 =
                 "select a,c,d from combined_filters_table_in where c in ('2025','2026') and d % 200 = 0";
         String plan = tEnv.explainSql(query1);
-        assertThat(plan)
+        assertThat(withoutStringLiteralTypes(plan))
                 .contains(
                         "TableSourceScan(table=[[testcatalog, defaultdb, combined_filters_table_in, filter=[OR(=(c, _UTF-16LE'2025'), =(c, _UTF-16LE'2026'))], project=[a, c, d]]], fields=[a, c, d])");
 
@@ -2133,7 +2294,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                         + "    and (c in ('2026')  or d like '%1%') "
                         + "    and     b like '%v3%'";
         String plan = tEnv.explainSql(query);
-        assertThat(plan)
+        assertThat(withoutStringLiteralTypes(plan))
                 .contains(
                         "Calc(select=[3 AS a, b, c, d], where=[((a = 3) AND ((c = '2026') OR LIKE(d, '%1%')) AND LIKE(b, '%v3%'))])\n"
                                 + "+- TableSourceScan(table=[[testcatalog, defaultdb, partitioned_table_complex, filter=[OR(=(c, _UTF-16LE'2026'), LIKE(d, _UTF-16LE'%1%'))]]], fields=[a, b, c, d])");
@@ -2358,5 +2519,24 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
             newValues[values.length] = partition;
             return row(newValues);
         }
+    }
+
+    /**
+     * Since Flink 2.4 (FLINK-40021), the conjunction of pushed-down filters is upper case.
+     *
+     * <p>TODO: remove this method when no longer support Flink versions before 2.4.
+     */
+    static String withLowerCaseAnd(String plan) {
+        return plan.replace("AND(", "and(");
+    }
+
+    /**
+     * Since Flink 2.4 (FLINK-36602), string literals of an IN list are printed with their type in
+     * the pushed-down filter; earlier versions print them without.
+     *
+     * <p>TODO: remove this method when no longer support Flink versions before 2.4.
+     */
+    private static String withoutStringLiteralTypes(String plan) {
+        return plan.replace(":VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\"", "");
     }
 }

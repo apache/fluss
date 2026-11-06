@@ -32,11 +32,12 @@ Verify downloaded JARs using the [verification instructions](/downloads#verifyin
 
 ## Version Compatibility
 
-| Use Case        | Required/Tested Versions                                     |
-|-----------------|--------------------------------------------------------------|
-| Tiering Service | Paimon 1.4, 2.0 (tested and verified to work)                 |
-| Union Read      | Paimon 1.1, 1.2, 1.3, 1.4, 2.0 (tested and verified to work) |
-| Java Runtime    | Java 11 or later; Paimon 2.0 adds no higher requirement      |
+| Use Case              | Required/Tested Versions                                          |
+|-----------------------|-------------------------------------------------------------------|
+| Tiering Service       | Paimon 1.4, 2.0, 2.1 (tested and verified to work)                 |
+| Union Read            | Paimon 1.1, 1.2, 1.3, 1.4, 2.0, 2.1 (tested and verified to work) |
+| Historical SST Lookup | Paimon 2.1.0 or later (required for concurrent lookup)             |
+| Java Runtime          | Java 11 or later; Paimon 2.1 adds no higher requirement             |
 
 ## Configure Paimon as LakeHouse Storage
 
@@ -99,7 +100,7 @@ For primary key tables, changelogs are also generated in the Paimon format, enab
 
 ### Configure a Custom Paimon Table Path
 
-To use a different database or table name for the Paimon table, set the following options when creating the Fluss table. These options are currently supported only for Paimon and map the Fluss table to the physical Paimon database and table name; they do not rename the Fluss table:
+To use a different database or table name for the Paimon table, set the following options when creating the Fluss table. These options map the Fluss table to the physical Paimon database and table name; they do not rename the Fluss table:
 
 ```sql
 'table.datalake.database-name' = 'paimon_database',

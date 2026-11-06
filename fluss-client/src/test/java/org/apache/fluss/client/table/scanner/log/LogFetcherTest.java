@@ -34,15 +34,18 @@ import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.LogRecordReadContext;
+import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.remote.RemoteLogFetchInfo;
 import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.messages.FetchLogRequest;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
+import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.protocol.FetchLogReadPreference;
 import org.apache.fluss.server.entity.FetchReqInfo;
 import org.apache.fluss.server.tablet.TestTabletServerGateway;
+import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.IOUtils;
 
 import org.junit.jupiter.api.AfterEach;
@@ -67,12 +70,14 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.apache.fluss.client.metadata.TestingMetadataUpdater.NODE1;
 import static org.apache.fluss.client.metadata.TestingMetadataUpdater.NODE2;
 import static org.apache.fluss.client.metadata.TestingMetadataUpdater.NODE3;
+import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getFetchLogData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeFetchLogResponse;
+import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsWithBaseOffset;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -148,6 +153,39 @@ public class LogFetcherTest {
         // When NotLeaderOrFollowerException is received, the bucketLocation will be removed from
         // metadata updater to trigger get the latest bucketLocation in next fetch round.
         assertThat(metadataUpdater.getBucketLocation(tb1)).isNotPresent();
+    }
+
+    @Test
+    void testRefetchBucketAfterLeaderNotAvailable() throws Exception {
+        IOUtils.closeQuietly(logFetcher);
+        long fetchOffset = 5L;
+        MemoryLogRecords records = genMemoryLogRecordsWithBaseOffset(fetchOffset, DATA1);
+        metadataUpdater =
+                initializeMetadataUpdater(
+                        new ErrorThenRecordsTabletServerGateway(
+                                Errors.LEADER_NOT_AVAILABLE_EXCEPTION,
+                                records,
+                                fetchOffset + DATA1.size()));
+        logFetcher = createLogFetcher(new Configuration());
+        LogScannerStatus scannerStatus = logFetcher.getLogScannerStatus();
+        scannerStatus.assignScanBuckets(Collections.singletonMap(tb1, fetchOffset));
+
+        logFetcher.sendFetchRequest(
+                1, logFetcher.prepareFetchLogRequests(Collections.singletonList(tb1)).get(1));
+
+        assertThat(metadataUpdater.getBucketLocation(tb1)).isNotPresent();
+        assertThat(logFetcher.collectFetch()).isEmpty();
+        assertThat(scannerStatus.getBucketOffset(tb1)).isEqualTo(fetchOffset);
+
+        metadataUpdater.updateTableInfos(
+                Collections.singletonMap(DATA1_TABLE_PATH, DATA1_TABLE_INFO));
+        FetchLogRequest retryRequest =
+                logFetcher.prepareFetchLogRequests(Collections.singletonList(tb1)).get(1);
+        assertThat(getFetchLogData(retryRequest).get(tb1).getFetchOffset()).isEqualTo(fetchOffset);
+        logFetcher.sendFetchRequest(1, retryRequest);
+
+        assertThat(logFetcher.collectFetch().records(tb1)).hasSize(DATA1.size());
+        assertThat(scannerStatus.getBucketOffset(tb1)).isEqualTo(fetchOffset + DATA1.size());
     }
 
     @Test
@@ -302,7 +340,11 @@ public class LogFetcherTest {
                                         .build();
                         RemoteLogFetchInfo remoteLogFetchInfo =
                                 new RemoteLogFetchInfo(
-                                        "/tmp/test-tablet-dir",
+                                        FlussPaths.remoteLogTabletDir(
+                                                        new FsPath("/tmp/remote/log"),
+                                                        segment.physicalTablePath(),
+                                                        tableBucket)
+                                                .toString(),
                                         null,
                                         Collections.singletonList(segment),
                                         0);
@@ -336,6 +378,37 @@ public class LogFetcherTest {
                                                         "mock fetchLog fail for not leader or follower exception.")));
                         resultForBucketMap.put(tableBucket, fetchLogResultForBucket);
                     });
+            return CompletableFuture.completedFuture(makeFetchLogResponse(resultForBucketMap));
+        }
+    }
+
+    private static class ErrorThenRecordsTabletServerGateway extends TestTabletServerGateway {
+        private final Errors error;
+        private final MemoryLogRecords records;
+        private final long highWatermark;
+        private boolean errorReturned;
+
+        ErrorThenRecordsTabletServerGateway(
+                Errors error, MemoryLogRecords records, long highWatermark) {
+            super(false, Collections.emptySet());
+            this.error = error;
+            this.records = records;
+            this.highWatermark = highWatermark;
+        }
+
+        @Override
+        public CompletableFuture<FetchLogResponse> fetchLog(FetchLogRequest request) {
+            Map<TableBucket, FetchLogResultForBucket> resultForBucketMap = new HashMap<>();
+            for (TableBucket tableBucket : getFetchLogData(request).keySet()) {
+                resultForBucketMap.put(
+                        tableBucket,
+                        errorReturned
+                                ? FetchLogResultForBucket.records(
+                                        tableBucket, records, highWatermark, -1L, -1L)
+                                : FetchLogResultForBucket.error(
+                                        tableBucket, new ApiError(error, "mock fetch error")));
+            }
+            errorReturned = true;
             return CompletableFuture.completedFuture(makeFetchLogResponse(resultForBucketMap));
         }
     }

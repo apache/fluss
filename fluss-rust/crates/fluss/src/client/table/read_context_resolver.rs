@@ -22,7 +22,8 @@
 //! more columns.
 //!
 //! When projection is active, the schema is pinned at scanner creation time
-//! and all batches use the initial ReadContext regardless of schema_id.
+//! for output. Server-projected batches use the initial context; remote batches
+//! decode with their write-time schema and align to the projected output.
 //!
 //! When fixed-schema mode is active, batches are still decoded with their
 //! write-time schema and then aligned to the scanner creation schema.
@@ -96,9 +97,6 @@ impl ReadContextResolver {
     }
 
     pub fn with_fixed_schema(mut self, target_fluss_schema: &Schema) -> Self {
-        if self.projected_fields.is_some() {
-            return self;
-        }
         self.fixed_target = {
             let guard = self.contexts.read();
             guard
@@ -113,11 +111,11 @@ impl ReadContextResolver {
     }
 
     /// Resolve the ReadContext for the given schema_id.
-    /// Returns the initial context if projection is active (schema pinned).
+    /// Returns the initial context for server-side projection.
     /// Returns None if the schema_id is not yet cached.
     pub fn resolve(&self, schema_id: i16, is_remote: bool) -> Option<Arc<ReadContext>> {
-        // If projection is active, always return the initial context
-        let effective_id = if self.projected_fields.is_some() {
+        // Server-projected batches already have the requested columns.
+        let effective_id = if self.projected_fields.is_some() && !is_remote {
             self.initial_schema_id
         } else {
             schema_id
@@ -139,7 +137,7 @@ impl ReadContextResolver {
     /// whose schema is absent. This keeps remote log files streaming: no scan
     /// of the remaining segment is needed to discover all schema IDs up front.
     pub async fn fetch_and_register(&self, schema_id: i16) -> Result<()> {
-        if self.projected_fields.is_some() || self.contexts.read().contains_key(&schema_id) {
+        if self.contexts.read().contains_key(&schema_id) {
             return Ok(());
         }
 
@@ -157,12 +155,8 @@ impl ReadContextResolver {
     }
 
     /// Register a new schema by its ID. Builds ReadContexts from the Schema.
-    /// No-op if already cached or if projection is active.
+    /// No-op if already cached.
     pub fn register_schema(&self, schema_id: i16, schema: &Schema) -> Result<()> {
-        if self.projected_fields.is_some() {
-            // Projection pins the schema, no need to register new ones
-            return Ok(());
-        }
         if self.contexts.read().contains_key(&schema_id) {
             return Ok(());
         }
@@ -175,6 +169,10 @@ impl ReadContextResolver {
             .as_ref()
             .map(|target| {
                 index_mapping(schema, &target.fluss_schema).map(|mapping| {
+                    let mapping = match &self.projected_fields {
+                        Some(fields) => fields.iter().map(|&field| mapping[field]).collect(),
+                        None => mapping,
+                    };
                     (
                         target.arrow_schema.clone(),
                         target.row_type.clone(),
@@ -235,8 +233,8 @@ mod tests {
     use crate::record::{ReadContext, to_arrow_schema};
     use std::sync::Arc;
 
-    #[test]
-    fn fixed_schema_does_not_capture_target_with_projection() -> Result<()> {
+    #[tokio::test]
+    async fn fixed_schema_captures_projected_target() -> Result<()> {
         let schema = Schema::builder()
             .column("id", DataTypes::int())
             .column("name", DataTypes::string())
@@ -261,7 +259,25 @@ mod tests {
             ReadContextResolver::new(1, local_context, remote_context, Some(projected_fields))
                 .with_fixed_schema(&schema);
 
-        assert!(resolver.fixed_target.is_none());
+        assert!(resolver.fixed_target.is_some());
+        assert!(resolver.resolve(0, false).is_some());
+        assert!(resolver.resolve(0, true).is_none());
+        // A failed lookup must not install a context or prevent a later retry.
+        assert!(resolver.fetch_and_register(0).await.is_err());
+        assert!(resolver.resolve(0, true).is_none());
+        let historical = Schema::builder().column("id", DataTypes::int()).build()?;
+        resolver.register_schema(0, &historical)?;
+        let remote = resolver.resolve(0, true).unwrap();
+        assert_eq!(
+            remote.target_schema(),
+            resolver.resolve(1, true).unwrap().target_schema()
+        );
+        resolver.fetch_and_register(0).await?;
+        assert!(Arc::ptr_eq(&remote, &resolver.resolve(0, true).unwrap()));
+        assert!(Arc::ptr_eq(
+            &resolver.resolve(0, false).unwrap(),
+            &resolver.resolve(1, false).unwrap()
+        ));
         Ok(())
     }
 }

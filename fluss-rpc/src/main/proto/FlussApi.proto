@@ -129,6 +129,25 @@ message CreateTableRequest {
 message CreateTableResponse {
 }
 
+message CreateTableFromLakeRequest {
+  required PbTablePath table_path = 1;
+  repeated PbKeyValue options = 2;
+}
+
+message CreateTableFromLakeResponse {
+  required PbTableInfo table_info = 1;
+}
+
+message PbTableInfo {
+  required int64 table_id = 1;
+  required int32 schema_id = 2;
+  required bytes table_json = 3;
+  required int64 created_time = 4;
+  required int64 modified_time = 5;
+  optional string remote_data_dir = 6;
+  optional int64 bucket_count_epoch = 7;
+}
+
 // alter table request and response
 message AlterTableRequest {
   required PbTablePath table_path = 1;
@@ -232,6 +251,20 @@ message UpdateMetadataRequest {
 }
 
 message UpdateMetadataResponse {
+}
+
+// describe cluster request and response
+message DescribeClusterRequest {
+}
+
+message DescribeClusterResponse {
+  optional PbServerNode coordinator_server = 1;
+  // Live tablet servers with addresses, racks and server tags.
+  repeated PbServerNode tablet_servers = 2;
+  // Also includes offline servers with assigned replicas. Missing loads are not zero counts.
+  repeated PbTabletServerLoad tablet_server_loads = 3;
+  // Live standby coordinators, excluding the active coordinator_server. Fluss versions >= 1.1.
+  repeated PbServerNode coordinator_standbys = 4;
 }
 
 // produce log request and response
@@ -423,6 +456,86 @@ message ListOffsetsRequest {
 }
 message ListOffsetsResponse {
   repeated PbListOffsetsRespForBucket buckets_resp = 1;
+}
+
+// Find consumer group owner request and response.
+message FindConsumerGroupOwnerRequest {
+  required string group_id = 1;
+}
+
+// All failures are returned through the RPC ErrorResponse envelope.
+message FindConsumerGroupOwnerResponse {
+  required PbServerNode owner = 1;
+}
+
+// Commit consumer offsets request and response.
+message CommitConsumerOffsetsRequest {
+  required string group_id = 1;
+  // An empty list, or tables containing no buckets, is a valid no-op and produces an empty
+  // successful response.
+  repeated PbCommitConsumerOffsetsRequestTable tables = 2;
+}
+
+// Request-level failures, such as authentication, authorization, malformed requests, or an
+// unexpected server failure, are returned through the RPC ErrorResponse envelope. Logical commit
+// failures, including group validation, ownership, and bucket write failures, are reported in each
+// PbCommitConsumerOffsetsResponseBucket.
+message CommitConsumerOffsetsResponse {
+  repeated PbCommitConsumerOffsetsResponseTable tables = 1;
+}
+
+// Get consumer offsets request and response.
+message GetConsumerOffsetsRequest {
+  required string group_id = 1;
+  // When true, tables must be empty and the server returns all committed offsets of the group.
+  // When false, only requested buckets are returned; an empty list, or tables containing no
+  // buckets, is a valid no-op and produces an empty successful response.
+  optional bool all_offsets = 2;
+  repeated PbGetConsumerOffsetsRequestTable tables = 3;
+}
+
+// Group-wide or request-level failures are returned through the RPC ErrorResponse envelope.
+// Failures affecting only one requested bucket are reported in the corresponding
+// PbGetConsumerOffsetsResponseBucket.
+message GetConsumerOffsetsResponse {
+  repeated PbGetConsumerOffsetsResponseTable tables = 1;
+}
+
+// Delete consumer offsets request and response.
+message DeleteConsumerOffsetsRequest {
+  required string group_id = 1;
+  // An empty list, or tables containing no buckets, is a valid no-op and produces an empty
+  // successful response.
+  repeated PbDeleteConsumerOffsetsRequestTable tables = 2;
+}
+
+// Group-wide or request-level failures are returned through the RPC ErrorResponse envelope.
+// Failures affecting only one requested bucket are reported in the corresponding
+// PbDeleteConsumerOffsetsResponseBucket.
+message DeleteConsumerOffsetsResponse {
+  repeated PbDeleteConsumerOffsetsResponseTable tables = 1;
+}
+
+// Lists consumer groups currently owned by the tablet server receiving this request. This is not
+// a cluster-wide listing; callers that need a cluster-wide view must query every tablet server and
+// merge the responses.
+message ListConsumerGroupsRequest {}
+
+// All failures are returned through the RPC ErrorResponse envelope.
+message ListConsumerGroupsResponse {
+  repeated PbListedGroup groups = 1;
+}
+
+// Delete consumer groups request and response.
+message DeleteConsumerGroupsRequest {
+  // An empty list is a valid no-op and produces an empty successful response.
+  repeated string groups = 1;
+}
+
+// Request-level failures are returned through the RPC ErrorResponse envelope. A failure affecting
+// one group is reported in the corresponding PbDeletedGroup.
+message DeleteConsumerGroupsResponse {
+  repeated PbDeletedGroup groups = 1;
 }
 
 // commit kv snapshot request and response
@@ -857,6 +970,15 @@ message GetClusterHealthResponse {
 
 
 // --------------- Inner classes ----------------
+message PbTabletServerLoad {
+  required int32 server_id = 1;
+  required int32 num_replicas = 2;
+  required int32 in_sync_replicas = 3;
+  required int32 num_leader_replicas = 4;
+  required int32 active_leader_replicas = 5;
+  required int32 leaderless_replicas = 6;
+}
+
 message PbApiVersion {
   required int32 api_key = 1;
   required int32 min_version = 2;
@@ -879,12 +1001,14 @@ message PbPhysicalTablePath {
 //   * versions <= 0.6: host and port are used.
 //   * versions >= 0.7: listeners is used to replace host and port.
 // For MetadataResponse and UpdateMetadataRequest: Fluss versions >= 0.7: we add rack for each tabletServer
+// For DescribeClusterResponse: Fluss versions >= 1.1: we add server_tag for each tabletServer
 message PbServerNode {
   required int32 node_id = 1;
   required string host = 2;
   required int32 port = 3;
   optional string listeners = 4;
   optional string rack = 5;
+  optional int32 server_tag = 6;
 }
 
 message PbTableMetadata {
@@ -901,6 +1025,10 @@ message PbTableMetadata {
   optional string remote_data_dir = 8;
   // A table-level, monotonically increasing version for bucket.num changes.
   optional int64 bucket_count_epoch = 9;
+
+  // The table's default bucket count, independent of bucket location availability.
+  // When present, bucket_count_epoch is also present, including epoch zero.
+  optional int32 bucket_count = 10;
 
   // TODO add a new filed 'deleted_table' to indicate this table is deleted in UpdateMetadataRequest.
   // trace by: https://github.com/apache/fluss/issues/981
@@ -1412,6 +1540,106 @@ message PbKvSnapshotLeaseForBucket {
   optional int64 partition_id = 1;
   required int32 bucket_id = 2;
   required int64 snapshot_id = 3;
+}
+
+// ---- CommitConsumerOffsets ----
+
+message PbCommitConsumerOffsetsRequestTable {
+  required int64 table_id = 1;
+  repeated PbCommitConsumerOffsetsRequestBucket buckets = 2;
+}
+
+message PbCommitConsumerOffsetsRequestBucket {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+  required int64 offset = 3;
+  optional string metadata = 4;
+}
+
+message PbCommitConsumerOffsetsResponseTable {
+  required int64 table_id = 1;
+  repeated PbCommitConsumerOffsetsResponseBucket buckets = 2;
+}
+
+message PbCommitConsumerOffsetsResponseBucket {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+  // Absent means that the commit succeeded for this bucket.
+  optional int32 error_code = 3;
+  // Set only when error_code is present and additional diagnostic information is available.
+  optional string error_message = 4;
+}
+
+// ---- GetConsumerOffsets ----
+
+message PbGetConsumerOffsetsRequestTable {
+  required int64 table_id = 1;
+  repeated PbGetConsumerOffsetsRequestBucket buckets = 2;
+}
+
+message PbGetConsumerOffsetsRequestBucket {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+}
+
+message PbGetConsumerOffsetsResponseTable {
+  required int64 table_id = 1;
+  repeated PbGetConsumerOffsetsResponseBucket buckets = 2;
+}
+
+message PbGetConsumerOffsetsResponseBucket {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+  // Absent with no error means not committed.
+  optional int64 offset = 3;
+  // Absent means that no user metadata was committed.
+  optional string metadata = 4;
+  // Absent means that the fetch succeeded for this bucket.
+  optional int32 error_code = 5;
+  // Set only when error_code is present and additional diagnostic information is available.
+  optional string error_message = 6;
+}
+
+// ---- DeleteConsumerOffsets ----
+
+message PbDeleteConsumerOffsetsRequestTable {
+  required int64 table_id = 1;
+  repeated PbDeleteConsumerOffsetsRequestBucket buckets = 2;
+}
+
+message PbDeleteConsumerOffsetsRequestBucket {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+}
+
+message PbDeleteConsumerOffsetsResponseTable {
+  required int64 table_id = 1;
+  repeated PbDeleteConsumerOffsetsResponseBucket buckets = 2;
+}
+
+message PbDeleteConsumerOffsetsResponseBucket {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+  // Absent means that the delete succeeded for this bucket.
+  optional int32 error_code = 3;
+  // Set only when error_code is present and additional diagnostic information is available.
+  optional string error_message = 4;
+}
+
+// ---- ListConsumerGroups ----
+
+message PbListedGroup {
+  required string group_id = 1;
+}
+
+// ---- DeleteConsumerGroups ----
+
+message PbDeletedGroup {
+  required string group_id = 1;
+  // Absent means that the group was deleted successfully.
+  optional int32 error_code = 2;
+  // Set only when error_code is present and additional diagnostic information is available.
+  optional string error_message = 3;
 }
 
 message PbTableStatsReqForBucket {

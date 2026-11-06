@@ -1233,6 +1233,7 @@ pub struct ReadContext {
     is_from_remote: bool,
     fluss_row_type: Option<Arc<RowType>>,
     schema_alignment: Option<Arc<[i32]>>,
+    source_projection: Option<Vec<usize>>,
 }
 
 #[derive(Clone)]
@@ -1259,6 +1260,7 @@ impl ReadContext {
             is_from_remote,
             fluss_row_type: None,
             schema_alignment: None,
+            source_projection: None,
         }
     }
 
@@ -1313,6 +1315,39 @@ impl ReadContext {
                 }),
             "schema alignment source and target types must match"
         );
+        let schema_alignment = if self.is_from_remote {
+            let source_projection: Vec<_> = schema_alignment
+                .iter()
+                .filter(|&&index| index != UNEXIST_MAPPING)
+                .map(|&index| index as usize)
+                .collect();
+            if source_projection
+                .iter()
+                .copied()
+                .eq(0..self.full_schema.fields().len())
+            {
+                schema_alignment
+            } else {
+                // Alignment indexes address the projected decoder output, not the source schema.
+                let mut projected_index = 0;
+                let alignment = schema_alignment
+                    .iter()
+                    .map(|&index| {
+                        if index == UNEXIST_MAPPING {
+                            index
+                        } else {
+                            let index = projected_index;
+                            projected_index += 1;
+                            index
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                self.source_projection = Some(source_projection);
+                Arc::from(alignment)
+            }
+        } else {
+            schema_alignment
+        };
         self.target_schema = target_schema;
         self.schema_alignment = Some(schema_alignment);
         self
@@ -1330,8 +1365,7 @@ impl ReadContext {
         // the logic is little bit of hard to understand, to refactor it to follow
         // java side
         let (need_do_reorder, sorted_fields) = {
-            // currently, for remote read, arrow log doesn't support projection pushdown,
-            // so, only need to do reordering when is not from remote
+            // Remote decoding preserves projection order; server responses use field order.
             if !is_from_remote {
                 let mut sorted_fields = projected_fields.clone();
                 sorted_fields.sort_unstable();
@@ -1382,6 +1416,17 @@ impl ReadContext {
             }
         };
 
+        let source_projection = if is_from_remote
+            && !project
+                .projected_fields
+                .iter()
+                .copied()
+                .eq(0..arrow_schema.fields().len())
+        {
+            Some(project.projected_fields.clone())
+        } else {
+            None
+        };
         Ok(ReadContext {
             target_schema,
             full_schema: arrow_schema,
@@ -1390,6 +1435,7 @@ impl ReadContext {
             is_from_remote,
             fluss_row_type: None,
             schema_alignment: None,
+            source_projection,
         })
     }
 
@@ -1427,11 +1473,15 @@ impl ReadContext {
             .map(|p| p.ordered_fields.as_slice())
     }
 
+    fn remote_decode_projection(&self) -> Option<&[usize]> {
+        self.source_projection.as_deref()
+    }
+
     pub(crate) fn record_batch(&self, data: Bytes) -> Result<RecordBatch> {
         let (batch_metadata, body_buffer, version) = parse_ipc_message(&data)?;
 
         let resolve_schema = {
-            // if from remote, no projection, need to use full schema
+            // Remote IPC metadata describes all source fields, even with decoder projection.
             if self.is_from_remote || self.schema_alignment.is_some() {
                 self.full_schema.clone()
             } else {
@@ -1456,7 +1506,11 @@ impl ReadContext {
             batch_metadata,
             resolve_schema,
             &HashMap::new(),
-            None,
+            if self.is_from_remote {
+                self.remote_decode_projection()
+            } else {
+                None
+            },
             &version,
         )?;
 
@@ -1464,9 +1518,7 @@ impl ReadContext {
             Some(projection) => {
                 let reordered_columns = {
                     // need to do reorder
-                    if self.is_from_remote {
-                        Some(&projection.projected_fields)
-                    } else if projection.reordering_needed {
+                    if !self.is_from_remote && projection.reordering_needed {
                         Some(&projection.reordering_indexes)
                     } else {
                         None
@@ -1504,21 +1556,10 @@ impl ReadContext {
             batch_metadata,
             self.full_schema.clone(),
             &HashMap::new(),
-            None,
+            self.remote_decode_projection(),
             &version,
         )?;
 
-        let record_batch = match &self.projection {
-            Some(projection) => {
-                let projected_columns: Vec<_> = projection
-                    .projected_fields
-                    .iter()
-                    .map(|&idx| record_batch.column(idx).clone())
-                    .collect();
-                RecordBatch::try_new(self.target_schema.clone(), projected_columns)?
-            }
-            None => record_batch,
-        };
         let record_batch = match &self.schema_alignment {
             Some(schema_alignment) => align_record_batch_to_schema(
                 record_batch,
@@ -1547,7 +1588,11 @@ fn align_record_batch_to_schema(
         }
     }
 
-    Ok(RecordBatch::try_new(target_schema, columns)?)
+    Ok(RecordBatch::try_new_with_options(
+        target_schema,
+        columns,
+        &arrow::array::RecordBatchOptions::new().with_row_count(Some(row_count)),
+    )?)
 }
 
 pub struct ArrowLogRecordIterator {
@@ -2225,6 +2270,194 @@ mod tests {
                 ),
             ),
         );
+    }
+
+    fn encode_projection_batch(
+        batch: &RecordBatch,
+        compression: Option<CompressionType>,
+    ) -> Result<Bytes> {
+        let options = IpcWriteOptions::default().try_with_compression(compression)?;
+        let mut writer =
+            StreamWriter::try_new_with_options(Vec::new(), batch.schema().as_ref(), options)?;
+        let header = writer.get_ref().len();
+        writer.write(batch)?;
+        Ok(Bytes::copy_from_slice(&writer.get_ref()[header..]))
+    }
+
+    #[test]
+    fn remote_decode_projection_preserves_columns_and_rows() -> Result<()> {
+        let row_type = Arc::new(RowType::new(vec![
+            DataField::new("id", DataTypes::int(), None),
+            DataField::new("tags", DataTypes::array(DataTypes::int()), None),
+            DataField::new("name", DataTypes::string(), None),
+            DataField::new(
+                "attributes",
+                DataTypes::map(DataTypes::string(), DataTypes::int()),
+                None,
+            ),
+            DataField::new(
+                "nested",
+                DataTypes::row(vec![
+                    DataField::new("seq", DataTypes::int(), None),
+                    DataField::new("label", DataTypes::string(), None),
+                ]),
+                None,
+            ),
+        ]));
+        let schema = to_arrow_schema(&row_type)?;
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(arrow::array::Int32Array::from(vec![Some(1), None])),
+                list_int_array(vec![Some(3), None, Some(5)], vec![0, 2, 3], None),
+                Arc::new(arrow::array::StringArray::from(vec![Some("hello"), None])),
+                map_string_int_array(vec!["a", "b"], vec![Some(1), None], vec![0, 1, 2], None),
+                struct_int_string_array(
+                    vec![Some(1), None],
+                    vec![Some("x"), None],
+                    Some(vec![true, false]),
+                ),
+            ],
+        )?;
+        for compression in [
+            None,
+            Some(CompressionType::LZ4_FRAME),
+            Some(CompressionType::ZSTD),
+        ] {
+            for rows in [0, 2] {
+                let batch = batch.slice(0, rows);
+                let data = encode_projection_batch(&batch, compression)?;
+                for fields in [
+                    vec![],
+                    vec![0],
+                    vec![2, 0],
+                    vec![1],
+                    vec![2, 1, 2],
+                    vec![0, 1, 2, 3, 4],
+                    vec![4, 3],
+                    vec![3, 0, 4, 3],
+                ] {
+                    let context = ReadContext::with_projection_pushdown(
+                        schema.clone(),
+                        Arc::new(row_type.project(&fields)?),
+                        fields.clone(),
+                        true,
+                    )?;
+                    let expected = batch.project(&fields)?;
+                    assert_eq!(context.record_batch(data.clone())?, expected);
+                    assert_eq!(
+                        context.record_batch_for_remote_log(data.clone())?.unwrap(),
+                        expected
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn remote_decode_projection_remaps_historical_schema() -> Result<()> {
+        let row_type = Arc::new(RowType::new(vec![
+            DataField::new("first", DataTypes::int(), None),
+            DataField::new("unused", DataTypes::string(), None),
+            DataField::new("last", DataTypes::int(), None),
+        ]));
+        let schema = to_arrow_schema(&row_type)?;
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(arrow::array::Int32Array::from(vec![1, 2])),
+                Arc::new(arrow::array::StringArray::from(vec!["unused", "unused"])),
+                Arc::new(arrow::array::Int32Array::from(vec![3, 4])),
+            ],
+        )?;
+        for mapping in [
+            vec![],
+            vec![-1],
+            vec![-1, -1],
+            vec![2, -1, 0, 2],
+            vec![0, -1],
+            vec![2, 0],
+            vec![0, -1, 1, 2],
+            vec![-1, 0, 1, 2],
+            vec![0, 1, 2, -1],
+        ] {
+            let target = Arc::new(arrow_schema::Schema::new_with_metadata(
+                mapping
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &source)| {
+                        let data_type = if source == UNEXIST_MAPPING {
+                            ArrowDataType::Int32
+                        } else {
+                            schema.field(source as usize).data_type().clone()
+                        };
+                        Field::new(format!("target_{i}"), data_type, true)
+                    })
+                    .collect::<Vec<_>>(),
+                HashMap::from([("version".into(), "target".into())]),
+            ));
+            let context = ReadContext::new(schema.clone(), row_type.clone(), true)
+                .with_target_schema_alignment(target.clone(), Arc::from(mapping.clone()));
+            let expected = align_record_batch_to_schema(batch.clone(), target, &mapping)?;
+            for compression in [
+                None,
+                Some(CompressionType::LZ4_FRAME),
+                Some(CompressionType::ZSTD),
+            ] {
+                let data = encode_projection_batch(&batch, compression)?;
+                assert_eq!(context.record_batch(data.clone())?, expected);
+                assert_eq!(
+                    context.record_batch_for_remote_log(data)?.unwrap(),
+                    expected
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn remote_decode_projection_skips_unselected_compressed_buffers() -> Result<()> {
+        let row_type = Arc::new(RowType::new(vec![
+            DataField::new("id", DataTypes::int(), None),
+            DataField::new("unused", DataTypes::string(), None),
+        ]));
+        let schema = to_arrow_schema(&row_type)?;
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(arrow::array::Int32Array::from(vec![7; 100])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "repeated payload";
+                    100
+                ])),
+            ],
+        )?;
+        let data = encode_projection_batch(&batch, Some(CompressionType::ZSTD))?;
+        let (metadata, body, _) = parse_ipc_message(&data)?;
+        let buffers = metadata.buffers().unwrap();
+        let buffer = buffers.get(buffers.len() - 1);
+        let start = data.len() - body.len() + buffer.offset() as usize;
+        let end = start + buffer.length() as usize;
+        let mut data = data.to_vec();
+        // Keep IPC framing and the uncompressed length; invalidate only the unused payload.
+        data[start + 8..end].fill(0);
+        let data = Bytes::from(data);
+        let full = ReadContext::new(schema.clone(), row_type.clone(), true);
+        assert!(full.record_batch(data.clone()).is_err());
+        let selected = ReadContext::with_projection_pushdown(
+            schema,
+            Arc::new(row_type.project(&[0])?),
+            vec![0],
+            true,
+        )?;
+        let expected = batch.project(&[0])?;
+        assert_eq!(selected.record_batch(data.clone())?, expected);
+        assert_eq!(
+            selected.record_batch_for_remote_log(data)?.unwrap(),
+            expected
+        );
+        Ok(())
     }
 
     fn single_int_read_context() -> (ReadContext, SchemaRef) {

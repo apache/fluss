@@ -493,6 +493,20 @@ public class WriterClient {
 
         writerMetricGroup.close();
 
+        if (WriteBatch.isInCallback()) {
+            // Pending writes may need this callback's thread to complete, e.g. it also handles
+            // their responses or is the sender thread itself, so waiting could block forever.
+            LOG.warn(
+                    "Force closing the writer without waiting since it is closed from a write callback.");
+            if (sender != null) {
+                sender.forceClose();
+            }
+            if (ioThreadPool != null) {
+                ioThreadPool.shutdown();
+            }
+            return;
+        }
+
         if (sender != null) {
             sender.initiateClose();
         }

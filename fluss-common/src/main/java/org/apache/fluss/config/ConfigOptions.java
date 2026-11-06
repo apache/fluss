@@ -20,6 +20,7 @@ package org.apache.fluss.config;
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.compression.ArrowCompressionType;
+import org.apache.fluss.compression.LogCompressionType;
 import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DeleteBehavior;
@@ -739,6 +740,15 @@ public class ConfigOptions {
                     .defaultValue("JKS")
                     .withDescription("Format of the server truststore: `JKS` or `PKCS12`.");
 
+    public static final ConfigOption<String> SERVER_SSL_PRINCIPAL_MAPPING_RULES =
+            key("security.ssl.principal.mapping.rules")
+                    .stringType()
+                    .defaultValue("DEFAULT")
+                    .withDescription(
+                            "Rules that map the distinguished name of a client certificate, in "
+                                    + "RFC 2253 form, to the principal name of an `mTLS` listener. "
+                                    + "`DEFAULT` keeps the full distinguished name.");
+
     public static final ConfigOption<Integer> TABLET_SERVER_ID =
             key("tablet-server.id")
                     .intType()
@@ -1092,11 +1102,11 @@ public class ConfigOptions {
     public static final ConfigOption<Boolean> LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED =
             key("log.retention.roll-active-segment.enabled")
                     .booleanType()
-                    .defaultValue(false)
+                    .defaultValue(true)
                     .withDescription(
                             "Whether to roll a non-empty active log segment after it has expired "
                                     + "according to the effective local cleanup TTL and the high "
-                                    + "watermark has reached the log end offset. Disabled by default.");
+                                    + "watermark has reached the log end offset. Enabled by default.");
 
     public static final ConfigOption<Duration> LOG_REPLICA_HIGH_WATERMARK_CHECKPOINT_INTERVAL =
             key("log.replica.high-watermark.checkpoint-interval")
@@ -1269,23 +1279,38 @@ public class ConfigOptions {
                     .intType()
                     .defaultValue(3)
                     .withDescription(
-                            "The number of threads that the server uses for receiving requests "
-                                    + "from the network and sending responses to the network.");
+                            "The number of network threads per listener resource group for receiving "
+                                    + "requests and sending responses. When the server binds both the "
+                                    + "listener selected by internal.listener.name and external listeners, "
+                                    + "the internal listener uses a dedicated group and all external "
+                                    + "listeners share another group. Otherwise, all listeners share "
+                                    + "one group.");
 
     public static final ConfigOption<Integer> NETTY_SERVER_NUM_WORKER_THREADS =
             key("netty.server.num-worker-threads")
                     .intType()
                     .defaultValue(8)
                     .withDescription(
-                            "The number of threads that the server uses for processing requests, "
-                                    + "which may include disk and remote I/O.");
+                            "The number of worker threads per listener resource group for processing "
+                                    + "requests, which may include disk and remote I/O. When the server "
+                                    + "binds both the listener selected by internal.listener.name and "
+                                    + "external listeners, the internal listener uses a dedicated group "
+                                    + "and all external listeners share another group. Otherwise, all "
+                                    + "listeners share one group.");
 
     public static final ConfigOption<Integer> NETTY_SERVER_MAX_QUEUED_REQUESTS =
             key("netty.server.max-queued-requests")
                     .intType()
                     .defaultValue(500)
                     .withDescription(
-                            "The number of queued requests allowed for worker threads, before blocking the I/O threads.");
+                            "The queued-request backpressure threshold per listener resource group, "
+                                    + "divided among its worker threads. When a worker queue reaches its "
+                                    + "threshold, reads are paused on its associated connections. Queues "
+                                    + "are unbounded; this is not a hard limit on queued requests. When "
+                                    + "the server binds both the listener selected by internal.listener.name "
+                                    + "and external listeners, the internal listener uses a dedicated "
+                                    + "group and all external listeners share another group. Otherwise, "
+                                    + "all listeners share one group.");
 
     public static final ConfigOption<Integer> NETTY_SERVER_MAX_QUEUED_HISTORICAL_REQUESTS =
             key("netty.server.max-queued-historical-requests")
@@ -1492,6 +1517,47 @@ public class ConfigOptions {
                     .withDescription(
                             "Setting a value greater than zero will cause the client to resend any record whose "
                                     + "send fails with a potentially transient error.");
+
+    public static final ConfigOption<Duration> CLIENT_WRITER_RETRY_BACKOFF =
+            key("client.writer.retry-backoff")
+                    .durationType()
+                    .defaultValue(Duration.ofMillis(100))
+                    .withDescription(
+                            "The initial delay before retrying a write that failed with a retriable error. "
+                                    + "The delay doubles with the batch retry count and uses 20% jitter, "
+                                    + "up to client.writer.retry-backoff-max. Set to 0 to disable this backoff.");
+
+    public static final ConfigOption<Duration> CLIENT_WRITER_RETRY_BACKOFF_MAX =
+            key("client.writer.retry-backoff-max")
+                    .durationType()
+                    .defaultValue(Duration.ofSeconds(1))
+                    .withDescription(
+                            "The maximum delay before retrying a write that failed with a retriable error. "
+                                    + "Must be between the initial backoff and 2147483647ms. "
+                                    + "The backoff applies per physical table bucket and is independent of "
+                                    + "KV backpressure and disk-write protection.");
+
+    public static final ConfigOption<Duration> CLIENT_WRITER_DISK_WRITE_LOCKED_BACKOFF =
+            key("client.writer.disk-write-locked.backoff")
+                    .durationType()
+                    .defaultValue(Duration.ofSeconds(1))
+                    .withDescription(
+                            "The initial retry backoff when disk write protection rejects a write. "
+                                    + "Applies to both Log and KV writes, independently of KV backpressure. "
+                                    + "The backoff doubles with the batch retry count and uses 20% jitter, "
+                                    + "up to client.writer.disk-write-locked.backoff-max. "
+                                    + "The value must be at least 1ms and no greater than the maximum backoff.");
+
+    public static final ConfigOption<Duration> CLIENT_WRITER_DISK_WRITE_LOCKED_BACKOFF_MAX =
+            key("client.writer.disk-write-locked.backoff-max")
+                    .durationType()
+                    .defaultValue(Duration.ofSeconds(10))
+                    .withDescription(
+                            "The maximum retry backoff for a bucket whose writes are rejected by disk "
+                                    + "write protection. Must be between the initial backoff and 2147483647ms. "
+                                    + "Setting this equal to the initial backoff uses a fixed delay without jitter. "
+                                    + "Writes retry automatically after the delay, subject to client.writer.retries. "
+                                    + "Flush and graceful close also respect this delay.");
 
     public static final ConfigOption<Boolean> CLIENT_WRITER_ENABLE_IDEMPOTENCE =
             key("client.writer.enable-idempotence")
@@ -1742,7 +1808,11 @@ public class ConfigOptions {
             key("client.lookup.queue-size")
                     .intType()
                     .defaultValue(25600)
-                    .withDescription("The maximum number of pending lookup operations.");
+                    .withDescription(
+                            "The maximum number of lookup operations in the initial input queue. "
+                                    + "Adding a lookup blocks while this queue is full. Lookups waiting "
+                                    + "for a bucket's leader or for a retry are outside this limit, so the "
+                                    + "total number of pending lookups can grow beyond it.");
 
     public static final ConfigOption<Integer> CLIENT_LOOKUP_MAX_BATCH_SIZE =
             key("client.lookup.max-batch-size")
@@ -1773,6 +1843,26 @@ public class ConfigOptions {
                     .withDescription(
                             "Setting a value greater than zero will cause the client to resend any lookup request "
                                     + "that fails with a potentially transient error.");
+
+    public static final ConfigOption<Duration> CLIENT_LOOKUP_RETRY_BACKOFF =
+            key("client.lookup.retry-backoff")
+                    .durationType()
+                    .defaultValue(Duration.ofMillis(100))
+                    .withDescription(
+                            "The initial delay before retrying a lookup that failed with a retriable error, "
+                                    + "such as NOT_LEADER_OR_FOLLOWER, or whose bucket has no known leader. The "
+                                    + "delay doubles with each attempt and uses 20% jitter, up to "
+                                    + "client.lookup.retry-backoff-max. Attempts made while a bucket has no known "
+                                    + "leader don't count toward client.lookup.max-retries. "
+                                    + "Set to 0 to disable this backoff.");
+
+    public static final ConfigOption<Duration> CLIENT_LOOKUP_RETRY_BACKOFF_MAX =
+            key("client.lookup.retry-backoff-max")
+                    .durationType()
+                    .defaultValue(Duration.ofSeconds(1))
+                    .withDescription(
+                            "The maximum delay before retrying a lookup. "
+                                    + "Must be between the initial backoff and 2147483647ms.");
 
     public static final ConfigOption<Integer> CLIENT_SCANNER_REMOTE_LOG_PREFETCH_NUM =
             key("client.scanner.remote-log.prefetch-num")
@@ -1911,6 +2001,26 @@ public class ConfigOptions {
                     .defaultValue(3)
                     .withDescription(
                             "The compression level of ZSTD for the log records if the log format is set to `ARROW` "
+                                    + "and the compression type is set to `ZSTD`. The valid range is 1 to 22.");
+
+    public static final ConfigOption<LogCompressionType> TABLE_LOG_COMPACTED_COMPRESSION_TYPE =
+            key("table.log.compacted.compression.type")
+                    .enumType(LogCompressionType.class)
+                    .defaultValue(LogCompressionType.NONE)
+                    .withDescription(
+                            "The compression type of the log record batches if the log format is set to `COMPACTED`. "
+                                    + "The candidate compression type is "
+                                    + Arrays.toString(LogCompressionType.values())
+                                    + ". Compressed batches use log batch format V3, which Fluss versions before 1.1 "
+                                    + "can't read: older clients and tablet servers fail with an 'Unsupported magic value' error. "
+                                    + "Upgrade all tablet servers and consumers (e.g., Flink jobs) before enabling compression.");
+
+    public static final ConfigOption<Integer> TABLE_LOG_COMPACTED_COMPRESSION_ZSTD_LEVEL =
+            key("table.log.compacted.compression.zstd.level")
+                    .intType()
+                    .defaultValue(3)
+                    .withDescription(
+                            "The compression level of ZSTD for the log record batches if the log format is set to `COMPACTED` "
                                     + "and the compression type is set to `ZSTD`. The valid range is 1 to 22.");
 
     public static final ConfigOption<KvFormat> TABLE_KV_FORMAT =
@@ -2161,16 +2271,16 @@ public class ConfigOptions {
                     .stringType()
                     .noDefaultValue()
                     .withDescription(
-                            "Specifies the database name of the datalake table. This option is currently supported only for Paimon. "
-                                    + "If not set, the Fluss database name is used. The option may be configured before the Paimon table is created and cannot be changed after creation.");
+                            "Specifies the database name of the datalake table. This option is currently supported only for Paimon and Iceberg. "
+                                    + "If not set, the Fluss database name is used. The option may be configured before the lake table is created and cannot be changed after creation.");
 
     public static final ConfigOption<String> TABLE_DATALAKE_TABLE_NAME =
             key("table.datalake.table-name")
                     .stringType()
                     .noDefaultValue()
                     .withDescription(
-                            "Specifies the table name of the datalake table. This option is currently supported only for Paimon. "
-                                    + "If not set, the Fluss table name is used. The option may be configured before the Paimon table is created and cannot be changed after creation.");
+                            "Specifies the table name of the datalake table. This option is currently supported only for Paimon and Iceberg. "
+                                    + "If not set, the Fluss table name is used. The option may be configured before the lake table is created and cannot be changed after creation.");
 
     public static final ConfigOption<Duration> TABLE_DATALAKE_FRESHNESS =
             key("table.datalake.freshness")
@@ -2205,6 +2315,16 @@ public class ConfigOptions {
                                     + "The `first_row` merge engine will keep the first row of the same primary key. "
                                     + "The `versioned` merge engine will keep the row with the largest version of the same primary key. "
                                     + "The `aggregation` merge engine will aggregate rows with the same primary key using field-level aggregate functions.");
+
+    public static final ConfigOption<Boolean> TABLE_UPSERT_SKIP_UNCHANGED =
+            key("table.upsert.skip-unchanged")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "For a primary key table using the default merge behavior, skip the state write and changelog when the complete candidate row has the same schema ID and serialized row bytes as the stored row. "
+                                    + "This also applies to partial updates and partial deletes. "
+                                    + "It requires FULL changelog image mode and cannot be combined with row-level KV TTL or a merge engine. As with other tables without a merge engine, OVERWRITE writes are unsupported. "
+                                    + "FULL changelog image mode already reads the previous value for every upsert. Comparing it with the complete candidate row adds comparison costs.");
 
     public static final ConfigOption<String> TABLE_MERGE_ENGINE_VERSION_COLUMN =
             // we may need to introduce "del-column" in the future to support delete operation
@@ -2268,6 +2388,86 @@ public class ConfigOptions {
                                     + "Note: enabling column statistics requires the V1 batch format. "
                                     + "Downstream consumers must be upgraded to Fluss v1.0+ before enabling this option, "
                                     + "as older versions cannot parse the extended batch format.");
+
+    public static final ConfigOption<Boolean> TABLE_KAFKA_ENABLED =
+            key("table.kafka.enabled")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Whether to expose this table as a Kafka topic. Requires a non-partitioned "
+                                    + "log table using the Arrow log format.");
+
+    public static final ConfigOption<KafkaValueConversionType> TABLE_KAFKA_CONVERT_VALUE_TYPE =
+            key("table.kafka.convert.value.type")
+                    .enumType(KafkaValueConversionType.class)
+                    .defaultValue(KafkaValueConversionType.PARSE_JSON)
+                    .withDescription(
+                            "How to convert Kafka record values. 'binary' stores the raw bytes in "
+                                    + "_kafka_value (BYTES); 'string' decodes UTF-8 text into _kafka_value "
+                                    + "(STRING); 'parse_json' parses a JSON object and maps its fields "
+                                    + "according to table.kafka.convert.value.layout. Defaults to 'parse_json'.");
+
+    public static final ConfigOption<KafkaValueConversionLayout> TABLE_KAFKA_CONVERT_VALUE_LAYOUT =
+            key("table.kafka.convert.value.layout")
+                    .enumType(KafkaValueConversionLayout.class)
+                    .defaultValue(KafkaValueConversionLayout.FLAT)
+                    .withDescription(
+                            "How to map JSON object fields when table.kafka.convert.value.type is "
+                                    + "'parse_json'. 'flat' maps fields by name to top-level table columns; "
+                                    + "'nested' maps them to fields in the _kafka_value column, which must "
+                                    + "have ROW type. Defaults to 'flat'. Ignored for 'binary' and 'string' conversion.");
+
+    public static final ConfigOption<KafkaKeyConversionType> TABLE_KAFKA_CONVERT_KEY_TYPE =
+            key("table.kafka.convert.key.type")
+                    .enumType(KafkaKeyConversionType.class)
+                    .noDefaultValue()
+                    .withDescription(
+                            "How to convert Kafka record keys. Only 'binary' is supported, which stores "
+                                    + "raw key bytes in the _kafka_key column of type BYTES. If this column "
+                                    + "is declared, keys are stored even when this option is omitted. "
+                                    + "Without this column, keys are not stored and this option must be left unset.");
+
+    // ------------------------------------------------------------------------
+    //  ConfigOptions for Consumer Offsets
+    // ------------------------------------------------------------------------
+
+    public static final ConfigOption<MemorySize> OFFSET_METADATA_MAX_BYTES =
+            key("server.consumer-offsets.metadata.max-size")
+                    .memoryType()
+                    .defaultValue(MemorySize.parse("4kb"))
+                    .withDescription(
+                            "The maximum size for a metadata entry associated with an offset commit.");
+
+    public static final ConfigOption<Duration> OFFSETS_RETENTION =
+            key("server.consumer-offsets.ttl")
+                    .durationType()
+                    .defaultValue(Duration.ofDays(7))
+                    .withDescription(
+                            "The retention period for committed consumer offsets after they become inactive.");
+
+    public static final ConfigOption<Integer> OFFSETS_TABLE_NUM_BUCKETS =
+            key("server.consumer-offsets.table.bucket-count")
+                    .intType()
+                    .defaultValue(16)
+                    .withDescription(
+                            "The number of buckets for the consumer-offset system table. This value should not change after deployment. "
+                                    + "Unlike log tables, each KV bucket leader maintains a separate RocksDB instance, so a large value "
+                                    + "introduces overhead for small and medium clusters. Increase it only if the consumer-offset write "
+                                    + "load cannot be handled by the default number of bucket leaders.");
+
+    public static final ConfigOption<Integer> OFFSETS_TABLE_REPLICATION_FACTOR =
+            key("server.consumer-offsets.table.replication-factor")
+                    .intType()
+                    .defaultValue(3)
+                    .withDescription(
+                            "The replication factor for the consumer-offset system table. Table creation waits until the cluster has enough tablet servers.");
+
+    public static final ConfigOption<Duration> OFFSET_COMMIT_TIMEOUT =
+            key("server.consumer-offsets.commit-timeout")
+                    .durationType()
+                    .defaultValue(Duration.ofSeconds(5))
+                    .withDescription(
+                            "The maximum time to wait for all replicas to acknowledge an offset commit.");
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for Kv
@@ -2607,6 +2807,20 @@ public class ConfigOptions {
                                     + "so that the total memory used by RocksDB is bounded by block cache size. "
                                     + "The default value is `false`.");
 
+    public static final ConfigOption<Boolean> KV_PARTITIONED_INDEX_FILTERS =
+            key("kv.rocksdb.block.partitioned-index-filters")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Enables partitioned indexes. If `kv.rocksdb.use-bloom-filter` is true, "
+                                    + "Bloom filters are partitioned as well. Requires a positive "
+                                    + "`kv.rocksdb.block.metadata-blocksize`; when `kv.rocksdb.use-bloom-filter` "
+                                    + "is true, `kv.rocksdb.bloom-filter.block-based-mode` must be `false`. "
+                                    + "Only newly generated SSTs "
+                                    + "use this format; existing SSTs remain readable when this option is enabled or disabled. "
+                                    + "Partitions use the block cache even when metadata caching is disabled. "
+                                    + "Takes effect when opening a RocksDB instance.");
+
     public static final ConfigOption<Boolean> KV_CACHE_INDEX_AND_FILTER_BLOCKS_WITH_HIGH_PRIORITY =
             key("kv.rocksdb.block.cache-index-and-filter-blocks-with-high-priority")
                     .booleanType()
@@ -2867,6 +3081,15 @@ public class ConfigOptions {
                                     + ConfigOptions.TABLE_DATALAKE_AUTO_EXPIRE_SNAPSHOT
                                     + " is false.");
 
+    public static final ConfigOption<Boolean> LAKE_TIERING_PARTITION_MARK_DONE_ENABLED =
+            key("lake.tiering.partition.mark-done.enabled")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Whether the tiering service marks idle partitions of tiered partitioned tables as done. "
+                                    + "Disabled by default. When enabled, mark-done uses the actual lake table's options "
+                                    + "(e.g. 'partition.idle-time-to-done' on the Paimon table).");
+
     public static final ConfigOption<String> LAKE_TIERING_IO_TMP_DIRS =
             key("lake.tiering.io.tmp.dirs")
                     .stringType()
@@ -2876,6 +3099,13 @@ public class ConfigOptions {
                                     + "Multiple directories can be separated by comma or the system path separator. "
                                     + "If not configured and the tiering service runs in a Flink job, Fluss uses "
                                     + "Flink's IO temporary directories with a 'fluss' child directory.");
+
+    public static final ConfigOption<Integer> LAKE_TIERING_COMMIT_THREAD_NUM =
+            key("lake.tiering.commit-thread-num")
+                    .intType()
+                    .defaultValue(2)
+                    .withDescription(
+                            "The number of threads the tiering service uses to commit tables concurrently. Must be positive.");
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for fluss kafka
@@ -2896,19 +3126,15 @@ public class ConfigOptions {
                     .withDescription(
                             "The listener names for Kafka wire protocol communication. Support multiple listener names, separated by comma.");
 
-    public static final ConfigOption<String> KAFKA_DATABASE =
-            key("kafka.database")
+    public static final ConfigOption<String> KAFKA_DEFAULT_DATABASE =
+            key("kafka.default.database")
                     .stringType()
-                    .defaultValue("kafka")
+                    .defaultValue("fluss")
                     .withDescription(
-                            "The database for fluss kafka. The default database is `kafka`.");
-
-    public static final ConfigOption<Duration> KAFKA_CONNECTION_MAX_IDLE_TIME =
-            key("kafka.connection.max-idle-time")
-                    .durationType()
-                    .defaultValue(Duration.ofSeconds(60))
-                    .withDescription(
-                            "Close kafka idle connections after the given time specified by this config.");
+                            "Default database for unqualified Kafka topic names. Fully qualified names may "
+                                    + "access other databases. When Kafka is enabled, the coordinator creates "
+                                    + "the configured database if missing, including 'fluss'. With Kafka disabled, "
+                                    + "native initialization creates 'fluss' only when the cluster has no databases.");
 
     /**
      * Compaction style for Fluss's kv, which is same to rocksdb's, but help use avoid including

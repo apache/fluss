@@ -383,7 +383,12 @@ class FlinkCatalogTest {
                 lakeTable);
         CatalogBaseTable gottenLakeTable =
                 catalog.getTable(new ObjectPath(DEFAULT_DB, flussTableName + "$lake"));
-        assertThat(gottenLakeTable).isEqualTo(lakeTable);
+        assertThat(gottenLakeTable.getOptions())
+                .containsAllEntriesOf(lakeTable.getOptions())
+                .containsEntry(
+                        FlinkCatalog.LAKE_TABLE_DATABASE_NAME_OPTION,
+                        lakeTablePath.getDatabaseName())
+                .containsEntry(FlinkCatalog.LAKE_TABLE_NAME_OPTION, lakeTablePath.getTableName());
 
         CatalogTable snapshotsTable = newCatalogTable(Collections.emptyMap());
         mockLakeCatalog.registerLakeTable(
@@ -393,7 +398,12 @@ class FlinkCatalogTest {
                 snapshotsTable);
         CatalogBaseTable gottenSnapshotsTable =
                 catalog.getTable(new ObjectPath(DEFAULT_DB, flussTableName + "$lake$snapshots"));
-        assertThat(gottenSnapshotsTable).isEqualTo(snapshotsTable);
+        assertThat(gottenSnapshotsTable.getOptions())
+                .containsAllEntriesOf(snapshotsTable.getOptions())
+                .containsEntry(
+                        FlinkCatalog.LAKE_TABLE_DATABASE_NAME_OPTION,
+                        lakeTablePath.getDatabaseName())
+                .containsEntry(FlinkCatalog.LAKE_TABLE_NAME_OPTION, lakeTablePath.getTableName());
     }
 
     @Test
@@ -558,6 +568,31 @@ class FlinkCatalogTest {
                 .hasMessage(
                         "Database %s does not exist in Catalog %s.",
                         nonExistDbPath.getDatabaseName(), CATALOG_NAME);
+    }
+
+    @Test
+    @MultiVersionTest
+    void testListMaterializedTables() throws Exception {
+        FlinkCatalog flinkCatalog = (FlinkCatalog) catalog;
+        assertThat(flinkCatalog.listMaterializedTables(DEFAULT_DB)).isEmpty();
+
+        catalog.createTable(tableInDefaultDb, newCatalogTable(Collections.emptyMap()), false);
+        CatalogMaterializedTable materializedTable =
+                newCatalogMaterializedTable(
+                        this.createSchema(),
+                        CatalogMaterializedTable.RefreshMode.CONTINUOUS,
+                        Collections.emptyMap());
+        catalog.createTable(new ObjectPath(DEFAULT_DB, "mt1"), materializedTable, false);
+        catalog.createTable(new ObjectPath(DEFAULT_DB, "mt2"), materializedTable, false);
+
+        assertThat(flinkCatalog.listMaterializedTables(DEFAULT_DB))
+                .containsExactlyInAnyOrder("mt1", "mt2");
+        assertThat(catalog.listTables(DEFAULT_DB)).containsExactlyInAnyOrder("t1", "mt1", "mt2");
+
+        assertThatThrownBy(() -> flinkCatalog.listMaterializedTables("non_exist_db"))
+                .isInstanceOf(DatabaseNotExistException.class)
+                .hasMessage(
+                        "Database %s does not exist in Catalog %s.", "non_exist_db", CATALOG_NAME);
     }
 
     @Test

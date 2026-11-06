@@ -19,8 +19,10 @@ package org.apache.fluss.rpc.protocol;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -40,6 +42,13 @@ class ApiKeysTest {
     }
 
     @Test
+    void testApiKeyIdsAreContinuous() {
+        int[] ids = Arrays.stream(ApiKeys.values()).mapToInt(api -> api.id).sorted().toArray();
+        // Reserve 0~999 for Kafka protocol compatibility.
+        assertThat(ids).containsExactly(IntStream.range(1000, 1000 + ids.length).toArray());
+    }
+
+    @Test
     void testSnapshotMetadataSupportsLayoutAwareClient() {
         assertThat(ApiKeys.GET_KV_SNAPSHOT_METADATA.highestSupportedVersion).isEqualTo((short) 1);
     }
@@ -47,5 +56,15 @@ class ApiKeysTest {
     @Test
     void testAlterTableSupportsBucketCountChange() {
         assertThat(ApiKeys.ALTER_TABLE.highestSupportedVersion).isEqualTo((short) 1);
+    }
+
+    @Test
+    void testConsumerOffsetApiKeys() {
+        assertThat(ApiKeys.FIND_CONSUMER_GROUP_OWNER.id).isEqualTo((short) 1068);
+        assertThat(ApiKeys.COMMIT_CONSUMER_OFFSETS.id).isEqualTo((short) 1069);
+        assertThat(ApiKeys.GET_CONSUMER_OFFSETS.id).isEqualTo((short) 1070);
+        assertThat(ApiKeys.DELETE_CONSUMER_OFFSETS.id).isEqualTo((short) 1071);
+        assertThat(ApiKeys.LIST_CONSUMER_GROUPS.id).isEqualTo((short) 1072);
+        assertThat(ApiKeys.DELETE_CONSUMER_GROUPS.id).isEqualTo((short) 1073);
     }
 }

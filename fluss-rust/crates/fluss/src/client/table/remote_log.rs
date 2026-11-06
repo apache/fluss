@@ -15,14 +15,16 @@
 // limitations under the License.
 
 use crate::client::credentials::CredentialsReceiver;
+use crate::config::Config;
 use crate::error::{Error, Result};
-use crate::io::{FileIO, Storage};
+use crate::io::{FileIO, FileIOBuilder, Storage};
 use crate::metadata::TableBucket;
 use crate::metrics::ScannerMetrics;
 use crate::proto::{PbRemoteLogFetchInfo, PbRemoteLogSegment};
 use futures::TryStreamExt;
 use parking_lot::Mutex;
 use std::{
+    borrow::Cow,
     cmp::{Ordering, Reverse},
     collections::{BinaryHeap, HashMap},
     future::Future,
@@ -38,10 +40,10 @@ use std::{
     env,
     time::{SystemTime, UNIX_EPOCH},
 };
-use tempfile::TempDir;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
 use tokio::task::JoinSet;
+use uuid::Uuid;
 
 /// Default maximum number of remote log segments to prefetch
 /// Matches Java's CLIENT_SCANNER_REMOTE_LOG_PREFETCH_NUM (default: 4)
@@ -62,6 +64,49 @@ const RETRY_BACKOFF_MAX_MS: u64 = 5_000;
 /// Maximum number of retries before giving up
 /// After this many retries, the download will fail permanently
 const MAX_RETRY_COUNT: u32 = 10;
+
+/// Normalize OSS-compatible remote log schemes to schemes supported by the storage layer.
+///
+/// Some Fluss deployments expose OSS-backed remote log locations with the `ossj` scheme. These
+/// locations can be accessed through the existing OSS backend after normalizing the scheme alias.
+/// This is remote-log compatibility handling, not a general Jindo filesystem implementation.
+fn normalize_remote_log_storage_url(url: &str) -> Cow<'_, str> {
+    match url.strip_prefix("ossj://") {
+        Some(path) => Cow::Owned(format!("oss://{path}")),
+        None => Cow::Borrowed(url),
+    }
+}
+
+fn build_remote_file_io_builder(
+    remote_log_tablet_dir: &str,
+    remote_fs_props: &HashMap<String, String>,
+) -> Result<FileIOBuilder> {
+    let normalized_remote_log_tablet_dir = normalize_remote_log_storage_url(remote_log_tablet_dir);
+
+    // Handle both URL (e.g., "s3://bucket/path") and local file paths.
+    // If the path doesn't contain "://", treat it as a local file path.
+    let remote_log_tablet_dir_url = if normalized_remote_log_tablet_dir.contains("://") {
+        normalized_remote_log_tablet_dir
+    } else {
+        Cow::Owned(format!("file://{normalized_remote_log_tablet_dir}"))
+    };
+
+    let file_io_builder = FileIO::from_url(&remote_log_tablet_dir_url)?;
+
+    // Inject credentials for remote object storage.
+    if remote_log_tablet_dir_url.starts_with("s3://")
+        || remote_log_tablet_dir_url.starts_with("s3a://")
+        || remote_log_tablet_dir_url.starts_with("oss://")
+    {
+        Ok(file_io_builder.with_props(
+            remote_fs_props
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str())),
+        ))
+    } else {
+        Ok(file_io_builder)
+    }
+}
 
 /// Calculate exponential backoff delay with jitter for retries
 fn calculate_backoff_delay(retry_count: u32) -> tokio::time::Duration {
@@ -291,10 +336,46 @@ enum DownloadResult {
     Cancelled,
 }
 
+/// Owns a scanner's download directory without creating it eagerly.
+/// In-flight downloads retain ownership until they finish, then remove only this directory.
+pub(crate) struct RemoteLogDirectory {
+    path: PathBuf,
+}
+
+impl RemoteLogDirectory {
+    pub(crate) fn new(config: &Config) -> Self {
+        let parent = config
+            .scanner_io_tmp_dir
+            .as_ref()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| std::env::temp_dir().join("fluss"));
+        Self {
+            path: parent.join(format!("remote-logs-{}", Uuid::new_v4())),
+        }
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for RemoteLogDirectory {
+    fn drop(&mut self) {
+        if let Err(error) = std::fs::remove_dir_all(&self.path) {
+            if error.kind() != io::ErrorKind::NotFound {
+                log::warn!(
+                    "Failed to remove remote log directory {}: {error}",
+                    self.path.display()
+                );
+            }
+        }
+    }
+}
+
 /// Production implementation of RemoteLogFetcher that downloads from actual storage
 struct ProductionFetcher {
     credentials_rx: CredentialsReceiver,
-    local_log_dir: Arc<TempDir>,
+    local_log_dir: Arc<RemoteLogDirectory>,
     remote_log_read_concurrency: usize,
 }
 
@@ -784,7 +865,7 @@ pub struct RemoteLogDownloader {
 
 impl RemoteLogDownloader {
     pub(crate) fn new(
-        local_log_dir: TempDir,
+        local_log_dir: RemoteLogDirectory,
         max_prefetch_segments: usize,
         max_concurrent_downloads: usize,
         remote_log_read_concurrency: usize,
@@ -885,34 +966,19 @@ impl RemoteLogDownloader {
         remote_fs_props: &HashMap<String, String>,
         remote_log_read_concurrency: usize,
     ) -> Result<PathBuf> {
-        // Handle both URL (e.g., "s3://bucket/path") and local file paths
-        // If the path doesn't contain "://", treat it as a local file path
-        let remote_log_tablet_dir_url = if remote_log_tablet_dir.contains("://") {
-            remote_log_tablet_dir.to_string()
-        } else {
-            format!("file://{remote_log_tablet_dir}")
-        };
-
-        // Create FileIO from the remote log tablet dir URL to get the storage
-        let file_io_builder = FileIO::from_url(&remote_log_tablet_dir_url)?;
-
-        // For S3/S3A URLs, inject S3 credentials from props
-        let file_io_builder = if remote_log_tablet_dir.starts_with("s3://")
-            || remote_log_tablet_dir.starts_with("s3a://")
-            || remote_log_tablet_dir.starts_with("oss://")
-        {
-            file_io_builder.with_props(
-                remote_fs_props
-                    .iter()
-                    .map(|(k, v)| (k.as_str(), v.as_str())),
-            )
-        } else {
-            file_io_builder
-        };
+        // Match Java RemoteFileDownloader: create parents on each download attempt.
+        // Directory errors follow the normal asynchronous download error/retry path.
+        if let Some(parent) = local_path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        let file_io_builder = build_remote_file_io_builder(remote_log_tablet_dir, remote_fs_props)?;
+        // Normalize the full segment path as well as the tablet directory. The directory selects
+        // the storage backend, while the full path is parsed into the bucket and object key.
+        let normalized_remote_path = normalize_remote_log_storage_url(remote_path);
 
         // Build storage and create operator directly
         let storage = Storage::build(file_io_builder)?;
-        let (op, relative_path) = storage.create(remote_path)?;
+        let (op, relative_path) = storage.create(&normalized_remote_path)?;
 
         // Timeout for remote storage operations (30 seconds)
         const REMOTE_OP_TIMEOUT: Duration = Duration::from_secs(30);
@@ -991,6 +1057,191 @@ mod tests {
     use crate::{BucketId, TableId};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    #[test]
+    fn remote_log_directory_defaults_and_reserves_paths_without_io() -> Result<()> {
+        let default_dir = RemoteLogDirectory::new(&Config::default());
+        assert_eq!(
+            default_dir.path().parent(),
+            Some(std::env::temp_dir().join("fluss").as_path())
+        );
+        let parent = tempfile::tempdir()?;
+        let nested = parent.path().join("new/remote logs");
+        let config = Config {
+            scanner_io_tmp_dir: Some(nested.to_string_lossy().into_owned()),
+            ..Default::default()
+        };
+        let first = RemoteLogDirectory::new(&config);
+        let second = RemoteLogDirectory::new(&config);
+        assert_eq!(first.path().parent(), Some(nested.as_path()));
+        assert_ne!(first.path(), second.path());
+        assert!(
+            first
+                .path()
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .starts_with("remote-logs-")
+        );
+        assert!(!nested.exists());
+        drop(first);
+        drop(second);
+        assert!(!nested.exists());
+        Ok(())
+    }
+
+    #[cfg(feature = "storage-fs")]
+    async fn download_test_file(path: &Path) -> Result<()> {
+        let remote = tempfile::tempdir()?;
+        let source = remote.path().join("source.log");
+        tokio::fs::write(&source, b"remote log payload").await?;
+        RemoteLogDownloader::download_file(
+            remote.path().to_str().unwrap(),
+            source.to_str().unwrap(),
+            path,
+            &HashMap::new(),
+            1,
+        )
+        .await?;
+        Ok(())
+    }
+
+    #[cfg(feature = "storage-fs")]
+    #[tokio::test]
+    async fn remote_log_directory_is_created_on_download_and_preserves_other_scanners() -> Result<()>
+    {
+        let parent = tempfile::tempdir()?;
+        let nested = parent.path().join("new/remote logs");
+        let config = Config {
+            scanner_io_tmp_dir: Some(nested.to_string_lossy().into_owned()),
+            ..Default::default()
+        };
+        let first = Arc::new(RemoteLogDirectory::new(&config));
+        let in_flight = Arc::clone(&first);
+        let second = RemoteLogDirectory::new(&config);
+        let first_path = first.path().to_owned();
+        let second_file = second.path().join("segment.log");
+        download_test_file(&first.path().join("segment.log")).await?;
+        download_test_file(&second_file).await?;
+        drop(first);
+        assert!(first_path.exists());
+        drop(in_flight);
+        assert!(!first_path.exists());
+        assert_eq!(tokio::fs::read(&second_file).await?, b"remote log payload");
+        // Java recreates parents on every attempt if a directory has been removed.
+        tokio::fs::remove_dir_all(second.path()).await?;
+        download_test_file(&second_file).await?;
+        drop(second);
+        assert!(nested.exists());
+        Ok(())
+    }
+
+    #[cfg(feature = "storage-fs")]
+    #[tokio::test]
+    async fn remote_log_directory_invalid_parent_fails_on_download() -> Result<()> {
+        let parent = tempfile::tempdir()?;
+        let file = parent.path().join("not-a-directory");
+        tokio::fs::write(&file, b"keep").await?;
+        let config = Config {
+            scanner_io_tmp_dir: Some(file.to_string_lossy().into_owned()),
+            ..Default::default()
+        };
+        let dir = RemoteLogDirectory::new(&config);
+        assert!(matches!(
+            download_test_file(&dir.path().join("segment.log")).await,
+            Err(Error::IoUnexpectedError { .. })
+        ));
+        drop(dir);
+        assert_eq!(tokio::fs::read(file).await?, b"keep");
+        Ok(())
+    }
+
+    #[cfg(all(unix, feature = "storage-fs"))]
+    #[tokio::test]
+    async fn remote_log_directory_unwritable_parent_fails_on_download() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        let parent = tempfile::tempdir()?;
+        let original = std::fs::metadata(parent.path())?.permissions();
+        std::fs::set_permissions(parent.path(), std::fs::Permissions::from_mode(0o500))?;
+        let can_write = std::fs::create_dir(parent.path().join("permission-probe")).is_ok();
+        let config = Config {
+            scanner_io_tmp_dir: Some(parent.path().to_string_lossy().into_owned()),
+            ..Default::default()
+        };
+        let dir = RemoteLogDirectory::new(&config);
+        let result = download_test_file(&dir.path().join("segment.log")).await;
+        std::fs::set_permissions(parent.path(), original)?;
+        if !can_write {
+            assert!(
+                matches!(result, Err(Error::IoUnexpectedError { source, .. }) if source.kind() == io::ErrorKind::PermissionDenied)
+            );
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "storage-fs")]
+    #[tokio::test]
+    async fn remote_log_directory_errors_use_existing_retry_and_terminal_error_path() -> Result<()>
+    {
+        let parent = tempfile::tempdir()?;
+        let file = parent.path().join("not-a-directory");
+        std::fs::write(&file, b"keep")?;
+        let config = Config {
+            scanner_io_tmp_dir: Some(file.to_string_lossy().into_owned()),
+            ..Default::default()
+        };
+        let (_credentials_tx, credentials_rx) = tokio::sync::watch::channel(Some(HashMap::new()));
+        let fetcher: Arc<dyn RemoteLogFetcher> = Arc::new(ProductionFetcher {
+            credentials_rx,
+            local_log_dir: Arc::new(RemoteLogDirectory::new(&config)),
+            remote_log_read_concurrency: 1,
+        });
+        let segment = create_segment("segment", 0, 0, create_table_bucket(1, 0));
+        let (sender, receiver) = oneshot::channel();
+        let request = RemoteLogDownloadRequest {
+            segment,
+            remote_log_tablet_dir: parent.path().to_string_lossy().into_owned(),
+            result_sender: sender,
+            retry_count: 0,
+            next_retry_at: None,
+        };
+        let semaphore = Arc::new(Semaphore::new(1));
+        let result = spawn_download_task(
+            request,
+            semaphore.clone().acquire_owned().await.unwrap(),
+            Arc::clone(&fetcher),
+            Arc::new(Notify::new()),
+            metrics(),
+        )
+        .await;
+        let DownloadResult::FailedRetry { mut request } = result else {
+            panic!("Directory error must be retried")
+        };
+        assert_eq!(request.retry_count, 1);
+        request.retry_count = MAX_RETRY_COUNT;
+        let result = spawn_download_task(
+            request,
+            semaphore.acquire_owned().await.unwrap(),
+            fetcher,
+            Arc::new(Notify::new()),
+            metrics(),
+        )
+        .await;
+        let DownloadResult::FailedPermanently {
+            error,
+            result_sender,
+        } = result
+        else {
+            panic!("Exhausted directory error must fail the result")
+        };
+        assert!(
+            matches!(&error, Error::UnexpectedError { source: Some(source), .. } if matches!(source.downcast_ref::<Error>(), Some(Error::IoUnexpectedError { .. })))
+        );
+        assert!(result_sender.send(Err(error)).is_ok());
+        assert!(receiver.await.unwrap().is_err());
+        Ok(())
+    }
+
     fn create_table_bucket(table_id: TableId, bucket_id: BucketId) -> TableBucket {
         TableBucket::new(table_id, bucket_id)
     }
@@ -1001,6 +1252,80 @@ mod tests {
     /// surface.
     fn metrics() -> Arc<ScannerMetrics> {
         test_scanner_metrics(&TablePath::new("db", "tbl"))
+    }
+
+    #[test]
+    fn test_normalize_ossj_remote_log_storage_url() {
+        assert_eq!(
+            normalize_remote_log_storage_url("ossj://bucket/path/to/segment"),
+            "oss://bucket/path/to/segment"
+        );
+
+        for url in [
+            "oss://bucket/path",
+            "s3://bucket/path",
+            "s3a://bucket/path",
+            "file:///tmp/path",
+            "/tmp/path",
+        ] {
+            assert_eq!(normalize_remote_log_storage_url(url), url);
+        }
+    }
+
+    #[test]
+    fn test_build_remote_file_io_builder_for_ossj() {
+        let remote_fs_props = HashMap::from([
+            (
+                "endpoint".to_string(),
+                "https://oss.example.com".to_string(),
+            ),
+            ("access_key_id".to_string(), "test-access-key".to_string()),
+            (
+                "access_key_secret".to_string(),
+                "test-access-key-secret".to_string(),
+            ),
+            (
+                "security_token".to_string(),
+                "test-security-token".to_string(),
+            ),
+        ]);
+
+        let file_io_builder =
+            build_remote_file_io_builder("ossj://bucket/path", &remote_fs_props).unwrap();
+        let (scheme, props) = file_io_builder.into_parts();
+
+        assert_eq!(scheme, "oss");
+        assert_eq!(props, remote_fs_props);
+    }
+
+    #[cfg(feature = "storage-oss")]
+    #[test]
+    fn test_build_oss_storage_and_path_for_ossj() {
+        let remote_fs_props = HashMap::from([
+            (
+                "endpoint".to_string(),
+                "https://oss.example.com".to_string(),
+            ),
+            ("access_key_id".to_string(), "test-access-key".to_string()),
+            (
+                "access_key_secret".to_string(),
+                "test-access-key-secret".to_string(),
+            ),
+        ]);
+
+        let file_io_builder =
+            build_remote_file_io_builder("ossj://bucket/path", &remote_fs_props).unwrap();
+        let storage = Storage::build(file_io_builder).unwrap();
+        let normalized_remote_path =
+            normalize_remote_log_storage_url("ossj://bucket/path/to/segment");
+        let (_, relative_path) = storage.create(&normalized_remote_path).unwrap();
+
+        assert_eq!(relative_path, "path/to/segment");
+
+        match storage {
+            Storage::Oss { props } => assert_eq!(props, remote_fs_props),
+            storage => panic!("Expected OSS storage, got {storage:?}"),
+        }
     }
 
     /// Simplified fake fetcher for testing

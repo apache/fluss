@@ -26,7 +26,6 @@ import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.config.cluster.ServerReconfigurable;
 import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.exception.KvStorageException;
-import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.memory.LazyMemorySegmentPool;
 import org.apache.fluss.metadata.KvFormat;
@@ -38,6 +37,8 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.TabletManagerBase;
 import org.apache.fluss.server.kv.autoinc.AutoIncrementManager;
 import org.apache.fluss.server.kv.autoinc.ZkSequenceGeneratorFactory;
+import org.apache.fluss.server.kv.rocksdb.RocksDBResourceContainer;
+import org.apache.fluss.server.kv.rocksdb.RocksDBStatisticsRegistry;
 import org.apache.fluss.server.kv.rowmerger.RowMerger;
 import org.apache.fluss.server.log.LogManager;
 import org.apache.fluss.server.log.LogTablet;
@@ -143,6 +144,8 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
 
     private final Map<TableBucket, Object> kvLocks = new ConcurrentHashMap<>();
 
+    private final RocksDBStatisticsRegistry statisticsRegistry = new RocksDBStatisticsRegistry();
+
     /**
      * For arrow log format. The buffer allocator to allocate memory for arrow write batch of
      * changelog records.
@@ -151,10 +154,6 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
 
     /** The memory segment pool to allocate memorySegment. */
     private final LazyMemorySegmentPool memorySegmentPool;
-
-    private final FsPath remoteKvDir;
-
-    private final FileSystem remoteFileSystem;
 
     /**
      * The shared rate limiter for all RocksDB instances to control flush and compaction write rate.
@@ -188,14 +187,18 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
             Clock clock)
             throws IOException {
         super(TabletType.KV, localDiskManager.dataDirs(), conf, recoveryThreadsPerDataDir);
+        RocksDBResourceContainer.validateConfiguration(conf);
+        if (conf.get(ConfigOptions.KV_PIN_L0_FILTER_AND_INDEX_BLOCKS_IN_CACHE)
+                && conf.get(ConfigOptions.KV_COMPACTION_STYLE)
+                        != ConfigOptions.CompactionStyle.LEVEL) {
+            LOG.warn("RocksDB L0 metadata pinning is recommended only for LEVEL compaction.");
+        }
         this.localDiskManager = localDiskManager;
         this.logManager = logManager;
         this.arrowBufferAllocator = BufferAllocatorUtil.createBufferAllocator(null);
         this.memorySegmentPool = LazyMemorySegmentPool.createServerBufferPool(conf);
         this.zkClient = zkClient;
         this.clock = clock;
-        this.remoteKvDir = FlussPaths.remoteKvDir(conf);
-        this.remoteFileSystem = remoteKvDir.getFileSystem();
         this.serverMetricGroup = tabletServerMetricGroup;
         this.sharedRocksDBRateLimiter = createSharedRateLimiter(conf);
         this.sharedBlockCache = createSharedBlockCache(conf);
@@ -583,6 +586,7 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
                                     sharedRocksDBRateLimiter,
                                     sharedBlockCache,
                                     sharedWriteBufferManager,
+                                    statisticsRegistry,
                                     kvFlushScheduler,
                                     flushCompleteListener,
                                     autoIncrementManager,
@@ -616,6 +620,17 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
         FileUtils.deleteDirectoryQuietly(tabletDir);
         createTabletDirectory(tabletDir);
         return tabletDir;
+    }
+
+    // TODO: Move ownership and cleanup of these shared resources to TabletServer.
+    /** Returns the shared Arrow allocator; callers must not close it. */
+    public BufferAllocator getArrowBufferAllocator() {
+        return arrowBufferAllocator;
+    }
+
+    /** Returns the shared memory segment pool; callers must not close it. */
+    public LazyMemorySegmentPool getMemorySegmentPool() {
+        return memorySegmentPool;
     }
 
     public Optional<KvTablet> getKv(TableBucket tableBucket) {
@@ -745,6 +760,7 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
                         sharedRocksDBRateLimiter,
                         sharedBlockCache,
                         sharedWriteBufferManager,
+                        statisticsRegistry,
                         kvFlushScheduler,
                         flushCompleteListener,
                         autoIncrementManager,
@@ -756,12 +772,13 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
     }
 
     public void deleteRemoteKvSnapshot(
-            PhysicalTablePath physicalTablePath, TableBucket tableBucket) {
+            String remoteDataDir, PhysicalTablePath physicalTablePath, TableBucket tableBucket) {
         FsPath remoteKvTabletDir =
-                FlussPaths.remoteKvTabletDir(remoteKvDir, physicalTablePath, tableBucket);
+                FlussPaths.remoteKvTabletDir(
+                        FlussPaths.remoteKvDir(remoteDataDir), physicalTablePath, tableBucket);
         try {
-            if (remoteFileSystem.exists(remoteKvTabletDir)) {
-                remoteFileSystem.delete(remoteKvTabletDir, true);
+            if (remoteKvTabletDir.getFileSystem().exists(remoteKvTabletDir)) {
+                remoteKvTabletDir.getFileSystem().delete(remoteKvTabletDir, true);
                 LOG.info("Delete table's remote bucket snapshot dir of {} success.", tableBucket);
             }
         } catch (Exception e) {
@@ -830,22 +847,6 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
 
     private <T, E extends Exception> T inKvLock(
             TableBucket tableBucket, SupplierWithException<T, E> action) throws E {
-        while (true) {
-            Object lock = kvLocks.computeIfAbsent(tableBucket, ignored -> new Object());
-            synchronized (lock) {
-                if (kvLocks.get(tableBucket) != lock) {
-                    continue;
-                }
-                try {
-                    return action.get();
-                } finally {
-                    if (!currentKvs.containsKey(tableBucket)) {
-                        // Retire the lock only after the action completes, while still holding
-                        // its monitor. Threads waiting on this lock must retry with the new one.
-                        kvLocks.remove(tableBucket, lock);
-                    }
-                }
-            }
-        }
+        return inTabletLock(tableBucket, kvLocks, currentKvs, action);
     }
 }

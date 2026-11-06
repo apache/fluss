@@ -112,11 +112,15 @@ class BucketRoutingTest {
                         .setNodeId(NODE.id())
                         .setHost(NODE.host())
                         .setPort(NODE.port());
-                response.addPartitionMetadata()
+                response.addTableMetadata()
                         .setTableId(table.getTableId())
-                        .setPartitionId(PARTITION_ID)
-                        .setPartitionName(PATH.getPartitionName())
-                        .setBucketCount(count);
+                        .setBucketCount(count)
+                        .setBucketCountEpoch((count - 2) / 2)
+                        .setTableJson(
+                                table.toTableDescriptor().withBucketCount(count).toJsonBytes())
+                        .setTablePath()
+                        .setDatabaseName(PATH.getTablePath().getDatabaseName())
+                        .setTableName(PATH.getTablePath().getTableName());
                 AdminReadOnlyGateway gateway =
                         new TestCoordinatorGateway() {
                             @Override
@@ -130,9 +134,9 @@ class BucketRoutingTest {
                                 gateway,
                                 true,
                                 metadata,
+                                Collections.singleton(PATH.getTablePath()),
                                 null,
-                                null,
-                                Collections.singleton(PARTITION_ID));
+                                null);
 
                 // Keep the original TableInfo while starting a new, unresolved partition.
                 PhysicalTablePath newPath =
@@ -457,7 +461,8 @@ class BucketRoutingTest {
                                                 path, new TableBucket(10, 0), 1, new int[] {1}))),
                         Collections.singletonMap(path.getTablePath(), 10L),
                         Collections.emptyMap(),
-                        Collections.singletonMap(TableOrPartition.ofTable(10), 1));
+                        Collections.singletonMap(TableOrPartition.ofTable(10), 1),
+                        Collections.emptyMap());
         RecordAccumulator accumulator = accumulator(ConfigOptions.NoKeyAssigner.STICKY);
         try {
             accumulator.append(
@@ -482,7 +487,8 @@ class BucketRoutingTest {
                         Collections.emptyMap(),
                         Collections.singletonMap(PATH.getTablePath(), table.getTableId()),
                         Collections.emptyMap(),
-                        Collections.singletonMap(TableOrPartition.ofTable(table.getTableId()), 4));
+                        Collections.singletonMap(TableOrPartition.ofTable(table.getTableId()), 4),
+                        Collections.emptyMap());
         RecordAccumulator accumulator = accumulator(ConfigOptions.NoKeyAssigner.STICKY);
         List<CompletableFuture<Exception>> completions = new ArrayList<>();
         List<WriteBatch> originals = new ArrayList<>();
@@ -557,7 +563,8 @@ class BucketRoutingTest {
                             newPartition.getBucketLocationsByPath(),
                             newPartition.getTableIdByPath(),
                             newPartition.getPartitionIdByPath(),
-                            counts);
+                            counts,
+                            Collections.emptyMap());
             assertThat(accumulator.ready(resolved).readyNodes).containsExactly(1);
             assertThat(completion).isNotDone();
             List<ReadyWriteBatch> drained =
@@ -1432,7 +1439,8 @@ class BucketRoutingTest {
                 Collections.singletonMap(path, partitionId),
                 includeCount
                         ? Collections.singletonMap(TableOrPartition.ofPartition(partitionId), count)
-                        : Collections.emptyMap());
+                        : Collections.emptyMap(),
+                Collections.emptyMap());
     }
 
     private static WriteRecord record(TableInfo table, WriteFormat format, int key, int version) {

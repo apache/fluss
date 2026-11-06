@@ -3,7 +3,15 @@ sidebar_position: 6
 ---
 # Partitioned Tables
 
-Partitioned tables distribute data across partitions based on column values. Partitions must exist before writing data, otherwise the client will by default retry indefinitely.
+Partitioned tables distribute data across partitions based on column values. A write to a partition that doesn't exist creates it, unless `writer.dynamic-create-partition.enabled` is `false`, in which case the write fails with `ErrorCode.PARTITION_NOT_EXISTS`. The server still validates a created partition, e.g. its values and, from Fluss 1.0 on, whether it is within an auto-partitioned table's retention. With idempotence enabled, the default, a write already sent to a partition that was dropped meanwhile fails with `ErrorCode.PARTITION_NOT_EXISTS` instead of re-creating it; writing it again creates the partition.
+
+:::warning
+Before Fluss 1.0, the server also creates a partition outside an auto-partitioned table's retention. The write succeeds, but the partition and its rows are deleted at the next auto-partition check (`auto-partition.check.interval`, 10 minutes by default).
+:::
+
+:::note
+Unlike the Java client, this client doesn't support [historical partition access](../../../table-design/data-distribution/partitioning.md#historical-partition-access) yet. With `table.datalake.historical-partition.enabled`, a write to an expired partition isn't routed to the table's `__historical__` partition, but handled as any other missing partition.
+:::
 
 ## Creating and Managing Partitions
 
@@ -33,7 +41,7 @@ partition_infos = await admin.list_partition_infos(table_path)
 
 ## Writing
 
-Same as non-partitioned tables - include partition column values in each row. **Partitions must exist before writing data, otherwise the client will by default retry indefinitely.**
+Same as non-partitioned tables - include partition column values in each row. A missing partition is created on write by default.
 
 ```python
 table = await conn.get_table(table_path)
@@ -72,7 +80,7 @@ scanner.unsubscribe_partition(partition_id=partition_infos[0].partition_id, buck
 
 ## Partitioned Primary Key Tables
 
-Partition columns must be part of the primary key. Partitions must exist before upserting data, otherwise the client will by default retry indefinitely.
+Partition columns must be part of the primary key. A missing partition is created on upsert by default.
 
 ```python
 schema = fluss.Schema(

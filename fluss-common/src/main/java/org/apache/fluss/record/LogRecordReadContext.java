@@ -20,7 +20,6 @@ package org.apache.fluss.record;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.metadata.LogFormat;
-import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.row.InternalRow;
@@ -29,12 +28,11 @@ import org.apache.fluss.row.ProjectedRow;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.AllocationManager;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocatorUtil;
-import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.RowType;
-import org.apache.fluss.utils.ArrowUtils;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.Projection;
+import org.apache.fluss.utils.SchemaUtil;
 import org.apache.fluss.utils.UnshadedArrowReadUtils;
 
 import javax.annotation.Nullable;
@@ -44,6 +42,7 @@ import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.IntStream;
 
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** A simple implementation for {@link LogRecordBatch.ReadContext}. */
@@ -86,7 +85,7 @@ public class LogRecordReadContext
     @Nullable private volatile AutoCloseable unshadedBufferAllocator;
     private final boolean projectionPushDowned;
     private final SchemaGetter schemaGetter;
-    private final ConcurrentHashMap<Integer, VectorSchemaRoot> vectorSchemaRootMap =
+    private final ConcurrentHashMap<Integer, ArrowReadPlan> arrowReadPlans =
             new ConcurrentHashMap<>();
     private final Object unshadedArrowResourceLock = new Object();
     private final ConcurrentHashMap<Integer, FieldGetter[]> fieldGetterCache =
@@ -144,7 +143,7 @@ public class LogRecordReadContext
                 dataRowType = rowType;
                 selectedFields = projection.getProjection();
             }
-            target = new ReadTarget(schemaId, dataRowType, selectedFields);
+            target = new ReadTarget(schemaId, dataRowType, selectedFields, logFormat);
         }
 
         if (logFormat == LogFormat.ARROW) {
@@ -211,7 +210,7 @@ public class LogRecordReadContext
     public static LogRecordReadContext createArrowReadContext(
             RowType rowType, int schemaId, SchemaGetter schemaGetter) {
         int[] selectedFields = IntStream.range(0, rowType.getFieldCount()).toArray();
-        ReadTarget target = new ReadTarget(schemaId, rowType, selectedFields);
+        ReadTarget target = new ReadTarget(schemaId, rowType, selectedFields, LogFormat.ARROW);
         return createArrowReadContext(-1L, target, false, schemaGetter, null);
     }
 
@@ -222,7 +221,7 @@ public class LogRecordReadContext
             SchemaGetter schemaGetter,
             boolean projectionPushDowned) {
         int[] selectedFields = IntStream.range(0, rowType.getFieldCount()).toArray();
-        ReadTarget target = new ReadTarget(schemaId, rowType, selectedFields);
+        ReadTarget target = new ReadTarget(schemaId, rowType, selectedFields, LogFormat.ARROW);
         return createArrowReadContext(-1L, target, projectionPushDowned, schemaGetter, null);
     }
 
@@ -237,7 +236,7 @@ public class LogRecordReadContext
     public static LogRecordReadContext createIndexedReadContext(
             RowType rowType, int schemaId, SchemaGetter schemaGetter) {
         int[] selectedFields = IntStream.range(0, rowType.getFieldCount()).toArray();
-        ReadTarget target = new ReadTarget(schemaId, rowType, selectedFields);
+        ReadTarget target = new ReadTarget(schemaId, rowType, selectedFields, LogFormat.INDEXED);
         return createIndexedReadContext(-1L, target, schemaGetter);
     }
 
@@ -245,7 +244,7 @@ public class LogRecordReadContext
     public static LogRecordReadContext createCompactedRowReadContext(
             RowType rowType, int schemaId, SchemaGetter schemaGetter) {
         int[] selectedFields = IntStream.range(0, rowType.getFieldCount()).toArray();
-        ReadTarget target = new ReadTarget(schemaId, rowType, selectedFields);
+        ReadTarget target = new ReadTarget(schemaId, rowType, selectedFields, LogFormat.COMPACTED);
         return createCompactedRowReadContext(-1L, target, schemaGetter);
     }
 
@@ -301,7 +300,7 @@ public class LogRecordReadContext
                 id -> {
                     RowType batchRowType = schemaGetter.getSchema(id).getRowType();
                     int[] allFields = IntStream.range(0, batchRowType.getFieldCount()).toArray();
-                    return buildProjectedFieldGetters(batchRowType, allFields);
+                    return buildProjectedFieldGetters(batchRowType, allFields, logFormat);
                 });
     }
 
@@ -324,29 +323,32 @@ public class LogRecordReadContext
      */
     @Nullable
     private int[] getSchemaEvolutionMapping(int schemaId) {
-        ProjectedRow projectedRow = getOutputProjectedRow(schemaId);
-        if (projectedRow == null) {
+        if (target == null || isProjectionPushDowned() || schemaId == target.schemaId) {
             return null;
         }
-        return projectedRow.getIndexMapping();
+        return SchemaUtil.getIndexMapping(
+                schemaGetter.getSchema(schemaId), schemaGetter.getSchema(target.schemaId));
     }
 
     @Override
-    public VectorSchemaRoot getVectorSchemaRoot(int schemaId) {
+    public ArrowReadPlan getArrowReadPlan(int schemaId) {
         if (logFormat != LogFormat.ARROW) {
-            throw new IllegalArgumentException(
-                    "Only Arrow log format provides vector schema root.");
+            throw new IllegalArgumentException("Only Arrow log format provides Arrow read plan.");
         }
-
-        RowType rowType = getRowType(schemaId);
-        return vectorSchemaRootMap.computeIfAbsent(
-                schemaId,
-                (id) ->
-                        VectorSchemaRoot.create(
-                                ArrowUtils.toArrowSchema(rowType), bufferAllocator));
+        return arrowReadPlans.computeIfAbsent(schemaId, this::createArrowReadPlan);
     }
 
-    @Override
+    private ArrowReadPlan createArrowReadPlan(int schemaId) {
+        RowType rowType = getRowType(schemaId);
+        int[] selectedFields =
+                target == null
+                        ? IntStream.range(0, rowType.getFieldCount()).toArray()
+                        : target.selectedFields;
+        return new ArrowReadPlan(
+                rowType, getSchemaEvolutionMapping(schemaId), selectedFields, bufferAllocator);
+    }
+
+    /** Gets the buffer allocator of the {@link LogFormat#ARROW} read plans. */
     public BufferAllocator getBufferAllocator() {
         if (logFormat != LogFormat.ARROW) {
             throw new IllegalArgumentException("Only Arrow log format provides buffer allocator.");
@@ -367,20 +369,16 @@ public class LogRecordReadContext
     @Nullable
     @Override
     public ProjectedRow getOutputProjectedRow(int schemaId) {
-
-        if (target == null || isProjectionPushDowned() || schemaId == target.schemaId) {
-            return null;
-        }
-
-        // TODO: should we cache the projection?
-        Schema originSchema = schemaGetter.getSchema(schemaId);
-        Schema expectedSchema = schemaGetter.getSchema(target.schemaId);
-        return ProjectedRow.from(originSchema, expectedSchema);
+        checkArgument(
+                logFormat == LogFormat.INDEXED || logFormat == LogFormat.COMPACTED,
+                "Only indexed and compacted log formats provide output projected rows.");
+        int[] mapping = getSchemaEvolutionMapping(schemaId);
+        return mapping == null ? null : ProjectedRow.from(mapping);
     }
 
     public void close() {
-        vectorSchemaRootMap.values().forEach(VectorSchemaRoot::close);
-        vectorSchemaRootMap.clear();
+        arrowReadPlans.values().forEach(ArrowReadPlan::close);
+        arrowReadPlans.clear();
         if (bufferAllocator != null) {
             bufferAllocator.close();
         }
@@ -467,14 +465,17 @@ public class LogRecordReadContext
     // -------------------------------------------------------------------------
     //  Private helpers
     // -------------------------------------------------------------------------
-    static FieldGetter[] buildProjectedFieldGetters(RowType rowType, int[] selectedFields) {
+    static FieldGetter[] buildProjectedFieldGetters(
+            RowType rowType, int[] selectedFields, LogFormat logFormat) {
+        // ARROW already copies strings during deserialization;
+        // other formats reference pooled network buffers and need explicit copying.
+        boolean copyStrings = logFormat != LogFormat.ARROW;
         List<DataType> dataTypeList = rowType.getChildren();
         FieldGetter[] fieldGetters = new FieldGetter[selectedFields.length];
         for (int i = 0; i < fieldGetters.length; i++) {
-            // build deep field getter to support nested types
             fieldGetters[i] =
                     InternalRow.createDeepFieldGetter(
-                            dataTypeList.get(selectedFields[i]), selectedFields[i]);
+                            dataTypeList.get(selectedFields[i]), selectedFields[i], copyStrings);
         }
         return fieldGetters;
     }
@@ -504,11 +505,11 @@ public class LogRecordReadContext
         /** Pre-built field getters corresponding to {@link #selectedFields}. */
         final FieldGetter[] fieldGetters;
 
-        ReadTarget(int schemaId, RowType dataRowType, int[] selectedFields) {
+        ReadTarget(int schemaId, RowType dataRowType, int[] selectedFields, LogFormat logFormat) {
             this.schemaId = schemaId;
             this.dataRowType = dataRowType;
             this.selectedFields = selectedFields;
-            this.fieldGetters = buildProjectedFieldGetters(dataRowType, selectedFields);
+            this.fieldGetters = buildProjectedFieldGetters(dataRowType, selectedFields, logFormat);
         }
     }
 }

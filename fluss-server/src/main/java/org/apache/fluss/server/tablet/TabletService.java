@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.tablet;
 
+import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.exception.ApiException;
 import org.apache.fluss.exception.AuthorizationException;
@@ -43,16 +44,28 @@ import org.apache.fluss.rpc.entity.ResultForBucket;
 import org.apache.fluss.rpc.entity.TableStatsResultForBucket;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
+import org.apache.fluss.rpc.messages.CommitConsumerOffsetsRequest;
+import org.apache.fluss.rpc.messages.CommitConsumerOffsetsResponse;
+import org.apache.fluss.rpc.messages.DeleteConsumerGroupsRequest;
+import org.apache.fluss.rpc.messages.DeleteConsumerGroupsResponse;
+import org.apache.fluss.rpc.messages.DeleteConsumerOffsetsRequest;
+import org.apache.fluss.rpc.messages.DeleteConsumerOffsetsResponse;
 import org.apache.fluss.rpc.messages.FetchLogRequest;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
+import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerRequest;
+import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerResponse;
 import org.apache.fluss.rpc.messages.GetClusterHealthRequest;
 import org.apache.fluss.rpc.messages.GetClusterHealthResponse;
+import org.apache.fluss.rpc.messages.GetConsumerOffsetsRequest;
+import org.apache.fluss.rpc.messages.GetConsumerOffsetsResponse;
 import org.apache.fluss.rpc.messages.GetTableStatsRequest;
 import org.apache.fluss.rpc.messages.GetTableStatsResponse;
 import org.apache.fluss.rpc.messages.InitWriterRequest;
 import org.apache.fluss.rpc.messages.InitWriterResponse;
 import org.apache.fluss.rpc.messages.LimitScanRequest;
 import org.apache.fluss.rpc.messages.LimitScanResponse;
+import org.apache.fluss.rpc.messages.ListConsumerGroupsRequest;
+import org.apache.fluss.rpc.messages.ListConsumerGroupsResponse;
 import org.apache.fluss.rpc.messages.ListOffsetsRequest;
 import org.apache.fluss.rpc.messages.ListOffsetsResponse;
 import org.apache.fluss.rpc.messages.LookupRequest;
@@ -69,6 +82,7 @@ import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsRequest;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsResponse;
 import org.apache.fluss.rpc.messages.PbFetchLogReqForTable;
 import org.apache.fluss.rpc.messages.PbScanReqForBucket;
+import org.apache.fluss.rpc.messages.PbServerNode;
 import org.apache.fluss.rpc.messages.PrefixLookupRequest;
 import org.apache.fluss.rpc.messages.PrefixLookupResponse;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
@@ -81,6 +95,7 @@ import org.apache.fluss.rpc.messages.StopReplicaRequest;
 import org.apache.fluss.rpc.messages.StopReplicaResponse;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.rpc.messages.UpdateMetadataResponse;
+import org.apache.fluss.rpc.netty.server.Session;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.protocol.FetchLogReadPreference;
@@ -109,10 +124,14 @@ import org.apache.fluss.server.log.FetchParamsBuilder;
 import org.apache.fluss.server.log.FilterInfo;
 import org.apache.fluss.server.log.ListOffsetsParam;
 import org.apache.fluss.server.metadata.ClusterMetadata;
+import org.apache.fluss.server.metadata.MetadataView;
+import org.apache.fluss.server.metadata.MetadataViewProvider;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.metadata.TabletServerMetadataProvider;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.replica.ReplicaManager;
+import org.apache.fluss.server.tablet.consumer.group.ConsumerOffsetTableManager;
+import org.apache.fluss.server.tablet.consumer.group.GroupManager;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 
@@ -170,7 +189,8 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toProduceLogDa
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toPutKvDataForBuckets;
 
 /** An RPC Gateway service for tablet server. */
-public final class TabletService extends RpcServiceBase implements TabletServerGateway {
+public final class TabletService extends RpcServiceBase
+        implements TabletServerGateway, MetadataViewProvider {
 
     private final String serviceName;
     private final ReplicaManager replicaManager;
@@ -180,6 +200,8 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     private final CoordinatorGateway coordinatorGateway;
     private final String interListenerName;
     private final ExecutorService replicaStateChangeExecutor;
+    private final GroupManager groupManager;
+    private final ConsumerOffsetTableManager consumerOffsetTableManager;
 
     public TabletService(
             int serverId,
@@ -194,7 +216,8 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
             ExecutorService replicaStateChangeExecutor,
             ScannerManager scannerManager,
             CoordinatorGateway coordinatorGateway,
-            String interListenerName) {
+            String interListenerName,
+            GroupManager groupManager) {
         super(
                 remoteFileSystem,
                 ServerType.TABLET_SERVER,
@@ -212,6 +235,26 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         this.coordinatorGateway = coordinatorGateway;
         this.interListenerName = interListenerName;
         this.replicaStateChangeExecutor = replicaStateChangeExecutor;
+        this.groupManager = groupManager;
+        this.consumerOffsetTableManager =
+                new ConsumerOffsetTableManager(
+                        groupManager.consumerOffsetTableConfig(),
+                        zkClient,
+                        metadataManager,
+                        metadataCache,
+                        metadataFunctionProvider,
+                        coordinatorGateway,
+                        ioExecutor);
+    }
+
+    /** Returns the local replica manager used by protocol plugins. */
+    public ReplicaManager getReplicaManager() {
+        return replicaManager;
+    }
+
+    /** Returns the shared TabletServer metadata cache. */
+    public TabletServerMetadataCache getMetadataCache() {
+        return metadataCache;
     }
 
     @Override
@@ -611,6 +654,13 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     }
 
     @Override
+    public MetadataView getMetadataView(Session session) {
+        return metadataCache.getMetadataView(
+                session.getListenerName(),
+                path -> isTableMetadataAuthorized(session, authorizer, path));
+    }
+
+    @Override
     public CompletableFuture<MetadataResponse> metadata(MetadataRequest request) {
         MetadataResponse metadataResponse =
                 processMetadataRequest(
@@ -753,6 +803,81 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
             return failed;
         }
         return coordinatorGateway.getClusterHealth(request);
+    }
+
+    @Override
+    public CompletableFuture<FindConsumerGroupOwnerResponse> findConsumerGroupOwner(
+            FindConsumerGroupOwnerRequest request) {
+        // Copy request/session values before returning: the request buffer is released after this
+        // method and the current session is bound to the RPC worker thread.
+        final String groupId = request.getGroupId();
+        final String listenerName = currentListenerName();
+        groupManager.validateGroupId(groupId);
+
+        return consumerOffsetTableManager
+                .ensureTableAsync()
+                .thenCompose(
+                        bucketCount -> {
+                            int bucketId = groupManager.bucketFor(groupId, bucketCount);
+                            return consumerOffsetTableManager.resolveOwnerAsync(
+                                    bucketId, listenerName);
+                        })
+                .thenApply(this::buildFindConsumerGroupOwnerResponse);
+    }
+
+    private FindConsumerGroupOwnerResponse buildFindConsumerGroupOwnerResponse(
+            ServerNode leaderNode) {
+        return new FindConsumerGroupOwnerResponse()
+                .setOwner(
+                        new PbServerNode()
+                                .setNodeId(leaderNode.id())
+                                .setHost(leaderNode.host())
+                                .setPort(leaderNode.port()));
+    }
+
+    @Override
+    public CompletableFuture<CommitConsumerOffsetsResponse> commitConsumerOffsets(
+            CommitConsumerOffsetsRequest request) {
+        CompletableFuture<CommitConsumerOffsetsResponse> response = new CompletableFuture<>();
+        response.completeExceptionally(
+                new UnsupportedOperationException("commitConsumerOffsets is not supported yet"));
+        return response;
+    }
+
+    @Override
+    public CompletableFuture<GetConsumerOffsetsResponse> getConsumerOffsets(
+            GetConsumerOffsetsRequest request) {
+        CompletableFuture<GetConsumerOffsetsResponse> response = new CompletableFuture<>();
+        response.completeExceptionally(
+                new UnsupportedOperationException("getConsumerOffsets is not supported yet"));
+        return response;
+    }
+
+    @Override
+    public CompletableFuture<DeleteConsumerOffsetsResponse> deleteConsumerOffsets(
+            DeleteConsumerOffsetsRequest request) {
+        CompletableFuture<DeleteConsumerOffsetsResponse> response = new CompletableFuture<>();
+        response.completeExceptionally(
+                new UnsupportedOperationException("deleteConsumerOffsets is not supported yet"));
+        return response;
+    }
+
+    @Override
+    public CompletableFuture<ListConsumerGroupsResponse> listConsumerGroups(
+            ListConsumerGroupsRequest request) {
+        CompletableFuture<ListConsumerGroupsResponse> response = new CompletableFuture<>();
+        response.completeExceptionally(
+                new UnsupportedOperationException("listConsumerGroups is not supported yet"));
+        return response;
+    }
+
+    @Override
+    public CompletableFuture<DeleteConsumerGroupsResponse> deleteConsumerGroups(
+            DeleteConsumerGroupsRequest request) {
+        CompletableFuture<DeleteConsumerGroupsResponse> response = new CompletableFuture<>();
+        response.completeExceptionally(
+                new UnsupportedOperationException("deleteConsumerGroups is not supported yet"));
+        return response;
     }
 
     @Override

@@ -39,6 +39,7 @@ import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
 import org.apache.fluss.metadata.DatabaseSummary;
+import org.apache.fluss.metadata.KafkaTableSchema;
 import org.apache.fluss.metadata.LakeTableUtil;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
@@ -58,6 +59,7 @@ import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
+import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import org.apache.fluss.utils.function.RunnableWithException;
 import org.apache.fluss.utils.function.ThrowingRunnable;
@@ -123,12 +125,13 @@ public class MetadataManager {
         this.lakeCatalogDynamicLoader = lakeCatalogDynamicLoader;
     }
 
-    /** Validates the table descriptor. */
-    public void validateTableDescriptor(TableDescriptor tableDescriptor) {
+    /** Validates a descriptor and its Kafka topic identity before persistence. */
+    public void validateTableDescriptor(TablePath tablePath, TableDescriptor tableDescriptor) {
         TableDescriptorValidation.validateTableDescriptor(
                 tableDescriptor,
                 maxBucketNum,
                 lakeCatalogDynamicLoader.getLakeCatalogContainer().getDataLakeFormat());
+        KafkaTableSchema.validateTablePath(tablePath, tableDescriptor);
     }
 
     public void createDatabase(
@@ -852,7 +855,7 @@ public class MetadataManager {
             }
 
             // reuse the same validate logic with the createTable() method
-            validateTableDescriptor(newDescriptor);
+            validateTableDescriptor(tablePath, newDescriptor);
 
             beforeUpdate.accept(tableInfo, newDescriptor);
 
@@ -860,7 +863,7 @@ public class MetadataManager {
             // enable datalake for the table. NOTE: this may have external (lake catalog) side
             // effects and is therefore NOT safe to auto-retry.
             preAlterTableProperties(
-                    tablePath, tableDescriptor, newDescriptor, tableChanges, flussPrincipal);
+                    tablePath, tableInfo, newDescriptor, tableChanges, flussPrincipal);
 
             TableRegistration updatedTableRegistration =
                     tableReg.newProperties(
@@ -945,24 +948,27 @@ public class MetadataManager {
 
     private void preAlterTableProperties(
             TablePath tablePath,
-            TableDescriptor tableDescriptor,
+            TableInfo tableInfo,
             TableDescriptor newDescriptor,
             List<TableChange> tableChanges,
             FlussPrincipal flussPrincipal) {
+        TableDescriptor tableDescriptor = tableInfo.toTableDescriptor();
         TablePath currentLakeTablePath =
                 LakeTableUtil.resolveLakeTablePath(
                         tablePath, Configuration.fromMap(tableDescriptor.getProperties()));
-        LakeCatalog.Context lakeCatalogContext =
-                new CoordinatorService.DefaultLakeCatalogContext(
-                        false,
-                        currentLakeTablePath,
-                        flussPrincipal,
-                        tableDescriptor,
-                        newDescriptor);
         LakeCatalog lakeCatalog =
                 lakeCatalogDynamicLoader.getLakeCatalogContainer().getLakeCatalog();
         boolean enablingDataLake =
                 isDataLakeEnabled(newDescriptor) && !isDataLakeEnabled(tableDescriptor);
+        Long currentLakeSnapshotId = enablingDataLake ? getCurrentLakeSnapshotId(tableInfo) : null;
+        LakeCatalog.Context lakeCatalogContext =
+                new CoordinatorService.DefaultLakeCatalogContext(
+                        false,
+                        currentLakeTablePath,
+                        currentLakeSnapshotId,
+                        flussPrincipal,
+                        tableDescriptor,
+                        newDescriptor);
         TablePath lakeTablePath = currentLakeTablePath;
         List<TableChange> lakeTableChanges = tableChanges;
 
@@ -1018,6 +1024,21 @@ public class MetadataManager {
                             e);
                 }
             }
+        }
+    }
+
+    @Nullable
+    private Long getCurrentLakeSnapshotId(TableInfo tableInfo) {
+        try {
+            return zookeeperClient
+                    .getLakeTableSnapshot(tableInfo.getTableId(), null)
+                    .map(LakeTableSnapshot::getSnapshotId)
+                    .orElse(null);
+        } catch (Exception e) {
+            throw new FlussRuntimeException(
+                    "Failed to read the registered lake snapshot for table "
+                            + tableInfo.getTablePath(),
+                    e);
         }
     }
 
@@ -1128,6 +1149,8 @@ public class MetadataManager {
                                         .getLakeCatalogContainer()
                                         .getDefaultTableLakeOptions()));
             }
+        } catch (TableNotExistException e) {
+            throw e;
         } catch (Exception e) {
             throw new FlussRuntimeException(
                     String.format("Failed to get tables '%s'.", tablePaths), e);
@@ -1146,6 +1169,23 @@ public class MetadataManager {
             throw new TableNotExistException("Table '" + tablePath + "' does not exist.");
         }
         return optionalTable.get();
+    }
+
+    /**
+     * Returns the ZK registrations of the given partitions of a table, read in one batch.
+     * Partitions that are not registered are absent from the result.
+     */
+    public Map<String, PartitionRegistration> getPartitionRegistrations(
+            TablePath tablePath, Collection<String> partitionNames) {
+        try {
+            return zookeeperClient.getPartitionRegistrations(tablePath, partitionNames);
+        } catch (Exception e) {
+            throw new FlussRuntimeException(
+                    String.format(
+                            "Failed to get partitions %s of table '%s'.",
+                            partitionNames, tablePath),
+                    e);
+        }
     }
 
     /**
