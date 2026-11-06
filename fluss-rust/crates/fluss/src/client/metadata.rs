@@ -298,7 +298,12 @@ impl Metadata {
         physical_tables_to_invalid: &HashSet<PhysicalTablePath>,
     ) {
         self.invalidate(|cluster| {
-            Some(cluster.invalidate_physical_table_meta(physical_tables_to_invalid))
+            // Called for every failed bucket, so mostly the leaders are already dropped.
+            let locations = cluster.get_bucket_locations_by_path();
+            physical_tables_to_invalid
+                .iter()
+                .any(|path| locations.contains_key(path))
+                .then(|| cluster.invalidate_physical_table_meta(physical_tables_to_invalid))
         });
     }
 
@@ -584,7 +589,8 @@ mod tests {
     use crate::proto::{ApiVersionsResponse, ErrorResponse, PbApiVersion, PbServerNode};
     use crate::rpc::ApiKey;
     use crate::test_utils::{
-        build_cluster_arc, pb_bucket, pb_metadata_response, pb_table_metadata,
+        build_cluster_arc, build_cluster_with_tables, pb_bucket, pb_metadata_response,
+        pb_table_metadata,
     };
     use prost::Message;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1111,6 +1117,30 @@ mod tests {
             metadata.server_for_refresh().map(|server| server.port()),
             Some(u32::from(new_port))
         );
+    }
+
+    #[test]
+    fn invalidate_physical_table_meta_skips_dropped_leaders() {
+        let table_a = TablePath::new("db".to_string(), "a".to_string());
+        let table_b = TablePath::new("db".to_string(), "b".to_string());
+        let metadata = Metadata::new_for_test(Arc::new(build_cluster_with_tables(
+            &[(&table_a, 1, 1), (&table_b, 2, 1)],
+            9092,
+        )));
+        let path_a = PhysicalTablePath::of(Arc::new(table_a));
+        let path_b = PhysicalTablePath::of(Arc::new(table_b));
+        metadata.invalidate_physical_table_meta(&HashSet::from([path_a.clone()]));
+        let cluster = metadata.get_cluster();
+        assert_eq!(leader(&cluster, 1), None);
+        let changes = metadata.subscribe_cluster_changes();
+
+        metadata.invalidate_physical_table_meta(&HashSet::from([path_a.clone()]));
+        assert!(Arc::ptr_eq(&cluster, &metadata.get_cluster()));
+        assert!(!changes.has_changed().unwrap());
+
+        metadata.invalidate_physical_table_meta(&HashSet::from([path_a, path_b]));
+        assert!(changes.has_changed().unwrap());
+        assert_eq!(leader(&metadata.get_cluster(), 2), None);
     }
 
     #[test]
