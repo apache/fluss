@@ -280,6 +280,22 @@ class FlinkSourceReaderTest extends FlinkTestBase {
         }
         assertThat(lakeSource.getCreateLakeRecordReaderCount()).isEqualTo(1);
 
+        // Restore from serialized checkpoint bytes, not the original split object.
+        assertThat(checkpointSplit.getLakeSplits()).hasSize(1);
+        SourceSplitSerializer splitSerializer = new SourceSplitSerializer(lakeSource);
+        byte[] checkpointBytes = splitSerializer.serialize(checkpointSplit);
+        LakeSnapshotAndFlussLogSplit restoredSplit =
+                (LakeSnapshotAndFlussLogSplit)
+                        splitSerializer.deserialize(splitSerializer.getVersion(), checkpointBytes);
+
+        assertThat(restoredSplit.isStreaming()).isTrue();
+        assertThat(restoredSplit.isLakeSplitFinished()).isTrue();
+        assertThat(restoredSplit.getLakeSplits()).isNull();
+        assertThat(restoredSplit.getStartingOffset()).isEqualTo(startingOffset);
+        assertThat(restoredSplit.getRecordsToSkip()).isEqualTo(1L);
+        int checkpointLakeSplitIndex = checkpointSplit.getCurrentLakeSplitIndex();
+        assertThat(restoredSplit.getCurrentLakeSplitIndex()).isEqualTo(checkpointLakeSplitIndex);
+
         // Append the first incremental record after the boundary checkpoint. Recovery must read it
         // through LogScanner without reopening the finished lake RecordReader.
         UpsertResult newLogResult = upsert(tablePath, row(2, "new-log"));
@@ -293,7 +309,7 @@ class FlinkSourceReaderTest extends FlinkTestBase {
                         tableDescriptor.getSchema().getRowType(),
                         new TestingReaderContext(),
                         restoringLakeSource)) {
-            restoredReader.addSplits(Collections.singletonList(checkpointSplit));
+            restoredReader.addSplits(Collections.singletonList(restoredSplit));
 
             retry(
                     Duration.ofMinutes(1),
