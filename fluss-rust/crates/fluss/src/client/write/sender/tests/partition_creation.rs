@@ -395,7 +395,6 @@ fn partition_write_stack_with_idempotence(
         Some(node(0, ServerType::CoordinatorServer)),
         HashMap::from([(1, node(1, ServerType::TabletServer))]),
         HashMap::new(),
-        HashMap::new(),
         HashMap::from([(table_path.clone(), 1)]),
         HashMap::from([(table_path, table_info.clone())]),
         HashMap::new(),

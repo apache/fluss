@@ -97,8 +97,7 @@ pub(crate) fn build_cluster_with_port(
     build_cluster_with_tables(&[(table_path, table_id, buckets)], port)
 }
 
-/// Build a Cluster whose tables are all led by tablet server 1 at the given port. Kept as the
-/// single Cluster::new call site in test code, so a constructor change only breaks this helper.
+/// Build a Cluster whose tables are all led by tablet server 1 at the given port.
 pub(crate) fn build_cluster_with_tables(tables: &[(&TablePath, i64, i32)], port: u32) -> Cluster {
     let server = ServerNode::new(1, "127.0.0.1".to_string(), port, ServerType::TabletServer);
 
@@ -106,7 +105,6 @@ pub(crate) fn build_cluster_with_tables(tables: &[(&TablePath, i64, i32)], port:
     servers.insert(server.id(), server.clone());
 
     let mut locations_by_path = HashMap::new();
-    let mut locations_by_bucket = HashMap::new();
     let mut table_id_by_path = HashMap::new();
     let mut table_info_by_path = HashMap::new();
     let mut bucket_count_by_table = HashMap::new();
@@ -117,12 +115,11 @@ pub(crate) fn build_cluster_with_tables(tables: &[(&TablePath, i64, i32)], port:
         for bucket_id in 0..*buckets {
             let table_bucket = TableBucket::new(*table_id, bucket_id);
             let bucket_location = BucketLocation::new(
-                table_bucket.clone(),
+                table_bucket,
                 Some(server.clone()),
                 Arc::clone(&physical_path),
             );
-            bucket_locations.push(bucket_location.clone());
-            locations_by_bucket.insert(table_bucket, bucket_location);
+            bucket_locations.push(bucket_location);
         }
         locations_by_path.insert(physical_path, bucket_locations);
         table_id_by_path.insert((*table_path).clone(), *table_id);
@@ -137,7 +134,6 @@ pub(crate) fn build_cluster_with_tables(tables: &[(&TablePath, i64, i32)], port:
         None,
         servers,
         locations_by_path,
-        locations_by_bucket,
         table_id_by_path,
         table_info_by_path,
         HashMap::new(),
