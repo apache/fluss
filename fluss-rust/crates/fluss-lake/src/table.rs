@@ -25,7 +25,7 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
-/// Entry point for source preparation over a Fluss table.
+/// Reusable table handle for capturing bounded source inputs.
 #[derive(Clone)]
 pub struct FlussLakeTable {
     connection: Arc<FlussConnection>,
@@ -33,29 +33,15 @@ pub struct FlussLakeTable {
 }
 
 impl FlussLakeTable {
-    /// Opens a table for bounded Fluss-only or lake and log reads.
-    pub async fn open(connection: Arc<FlussConnection>, table_path: &TablePath) -> Result<Self> {
-        let admin = connection
-            .get_admin()
-            .map_err(|error| planning_client_error("create Fluss admin client", error))?;
-        let table_info = admin
-            .get_table_info(table_path)
-            .await
-            .map_err(|error| planning_client_error("get table metadata", error))?;
-        Self::try_from_table_info(connection, &table_info)
-    }
-
-    /// Creates a table from metadata already resolved by the caller.
-    /// Preparation fetches fresh metadata before capturing source boundaries.
-    pub fn try_from_table_info(
-        connection: Arc<FlussConnection>,
-        table_info: &TableInfo,
-    ) -> Result<Self> {
-        validate_readable_table(table_info)?;
-        Ok(Self {
+    /// Creates a reusable table handle without fetching metadata or capturing boundaries.
+    ///
+    /// Table existence and configuration are checked by
+    /// [`Self::capture_read_context`] or its partition-scoped variant.
+    pub fn new(connection: Arc<FlussConnection>, table_path: &TablePath) -> Self {
+        Self {
             connection,
-            table_path: table_info.table_path.clone(),
-        })
+            table_path: table_path.clone(),
+        }
     }
 
     /// Captures table-wide source boundaries without planning lake files.
