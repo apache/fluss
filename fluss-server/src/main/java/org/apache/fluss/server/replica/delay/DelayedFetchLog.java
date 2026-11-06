@@ -45,6 +45,7 @@ import javax.annotation.Nullable;
 
 import java.io.IOException;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.function.Consumer;
 
@@ -85,7 +86,7 @@ public class DelayedFetchLog extends DelayedOperation {
     public void onComplete() {
         Map<TableBucket, FetchLogResultForBucket> result = new HashMap<>();
 
-        Map<TableBucket, FetchReqInfo> reFetchBuckets = new HashMap<>();
+        Map<TableBucket, FetchReqInfo> reFetchBuckets = new LinkedHashMap<>();
         for (Map.Entry<TableBucket, FetchBucketStatus> fetchBucketStatusEntry :
                 fetchBucketStatusMap.entrySet()) {
             FetchBucketStatus fetchBucketStatus = fetchBucketStatusEntry.getValue();

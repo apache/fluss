@@ -26,10 +26,15 @@ import org.apache.fluss.client.table.scanner.RemoteFileDownloader;
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
+import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.row.GenericRow;
@@ -44,8 +49,10 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -255,6 +262,86 @@ public class LogFetcherITCase extends ClientToServerITCaseBase {
         // after collect fetch, the fetcher is empty.
         assertThat(logFetcher.hasAvailableFetches()).isFalse();
         assertThat(logFetcher.getCompletedFetchesSize()).isEqualTo(0);
+    }
+
+    @Test
+    void testSmallFetchBudgetDoesNotStarveInterleavedTables() throws Exception {
+        TablePath otherTablePath = TablePath.of("test_db_1", "log_fetch_fairness");
+        long otherTableId =
+                createTable(
+                        otherTablePath,
+                        TableDescriptor.builder().schema(DATA1_SCHEMA).distributedBy(9).build(),
+                        true);
+        FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(otherTableId);
+        metadataUpdater.checkAndUpdateTableMetadata(Collections.singleton(otherTablePath));
+
+        TableBucket middleBucket = new TableBucket(tableId, bucketId0);
+        int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(middleBucket);
+        List<TableBucket> sameLeaderBuckets = new ArrayList<>();
+        for (int bucketId = 0; bucketId < 9; bucketId++) {
+            TableBucket bucket = new TableBucket(otherTableId, bucketId);
+            if (FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(bucket) == leader) {
+                sameLeaderBuckets.add(bucket);
+            }
+        }
+        assertThat(sameLeaderBuckets).hasSizeGreaterThanOrEqualTo(2);
+        TableBucket emptyBucket = sameLeaderBuckets.get(0);
+        TableBucket trailingBucket = sameLeaderBuckets.get(1);
+
+        // Each hot bucket remains non-empty after all four fetch rounds.
+        for (long baseOffset = 0; baseOffset < 30; baseOffset += 10) {
+            addRecordsToBucket(middleBucket, genMemoryLogRecordsByObject(DATA1), baseOffset);
+            addRecordsToBucket(trailingBucket, genMemoryLogRecordsByObject(DATA1), baseOffset);
+        }
+
+        LogScannerStatus status = new LogScannerStatus();
+        Map<TableBucket, Long> orderedBuckets = new LinkedHashMap<>();
+        orderedBuckets.put(emptyBucket, 0L);
+        orderedBuckets.put(middleBucket, 0L);
+        orderedBuckets.put(trailingBucket, 0L);
+        status.assignScanBuckets(orderedBuckets);
+
+        Configuration smallFetchConf = new Configuration(clientConf);
+        smallFetchConf.set(
+                ConfigOptions.CLIENT_SCANNER_LOG_FETCH_MAX_BYTES, MemorySize.parse("1b"));
+        LogFetcher fairFetcher =
+                new LogFetcher(
+                        "fair-fetch-scanner",
+                        status,
+                        smallFetchConf,
+                        metadataUpdater,
+                        TestingScannerMetricGroup.newInstance(),
+                        new RemoteFileDownloader(1),
+                        LogRecordReadContext.SchemaResolution.TARGET);
+        fairFetcher.registerTable(new TableScanSpec(tableInfo, null, null), clientSchemaGetter);
+        TableInfo otherTableInfo = admin.getTableInfo(otherTablePath).get();
+        fairFetcher.registerTable(
+                new TableScanSpec(otherTableInfo, null, null),
+                new ClientSchemaGetter(otherTablePath, otherTableInfo.getSchemaInfo(), admin));
+
+        try {
+            TableBucket[] expectedWinners = {
+                middleBucket, trailingBucket, middleBucket, trailingBucket
+            };
+            for (int round = 0; round < expectedWinners.length; round++) {
+                fairFetcher.sendFetches();
+                retry(
+                        Duration.ofMinutes(1),
+                        () -> assertThat(fairFetcher.hasAvailableFetches()).isTrue());
+                ScanRecords records = fairFetcher.collectFetch();
+                TableBucket winner = expectedWinners[round];
+                TableBucket loser = winner.equals(middleBucket) ? trailingBucket : middleBucket;
+                assertThat(records.records(winner)).hasSize(DATA1.size());
+                assertThat(records.records(loser)).isEmpty();
+                assertThat(records.records(emptyBucket)).isEmpty();
+                assertThat(status.getBucketOffset(middleBucket))
+                        .isEqualTo((long) (round / 2 + 1) * DATA1.size());
+                assertThat(status.getBucketOffset(trailingBucket))
+                        .isEqualTo((long) ((round + 1) / 2) * DATA1.size());
+            }
+        } finally {
+            fairFetcher.close();
+        }
     }
 
     @Test
