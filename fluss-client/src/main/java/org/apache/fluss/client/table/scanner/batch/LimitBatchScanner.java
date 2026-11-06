@@ -67,6 +67,7 @@ public class LimitBatchScanner implements BatchScanner {
     private final int limit;
     private final InternalRow.FieldGetter[] fieldGetters;
     private final CompletableFuture<LimitScanResponse> scanFuture;
+    private final CompletableFuture<LimitScanResponse> pollFuture;
     private final SchemaGetter schemaGetter;
     private final KvFormat kvFormat;
     private final int targetSchemaId;
@@ -80,6 +81,8 @@ public class LimitBatchScanner implements BatchScanner {
     private final Map<Short, int[]> schemaProjectionCache = new HashMap<>();
 
     private boolean endOfInput;
+    private volatile boolean closed;
+    private boolean responseConsumed;
 
     public LimitBatchScanner(
             TableInfo tableInfo,
@@ -125,6 +128,7 @@ public class LimitBatchScanner implements BatchScanner {
                     "Server " + leader + " is not found in metadata cache.");
         }
         this.scanFuture = gateway.limitScan(limitScanRequest);
+        this.pollFuture = scanFuture.thenApply(response -> response);
 
         this.kvFormat = tableInfo.getTableConfig().getKvFormat();
         this.endOfInput = false;
@@ -134,12 +138,12 @@ public class LimitBatchScanner implements BatchScanner {
     @Nullable
     @Override
     public CloseableIterator<InternalRow> pollBatch(Duration timeout) throws IOException {
-        if (endOfInput) {
+        if (endOfInput || closed) {
             return null;
         }
         LimitScanResponse response;
         try {
-            response = scanFuture.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
+            response = pollFuture.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
         } catch (TimeoutException e) {
             // poll next time
             return CloseableIterator.emptyIterator();
@@ -147,16 +151,19 @@ public class LimitBatchScanner implements BatchScanner {
             throw new IOException(e);
         }
 
-        ByteBuf parsedByteBuf = response.getParsedByteBuf();
-        try {
-            List<InternalRow> scanRows = parseLimitScanResponse(response);
-            endOfInput = true;
-            return CloseableIterator.wrap(scanRows.iterator());
-        } catch (Exception e) {
-            throw new IOException(e);
-        } finally {
-            if (parsedByteBuf != null) {
-                parsedByteBuf.release();
+        synchronized (this) {
+            if (closed || responseConsumed) {
+                return null;
+            }
+            responseConsumed = true;
+            try {
+                List<InternalRow> scanRows = parseLimitScanResponse(response);
+                endOfInput = true;
+                return CloseableIterator.wrap(scanRows.iterator());
+            } catch (Exception e) {
+                throw new IOException(e);
+            } finally {
+                releaseResponse(response);
             }
         }
     }
@@ -231,9 +238,30 @@ public class LimitBatchScanner implements BatchScanner {
     }
 
     @Override
-    public void close() throws IOException {
-        scanFuture.cancel(true);
+    public synchronized void close() throws IOException {
+        if (closed) {
+            return;
+        }
+        closed = true;
+        pollFuture.complete(null);
+        // Keep the future consumable so a late response can return its buffer to Netty.
+        scanFuture.thenAccept(
+                response -> {
+                    synchronized (this) {
+                        if (!responseConsumed) {
+                            responseConsumed = true;
+                            releaseResponse(response);
+                        }
+                    }
+                });
         // Release off-heap memory held by the chunked allocation manager factory.
         chunkedFactory.close();
+    }
+
+    private static void releaseResponse(LimitScanResponse response) {
+        ByteBuf buffer = response.getParsedByteBuf();
+        if (buffer != null) {
+            buffer.release();
+        }
     }
 }
