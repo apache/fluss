@@ -23,9 +23,11 @@ import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
+import org.apache.fluss.flink.tiering.LakeTieringJobBuilder;
 import org.apache.fluss.lake.paimon.testutils.FlinkPaimonTieringTestBase;
 import org.apache.fluss.lake.paimon.tiering.markdone.PartitionMarkDoneState;
 import org.apache.fluss.lake.paimon.tiering.markdone.PartitionMarkDoneStateJsonSerde;
+import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.Schema;
@@ -79,6 +81,8 @@ import java.util.Map;
 import java.util.stream.Stream;
 
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.collectRowsUntilEndWithTimeout;
+import static org.apache.fluss.flink.tiering.source.TieringSourceOptions.POLL_TIERING_TABLE_INTERVAL;
+import static org.apache.fluss.flink.tiering.source.TieringSourceOptions.TIERING_GROUP;
 import static org.apache.fluss.lake.committer.LakeCommitter.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
 import static org.apache.fluss.lake.paimon.testutils.PaimonTestUtils.adjustToLegacyV1Table;
 import static org.apache.fluss.lake.paimon.tiering.markdone.PaimonPartitionMarkDone.MARK_DONE_STATE_PROPERTY;
@@ -202,6 +206,71 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
             checkFlussOffsetsInSnapshot(partitionedTablePath, expectedOffsets);
         } finally {
             jobClient.cancel().get();
+        }
+    }
+
+    @Test
+    void testTieringWithGroups() throws Exception {
+        TablePath groupedTable = TablePath.of(DEFAULT_DB, "largeGroupTable");
+        TablePath defaultTable = TablePath.of(DEFAULT_DB, "defaultGroupTable");
+        try (AutoCloseable defaultTableCleanup = () -> dropTable(defaultTable);
+                AutoCloseable groupedTableCleanup = () -> dropTable(groupedTable)) {
+            long groupedTableId =
+                    createLogTable(
+                            groupedTable,
+                            1,
+                            false,
+                            Collections.singletonMap(
+                                    ConfigOptions.TABLE_DATALAKE_TIERING_GROUP.key(), "large"),
+                            Collections.emptyMap());
+            TableBucket groupedBucket = new TableBucket(groupedTableId, 0);
+            List<InternalRow> groupedRows = Arrays.asList(row(1, "large1"), row(2, "large2"));
+            writeRows(groupedTable, groupedRows, true);
+
+            TableBucket defaultBucket = new TableBucket(createLogTable(defaultTable), 0);
+            List<InternalRow> defaultRows =
+                    Arrays.asList(row(1, "default1"), row(2, "default2"), row(3, "default3"));
+            writeRows(defaultTable, defaultRows.subList(0, 2), true);
+
+            JobClient defaultJob = buildTieringJob(execEnv);
+            try (AutoCloseable defaultJobCleanup = () -> defaultJob.cancel().get()) {
+                assertReplicaStatus(defaultBucket, 2);
+                // Complete a second round while the large-group table is still waiting.
+                writeRows(defaultTable, defaultRows.subList(2, 3), true);
+                assertReplicaStatus(defaultBucket, 3);
+                checkDataInPaimonAppendOnlyTable(defaultTable, defaultRows, 0);
+                FileStoreTable groupedLakeTable =
+                        (FileStoreTable)
+                                paimonCatalog.getTable(
+                                        Identifier.create(
+                                                groupedTable.getDatabaseName(),
+                                                groupedTable.getTableName()));
+                assertThat(groupedLakeTable.snapshotManager().latestSnapshot())
+                        .as("The large-group table must wait for a matching tiering service")
+                        .isNull();
+
+                Configuration groupedConf = new Configuration(clientConf);
+                groupedConf.set(TIERING_GROUP, "large");
+                groupedConf.set(POLL_TIERING_TABLE_INTERVAL, Duration.ofMillis(500));
+                StreamExecutionEnvironment groupedEnv =
+                        StreamExecutionEnvironment.getExecutionEnvironment();
+                groupedEnv.setParallelism(2);
+                groupedEnv.enableCheckpointing(1000);
+                JobClient groupedJob =
+                        LakeTieringJobBuilder.newBuilder(
+                                        groupedEnv,
+                                        groupedConf,
+                                        Configuration.fromMap(getPaimonCatalogConf()),
+                                        new Configuration(),
+                                        DataLakeFormat.PAIMON.toString())
+                                .build();
+                try (AutoCloseable groupedJobCleanup = () -> groupedJob.cancel().get()) {
+                    assertReplicaStatus(groupedBucket, 2);
+                    checkDataInPaimonAppendOnlyTable(groupedTable, groupedRows, 0);
+                    checkFlussOffsetsInSnapshot(
+                            groupedTable, Collections.singletonMap(groupedBucket, 2L));
+                }
+            }
         }
     }
 

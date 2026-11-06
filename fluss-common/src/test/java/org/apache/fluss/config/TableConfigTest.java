@@ -29,6 +29,18 @@ import static org.assertj.core.api.Assertions.assertThat;
 class TableConfigTest {
 
     @Test
+    void testDataLakeTieringGroup() {
+        Configuration conf = new Configuration();
+        TableConfig tableConfig = new TableConfig(conf);
+
+        assertThat(tableConfig.getDataLakeTieringGroup()).isEqualTo("default");
+        conf.set(ConfigOptions.TABLE_DATALAKE_TIERING_GROUP, "large");
+        assertThat(tableConfig.getDataLakeTieringGroup()).isEqualTo("large");
+        conf.removeConfig(ConfigOptions.TABLE_DATALAKE_TIERING_GROUP);
+        assertThat(tableConfig.getDataLakeTieringGroup()).isEqualTo("default");
+    }
+
+    @Test
     void testDeleteBehavior() {
         Configuration conf = new Configuration();
         TableConfig tableConfig = new TableConfig(conf);
