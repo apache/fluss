@@ -19,6 +19,7 @@ package org.apache.fluss.client.lookup;
 
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.cluster.Cluster;
+import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
@@ -84,7 +85,13 @@ abstract class AbstractLookuper implements Lookuper {
         metadataUpdater.checkAndUpdatePartitionMetadata(partitionPath);
 
         Cluster cluster = metadataUpdater.getCluster();
-        long partitionId = cluster.getPartitionIdOrElseThrow(partitionPath);
+        long partitionId =
+                cluster.getPartitionId(partitionPath)
+                        .orElseThrow(
+                                () ->
+                                        new StaleMetadataException(
+                                                "Partition metadata is unavailable for "
+                                                        + partitionPath));
         int bucketCount = cluster.getBucketCountOrFallback(tableInfo, partitionId);
         return new PartitionRoutingInfo(partitionId, bucketCount);
     }

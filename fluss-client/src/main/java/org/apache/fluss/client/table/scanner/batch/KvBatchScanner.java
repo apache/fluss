@@ -288,16 +288,15 @@ public final class KvBatchScanner implements BatchScanner {
             // Invalidate routing for a caller-created scanner; reopening here would change the
             // snapshot.
             try {
-                metadataUpdater.invalidPhysicalTableBucketMeta(
+                metadataUpdater.invalidPhysicalTableBucketMetaByIds(
                         bucket.getPartitionId() == null
-                                ? metadataUpdater.getPhysicalTablePathByIds(
-                                        Collections.singleton(bucket.getTableId()), null)
-                                : metadataUpdater.getPhysicalTablePathByIds(
-                                        null,
-                                        Collections.singleton(
-                                                new TablePartition(
-                                                        bucket.getTableId(),
-                                                        bucket.getPartitionId()))));
+                                ? Collections.singleton(bucket.getTableId())
+                                : null,
+                        bucket.getPartitionId() == null
+                                ? null
+                                : Collections.singleton(
+                                        new TablePartition(
+                                                bucket.getTableId(), bucket.getPartitionId())));
             } catch (Exception e) {
                 LOG.debug("Failed to invalidate bucket metadata for {}.", bucket, e);
             }
