@@ -332,11 +332,7 @@ mod tests {
         let cluster = Cluster::new(
             None,
             HashMap::from([(1, server)]),
-            HashMap::from([(Arc::clone(&physical), locations.clone())]),
-            locations
-                .into_iter()
-                .map(|location| (location.table_bucket.clone(), location))
-                .collect(),
+            HashMap::from([(Arc::clone(&physical), locations)]),
             HashMap::new(),
             HashMap::new(),
             HashMap::new(),
