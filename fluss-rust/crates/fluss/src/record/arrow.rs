@@ -1584,12 +1584,7 @@ fn align_record_batch_to_schema(
             .enumerate()
             .all(|(index, mapped)| *mapped == index as i32)
     {
-        // Reuse an already aligned batch without validating the same schema again.
-        if Arc::ptr_eq(record_batch.schema_ref(), &target_schema) {
-            return Ok(record_batch);
-        }
-        // Keep validation for a different target schema, but move the column list
-        // instead of allocating a new list and cloning every array reference.
+        // Move the column list without cloning array references, retaining Arrow validation.
         let (_, columns, row_count) = record_batch.into_parts();
         return Ok(RecordBatch::try_new_with_options(
             target_schema,
