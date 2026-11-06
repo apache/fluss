@@ -39,7 +39,7 @@ public interface BucketingFunction {
             return new FlussBucketingFunction();
         } else if (lakeFormat == DataLakeFormat.PAIMON) {
             return new PaimonBucketingFunction();
-        } else if (lakeFormat == DataLakeFormat.LANCE) {
+        } else if (lakeFormat == DataLakeFormat.LANCE || lakeFormat == DataLakeFormat.DELTA) {
             return new FlussBucketingFunction();
         } else if (lakeFormat == DataLakeFormat.ICEBERG) {
             return new IcebergBucketingFunction();
