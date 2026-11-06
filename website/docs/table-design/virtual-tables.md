@@ -15,12 +15,13 @@ Fluss supports the following virtual table types:
 | [Changelog](#changelog-table) | `$changelog` | Provides access to the raw changelog stream with metadata | Primary Key Tables, Log Tables |
 | [Binlog](#binlog-table) | `$binlog` | Provides binlog format with before/after metadata         | Primary Key Tables only |
 | [Buckets](#buckets-table) | `$buckets` | Provides replica placement and leader/ISR metadata        | Primary Key Tables, Log Tables |
+| [Partitions](#partitions-table) | `$partitions` | Provides partition IDs, names, and bucket counts       | Partitioned Tables |
 
 ## Flink Runtime Modes
 
 Both `$changelog` and `$binlog` can be queried in Flink streaming or batch runtime.
-The `$buckets` table always returns a bounded metadata snapshot, including when the Flink runtime
-mode is streaming.
+The `$buckets` and `$partitions` tables always return bounded metadata snapshots, including when
+the Flink runtime mode is streaming.
 
 | Runtime Mode | Behavior |
 |--------------|----------|
@@ -54,6 +55,41 @@ LIMIT 100;
 :::warning
 On Flink 1.18, a predicate on `_commit_timestamp` (or on any other `TIMESTAMP_LTZ` column) returns wrong results when the session time zone is not UTC. Flink 1.18 rebuilds such a predicate using the session time zone instead of UTC after the filter is pushed into the source, which shifts the literal by the zone offset and typically makes the query return no rows. This is [FLINK-35318](https://issues.apache.org/jira/browse/FLINK-35318), fixed in Flink 1.19.2 and 1.20.0 and never backported to 1.18. On Flink 1.18, either avoid `TIMESTAMP_LTZ` predicates or set `table.local-time-zone` to `UTC`.
 :::
+
+## Partitions Table
+
+The `$partitions` virtual table provides read-only access to the current metadata of every regular
+partition in a partitioned table. Append `$partitions` to the base table name:
+
+```sql title="Flink SQL"
+SELECT * FROM orders$partitions;
+```
+
+### Schema
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `partition_id` | BIGINT NOT NULL | The globally unique partition ID |
+| `partition_name` | STRING NOT NULL | The partition name |
+| `bucket_count` | INT NOT NULL | The actual bucket count of the partition |
+
+The table can be inspected and queried with standard SQL:
+
+```sql title="Flink SQL"
+DESCRIBE orders$partitions;
+
+SELECT partition_name, bucket_count
+FROM orders$partitions
+WHERE bucket_count > 2;
+```
+
+After `ALTER TABLE ... SET ('bucket.num' = N)`, existing partitions keep their original bucket
+counts and only newly created partitions use the new value. Query `$partitions` to inspect the
+effective bucket count of each partition instead of relying on the table-level default shown by
+`SHOW CREATE TABLE`.
+
+The current implementation obtains the complete partition metadata snapshot before Flink evaluates
+the predicate. Predicate pushdown is not supported yet.
 
 ## Buckets Table
 

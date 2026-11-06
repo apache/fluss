@@ -111,10 +111,11 @@ The `SELECT` returns all five rows from the mixed-bucket-count table — three f
 SHOW CREATE TABLE order_events;
 ```
 
-To inspect the actual bucket count of each partition, use the [`sys.list_partition_infos`](engine-flink/procedures.md#list_partition_infos) procedure:
+To inspect the actual bucket count of each partition, query the [`$partitions`](../virtual-tables.md#partitions-table) virtual table:
 
 ```sql title="Flink SQL"
-CALL sys.list_partition_infos('my_db', 'order_events');
+SELECT partition_id, partition_name, bucket_count
+FROM my_db.order_events$partitions;
 ```
 
 It returns one row per partition with the partition id, the partition name, and the partition's actual bucket count. For the table above after the rescale, the result looks like:

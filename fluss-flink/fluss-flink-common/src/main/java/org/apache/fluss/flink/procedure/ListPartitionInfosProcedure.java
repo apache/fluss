@@ -43,7 +43,11 @@ import java.util.List;
  * -- List the partition id, partition name and bucket count of each partition
  * CALL sys.list_partition_infos('my_db', 'my_table');
  * </pre>
+ *
+ * @deprecated Use the read-only {@code my_table$partitions} virtual table instead. This procedure
+ *     remains available for backward compatibility.
  */
+@Deprecated
 public class ListPartitionInfosProcedure extends ProcedureBase {
 
     @ProcedureHint(
