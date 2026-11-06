@@ -24,6 +24,7 @@ import org.apache.fluss.utils.WrappingProxy;
 
 import java.io.IOException;
 import java.net.URI;
+import java.util.Set;
 
 /**
  * A wrapper around {@link FileSystemPlugin} that ensures the plugin classloader is used for all
@@ -46,6 +47,11 @@ public class PluginFileSystemWrapper implements FileSystemPlugin {
     @Override
     public String getScheme() {
         return inner.getScheme();
+    }
+
+    @Override
+    public Set<String> getFallbackSchemes() {
+        return inner.getFallbackSchemes();
     }
 
     @Override
