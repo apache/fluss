@@ -79,10 +79,10 @@ tiering service bundles a Flink distribution with an embedded runtime.
 
 {{/*
 Default Fluss bootstrap servers for the tiering service: the client listener
-of this release's coordinator.
+of this release's coordinator, on the chart's configured cluster domain.
 */}}
 {{- define "fluss.embeddedTiering.defaultBootstrapServers" -}}
-{{- printf "%s.%s.svc.cluster.local:%v" (include "fluss.coordinator.serviceName" .) .Release.Namespace .Values.listeners.client.port -}}
+{{- printf "%s.%s.svc.%s:%v" (include "fluss.coordinator.serviceName" .) .Release.Namespace (include "fluss.listeners.clusterDomain" .) .Values.listeners.client.port -}}
 {{- end -}}
 
 {{/*
