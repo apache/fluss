@@ -25,18 +25,19 @@ Implementation reference: [full PoC](https://github.com/naivedogger/fluss/tree/f
 ## Read flow and ownership
 
 ```text
-FlussLakeTable
+FlussLakeTable::new() (no I/O)
   ├─ capture_read_context() → ReadContext
   │                            ├─ shared by multiple scans
   │                            └─ engine-native planning and execution
   └─ new_scan() → FlussLakeScan
-                   ├─ plan() → ReadPlan → ReadSplits
+                   ├─ plan() → capture boundaries → ReadPlan → ReadSplits
                    ├─ plan_with_context(context) ──┘
                    └─ new_reader() → read_split(s) → Arrow batches
 ```
 
 | Object | Owns |
 | --- | --- |
+| Table | Reusable connection, table path and runtime lake properties. No captured schema or boundaries. |
 | ReadContext | Frozen source identity, schema, partition scope, optional lake snapshot and concrete log boundaries. No credentials or file tasks. |
 | Scan | Projection, predicate, read mode, output batch size and runtime LakeSource. |
 | Plan / Split | Output schema, scheduling descriptors and frozen execution inputs. Default split payloads are opaque to engines. |
@@ -48,13 +49,8 @@ FlussLakeTable
 
 ```rust
 impl FlussLakeTable {
-    pub async fn open(connection: Arc<FlussConnection>, table_path: &TablePath) -> Result<Self>;
-    pub async fn open_with_properties(
-        connection: Arc<FlussConnection>,
-        table_path: &TablePath,
-        catalog_property_overrides: HashMap<String, String>,
-    ) -> Result<Self>;
-    pub fn try_from_table_info(connection: Arc<FlussConnection>, table_info: &TableInfo) -> Result<Self>;
+    pub fn new(connection: Arc<FlussConnection>, table_path: &TablePath) -> Self;
+    pub fn with_catalog_properties(self, properties: HashMap<String, String>) -> Self;
     pub fn new_scan(&self) -> FlussLakeScan;
     pub async fn capture_read_context(&self) -> Result<FlussLakeReadContext>;
     pub async fn capture_read_context_with_partition_scope(
@@ -75,7 +71,7 @@ impl FlussLakeScan {
 }
 ```
 
-`plan()` captures boundaries and plans tasks. Safe partition predicates can reduce offset queries before capture. The initial planner scope is implied STRING partition equalities, including AND conjuncts; other conditions keep a broader capture scope. Explicit capture remains table-wide by default so multiple scans can share one boundary set. `plan_with_context()` preserves the supplied context and never widens its scope or refreshes its boundaries.
+`new()` constructs a table handle synchronously without I/O or existence checks. `with_catalog_properties()` replaces runtime lake overrides for subsequently created scans; it does not capture metadata. Each `plan()` call binds scan settings to current metadata, captures fresh boundaries and plans tasks. Missing tables and invalid lake configuration fail at planning or explicit capture. Existing plans retain their captured inputs; reusing a Table or Scan does not reuse a previous context. Safe partition predicates can reduce offset queries before capture. The initial planner scope is implied STRING partition equalities, including AND conjuncts; other conditions keep a broader capture scope. Explicit capture remains table-wide by default so multiple scans can share one boundary set. `plan_with_context()` preserves the supplied context and never widens its scope or refreshes its boundaries.
 
 A PartitionSpec is an exact conjunction of metadata-encoded partition values, possibly covering only some partition keys. Empty means table-wide. Its scope constrains both lake and log inputs, including lake-only expired partitions. Explicit scoped capture belongs to #4887; predicate-to-scope extraction belongs to the planner PR.
 
@@ -102,6 +98,10 @@ impl FlussLakeReadContext {
     pub fn lake_snapshot_id(&self) -> Option<i64>;
     pub fn merge_engine(&self) -> Option<&str>;
     pub fn log_ranges(&self) -> &[FlussLakeLogRange];
+    pub fn is_lake_only(&self) -> bool;
+    pub fn from_lake_snapshot(
+        table: &TableInfo, snapshot_id: Option<i64>, scope: &PartitionSpec,
+    ) -> Result<Self>;
     pub fn validate_table(&self, table: &TableInfo) -> Result<()>;
     pub fn from_boundary(
         table: &TableInfo, snapshot_id: Option<i64>, ranges: Vec<FlussLakeLogRange>,
@@ -139,6 +139,8 @@ impl FlussLakeLogRange {
     pub fn validate_available(&self) -> Result<()>;
 }
 ```
+
+The subsequent planner adds lake-only capture and `from_lake_snapshot()`: these contexts omit log boundaries and report `is_lake_only() == true`. They cannot be reused for union scans. An empty log-range list in an ordinary context instead means no live partitions were captured. Lake-only planning skips live-partition discovery and offset RPCs, while preserving schema, snapshot, scope and source-identity checks. These additions are beyond the boundary-only PR's current implementation.
 
 A context fixes source identity and schema, not a global transactional time point. Each log range is half-open `[start, stop)` and uses concrete offsets captured from the server. Per-partition bucket counts take precedence over the table default. A range is a source boundary, not a mandatory thread, split or engine scheduling unit.
 
@@ -253,7 +255,7 @@ Examples show call relationships, not runnable programs. `connection`, `path`, i
 ### Default read with a lake backend
 
 ```rust
-let table = FlussLakeTable::open(connection, &path).await?;
+let table = FlussLakeTable::new(connection, &path);
 let scan = table.new_scan()
     .with_lake_source(lake_source)
     .with_filter(col("region").eq("US"))
@@ -294,56 +296,15 @@ let mut batches = reader.read_split(&tasks[0])?;
 
 Tasks retain their planned boundaries and schema without replanning or a retained plan handle. A DataFusion adapter can schedule them in-process. Cross-process task encoding and recovery belong to a concrete distributed adapter, not this initial default reader contract.
 
-### Java capture and engine-native execution
+### Java boundaries and engine-native execution
 
-The Java entry is implemented in #4887. Its public signatures are:
+Java coordinators can use existing Admin APIs: `getReadableLakeSnapshot()` returns the snapshot and its matching lake/log seams; offset queries capture concrete log bounds. The Flink connector's `LakeSplitGenerator.generateHybridLakeFlussSplits()` already composes lake and log tasks and can be reused where appropriate. Its output is not a Rust context or a portable Rust lake payload. The adapter must preserve the selected snapshot and schema, source identities, per-partition bucket counts and scope, and resolve offset sentinels rather than recapturing a newer snapshot on a worker.
 
-```java
-public static UnionReadContext captureReadContext(Admin admin, TablePath tablePath) throws Exception;
-public static UnionReadContext captureReadContext(
-        Admin admin, TablePath tablePath, PartitionSpec scope) throws Exception;
-
-public final class UnionReadContext {
-    public TablePath getTablePath();
-    public long getTableId();
-    public int getSchemaId();
-    public Schema getSchema();
-    public List<String> getPartitionKeys();
-    public List<String> getBucketKeys();
-    public int getNumBuckets();
-    public Map<String, String> getPartitionFilter();
-    public Optional<TablePath> getLakeTablePath();
-    public Optional<DataLakeFormat> getLakeFormat();
-    public Optional<MergeEngineType> getMergeEngine();
-    public OptionalLong getLakeSnapshotId();
-    public List<LogRange> getLogRanges();
-
-    public static final class LogRange {
-        public TableBucket getTableBucket();
-        public Map<String, String> getPartitionValues();
-        public int getBucketCount();
-        public OptionalLong getLakeSnapshotOffset();
-        public long getStartOffset();
-        public long getStopOffset();
-        public long getEarliestOffset();
-    }
-}
-```
-
-```java
-UnionReadContext context = UnionReadBoundaryPlanner.captureReadContext(admin, tablePath, scope);
-for (UnionReadContext.LogRange range : context.getLogRanges()) {
-    // Build engine-owned scan ranges from the physical bucket and [start, stop).
-}
-```
-
-UnionReadContext exposes table identity, schema, partition/bucket keys, partition scope, lake mapping/format/snapshot and log ranges. Each LogRange exposes the TableBucket, business partition values, bucket count, optional lake seam, earliest and stop offsets. A present zero seam is a lake baseline. These are structured accessors for FE planning, not an opaque byte array or a prescribed engine task layout.
-
-One call captures metadata and rechecks identities without opening lake files. The caller owns Admin. Capture blocks planning threads, not Admin RPC callbacks. Interrupted waits abort capture without cancelling issued RPCs. Request timeouts follow client configuration.
+No new Java capture API is included in #4887. A client-only helper can follow if an engine needs a simpler entry without Flink connector dependencies.
 
 ```text
-Java coordinator: captureReadContext → structured source boundaries
-    ↓ engine planning and task encoding (preserve schema, snapshot, scope and offsets)
+Java coordinator: existing snapshot/offset APIs or connector planning
+    ↓ engine field mapping and task encoding
 Engine: native file tasks / scan ranges / morsels
     ↓ engine distribution and decoding
 Workers: native lake reader + bounded Fluss log reader + PK reconciliation
