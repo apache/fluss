@@ -20,6 +20,7 @@ package org.apache.fluss.server.log.remote;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.fs.FSDataOutputStream;
+import org.apache.fluss.fs.FileStatus;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.TableBucket;
@@ -30,6 +31,8 @@ import org.apache.fluss.remote.RemoteLogFetchInfo;
 import org.apache.fluss.remote.RemoteLogManifest;
 import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
+import org.apache.fluss.rpc.messages.CommitRemoteLogManifestRequest;
+import org.apache.fluss.rpc.messages.CommitRemoteLogManifestResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.FetchLogReadPreference;
 import org.apache.fluss.server.coordinator.TestCoordinatorGateway;
@@ -45,6 +48,7 @@ import org.apache.fluss.server.testutils.ServerTestTags;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
 import org.apache.fluss.utils.FlussPaths;
+import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
@@ -56,6 +60,8 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -65,6 +71,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -230,6 +239,104 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
     }
 
     @ParameterizedTest
+    @CsvSource({
+        "negative-response, 1, false",
+        "lost-then-rejected, 2, false",
+        "lost-responses, 10, false",
+        "lost-then-success, 2, true",
+        "late-commit, 10, false"
+    })
+    void testUncertainCommitPreservesReferencedFiles(
+            String failure, int expectedAttempts, boolean confirmedSuccess) throws Exception {
+        TableBucket bucket = makeTableBucket(false);
+        makeLogTableAsLeader(bucket, false);
+        Replica replica = replicaManager.getReplicaOrException(bucket);
+        LogTablet log = replica.getLogTablet();
+        addMultiSegmentsToLogTablet(log, 5);
+        long localStartOffset = log.localLogStartOffset();
+        AtomicInteger attempts = new AtomicInteger();
+        AtomicBoolean injectFailure = new AtomicBoolean(true);
+        AtomicReference<CommitRemoteLogManifestRequest> pendingCommit = new AtomicReference<>();
+        TestCoordinatorGateway gateway =
+                new TestCoordinatorGateway(zkClient) {
+                    @Override
+                    public CompletableFuture<CommitRemoteLogManifestResponse>
+                            commitRemoteLogManifest(CommitRemoteLogManifestRequest request) {
+                        int attempt = attempts.incrementAndGet();
+                        if (!injectFailure.get()
+                                || (failure.equals("lost-then-success") && attempt > 1)) {
+                            return super.commitRemoteLogManifest(request);
+                        }
+                        if (failure.equals("late-commit")) {
+                            pendingCommit.set(request);
+                        } else if (attempt == 1) {
+                            // Persist the handle before losing or replacing the success response.
+                            assertThat(
+                                            super.commitRemoteLogManifest(request)
+                                                    .join()
+                                                    .isCommitSuccess())
+                                    .isTrue();
+                        }
+                        if (failure.equals("negative-response")
+                                || (failure.equals("lost-then-rejected") && attempt > 1)) {
+                            return CompletableFuture.completedFuture(
+                                    new CommitRemoteLogManifestResponse().setCommitSuccess(false));
+                        }
+                        return FutureUtils.completedExceptionally(new IOException("lost response"));
+                    }
+                };
+        RemoteLogTablet remoteLog = buildRemoteLogTablet(log);
+        LogTieringTask task =
+                new LogTieringTask(
+                        replica,
+                        remoteLog,
+                        remoteLogStorage,
+                        remoteLogManager.getRemoteLogIndexCache(log.getDataDir()),
+                        gateway,
+                        manualClock,
+                        Integer.MAX_VALUE);
+
+        task.run();
+        if (failure.equals("late-commit")) {
+            // A client timeout does not cancel a request queued at the Coordinator.
+            assertThat(
+                            new TestCoordinatorGateway(zkClient)
+                                    .commitRemoteLogManifest(pendingCommit.get())
+                                    .join()
+                                    .isCommitSuccess())
+                    .isTrue();
+        }
+
+        FsPath manifestPath =
+                zkClient.getRemoteLogManifestHandle(bucket).get().getRemoteLogManifestPath();
+        RemoteLogManifest persisted = remoteLogStorage.readRemoteLogManifestSnapshot(manifestPath);
+        assertThat(persisted.getRemoteLogSegmentList()).hasSize(4);
+        for (RemoteLogSegment segment : persisted.getRemoteLogSegmentList()) {
+            FsPath dir = FlussPaths.remoteLogSegmentDir(remoteLogDir(conf), segment);
+            FileStatus[] files = dir.getFileSystem().listStatus(dir);
+            assertThat(files).hasSize(4);
+            for (FileStatus file : files) {
+                try (InputStream in = dir.getFileSystem().open(file.getPath())) {
+                    assertThat(in.read()).isNotEqualTo(-1);
+                }
+            }
+        }
+        assertThat(attempts).hasValue(expectedAttempts);
+        if (confirmedSuccess) {
+            assertThat(remoteLog.allRemoteLogSegments())
+                    .containsExactlyElementsOf(persisted.getRemoteLogSegmentList());
+        } else {
+            assertThat(remoteLog.allRemoteLogSegments()).isEmpty();
+            assertThat(log.localLogStartOffset()).isEqualTo(localStartOffset);
+            // The next scheduled round must still be able to publish progress.
+            injectFailure.set(false);
+            task.run();
+            assertThat(remoteLog.allRemoteLogSegments()).hasSize(4);
+            assertThat(log.localLogStartOffset()).isGreaterThan(localStartOffset);
+        }
+    }
+
+    @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testCommitCopyLogSegmentsToRemoteFailed1(boolean partitionTable) throws Exception {
         // make commit remote log manifest fail by failed to upload remote log manifest
@@ -263,8 +370,11 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         List<RemoteLogSegment> remoteLogSegmentList =
                 remoteLogManager.relevantRemoteLogSegments(tb, 0L);
         assertThat(remoteLogSegmentList).isEmpty();
-        // log storage should clean up the temporary data
-        assertThat(listRemoteLogFiles(tb)).isEmpty();
+        // A negative response cannot prove that the Coordinator did not persist the manifest.
+        assertThat(listRemoteLogFiles(tb)).hasSize(4);
+        testCoordinatorGateway.commitRemoteLogManifestFail.set(false);
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+        assertThat(remoteLogManager.relevantRemoteLogSegments(tb, 0L)).hasSize(4);
     }
 
     @ParameterizedTest
