@@ -17,6 +17,7 @@
 
 package org.apache.fluss.flink.procedure;
 
+import org.apache.fluss.exception.InvalidConsumerGroupIdException;
 import org.apache.fluss.security.acl.FlussPrincipal;
 import org.apache.fluss.security.acl.OperationType;
 import org.apache.fluss.security.acl.PermissionType;
@@ -119,7 +120,12 @@ public abstract class AbstractAclProcedure extends ProcedureBase {
 
         if (resourceStr.regionMatches(
                 true, 0, GROUP_RESOURCE_PREFIX, 0, GROUP_RESOURCE_PREFIX.length())) {
-            return Resource.group(resourceStr.substring(GROUP_RESOURCE_PREFIX.length()));
+            String groupId = resourceStr.substring(GROUP_RESOURCE_PREFIX.length());
+            if (groupId.isEmpty()) {
+                throw new InvalidConsumerGroupIdException(
+                        "Consumer group id must not be null or empty.");
+            }
+            return Resource.group(groupId);
         }
 
         Resource resource;

@@ -14,7 +14,13 @@ Fluss provides a pluggable authorization framework that uses Access Control List
 |--------------------|---------|---------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | authorizer.enabled | Boolean | false         | Specifies whether to enable the authorization feature.                                                                                                                                                                                                                                                         |
 | authorizer.type    | String  | default       | Specifies the type of authorizer to be used for access control. This value corresponds to the identifier of the authorization plugin. The default value is `default`, which indicates the built-in authorizer implementation. Custom authorizers can be implemented by providing a matching plugin identifier. |
+| authorizer.group-acl-bypass.enabled | Boolean | false | Bypasses consumer-group operation checks in the built-in default authorizer, even when Group ACLs exist. Table permissions, group ID validation, and ACL administration remain enforced. Custom authorizers are unaffected. Requires a server restart. |
 
+With authorization enabled, the default authorizer rejects consumer-group operations
+without a matching Group ACL. To allow all users to perform consumer-group operations,
+set `authorizer.group-acl-bypass.enabled: true` on all CoordinatorServers and
+TabletServers and restart them. The option ignores existing Group ACLs for those
+operations. It does not allow users to manage Group ACLs or access unauthorized tables.
 
 ## Core Components of ACLs
 
@@ -40,23 +46,26 @@ There are four main types of resources:
 This hierarchy follows this pattern:
 ```text
 Cluster
- ├── Database
- │   └── Table
- └── Group
+ └── Database
+     └── Table
+
+Group
 ```
 
-Consumer groups are independent of databases and tables. Group permissions can be
-inherited from cluster permissions, but do not grant access to databases or tables.
+Consumer-group permissions are independent of cluster, database, and table permissions.
+Cluster permissions do not grant access to groups. To authorize an operation on all
+groups, grant that operation on the Group resource `*`. Configured superusers retain
+access to all resources.
 Group ACLs can be created before any state exists for that group ID.
 
-Group IDs follow the same naming rules as database and table names: 1 to 200 ASCII
-letters, digits, underscores (`_`), or hyphens (`-`). The prefix `__` is reserved
-for internal names. Dots, slashes, colons, spaces, and non-ASCII characters are not
-allowed.
+Group IDs are opaque, non-empty strings, matching Kafka consumer-group semantics. They
+may contain characters such as dots, slashes, colons, underscores, hyphens, whitespace,
+and non-ASCII characters, and have no group-specific length limit. Only a missing or empty
+group ID is rejected.
 
 ACLs match exact group names. The ACL resource name `*` matches all consumer groups,
-but is not a valid group ID for consumer-group requests. Prefix patterns such as
-`default-*` are rejected.
+including a concrete group named `*`. Prefix patterns such as `default-*` are not
+supported and are treated as literal group names.
 
 ### Operation
 In Fluss, an OperationType defines the type of action a principal (user or role) is attempting to perform on a resource (cluster, database, table, or consumer group).
@@ -124,9 +133,9 @@ Below is a summary of the currently public protocols and their relationship with
 | INIT_WRITER | WRITE | Table | The user is authorized if it has `WRITE` permission on one of the requested tables. |
 | CREATE_PARTITION | WRITE | Table | |
 | DROP_PARTITION | WRITE | Table | |
-| CREATE_ACLS | ALL | Target resource | Requires `ALL` on the resource whose ACLs are being created. For table ACLs, the minimum authorization granularity is the database. |
-| DROP_ACLS | ALL | Target resource | Requires `ALL` on each matched resource. For table ACLs, the minimum authorization granularity is the database. |
-| LIST_ACLS | DESCRIBE | Target resource | Only ACLs on resources the user can `DESCRIBE` are returned. |
+| CREATE_ACLS | ALTER for Group ACLs; ALL otherwise | Cluster for Group ACLs; target resource otherwise | Group ACLs require Cluster `ALTER`. For table ACLs, `ALL` is checked on the database. |
+| DROP_ACLS | ALTER for Group ACLs; ALL otherwise | Cluster for Group ACLs; target resource otherwise | Group ACLs require Cluster `ALTER`. For table ACLs, `ALL` is checked on the database. All applicable checks precede any changes. |
+| LIST_ACLS | DESCRIBE | Cluster for Group ACLs; target resource otherwise | Group ACLs require Cluster `DESCRIBE`. Other ACLs are returned only when the user can `DESCRIBE` their resource. |
 | DESCRIBE_CLUSTER_CONFIGS | DESCRIBE | Cluster | |
 | ALTER_CLUSTER_CONFIGS | ALTER | Cluster | |
 | ADD_SERVER_TAG | ALTER | Cluster | |
@@ -137,7 +146,8 @@ Below is a summary of the currently public protocols and their relationship with
 | LIST_REBALANCE_PROGRESS | DESCRIBE | Cluster | |
 | CANCEL_REBALANCE | WRITE | Cluster | |
 | GET_CLUSTER_HEALTH | DESCRIBE | Cluster | |
-| FIND_CONSUMER_GROUP_OWNER | DESCRIBE | Group | `READ` and `WRITE` on the group imply `DESCRIBE`. Authorization is checked before initializing the consumer-offset system table. |
+| FIND_CONSUMER_GROUP_OWNER | DESCRIBE | Group | `READ` and `WRITE` on the group imply `DESCRIBE`. Authorization is checked before initializing the consumer-offset system table. The default authorizer skips this check when `authorizer.group-acl-bypass.enabled` is `true`; group ID validation still applies. |
+| COMMIT_CONSUMER_OFFSETS | READ | Group and source Tables | Requires `READ` on the consumer group and `READ` on every source table. Group authorization is checked before owner resolution and source-table authorization. The default authorizer skips the Group check when `authorizer.group-acl-bypass.enabled` is `true`; source-table checks still apply. |
 | REGISTER_PRODUCER_OFFSETS | WRITE | Table | Requires `WRITE` on all tables in the request. |
 | GET_PRODUCER_OFFSETS | READ | Table | Offsets for tables without `READ` permission are filtered out. |
 | GET_CONSUMER_OFFSETS | DESCRIBE | Table | Requires `DESCRIBE` on every source table in the request. `allOffsets` requests do not perform table-level ACL checks yet. |
@@ -149,6 +159,14 @@ Below is a summary of the currently public protocols and their relationship with
 
 ## ACL Operation
 Fluss provides a FLINK SQL interface to manage Access Control Lists (ACLs) using the Flink CALL statement. This allows administrators and users to dynamically control access permissions for principals (users or roles) on clusters, databases, tables, and consumer groups.
+
+The default authorizer requires `ALTER` on Cluster to add or drop Group ACLs, and
+`DESCRIBE` on Cluster to list Group ACLs. `ALL` on a Group does not grant these
+administrative permissions. These checks apply even when Group operation checks are
+bypassed. Explicit Group filters require the corresponding Cluster permission even
+when no Group ACL matches. An `ANY` listing preserves the usual visibility of other
+resource types and omits Group ACLs when Cluster `DESCRIBE` is missing. Mixed ACL
+mutations check every applicable permission before changing any ACL.
 
 ### Add ACL
 The general syntax is:

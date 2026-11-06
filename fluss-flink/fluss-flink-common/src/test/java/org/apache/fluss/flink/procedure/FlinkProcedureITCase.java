@@ -304,7 +304,15 @@ public abstract class FlinkProcedureITCase {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"default-consumer", "Default_consumer-1", "*", "fluss-cluster"})
+    @ValueSource(
+            strings = {
+                "default-consumer",
+                "Default_consumer-1",
+                "default.consumer",
+                "消费组",
+                "*",
+                "fluss-cluster"
+            })
     void testConsumerGroupAcls(String groupId) throws Exception {
         String sqlResource = "group." + groupId;
         tEnv.executeSql(
@@ -347,15 +355,7 @@ public abstract class FlinkProcedureITCase {
 
     @Test
     void testInvalidConsumerGroupAclNames() {
-        for (String groupId :
-                Arrays.asList(
-                        "",
-                        "default.consumer",
-                        "default/consumer",
-                        "default:consumer",
-                        "消费组",
-                        "__internal",
-                        "default-*")) {
+        for (String groupId : Collections.singletonList("")) {
             for (String procedure : Arrays.asList("add_acl", "drop_acl", "list_acl")) {
                 String sql =
                         String.format(

@@ -25,6 +25,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.exception.ApiException;
 import org.apache.fluss.exception.ConsumerGroupOwnerLoadingException;
 import org.apache.fluss.exception.ConsumerGroupOwnerNotAvailableException;
+import org.apache.fluss.exception.InvalidConsumerGroupIdException;
 import org.apache.fluss.exception.NotConsumerGroupOwnerException;
 import org.apache.fluss.memory.UnmanagedPagedOutputView;
 import org.apache.fluss.metadata.DatabaseDescriptor;
@@ -85,7 +86,6 @@ import static org.apache.fluss.server.metadata.TableMetadata.DELETED_TABLE_PATH;
 import static org.apache.fluss.server.tablet.consumer.group.ConsumerOffsetSchema.OFFSET_COMMIT_RECORD_TYPE;
 import static org.apache.fluss.server.tablet.consumer.group.ConsumerOffsetTableConfig.OFFSET_COMMIT_REQUIRED_ACKS;
 import static org.apache.fluss.server.zk.data.LeaderAndIsr.NO_LEADER;
-import static org.apache.fluss.utils.ConsumerGroupUtils.validateGroupId;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** Discovers consumer group owners and reads and commits their offsets on local leaders. */
@@ -189,7 +189,10 @@ public final class ConsumerGroupManager {
     }
 
     private static void checkGroupId(String groupId) {
-        validateGroupId(groupId);
+        if (groupId == null || groupId.isEmpty()) {
+            throw new InvalidConsumerGroupIdException(
+                    "Consumer group id must not be null or empty.");
+        }
     }
 
     /**

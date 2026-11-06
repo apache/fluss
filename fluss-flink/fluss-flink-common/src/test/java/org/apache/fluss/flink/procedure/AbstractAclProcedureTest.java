@@ -43,6 +43,12 @@ class AbstractAclProcedureTest {
         "cluster.group.default, TABLE, group.default",
         "group.default-consumer, GROUP, default-consumer",
         "GROUP.Default_consumer-1, GROUP, Default_consumer-1",
+        "group.default.consumer, GROUP, default.consumer",
+        "group.default/consumer, GROUP, default/consumer",
+        "group.default:consumer, GROUP, default:consumer",
+        "group.消费组, GROUP, 消费组",
+        "group.default-*, GROUP, default-*",
+        "group.__internal, GROUP, __internal",
         "group.*, GROUP, *",
         "group.fluss-cluster, GROUP, fluss-cluster"
     })
@@ -62,17 +68,7 @@ class AbstractAclProcedureTest {
     }
 
     @ParameterizedTest
-    @ValueSource(
-            strings = {
-                "group.",
-                "GROUP.",
-                "group.default.consumer",
-                "group.default/consumer",
-                "group.default:consumer",
-                "group.消费组",
-                "group.default-*",
-                "group.__internal"
-            })
+    @ValueSource(strings = {"group.", "GROUP."})
     void testInvalidGroupId(String input) {
         TestingAclProcedure procedure = new TestingAclProcedure();
         assertThatThrownBy(

@@ -17,17 +17,12 @@
 
 package org.apache.fluss.security.acl;
 
-import org.apache.fluss.exception.InvalidConsumerGroupIdException;
-
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
-import org.junit.jupiter.params.provider.EmptySource;
-import org.junit.jupiter.params.provider.NullAndEmptySource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for ACL resource identity, filtering, and wire compatibility. */
 class ResourceTest {
@@ -53,42 +48,19 @@ class ResourceTest {
     }
 
     @ParameterizedTest
-    @NullAndEmptySource
     @ValueSource(
             strings = {
+                "default.consumer",
                 "default/consumer",
                 "default:consumer",
-                "default.consumer",
                 "消费组",
                 "default-*",
-                "__internal",
-                " "
+                "__internal"
             })
-    void testInvalidGroupResourceName(String name) {
-        assertThatThrownBy(() -> new Resource(ResourceType.GROUP, name))
-                .isInstanceOf(InvalidConsumerGroupIdException.class);
-        assertThatThrownBy(() -> Resource.group(name))
-                .isInstanceOf(InvalidConsumerGroupIdException.class);
-        assertThatThrownBy(() -> Resource.of("group", name))
-                .isInstanceOf(InvalidConsumerGroupIdException.class);
-    }
-
-    @ParameterizedTest
-    @EmptySource
-    @ValueSource(
-            strings = {
-                "default/consumer",
-                "default:consumer",
-                "default.consumer",
-                "消费组",
-                "default-*",
-                "__internal",
-                " "
-            })
-    void testGroupFilterWithInvalidNameDoesNotMatch(String name) {
-        ResourceFilter filter = new ResourceFilter(ResourceType.GROUP, name);
-        assertThat(filter.matches(Resource.group("default-consumer"))).isFalse();
-        assertThat(filter.matches(Resource.group("*"))).isFalse();
+    void testKafkaCompatibleGroupResourceName(String name) {
+        Resource resource = Resource.group(name);
+        assertThat(resource).isEqualTo(new Resource(ResourceType.GROUP, name));
+        assertThat(Resource.of("group", name)).isEqualTo(resource);
     }
 
     @Test
