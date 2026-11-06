@@ -30,7 +30,10 @@ import org.apache.fluss.lake.source.LakeSplit;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.predicate.Predicate;
+import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.ExceptionUtils;
+import org.apache.fluss.utils.PartitionUtils;
 
 import javax.annotation.Nullable;
 
@@ -47,6 +50,7 @@ import java.util.stream.IntStream;
 import static org.apache.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFSET;
 import static org.apache.fluss.flink.source.split.LogSplit.NO_STOPPING_OFFSET;
 import static org.apache.fluss.metadata.ResolvedPartitionSpec.PARTITION_SPEC_SEPARATOR;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** A generator for lake splits. */
 public class LakeSplitGenerator {
@@ -58,6 +62,13 @@ public class LakeSplitGenerator {
     private final int bucketCount;
     private final Supplier<Set<PartitionInfo>> listPartitionSupplier;
 
+    /**
+     * The partition filter on the partition row type, or null if no filter. The partitions from
+     * {@link #listPartitionSupplier} are already filtered, but the lake splits are not, so the
+     * filter is also applied to the lake partitions.
+     */
+    @Nullable private final Predicate partitionFilter;
+
     private final LakeSource<LakeSplit> lakeSource;
 
     public LakeSplitGenerator(
@@ -67,7 +78,8 @@ public class LakeSplitGenerator {
             OffsetsInitializer.BucketOffsetsRetriever bucketOffsetsRetriever,
             OffsetsInitializer stoppingOffsetInitializer,
             int bucketCount,
-            Supplier<Set<PartitionInfo>> listPartitionSupplier) {
+            Supplier<Set<PartitionInfo>> listPartitionSupplier,
+            @Nullable Predicate partitionFilter) {
         this.tableInfo = tableInfo;
         this.flussAdmin = flussAdmin;
         this.lakeSource = lakeSource;
@@ -75,6 +87,7 @@ public class LakeSplitGenerator {
         this.stoppingOffsetInitializer = stoppingOffsetInitializer;
         this.bucketCount = bucketCount;
         this.listPartitionSupplier = listPartitionSupplier;
+        this.partitionFilter = partitionFilter;
     }
 
     /**
@@ -148,12 +161,20 @@ public class LakeSplitGenerator {
                                         (existing, replacement) -> existing,
                                         LinkedHashMap::new));
         long lakeSplitPartitionId = -1L;
+        RowType partitionRowType =
+                partitionFilter == null ? null : PartitionUtils.partitionRowType(tableInfo);
 
         // iterate lake splits
         for (Map.Entry<String, Map<Integer, List<LakeSplit>>> lakeSplitEntry :
                 lakeSplits.entrySet()) {
             String partitionName = lakeSplitEntry.getKey();
             Map<Integer, List<LakeSplit>> lakeSplitsOfPartition = lakeSplitEntry.getValue();
+            if (partitionRowType != null
+                    && !matchesPartitionFilter(lakeSplitsOfPartition, partitionRowType)) {
+                // the partition is pruned by the partition filter. It must be skipped here,
+                // otherwise it would be read as a partition that only exists in lake.
+                continue;
+            }
             PartitionInfo flussPartition = flussPartitionByName.remove(partitionName);
             if (flussPartition != null) {
                 // mean the partition also exist in fluss partition
@@ -214,6 +235,14 @@ public class LakeSplitGenerator {
                             bucketEndOffset));
         }
         return splits;
+    }
+
+    private boolean matchesPartitionFilter(
+            Map<Integer, List<LakeSplit>> lakeSplitsOfPartition, RowType partitionRowType) {
+        // all lake splits of a partition share the same partition values
+        LakeSplit lakeSplit = lakeSplitsOfPartition.values().iterator().next().get(0);
+        return checkNotNull(partitionFilter)
+                .test(PartitionUtils.toPartitionRow(lakeSplit.partition(), partitionRowType));
     }
 
     private List<SourceSplitBase> generateSplit(
