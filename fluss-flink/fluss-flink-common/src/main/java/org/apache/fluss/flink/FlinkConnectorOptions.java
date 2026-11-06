@@ -229,6 +229,14 @@ public class FlinkConnectorOptions {
                                     + "as a small value would cause frequent requests and increase server load. In the future, "
                                     + "once list partitions is optimized, the default value of this parameter can be reduced.");
 
+    public static final ConfigOption<Boolean> SCAN_FILTER_UNCHANGED_ROW_ENABLED =
+            ConfigOptions.key("scan.filter-unchanged-row.enabled")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Skip complete update pairs with equal projected values when scanning a subset of "
+                                    + "a primary-key table's columns. Skipped updates do not advance watermarks.");
+
     public static final ConfigOption<Integer> SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE =
             ConfigOptions.key("scan.split.assignment.batch-size")
                     .intType()

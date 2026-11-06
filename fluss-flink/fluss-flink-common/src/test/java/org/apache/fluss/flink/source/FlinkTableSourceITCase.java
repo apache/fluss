@@ -28,8 +28,10 @@ import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.flink.source.lookup.FlussLookupInputPartitioner;
 import org.apache.fluss.flink.source.lookup.LookupNormalizer;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.row.GenericMap;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.testutils.common.MultiVersionTest;
@@ -336,6 +338,94 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
         int expectRecords = expected.size();
         List<String> actual = collectRowsWithTimeout(rowIter, expectRecords);
         assertThat(actual).containsExactlyElementsOf(expected);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"ARROW", "COMPACTED"})
+    void testSkipUpdatesToNonProjectedColumns(String logFormat) throws Exception {
+        String tableName = "projected_updates";
+        tEnv.executeSql(
+                "CREATE TABLE "
+                        + tableName
+                        + " (a INT PRIMARY KEY NOT ENFORCED, b MAP<BYTES, INT>, c INT) WITH ("
+                        + "'bucket.num' = '1', 'table.log.format' = '"
+                        + logFormat
+                        + "')");
+        TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
+        GenericMap oneEntry = GenericMap.of(new byte[] {1}, 10);
+        GenericMap twoEntries = GenericMap.of(new byte[] {1}, 10, new byte[] {2}, 20);
+        writeRows(
+                conn,
+                tablePath,
+                Arrays.asList(
+                        row(1, oneEntry, 10),
+                        row(1, oneEntry, 20),
+                        row(1, null, 30),
+                        row(1, null, 40),
+                        row(1, twoEntries, 50),
+                        row(1, twoEntries, 60)),
+                false);
+        try (Table table = conn.getTable(tablePath)) {
+            UpsertWriter writer = table.newUpsert().createWriter();
+            writer.delete(row(1, twoEntries, 60));
+            writer.flush();
+        }
+        try (CloseableIterator<Row> rows =
+                tEnv.executeSql(
+                                "SELECT CARDINALITY(b), a FROM "
+                                        + tableName
+                                        + " /*+ OPTIONS('scan.startup.mode' = 'earliest', "
+                                        + "'scan.bounded.mode' = 'latest-offset', "
+                                        + "'scan.filter-unchanged-row.enabled' = 'true', "
+                                        + "'client.scanner.log.max-poll-records' = '1') */")
+                        .collect()) {
+            assertThat(collectBatchRows(rows))
+                    .containsExactly(
+                            "+I[1, 1]",
+                            "-U[1, 1]",
+                            "+U[null, 1]",
+                            "-U[null, 1]",
+                            "+U[2, 1]",
+                            "-D[2, 1]");
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testProjectedUpdatesWithPushedDownWatermark(boolean skipUnchangedUpdates)
+            throws Exception {
+        tEnv.executeSql(
+                "CREATE TABLE watermark_updates (id INT PRIMARY KEY NOT ENFORCED, ts TIMESTAMP(3), "
+                        + "v INT, WATERMARK FOR ts AS ts) WITH ('bucket.num' = '1')");
+        LocalDateTime ts = LocalDateTime.of(2025, 1, 1, 12, 0);
+        TimestampNtz timestamp = TimestampNtz.fromLocalDateTime(ts);
+        writeRows(
+                conn,
+                TablePath.of(DEFAULT_DB, "watermark_updates"),
+                Arrays.asList(
+                        row(1, timestamp, 10),
+                        row(1, timestamp, 20),
+                        row(1, TimestampNtz.fromLocalDateTime(ts.plusMinutes(1)), 20)),
+                false);
+        String query =
+                "SELECT id, ts FROM watermark_updates /*+ OPTIONS('scan.startup.mode' = 'earliest', "
+                        + "'scan.bounded.mode' = 'latest-offset'"
+                        + (skipUnchangedUpdates
+                                ? ", 'scan.filter-unchanged-row.enabled' = 'true'"
+                                : "")
+                        + ") */";
+        assertThat(tEnv.explainSql(query)).contains("watermark=[");
+        List<String> expected = new ArrayList<>();
+        expected.add("+I[1, " + ts + "]");
+        if (!skipUnchangedUpdates) {
+            expected.add("-U[1, " + ts + "]");
+            expected.add("+U[1, " + ts + "]");
+        }
+        expected.add("-U[1, " + ts + "]");
+        expected.add("+U[1, " + ts.plusMinutes(1) + "]");
+        try (CloseableIterator<Row> rows = tEnv.executeSql(query).collect()) {
+            assertThat(collectBatchRows(rows)).containsExactlyElementsOf(expected);
+        }
     }
 
     @Test
