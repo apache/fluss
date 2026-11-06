@@ -58,8 +58,22 @@ Connections use Fluss's default plaintext protocol unless
 broken transport is left to the native client, which reconnects the affected
 server on its own.
 `connection.identity-mode: user` is refused at startup until Fluss supports
-act-as. Lookup and prefix-lookup APIs, HTTP caller authentication, and user
-identity propagation remain follow-up work.
+act-as. Lookup and prefix-lookup APIs and user identity propagation remain
+follow-up work.
+
+HTTP caller authentication supports `trust` (anonymous or an optional Basic
+username), `password` (Basic with plaintext/bcrypt records), `token` (static
+Bearer tokens or SHA-256 digests), and `trusted-header` (a proxy identity checked
+against the real peer IP allowlist). See `conf/gateway.yaml` and the Gateway
+security documentation for configuration and deployment requirements. Native
+TLS termination is tracked separately in #4470.
+
+The `auth` module exposes a protocol-neutral `Authenticator` trait that resolves
+credentials to the existing `Principal`. The REST adapter owns HTTP credential
+extraction, challenges, proxy source policy, and OpenAPI declarations. Built-in
+authenticators are selected explicitly at startup; future frontends can use the
+same trait with their own credential exchange. This is an internal Rust API,
+not a dynamic plugin ABI.
 
 ## Distribution and container
 
