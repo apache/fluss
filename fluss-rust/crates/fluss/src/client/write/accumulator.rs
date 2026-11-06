@@ -25,13 +25,16 @@ use crate::cluster::{BucketLocation, Cluster, ServerNode};
 use crate::compression::ArrowCompressionRatioEstimator;
 use crate::config::Config;
 use crate::error::{Error, FlussError, Result};
-use crate::metadata::{PhysicalTablePath, TableBucket, TableInfo, TableOrPartition, TablePath};
+use crate::metadata::{
+    PhysicalTablePath, ResolvedPartitionSpec, TableBucket, TableInfo, TableOrPartition, TablePath,
+};
 use crate::record::{ArrowBatchConfig, NO_BATCH_SEQUENCE, NO_WRITER_ID};
 use crate::util::current_time_ms;
 use crate::{BucketId, PartitionId, TableId};
 use dashmap::DashMap;
 use parking_lot::{Condvar, Mutex, RwLock};
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::ops::DerefMut;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicI64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
@@ -456,6 +459,13 @@ impl RecordAccumulator {
                 &self.config,
             ));
         }
+        // A value containing the separator would name, and create, another partition.
+        if let Some(partition_name) = physical_table_path.get_partition_name() {
+            ResolvedPartitionSpec::try_from_partition_name(
+                Arc::clone(table_info.get_partition_keys()),
+                partition_name,
+            )?;
+        }
         let partition_id = cluster.get_partition_id(physical_table_path);
         let routing = match partition_id
             .and_then(|id| cluster.bucket_count(TableOrPartition::Partition(id)))
@@ -651,18 +661,27 @@ impl RecordAccumulator {
                 context.partition_id = *partition_id;
             }
         }
+        // Nothing is queued, e.g. after its batches failed, so there is nothing to refresh for.
+        let has_queued_batches = |bucket_batches: &BucketBatches| {
+            bucket_batches
+                .iter()
+                .any(|(_, batch)| !batch.lock().is_empty())
+        };
         if is_partitioned_table && partition_id.is_none() {
+            if !has_queued_batches(&entry.bucket_batches) {
+                return Ok(next_delay);
+            }
             log::debug!(
                 "Partition does not exist for {}, bucket will not be set to ready",
                 physical_table_path.as_ref()
             );
 
-            // TODO: we shouldn't add unready partitions to unknownLeaderTables,
-            // because it cases PartitionNotExistException later
+            // The sender's refresh finds the partition, creates it or fails its batches.
             unknown_leader_tables.insert(Arc::clone(physical_table_path));
             return Ok(next_delay);
         }
 
+        // Resolved even when nothing is queued, so later appends route with the right count.
         if !entry.routing.is_resolved() {
             let resolved = cluster
                 .get_table_id(physical_table_path.get_table_path())
@@ -672,7 +691,9 @@ impl RecordAccumulator {
                         .map(|bucket_count| (table_id, bucket_count))
                 });
             let Some((table_id, bucket_count)) = resolved else {
-                unknown_leader_tables.insert(Arc::clone(physical_table_path));
+                if has_queued_batches(&entry.bucket_batches) {
+                    unknown_leader_tables.insert(Arc::clone(physical_table_path));
+                }
                 return Ok(next_delay);
             };
             self.resolve_routing(physical_table_path, &entry.routing, bucket_count, table_id);
@@ -1019,10 +1040,16 @@ impl RecordAccumulator {
             if let Some(deque) = deque {
                 let mut maybe_batch = None;
                 let mut stale_batches = Vec::new();
+                let mut dropped_partition_batches = Vec::new();
                 {
                     let mut batch_lock = deque.lock();
-                    let head_table_id = batch_lock.front().map(|batch| batch.table_id());
-                    if let Some(head_table_id) = head_table_id {
+                    let head = batch_lock.front().map(|batch| {
+                        (
+                            batch.table_id(),
+                            Self::sequence_partition_order(batch, &table_bucket),
+                        )
+                    });
+                    if let Some((head_table_id, head_partition_order)) = head {
                         if head_table_id < table_bucket.table_id() {
                             // Table ids only ever grow, so a lower one means these belong to
                             // a dropped table. Take every consecutive stale head batch in one
@@ -1041,6 +1068,21 @@ impl RecordAccumulator {
                                 break;
                             }
                             continue;
+                        } else if head_partition_order.is_gt() {
+                            // This snapshot predates the partition a retried batch was sequenced
+                            // in, so leave the batch for a cycle with fresher metadata.
+                            if current_index == start {
+                                break;
+                            }
+                            continue;
+                        } else if head_partition_order.is_lt() {
+                            // A re-created partition starts its sequences over, so resending these
+                            // could be deduplicated against its new batches and silently lost.
+                            while batch_lock.front().is_some_and(|batch| {
+                                Self::sequence_partition_order(batch, &table_bucket).is_lt()
+                            }) {
+                                dropped_partition_batches.push(batch_lock.pop_front().unwrap());
+                            }
                         } else {
                             let first_batch = batch_lock.front().unwrap();
 
@@ -1070,6 +1112,11 @@ impl RecordAccumulator {
 
                 // Outside the deque lock, so waking a writer never runs under it.
                 self.fail_stale_batches(table_path, &table_bucket, stale_batches);
+                self.fail_dropped_partition_batches(
+                    table_path,
+                    &table_bucket,
+                    dropped_partition_batches,
+                );
 
                 if let Some(ref mut batch) = maybe_batch {
                     // Assign writer state to fresh batches (matching Java's drain loop)
@@ -1085,6 +1132,7 @@ impl RecordAccumulator {
                             .idempotence_manager
                             .next_sequence_and_increment(&table_bucket);
                         batch.set_writer_state(writer_id, seq);
+                        batch.set_sequence_partition_id(table_bucket.partition_id());
                         self.idempotence_manager.add_in_flight_batch(
                             &table_bucket,
                             seq,
@@ -1320,19 +1368,114 @@ impl RecordAccumulator {
         table_id: TableId,
         error: broadcast::Error,
     ) {
+        self.fail_queued_batches(
+            self.write_batches
+                .iter_mut()
+                .filter(|entry| entry.key().get_table_path() == table_path),
+            |batch| batch.table_id() == table_id,
+            error,
+        );
+    }
+
+    /// Fails the queued batches of a partition that does not exist, or only those of table
+    /// `table_id` when given. A batch still in flight is completed by its response.
+    pub fn fail_queued_batches_for_partition(
+        &self,
+        physical_table_path: &PhysicalTablePath,
+        table_id: Option<TableId>,
+        error: broadcast::Error,
+    ) {
+        self.fail_queued_batches(
+            self.write_batches.get_mut(physical_table_path),
+            |batch| table_id.is_none_or(|table_id| batch.table_id() == table_id),
+            error,
+        );
+    }
+
+    /// Fails the queued batches already sent to dropped partition `partition_id`, or to an older
+    /// one under the same path, as their sequences can't be used in a new partition. Without a
+    /// partition id, all batches already sent fail.
+    pub fn fail_sequenced_batches_for_partition(
+        &self,
+        physical_table_path: &PhysicalTablePath,
+        partition_id: Option<PartitionId>,
+        error: broadcast::Error,
+    ) {
+        let failed = self.fail_queued_batches(
+            self.write_batches.get_mut(physical_table_path),
+            |batch| {
+                batch.has_batch_sequence()
+                    && partition_id.is_none_or(|partition_id| {
+                        batch.sequence_partition_id() <= Some(partition_id)
+                    })
+            },
+            error,
+        );
+        if failed > 0 {
+            log::warn!(
+                "Partition {physical_table_path} with partition_id={partition_id:?} was dropped. Failing {failed} retried batches sent to it or an older partition."
+            );
+        }
+    }
+
+    /// Fails the queued batches of `physical_table_path` appended to a table that was dropped
+    /// before table `table_id` was created under the same path. Table ids only ever grow.
+    pub fn fail_dropped_table_batches_for_partition(
+        &self,
+        physical_table_path: &PhysicalTablePath,
+        table_id: TableId,
+    ) {
+        let table_path = physical_table_path.get_table_path();
+        let failed = self.fail_queued_batches(
+            self.write_batches.get_mut(physical_table_path),
+            |batch| batch.table_id() < table_id,
+            broadcast::Error::WriteFailed {
+                code: FlussError::TableNotExist.code(),
+                message: format!(
+                    "Table {table_path} now resolves to table_id={table_id}, so this write to a dropped table instance was not sent."
+                ),
+            },
+        );
+        if failed > 0 {
+            log::warn!(
+                "Table {table_path} was dropped and re-created with table_id={table_id}. Failing {failed} pending batches of {physical_table_path} for the old table instance."
+            );
+        }
+    }
+
+    /// Whether any batch of `physical_table_path`, or of table `table_id` when given, is queued.
+    pub fn has_queued_batches_for_partition(
+        &self,
+        physical_table_path: &PhysicalTablePath,
+        table_id: Option<TableId>,
+    ) -> bool {
+        self.write_batches
+            .get(physical_table_path)
+            .is_some_and(|entry| {
+                entry.batches.values().any(|deque| {
+                    deque
+                        .lock()
+                        .iter()
+                        .any(|batch| table_id.is_none_or(|table_id| batch.table_id() == table_id))
+                })
+            })
+    }
+
+    fn fail_queued_batches(
+        &self,
+        entries: impl IntoIterator<Item = impl DerefMut<Target = BucketAndWriteBatches>>,
+        matches_batch: impl Fn(&WriteBatch) -> bool,
+        error: broadcast::Error,
+    ) -> usize {
         let mut completed_batch_ids = Vec::new();
-        for mut entry in self
-            .write_batches
-            .iter_mut()
-            .filter(|entry| entry.key().get_table_path() == table_path)
-        {
-            for deque in entry.value_mut().batches.values_mut() {
+        for mut entry in entries {
+            for deque in entry.batches.values_mut() {
                 let stale: Vec<WriteBatch> = {
                     let mut dq = deque.lock();
                     let mut kept = VecDeque::with_capacity(dq.len());
                     let mut stale = Vec::new();
                     while let Some(batch) = dq.pop_front() {
-                        if batch.table_id() == table_id {
+                        if matches_batch(&batch) {
                             stale.push(batch);
                         } else {
                             kept.push_back(batch);
@@ -1352,10 +1495,12 @@ impl RecordAccumulator {
         }
 
         // Drop the completed batches' handles and memory permits.
+        let failed = completed_batch_ids.len();
         let mut incomplete = self.incomplete_batches.write();
         for batch_id in completed_batch_ids {
             incomplete.remove(&batch_id);
         }
+        failed
     }
 
     /// Fails batches whose table instance no longer matches the bucket they would
@@ -1385,7 +1530,58 @@ impl RecordAccumulator {
                 stale_table_id
             ),
         };
-        for batch in stale_batches {
+        self.fail_dequeued_batches(stale_batches, error);
+    }
+
+    /// Orders the partition a retried batch was sequenced in against the one `table_bucket`
+    /// resolves to now. Partition ids only ever grow, so `Less` means the batch's partition was
+    /// dropped and `Greater` means `table_bucket` comes from older metadata than the batch.
+    fn sequence_partition_order(
+        batch: &WriteBatch,
+        table_bucket: &TableBucket,
+    ) -> std::cmp::Ordering {
+        if !batch.has_batch_sequence() {
+            return std::cmp::Ordering::Equal;
+        }
+        batch
+            .sequence_partition_id()
+            .cmp(&table_bucket.partition_id())
+    }
+
+    /// Fails retried batches whose sequence was assigned in a partition since dropped and
+    /// re-created under the same path. Call outside the deque lock.
+    fn fail_dropped_partition_batches(
+        &self,
+        table_path: &Arc<PhysicalTablePath>,
+        table_bucket: &TableBucket,
+        batches: Vec<WriteBatch>,
+    ) {
+        let Some(dropped_partition_id) = batches.first().map(|batch| batch.sequence_partition_id())
+        else {
+            return;
+        };
+        log::warn!(
+            "Partition {} was dropped and re-created. Old id: {:?}, new id: {:?}. Failing {} retried batches sent to the old partition.",
+            table_path.as_ref(),
+            dropped_partition_id,
+            table_bucket.partition_id(),
+            batches.len()
+        );
+        let error = broadcast::Error::WriteFailed {
+            code: FlussError::PartitionNotExists.code(),
+            message: format!(
+                "Partition {} now resolves to partition_id={:?}, so this retried write to partition_id={:?} was not sent again.",
+                table_path.as_ref(),
+                table_bucket.partition_id(),
+                dropped_partition_id
+            ),
+        };
+        self.fail_dequeued_batches(batches, error);
+    }
+
+    /// Fails batches that `drain` took out of their queue.
+    fn fail_dequeued_batches(&self, batches: Vec<WriteBatch>, error: broadcast::Error) {
+        for batch in batches {
             if batch.complete(Err(error.clone())) {
                 self.release_idempotence_slot(&batch);
                 self.incomplete_batches.write().remove(&batch.batch_id());
@@ -3370,6 +3566,49 @@ mod tests {
     }
 
     #[test]
+    fn failed_writes_of_a_recreated_table_leave_no_partition_to_refresh() -> Result<()> {
+        let accumulator = RecordAccumulator::new(Config::default(), disabled_idempotence());
+        let (dropped_info, partition_path) = partitioned_table(4, false);
+        let dropped = partitioned_cluster(&dropped_info, &partition_path, Some(4));
+        accumulator.routing_bucket_count(&partition_path, &dropped_info, &dropped)?;
+
+        let mut recreated_info = dropped_info.as_ref().clone();
+        recreated_info.table_id = 2;
+        let recreated_info = Arc::new(recreated_info);
+        let recreated = partitioned_cluster(&recreated_info, &partition_path, None);
+        let row = partition_row();
+        let record = WriteRecord::for_append(
+            Arc::clone(&recreated_info),
+            Arc::clone(&partition_path),
+            1,
+            &row,
+        );
+        accumulator.append(&record, 0, &recreated, false)?;
+        assert!(
+            accumulator
+                .ready(&recreated)?
+                .unknown_leader_tables
+                .contains(&partition_path)
+        );
+
+        accumulator.fail_queued_batches_for_partition(
+            &partition_path,
+            Some(recreated_info.table_id),
+            broadcast::Error::WriteFailed {
+                code: FlussError::PartitionSpecInvalidException.code(),
+                message: "creating the partition failed".to_string(),
+            },
+        );
+        assert!(
+            !accumulator
+                .ready(&recreated)?
+                .unknown_leader_tables
+                .contains(&partition_path)
+        );
+        Ok(())
+    }
+
+    #[test]
     fn appends_racing_resolution_never_drain_with_the_provisional_count() -> Result<()> {
         const RECORDS: usize = 50;
         for _ in 0..300 {
@@ -3540,6 +3779,123 @@ mod tests {
             accumulator.routing_bucket_count(&physical_table_path, &table_info, &cluster)?,
             3
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn drain_fails_a_retried_batch_only_once_its_partition_is_re_created() -> Result<()> {
+        let idempotence = enabled_idempotence();
+        idempotence.set_writer_id(42);
+        let accumulator = RecordAccumulator::new(Config::default(), Arc::clone(&idempotence));
+        let (table_info, partition_path) = partitioned_table(1, false);
+        let row = partition_row();
+        let record = WriteRecord::for_append(
+            Arc::clone(&table_info),
+            Arc::clone(&partition_path),
+            1,
+            &row,
+        );
+
+        let sequenced = partitioned_cluster_with_id(&table_info, &partition_path, 11, Some(1));
+        let retried_handle = accumulator
+            .append(&record, 0, &sequenced, false)?
+            .result_handle
+            .expect("handle");
+        let nodes = HashSet::from([sequenced.get_tablet_server(1).expect("server").clone()]);
+        let mut sent = accumulator.drain(Arc::clone(&sequenced), &nodes, i32::MAX)?;
+        accumulator.re_enqueue(sent.remove(&1).expect("drained").pop().expect("batch"));
+
+        let stale = partitioned_cluster_with_id(&table_info, &partition_path, 10, Some(1));
+        accumulator.ready(&stale)?;
+        assert!(accumulator.drain(stale, &nodes, i32::MAX)?.is_empty());
+        assert!(retried_handle.wait().now_or_never().is_none());
+
+        let re_created = partitioned_cluster_with_id(&table_info, &partition_path, 12, Some(1));
+        accumulator.append(&record, 0, &re_created, false)?;
+        accumulator.ready(&re_created)?;
+        assert!(
+            accumulator
+                .drain(Arc::clone(&re_created), &nodes, i32::MAX)?
+                .is_empty()
+        );
+        let result = tokio::time::timeout(Duration::from_secs(10), retried_handle.wait())
+            .await
+            .expect("the retried write must be failed")?;
+        assert!(matches!(
+            result,
+            Err(broadcast::Error::WriteFailed { code, .. })
+                if code == FlussError::PartitionNotExists.code()
+        ));
+
+        let mut drained = accumulator.drain(re_created, &nodes, i32::MAX)?;
+        let batch = drained.remove(&1).expect("drained").pop().expect("batch");
+        assert_eq!(batch.table_bucket.partition_id(), Some(12));
+        assert_eq!(batch.write_batch.batch_sequence(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn a_partition_value_containing_the_separator_is_rejected() {
+        let accumulator = RecordAccumulator::new(Config::default(), disabled_idempotence());
+        let (table_info, partition_path) = partitioned_table(1, false);
+        let cluster = partitioned_cluster(&table_info, &partition_path, None);
+        let path = Arc::new(PhysicalTablePath::of_partitioned(
+            Arc::new(table_info.table_path.clone()),
+            Some("US$$EU".to_string()),
+        ));
+        let row = GenericRow {
+            values: vec![Datum::Int32(1), Datum::String("US$$EU".into())],
+        };
+        let record = WriteRecord::for_append(Arc::clone(&table_info), path, 1, &row);
+
+        let error = accumulator
+            .append(&record, 0, &cluster, false)
+            .err()
+            .expect("the write must be rejected");
+
+        assert!(matches!(error, Error::IllegalArgument { .. }), "{error}");
+        assert!(!accumulator.has_undrained());
+    }
+
+    #[tokio::test]
+    async fn failing_a_dropped_partition_keeps_writes_sent_to_a_newer_one() -> Result<()> {
+        let idempotence = enabled_idempotence();
+        idempotence.set_writer_id(42);
+        let accumulator = RecordAccumulator::new(Config::default(), Arc::clone(&idempotence));
+        let (table_info, partition_path) = partitioned_table(1, false);
+        let row = partition_row();
+        let record = WriteRecord::for_append(
+            Arc::clone(&table_info),
+            Arc::clone(&partition_path),
+            1,
+            &row,
+        );
+        let cluster = partitioned_cluster_with_id(&table_info, &partition_path, 20, Some(1));
+        let handle = accumulator
+            .append(&record, 0, &cluster, false)?
+            .result_handle
+            .expect("handle");
+        let nodes = HashSet::from([cluster.get_tablet_server(1).expect("server").clone()]);
+        let mut sent = accumulator.drain(cluster, &nodes, i32::MAX)?;
+        accumulator.re_enqueue(sent.remove(&1).expect("drained").pop().expect("batch"));
+        let error = || broadcast::Error::WriteFailed {
+            code: FlussError::PartitionNotExists.code(),
+            message: "dropped".to_string(),
+        };
+
+        accumulator.fail_sequenced_batches_for_partition(&partition_path, Some(10), error());
+        assert!(handle.wait().now_or_never().is_none());
+
+        accumulator.fail_sequenced_batches_for_partition(&partition_path, Some(20), error());
+        let result = tokio::time::timeout(Duration::from_secs(10), handle.wait())
+            .await
+            .expect("the retried write must be failed")?;
+        assert!(matches!(
+            result,
+            Err(broadcast::Error::WriteFailed { code, .. })
+                if code == FlussError::PartitionNotExists.code()
+        ));
+        assert!(!accumulator.has_incomplete());
         Ok(())
     }
 }

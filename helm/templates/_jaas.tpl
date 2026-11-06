@@ -17,6 +17,36 @@ limitations under the License.
 */}}
 
 {{/*
+Env entries for a SASL PLAIN users list (client or external).
+Usage:
+  include "fluss.security.sasl.plain.userList.env" (dict "kind" "client" "users" $users)
+*/}}
+{{- define "fluss.security.sasl.plain.userList.env" -}}
+{{- $kind := .kind -}}
+{{- range $idx, $user := .users }}
+{{- $ref := $user.existingSecret | default (dict) }}
+- name: {{ include (printf "fluss.security.sasl.plain.%s.envVarName" $kind) (dict "field" "username" "idx" $idx) }}
+{{- if $ref.name }}
+  valueFrom:
+    secretKeyRef:
+      name: {{ $ref.name }}
+      key: {{ $ref.usernameKey | default "username" }}
+{{- else }}
+  value: {{ $user.username | quote }}
+{{- end }}
+- name: {{ include (printf "fluss.security.sasl.plain.%s.envVarName" $kind) (dict "field" "password" "idx" $idx) }}
+{{- if $ref.name }}
+  valueFrom:
+    secretKeyRef:
+      name: {{ $ref.name }}
+      key: {{ $ref.passwordKey | default "password" }}
+{{- else }}
+  value: {{ $user.password | quote }}
+{{- end }}
+{{- end }}
+{{- end -}}
+
+{{/*
 Renders the env entries for the JAAS init container: secretKeyRef for each
 Secret-sourced credential, literal `value:` for each values-sourced one.
 Usage:
@@ -50,27 +80,14 @@ Usage:
 {{- end }}
 {{- /* client */ -}}
 {{- if and (include "fluss.security.sasl.plain.enabled" .) (eq $clientMechanism "plain") }}
-{{- range $idx, $user := .Values.security.client.sasl.plain.users | default (list) }}
-{{- $ref := $user.existingSecret | default (dict) }}
-- name: {{ include "fluss.security.sasl.plain.client.envVarName" (dict "field" "username" "idx" $idx) }}
-{{- if $ref.name }}
-  valueFrom:
-    secretKeyRef:
-      name: {{ $ref.name }}
-      key: {{ $ref.usernameKey | default "username" }}
-{{- else }}
-  value: {{ $user.username | quote }}
+{{- include "fluss.security.sasl.plain.userList.env" (dict "kind" "client" "users" (.Values.security.client.sasl.plain.users | default list)) }}
 {{- end }}
-- name: {{ include "fluss.security.sasl.plain.client.envVarName" (dict "field" "password" "idx" $idx) }}
-{{- if $ref.name }}
-  valueFrom:
-    secretKeyRef:
-      name: {{ $ref.name }}
-      key: {{ $ref.passwordKey | default "password" }}
-{{- else }}
-  value: {{ $user.password | quote }}
-{{- end }}
-{{- end }}
+{{- /* external */ -}}
+{{- if eq (include "fluss.security.external.mechanism" . | trim) "plain" }}
+{{- $ext := .Values.security.external | default dict -}}
+{{- $sasl := $ext.sasl | default dict -}}
+{{- $plain := $sasl.plain | default dict -}}
+{{- include "fluss.security.sasl.plain.userList.env" (dict "kind" "external" "users" ($plain.users | default list)) }}
 {{- end }}
 {{- /* zookeeper */ -}}
 {{- if $zkEnabled }}

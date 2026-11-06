@@ -21,7 +21,6 @@ import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.rpc.RpcGatewayService;
 import org.apache.fluss.rpc.protocol.NetworkProtocolPlugin;
 import org.apache.fluss.rpc.protocol.RequestType;
-import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 import org.apache.fluss.utils.concurrent.FutureUtils;
 
@@ -45,7 +44,7 @@ final class RequestProcessorPool {
 
     private final RequestChannel[] requestChannels;
     private final RequestProcessor[] processors;
-    private final RequestHandler<?>[] requestHandlers;
+    private final String threadName;
 
     private ExecutorService workerPool;
     private CompletableFuture<Void> closeFuture;
@@ -54,26 +53,28 @@ final class RequestProcessorPool {
             int numProcessors,
             int totalQueueCapacity,
             RpcGatewayService service,
-            List<NetworkProtocolPlugin> protocols,
-            RequestsMetrics requestsMetrics) {
+            RequestHandler<?>[] requestHandlers,
+            RequestsMetrics requestsMetrics,
+            int processorIndexOffset,
+            String threadName) {
         this.processors = new RequestProcessor[numProcessors];
         this.requestChannels = new RequestChannel[numProcessors];
+        this.threadName = threadName;
 
-        this.requestHandlers = initializeRequestHandlers(protocols, service);
         for (int i = 0; i < numProcessors; i++) {
             RequestChannel requestChannel = new RequestChannel(totalQueueCapacity / numProcessors);
             requestChannels[i] = requestChannel;
             // bind processor to a single channel to make requests from the
             // same channel processed serializable
-            processors[i] = new RequestProcessor(i, requestChannel, service, requestHandlers);
+            int processorIndex = processorIndexOffset + i;
+            processors[i] =
+                    new RequestProcessor(processorIndex, requestChannel, service, requestHandlers);
             requestsMetrics.gauge(
                     PROCESSOR_INDEX,
-                    String.valueOf(i),
+                    String.valueOf(processorIndex),
                     MetricNames.REQUEST_QUEUE_SIZE,
                     requestChannel::requestsCount);
         }
-        // register requestQueueSize metrics
-        requestsMetrics.gauge(MetricNames.REQUEST_QUEUE_SIZE, this::getRequestQueueSize);
     }
 
     public int getRequestQueueSize() {
@@ -92,7 +93,7 @@ final class RequestProcessorPool {
         checkState(closeFuture == null, "Request processor pool has already been closed.");
         this.workerPool =
                 Executors.newFixedThreadPool(
-                        processors.length, new ExecutorThreadFactory("fluss-netty-server-worker"));
+                        processors.length, new ExecutorThreadFactory(threadName));
         for (RequestProcessor processor : processors) {
             workerPool.execute(processor);
         }
@@ -114,21 +115,15 @@ final class RequestProcessorPool {
                 FutureUtils.runAfterwards(
                         FutureUtils.completeAll(shutdownFutures),
                         () -> {
-                            try {
-                                // Handlers are shared by all processors and must be closed only
-                                // once.
-                                IOUtils.closeAll(requestHandlers);
-                            } finally {
-                                if (workerPool != null) {
-                                    workerPool.shutdown();
-                                }
+                            if (workerPool != null) {
+                                workerPool.shutdown();
                             }
                         });
         return closeFuture;
         // service and requestChannel shutdown is handled outside.
     }
 
-    private RequestHandler<?>[] initializeRequestHandlers(
+    static RequestHandler<?>[] createRequestHandlers(
             List<NetworkProtocolPlugin> protocolPlugins, RpcGatewayService service) {
         int maxRequestTypeId =
                 Arrays.stream(RequestType.values())

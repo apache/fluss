@@ -57,6 +57,7 @@ import java.util.List;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.utils.Preconditions.checkState;
 
 /* This file is based on source code of Apache Flink Project (https://flink.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -215,9 +216,11 @@ public class RocksDBResourceContainer implements AutoCloseable {
         }
 
         if (enableStatistics) {
-            statistics = new Statistics();
+            if (statistics == null) {
+                statistics = new Statistics();
+                handlesToClose.add(statistics);
+            }
             opt.setStatistics(statistics);
-            handlesToClose.add(statistics);
         }
 
         return opt;
@@ -227,6 +230,16 @@ public class RocksDBResourceContainer implements AutoCloseable {
     @Nullable
     public Statistics getStatistics() {
         return statistics;
+    }
+
+    /**
+     * Borrows table statistics before opening the RocksDB instance and releases them with this
+     * container.
+     */
+    public void useSharedStatistics(RocksDBStatisticsRegistry.Lease lease) {
+        checkState(enableStatistics && statistics == null, "Statistics are already configured.");
+        statistics = lease.getStatistics();
+        handlesToClose.add(lease);
     }
 
     /** Gets the block cache used by RocksDB, null if not yet initialized. */

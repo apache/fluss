@@ -27,12 +27,23 @@ image:
   pullPolicy: IfNotPresent
   pullSecrets: []
 
+# Gives every resource a name unique to this release, and scopes the ZooKeeper
+# root path to the namespace and release, so several Fluss clusters can share
+# a namespace.
+# Off by default, an existing release must opt in deliberately.
+uniqueResourceNames: false
+
 # Fluss server configuration options
 configurationOverrides:
   default.bucket.number: 3
   default.replication.factor: 3
-  zookeeper.path.root: /fluss
-  zookeeper.address: zk-zookeeper.{{ .Release.Namespace }}.svc.cluster.local:2181
+  # Follows uniqueResourceNames. The scoped root carries the namespace as well
+  # as the release, since release names are only unique within a namespace, in
+  # separate path segments so the two cannot run together. It is a sibling of
+  # /fluss rather than a child, because a release still on /fluss uses that as
+  # its ZooKeeper namespace and would contain it.
+  zookeeper.path.root: /fluss{{ if .Values.uniqueResourceNames }}-{{ .Release.Namespace }}/{{ .Release.Name }}{{ end }}
+  zookeeper.address: zk-zookeeper.{{ .Release.Namespace }}.svc.{{ .Values.clusterDomain }}:2181
   remote.data.dir: /tmp/fluss/remote-data
   data.dir: /tmp/fluss/data
   internal.listener.name: INTERNAL
@@ -76,8 +87,10 @@ tablet:
     healthCheckTimeoutSeconds: 1200
     # Optional client auth configuration passed to the probe's RpcClient as a
     # single-line string of semicolon-separated `key:value` pairs (no quoting
-    # or escaping needed). Required only when the local client listener
-    # enforces SASL. Example:
+    # or escaping needed). Required when security.client.sasl.mechanism is
+    # set; the chart fails to render without it, unless the probe gets the
+    # value as a READINESS_HEALTH_CHECK_AUTH env var from a Secret through
+    # secrets.env (both components) or extraEnv. Example:
     #   healthCheckAuth: "client.security.protocol:SASL;client.sasl.mechanism:PLAIN;client.security.sasl.username:admin;client.security.sasl.password:admin-pass"
     healthCheckAuth: ""
   extraVolumes: []
@@ -85,9 +98,18 @@ tablet:
   initContainers: []
   extraEnv: []
   envFrom: []
+  # Optional EXTERNAL advertised host/port overrides for tablets only.
+  # advertisedHosts / advertisedPorts are per-ordinal; length must equal numberOfReplicas.
+  listeners:
+    external:
+      advertisedHost: ""
+      advertisedHosts: []
+      advertisedPort: ""
+      advertisedPorts: []
   annotations: {}
   service:
     annotations: {}
+    publishNotReadyAddresses: true
   podAnnotations: {}
   podLabels: {}
   podDisruptionBudget:
@@ -121,19 +143,56 @@ tablet:
   topologySpreadConstraints: []
 
 coordinator:
+  # The default stays 1. Running more than one replica gives you warm standbys
+  # that take over via leader election on coordinator failure.
   numberOfReplicas: 1
   storage:
     enabled: false
     size: 1Gi
     storageClass:
+  # Readiness probe configuration. The probe talks to the LOCAL coordinator
+  # (POD_IP:client-port) for cluster health, which tells it the role:
+  #   - the leader answers and is Ready regardless of cluster status color.
+  #   - a standby rejects the request, and becomes Ready once the leader
+  #     lists it among the standby coordinators.
+  # The check runs only until it first passes or healthCheckTimeoutSeconds
+  # runs out; after that the probe only checks the TCP port.
+  readinessProbe:
+    rpcTimeoutMs: 5000
+    failureThreshold: 360
+    timeoutSeconds: 10
+    initialDelaySeconds: 15
+    periodSeconds: 5
+    # Maximum wall-clock seconds the role check is allowed to keep a
+    # freshly-created coordinator pod NotReady on its first boot. After this
+    # budget is exhausted the probe latches the TCP-only fast path so a
+    # missing leader cannot hang a rolling upgrade indefinitely.
+    # Default: 1200 (20 minutes).
+    healthCheckTimeoutSeconds: 1200
+    # Optional client auth configuration passed to the probe's RpcClient as a
+    # single-line string of semicolon-separated `key:value` pairs (no quoting
+    # or escaping needed). Required when security.client.sasl.mechanism is
+    # set; the chart fails to render without it, unless the probe gets the
+    # value as a READINESS_HEALTH_CHECK_AUTH env var from a Secret through
+    # secrets.env (both components) or extraEnv. Example:
+    #   healthCheckAuth: "client.security.protocol:SASL;client.sasl.mechanism:PLAIN;client.security.sasl.username:admin;client.security.sasl.password:admin-pass"
+    healthCheckAuth: ""
   extraVolumes: []
   extraVolumeMounts: []
   initContainers: []
   extraEnv: []
   envFrom: []
+  # Optional EXTERNAL advertised host/port overrides for the coordinator.
+  # EXTERNAL with numberOfReplicas > 1 fails the render: per-ordinal
+  # coordinator addresses are not supported yet.
+  listeners:
+    external:
+      advertisedHost: ""
+      advertisedPort: ""
   annotations: {}
   service:
     annotations: {}
+    publishNotReadyAddresses: true
   podAnnotations: {}
   podLabels: {}
   podDisruptionBudget:
@@ -145,12 +204,21 @@ coordinator:
   tolerations: []
   topologySpreadConstraints: []
 
-# Fluss listener configurations
+# Kubernetes cluster domain for chart-owned in-cluster DNS (CLIENT advertised FQDN).
+clusterDomain: cluster.local
+
 listeners:
   internal:
     port: 9123
   client:
     port: 9124
+  external:
+    # Opt-in second client listener so in-cluster CLIENT advertised addresses
+    # stay on cluster DNS while external clients bootstrap on EXTERNAL.
+    enabled: false
+    port: 9125
+    advertisedHost: ""
+    advertisedPort: ""
 
 # Secrets referenced from configurationOverrides via config provider markers:
 # mounts are read with ${directory:<basePath>/<name>:<key>}, env entries with
@@ -180,6 +248,21 @@ security:
         #   password: alice-pass
         # - existingSecret:
         #     name: fluss-client-sasl-bob
+        #     usernameKey: username
+        #     passwordKey: password
+
+  external:
+    sasl:
+      # "" (PLAINTEXT + warning when listeners.external.enabled) | plain
+      mechanism: ""
+      plain:
+        users: []
+        # To share credentials with CLIENT, point both listeners' users at the
+        # same existingSecret.
+        # - username: external-user
+        #   password: external-pass
+        # - existingSecret:
+        #     name: fluss-external-sasl
         #     usernameKey: username
         #     passwordKey: password
 

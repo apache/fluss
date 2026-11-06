@@ -328,6 +328,15 @@ class TableDescriptorTest {
     }
 
     @Test
+    void testCountDataType() {
+        AggFunctions.COUNT().validateDataType(DataTypes.BIGINT());
+        assertThat(AggFunctionType.fromString("count")).isEqualTo(AggFunctionType.COUNT);
+        assertThatThrownBy(() -> AggFunctions.COUNT().validateDataType(DataTypes.INT()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("BIGINT");
+    }
+
+    @Test
     void testLastNRequiresSizeParameter() {
         AggFunctions.LAST_N(5).validateParameters();
 

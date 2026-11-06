@@ -55,6 +55,7 @@ import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.exception.TableNotPartitionedException;
 import org.apache.fluss.exception.TooManyBucketsException;
 import org.apache.fluss.exception.TooManyPartitionsException;
+import org.apache.fluss.exception.UnsupportedVersionException;
 import org.apache.fluss.metadata.BucketInfo;
 import org.apache.fluss.metadata.DatabaseChange;
 import org.apache.fluss.metadata.DatabaseDescriptor;
@@ -93,10 +94,6 @@ public interface Admin extends AutoCloseable {
     /**
      * Get the current server node information asynchronously: the coordinator server, followed by
      * the alive tablet servers.
-     *
-     * <p>Each tablet server carries its {@link ServerTag} in {@link ServerNode#serverTag()}, or
-     * {@code null} if it has none. The tags are read from the coordinator. Against a cluster older
-     * than Fluss 1.1, which cannot report server tags, the server nodes are returned without tags.
      */
     CompletableFuture<List<ServerNode>> getServerNodes();
 
@@ -929,10 +926,23 @@ public interface Admin extends AutoCloseable {
     CompletableFuture<ClusterHealth> getClusterHealth();
 
     /**
-     * Describe the replica load of each tablet server in the cluster asynchronously.
+     * Describe the coordinators, live tablet servers and per-server replica loads asynchronously.
      *
-     * <p>The returned list contains {@link TabletServerDescription} counters per tablet server.
-     * Live tablet servers are always included, even when they host no replicas.
+     * <p>The returned {@link ClusterDescription} provides node addresses, racks and server tags,
+     * together with replica loads keyed by server ID. Besides the active coordinator, it lists the
+     * currently live standby coordinators of a high-availability deployment. Live servers have
+     * explicit loads even when they host no replicas. Loads also include offline servers with
+     * assigned replicas. A missing load means statistics are unavailable and must never be
+     * interpreted as zero replicas.
+     *
+     * <p>This API requires DESCRIBE permission on the cluster resource. Retriable failures trigger
+     * a metadata refresh and one retry to handle coordinator address changes. Servers that do not
+     * support this API fail with {@link UnsupportedVersionException}.
+     *
+     * <p>Requests currently go directly to the coordinator, which aggregates replica loads on its
+     * event thread. Avoid high request volumes or frequent polling, as these can delay other
+     * coordinator work. A future implementation may route requests to a randomly selected tablet
+     * server to reduce coordinator load.
      *
      * <p>This API is designed for operational tooling (e.g., a Kubernetes operator):
      *
@@ -946,10 +956,10 @@ public interface Admin extends AutoCloseable {
      *   <li>reporting per-server tablet load in cluster status.
      * </ul>
      *
-     * @return a {@link CompletableFuture} that completes with the per tablet server replica loads.
+     * @return a {@link CompletableFuture} that completes with the cluster description.
      * @since 1.1
      */
-    CompletableFuture<List<TabletServerDescription>> describeTabletServers();
+    CompletableFuture<ClusterDescription> describeCluster();
 
     /**
      * List per-bucket remote log manifest entries for a table or partition scope.

@@ -195,6 +195,17 @@ impl Config {
                             FlussError::new_err(format!("Invalid value '{value}' for '{key}': {e}"))
                         })?;
                     }
+                    "writer.dynamic-create-partition.enabled" => {
+                        config.writer_dynamic_create_partition_enabled = match value.as_str() {
+                            "true" => true,
+                            "false" => false,
+                            other => {
+                                return Err(FlussError::new_err(format!(
+                                    "Invalid value '{other}' for '{key}', expected 'true' or 'false'"
+                                )));
+                            }
+                        };
+                    }
                     "writer.bucket.no-key-assigner" => {
                         config.writer_bucket_no_key_assigner =
                             value.parse::<fcore::config::NoKeyAssigner>().map_err(|e| {
@@ -231,8 +242,23 @@ impl Config {
                             FlussError::new_err(format!("Invalid value '{value}' for '{key}': {e}"))
                         })?;
                     }
+                    "lookup.retry-backoff-ms" => {
+                        config.lookup_retry_backoff_ms = value.parse::<u64>().map_err(|e| {
+                            FlussError::new_err(format!("Invalid value '{value}' for '{key}': {e}"))
+                        })?;
+                    }
+                    "lookup.retry-max-backoff-ms" => {
+                        config.lookup_retry_max_backoff_ms = value.parse::<u64>().map_err(|e| {
+                            FlussError::new_err(format!("Invalid value '{value}' for '{key}': {e}"))
+                        })?;
+                    }
                     "connect-timeout" => {
                         config.connect_timeout_ms = value.parse::<u64>().map_err(|e| {
+                            FlussError::new_err(format!("Invalid value '{value}' for '{key}': {e}"))
+                        })?;
+                    }
+                    "connection.max-idle-time-ms" => {
+                        config.connection_max_idle_time_ms = value.parse::<u64>().map_err(|e| {
                             FlussError::new_err(format!("Invalid value '{value}' for '{key}': {e}"))
                         })?;
                     }
@@ -432,6 +458,18 @@ impl Config {
         Ok(())
     }
 
+    /// Get whether writes create the partitions they target that don't exist yet
+    #[getter]
+    fn writer_dynamic_create_partition_enabled(&self) -> bool {
+        self.inner.writer_dynamic_create_partition_enabled
+    }
+
+    /// Set whether writes create the partitions they target that don't exist yet
+    #[setter]
+    fn set_writer_dynamic_create_partition_enabled(&mut self, enabled: bool) {
+        self.inner.writer_dynamic_create_partition_enabled = enabled;
+    }
+
     /// Get whether idempotent writes are enabled
     #[getter]
     fn writer_enable_idempotence(&self) -> bool {
@@ -526,6 +564,19 @@ impl Config {
     #[setter]
     fn set_connect_timeout_ms(&mut self, timeout: u64) {
         self.inner.connect_timeout_ms = timeout;
+    }
+
+    /// Get the time in milliseconds after which idle cached connections are closed
+    #[getter]
+    fn connection_max_idle_time_ms(&self) -> u64 {
+        self.inner.connection_max_idle_time_ms
+    }
+
+    /// Set the time in milliseconds after which idle cached connections are closed, or 0 to
+    /// disable closing idle connections
+    #[setter]
+    fn set_connection_max_idle_time_ms(&mut self, max_idle_time: u64) {
+        self.inner.connection_max_idle_time_ms = max_idle_time;
     }
 
     /// Get the security protocol
@@ -682,6 +733,30 @@ impl Config {
     #[setter]
     fn set_lookup_max_retries(&mut self, value: i32) {
         self.inner.lookup_max_retries = value;
+    }
+
+    /// Get the base lookup retry backoff in milliseconds
+    #[getter]
+    fn lookup_retry_backoff_ms(&self) -> u64 {
+        self.inner.lookup_retry_backoff_ms
+    }
+
+    /// Set the base lookup retry backoff in milliseconds
+    #[setter]
+    fn set_lookup_retry_backoff_ms(&mut self, backoff: u64) {
+        self.inner.lookup_retry_backoff_ms = backoff;
+    }
+
+    /// Get the maximum lookup retry backoff in milliseconds, before jitter
+    #[getter]
+    fn lookup_retry_max_backoff_ms(&self) -> u64 {
+        self.inner.lookup_retry_max_backoff_ms
+    }
+
+    /// Set the maximum lookup retry backoff in milliseconds, before jitter
+    #[setter]
+    fn set_lookup_retry_max_backoff_ms(&mut self, backoff: u64) {
+        self.inner.lookup_retry_max_backoff_ms = backoff;
     }
 }
 

@@ -19,6 +19,7 @@ package org.apache.fluss.server.kv;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.compression.ArrowCompressionInfo;
+import org.apache.fluss.compression.LogCompressionInfo;
 import org.apache.fluss.exception.DeletionDisabledException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.SchemaNotExistException;
@@ -103,6 +104,7 @@ public final class KvWriteProcessor {
     // This avoids creating a new instance on every putAsLeader call
     private final RowMerger overwriteRowMerger;
     private final ArrowCompressionInfo arrowCompressionInfo;
+    private final LogCompressionInfo compactedLogCompressionInfo;
     private final SchemaGetter schemaGetter;
     // the changelog image mode for this tablet
     private final ChangelogImage changelogImage;
@@ -123,6 +125,7 @@ public final class KvWriteProcessor {
             KvFormat kvFormat,
             RowMerger rowMerger,
             ArrowCompressionInfo arrowCompressionInfo,
+            LogCompressionInfo compactedLogCompressionInfo,
             SchemaGetter schemaGetter,
             ChangelogImage changelogImage,
             AutoIncrementManager autoIncrementManager,
@@ -142,6 +145,7 @@ public final class KvWriteProcessor {
         // on every putAsLeader call. Used for undo recovery scenarios.
         this.overwriteRowMerger = new DefaultRowMerger(kvFormat, DeleteBehavior.ALLOW);
         this.arrowCompressionInfo = arrowCompressionInfo;
+        this.compactedLogCompressionInfo = compactedLogCompressionInfo;
         this.schemaGetter = schemaGetter;
         this.changelogImage = changelogImage;
         this.autoIncrementManager = autoIncrementManager;
@@ -561,7 +565,8 @@ public final class KvWriteProcessor {
                 }
                 return new IndexWalBuilder(schemaId, memorySegmentPool);
             case COMPACTED:
-                return new CompactedWalBuilder(schemaId, rowType, memorySegmentPool);
+                return new CompactedWalBuilder(
+                        schemaId, rowType, memorySegmentPool, compactedLogCompressionInfo);
             case ARROW:
                 return new ArrowWalBuilder(
                         schemaId,

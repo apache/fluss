@@ -40,6 +40,7 @@ Create the pull request and work with the reviewer.
 1. Make sure no unrelated or unnecessary reformatting changes are included.
 2. Please ensure that the test passing.
 3. Please don't resolve conversation.
+4. A daily job marks pull requests without activity for 60 days as stale and closes them if they stay inactive for another 10 days. A new comment, commit or other update removes the stale label and restarts the 60 days.
 
 ### Merge
 A committer of Fluss checks if the contribution fulfills the requirements and merges the code to the codebase.

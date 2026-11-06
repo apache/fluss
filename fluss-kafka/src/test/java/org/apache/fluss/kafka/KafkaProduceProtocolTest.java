@@ -77,6 +77,134 @@ import static org.assertj.core.api.Assertions.tuple;
 /** Protocol tests independent of the Fluss append and record conversion backends. */
 class KafkaProduceProtocolTest {
 
+    @ParameterizedTest
+    @EnumSource(
+            value = CompressionType.class,
+            names = {"GZIP", "SNAPPY", "LZ4", "ZSTD"})
+    void testCorruptCompressedStreamDoesNotSuppressValidPartition(CompressionType codec) {
+        byte[] value = new byte[1024];
+        Arrays.fill(value, (byte) 7);
+        MemoryRecords malformed =
+                MemoryRecords.withRecords(
+                        RecordBatch.MAGIC_VALUE_V2,
+                        0L,
+                        Compression.of(codec).build(),
+                        new SimpleRecord(value));
+        ByteBuffer bytes = malformed.buffer();
+        // Preserve a valid outer batch CRC to exercise the decompressor, not just the CRC guard.
+        for (int i = DefaultRecordBatch.RECORD_BATCH_OVERHEAD; i < bytes.limit(); i++) {
+            bytes.put(i, (byte) 0);
+        }
+        updateBatchChecksum(malformed);
+        malformed.batches().iterator().next().ensureValid();
+        ProduceResponse response =
+                dispatch(
+                        request(
+                                (short) 11,
+                                (short) 1,
+                                partition(0, malformed),
+                                partition(1, records())),
+                        command -> {
+                            assertThat(command.topics().get(0).partitions())
+                                    .extracting(KafkaProduceCommand.PartitionWrite::partitionId)
+                                    .containsExactly(1);
+                            return successful(command);
+                        });
+        assertThat(
+                        response.data()
+                                .responses()
+                                .find("topic")
+                                .partitionResponses()
+                                .get(0)
+                                .errorCode())
+                .isIn(Errors.CORRUPT_MESSAGE.code(), Errors.INVALID_RECORD.code());
+        if (codec == CompressionType.GZIP) {
+            PartitionProduceResponse failed =
+                    response.data().responses().find("topic").partitionResponses().get(0);
+            assertThat(failed.errorCode()).isEqualTo(Errors.INVALID_RECORD.code());
+            assertThat(failed.errorMessage())
+                    .contains("java.util.zip.ZipException", "Not in GZIP format");
+        }
+        assertThat(
+                        response.data()
+                                .responses()
+                                .find("topic")
+                                .partitionResponses()
+                                .get(1)
+                                .errorCode())
+                .isEqualTo(Errors.NONE.code());
+        assertErrors(
+                dispatch(
+                        request((short) 11, (short) 1, partition(0, records())),
+                        KafkaProduceProtocolTest::successful),
+                Errors.NONE);
+    }
+
+    @ParameterizedTest
+    @EnumSource(
+            value = CompressionType.class,
+            names = {"GZIP", "SNAPPY", "LZ4", "ZSTD"})
+    void testTruncatedCompressedStreamsDoNotSuppressValidPartition(CompressionType codec) {
+        byte[] value = new byte[1024];
+        Arrays.fill(value, (byte) 7);
+        MemoryRecords complete =
+                MemoryRecords.withRecords(
+                        RecordBatch.MAGIC_VALUE_V2,
+                        0L,
+                        Compression.of(codec).build(),
+                        new SimpleRecord(value));
+        for (int size = DefaultRecordBatch.RECORD_BATCH_OVERHEAD;
+                size < complete.sizeInBytes();
+                size++) {
+            ByteBuffer bytes = ByteBuffer.allocate(size);
+            ByteBuffer source = complete.buffer().duplicate();
+            source.limit(size);
+            bytes.put(source).flip();
+            // The batch length excludes the base offset and the length field itself.
+            bytes.putInt(Long.BYTES, size - Long.BYTES - Integer.BYTES);
+            MemoryRecords truncated = MemoryRecords.readableRecords(bytes);
+            updateBatchChecksum(truncated);
+            truncated.batches().iterator().next().ensureValid();
+            MemoryRecords valid =
+                    timestampedRecords(
+                            codec,
+                            org.apache.kafka.common.record.TimestampType.LOG_APPEND_TIME,
+                            123L,
+                            456L,
+                            789L);
+            ProduceResponse response =
+                    dispatch(
+                            request(
+                                    (short) 11,
+                                    (short) 1,
+                                    partition(0, truncated),
+                                    partition(1, valid)),
+                            command -> {
+                                assertThat(command.topics().get(0).partitions())
+                                        .extracting(KafkaProduceCommand.PartitionWrite::partitionId)
+                                        .containsExactly(1);
+                                assertThat(command.topics().get(0).partitions().get(0).records())
+                                        .allSatisfy(
+                                                record -> {
+                                                    assertThat(record.timestamp()).isEqualTo(123L);
+                                                    assertThat(record.timestampType())
+                                                            .isEqualTo(
+                                                                    TimestampType.LOG_APPEND_TIME);
+                                                    assertThat(record.key())
+                                                            .isEqualTo(
+                                                                    ByteBuffer.wrap(
+                                                                            new byte[] {1}));
+                                                    assertThat(record.value())
+                                                            .isEqualTo(
+                                                                    ByteBuffer.wrap(
+                                                                            new byte[] {2}));
+                                                });
+                                return successful(command);
+                            });
+            assertErrors(response, Errors.INVALID_RECORD, Errors.NONE);
+        }
+    }
+
     @Test
     void testSupportedVersionsExposeRecordsAndForwardContext() {
         for (short version = 3; version <= 11; version++) {

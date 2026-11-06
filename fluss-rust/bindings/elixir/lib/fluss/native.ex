@@ -31,22 +31,22 @@ defmodule Fluss.Native do
 
   def admin_get_server_nodes(_admin), do: :erlang.nif_error(:nif_not_loaded)
 
-  def admin_create_database(_admin, _name, _descriptor, _ignore_if_exists),
+  def admin_create_database(_admin, _name, _descriptor, _opts),
     do: :erlang.nif_error(:nif_not_loaded)
 
   def admin_get_database_info(_admin, _database_name), do: :erlang.nif_error(:nif_not_loaded)
 
-  def admin_drop_database(_admin, _name, _ignore_if_not_exists),
+  def admin_drop_database(_admin, _name, _opts),
     do: :erlang.nif_error(:nif_not_loaded)
 
   def admin_list_databases(_admin), do: :erlang.nif_error(:nif_not_loaded)
 
   def admin_database_exists(_admin, _database_name), do: :erlang.nif_error(:nif_not_loaded)
 
-  def admin_create_table(_admin, _db, _table, _descriptor, _ignore_if_exists),
+  def admin_create_table(_admin, _db, _table, _descriptor, _opts),
     do: :erlang.nif_error(:nif_not_loaded)
 
-  def admin_drop_table(_admin, _db, _table, _ignore_if_not_exists),
+  def admin_drop_table(_admin, _db, _table, _opts),
     do: :erlang.nif_error(:nif_not_loaded)
 
   def admin_list_tables(_admin, _database), do: :erlang.nif_error(:nif_not_loaded)
@@ -60,14 +60,27 @@ defmodule Fluss.Native do
   def admin_get_table_schema(_admin, _database_name, _table_name, _schema_id),
     do: :erlang.nif_error(:nif_not_loaded)
 
-  def admin_create_partition(_admin, _database_name, _table_name, _spec, _ignore_if_exists),
+  def admin_create_partition(_admin, _database_name, _table_name, _spec, _opts),
     do: :erlang.nif_error(:nif_not_loaded)
 
-  def admin_drop_partition(_admin, _database_name, _table_name, _spec, _ignore_if_not_exists),
+  def admin_drop_partition(_admin, _database_name, _table_name, _spec, _opts),
     do: :erlang.nif_error(:nif_not_loaded)
 
   def admin_list_partition_infos(_admin, _database_name, _table_name, _spec),
     do: :erlang.nif_error(:nif_not_loaded)
+
+  def admin_list_offsets(_admin, _database_name, _table_name, _bucket_ids, _spec),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def admin_list_partition_offsets(
+        _admin,
+        _database_name,
+        _table_name,
+        _partition,
+        _bucket_ids,
+        _spec
+      ),
+      do: :erlang.nif_error(:nif_not_loaded)
 
   # Schema / TableDescriptor
   def table_descriptor_new(_schema, _options),

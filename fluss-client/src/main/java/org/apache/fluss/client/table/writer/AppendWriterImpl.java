@@ -17,6 +17,7 @@
 
 package org.apache.fluss.client.table.writer;
 
+import org.apache.fluss.client.table.BucketCalculator;
 import org.apache.fluss.client.write.WriteRecord;
 import org.apache.fluss.client.write.WriterClient;
 import org.apache.fluss.metadata.LogFormat;
@@ -28,20 +29,18 @@ import org.apache.fluss.row.InternalRow.FieldGetter;
 import org.apache.fluss.row.compacted.CompactedRow;
 import org.apache.fluss.row.encode.CompactedRowEncoder;
 import org.apache.fluss.row.encode.IndexedRowEncoder;
-import org.apache.fluss.row.encode.KeyEncoder;
 import org.apache.fluss.row.indexed.IndexedRow;
 import org.apache.fluss.types.DataType;
 
 import javax.annotation.Nullable;
 
-import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 /** The writer to write data to the log table. */
 class AppendWriterImpl extends AbstractTableWriter implements AppendWriter {
     private static final AppendResult APPEND_SUCCESS = new AppendResult();
 
-    private final @Nullable KeyEncoder bucketKeyEncoder;
+    private final @Nullable BucketCalculator bucketCalculator;
 
     private final LogFormat logFormat;
     private final IndexedRowEncoder indexedRowEncoder;
@@ -51,16 +50,8 @@ class AppendWriterImpl extends AbstractTableWriter implements AppendWriter {
 
     AppendWriterImpl(TablePath tablePath, TableInfo tableInfo, WriterClient writerClient) {
         super(tablePath, tableInfo, writerClient);
-        List<String> bucketKeys = tableInfo.getBucketKeys();
-        if (bucketKeys.isEmpty()) {
-            this.bucketKeyEncoder = null;
-        } else {
-            this.bucketKeyEncoder =
-                    KeyEncoder.ofBucketKeyEncoder(
-                            tableInfo.getRowType(),
-                            tableInfo.getBucketKeys(),
-                            tableInfo.getTableConfig().getDataLakeFormat().orElse(null));
-        }
+        this.bucketCalculator =
+                tableInfo.hasBucketKey() ? BucketCalculator.forAppendRow(tableInfo) : null;
 
         DataType[] fieldDataTypes =
                 tableInfo.getSchema().getRowType().getChildren().toArray(new DataType[0]);
@@ -82,7 +73,7 @@ class AppendWriterImpl extends AbstractTableWriter implements AppendWriter {
         checkFieldCount(row);
 
         PhysicalTablePath physicalPath = getPhysicalPath(row);
-        byte[] bucketKey = bucketKeyEncoder != null ? bucketKeyEncoder.encodeKey(row) : null;
+        byte[] bucketKey = bucketCalculator != null ? bucketCalculator.encodeKey(row) : null;
 
         final WriteRecord record;
         if (logFormat == LogFormat.INDEXED) {

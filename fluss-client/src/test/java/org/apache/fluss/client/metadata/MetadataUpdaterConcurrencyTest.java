@@ -17,6 +17,7 @@
 
 package org.apache.fluss.client.metadata;
 
+import org.apache.fluss.client.utils.TestingRpcClient;
 import org.apache.fluss.cluster.BucketLocation;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
@@ -34,7 +35,6 @@ import org.apache.fluss.rpc.messages.ApiMessage;
 import org.apache.fluss.rpc.messages.MetadataResponse;
 import org.apache.fluss.rpc.messages.PbPartitionMetadata;
 import org.apache.fluss.rpc.messages.PbTableMetadata;
-import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.testutils.common.CommonTestUtils;
 
 import org.junit.jupiter.api.AfterEach;
@@ -82,7 +82,15 @@ class MetadataUpdaterConcurrencyTest {
             new ServerNode(1, "localhost", 8080, ServerType.TABLET_SERVER);
 
     private final ExecutorService executor = Executors.newFixedThreadPool(2);
-    private final ControllableRpcClient rpcClient = new ControllableRpcClient();
+    private final BlockingQueue<CompletableFuture<ApiMessage>> requests =
+            new LinkedBlockingQueue<>();
+    private final RpcClient rpcClient =
+            new TestingRpcClient(
+                    (node, apiKey) -> {
+                        CompletableFuture<ApiMessage> response = new CompletableFuture<>();
+                        requests.add(response);
+                        return response;
+                    });
 
     @AfterEach
     void tearDown() throws Exception {
@@ -108,7 +116,7 @@ class MetadataUpdaterConcurrencyTest {
                                                 : Collections.singleton(TABLE_B),
                                         null,
                                         null));
-        CompletableFuture<ApiMessage> pending = rpcClient.takeRequest();
+        CompletableFuture<ApiMessage> pending = takeRequest();
         // This must finish while the metadata RPC is still pending, as on a network callback.
         executor.submit(() -> updater.invalidPhysicalTableBucketMeta(Collections.singleton(PATH_A)))
                 .get(10, TimeUnit.SECONDS);
@@ -127,7 +135,7 @@ class MetadataUpdaterConcurrencyTest {
         assertThat(updater.getCluster().getBucketCount(TableOrPartition.ofTable(1))).isEmpty();
         assertThat(updater.getCluster().leaderFor(BUCKET_B)).isEqualTo(2);
         assertThat(updater.getCluster().getBucketCount(TableOrPartition.ofTable(2))).hasValue(1);
-        assertThat(rpcClient.requests).isEmpty();
+        assertThat(requests).isEmpty();
         refreshA(updater);
     }
 
@@ -135,7 +143,7 @@ class MetadataUpdaterConcurrencyTest {
     void testNodeRefreshKeepsConcurrentInvalidation() throws Exception {
         MetadataUpdater updater = updater(false);
         Future<?> refresh = executor.submit(updater::refreshClusterUntilAvailable);
-        CompletableFuture<ApiMessage> pending = rpcClient.takeRequest();
+        CompletableFuture<ApiMessage> pending = takeRequest();
         updater.invalidPhysicalTableBucketMeta(Collections.singleton(PATH_A));
         pending.complete(response());
         refresh.get(10, TimeUnit.SECONDS);
@@ -152,7 +160,7 @@ class MetadataUpdaterConcurrencyTest {
                         () ->
                                 updater.updateMetadata(
                                         null, Arrays.asList(PARTITION_P, PARTITION_Q), null));
-        CompletableFuture<ApiMessage> pending = rpcClient.takeRequest();
+        CompletableFuture<ApiMessage> pending = takeRequest();
         updater.invalidPhysicalTableBucketMetaByIds(
                 null, Collections.singleton(new TablePartition(1, 11)));
         MetadataResponse response = response();
@@ -164,7 +172,7 @@ class MetadataUpdaterConcurrencyTest {
         assertThat(updater.getCluster().getPartitionId(PARTITION_P)).isEmpty();
         assertThat(updater.getCluster().leaderFor(BUCKET_P)).isNull();
         assertThat(updater.getCluster().leaderFor(BUCKET_Q)).isEqualTo(2);
-        assertThat(updater.getCluster().getBucketCount(TableOrPartition.ofTable(1))).hasValue(6);
+        assertThat(updater.getCluster().getBucketCount(TableOrPartition.ofTable(1))).hasValue(4);
     }
 
     @ParameterizedTest
@@ -181,7 +189,7 @@ class MetadataUpdaterConcurrencyTest {
                         () ->
                                 updater.updateMetadata(
                                         null, Arrays.asList(PARTITION_P, PARTITION_Q), null));
-        CompletableFuture<ApiMessage> pending = rpcClient.takeRequest();
+        CompletableFuture<ApiMessage> pending = takeRequest();
         updater.invalidPhysicalTableBucketAndPartitionMeta(Collections.singleton(PARTITION_P));
         if (repeatedInvalidation) {
             assertThat(updater.getCluster()).isSameAs(beforeInvalidation);
@@ -199,7 +207,7 @@ class MetadataUpdaterConcurrencyTest {
         assertThat(cluster.getPartitionId(PARTITION_Q)).hasValue(12L);
         assertThat(cluster.leaderFor(BUCKET_Q)).isEqualTo(2);
         assertThat(cluster.getBucketCount(TableOrPartition.ofPartition(12))).hasValue(6);
-        assertThat(cluster.getBucketCount(TableOrPartition.ofTable(1))).hasValue(6);
+        assertThat(cluster.getBucketCount(TableOrPartition.ofTable(1))).hasValue(4);
     }
 
     @Test
@@ -210,7 +218,7 @@ class MetadataUpdaterConcurrencyTest {
                         () ->
                                 updater.updateMetadata(
                                         null, Collections.singleton(PARTITION_P), null));
-        CompletableFuture<ApiMessage> pending = rpcClient.takeRequest();
+        CompletableFuture<ApiMessage> pending = takeRequest();
         updater.invalidPhysicalTableBucketMeta(Collections.singleton(PATH_A));
         MetadataResponse response = response();
         addPartition(response, "p", 11, 8);
@@ -288,11 +296,11 @@ class MetadataUpdaterConcurrencyTest {
         Future<?> failedRefresh =
                 executor.submit(
                         () -> updater.updateMetadata(Collections.singleton(TABLE_A), null, null));
-        rpcClient.takeRequest().completeExceptionally(new NetworkException("offline"));
+        takeRequest().completeExceptionally(new NetworkException("offline"));
         failedRefresh.get(10, TimeUnit.SECONDS);
 
         Future<?> bootstrap = executor.submit(updater::refreshClusterUntilAvailable);
-        CompletableFuture<ApiMessage> pending = rpcClient.takeRequest();
+        CompletableFuture<ApiMessage> pending = takeRequest();
         executor.submit(() -> updater.invalidPhysicalTableBucketMeta(Collections.singleton(PATH_B)))
                 .get(10, TimeUnit.SECONDS);
         pending.complete(response());
@@ -301,6 +309,7 @@ class MetadataUpdaterConcurrencyTest {
         assertThat(updater.getCluster().getPartitionIdByPath()).isEmpty();
         assertThat(updater.getCluster().getBucketLocationsByPath()).isEmpty();
         assertThat(updater.getCluster().getBucketCountByTableOrPartition()).isEmpty();
+        assertThat(updater.getCluster().getBucketCountEpochByTableId()).isEmpty();
         refreshA(updater);
     }
 
@@ -310,7 +319,7 @@ class MetadataUpdaterConcurrencyTest {
                         () -> updater.updateMetadata(Collections.singleton(TABLE_A), null, null));
         MetadataResponse response = response();
         addTable(response, TABLE_A, 1, 2);
-        rpcClient.takeRequest().complete(response);
+        takeRequest().complete(response);
         refresh.get(10, TimeUnit.SECONDS);
         assertThat(updater.leaderFor(TABLE_A, BUCKET_A)).isEqualTo(2);
     }
@@ -319,6 +328,9 @@ class MetadataUpdaterConcurrencyTest {
         Map<PhysicalTablePath, List<BucketLocation>> locations = new HashMap<>();
         Map<PhysicalTablePath, Long> partitions = new HashMap<>();
         Map<TableOrPartition, Integer> counts = new HashMap<>();
+        Map<Long, Long> epochs = new HashMap<>();
+        epochs.put(1L, partitioned ? 1L : 0L);
+        epochs.put(2L, 0L);
         if (partitioned) {
             locations.put(PARTITION_P, locations(PARTITION_P, BUCKET_P, 4));
             locations.put(PARTITION_Q, locations(PARTITION_Q, BUCKET_Q, 2));
@@ -343,7 +355,8 @@ class MetadataUpdaterConcurrencyTest {
                         locations,
                         ids,
                         partitions,
-                        counts);
+                        counts,
+                        epochs);
         Configuration configuration = new Configuration();
         configuration.set(
                 ConfigOptions.BOOTSTRAP_SERVERS, Collections.singletonList("localhost:8080"));
@@ -372,7 +385,8 @@ class MetadataUpdaterConcurrencyTest {
     }
 
     private static void addTable(MetadataResponse response, TablePath path, long id, int leader) {
-        PbTableMetadata table = response.addTableMetadata().setTableId(id);
+        PbTableMetadata table =
+                response.addTableMetadata().setTableId(id).setBucketCount(1).setBucketCountEpoch(0);
         table.setTablePath()
                 .setDatabaseName(path.getDatabaseName())
                 .setTableName(path.getTableName());
@@ -400,40 +414,9 @@ class MetadataUpdaterConcurrencyTest {
         }
     }
 
-    private static final class ControllableRpcClient implements RpcClient {
-        private final BlockingQueue<CompletableFuture<ApiMessage>> requests =
-                new LinkedBlockingQueue<>();
-
-        CompletableFuture<ApiMessage> takeRequest() throws Exception {
-            CompletableFuture<ApiMessage> request = requests.poll(10, TimeUnit.SECONDS);
-            assertThat(request).isNotNull();
-            return request;
-        }
-
-        @Override
-        public CompletableFuture<ApiMessage> sendRequest(
-                ServerNode node, ApiKeys apiKey, ApiMessage request) {
-            CompletableFuture<ApiMessage> response = new CompletableFuture<>();
-            requests.add(response);
-            return response;
-        }
-
-        @Override
-        public boolean connect(ServerNode node) {
-            return true;
-        }
-
-        @Override
-        public CompletableFuture<Void> disconnect(String serverUid) {
-            return CompletableFuture.completedFuture(null);
-        }
-
-        @Override
-        public boolean isReady(String serverUid) {
-            return true;
-        }
-
-        @Override
-        public void close() {}
+    private CompletableFuture<ApiMessage> takeRequest() throws Exception {
+        CompletableFuture<ApiMessage> request = requests.poll(10, TimeUnit.SECONDS);
+        assertThat(request).isNotNull();
+        return request;
     }
 }

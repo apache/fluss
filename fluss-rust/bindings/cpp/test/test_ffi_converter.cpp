@@ -83,6 +83,38 @@ TEST(FfiConverterTest, WriterRetryBackoffConfiguration) {
     EXPECT_EQ(ffi_config.writer_retry_max_backoff_ms, 5000u);
 }
 
+TEST(FfiConverterTest, ConnectionMaxIdleTimeConfiguration) {
+    fluss::Configuration config;
+    EXPECT_EQ(fluss::utils::to_ffi_config(config).connection_max_idle_time_ms, 600000u);
+
+    config.connection_max_idle_time_ms = 60000;
+    EXPECT_EQ(fluss::utils::to_ffi_config(config).connection_max_idle_time_ms, 60000u);
+
+    config.connection_max_idle_time_ms = 0;
+    EXPECT_EQ(fluss::utils::to_ffi_config(config).connection_max_idle_time_ms, 0u);
+}
+
+TEST(FfiConverterTest, LookupRetryBackoffConfiguration) {
+    fluss::Configuration config;
+    EXPECT_EQ(config.lookup_retry_backoff_ms, 100u);
+    EXPECT_EQ(config.lookup_retry_max_backoff_ms, 1000u);
+
+    config.lookup_retry_backoff_ms = 250;
+    config.lookup_retry_max_backoff_ms = 5000;
+    auto ffi_config = fluss::utils::to_ffi_config(config);
+    EXPECT_EQ(ffi_config.lookup_retry_backoff_ms, 250u);
+    EXPECT_EQ(ffi_config.lookup_retry_max_backoff_ms, 5000u);
+}
+
+TEST(FfiConverterTest, WriterDynamicCreatePartitionConfiguration) {
+    fluss::Configuration config;
+    EXPECT_TRUE(config.writer_dynamic_create_partition_enabled);
+    EXPECT_TRUE(fluss::utils::to_ffi_config(config).writer_dynamic_create_partition_enabled);
+
+    config.writer_dynamic_create_partition_enabled = false;
+    EXPECT_FALSE(fluss::utils::to_ffi_config(config).writer_dynamic_create_partition_enabled);
+}
+
 // --- DataType value semantics ---
 
 TEST(DataTypeTest, DefaultNullable) { EXPECT_TRUE(DataType::Int().nullable()); }

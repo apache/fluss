@@ -320,8 +320,15 @@ pub struct DescribeClusterRequest {}
 pub struct DescribeClusterResponse {
     #[prost(message, optional, tag = "1")]
     pub coordinator_server: ::core::option::Option<PbServerNode>,
+    /// Live tablet servers with addresses, racks and server tags.
     #[prost(message, repeated, tag = "2")]
     pub tablet_servers: ::prost::alloc::vec::Vec<PbServerNode>,
+    /// Also includes offline servers with assigned replicas. Missing loads are not zero counts.
+    #[prost(message, repeated, tag = "3")]
+    pub tablet_server_loads: ::prost::alloc::vec::Vec<PbTabletServerLoad>,
+    /// Live standby coordinators, excluding the active coordinator_server. Fluss versions >= 1.1.
+    #[prost(message, repeated, tag = "4")]
+    pub coordinator_standbys: ::prost::alloc::vec::Vec<PbServerNode>,
 }
 /// produce log request and response
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1254,13 +1261,6 @@ pub struct GetClusterHealthResponse {
     #[prost(int32, required, tag = "5")]
     pub status: i32,
 }
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct DescribeTabletServersRequest {}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct DescribeTabletServersResponse {
-    #[prost(message, repeated, tag = "1")]
-    pub tablet_servers: ::prost::alloc::vec::Vec<PbTabletServerLoad>,
-}
 /// --------------- Inner classes ----------------
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PbTabletServerLoad {
@@ -1347,6 +1347,10 @@ pub struct PbTableMetadata {
     /// A table-level, monotonically increasing version for bucket.num changes.
     #[prost(int64, optional, tag = "9")]
     pub bucket_count_epoch: ::core::option::Option<i64>,
+    /// The table's default bucket count, independent of bucket location availability.
+    /// When present, bucket_count_epoch is also present, including epoch zero.
+    #[prost(int32, optional, tag = "10")]
+    pub bucket_count: ::core::option::Option<i32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PbPartitionMetadata {

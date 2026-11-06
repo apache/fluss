@@ -12,7 +12,7 @@ Fluss supports different metric types: **Counters**, **Gauges**, **Histograms**,
 
 - `Gauge`: Provides a value of any type at a point in time.
 - `Counter`: Used to count values by incrementing and decrementing.
-- `Histogram`: Measure the statistical distribution of a set of values including the min, max, mean, standard deviation and percentile.
+- `Histogram`: Measure the statistical distribution of a set of values including the min, max, mean, standard deviation and percentile. Built-in histograms only consider samples from the last five minutes; see [Histograms](metric-reporters.md#histograms).
 - `Meter`: The gauge exports the meter's rate.
 
 Fluss client also has supported built-in metrics to measure operations of **write to**, **read from** fluss cluster, 
@@ -1024,9 +1024,11 @@ lookup file; <code>false</code> means that it did not download a local lookup fi
 
 RocksDB metrics provide insights into the performance and health of the underlying RocksDB storage engine used by Fluss. These metrics are categorized into table-level metrics (aggregated from all buckets of a table) and server-level metrics (aggregated from all tables in a server).
 
-#### Table-level RocksDB Metrics (Max Aggregation)
+#### Table-level RocksDB Latency and Instance State
 
-These metrics use Max aggregation to show the maximum value across all buckets of a table, which helps identify the worst-performing bucket.
+Each TabletServer shares one native Statistics object among all RocksDB instances of a table. Latency percentiles describe the combined samples, and write stall time is cumulative across these RocksDB instances. A low-volume slow bucket can be hidden by faster buckets in the combined P99. L0 file counts and pending indicators still use the maximum across live RocksDB instance properties. The shared statistics retain counters and histogram samples from closed RocksDB instances while any RocksDB instance of the table remains open. They are released after the last RocksDB instance closes; reopening then starts fresh statistics.
+
+Since Fluss 1.1, the latency P99 and cumulative write stall metrics use the names below. The four historical `...Max` names remain as **deprecated aliases** throughout Fluss 1.x and will be removed in Fluss 2.0. From 1.1, these aliases report the shared table statistics, not the maximum bucket values reported in 1.0. Existing dashboards retain their metric names, but alert thresholds and interpretations must be reviewed. A P99 reported by one TabletServer is not a cluster-wide table P99; taking the maximum or average across TabletServers does not produce that percentile.
 
 <table class="table table-bordered">
   <thead>
@@ -1042,18 +1044,18 @@ These metrics use Max aggregation to show the maximum value across all buckets o
     <tr>
       <th rowspan="7"><strong>tabletserver</strong></th>
       <td rowspan="7">table</td>
-      <td>rocksdbWriteStallMicrosMax</td>
-      <td>Maximum write stall duration across all buckets of this table (in microseconds). Write stalls occur when RocksDB needs to slow down writes due to compaction pressure or memory limits.</td>
+      <td>rocksdbWriteStallMicrosTotal<br /><strong>Deprecated alias:</strong> rocksdbWriteStallMicrosMax</td>
+      <td>Cumulative write stall time across all RocksDB instances of this table on this TabletServer (in microseconds), collected by shared Statistics. Concurrent stalls can overlap.</td>
       <td>Gauge</td>
     </tr>
     <tr>
-      <td>rocksdbGetLatencyMicrosMax</td>
-      <td>Maximum get operation latency across all buckets of this table (in microseconds). This represents the slowest read operation among all buckets.</td>
+      <td>rocksdbGetLatencyMicrosP99<br /><strong>Deprecated alias:</strong> rocksdbGetLatencyMicrosMax</td>
+      <td>P99 of the combined native DB_GET samples from all RocksDB instances of this table on this TabletServer (in microseconds). Samples accumulate since the shared Statistics object was created or reset. This is not the maximum bucket P99 or RPC latency.</td>
       <td>Gauge</td>
     </tr>
     <tr>
-      <td>rocksdbWriteLatencyMicrosMax</td>
-      <td>Maximum write operation latency across all buckets of this table (in microseconds). This represents the slowest write operation among all buckets.</td>
+      <td>rocksdbWriteLatencyMicrosP99<br /><strong>Deprecated alias:</strong> rocksdbWriteLatencyMicrosMax</td>
+      <td>P99 of the combined native DB_WRITE samples from all RocksDB instances of this table on this TabletServer (in microseconds), accumulated since shared Statistics creation or reset. This is not the maximum bucket P99.</td>
       <td>Gauge</td>
     </tr>
     <tr>
@@ -1072,8 +1074,8 @@ These metrics use Max aggregation to show the maximum value across all buckets o
       <td>Gauge</td>
     </tr>
     <tr>
-      <td>rocksdbCompactionTimeMicrosMax</td>
-      <td>Maximum compaction time across all buckets of this table (in microseconds). This represents the longest compaction operation among all buckets.</td>
+      <td>rocksdbCompactionTimeMicrosP99<br /><strong>Deprecated alias:</strong> rocksdbCompactionTimeMicrosMax</td>
+      <td>P99 of the combined native COMPACTION_TIME samples from all RocksDB instances of this table on this TabletServer (in microseconds), accumulated since shared Statistics creation or reset. This is not the maximum bucket P99.</td>
       <td>Gauge</td>
     </tr>
   </tbody>

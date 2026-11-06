@@ -35,6 +35,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.row.InternalMap;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.tablet.TabletServer;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
@@ -134,6 +135,108 @@ class KafkaProduceAppendITCase {
                 admin.dropTable(path, true).get();
             }
         }
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+        "gzip,binary",
+        "snappy,binary",
+        "lz4,binary",
+        "zstd,binary",
+        "lz4,string",
+        "zstd,string"
+    })
+    void testCompressedBatchPreservesRecordsInNativeStorage(String codec, String format)
+            throws Exception {
+        TablePath path = TablePath.of(DATABASE, "compressed_" + codec + "_" + format);
+        try (Connection connection = ConnectionFactory.createConnection(CLUSTER.getClientConfig());
+                org.apache.fluss.client.admin.Admin admin = connection.getAdmin()) {
+            admin.createDatabase(DATABASE, DatabaseDescriptor.EMPTY, true).get();
+            admin.createTable(path, descriptor(format), false).get();
+            CLUSTER.waitUntilAllGatewayHasSameMetadata();
+            CLUSTER.waitAndGetLeaderReplica(
+                    new TableBucket(admin.getTableInfo(path).get().getTableId(), 0));
+            try (KafkaProducer<byte[], byte[]> producer = compressedProducer(codec)) {
+                producer.partitionsFor(path.toString());
+                List<Future<RecordMetadata>> writes = new ArrayList<>();
+                for (int i = 0; i < 50; i++) {
+                    writes.add(
+                            producer.send(
+                                    new ProducerRecord<>(
+                                            path.toString(),
+                                            0,
+                                            1000L + i,
+                                            KEY,
+                                            ("消息-" + i).getBytes(StandardCharsets.UTF_8),
+                                            Arrays.asList(
+                                                    new RecordHeader("source", null),
+                                                    new RecordHeader("source", VALUE),
+                                                    new RecordHeader("nullable", VALUE),
+                                                    new RecordHeader("nullable", null)))));
+                }
+                producer.flush();
+                for (int i = 0; i < writes.size(); i++) {
+                    assertThat(writes.get(i).get(30, TimeUnit.SECONDS).offset()).isEqualTo(i);
+                }
+                try (Table table = connection.getTable(path);
+                        LogScanner scanner = table.newScan().createLogScanner()) {
+                    scanner.subscribeFromBeginning(0);
+                    int count = 0;
+                    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+                    while (count < writes.size() && System.nanoTime() < deadline) {
+                        for (ScanRecord record : scanner.poll(Duration.ofSeconds(1))) {
+                            InternalRow row = record.getRow();
+                            assertThat(record.logOffset()).isEqualTo(count);
+                            String expectedValue = "消息-" + count;
+                            if (format.equals("binary")) {
+                                assertThat(row.getBytes(0))
+                                        .isEqualTo(expectedValue.getBytes(StandardCharsets.UTF_8));
+                            } else {
+                                assertThat(row.getString(0).toString()).isEqualTo(expectedValue);
+                            }
+                            assertThat(row.getBytes(3)).isEqualTo(KEY);
+                            assertThat(row.isNullAt(2)).isTrue();
+                            InternalMap headers = row.getMap(1);
+                            Map<String, byte[]> values = new HashMap<>();
+                            for (int index = 0; index < headers.size(); index++) {
+                                values.put(
+                                        headers.keyArray().getString(index).toString(),
+                                        headers.valueArray().isNullAt(index)
+                                                ? null
+                                                : headers.valueArray().getBytes(index));
+                            }
+                            assertThat(headers.size()).isEqualTo(2);
+                            assertThat(values).containsOnlyKeys("source", "nullable");
+                            assertThat(values.get("source")).isEqualTo(VALUE);
+                            assertThat(values.get("nullable")).isNull();
+                            count++;
+                        }
+                    }
+                    assertThat(count).isEqualTo(50);
+                    assertThat(scanner.poll(Duration.ofMillis(100))).isEmpty();
+                }
+            } finally {
+                admin.dropTable(path, true).get();
+            }
+        }
+    }
+
+    private static KafkaProducer<byte[], byte[]> compressedProducer(String codec) {
+        ServerNode node = CLUSTER.getTabletServerNodes("KAFKA").get(0);
+        Map<String, Object> config = new HashMap<>();
+        config.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, node.host() + ":" + node.port());
+        config.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class);
+        config.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class);
+        config.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, false);
+        config.put(ProducerConfig.ACKS_CONFIG, "all");
+        config.put(ProducerConfig.BATCH_SIZE_CONFIG, 65536);
+        config.put(ProducerConfig.COMPRESSION_TYPE_CONFIG, codec);
+        // Explicit flush sends a single accumulated batch instead of one request per send.
+        config.put(ProducerConfig.LINGER_MS_CONFIG, 60000L);
+        config.put(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG, 90000);
+        config.put(ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG, 10000);
+        config.put(ProducerConfig.MAX_BLOCK_MS_CONFIG, 30000);
+        return new KafkaProducer<>(config);
     }
 
     @Test

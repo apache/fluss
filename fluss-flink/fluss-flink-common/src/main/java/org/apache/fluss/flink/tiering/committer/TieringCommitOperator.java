@@ -17,6 +17,7 @@
 
 package org.apache.fluss.flink.tiering.committer;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.Admin;
@@ -32,14 +33,18 @@ import org.apache.fluss.lake.committer.LakeCommitter;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.fluss.lake.writer.LakeWriter;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.utils.ExceptionUtils;
+import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 
+import org.apache.flink.api.common.operators.MailboxExecutor;
 import org.apache.flink.runtime.operators.coordination.OperatorEventGateway;
 import org.apache.flink.runtime.source.event.SourceEventWrapper;
 import org.apache.flink.streaming.api.operators.AbstractStreamOperator;
 import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
 import org.apache.flink.streaming.api.operators.StreamOperatorParameters;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
+import org.apache.flink.streaming.runtime.tasks.mailbox.TaskMailbox.MailboxClosedException;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -47,7 +52,15 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 
+import static org.apache.flink.runtime.util.Runnables.withUncaughtExceptionHandler;
+import static org.apache.fluss.config.ConfigOptions.LAKE_TIERING_COMMIT_THREAD_NUM;
+import static org.apache.fluss.shaded.guava32.com.google.common.util.concurrent.Uninterruptibles.awaitTerminationUninterruptibly;
+import static org.apache.fluss.utils.IOUtils.closeAll;
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
 /**
@@ -76,6 +89,12 @@ public class TieringCommitOperator<WriteResult, Committable>
     private final Configuration lakeTieringConfig;
     private final LakeTieringFactory<WriteResult, Committable> lakeTieringFactory;
     private final FlussTableLakeSnapshotCommitter flussTableLakeSnapshotCommitter;
+    private final MailboxExecutor mailboxExecutor;
+    private final int commitThreads;
+    // Mailbox-thread confined, including completed commits whose callbacks have not run yet.
+    private final Set<Long> committingTables = new HashSet<>();
+    private ExecutorService commitExecutor;
+    private boolean closed;
     private TieringCommitter<WriteResult, Committable> tieringCommitter;
     private Connection connection;
     private Admin admin;
@@ -89,6 +108,7 @@ public class TieringCommitOperator<WriteResult, Committable>
     /** Creates an operator that collects and commits table tiering rounds. */
     public TieringCommitOperator(
             StreamOperatorParameters<CommittableMessage<Committable>> parameters,
+            MailboxExecutor mailboxExecutor,
             Configuration flussConf,
             Configuration lakeTieringConfig,
             LakeTieringFactory<WriteResult, Committable> lakeTieringFactory) {
@@ -97,6 +117,10 @@ public class TieringCommitOperator<WriteResult, Committable>
         this.tableWriteResultAccumulators = new HashMap<>();
         this.flussConfig = flussConf;
         this.lakeTieringConfig = lakeTieringConfig;
+        this.mailboxExecutor = mailboxExecutor;
+        this.commitThreads = lakeTieringConfig.get(LAKE_TIERING_COMMIT_THREAD_NUM);
+        checkArgument(
+                commitThreads > 0, "%s must be positive.", LAKE_TIERING_COMMIT_THREAD_NUM.key());
         this.setup(
                 parameters.getContainingTask(),
                 parameters.getStreamConfig(),
@@ -119,6 +143,10 @@ public class TieringCommitOperator<WriteResult, Committable>
                         lakeTieringConfig,
                         lakeTieringFactory,
                         flussTableLakeSnapshotCommitter);
+        commitExecutor =
+                Executors.newFixedThreadPool(
+                        commitThreads,
+                        new ExecutorThreadFactory("tiering-committer", getUserCodeClassloader()));
     }
 
     @Override
@@ -136,46 +164,89 @@ public class TieringCommitOperator<WriteResult, Committable>
         accumulator.add(tableBucketWriteResult);
 
         if (accumulator.isComplete()) {
-            try {
-                TieringCommitResult<Committable> commitResult =
-                        tieringCommitter.commitWriteResults(
-                                tableId,
-                                tableBucketWriteResult.tablePath(),
-                                accumulator.bucketWriteResults);
-                // only emit downstream when actual data was written
-                if (commitResult.getCommittable() != null) {
-                    output.collect(
-                            new StreamRecord<>(
-                                    new CommittableMessage<>(commitResult.getCommittable())));
-                }
-                // notify that the table id has been finished tier
-                operatorEventGateway.sendEventToCoordinator(
-                        new SourceEventWrapper(
-                                new FinishedTieringEvent(tableId, commitResult.getStats())));
-            } catch (Exception e) {
-                // if any exception happens, send to source coordinator to mark it as failed
-                operatorEventGateway.sendEventToCoordinator(
-                        new SourceEventWrapper(
-                                new FailedTieringEvent(
-                                        tableId, ExceptionUtils.stringifyException(e))));
-                LOG.warn(
-                        "Fail to commit tiering write result, will try to tier again in next round.",
-                        e);
-            } finally {
-                tableWriteResultAccumulators.remove(tableId);
+            // Bound submitted rounds as well as threads; yield so completions can free capacity.
+            while (committingTables.size() >= commitThreads) {
+                mailboxExecutor.yield();
             }
+            tableWriteResultAccumulators.remove(tableId);
+            checkState(committingTables.add(tableId), "Table %s is already committing.", tableId);
+            commitAsync(
+                    tableId, tableBucketWriteResult.tablePath(), accumulator.bucketWriteResults);
         }
     }
 
     @Override
     public void close() throws Exception {
-        flussTableLakeSnapshotCommitter.close();
-        if (admin != null) {
-            admin.close();
+        closed = true;
+        if (commitExecutor != null) {
+            commitExecutor.shutdownNow();
+            awaitTerminationUninterruptibly(commitExecutor);
         }
-        if (connection != null) {
-            connection.close();
+        // Release the clients before restoring a pending cancellation interrupt.
+        boolean interrupted = Thread.interrupted();
+        try {
+            closeAll(flussTableLakeSnapshotCommitter, admin, connection, super::close);
+        } finally {
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+            }
         }
+    }
+
+    private void commitAsync(
+            long tableId, TablePath tablePath, List<TableBucketWriteResult<WriteResult>> results) {
+        Runnable commit =
+                () -> {
+                    TieringCommitResult<Committable> result;
+                    try {
+                        result = tieringCommitter.commitWriteResults(tableId, tablePath, results);
+                    } catch (Exception e) {
+                        postCompletion(tableId, () -> reportFailed(tableId, e));
+                        return;
+                    }
+                    postCompletion(tableId, () -> reportFinished(tableId, result));
+                };
+        commitExecutor.execute(
+                withUncaughtExceptionHandler(
+                        commit,
+                        (thread, error) ->
+                                getContainingTask().getEnvironment().failExternally(error)));
+    }
+
+    @VisibleForTesting
+    void postCompletion(long tableId, Runnable completion) {
+        try {
+            mailboxExecutor.execute(
+                    () -> {
+                        if (!closed) {
+                            committingTables.remove(tableId);
+                            completion.run();
+                        }
+                    },
+                    "Complete tiering commit for table %s",
+                    tableId);
+        } catch (RejectedExecutionException e) {
+            if (!(e.getCause() instanceof MailboxClosedException)) {
+                throw e;
+            }
+        }
+    }
+
+    private void reportFinished(long tableId, TieringCommitResult<Committable> result) {
+        if (result.getCommittable() != null) {
+            output.collect(new StreamRecord<>(new CommittableMessage<>(result.getCommittable())));
+        }
+        operatorEventGateway.sendEventToCoordinator(
+                new SourceEventWrapper(new FinishedTieringEvent(tableId, result.getStats())));
+    }
+
+    private void reportFailed(long tableId, Exception cause) {
+        operatorEventGateway.sendEventToCoordinator(
+                new SourceEventWrapper(
+                        new FailedTieringEvent(tableId, ExceptionUtils.stringifyException(cause))));
+        LOG.warn(
+                "Fail to commit tiering write result, will try to tier again in next round.",
+                cause);
     }
 
     /** Collects one table's tiering round with constant-time validation of each result. */

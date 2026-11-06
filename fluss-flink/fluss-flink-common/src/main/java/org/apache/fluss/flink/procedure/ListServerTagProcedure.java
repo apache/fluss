@@ -18,7 +18,6 @@
 package org.apache.fluss.flink.procedure;
 
 import org.apache.fluss.cluster.ServerNode;
-import org.apache.fluss.cluster.ServerType;
 
 import org.apache.flink.table.annotation.DataTypeHint;
 import org.apache.flink.table.annotation.ProcedureHint;
@@ -31,6 +30,8 @@ import java.util.List;
 /**
  * Procedure to list server tags of tablet servers.
  *
+ * <p>Requires DESCRIBE permission on the cluster resource.
+ *
  * <p>Usage example:
  *
  * <pre>
@@ -41,10 +42,9 @@ public class ListServerTagProcedure extends ProcedureBase {
 
     @ProcedureHint(output = @DataTypeHint("ROW<server_id INT, rack STRING, server_tag STRING>"))
     public Row[] call(ProcedureContext context) throws Exception {
-        List<ServerNode> serverNodes = admin.getServerNodes().get();
         List<Row> rows = new ArrayList<>();
-        for (ServerNode node : serverNodes) {
-            if (node.serverType() == ServerType.TABLET_SERVER && node.serverTag() != null) {
+        for (ServerNode node : admin.describeCluster().get().getTabletServers().values()) {
+            if (node.serverTag() != null) {
                 rows.add(Row.of(node.id(), node.rack(), node.serverTag().toString()));
             }
         }

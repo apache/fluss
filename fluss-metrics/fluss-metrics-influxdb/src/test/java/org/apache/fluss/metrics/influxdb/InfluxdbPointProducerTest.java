@@ -145,6 +145,7 @@ class InfluxdbPointProducerTest {
         assertThat(point).isNotNull();
         assertThat(point.getMeasurement()).isEqualTo("test_histogram");
         assertThat(point.getField("count")).isEqualTo(80L);
+        assertThat(point.getField("windowCount")).isEqualTo(3L);
         assertThat(point.getField("mean")).isEqualTo(50.5);
         assertThat(point.getField("stddev")).isEqualTo(10.2);
         assertThat(point.getField("max")).isEqualTo(100L);
@@ -153,5 +154,22 @@ class InfluxdbPointProducerTest {
                 .isEqualTo(
                         BigInteger.valueOf(
                                 time.getEpochSecond() * 1_000_000_000L + time.getNano()));
+    }
+
+    @Test
+    void testEmptyHistogramWindowOmitsDistributionFields() {
+        TestHistogram histogram = new TestHistogram();
+        histogram.setCount(80);
+        histogram.setSize(0);
+
+        Point point =
+                pointProducer.createPoint(
+                        histogram, "test_histogram", new ArrayList<>(), Instant.now());
+
+        assertThat(point.getField("count")).isEqualTo(80L);
+        assertThat(point.getField("windowCount")).isEqualTo(0L);
+        assertThat(point.getField("mean")).isNull();
+        assertThat(point.getField("max")).isNull();
+        assertThat(point.getField("p99")).isNull();
     }
 }

@@ -179,14 +179,35 @@ public class MetricNames {
     // --------------------------------------------------------------------------------------------
     // RocksDB metrics
     // --------------------------------------------------------------------------------------------
-    // Table-level RocksDB metrics (aggregated from all buckets of a table, Max aggregation)
-    /** Maximum write stall duration across all buckets of this table (Max aggregation). */
+    // Table-level native statistics and RocksDB instance properties.
+    /** Cumulative write stall time for a table on one TabletServer. */
+    public static final String ROCKSDB_WRITE_STALL_MICROS_TOTAL = "rocksdbWriteStallMicrosTotal";
+
+    /**
+     * @deprecated Since 1.1, use {@link #ROCKSDB_WRITE_STALL_MICROS_TOTAL}. This alias uses the
+     *     shared table statistic, rather than the maximum bucket value, and will be removed in 2.0.
+     */
+    @Deprecated
     public static final String ROCKSDB_WRITE_STALL_MICROS_MAX = "rocksdbWriteStallMicrosMax";
 
-    /** Maximum get latency across all buckets of this table (Max aggregation). */
+    /** Combined Get P99 for a table on one TabletServer. */
+    public static final String ROCKSDB_GET_LATENCY_MICROS_P99 = "rocksdbGetLatencyMicrosP99";
+
+    /**
+     * @deprecated Since 1.1, use {@link #ROCKSDB_GET_LATENCY_MICROS_P99}. This alias uses the
+     *     shared table statistic, rather than the maximum bucket value, and will be removed in 2.0.
+     */
+    @Deprecated
     public static final String ROCKSDB_GET_LATENCY_MICROS_MAX = "rocksdbGetLatencyMicrosMax";
 
-    /** Maximum write latency across all buckets of this table (Max aggregation). */
+    /** Combined Write P99 for a table on one TabletServer. */
+    public static final String ROCKSDB_WRITE_LATENCY_MICROS_P99 = "rocksdbWriteLatencyMicrosP99";
+
+    /**
+     * @deprecated Since 1.1, use {@link #ROCKSDB_WRITE_LATENCY_MICROS_P99}. This alias uses the
+     *     shared table statistic, rather than the maximum bucket value, and will be removed in 2.0.
+     */
+    @Deprecated
     public static final String ROCKSDB_WRITE_LATENCY_MICROS_MAX = "rocksdbWriteLatencyMicrosMax";
 
     /** Maximum number of L0 files across all buckets of this table (Max aggregation). */
@@ -198,7 +219,15 @@ public class MetricNames {
     /** Maximum compaction pending indicator across all buckets of this table (Max aggregation). */
     public static final String ROCKSDB_COMPACTION_PENDING_MAX = "rocksdbCompactionPendingMax";
 
-    /** Maximum compaction time across all buckets of this table (Max aggregation). */
+    /** Combined compaction P99 for a table on one TabletServer. */
+    public static final String ROCKSDB_COMPACTION_TIME_MICROS_P99 =
+            "rocksdbCompactionTimeMicrosP99";
+
+    /**
+     * @deprecated Since 1.1, use {@link #ROCKSDB_COMPACTION_TIME_MICROS_P99}. This alias uses the
+     *     shared table statistic, rather than the maximum bucket value, and will be removed in 2.0.
+     */
+    @Deprecated
     public static final String ROCKSDB_COMPACTION_TIME_MICROS_MAX =
             "rocksdbCompactionTimeMicrosMax";
 

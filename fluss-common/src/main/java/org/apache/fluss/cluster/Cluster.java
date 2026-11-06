@@ -37,6 +37,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
 
@@ -59,14 +60,17 @@ public final class Cluster {
     private final Map<PhysicalTablePath, Long> partitionsIdByPath;
     private final Map<Long, String> partitionNameById;
     private final Map<TableOrPartition, Integer> bucketCountByTableOrPartition;
+    private final Map<Long, Long> bucketCountEpochByTableId;
 
+    /** Creates a metadata snapshot including table bucket-count epochs. */
     public Cluster(
             Map<Integer, ServerNode> aliveTabletServersById,
             @Nullable ServerNode coordinatorServer,
             Map<PhysicalTablePath, List<BucketLocation>> bucketLocationsByPath,
             Map<TablePath, Long> tableIdByPath,
             Map<PhysicalTablePath, Long> partitionsIdByPath,
-            Map<TableOrPartition, Integer> bucketCountByTableOrPartition) {
+            Map<TableOrPartition, Integer> bucketCountByTableOrPartition,
+            Map<Long, Long> bucketCountEpochByTableId) {
         this.coordinatorServer = coordinatorServer;
         this.aliveTabletServersById = Collections.unmodifiableMap(aliveTabletServersById);
         this.aliveTabletServers =
@@ -76,6 +80,8 @@ public final class Cluster {
                 Collections.unmodifiableMap(new LinkedHashMap<>(partitionsIdByPath));
         this.bucketCountByTableOrPartition =
                 Collections.unmodifiableMap(new HashMap<>(bucketCountByTableOrPartition));
+        this.bucketCountEpochByTableId =
+                Collections.unmodifiableMap(new HashMap<>(bucketCountEpochByTableId));
 
         // Index the bucket locations by table path, and index bucket location by bucket.
         // Note that this code is performance sensitive if there are a large number of buckets,
@@ -143,6 +149,7 @@ public final class Cluster {
         this.partitionsIdByPath = previous.partitionsIdByPath;
         this.partitionNameById = previous.partitionNameById;
         this.bucketCountByTableOrPartition = previous.bucketCountByTableOrPartition;
+        this.bucketCountEpochByTableId = previous.bucketCountEpochByTableId;
     }
 
     /** Creates a snapshot with updated nodes and the existing table and bucket metadata. */
@@ -196,7 +203,8 @@ public final class Cluster {
                 newBucketLocationsByPath,
                 new HashMap<>(tableIdByPath),
                 new HashMap<>(partitionsIdByPath),
-                newBucketCountByTableOrPartition);
+                newBucketCountByTableOrPartition,
+                new HashMap<>(bucketCountEpochByTableId));
     }
 
     /** Invalidates bucket metadata and partition ID mappings for the given physical table paths. */
@@ -221,7 +229,8 @@ public final class Cluster {
                 new HashMap<>(cluster.availableLocationsByPath),
                 new HashMap<>(tableIdByPath),
                 newPartitionsIdByPath,
-                new HashMap<>(cluster.bucketCountByTableOrPartition));
+                new HashMap<>(cluster.bucketCountByTableOrPartition),
+                new HashMap<>(bucketCountEpochByTableId));
     }
 
     private boolean hasBucketMetadata(Set<PhysicalTablePath> physicalTables) {
@@ -420,7 +429,10 @@ public final class Cluster {
         if (bucketCount != null) {
             return bucketCount;
         }
-        long bucketCountEpoch = tableInfo.getBucketCountEpoch();
+        long bucketCountEpoch =
+                Math.max(
+                        tableInfo.getBucketCountEpoch(),
+                        getBucketCountEpoch(tableInfo.getTableId()).orElse(0L));
         if (bucketCountEpoch > 0) {
             throw new InvalidBucketRoutingException(
                     "Routing bucket count is unavailable for "
@@ -437,11 +449,23 @@ public final class Cluster {
         return bucketCountByTableOrPartition;
     }
 
+    /** Returns the known bucket-count epoch for a table. */
+    public OptionalLong getBucketCountEpoch(long tableId) {
+        Long epoch = bucketCountEpochByTableId.get(tableId);
+        return epoch == null ? OptionalLong.empty() : OptionalLong.of(epoch);
+    }
+
+    /** Returns the table bucket-count epochs in this snapshot. */
+    public Map<Long, Long> getBucketCountEpochByTableId() {
+        return bucketCountEpochByTableId;
+    }
+
     /** Create an empty cluster instance with no nodes and no table-buckets. */
     public static Cluster empty() {
         return new Cluster(
                 Collections.emptyMap(),
                 null,
+                Collections.emptyMap(),
                 Collections.emptyMap(),
                 Collections.emptyMap(),
                 Collections.emptyMap(),

@@ -20,7 +20,6 @@ package org.apache.fluss.server.coordinator;
 import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.rpc.messages.DescribeTabletServersResponse;
 import org.apache.fluss.rpc.messages.GetClusterHealthResponse;
 import org.apache.fluss.rpc.messages.PbTabletServerLoad;
 import org.apache.fluss.server.metadata.ServerInfo;
@@ -31,12 +30,13 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Tests for {@link CoordinatorService#computeTabletServerLoads(CoordinatorContext)}. */
-class DescribeTabletServersTest {
+class TabletServerLoadTest {
 
     private CoordinatorContext ctx;
 
@@ -49,11 +49,9 @@ class DescribeTabletServersTest {
 
     @Test
     void testEmptyClusterReportsLiveServersWithZeroCounters() {
-        DescribeTabletServersResponse resp = CoordinatorService.computeTabletServerLoads(ctx);
+        Collection<PbTabletServerLoad> resp = CoordinatorService.computeTabletServerLoads(ctx);
 
-        assertThat(resp.getTabletServersList())
-                .extracting(PbTabletServerLoad::getServerId)
-                .containsExactly(0, 1, 2);
+        assertThat(resp).extracting(PbTabletServerLoad::getServerId).containsExactly(0, 1, 2);
         assertLoad(resp, 0, 0, 0, 0, 0);
         assertLoad(resp, 1, 0, 0, 0, 0);
         assertLoad(resp, 2, 0, 0, 0, 0);
@@ -66,7 +64,7 @@ class DescribeTabletServersTest {
         ctx.putBucketLeaderAndIsr(
                 tb, new LeaderAndIsr(0, 1, Arrays.asList(0, 1, 2), Collections.emptyList(), 0, 1));
 
-        DescribeTabletServersResponse resp = CoordinatorService.computeTabletServerLoads(ctx);
+        Collection<PbTabletServerLoad> resp = CoordinatorService.computeTabletServerLoads(ctx);
 
         assertLoad(resp, 0, 1, 1, 1, 1);
         assertLoad(resp, 1, 1, 1, 0, 0);
@@ -81,7 +79,7 @@ class DescribeTabletServersTest {
         ctx.putBucketLeaderAndIsr(
                 tb, new LeaderAndIsr(0, 1, Arrays.asList(0, 1), Collections.emptyList(), 0, 1));
 
-        DescribeTabletServersResponse resp = CoordinatorService.computeTabletServerLoads(ctx);
+        Collection<PbTabletServerLoad> resp = CoordinatorService.computeTabletServerLoads(ctx);
 
         assertLoad(resp, 0, 1, 1, 1, 1);
         assertLoad(resp, 1, 1, 1, 0, 0);
@@ -121,7 +119,7 @@ class DescribeTabletServersTest {
                         0,
                         1));
 
-        DescribeTabletServersResponse resp = CoordinatorService.computeTabletServerLoads(ctx);
+        Collection<PbTabletServerLoad> resp = CoordinatorService.computeTabletServerLoads(ctx);
 
         assertLoad(resp, 0, 1, 1, 0, 0, 1);
         assertLoad(resp, 1, 1, 1, 0, 0, 1);
@@ -133,7 +131,7 @@ class DescribeTabletServersTest {
         TableBucket tb = new TableBucket(1L, 0);
         ctx.updateBucketReplicaAssignment(tb, Arrays.asList(0, 1));
 
-        DescribeTabletServersResponse resp = CoordinatorService.computeTabletServerLoads(ctx);
+        Collection<PbTabletServerLoad> resp = CoordinatorService.computeTabletServerLoads(ctx);
 
         assertLoad(resp, 0, 1, 0, 0, 0, 1);
         assertLoad(resp, 1, 1, 0, 0, 0, 1);
@@ -172,7 +170,7 @@ class DescribeTabletServersTest {
                 new LeaderAndIsr(
                         0, 1, Collections.singletonList(0), Collections.emptyList(), 0, 1));
 
-        DescribeTabletServersResponse resp = CoordinatorService.computeTabletServerLoads(ctx);
+        Collection<PbTabletServerLoad> resp = CoordinatorService.computeTabletServerLoads(ctx);
 
         assertLoad(resp, 0, 1, 1, 1, 1);
         assertLoad(resp, 1, 1, 0, 0, 0);
@@ -198,14 +196,14 @@ class DescribeTabletServersTest {
                 tb3, new LeaderAndIsr(0, 1, Arrays.asList(0, 2), Collections.emptyList(), 0, 1));
         ctx.addPendingLeaderActivation(tb3);
 
-        DescribeTabletServersResponse resp = CoordinatorService.computeTabletServerLoads(ctx);
+        Collection<PbTabletServerLoad> resp = CoordinatorService.computeTabletServerLoads(ctx);
         GetClusterHealthResponse health = CoordinatorService.computeClusterHealth(ctx);
 
         int numReplicas = 0;
         int inSyncReplicas = 0;
         int numLeaderReplicas = 0;
         int activeLeaderReplicas = 0;
-        for (PbTabletServerLoad load : resp.getTabletServersList()) {
+        for (PbTabletServerLoad load : resp) {
             numReplicas += load.getNumReplicas();
             inSyncReplicas += load.getInSyncReplicas();
             numLeaderReplicas += load.getNumLeaderReplicas();
@@ -220,7 +218,7 @@ class DescribeTabletServersTest {
     }
 
     private static void assertLoad(
-            DescribeTabletServersResponse resp,
+            Collection<PbTabletServerLoad> resp,
             int serverId,
             int numReplicas,
             int inSyncReplicas,
@@ -237,7 +235,7 @@ class DescribeTabletServersTest {
     }
 
     private static void assertLoad(
-            DescribeTabletServersResponse resp,
+            Collection<PbTabletServerLoad> resp,
             int serverId,
             int numReplicas,
             int inSyncReplicas,
@@ -264,7 +262,7 @@ class DescribeTabletServersTest {
 
     private void assertServersGreenIffClusterGreen() {
         boolean allServersGreen =
-                CoordinatorService.computeTabletServerLoads(ctx).getTabletServersList().stream()
+                CoordinatorService.computeTabletServerLoads(ctx).stream()
                         .allMatch(
                                 l ->
                                         l.getInSyncReplicas() == l.getNumReplicas()
@@ -276,8 +274,8 @@ class DescribeTabletServersTest {
         assertThat(allServersGreen).isEqualTo(clusterGreen);
     }
 
-    private static PbTabletServerLoad findLoad(DescribeTabletServersResponse resp, int serverId) {
-        return resp.getTabletServersList().stream()
+    private static PbTabletServerLoad findLoad(Collection<PbTabletServerLoad> resp, int serverId) {
+        return resp.stream()
                 .filter(l -> l.getServerId() == serverId)
                 .findFirst()
                 .orElseThrow(

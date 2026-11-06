@@ -536,7 +536,8 @@ This procedure takes no parameters.
 **Important Notes:**
 
 - Only live TabletServers that have a tag assigned are included in the result. If no TabletServer has a tag, an empty result is returned.
-- The tags are read from the Coordinator. Against a cluster older than Fluss 1.1, which cannot report server tags, the result is always empty.
+- The caller must have `DESCRIBE` permission on the cluster.
+- The tags are read from the Coordinator through `Admin.describeCluster()`. This requires Fluss 1.1 or later; older clusters fail with `UnsupportedVersionException`.
 
 **Example:**
 

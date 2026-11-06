@@ -20,6 +20,7 @@ package org.apache.fluss.config;
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.compression.ArrowCompressionType;
+import org.apache.fluss.compression.LogCompressionType;
 import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DeleteBehavior;
@@ -1278,23 +1279,38 @@ public class ConfigOptions {
                     .intType()
                     .defaultValue(3)
                     .withDescription(
-                            "The number of threads that the server uses for receiving requests "
-                                    + "from the network and sending responses to the network.");
+                            "The number of network threads per listener resource group for receiving "
+                                    + "requests and sending responses. When the server binds both the "
+                                    + "listener selected by internal.listener.name and external listeners, "
+                                    + "the internal listener uses a dedicated group and all external "
+                                    + "listeners share another group. Otherwise, all listeners share "
+                                    + "one group.");
 
     public static final ConfigOption<Integer> NETTY_SERVER_NUM_WORKER_THREADS =
             key("netty.server.num-worker-threads")
                     .intType()
                     .defaultValue(8)
                     .withDescription(
-                            "The number of threads that the server uses for processing requests, "
-                                    + "which may include disk and remote I/O.");
+                            "The number of worker threads per listener resource group for processing "
+                                    + "requests, which may include disk and remote I/O. When the server "
+                                    + "binds both the listener selected by internal.listener.name and "
+                                    + "external listeners, the internal listener uses a dedicated group "
+                                    + "and all external listeners share another group. Otherwise, all "
+                                    + "listeners share one group.");
 
     public static final ConfigOption<Integer> NETTY_SERVER_MAX_QUEUED_REQUESTS =
             key("netty.server.max-queued-requests")
                     .intType()
                     .defaultValue(500)
                     .withDescription(
-                            "The number of queued requests allowed for worker threads, before blocking the I/O threads.");
+                            "The queued-request backpressure threshold per listener resource group, "
+                                    + "divided among its worker threads. When a worker queue reaches its "
+                                    + "threshold, reads are paused on its associated connections. Queues "
+                                    + "are unbounded; this is not a hard limit on queued requests. When "
+                                    + "the server binds both the listener selected by internal.listener.name "
+                                    + "and external listeners, the internal listener uses a dedicated "
+                                    + "group and all external listeners share another group. Otherwise, "
+                                    + "all listeners share one group.");
 
     public static final ConfigOption<Integer> NETTY_SERVER_MAX_QUEUED_HISTORICAL_REQUESTS =
             key("netty.server.max-queued-historical-requests")
@@ -1792,7 +1808,11 @@ public class ConfigOptions {
             key("client.lookup.queue-size")
                     .intType()
                     .defaultValue(25600)
-                    .withDescription("The maximum number of pending lookup operations.");
+                    .withDescription(
+                            "The maximum number of lookup operations in the initial input queue. "
+                                    + "Adding a lookup blocks while this queue is full. Lookups waiting "
+                                    + "for a bucket's leader or for a retry are outside this limit, so the "
+                                    + "total number of pending lookups can grow beyond it.");
 
     public static final ConfigOption<Integer> CLIENT_LOOKUP_MAX_BATCH_SIZE =
             key("client.lookup.max-batch-size")
@@ -1823,6 +1843,26 @@ public class ConfigOptions {
                     .withDescription(
                             "Setting a value greater than zero will cause the client to resend any lookup request "
                                     + "that fails with a potentially transient error.");
+
+    public static final ConfigOption<Duration> CLIENT_LOOKUP_RETRY_BACKOFF =
+            key("client.lookup.retry-backoff")
+                    .durationType()
+                    .defaultValue(Duration.ofMillis(100))
+                    .withDescription(
+                            "The initial delay before retrying a lookup that failed with a retriable error, "
+                                    + "such as NOT_LEADER_OR_FOLLOWER, or whose bucket has no known leader. The "
+                                    + "delay doubles with each attempt and uses 20% jitter, up to "
+                                    + "client.lookup.retry-backoff-max. Attempts made while a bucket has no known "
+                                    + "leader don't count toward client.lookup.max-retries. "
+                                    + "Set to 0 to disable this backoff.");
+
+    public static final ConfigOption<Duration> CLIENT_LOOKUP_RETRY_BACKOFF_MAX =
+            key("client.lookup.retry-backoff-max")
+                    .durationType()
+                    .defaultValue(Duration.ofSeconds(1))
+                    .withDescription(
+                            "The maximum delay before retrying a lookup. "
+                                    + "Must be between the initial backoff and 2147483647ms.");
 
     public static final ConfigOption<Integer> CLIENT_SCANNER_REMOTE_LOG_PREFETCH_NUM =
             key("client.scanner.remote-log.prefetch-num")
@@ -1961,6 +2001,26 @@ public class ConfigOptions {
                     .defaultValue(3)
                     .withDescription(
                             "The compression level of ZSTD for the log records if the log format is set to `ARROW` "
+                                    + "and the compression type is set to `ZSTD`. The valid range is 1 to 22.");
+
+    public static final ConfigOption<LogCompressionType> TABLE_LOG_COMPACTED_COMPRESSION_TYPE =
+            key("table.log.compacted.compression.type")
+                    .enumType(LogCompressionType.class)
+                    .defaultValue(LogCompressionType.NONE)
+                    .withDescription(
+                            "The compression type of the log record batches if the log format is set to `COMPACTED`. "
+                                    + "The candidate compression type is "
+                                    + Arrays.toString(LogCompressionType.values())
+                                    + ". Compressed batches use log batch format V3, which Fluss versions before 1.1 "
+                                    + "can't read: older clients and tablet servers fail with an 'Unsupported magic value' error. "
+                                    + "Upgrade all tablet servers and consumers (e.g., Flink jobs) before enabling compression.");
+
+    public static final ConfigOption<Integer> TABLE_LOG_COMPACTED_COMPRESSION_ZSTD_LEVEL =
+            key("table.log.compacted.compression.zstd.level")
+                    .intType()
+                    .defaultValue(3)
+                    .withDescription(
+                            "The compression level of ZSTD for the log record batches if the log format is set to `COMPACTED` "
                                     + "and the compression type is set to `ZSTD`. The valid range is 1 to 22.");
 
     public static final ConfigOption<KvFormat> TABLE_KV_FORMAT =
@@ -2211,16 +2271,16 @@ public class ConfigOptions {
                     .stringType()
                     .noDefaultValue()
                     .withDescription(
-                            "Specifies the database name of the datalake table. This option is currently supported only for Paimon. "
-                                    + "If not set, the Fluss database name is used. The option may be configured before the Paimon table is created and cannot be changed after creation.");
+                            "Specifies the database name of the datalake table. This option is currently supported only for Paimon and Iceberg. "
+                                    + "If not set, the Fluss database name is used. The option may be configured before the lake table is created and cannot be changed after creation.");
 
     public static final ConfigOption<String> TABLE_DATALAKE_TABLE_NAME =
             key("table.datalake.table-name")
                     .stringType()
                     .noDefaultValue()
                     .withDescription(
-                            "Specifies the table name of the datalake table. This option is currently supported only for Paimon. "
-                                    + "If not set, the Fluss table name is used. The option may be configured before the Paimon table is created and cannot be changed after creation.");
+                            "Specifies the table name of the datalake table. This option is currently supported only for Paimon and Iceberg. "
+                                    + "If not set, the Fluss table name is used. The option may be configured before the lake table is created and cannot be changed after creation.");
 
     public static final ConfigOption<Duration> TABLE_DATALAKE_FRESHNESS =
             key("table.datalake.freshness")
@@ -3039,6 +3099,13 @@ public class ConfigOptions {
                                     + "Multiple directories can be separated by comma or the system path separator. "
                                     + "If not configured and the tiering service runs in a Flink job, Fluss uses "
                                     + "Flink's IO temporary directories with a 'fluss' child directory.");
+
+    public static final ConfigOption<Integer> LAKE_TIERING_COMMIT_THREAD_NUM =
+            key("lake.tiering.commit-thread-num")
+                    .intType()
+                    .defaultValue(2)
+                    .withDescription(
+                            "The number of threads the tiering service uses to commit tables concurrently. Must be positive.");
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for fluss kafka

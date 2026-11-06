@@ -17,11 +17,13 @@
 
 package org.apache.fluss.rpc.netty.server;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.cluster.ServerReconfigurable;
+import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.rpc.RpcGateway;
 import org.apache.fluss.rpc.RpcGatewayService;
@@ -36,6 +38,7 @@ import org.apache.fluss.shaded.netty4.io.netty.channel.Channel;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandler;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelOption;
 import org.apache.fluss.shaded.netty4.io.netty.channel.EventLoopGroup;
+import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import org.slf4j.Logger;
@@ -63,6 +66,10 @@ import static org.apache.fluss.utils.Preconditions.checkState;
 /**
  * Netty based {@link RpcServer} implementation. The RPC server starts a handler to receive RPC
  * invocations from a {@link RpcGateway}.
+ *
+ * <p>A separate internal listener receives its own configured network threads, request processors
+ * and queue capacity. All other listeners share the external resources. With a single listener,
+ * internal and external requests share one resource group.
  */
 public final class NettyServer implements RpcServer {
 
@@ -70,14 +77,19 @@ public final class NettyServer implements RpcServer {
 
     private final Configuration conf;
     private final Collection<Endpoint> endpoints;
-    private final RequestProcessorPool workerPool;
+    private final ServerRpcResources externalResources;
+    private final ServerRpcResources internalResources;
+    private final List<ServerRpcResources> resources;
+    private final String internalListenerName;
     private final MetricGroup serverMetricGroup;
     private final List<NetworkProtocolPlugin> protocols;
     private final List<Channel> bindChannels;
     private final List<Endpoint> bindEndpoints;
+    private final RequestHandler<?>[] requestHandlers;
 
     private EventLoopGroup acceptorGroup;
-    private EventLoopGroup selectorGroup;
+
+    private CompletableFuture<Void> terminationFuture;
 
     private volatile boolean isRunning;
 
@@ -87,30 +99,74 @@ public final class NettyServer implements RpcServer {
             RpcGatewayService service,
             MetricGroup serverMetricGroup,
             RequestsMetrics requestsMetrics) {
+        this(
+                conf,
+                endpoints,
+                service,
+                serverMetricGroup,
+                requestsMetrics,
+                loadProtocols(conf, service.providerType(), endpoints, requestsMetrics));
+    }
+
+    @VisibleForTesting
+    NettyServer(
+            Configuration conf,
+            Collection<Endpoint> endpoints,
+            RpcGatewayService service,
+            MetricGroup serverMetricGroup,
+            RequestsMetrics requestsMetrics,
+            List<NetworkProtocolPlugin> protocols) {
         this.conf = checkNotNull(conf, "conf");
         this.serverMetricGroup = checkNotNull(serverMetricGroup, "serverMetricGroup");
         this.endpoints = checkNotNull(endpoints, "endpoints");
-        this.protocols = loadProtocols(conf, service.providerType(), endpoints, requestsMetrics);
+        this.protocols = protocols;
 
-        this.workerPool =
-                new RequestProcessorPool(
-                        conf.getInt(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS),
-                        conf.getInt(ConfigOptions.NETTY_SERVER_MAX_QUEUED_REQUESTS),
-                        service,
-                        protocols,
-                        requestsMetrics);
+        this.requestHandlers = RequestProcessorPool.createRequestHandlers(protocols, service);
+        this.internalListenerName = conf.get(ConfigOptions.INTERNAL_LISTENER_NAME);
+        this.externalResources =
+                new ServerRpcResources(conf, service, requestHandlers, requestsMetrics, 0, "");
+        this.resources = new ArrayList<>();
+        resources.add(externalResources);
+        boolean hasInternalListener =
+                endpoints.stream()
+                        .anyMatch(
+                                endpoint ->
+                                        internalListenerName.equals(endpoint.getListenerName()));
+        boolean hasExternalListener =
+                endpoints.stream()
+                        .anyMatch(
+                                endpoint ->
+                                        !internalListenerName.equals(endpoint.getListenerName()));
+        if (hasInternalListener && hasExternalListener) {
+            this.internalResources =
+                    new ServerRpcResources(
+                            conf,
+                            service,
+                            requestHandlers,
+                            requestsMetrics,
+                            conf.getInt(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS),
+                            "-internal");
+            resources.add(internalResources);
+        } else {
+            this.internalResources = externalResources;
+        }
+        requestsMetrics.gauge(
+                MetricNames.REQUEST_QUEUE_SIZE,
+                () -> resources.stream().mapToInt(ServerRpcResources::requestsCount).sum());
         this.bindChannels = new CopyOnWriteArrayList<>();
         this.bindEndpoints = new CopyOnWriteArrayList<>();
     }
 
     @Override
-    public void start() throws IOException {
+    public synchronized void start() throws IOException {
         checkState(bindChannels.isEmpty(), "Netty server has already been initialized.");
+        checkState(terminationFuture == null, "Netty server has already been closed.");
         int numNetworkThreads = conf.getInt(ConfigOptions.NETTY_SERVER_NUM_NETWORK_THREADS);
         int numWorkerThreads = conf.getInt(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS);
         LOG.info(
-                "Starting Netty server on endpoints {} with {} network threads and {} worker threads.",
+                "Starting Netty server on endpoints {} with {} resource groups, each with {} network threads and {} worker threads.",
                 endpoints,
+                resources.size(),
                 numNetworkThreads,
                 numWorkerThreads);
 
@@ -120,19 +176,21 @@ public final class NettyServer implements RpcServer {
                 NettyUtils.newEventLoopGroup(
                         1, // always use single thread for acceptor
                         "fluss-netty-server-acceptor");
-        this.selectorGroup =
-                NettyUtils.newEventLoopGroup(numNetworkThreads, "fluss-netty-server-selector");
         PooledByteBufAllocator pooledBufAllocator = PooledByteBufAllocator.DEFAULT;
 
-        // setup worker thread pool
-        workerPool.start();
+        try {
+            for (ServerRpcResources resource : resources) {
+                resource.start();
+            }
 
-        // load protocol plugins
-        Map<String, NetworkProtocolPlugin> protocols = getProtocolsByListenerName();
-
-        for (Endpoint endpoint : endpoints) {
-            NetworkProtocolPlugin protocol = protocols.get(endpoint.getListenerName());
-            startEndpoint(endpoint, protocol);
+            Map<String, NetworkProtocolPlugin> protocols = getProtocolsByListenerName();
+            for (Endpoint endpoint : endpoints) {
+                NetworkProtocolPlugin protocol = protocols.get(endpoint.getListenerName());
+                startEndpoint(endpoint, protocol);
+            }
+        } catch (IOException | RuntimeException e) {
+            closeAsync().join();
+            throw e;
         }
 
         final long duration = (System.nanoTime() - start) / 1_000_000;
@@ -153,6 +211,11 @@ public final class NettyServer implements RpcServer {
     private void startEndpoint(Endpoint endpoint, NetworkProtocolPlugin protocol)
             throws IOException {
         ServerBootstrap bootstrap = new ServerBootstrap();
+        ServerRpcResources resource =
+                internalListenerName.equals(endpoint.getListenerName())
+                        ? internalResources
+                        : externalResources;
+        EventLoopGroup selectorGroup = resource.selectorGroup();
 
         bootstrap.childOption(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT);
         bootstrap.group(acceptorGroup, selectorGroup);
@@ -167,7 +230,7 @@ public final class NettyServer implements RpcServer {
         final String protocolName = protocol.name();
         channelHandler =
                 protocol.createChannelHandler(
-                        workerPool.getRequestChannels(), endpoint.getListenerName());
+                        resource.requestChannels(), endpoint.getListenerName());
         bootstrap.childHandler(channelHandler);
 
         // --------------------------------------------------------------------
@@ -293,35 +356,26 @@ public final class NettyServer implements RpcServer {
     @Override
     public ScheduledExecutorService getScheduledExecutor() {
         checkState(isRunning, "Netty server has not been started yet.");
-        return selectorGroup;
+        return externalResources.selectorGroup();
     }
 
     @Override
-    public CompletableFuture<Void> closeAsync() {
-        if (!isRunning) {
-            return CompletableFuture.completedFuture(null);
+    public synchronized CompletableFuture<Void> closeAsync() {
+        if (terminationFuture != null) {
+            return terminationFuture;
         }
 
         isRunning = false;
 
-        CompletableFuture<Void> acceptorShutdownFuture = shutdownGroup(acceptorGroup);
-        CompletableFuture<Void> selectorShutdownFuture = shutdownGroup(selectorGroup);
-        CompletableFuture<Void> channelShutdownFuture =
-                FutureUtils.completeAll(
-                        bindChannels.stream()
-                                .map(NettyUtils::shutdownChannel)
-                                .collect(Collectors.toList()));
-        CompletableFuture<Void> workerShutdownFuture;
-        if (workerPool != null) {
-            workerShutdownFuture = workerPool.closeAsync();
-        } else {
-            workerShutdownFuture = CompletableFuture.completedFuture(null);
-        }
-
-        return CompletableFuture.allOf(
-                acceptorShutdownFuture,
-                selectorShutdownFuture,
-                channelShutdownFuture,
-                workerShutdownFuture);
+        List<CompletableFuture<Void>> shutdownFutures = new ArrayList<>();
+        shutdownFutures.add(shutdownGroup(acceptorGroup));
+        bindChannels.forEach(channel -> shutdownFutures.add(NettyUtils.shutdownChannel(channel)));
+        resources.forEach(resource -> shutdownFutures.add(resource.closeAsync()));
+        // Handlers are shared by both resource groups and outlive all request processors.
+        terminationFuture =
+                FutureUtils.runAfterwards(
+                        FutureUtils.completeAll(shutdownFutures),
+                        () -> IOUtils.closeAll(requestHandlers));
+        return terminationFuture;
     }
 }

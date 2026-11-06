@@ -22,6 +22,10 @@ updates:
     directory: "/"
     schedule:
       interval: "monthly"
+    ignore:
+      # Pinned in process-stale-prs.yaml until https://github.com/actions/stale/issues/1378 is fixed.
+      - dependency-name: "actions/stale"
+        versions: [">= 10.3.0"]
 
   # Rust client workspace
   - package-ecosystem: "cargo"

@@ -37,6 +37,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.File;
+import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Arrays;
 
@@ -221,6 +222,39 @@ class RocksDBKvTest {
                 assertThat(lookup.readAll()).isEmpty();
             }
             assertThat(kv.getResourceGuard().getLeaseCount()).isZero();
+        }
+    }
+
+    @Test
+    void testMultiGetSnapshotSurvivesFlushCompactionAndDelete(@TempDir Path tempDir)
+            throws Exception {
+        try (RocksDBKv kv = buildRocksDBKv(tempDir.toFile())) {
+            byte[] key = new byte[] {1};
+            byte[] missing = new byte[] {2};
+            kv.put(key, new byte[] {10});
+            RocksDBKv.MultiGetLookup lookup = kv.openMultiGet();
+            try {
+                assertThat(kv.getResourceGuard().getLeaseCount()).isEqualTo(1);
+                assertThat(kv.db.getLongProperty("rocksdb.num-snapshots")).isEqualTo(1);
+                kv.delete(key);
+                kv.put(missing, new byte[] {20});
+                try (FlushOptions options = new FlushOptions().setWaitForFlush(true)) {
+                    kv.db.flush(options);
+                }
+                kv.db.compactRange();
+                assertThat(lookup.read(Arrays.asList(key, missing, key)))
+                        .containsExactly(new byte[] {10}, null, new byte[] {10});
+            } finally {
+                lookup.close();
+            }
+            lookup.close();
+            assertThat(kv.getResourceGuard().getLeaseCount()).isZero();
+            assertThat(kv.db.getLongProperty("rocksdb.num-snapshots")).isZero();
+            assertThatThrownBy(() -> lookup.read(Arrays.asList(key)))
+                    .isInstanceOf(IOException.class)
+                    .hasMessageContaining("closed");
+            assertThat(kv.multiGet(Arrays.asList(key, missing)))
+                    .containsExactly(null, new byte[] {20});
         }
     }
 

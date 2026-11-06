@@ -223,7 +223,7 @@ Use Iceberg-specific configurations as parameters when starting the Flink tierin
 
 ## Table Mapping Between Fluss and Iceberg
 
-When a Fluss table is created or altered with the option `'table.datalake.enabled' = 'true'` and configured with Iceberg as the datalake format, Fluss will automatically create a corresponding Iceberg table with the same table path.
+When a Fluss table is created or altered with the option `'table.datalake.enabled' = 'true'` and configured with Iceberg as the datalake format, Fluss will automatically create a corresponding Iceberg table. By default, it uses the same database and table name as the Fluss table. To use different names, see [Configure a Custom Iceberg Table Path](#configure-a-custom-iceberg-table-path).
 
 Newly created Iceberg tables (**clean** tables) contain only the user-defined columns of the Fluss table. Fluss no longer appends the `__bucket`, `__offset`, and `__timestamp` system columns to the physical schema, and a clean table therefore has no `__bucket` partitioning or `__offset` sort order.
 
@@ -256,6 +256,27 @@ CREATE TABLE fluss_order_with_lake (
  ) WITH (
      'table.datalake.enabled' = 'true',
      'table.datalake.freshness' = '30s'
+);
+```
+
+### Configure a Custom Iceberg Table Path
+
+To use a different database or table name for the physical Iceberg table, set the following options when creating the Fluss table:
+
+```sql
+'table.datalake.database-name' = 'iceberg_database',
+'table.datalake.table-name' = 'iceberg_table'
+```
+
+Both options are optional. If either option is omitted, the corresponding Fluss database or table name is used. The mapping does not rename the Fluss table or set the Iceberg table's filesystem location.
+
+For a Fluss table created after datalake was configured for the cluster, the mapping can also be set in the same `ALTER TABLE` statement that enables lake storage for the first time:
+
+```sql
+ALTER TABLE existing_fluss_table SET (
+  'table.datalake.enabled' = 'true',
+  'table.datalake.database-name' = 'iceberg_database',
+  'table.datalake.table-name' = 'iceberg_table'
 );
 ```
 

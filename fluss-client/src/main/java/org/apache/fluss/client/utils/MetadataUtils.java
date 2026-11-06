@@ -17,24 +17,19 @@
 
 package org.apache.fluss.client.utils;
 
-import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.cluster.BucketLocation;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
-import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.exception.StaleMetadataException;
-import org.apache.fluss.exception.UnsupportedVersionException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableOrPartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.GatewayClientProxy;
 import org.apache.fluss.rpc.RpcClient;
-import org.apache.fluss.rpc.gateway.AdminGateway;
 import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
-import org.apache.fluss.rpc.messages.DescribeClusterRequest;
-import org.apache.fluss.rpc.messages.DescribeClusterResponse;
 import org.apache.fluss.rpc.messages.MetadataRequest;
 import org.apache.fluss.rpc.messages.MetadataResponse;
 import org.apache.fluss.rpc.messages.PbBucketMetadata;
@@ -42,10 +37,6 @@ import org.apache.fluss.rpc.messages.PbPartitionMetadata;
 import org.apache.fluss.rpc.messages.PbServerNode;
 import org.apache.fluss.rpc.messages.PbTableMetadata;
 import org.apache.fluss.rpc.messages.PbTablePath;
-import org.apache.fluss.utils.ExceptionUtils;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
@@ -61,12 +52,9 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.function.Supplier;
 
 /** Utils for metadata for client. */
 public class MetadataUtils {
-
-    private static final Logger LOG = LoggerFactory.getLogger(MetadataUtils.class);
 
     private static final Random randOffset = new Random();
 
@@ -131,8 +119,7 @@ public class MetadataUtils {
     /**
      * Merges a response into the current snapshot, excluding targets invalidated during the
      * request. A full update uses the snapshot to resolve response metadata but does not copy its
-     * entries. Invalidating a table also excludes partition responses that could restore its bucket
-     * count.
+     * entries. Invalidating a table also excludes metadata for its partitions.
      */
     public static Cluster rebuildCluster(
             @Nullable Cluster currentCluster,
@@ -156,119 +143,27 @@ public class MetadataUtils {
         Map<PhysicalTablePath, List<BucketLocation>> bucketLocations = new HashMap<>();
         Map<PhysicalTablePath, Long> partitionIds = new HashMap<>();
         Map<TableOrPartition, Integer> bucketCounts = new HashMap<>();
+        Map<Long, Long> bucketCountEpochs = new HashMap<>();
         if (partialUpdate) {
             tableIds.putAll(currentCluster.getTableIdByPath());
             bucketLocations.putAll(currentCluster.getBucketLocationsByPath());
             partitionIds.putAll(currentCluster.getPartitionIdByPath());
             bucketCounts.putAll(currentCluster.getBucketCountByTableOrPartition());
+            bucketCountEpochs.putAll(currentCluster.getBucketCountEpochByTableId());
         }
         tableIds.putAll(metadata.tablePathToTableId);
         bucketLocations.putAll(metadata.bucketLocations);
         partitionIds.putAll(metadata.partitionIdByPath);
         bucketCounts.putAll(metadata.bucketCountByTableOrPartition);
+        bucketCountEpochs.putAll(metadata.bucketCountEpochByTableId);
         return new Cluster(
                 newAliveTabletServers,
                 getCoordinatorServer(response),
                 bucketLocations,
                 tableIds,
                 partitionIds,
-                bucketCounts);
-    }
-
-    /**
-     * Sends a {@link DescribeClusterRequest} to the coordinator. The returned server nodes are the
-     * coordinator server, followed by the alive tablet servers with their {@link ServerTag}.
-     */
-    public static CompletableFuture<List<ServerNode>> sendDescribeClusterRequest(
-            AdminGateway gateway) {
-        return gateway.describeCluster(new DescribeClusterRequest())
-                .thenApply(MetadataUtils::toServerNodes);
-    }
-
-    /**
-     * Runs {@code request}, or {@code fallback} instead when the server does not support the
-     * request, for example because it runs an older Fluss version. Any other failure of {@code
-     * request} fails the returned future.
-     */
-    public static <T> CompletableFuture<T> fallbackIfUnsupported(
-            Supplier<CompletableFuture<T>> request, Supplier<CompletableFuture<T>> fallback) {
-        CompletableFuture<T> result = new CompletableFuture<>();
-        CompletableFuture<T> requestFuture;
-        try {
-            requestFuture = request.get();
-        } catch (Throwable t) {
-            requestFuture = new CompletableFuture<>();
-            requestFuture.completeExceptionally(t);
-        }
-        requestFuture.whenComplete(
-                (value, error) -> {
-                    if (error == null) {
-                        result.complete(value);
-                    } else if (!ExceptionUtils.findThrowable(
-                                    error, UnsupportedVersionException.class)
-                            .isPresent()) {
-                        result.completeExceptionally(
-                                ExceptionUtils.stripCompletionException(error));
-                    } else {
-                        LOG.info(
-                                "The server does not support the request, falling back: {}",
-                                error.getMessage());
-                        try {
-                            fallback.get()
-                                    .whenComplete(
-                                            (fallbackValue, fallbackError) -> {
-                                                if (fallbackError == null) {
-                                                    result.complete(fallbackValue);
-                                                } else {
-                                                    result.completeExceptionally(
-                                                            ExceptionUtils.stripCompletionException(
-                                                                    fallbackError));
-                                                }
-                                            });
-                        } catch (Throwable t) {
-                            result.completeExceptionally(t);
-                        }
-                    }
-                });
-        return result;
-    }
-
-    @VisibleForTesting
-    static List<ServerNode> toServerNodes(DescribeClusterResponse response) {
-        List<ServerNode> serverNodes = new ArrayList<>();
-        ServerNode coordinator = getCoordinatorServer(response);
-        if (coordinator != null) {
-            serverNodes.add(coordinator);
-        }
-        for (PbServerNode serverNode : response.getTabletServersList()) {
-            serverNodes.add(
-                    new ServerNode(
-                            serverNode.getNodeId(),
-                            serverNode.getHost(),
-                            serverNode.getPort(),
-                            ServerType.TABLET_SERVER,
-                            serverNode.hasRack() ? serverNode.getRack() : null,
-                            serverNode.hasServerTag()
-                                    ? toServerTag(serverNode.getServerTag())
-                                    : null));
-        }
-        return serverNodes;
-    }
-
-    /**
-     * Converts the server tag value of a response. A value this client does not know, written by a
-     * newer server, is reported as no tag instead of failing the whole request.
-     */
-    @Nullable
-    private static ServerTag toServerTag(int value) {
-        try {
-            return ServerTag.valueOf(value);
-        } catch (IllegalArgumentException e) {
-            LOG.warn(
-                    "Ignoring unknown server tag {}, it was probably added by a newer Fluss version.",
-                    value);
-            return null;
-        }
+                bucketCounts,
+                bucketCountEpochs);
     }
 
     private static NewTableMetadata getTableMetadataToUpdate(
@@ -281,6 +176,7 @@ public class MetadataUtils {
         Map<PhysicalTablePath, List<BucketLocation>> newBucketLocations = new HashMap<>();
         Map<PhysicalTablePath, Long> newPartitionIdByPath = new HashMap<>();
         Map<TableOrPartition, Integer> newBucketCountByTableOrPartition = new HashMap<>();
+        Map<Long, Long> newBucketCountEpochByTableId = new HashMap<>();
 
         // iterate all table metadata
         List<PbTableMetadata> pbTableMetadataList = metadataResponse.getTableMetadatasList();
@@ -309,12 +205,60 @@ public class MetadataUtils {
                             PhysicalTablePath.of(tablePath),
                             toBucketLocations(
                                     tablePath, tableId, null, null, pbBucketMetadataList));
-                    // An empty bucket list means the assignment is not generated yet; keeping the
-                    // entry out lets callers fall back to the table-level count instead of 0.
-                    if (!pbBucketMetadataList.isEmpty()) {
-                        newBucketCountByTableOrPartition.put(
-                                TableOrPartition.ofTable(tableId), pbBucketMetadataList.size());
+                    if (pbTableMetadata.hasBucketCount()
+                            && !pbTableMetadata.hasBucketCountEpoch()) {
+                        throw new StaleMetadataException(
+                                "Explicit table count has no epoch: " + tablePath);
                     }
+                    int count =
+                            pbTableMetadata.hasBucketCount()
+                                    ? pbTableMetadata.getBucketCount()
+                                    : TableDescriptor.fromJsonBytes(pbTableMetadata.getTableJson())
+                                            .getTableDistribution()
+                                            .flatMap(
+                                                    TableDescriptor.TableDistribution
+                                                            ::getBucketCount)
+                                            .orElseThrow(
+                                                    () ->
+                                                            new StaleMetadataException(
+                                                                    "Table bucket count is unavailable: "
+                                                                            + tablePath));
+                    long epoch =
+                            pbTableMetadata.hasBucketCountEpoch()
+                                    ? pbTableMetadata.getBucketCountEpoch()
+                                    : 0L;
+                    if (count <= 0 || epoch < 0) {
+                        throw new StaleMetadataException(
+                                "Invalid table bucket count or epoch: " + tablePath);
+                    }
+                    if (cluster != null && cluster.getBucketCountEpoch(tableId).isPresent()) {
+                        long previousEpoch = cluster.getBucketCountEpoch(tableId).getAsLong();
+                        Integer previousCount =
+                                cluster.getBucketCount(TableOrPartition.ofTable(tableId))
+                                        .orElse(null);
+                        if (epoch < previousEpoch) {
+                            // A delayed response must retain the newer cached count and locations.
+                            epoch = previousEpoch;
+                            if (previousCount == null) {
+                                throw new StaleMetadataException(
+                                        "A newer table layout is required: " + tablePath);
+                            }
+                            count = previousCount;
+                            newBucketLocations.put(
+                                    PhysicalTablePath.of(tablePath),
+                                    cluster.getBucketLocationsByPath()
+                                            .getOrDefault(
+                                                    PhysicalTablePath.of(tablePath),
+                                                    Collections.emptyList()));
+                        } else if (epoch == previousEpoch
+                                && previousCount != null
+                                && count != previousCount) {
+                            throw new StaleMetadataException(
+                                    "Conflicting table counts at the same epoch: " + tablePath);
+                        }
+                    }
+                    newBucketCountByTableOrPartition.put(TableOrPartition.ofTable(tableId), count);
+                    newBucketCountEpochByTableId.put(tableId, epoch);
                 });
 
         List<PbPartitionMetadata> pbPartitionMetadataList =
@@ -333,7 +277,12 @@ public class MetadataUtils {
                     }
                     TablePath tablePath = newTablePathByTableId.get(tableId);
                     if (tablePath == null) {
-                        tablePath = cluster.getTablePathOrElseThrow(tableId);
+                        tablePath =
+                                cluster == null ? null : cluster.getTablePath(tableId).orElse(null);
+                    }
+                    if (tablePath == null) {
+                        throw new StaleMetadataException(
+                                "Parent table metadata is unavailable for " + tableId);
                     }
                     PhysicalTablePath physicalTablePath =
                             PhysicalTablePath.of(tablePath, pbPartitionMetadata.getPartitionName());
@@ -352,36 +301,45 @@ public class MetadataUtils {
                                     pbPartitionMetadata.getPartitionId(),
                                     pbPartitionMetadata.getPartitionName(),
                                     pbPartitionMetadata.getBucketMetadatasList()));
-                    // Old servers do not send the explicit count but still send the complete
-                    // assignment, so normalize both protocol versions into the same Cluster map.
-                    // An empty assignment means the layout is not available yet, not zero buckets.
-                    int bucketCount =
+                    Integer bucketCount =
                             pbPartitionMetadata.hasBucketCount()
-                                            && pbPartitionMetadata.getBucketCount() > 0
                                     ? pbPartitionMetadata.getBucketCount()
-                                    : pbPartitionMetadata.getBucketMetadatasList().size();
-                    if (bucketCount > 0) {
-                        newBucketCountByTableOrPartition.put(
-                                TableOrPartition.ofPartition(pbPartitionMetadata.getPartitionId()),
-                                bucketCount);
-
-                        // TODO: This is a temporary workaround: use the largest observed partition
-                        // bucket count as the table-level count. The proper solution is to extend
-                        // the metadata RPC path to return the table's bucket count and bucket count
-                        // epoch together.
-                        TableOrPartition table = TableOrPartition.ofTable(tableId);
-                        int previousTableBucketCount =
-                                cluster == null ? 0 : cluster.getBucketCount(table).orElse(0);
-                        newBucketCountByTableOrPartition.merge(
-                                table, Math.max(previousTableBucketCount, bucketCount), Math::max);
+                                    : null;
+                    if (bucketCount == null) {
+                        Long epoch = newBucketCountEpochByTableId.get(tableId);
+                        if (epoch == null
+                                && cluster != null
+                                && cluster.getBucketCountEpoch(tableId).isPresent()) {
+                            epoch = cluster.getBucketCountEpoch(tableId).getAsLong();
+                        }
+                        if (epoch != null && epoch == 0L) {
+                            // At epoch zero all partitions share the table count. The first rescale
+                            // atomically persists existing partition counts and advances the epoch.
+                            bucketCount =
+                                    newBucketCountByTableOrPartition.get(
+                                            TableOrPartition.ofTable(tableId));
+                            if (bucketCount == null && cluster != null) {
+                                bucketCount =
+                                        cluster.getBucketCount(TableOrPartition.ofTable(tableId))
+                                                .orElse(null);
+                            }
+                        }
                     }
+                    if (bucketCount == null || bucketCount <= 0) {
+                        throw new StaleMetadataException(
+                                "Partition bucket count is unavailable: " + physicalTablePath);
+                    }
+                    newBucketCountByTableOrPartition.put(
+                            TableOrPartition.ofPartition(pbPartitionMetadata.getPartitionId()),
+                            bucketCount);
                 });
 
         return new NewTableMetadata(
                 newTablePathToTableId,
                 newBucketLocations,
                 newPartitionIdByPath,
-                newBucketCountByTableOrPartition);
+                newBucketCountByTableOrPartition,
+                newBucketCountEpochByTableId);
     }
 
     private static final class NewTableMetadata {
@@ -389,16 +347,19 @@ public class MetadataUtils {
         private final Map<PhysicalTablePath, List<BucketLocation>> bucketLocations;
         private final Map<PhysicalTablePath, Long> partitionIdByPath;
         private final Map<TableOrPartition, Integer> bucketCountByTableOrPartition;
+        private final Map<Long, Long> bucketCountEpochByTableId;
 
         public NewTableMetadata(
                 Map<TablePath, Long> tablePathToTableId,
                 Map<PhysicalTablePath, List<BucketLocation>> bucketLocations,
                 Map<PhysicalTablePath, Long> partitionIdByPath,
-                Map<TableOrPartition, Integer> bucketCountByTableOrPartition) {
+                Map<TableOrPartition, Integer> bucketCountByTableOrPartition,
+                Map<Long, Long> bucketCountEpochByTableId) {
             this.tablePathToTableId = tablePathToTableId;
             this.bucketLocations = bucketLocations;
             this.partitionIdByPath = partitionIdByPath;
             this.bucketCountByTableOrPartition = bucketCountByTableOrPartition;
+            this.bucketCountEpochByTableId = bucketCountEpochByTableId;
         }
     }
 
@@ -420,20 +381,6 @@ public class MetadataUtils {
 
     @Nullable
     private static ServerNode getCoordinatorServer(MetadataResponse response) {
-        if (!response.hasCoordinatorServer()) {
-            return null;
-        } else {
-            PbServerNode protoServerNode = response.getCoordinatorServer();
-            return new ServerNode(
-                    protoServerNode.getNodeId(),
-                    protoServerNode.getHost(),
-                    protoServerNode.getPort(),
-                    ServerType.COORDINATOR);
-        }
-    }
-
-    @Nullable
-    private static ServerNode getCoordinatorServer(DescribeClusterResponse response) {
         if (!response.hasCoordinatorServer()) {
             return null;
         } else {

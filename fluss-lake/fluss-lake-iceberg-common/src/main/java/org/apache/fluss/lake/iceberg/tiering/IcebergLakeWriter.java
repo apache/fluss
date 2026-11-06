@@ -69,7 +69,7 @@ public class IcebergLakeWriter implements LakeWriter<IcebergWriteResult> {
             IcebergCatalogProvider icebergCatalogProvider, WriterInitContext writerInitContext)
             throws IOException {
         this.icebergCatalog = icebergCatalogProvider.get();
-        this.icebergTable = getTable(writerInitContext.tablePath());
+        this.icebergTable = getTable(writerInitContext.tableInfo().getLakeTablePath());
         IcebergPartitionSpecValidator.validate(icebergTable, writerInitContext.tableInfo());
 
         // Create a record writer

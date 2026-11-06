@@ -129,40 +129,19 @@ fn timestamp_to_string<T: Timestamp>(ts: T) -> String {
     let ts_jiff = epoch + jiff::Span::new().seconds(total_secs);
     let dt = ts_jiff.to_zoned(jiff::tz::TimeZone::UTC).datetime();
 
-    if nanos > 0 {
-        format!(
-            "{:04}-{:02}-{:02}-{:02}-{:02}-{:02}_{:03}{:06}",
-            dt.year(),
-            dt.month(),
-            dt.day(),
-            dt.hour(),
-            dt.minute(),
-            dt.second(),
-            millis_of_second,
-            nanos
-        )
-    } else if millis_of_second > 0 {
-        format!(
-            "{:04}-{:02}-{:02}-{:02}-{:02}-{:02}_{:03}",
-            dt.year(),
-            dt.month(),
-            dt.day(),
-            dt.hour(),
-            dt.minute(),
-            dt.second(),
-            millis_of_second
-        )
-    } else {
-        format!(
-            "{:04}-{:02}-{:02}-{:02}-{:02}-{:02}_",
-            dt.year(),
-            dt.month(),
-            dt.day(),
-            dt.hour(),
-            dt.minute(),
-            dt.second(),
-        )
-    }
+    let nanos_of_second = millis_of_second * 1_000_000 + i64::from(nanos);
+    let mut partition_name = format!(
+        "{:04}-{:02}-{:02}-{:02}-{:02}-{:02}_{nanos_of_second:09}",
+        dt.year(),
+        dt.month(),
+        dt.day(),
+        dt.hour(),
+        dt.minute(),
+        dt.second(),
+    );
+    // Java omits trailing fractional zeros, keeping the separator even for whole seconds.
+    partition_name.truncate(partition_name.trim_end_matches('0').len());
+    partition_name
 }
 
 /// Converts a Datum value to its string representation for partition naming.
@@ -508,6 +487,37 @@ mod tests {
                 .expect("datum conversion to partition string failed"),
             "-Inf"
         );
+    }
+
+    #[test]
+    fn test_timestamp_partition_names_match_java() {
+        for (millis, nanos, expected) in [
+            (0, 0, "1970-01-01-00-00-00_"),
+            (120, 0, "1970-01-01-00-00-00_12"),
+            (123, 456000, "1970-01-01-00-00-00_123456"),
+            (0, 1000, "1970-01-01-00-00-00_000001"),
+            (0, 1, "1970-01-01-00-00-00_000000001"),
+            (123, 456789, "1970-01-01-00-00-00_123456789"),
+            (-100, 0, "1969-12-31-23-59-59_9"),
+            (-1, 999000, "1969-12-31-23-59-59_999999"),
+        ] {
+            for (datum, data_type) in [
+                (
+                    Datum::TimestampNtz(TimestampNtz::from_millis_nanos(millis, nanos).unwrap()),
+                    DataType::Timestamp(TimestampType::new(9).unwrap()),
+                ),
+                (
+                    Datum::TimestampLtz(TimestampLtz::from_millis_nanos(millis, nanos).unwrap()),
+                    DataType::TimestampLTz(TimestampLTzType::new(9).unwrap()),
+                ),
+            ] {
+                assert_eq!(
+                    convert_value_of_type(&datum, &data_type).unwrap(),
+                    expected,
+                    "{data_type}: millis={millis}, nanos={nanos}"
+                );
+            }
+        }
     }
 
     #[test]

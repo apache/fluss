@@ -63,6 +63,52 @@ class TableDescriptorValidationTest {
     }
 
     @Test
+    void testCompactedCompressionZstdLevel() {
+        TableDescriptorValidation.validateTableDescriptor(
+                logTableWithProperty(
+                        ConfigOptions.TABLE_LOG_COMPACTED_COMPRESSION_ZSTD_LEVEL.key(), "22"),
+                100,
+                null);
+        assertThatThrownBy(
+                        () ->
+                                TableDescriptorValidation.validateTableDescriptor(
+                                        logTableWithProperty(
+                                                ConfigOptions
+                                                        .TABLE_LOG_COMPACTED_COMPRESSION_ZSTD_LEVEL
+                                                        .key(),
+                                                "0"),
+                                        100,
+                                        null))
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining("Invalid ZSTD compression level: 0");
+    }
+
+    @Test
+    void testCompactedCompressionRequiresCompactedLogFormat() {
+        // the default log format is ARROW
+        assertThatThrownBy(
+                        () ->
+                                TableDescriptorValidation.validateTableDescriptor(
+                                        logTableWithProperty(
+                                                ConfigOptions.TABLE_LOG_COMPACTED_COMPRESSION_TYPE
+                                                        .key(),
+                                                "ZSTD"),
+                                        100,
+                                        null))
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining(
+                        "'table.log.compacted.compression.type' is only supported for tables with "
+                                + "'table.log.format' = 'COMPACTED', but the log format is 'ARROW'.");
+
+        // NONE is allowed for every log format
+        TableDescriptorValidation.validateTableDescriptor(
+                logTableWithProperty(
+                        ConfigOptions.TABLE_LOG_COMPACTED_COMPRESSION_TYPE.key(), "NONE"),
+                100,
+                null);
+    }
+
+    @Test
     void testSkipUnchangedUpsertsRequiresPrimaryKey() {
         assertThatThrownBy(
                         () ->
@@ -265,6 +311,19 @@ class TableDescriptorValidationTest {
     }
 
     @Test
+    void testCustomLakePathRejectedForUnsupportedFormat() {
+        assertThatThrownBy(
+                        () ->
+                                validate(
+                                        tableDescriptorWithLakeName(
+                                                ConfigOptions.TABLE_DATALAKE_DATABASE_NAME,
+                                                "lance_db"),
+                                        DataLakeFormat.LANCE))
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining("only supported for Paimon and Iceberg");
+    }
+
+    @Test
     void testKvFormatVersionStillRejectsValuesAboveVersionTwo() {
         TableDescriptor descriptor =
                 pkTableWithProperty(
@@ -400,16 +459,15 @@ class TableDescriptorValidationTest {
         assertThatCode(() -> validate(tableDescriptor, DataLakeFormat.PAIMON))
                 .doesNotThrowAnyException();
 
-        // custom lake paths are not supported for Iceberg
-        assertThatThrownBy(
+        // custom lake paths are now supported for Iceberg
+        assertThatCode(
                         () ->
                                 validate(
                                         tableDescriptorWithLakeName(
                                                 ConfigOptions.TABLE_DATALAKE_TABLE_NAME,
                                                 "lake_table"),
                                         DataLakeFormat.ICEBERG))
-                .isInstanceOf(InvalidConfigException.class)
-                .hasMessageContaining("Custom lake table path is only supported for Paimon");
+                .doesNotThrowAnyException();
     }
 
     @Test

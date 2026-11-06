@@ -24,6 +24,7 @@ import org.apache.fluss.server.zk.ZooKeeperClient;
 
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -77,15 +78,22 @@ public class TabletServerMetadataProvider extends ZkBasedMetadataProvider {
     }
 
     @Override
+    public Map<PhysicalTablePath, PartitionMetadata> getPartitionsMetadataFromCache(
+            Collection<PhysicalTablePath> physicalTablePaths) {
+        return metadataCache.getPartitionsMetadata(physicalTablePaths);
+    }
+
+    @Override
     public Optional<PhysicalTablePath> getPhysicalTablePathFromCache(long partitionId) {
         return metadataCache.getPhysicalTablePath(partitionId);
     }
 
     @Override
     public List<TableMetadata> getTablesMetadataFromZK(Collection<TablePath> tablePaths) {
+        ServerMetadataSnapshot snapshot = metadataCache.getSnapshot();
         List<TableMetadata> result = super.getTablesMetadataFromZK(tablePaths);
         // Update local cache after successfully fetching from ZooKeeper
-        result.forEach(metadataCache::updateTableMetadata);
+        metadataCache.updateTableMetadata(result, snapshot);
         return result;
     }
 

@@ -129,6 +129,9 @@ pub struct RecordBatch {
     /// Server-side commit timestamp in epoch milliseconds, or -1 if unavailable.
     #[pyo3(get)]
     commit_timestamp: i64,
+    /// Source log batch schema ID, or -1 when there is no single source schema.
+    #[pyo3(get)]
+    schema_id: i32,
 }
 
 #[pymethods]
@@ -146,11 +149,12 @@ impl RecordBatch {
 
     fn __str__(&self) -> String {
         format!(
-            "RecordBatch(bucket={}, base_offset={}, last_offset={}, commit_timestamp={}, rows={})",
+            "RecordBatch(bucket={}, base_offset={}, last_offset={}, commit_timestamp={}, schema_id={}, rows={})",
             self.bucket.__str__(),
             self.base_offset,
             self.last_offset,
             self.commit_timestamp,
+            self.schema_id,
             self.batch.num_rows()
         )
     }
@@ -164,11 +168,13 @@ impl RecordBatch {
     /// Create a RecordBatch from core ScanBatch
     pub fn from_scan_batch(scan_batch: fcore::record::ScanBatch) -> Self {
         let commit_timestamp = scan_batch.commit_timestamp();
+        let schema_id = scan_batch.schema_id();
         RecordBatch {
             bucket: TableBucket::from_core(scan_batch.bucket().clone()),
             base_offset: scan_batch.base_offset(),
             last_offset: scan_batch.last_offset(),
             commit_timestamp,
+            schema_id,
             batch: Arc::new(scan_batch.into_batch()),
         }
     }
@@ -3045,5 +3051,29 @@ mod tests {
 
         // Negative with sub-millisecond part
         assert_eq!(nanos_to_millis_and_submillis(-500_000), (-1, 500_000));
+    }
+    #[test]
+    fn record_batch_conversion_preserves_source_schema_id() {
+        use arrow::datatypes::{DataType as ArrowType, Field, Schema as ArrowSchema};
+        let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "id",
+            ArrowType::Int32,
+            true,
+        )]));
+        for schema_id in [fcore::record::NO_SCHEMA_ID, 0, i32::from(i16::MAX)] {
+            let batch = fcore::record::ScanBatch::new(
+                fcore::metadata::TableBucket::new(1, 0),
+                ArrowRecordBatch::new_empty(schema.clone()),
+                0,
+            )
+            .with_schema_id(schema_id);
+            let converted = RecordBatch::from_scan_batch(batch);
+            assert_eq!(converted.schema_id, schema_id);
+            assert!(
+                converted
+                    .__str__()
+                    .contains(&format!("schema_id={schema_id}"))
+            );
+        }
     }
 }

@@ -68,6 +68,8 @@ impl LookupClient {
         let batch_timeout_ms = config.lookup_batch_timeout_ms;
         let max_inflight = config.lookup_max_inflight_requests;
         let max_retries = config.lookup_max_retries;
+        let retry_backoff_ms = config.lookup_retry_backoff_ms;
+        let retry_max_backoff_ms = config.lookup_retry_max_backoff_ms;
 
         // Create queue and channels
         let cluster_rx = metadata.subscribe_cluster_changes();
@@ -84,6 +86,8 @@ impl LookupClient {
             re_enqueue_tx,
             max_inflight,
             max_retries,
+            retry_backoff_ms,
+            retry_max_backoff_ms,
             shutdown_rx,
         );
 

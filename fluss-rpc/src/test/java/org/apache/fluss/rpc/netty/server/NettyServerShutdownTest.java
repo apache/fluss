@@ -17,6 +17,8 @@
 
 package org.apache.fluss.rpc.netty.server;
 
+import org.apache.fluss.cluster.Endpoint;
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.metrics.util.NOPMetricsGroup;
@@ -24,10 +26,14 @@ import org.apache.fluss.rpc.RpcGatewayService;
 import org.apache.fluss.rpc.TestingGatewayService;
 import org.apache.fluss.rpc.protocol.NetworkProtocolPlugin;
 import org.apache.fluss.rpc.protocol.RequestType;
+import org.apache.fluss.shaded.netty4.io.netty.channel.Channel;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandler;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelInitializer;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -36,24 +42,39 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Tests ownership and shutdown of handlers shared by request processors. */
-class RequestProcessorPoolTest {
+/** Tests ownership and shutdown of handlers shared by listener resource groups. */
+class NettyServerShutdownTest {
 
     @Test
     void testSharedHandlerClosesOnceAfterAllProcessorsStop() throws Exception {
         TestingRequestHandler handler = new TestingRequestHandler();
-        RequestProcessorPool pool = pool(handler);
+        List<RequestChannel[]> channels = new ArrayList<>();
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.INTERNAL_LISTENER_NAME, "INTERNAL");
+        conf.setInt(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS, 1);
+        MetricGroup metrics = NOPMetricsGroup.newInstance();
+        NettyServer server =
+                new NettyServer(
+                        conf,
+                        Arrays.asList(
+                                new Endpoint("127.0.0.1", 0, "CLIENT"),
+                                new Endpoint("127.0.0.1", 0, "INTERNAL")),
+                        new TestingGatewayService(),
+                        metrics,
+                        RequestsMetrics.createCoordinatorServerRequestMetrics(metrics),
+                        Collections.singletonList(testingProtocol(handler, channels)));
         TestingRequest first = new TestingRequest();
         TestingRequest second = new TestingRequest();
         try {
-            pool.start();
-            pool.getRequestChannels()[0].putRequest(first);
-            pool.getRequestChannels()[1].putRequest(second);
+            server.start();
+            assertThat(channels).hasSize(2);
+            channels.get(0)[0].putRequest(first);
+            channels.get(1)[0].putRequest(second);
             first.started.get(10, TimeUnit.SECONDS);
             second.started.get(10, TimeUnit.SECONDS);
 
-            CompletableFuture<Void> closed = pool.closeAsync();
-            CompletableFuture<Void> closedAgain = pool.closeAsync();
+            CompletableFuture<Void> closed = server.closeAsync();
+            CompletableFuture<Void> closedAgain = server.closeAsync();
             assertThat(closed).isNotDone();
             assertThat(closedAgain).isNotDone();
             assertThat(handler.closeCalls).hasValue(0);
@@ -67,26 +88,17 @@ class RequestProcessorPoolTest {
             CompletableFuture.allOf(closed, closedAgain).get(10, TimeUnit.SECONDS);
             assertThat(first.bufferReleased).isCompleted();
             assertThat(second.bufferReleased).isCompleted();
-            pool.closeAsync().get(10, TimeUnit.SECONDS);
+            server.closeAsync().get(10, TimeUnit.SECONDS);
             assertThat(handler.closeCalls).hasValue(1);
         } finally {
             first.release.complete(null);
             second.release.complete(null);
-            pool.closeAsync().handle((ignored, failure) -> null).get(10, TimeUnit.SECONDS);
+            server.closeAsync().handle((ignored, failure) -> null).get(10, TimeUnit.SECONDS);
         }
     }
 
-    private static RequestProcessorPool pool(TestingRequestHandler handler) {
-        MetricGroup metrics = NOPMetricsGroup.newInstance();
-        return new RequestProcessorPool(
-                2,
-                10,
-                new TestingGatewayService(),
-                Collections.singletonList(testingProtocol(handler)),
-                RequestsMetrics.createCoordinatorServerRequestMetrics(metrics));
-    }
-
-    private static NetworkProtocolPlugin testingProtocol(RequestHandler<?> handler) {
+    private static NetworkProtocolPlugin testingProtocol(
+            RequestHandler<?> handler, List<RequestChannel[]> requestChannels) {
         return new NetworkProtocolPlugin() {
             @Override
             public String name() {
@@ -98,13 +110,17 @@ class RequestProcessorPoolTest {
 
             @Override
             public List<String> listenerNames() {
-                return Collections.emptyList();
+                return Arrays.asList("CLIENT", "INTERNAL");
             }
 
             @Override
             public ChannelHandler createChannelHandler(
                     RequestChannel[] channels, String listenerName) {
-                return null;
+                requestChannels.add(channels);
+                return new ChannelInitializer<Channel>() {
+                    @Override
+                    protected void initChannel(Channel channel) {}
+                };
             }
 
             @Override

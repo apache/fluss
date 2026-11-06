@@ -26,6 +26,7 @@ import org.apache.fluss.predicate.PredicateBuilder;
 
 import org.apache.paimon.CoreOptions;
 import org.apache.paimon.Snapshot;
+import org.apache.paimon.catalog.Catalog.TableNotExistException;
 import org.apache.paimon.data.BinaryString;
 import org.apache.paimon.data.GenericRow;
 import org.apache.paimon.data.InternalRow;
@@ -36,6 +37,8 @@ import org.apache.paimon.table.Table;
 import org.apache.paimon.table.source.Split;
 import org.apache.paimon.types.DataTypes;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.Arrays;
 import java.util.Collections;
@@ -45,9 +48,20 @@ import java.util.stream.Collectors;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toFlussRowType;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test case for {@link PaimonSplitPlanner}. */
 class PaimonSplitPlannerTest extends PaimonSourceTestBase {
+    @Test
+    void testPlanForMissingTable() {
+        LakeSource<PaimonSplit> lakeSource =
+                lakeStorage.createLakeSource(TablePath.of(DEFAULT_DB, DEFAULT_TABLE));
+
+        assertThatThrownBy(() -> lakeSource.createPlanner(() -> 1L).plan())
+                .isInstanceOf(RuntimeException.class)
+                .hasCauseInstanceOf(TableNotExistException.class);
+    }
+
     @Test
     void testPlan() throws Exception {
         // prepare paimon table
@@ -116,8 +130,9 @@ class PaimonSplitPlannerTest extends PaimonSourceTestBase {
         }
     }
 
-    @Test
-    void testPlanWithFiltersAfterAddingColumn() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testPlanWithFiltersAfterAddingColumn(boolean useProvidedTable) throws Exception {
         TablePath tablePath = TablePath.of(DEFAULT_DB, DEFAULT_TABLE);
         createTable(tablePath, Schema.newBuilder().column("id", DataTypes.INT()).build());
         writeRecord(tablePath, Collections.singletonList(GenericRow.of(1)));
@@ -128,7 +143,10 @@ class PaimonSplitPlannerTest extends PaimonSourceTestBase {
                 Collections.singletonList(SchemaChange.addColumn("added", DataTypes.INT())),
                 false);
 
-        LakeSource<PaimonSplit> lakeSource = lakeStorage.createLakeSource(tablePath);
+        LakeSource<PaimonSplit> lakeSource =
+                useProvidedTable
+                        ? new PaimonLakeSource((FileStoreTable) getTable(tablePath))
+                        : lakeStorage.createLakeSource(tablePath);
         PredicateBuilder predicateBuilder =
                 new PredicateBuilder(toFlussRowType(getTable(tablePath).rowType()));
         lakeSource.withFilters(

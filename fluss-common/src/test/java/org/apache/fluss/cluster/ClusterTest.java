@@ -97,6 +97,8 @@ class ClusterTest {
         partitionIds.put(DATA1_PHYSICAL_TABLE_PATH_PA_2024, partitionId);
         Map<TableOrPartition, Integer> bucketCounts = new HashMap<>();
         bucketCounts.put(TableOrPartition.ofPartition(partitionId), 2);
+        Map<Long, Long> bucketCountEpochs = new HashMap<>();
+        bucketCountEpochs.put(DATA1_TABLE_ID, 1L);
         Cluster cluster =
                 new Cluster(
                         aliveTabletServersById,
@@ -104,14 +106,17 @@ class ClusterTest {
                         Collections.emptyMap(),
                         tableIds,
                         partitionIds,
-                        bucketCounts);
+                        bucketCounts,
+                        bucketCountEpochs);
 
         tableIds.clear();
         partitionIds.clear();
         bucketCounts.clear();
+        bucketCountEpochs.clear();
         assertThat(cluster.getTableId(DATA1_TABLE_PATH)).hasValue(DATA1_TABLE_ID);
         assertThat(cluster.getPartitionId(DATA1_PHYSICAL_TABLE_PATH_PA_2024)).hasValue(partitionId);
         assertThat(cluster.getBucketCount(TableOrPartition.ofPartition(partitionId))).hasValue(2);
+        assertThat(cluster.getBucketCountEpoch(DATA1_TABLE_ID)).hasValue(1L);
     }
 
     @Test
@@ -129,6 +134,7 @@ class ClusterTest {
                             COORDINATOR_SERVER,
                             new HashMap<>(cluster.getBucketLocationsByPath()),
                             new HashMap<>(cluster.getTableIdByPath()),
+                            Collections.emptyMap(),
                             Collections.emptyMap(),
                             Collections.emptyMap());
         }
@@ -159,6 +165,7 @@ class ClusterTest {
                         new HashMap<>(initialCluster.getBucketLocationsByPath()),
                         new HashMap<>(initialCluster.getTableIdByPath()),
                         Collections.singletonMap(DATA1_PHYSICAL_TABLE_PATH_PA_2024, partitionId),
+                        Collections.emptyMap(),
                         Collections.emptyMap());
 
         assertThat(cluster.getPartitionId(DATA1_PHYSICAL_TABLE_PATH_PA_2024)).hasValue(partitionId);
@@ -203,6 +210,7 @@ class ClusterTest {
                                 DATA1_PHYSICAL_TABLE_PATH, Collections.emptyList()),
                         Collections.emptyMap(),
                         Collections.emptyMap(),
+                        Collections.emptyMap(),
                         Collections.emptyMap());
 
         assertThat(cluster.getBucketLocationsByPath()).containsKey(DATA1_PHYSICAL_TABLE_PATH);
@@ -227,7 +235,8 @@ class ClusterTest {
                         Collections.emptyMap(),
                         Collections.singletonMap(DATA1_TABLE_PATH, DATA1_TABLE_ID),
                         Collections.singletonMap(DATA1_PHYSICAL_TABLE_PATH_PA_2024, partitionId),
-                        counts);
+                        counts,
+                        Collections.emptyMap());
 
         Cluster tableInvalidated =
                 cluster.invalidPhysicalTableBucketMeta(
@@ -256,6 +265,7 @@ class ClusterTest {
                         Collections.emptyMap(),
                         Collections.singletonMap(DATA1_TABLE_PATH, DATA1_TABLE_ID),
                         Collections.singletonMap(DATA1_PHYSICAL_TABLE_PATH_PA_2024, partitionId),
+                        Collections.emptyMap(),
                         Collections.emptyMap());
 
         Cluster tableInvalidated =
@@ -293,7 +303,8 @@ class ClusterTest {
                         Collections.emptyMap(),
                         Collections.singletonMap(DATA1_TABLE_PATH, DATA1_TABLE_ID),
                         Collections.emptyMap(),
-                        bucketCounts);
+                        bucketCounts,
+                        Collections.emptyMap());
 
         assertThat(cluster.getBucketCountOrFallback(DATA1_TABLE_INFO, null)).isEqualTo(5);
         assertThat(cluster.getBucketCountOrFallback(DATA1_TABLE_INFO, partitionId)).isEqualTo(7);
@@ -304,6 +315,7 @@ class ClusterTest {
                         COORDINATOR_SERVER,
                         Collections.emptyMap(),
                         Collections.singletonMap(DATA1_TABLE_PATH, DATA1_TABLE_ID),
+                        Collections.emptyMap(),
                         Collections.emptyMap(),
                         Collections.emptyMap());
         assertThat(clusterWithoutBucketCount.getBucketCountOrFallback(DATA1_TABLE_INFO, null))
@@ -390,6 +402,7 @@ class ClusterTest {
                 COORDINATOR_SERVER,
                 tablePathToBucketLocations,
                 tablePathToTableId,
+                Collections.emptyMap(),
                 Collections.emptyMap(),
                 Collections.emptyMap());
     }

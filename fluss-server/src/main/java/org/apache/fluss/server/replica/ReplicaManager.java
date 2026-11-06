@@ -721,9 +721,11 @@ public class ReplicaManager implements ServerReconfigurable {
                 appendToLocalLog(entriesPerBucket, requiredAcks, userContext);
         LOG.debug("Append records to local log in {} ms", System.currentTimeMillis() - startTime);
 
-        // maybe do delay write operation.
+        // Register any delayed write before waking followers. The append has already released
+        // the replica locks, so completion checks can run directly here.
         maybeAddDelayedWrite(
                 timeoutMs, requiredAcks, entriesPerBucket.size(), appendResult, responseCallback);
+        completeDelayedFetches(appendResult);
     }
 
     /** Appends historical log batches while preserving each original partition in the response. */
@@ -2234,6 +2236,23 @@ public class ReplicaManager implements ServerReconfigurable {
     private boolean isNonCriticalFetchError(Errors error) {
         return error == Errors.NOT_LEADER_OR_FOLLOWER
                 || error == Errors.UNKNOWN_TABLE_OR_BUCKET_EXCEPTION;
+    }
+
+    private void completeDelayedFetches(Map<TableBucket, ProduceLogResultForBucket> appendResults) {
+        appendResults.forEach(
+                (tableBucket, appendResult) -> {
+                    if (appendResult.succeeded()) {
+                        try {
+                            delayedFetchLogManager.checkAndComplete(
+                                    new DelayedTableBucketKey(tableBucket));
+                        } catch (Exception e) {
+                            LOG.error(
+                                    "Failed to complete delayed fetches for bucket {}.",
+                                    tableBucket,
+                                    e);
+                        }
+                    }
+                });
     }
 
     private void completeDelayedOperations(TableBucket tableBucket) {
