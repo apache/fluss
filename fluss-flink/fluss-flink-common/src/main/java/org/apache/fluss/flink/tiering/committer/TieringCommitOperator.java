@@ -26,7 +26,6 @@ import org.apache.fluss.client.tiering.TableBucketWriteResult;
 import org.apache.fluss.client.tiering.TieringCommitResult;
 import org.apache.fluss.client.tiering.TieringCommitter;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.flink.tiering.event.FailedTieringEvent;
 import org.apache.fluss.flink.tiering.event.FinishedTieringEvent;
 import org.apache.fluss.flink.tiering.source.TieringSource;
@@ -93,6 +92,12 @@ public class TieringCommitOperator<WriteResult, Committable>
     /** Consecutive failed rounds of a table from which its commit failures are logged at ERROR. */
     @VisibleForTesting static final int CONSECUTIVE_FAILURES_TO_LOG_ERROR = 3;
 
+    /**
+     * Tables whose consecutive commit failures are counted, under 1 MB in total. Bounds the counts
+     * of tables that are dropped while failing, as they never commit again.
+     */
+    private static final int MAX_TABLES_WITH_COMMIT_FAILURES = 10_000;
+
     private final Configuration flussConfig;
     private final Configuration lakeTieringConfig;
     private final LakeTieringFactory<WriteResult, Committable> lakeTieringFactory;
@@ -113,9 +118,9 @@ public class TieringCommitOperator<WriteResult, Committable>
     // Table ID -> accumulator for the current tiering round.
     private final Map<Long, TableWriteResultAccumulator<WriteResult>> tableWriteResultAccumulators;
 
-    // Table ID -> consecutive failed commit rounds, only to pick the log level. Mailbox-thread
-    // confined.
-    private final Map<Long, ConsecutiveCommitFailures> consecutiveCommitFailures = new HashMap<>();
+    // Only picks the log level of commit failures. Mailbox-thread confined.
+    private final ConsecutiveCommitFailureCounter consecutiveCommitFailures =
+            new ConsecutiveCommitFailureCounter(MAX_TABLES_WITH_COMMIT_FAILURES);
 
     /** Creates an operator that collects and commits table tiering rounds. */
     public TieringCommitOperator(
@@ -227,32 +232,16 @@ public class TieringCommitOperator<WriteResult, Committable>
 
     @VisibleForTesting
     void postCompletion(long tableId, Runnable completion) {
-        executeInMailbox(
-                () -> {
-                    committingTables.remove(tableId);
-                    completion.run();
-                },
-                "Complete tiering commit for table %s",
-                tableId);
-    }
-
-    @VisibleForTesting
-    int getConsecutiveCommitFailures(long tableId) {
-        ConsecutiveCommitFailures failures = consecutiveCommitFailures.get(tableId);
-        return failures == null ? 0 : failures.count;
-    }
-
-    private void executeInMailbox(
-            Runnable action, String descriptionFormat, Object... descriptionArgs) {
         try {
             mailboxExecutor.execute(
                     () -> {
                         if (!closed) {
-                            action.run();
+                            committingTables.remove(tableId);
+                            completion.run();
                         }
                     },
-                    descriptionFormat,
-                    descriptionArgs);
+                    "Complete tiering commit for table %s",
+                    tableId);
         } catch (RejectedExecutionException e) {
             if (!(e.getCause() instanceof MailboxClosedException)) {
                 throw e;
@@ -260,8 +249,13 @@ public class TieringCommitOperator<WriteResult, Committable>
         }
     }
 
+    @VisibleForTesting
+    int getConsecutiveCommitFailures(long tableId) {
+        return consecutiveCommitFailures.getFailures(tableId);
+    }
+
     private void reportFinished(long tableId, TieringCommitResult<Committable> result) {
-        consecutiveCommitFailures.remove(tableId);
+        consecutiveCommitFailures.recordSuccess(tableId);
         if (result.getCommittable() != null) {
             output.collect(new StreamRecord<>(new CommittableMessage<>(result.getCommittable())));
         }
@@ -273,16 +267,7 @@ public class TieringCommitOperator<WriteResult, Committable>
         operatorEventGateway.sendEventToCoordinator(
                 new SourceEventWrapper(
                         new FailedTieringEvent(tableId, ExceptionUtils.stringifyException(cause))));
-        ConsecutiveCommitFailures tableFailures = consecutiveCommitFailures.get(tableId);
-        if (tableFailures == null) {
-            tableFailures = new ConsecutiveCommitFailures(tablePath);
-            consecutiveCommitFailures.put(tableId, tableFailures);
-            // Entries are only added here, so pruning on each new entry bounds the map by the
-            // failing tables that still exist. This one is included, as it may have failed
-            // because it was dropped during the round.
-            removeDroppedTables();
-        }
-        int failures = ++tableFailures.count;
+        int failures = consecutiveCommitFailures.recordFailure(tableId);
         // A permanent failure retries forever without failing the job, so escalate it to make a
         // table that stopped tiering visible.
         if (failures >= CONSECUTIVE_FAILURES_TO_LOG_ERROR) {
@@ -301,44 +286,6 @@ public class TieringCommitOperator<WriteResult, Committable>
                     tablePath,
                     tableId,
                     cause);
-        }
-    }
-
-    /**
-     * Removes the failure counts of tables that were dropped, including ones recreated under the
-     * same path, as a dropped table gets no further round to reset its count. A failed lookup keeps
-     * the count.
-     */
-    private void removeDroppedTables() {
-        for (Map.Entry<Long, ConsecutiveCommitFailures> entry :
-                consecutiveCommitFailures.entrySet()) {
-            long tableId = entry.getKey();
-            admin.getTableInfo(entry.getValue().tablePath)
-                    .whenComplete(
-                            (tableInfo, error) -> {
-                                boolean dropped =
-                                        error == null
-                                                ? tableInfo.getTableId() != tableId
-                                                : ExceptionUtils.findThrowable(
-                                                                error, TableNotExistException.class)
-                                                        .isPresent();
-                                if (dropped) {
-                                    executeInMailbox(
-                                            () -> consecutiveCommitFailures.remove(tableId),
-                                            "Remove commit failures of dropped table %s",
-                                            tableId);
-                                }
-                            });
-        }
-    }
-
-    /** Consecutive failed commit rounds of a table, with its path to look up whether it exists. */
-    private static final class ConsecutiveCommitFailures {
-        private final TablePath tablePath;
-        private int count;
-
-        private ConsecutiveCommitFailures(TablePath tablePath) {
-            this.tablePath = tablePath;
         }
     }
 
