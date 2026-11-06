@@ -1844,7 +1844,8 @@ public class ServerRpcMessageUtils {
                         ? request.getHighestCopiedEndOffset()
                         : request.getRemoteLogEndOffset(),
                 request.getCoordinatorEpoch(),
-                request.getBucketLeaderEpoch());
+                request.getBucketLeaderEpoch(),
+                request.hasExpectedManifestPath() ? request.getExpectedManifestPath() : null);
     }
 
     public static CommitRemoteLogManifestRequest makeCommitRemoteLogManifestRequest(
@@ -1863,6 +1864,9 @@ public class ServerRpcMessageUtils {
                 .setHighestCopiedEndOffset(commitRemoteLogManifestData.getHighestCopiedEndOffset())
                 .setCoordinatorEpoch(commitRemoteLogManifestData.getCoordinatorEpoch())
                 .setBucketLeaderEpoch(commitRemoteLogManifestData.getBucketLeaderEpoch());
+        if (commitRemoteLogManifestData.getExpectedManifestPath() != null) {
+            request.setExpectedManifestPath(commitRemoteLogManifestData.getExpectedManifestPath());
+        }
         return request;
     }
 

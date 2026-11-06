@@ -147,6 +147,10 @@ public class RemoteLogManager implements Closeable {
             return;
         }
         TableBucket tableBucket = replica.getTableBucket();
+        TaskWithFuture previousTask = rlmTasks.remove(tableBucket);
+        if (previousTask != null) {
+            previousTask.cancel();
+        }
         PhysicalTablePath physicalTablePath = replica.getPhysicalTablePath();
         LogTablet log = replica.getLogTablet();
         FsPath remoteLogDir = FlussPaths.remoteLogDir(replica.getRemoteDataDir());
@@ -161,7 +165,9 @@ public class RemoteLogManager implements Closeable {
                     remoteLogStorage.readRemoteLogManifestSnapshot(
                             remoteLogManifestHandleOpt.get().getRemoteLogManifestPath());
 
-            remoteLog.loadRemoteLogManifest(manifest);
+            remoteLog.loadRemoteLogManifest(
+                    manifest,
+                    remoteLogManifestHandleOpt.get().getRemoteLogManifestPath().toString());
         }
 
         log.updateRemoteLogOffsets(
@@ -343,6 +349,7 @@ public class RemoteLogManager implements Closeable {
                                     remoteLogStorage,
                                     remoteLogIndexCache(replica.getLogTablet().getDataDir()),
                                     coordinatorGateway,
+                                    zkClient,
                                     clock,
                                     maxUploadSegmentsPerTask);
                     LOG.info(
@@ -372,18 +379,18 @@ public class RemoteLogManager implements Closeable {
     @Override
     public void close() throws IOException {
         rlmTasks.values().forEach(TaskWithFuture::cancel);
+        shutdownAndAwaitTermination(
+                rlManagerScheduledThreadPool, "RLMScheduledThreadPool", 10, TimeUnit.SECONDS);
+
         IOUtils.closeQuietly(remoteLogStorage, "RemoteLogStorageManager");
         remoteLogIndexCachesByDir.forEach(
                 (dataDir, cache) ->
                         IOUtils.closeQuietly(cache, "RemoteIndexCache-" + dataDir.getName()));
 
-        shutdownAndAwaitTermination(
-                rlManagerScheduledThreadPool, "RLMScheduledThreadPool", 10, TimeUnit.SECONDS);
-
         rlmTasks.clear();
     }
 
-    static class TaskWithFuture {
+    class TaskWithFuture {
 
         private final LogTieringTask task;
         private final Future<?> future;
@@ -399,6 +406,8 @@ public class RemoteLogManager implements Closeable {
                 future.cancel(true);
             } catch (Exception ex) {
                 LOG.error("Error occurred while canceling the task: {}", task, ex);
+            } finally {
+                task.cleanupAfterCancellation(rlManagerScheduledThreadPool);
             }
         }
     }

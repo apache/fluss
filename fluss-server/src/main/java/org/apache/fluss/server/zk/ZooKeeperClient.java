@@ -1587,6 +1587,40 @@ public class ZooKeeperClient implements AutoCloseable {
         }
     }
 
+    /**
+     * Installs a manifest only against its predecessor, recognizing retries of the same manifest. A
+     * false result is obtained before writing. Exceptions after issuing a write remain uncertain,
+     * including version failures after a Curator retry.
+     */
+    public boolean compareAndSetRemoteLogManifestHandle(
+            TableBucket tableBucket, RemoteLogManifestHandle newHandle, String expectedManifestPath)
+            throws Exception {
+        String path = BucketRemoteLogsZNode.path(tableBucket);
+        Stat stat = new Stat();
+        Optional<byte[]> current = getDataWithStat(path, stat);
+        if (current.isPresent()) {
+            String currentPath =
+                    BucketRemoteLogsZNode.decode(current.get())
+                            .getRemoteLogManifestPath()
+                            .toString();
+            if (currentPath.equals(newHandle.getRemoteLogManifestPath().toString())) {
+                return true;
+            }
+            if (!currentPath.equals(expectedManifestPath)) {
+                return false;
+            }
+            zkClient.setData()
+                    .withVersion(stat.getVersion())
+                    .forPath(path, BucketRemoteLogsZNode.encode(newHandle));
+        } else {
+            if (!expectedManifestPath.isEmpty()) {
+                return false;
+            }
+            zkClient.create().forPath(path, BucketRemoteLogsZNode.encode(newHandle));
+        }
+        return true;
+    }
+
     public Optional<RemoteLogManifestHandle> getRemoteLogManifestHandle(TableBucket tableBucket)
             throws Exception {
         String path = BucketRemoteLogsZNode.path(tableBucket);

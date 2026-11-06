@@ -708,6 +708,8 @@ message CommitRemoteLogManifestRequest {
   required int32 coordinator_epoch = 7;
   required int32 bucket_leader_epoch = 8;
   optional int64 highest_copied_end_offset = 9;
+  // v1: empty means no predecessor; absence retains the v0 unconditional contract.
+  optional string expected_manifest_path = 10;
 }
 
 message CommitRemoteLogManifestResponse {
