@@ -29,6 +29,8 @@ import java.util.concurrent.ExecutionException;
 /** {@link org.apache.flink.table.procedures.Procedure} to operate acl. */
 public abstract class AbstractAclProcedure extends ProcedureBase {
 
+    private static final String GROUP_RESOURCE_PREFIX = "group.";
+
     /**
      * Invokes the ACL operation as a Flink table procedure.
      *
@@ -40,6 +42,7 @@ public abstract class AbstractAclProcedure extends ProcedureBase {
      *       <li>{@code cluster} - cluster level
      *       <li>{@code cluster.db_name} - database level
      *       <li>{@code cluster.db_name.table_name} - table level
+     *       <li>{@code group.group_id} - consumer-group level
      *     </ul>
      *
      * @param permission Permission type to grant or revoke. Common values include in {@link
@@ -114,13 +117,19 @@ public abstract class AbstractAclProcedure extends ProcedureBase {
             return Resource.any();
         }
 
+        if (resourceStr.regionMatches(
+                true, 0, GROUP_RESOURCE_PREFIX, 0, GROUP_RESOURCE_PREFIX.length())) {
+            return Resource.group(resourceStr.substring(GROUP_RESOURCE_PREFIX.length()));
+        }
+
         Resource resource;
         String[] resourcePath = resourceStr.split(Resource.TABLE_SPLITTER);
         if (resourcePath.length == 0
                 || resourcePath.length > 3
                 || !"cluster".equalsIgnoreCase(resourcePath[0])) {
             throw new IllegalArgumentException(
-                    "resource must be in format cluster.${database}.${table}");
+                    "resource must be in format cluster, cluster.${database}, "
+                            + "cluster.${database}.${table}, or group.${group_id}");
         } else if (resourcePath.length == 1) {
             resource = Resource.cluster();
         } else if (resourcePath.length == 2) {

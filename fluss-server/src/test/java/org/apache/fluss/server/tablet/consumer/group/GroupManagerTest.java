@@ -20,7 +20,11 @@ package org.apache.fluss.server.tablet.consumer.group;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidConsumerGroupIdException;
 
+import org.apache.commons.lang3.StringUtils;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullAndEmptySource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -38,11 +42,38 @@ class GroupManagerTest {
         assertThat(bucket).isBetween(0, bucketCount - 1);
     }
 
+    @ParameterizedTest
+    @NullAndEmptySource
+    @ValueSource(
+            strings = {
+                ".",
+                "..",
+                " ",
+                "default.consumer",
+                "default/consumer",
+                "default:consumer",
+                "消费组",
+                "__internal",
+                "default-*",
+                "*"
+            })
+    void testInvalidGroupId(String groupId) {
+        assertThatThrownBy(() -> groupManager.bucketFor(groupId, 50))
+                .isInstanceOf(InvalidConsumerGroupIdException.class)
+                .hasMessageContaining("Consumer group id");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"Default_consumer-1", "0", "_consumer", "consumer__1"})
+    void testValidGroupId(String groupId) {
+        assertThat(groupManager.bucketFor(groupId, 50)).isBetween(0, 49);
+    }
+
     @Test
-    void testInvalidGroupId() {
-        assertThatThrownBy(() -> groupManager.bucketFor(null, 50))
-                .isInstanceOf(InvalidConsumerGroupIdException.class);
-        assertThatThrownBy(() -> groupManager.bucketFor("", 50))
-                .isInstanceOf(InvalidConsumerGroupIdException.class);
+    void testGroupIdLengthLimit() {
+        assertThat(groupManager.bucketFor(StringUtils.repeat("a", 200), 50)).isBetween(0, 49);
+        assertThatThrownBy(() -> groupManager.bucketFor(StringUtils.repeat("a", 201), 50))
+                .isInstanceOf(InvalidConsumerGroupIdException.class)
+                .hasMessageContaining("200");
     }
 }
