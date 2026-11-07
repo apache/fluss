@@ -19,6 +19,7 @@ package org.apache.fluss.kafka;
 
 import org.apache.fluss.rpc.netty.NettyChannelInitializer;
 import org.apache.fluss.rpc.netty.server.RequestChannel;
+import org.apache.fluss.rpc.netty.server.RequestsMetrics;
 import org.apache.fluss.security.auth.ServerAuthenticator;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelInitializer;
 import org.apache.fluss.shaded.netty4.io.netty.channel.socket.SocketChannel;
@@ -40,6 +41,7 @@ public class KafkaChannelInitializer extends NettyChannelInitializer {
     private final String listenerName;
     private final int maxRequestSize;
     private final @Nullable Supplier<ServerAuthenticator> authenticatorSupplier;
+    private final RequestsMetrics requestMetrics;
     private final LengthFieldPrepender prepender = new LengthFieldPrepender(4);
 
     /** Creates a channel initializer with an optional per-connection authenticator supplier. */
@@ -48,12 +50,14 @@ public class KafkaChannelInitializer extends NettyChannelInitializer {
             String listenerName,
             long maxIdleTimeSeconds,
             int maxRequestSize,
-            @Nullable Supplier<ServerAuthenticator> authenticatorSupplier) {
+            @Nullable Supplier<ServerAuthenticator> authenticatorSupplier,
+            RequestsMetrics requestMetrics) {
         super(maxIdleTimeSeconds);
         this.requestChannels = requestChannels;
         this.listenerName = listenerName;
         this.maxRequestSize = maxRequestSize;
         this.authenticatorSupplier = authenticatorSupplier;
+        this.requestMetrics = requestMetrics;
     }
 
     @Override
@@ -75,6 +79,7 @@ public class KafkaChannelInitializer extends NettyChannelInitializer {
                                         MathUtils.murmurHash(ch.id().hashCode())
                                                 % requestChannels.length],
                                 listenerName,
-                                authenticatorSupplier));
+                                authenticatorSupplier,
+                                requestMetrics));
     }
 }

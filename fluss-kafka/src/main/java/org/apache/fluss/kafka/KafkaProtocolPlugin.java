@@ -25,6 +25,7 @@ import org.apache.fluss.kafka.mapping.KafkaTopicMapper;
 import org.apache.fluss.rpc.RpcGatewayService;
 import org.apache.fluss.rpc.netty.server.RequestChannel;
 import org.apache.fluss.rpc.netty.server.RequestHandler;
+import org.apache.fluss.rpc.netty.server.RequestsMetrics;
 import org.apache.fluss.rpc.protocol.NetworkProtocolPlugin;
 import org.apache.fluss.security.acl.FlussPrincipal;
 import org.apache.fluss.security.auth.AuthenticationFactory;
@@ -79,7 +80,9 @@ public class KafkaProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
 
     @Override
     public ChannelHandler createChannelHandler(
-            RequestChannel[] requestChannels, String listenerName) {
+            RequestChannel[] requestChannels,
+            String listenerName,
+            RequestsMetrics requestsMetrics) {
         Supplier<ServerAuthenticator> authenticatorSupplier = null;
         if (saslListenerNames.contains(listenerName)) {
             authenticatorSupplier =
@@ -93,7 +96,8 @@ public class KafkaProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
                 listenerName,
                 conf.get(ConfigOptions.NETTY_CONNECTION_MAX_IDLE_TIME).getSeconds(),
                 (int) conf.get(ConfigOptions.NETTY_SERVER_MAX_REQUEST_SIZE).getBytes(),
-                authenticatorSupplier);
+                authenticatorSupplier,
+                requestsMetrics);
     }
 
     @Override

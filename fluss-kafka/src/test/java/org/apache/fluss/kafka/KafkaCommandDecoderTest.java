@@ -41,6 +41,7 @@ import org.junit.jupiter.api.Test;
 
 import java.nio.ByteBuffer;
 
+import static org.apache.fluss.rpc.netty.server.KafkaMetricsTestUtils.createRequestMetrics;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Tests response ordering and ownership in {@link KafkaCommandDecoder}. */
@@ -51,7 +52,9 @@ public class KafkaCommandDecoderTest extends KafkaServerTestBase {
             throws Exception {
         RequestChannel requestChannel = new RequestChannel(1);
         EmbeddedChannel channel =
-                new EmbeddedChannel(new KafkaCommandDecoder(requestChannel, "KAFKA_EXTERNAL"));
+                new EmbeddedChannel(
+                        new KafkaCommandDecoder(
+                                requestChannel, "KAFKA_EXTERNAL", null, createRequestMetrics()));
         short unsupportedVersion = (short) (ApiKeys.API_VERSIONS.latestVersion() + 1);
         RequestHeader header =
                 new RequestHeader(ApiKeys.API_VERSIONS, unsupportedVersion, "client", 42);
@@ -103,7 +106,9 @@ public class KafkaCommandDecoderTest extends KafkaServerTestBase {
     public void testDisconnectReleasesQueuedRequestBuffer() {
         RequestChannel requestChannel = new RequestChannel(100);
         EmbeddedChannel channel =
-                new EmbeddedChannel(new KafkaCommandDecoder(requestChannel, "KAFKA"));
+                new EmbeddedChannel(
+                        new KafkaCommandDecoder(
+                                requestChannel, "KAFKA", null, createRequestMetrics()));
         short produceVersion = ApiKeys.PRODUCE.latestVersion();
         ProduceRequest produceRequest =
                 new ProduceRequest(
@@ -134,7 +139,9 @@ public class KafkaCommandDecoderTest extends KafkaServerTestBase {
     public void testAcksZeroSuppressesResponseAndUnblocksFollowingResponse() {
         RequestChannel requestChannel = new RequestChannel(100);
         EmbeddedChannel channel =
-                new EmbeddedChannel(new KafkaCommandDecoder(requestChannel, "KAFKA"));
+                new EmbeddedChannel(
+                        new KafkaCommandDecoder(
+                                requestChannel, "KAFKA", null, createRequestMetrics()));
         short produceVersion = ApiKeys.PRODUCE.latestVersion();
         ProduceRequest produceRequest =
                 new ProduceRequest(

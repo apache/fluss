@@ -70,6 +70,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
+import static org.apache.fluss.rpc.netty.server.KafkaMetricsTestUtils.createRequestMetrics;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.tuple;
@@ -775,7 +776,9 @@ class KafkaProduceProtocolTest {
         for (boolean failure : Arrays.asList(false, true)) {
             RequestChannel requests = new RequestChannel(100);
             EmbeddedChannel channel =
-                    new EmbeddedChannel(new KafkaCommandDecoder(requests, "KAFKA"));
+                    new EmbeddedChannel(
+                            new KafkaCommandDecoder(
+                                    requests, "KAFKA", null, createRequestMetrics()));
             ProduceRequest body = request((short) 11, (short) 0, partition(0, records()));
             RequestHeader header = new RequestHeader(ApiKeys.PRODUCE, (short) 11, "producer", 1);
             ByteBuf buffer =

@@ -716,6 +716,8 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
           request_metadata
           request_fetchLogClient
           request_fetchLogFollower
+          request_kafka_produce
+          request_kafka_metadata
       </td>
       <td>requestsPerSecond</td>
       <td>The total number of requests processed per second for each request type.</td>
