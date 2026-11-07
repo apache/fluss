@@ -587,7 +587,8 @@ public final class LogSegment {
                             chunk.getFileChannel(),
                             chunk.getPosition(),
                             chunk.getPosition() + chunk.getSize(),
-                            adjustedMaxSize);
+                            adjustedMaxSize,
+                            minOneMessage);
             return new FetchDataInfo(offsetMetadata, projectedRecords);
         }
     }
