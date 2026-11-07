@@ -177,9 +177,9 @@ impl AppendWriter {
     /// This method returns a [`WriteResultFuture`] immediately after queueing the write,
     /// enabling fire-and-forget semantics for efficient batching.
     ///
-    /// For a partitioned table the partition is derived from the **first row**, so all rows
-    /// in the batch must belong to the same partition. Rows are distributed across buckets by
-    /// their bucket key automatically.
+    /// For a partitioned table, all rows in the batch must belong to the same partition.
+    /// A batch containing different partitions is rejected before any rows are queued.
+    /// Rows are distributed across buckets by their bucket key automatically.
     ///
     /// # Returns
     /// A [`WriteResultFuture`] that can be awaited to wait for server acknowledgment,
@@ -202,18 +202,31 @@ impl AppendWriter {
             return Ok(WriteResultFuture::join(Vec::new()));
         }
         let batch = prepare_append_record_batch(&batch, self.table_info.row_type())?;
-        let physical_table_path = if self.partition_getter.is_some() {
-            let first_row = ColumnarRow::new(
+        let physical_table_path = if let Some(getter) = &self.partition_getter {
+            let mut row = ColumnarRow::new(
                 Arc::new(batch.clone()),
                 Arc::new(self.table_info.row_type.clone()),
                 0,
                 None,
             )?;
-            Arc::new(get_physical_path(
-                &self.table_path,
-                self.partition_getter.as_ref(),
-                &first_row,
-            )?)
+            let expected_partition = getter.get_partition(&row)?;
+            for i in 1..batch.num_rows() {
+                row.set_row_id(i);
+                let partition = getter.get_partition(&row)?;
+                if partition != expected_partition {
+                    return Err(IllegalArgument {
+                        message: format!(
+                            "Arrow batch contains rows from different partitions: row {i} belongs to \
+                             '{partition}', expected '{expected_partition}'. \
+                             All rows must belong to the same partition."
+                        ),
+                    });
+                }
+            }
+            Arc::new(PhysicalTablePath::of_partitioned(
+                Arc::clone(&self.table_path),
+                Some(expected_partition),
+            ))
         } else {
             Arc::new(PhysicalTablePath::of(Arc::clone(&self.table_path)))
         };
@@ -316,4 +329,79 @@ fn take_rows(batch: &RecordBatch, indices: &[u32]) -> Result<RecordBatch> {
         message: format!("Failed to rebuild split arrow batch: {e}"),
         source: None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::client::{FlussAdmin, Metadata};
+    use crate::config::Config;
+    use crate::metadata::{DataTypes, Schema, TableDescriptor};
+    use crate::rpc::RpcClient;
+    use crate::test_utils::build_cluster;
+    use arrow::array::{Int32Array, StringArray};
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn invalid_partition_batches_are_rejected_before_routing() -> Result<()> {
+        for bucket_keys in [vec![], vec!["id".to_string()]] {
+            let table_path = TablePath::new("db", "partitioned");
+            let descriptor = TableDescriptor::builder()
+                .schema(
+                    Schema::builder()
+                        .column("id", DataTypes::int())
+                        .column("region", DataTypes::string())
+                        .column("country", DataTypes::string())
+                        .build()?,
+                )
+                .partitioned_by(vec!["region", "country"])
+                .distributed_by(Some(2), bucket_keys)
+                .build()?;
+            let table_info = Arc::new(TableInfo::of(table_path.clone(), 1, 1, descriptor, 0, 0));
+            // Missing table metadata ensures invalid batches fail before routing or enqueueing.
+            let metadata = Arc::new(Metadata::new_for_test(Arc::new(build_cluster(
+                &TablePath::new("db", "other"),
+                2,
+                2,
+            ))));
+            let admin = Arc::new(FlussAdmin::new(
+                Arc::new(RpcClient::new()),
+                metadata.clone(),
+            ));
+            let client = Arc::new(WriterClient::new(Config::default(), metadata, admin)?);
+            let writer =
+                TableAppend::new(table_path, table_info.clone(), client.clone()).create_writer()?;
+            for (region, country, mixed) in [
+                (Some("EU"), Some("US"), true),
+                (Some("US"), Some("CA"), true),
+                (None, Some("US"), false),
+            ] {
+                let batch = RecordBatch::try_new(
+                    crate::record::to_arrow_schema(table_info.row_type())?,
+                    vec![
+                        Arc::new(Int32Array::from(vec![1, 2, 3])),
+                        Arc::new(StringArray::from(vec![Some("US"), Some("US"), region])),
+                        Arc::new(StringArray::from(vec![Some("US"), Some("US"), country])),
+                    ],
+                )?;
+                writer.append_arrow_batch(batch.slice(0, 0))?.await?;
+                let error = writer.append_arrow_batch(batch).expect_err("invalid batch");
+                match error {
+                    IllegalArgument { message } if mixed => {
+                        assert!(
+                            message
+                                .starts_with("Arrow batch contains rows from different partitions")
+                        );
+                        assert!(message.contains("row 2"));
+                    }
+                    IllegalArgument { message } => {
+                        assert_eq!(message, "Partition value shouldn't be null.");
+                    }
+                    error => panic!("Expected partition validation error, got {error}"),
+                }
+            }
+            client.close(Duration::from_secs(1)).await?;
+        }
+        Ok(())
+    }
 }
