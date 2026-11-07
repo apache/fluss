@@ -17,7 +17,7 @@
 
 package org.apache.fluss.server.utils;
 
-import org.apache.fluss.exception.InvalidBucketRoutingException;
+import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
@@ -71,7 +71,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.LinkedHashMap;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -85,6 +85,7 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeUpdateMeta
 import static org.apache.fluss.testutils.DataTestUtils.genKvRecordBatch;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.entry;
 
 /** Tests for {@link ServerRpcMessageUtils}. */
 class ServerRpcMessageUtilsTest {
@@ -110,25 +111,20 @@ class ServerRpcMessageUtilsTest {
     }
 
     @Test
-    void testCommitConsumerOffsetsRequestRejectsDuplicateBucket() {
-        PbCommitConsumerOffsetsRequestBucket first =
-                new PbCommitConsumerOffsetsRequestBucket().setBucketId(1).setOffset(10L);
-        PbCommitConsumerOffsetsRequestBucket duplicate =
-                new PbCommitConsumerOffsetsRequestBucket().setBucketId(1).setOffset(20L);
-        PbCommitConsumerOffsetsRequestTable table =
-                new PbCommitConsumerOffsetsRequestTable()
-                        .setTableId(2L)
-                        .addAllBuckets(Arrays.asList(first, duplicate));
+    void testCommitConsumerOffsetsRequestKeepsLastOffsetPerBucket() {
         CommitConsumerOffsetsRequest request =
-                new CommitConsumerOffsetsRequest()
-                        .setGroupId("group-1")
-                        .addAllTables(Collections.singletonList(table));
+                new CommitConsumerOffsetsRequest().setGroupId("group-1");
+        request.addTable().setTableId(2L).addBucket().setBucketId(1).setOffset(40L);
+        request.addTable()
+                .setTableId(2L)
+                .addBucket()
+                .setBucketId(1)
+                .setOffset(30L)
+                .setMetadata("last");
 
-        assertThatThrownBy(() -> ServerRpcMessageUtils.decodeCommitConsumerOffsetsRequest(request))
-                .isInstanceOf(InvalidBucketRoutingException.class)
-                .hasMessageContaining("Duplicate table bucket")
-                .hasMessageContaining("tableId=2")
-                .hasMessageContaining("bucket=1");
+        TableBucket bucket = new TableBucket(2L, 1);
+        assertThat(ServerRpcMessageUtils.decodeCommitConsumerOffsetsRequest(request))
+                .containsOnly(entry(bucket, new ConsumerOffsetAndMetadata(30L, "last")));
     }
 
     @Test
@@ -143,7 +139,7 @@ class ServerRpcMessageUtilsTest {
                 .setOffset(10L);
 
         assertThatThrownBy(() -> ServerRpcMessageUtils.decodeCommitConsumerOffsetsRequest(request))
-                .isInstanceOf(InvalidBucketRoutingException.class)
+                .isInstanceOf(InvalidPartitionException.class)
                 .hasMessageContaining("partition_id=-1")
                 .hasMessageContaining("omit partition_id");
     }
@@ -168,7 +164,7 @@ class ServerRpcMessageUtilsTest {
                                 : Arrays.asList(absentPartition, sentinelPartition));
 
         assertThatThrownBy(() -> ServerRpcMessageUtils.decodeCommitConsumerOffsetsRequest(request))
-                .isInstanceOf(InvalidBucketRoutingException.class)
+                .isInstanceOf(InvalidPartitionException.class)
                 .hasMessageContaining("partition_id=-1");
     }
 
@@ -182,16 +178,19 @@ class ServerRpcMessageUtilsTest {
         table.addBucket().setBucketId(1).setPartitionId(101L).setOffset(30L);
 
         assertThat(ServerRpcMessageUtils.decodeCommitConsumerOffsetsRequest(request))
-                .hasSize(3)
-                .containsEntry(new TableBucket(2L, 1), new ConsumerOffsetAndMetadata(10L, ""))
-                .containsEntry(new TableBucket(3L, 100L, 1), new ConsumerOffsetAndMetadata(20L, ""))
-                .containsEntry(
-                        new TableBucket(3L, 101L, 1), new ConsumerOffsetAndMetadata(30L, ""));
+                .containsOnly(
+                        entry(new TableBucket(2L, 1), new ConsumerOffsetAndMetadata(10L, null)),
+                        entry(
+                                new TableBucket(3L, 100L, 1),
+                                new ConsumerOffsetAndMetadata(20L, null)),
+                        entry(
+                                new TableBucket(3L, 101L, 1),
+                                new ConsumerOffsetAndMetadata(30L, null)));
     }
 
     @Test
-    void testCommitConsumerOffsetsResponsePreservesRequestOrder() {
-        Map<TableBucket, Errors> results = new LinkedHashMap<>();
+    void testCommitConsumerOffsetsResponseGroupsBucketResultsByTable() {
+        Map<TableBucket, Errors> results = new HashMap<>();
         results.put(new TableBucket(2L, 3), Errors.NONE);
         results.put(new TableBucket(2L, 1), Errors.NOT_CONSUMER_GROUP_OWNER);
         results.put(new TableBucket(1L, 2), Errors.NONE);
@@ -202,20 +201,18 @@ class ServerRpcMessageUtilsTest {
         List<PbCommitConsumerOffsetsResponseTable> tables = response.getTablesList();
         assertThat(tables)
                 .extracting(PbCommitConsumerOffsetsResponseTable::getTableId)
-                .containsExactly(2L, 1L);
-
-        List<PbCommitConsumerOffsetsResponseBucket> tableTwoBuckets =
-                tables.get(0).getBucketsList();
-        assertThat(tableTwoBuckets)
-                .extracting(PbCommitConsumerOffsetsResponseBucket::getBucketId)
-                .containsExactly(3, 1);
-        assertThat(tableTwoBuckets.get(0).hasErrorCode()).isFalse();
-        assertThat(tableTwoBuckets.get(1).getErrorCode())
-                .isEqualTo(Errors.NOT_CONSUMER_GROUP_OWNER.code());
-
-        assertThat(tables.get(1).getBucketsList())
-                .extracting(PbCommitConsumerOffsetsResponseBucket::getBucketId)
-                .containsExactly(2);
+                .containsExactlyInAnyOrder(2L, 1L);
+        Map<TableBucket, Errors> bucketResults = new HashMap<>();
+        for (PbCommitConsumerOffsetsResponseTable table : tables) {
+            for (PbCommitConsumerOffsetsResponseBucket bucket : table.getBucketsList()) {
+                TableBucket key = new TableBucket(table.getTableId(), bucket.getBucketId());
+                Errors error =
+                        bucket.hasErrorCode() ? Errors.forCode(bucket.getErrorCode()) : Errors.NONE;
+                assertThat(bucket.hasErrorCode()).isEqualTo(error != Errors.NONE);
+                assertThat(bucketResults.put(key, error)).isNull();
+            }
+        }
+        assertThat(bucketResults).isEqualTo(results);
     }
 
     @ParameterizedTest

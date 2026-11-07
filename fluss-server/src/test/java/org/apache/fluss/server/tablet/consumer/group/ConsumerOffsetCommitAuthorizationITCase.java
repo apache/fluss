@@ -257,18 +257,18 @@ class ConsumerOffsetCommitAuthorizationITCase {
                 committedBuckets.add(new TableBucket(table.getTableId(), bucket.getBucketId()));
             }
         }
-        assertThat(committedBuckets).containsExactly(buckets);
+        assertThat(committedBuckets).containsExactlyInAnyOrder(buckets);
     }
 
     private void assertStoredOffset(TableBucket sourceBucket, long expectedOffset)
             throws Exception {
         byte[] key =
-                ConsumerOffsetSchema.encodeOffsetKey(
-                        ConsumerOffsetSchema.createOffsetKeyEncoder(),
-                        GROUP_ID,
-                        sourceBucket.getTableId(),
-                        sourceBucket.getPartitionId(),
-                        sourceBucket.getBucket());
+                new ConsumerOffsetSchema()
+                        .encodeOffsetKey(
+                                GROUP_ID,
+                                sourceBucket.getTableId(),
+                                sourceBucket.getPartitionId(),
+                                sourceBucket.getBucket());
         ZooKeeperClient zkClient = cluster.getZooKeeperClient();
         ValueDecoder decoder =
                 new ValueDecoder(

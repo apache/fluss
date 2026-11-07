@@ -1041,7 +1041,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
         // Override the data lake format if the table hasn't set it and the cluster configured.
         // System tables must not inherit the cluster data lake format. In particular, the
-        // consumer-offset table must retain standard Fluss KV bucketing so that GroupManager
+        // consumer-offset table must retain standard Fluss KV bucketing so that
+        // ConsumerGroupManager
         // owner routing remains consistent with the bucket assignment of offset records.
         if (dataLakeFormat != null
                 && !SystemTables.isSystemTable(tablePath)

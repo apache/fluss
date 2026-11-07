@@ -28,6 +28,7 @@ import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.metadata.BucketMetadata;
 import org.apache.fluss.server.metadata.SystemTables;
 import org.apache.fluss.server.metadata.TableMetadata;
+import org.apache.fluss.server.metadata.TabletServerMetadataProvider;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.replica.ReplicaManager.NoneReplica;
 import org.apache.fluss.server.replica.ReplicaTestBase;
@@ -56,7 +57,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for consumer-group routing and local ownership checks. */
-class GroupManagerTest extends ReplicaTestBase {
+class ConsumerGroupManagerTest extends ReplicaTestBase {
 
     private static final String GROUP_ID = "ownership-test";
     private static final long OFFSETS_TABLE_ID = 100L;
@@ -64,12 +65,12 @@ class GroupManagerTest extends ReplicaTestBase {
     private static final TableBucket SOURCE_BUCKET = new TableBucket(1L, 0);
 
     private LakeCatalogDynamicLoader lakeCatalogLoader;
-    private GroupManager groupManager;
+    private ConsumerGroupManager groupManager;
     private TableInfo offsetsTableInfo;
     private TableBucket offsetsTableBucket;
 
     @BeforeEach
-    void createGroupManager() throws Exception {
+    void createConsumerGroupManager() throws Exception {
         registerTableInZkClient(
                 SystemTables.CONSUMER_OFFSETS,
                 ConsumerOffsetSchema.getTableSchema(),
@@ -80,11 +81,22 @@ class GroupManagerTest extends ReplicaTestBase {
         MetadataManager metadataManager = new MetadataManager(zkClient, conf, lakeCatalogLoader);
         offsetsTableInfo = metadataManager.getTable(SystemTables.CONSUMER_OFFSETS);
         groupManager =
-                GroupManager.from(conf, TABLET_SERVER_ID, replicaManager, serverMetadataCache);
+                new ConsumerGroupManager(
+                        TABLET_SERVER_ID,
+                        replicaManager,
+                        ConsumerOffsetTableConfig.from(conf),
+                        zkClient,
+                        metadataManager,
+                        serverMetadataCache,
+                        new TabletServerMetadataProvider(
+                                zkClient, metadataManager, serverMetadataCache),
+                        testCoordinatorGateway,
+                        Runnable::run);
+        groupManager.ensureTableAsync().join();
         offsetsTableBucket =
                 new TableBucket(
                         OFFSETS_TABLE_ID,
-                        groupManager.bucketFor(GROUP_ID, TEST_ROUTING_BUCKET_COUNT));
+                        new ConsumerOffsetSchema().bucketFor(GROUP_ID, TEST_ROUTING_BUCKET_COUNT));
         // Keep ZooKeeper independent of the cache to detect synchronous owner lookups.
         zkClient.registerLeaderAndIsr(
                 offsetsTableBucket,
@@ -100,19 +112,10 @@ class GroupManagerTest extends ReplicaTestBase {
     }
 
     @Test
-    void testStableBucketRouting() {
-        int bucketCount = 50;
-        int bucket = groupManager.bucketFor("group-a", bucketCount);
-
-        assertThat(groupManager.bucketFor("group-a", bucketCount)).isEqualTo(bucket);
-        assertThat(bucket).isBetween(0, bucketCount - 1);
-    }
-
-    @Test
     void testInvalidGroupId() {
-        assertThatThrownBy(() -> groupManager.bucketFor(null, 50))
+        assertThatThrownBy(() -> groupManager.validateGroupId(null))
                 .isInstanceOf(InvalidConsumerGroupIdException.class);
-        assertThatThrownBy(() -> groupManager.bucketFor("", 50))
+        assertThatThrownBy(() -> groupManager.validateGroupId(""))
                 .isInstanceOf(InvalidConsumerGroupIdException.class);
     }
 
@@ -208,12 +211,17 @@ class GroupManagerTest extends ReplicaTestBase {
     }
 
     private void assertCommitResult(Errors expectedError) throws Exception {
-        CompletableFuture<Map<TableBucket, Errors>> result = new CompletableFuture<>();
-        groupManager.handleCommitConsumerOffsets(
-                GROUP_ID,
-                Collections.singletonMap(SOURCE_BUCKET, new ConsumerOffsetAndMetadata(10L, "")),
-                offsetsTableInfo,
-                result::complete);
+        if (expectedError != Errors.NONE) {
+            assertThatThrownBy(() -> groupManager.validateGroupId(GROUP_ID))
+                    .isInstanceOf(expectedError.exception().getClass());
+            return;
+        }
+        CompletableFuture<Map<TableBucket, Errors>> result =
+                groupManager.handleCommitConsumerOffsets(
+                        GROUP_ID,
+                        groupManager.validateGroupId(GROUP_ID),
+                        Collections.singletonMap(
+                                SOURCE_BUCKET, new ConsumerOffsetAndMetadata(10L, "")));
         assertThat(result)
                 .succeedsWithin(Duration.ofSeconds(10))
                 .isEqualTo(Collections.singletonMap(SOURCE_BUCKET, expectedError));

@@ -23,6 +23,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.ConsumerGroupOwnerLoadingException;
 import org.apache.fluss.exception.ConsumerGroupOwnerNotAvailableException;
+import org.apache.fluss.exception.NotConsumerGroupOwnerException;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
@@ -38,7 +39,6 @@ import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerRequest;
 import org.apache.fluss.rpc.messages.LookupResponse;
 import org.apache.fluss.rpc.messages.PbCommitConsumerOffsetsResponseBucket;
 import org.apache.fluss.rpc.messages.PbLookupRespForBucket;
-import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.metadata.SystemTables;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
@@ -64,6 +64,7 @@ import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newLookupReq
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitValue;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Integration tests for consumer-offset commits across owner changes. */
 class ConsumerOffsetCommitITCase {
@@ -96,9 +97,9 @@ class ConsumerOffsetCommitITCase {
                                 .distributedBy(1, "id")
                                 .build());
         TableBucket sourceBucket = new TableBucket(tableId, 0);
+        int discoveryNode = FLUSS_CLUSTER_EXTENSION.getTabletServerNodes().get(0).id();
         TabletServerGateway discoveryGateway =
-                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(
-                        FLUSS_CLUSTER_EXTENSION.getTabletServerNodes().get(0).id());
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(discoveryNode);
         int oldOwner = findOwner(discoveryGateway);
 
         ZooKeeperClient zkClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
@@ -120,11 +121,16 @@ class ConsumerOffsetCommitITCase {
 
         TabletServerGateway oldGateway =
                 FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(oldOwner);
-        assertCommitResult(oldGateway, sourceBucket, 10L, "before-leader-change", Errors.NONE);
+        commitSuccessfully(oldGateway, sourceBucket, 10L, "before-leader-change");
         assertStoredOffset(
                 oldGateway, offsetTableBucket, sourceBucket, 10L, "before-leader-change");
 
-        int newOwner = replicas.stream().filter(id -> id != oldOwner).findFirst().get();
+        // The new owner must accept commits even though it never served a find request.
+        int newOwner =
+                replicas.stream()
+                        .filter(id -> id != oldOwner && id != discoveryNode)
+                        .findFirst()
+                        .get();
         transferLeader(offsetTableBucket, oldOwner, newOwner, replicas);
         retry(
                 WAIT_TIMEOUT,
@@ -138,12 +144,12 @@ class ConsumerOffsetCommitITCase {
         retry(
                 WAIT_TIMEOUT,
                 () ->
-                        assertCommitResult(
-                                oldGateway,
-                                sourceBucket,
-                                999L,
-                                "rejected",
-                                Errors.NOT_CONSUMER_GROUP_OWNER));
+                        assertThatThrownBy(
+                                        () ->
+                                                commitSuccessfully(
+                                                        oldGateway, sourceBucket, 999L, "rejected"))
+                                .rootCause()
+                                .isInstanceOf(NotConsumerGroupOwnerException.class));
         retry(WAIT_TIMEOUT, () -> assertThat(findOwner(oldGateway)).isEqualTo(newOwner));
         TabletServerGateway newGateway =
                 FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(newOwner);
@@ -151,7 +157,7 @@ class ConsumerOffsetCommitITCase {
         // Read the old value before overwriting it, proving the new leader recovered the commit.
         assertStoredOffset(
                 newGateway, offsetTableBucket, sourceBucket, 10L, "before-leader-change");
-        assertCommitResult(newGateway, sourceBucket, 20L, "after-leader-change", Errors.NONE);
+        commitSuccessfully(newGateway, sourceBucket, 20L, "after-leader-change");
         assertStoredOffset(newGateway, offsetTableBucket, sourceBucket, 20L, "after-leader-change");
     }
 
@@ -212,12 +218,8 @@ class ConsumerOffsetCommitITCase {
         event.getResultFuture().get();
     }
 
-    private static void assertCommitResult(
-            TabletServerGateway gateway,
-            TableBucket sourceBucket,
-            long offset,
-            String metadata,
-            Errors expectedError)
+    private static void commitSuccessfully(
+            TabletServerGateway gateway, TableBucket sourceBucket, long offset, String metadata)
             throws Exception {
         CommitConsumerOffsetsRequest request =
                 new CommitConsumerOffsetsRequest().setGroupId(GROUP_ID);
@@ -234,11 +236,7 @@ class ConsumerOffsetCommitITCase {
         PbCommitConsumerOffsetsResponseBucket bucket = response.getTableAt(0).getBucketAt(0);
         assertThat(bucket.getBucketId()).isEqualTo(sourceBucket.getBucket());
         assertThat(bucket.hasPartitionId()).isFalse();
-        if (expectedError == Errors.NONE) {
-            assertThat(bucket.hasErrorCode()).isFalse();
-        } else {
-            assertThat(bucket.getErrorCode()).isEqualTo(expectedError.code());
-        }
+        assertThat(bucket.hasErrorCode()).isFalse();
     }
 
     private static void assertStoredOffset(
@@ -249,12 +247,12 @@ class ConsumerOffsetCommitITCase {
             String expectedMetadata)
             throws Exception {
         byte[] key =
-                ConsumerOffsetSchema.encodeOffsetKey(
-                        ConsumerOffsetSchema.createOffsetKeyEncoder(),
-                        GROUP_ID,
-                        sourceBucket.getTableId(),
-                        sourceBucket.getPartitionId(),
-                        sourceBucket.getBucket());
+                new ConsumerOffsetSchema()
+                        .encodeOffsetKey(
+                                GROUP_ID,
+                                sourceBucket.getTableId(),
+                                sourceBucket.getPartitionId(),
+                                sourceBucket.getBucket());
         int schemaId =
                 FLUSS_CLUSTER_EXTENSION
                         .getZooKeeperClient()

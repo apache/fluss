@@ -469,21 +469,20 @@ message FindConsumerGroupOwnerResponse {
 }
 
 // Commit consumer offsets request and response.
-// Each tablet server appends accepted non-empty commits for the same group in submission order,
-// including when initializing the system table. Replication acknowledgements may overlap.
+// Concurrent commits for the same group may be appended in any order.
 // Offset values may decrease for intentional consumption resets.
+// Within one request, the last entry for each bucket supplies its offset and metadata.
+// If that entry exceeds the metadata limit, the bucket returns a size error and is not updated.
 message CommitConsumerOffsetsRequest {
   required string group_id = 1;
-  // An empty list, or tables containing no buckets, is a valid no-op and produces an empty
-  // successful response.
+  // Once the group and ownership are validated, a request with no buckets succeeds.
   repeated PbCommitConsumerOffsetsRequestTable tables = 2;
 }
 
-// Request-level failures, such as authentication, authorization, malformed requests, or an
-// unexpected server failure, are returned through the RPC ErrorResponse envelope. Logical commit
-// failures, including group validation, ownership, and bucket write failures, are reported in each
-// PbCommitConsumerOffsetsResponseBucket.
+// Group validation, owner availability, authorization, and malformed requests use the RPC
+// ErrorResponse envelope. Offset validation and write failures are reported per bucket.
 message CommitConsumerOffsetsResponse {
+  // One result per distinct bucket in the request.
   repeated PbCommitConsumerOffsetsResponseTable tables = 1;
 }
 
@@ -1557,6 +1556,7 @@ message PbCommitConsumerOffsetsRequestBucket {
   optional int64 partition_id = 1;
   required int32 bucket_id = 2;
   required int64 offset = 3;
+  // Omitted metadata is stored as null. An explicit empty string is preserved.
   optional string metadata = 4;
 }
 

@@ -19,11 +19,13 @@ package org.apache.fluss.server.tablet.consumer.group;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.exception.ConsumerGroupOwnerNotAvailableException;
+import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.metadata.SystemTables;
+import org.apache.fluss.server.metadata.TableMetadata;
 import org.apache.fluss.server.metadata.TabletServerMetadataProvider;
 import org.apache.fluss.server.replica.ReplicaTestBase;
 import org.apache.fluss.server.zk.data.TableRegistration;
@@ -34,6 +36,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.util.Collections;
 import java.util.concurrent.CompletableFuture;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -48,7 +51,7 @@ class ConsumerOffsetTableInitializationTest extends ReplicaTestBase {
             new ManuallyTriggeredScheduledExecutorService();
     private LakeCatalogDynamicLoader lakeCatalogLoader;
     private MetadataManager metadataManager;
-    private ConsumerOffsetTableManager tableManager;
+    private ConsumerGroupManager tableManager;
 
     @BeforeEach
     void createTableManager() throws Exception {
@@ -68,7 +71,9 @@ class ConsumerOffsetTableInitializationTest extends ReplicaTestBase {
         lakeCatalogLoader = new LakeCatalogDynamicLoader(conf, null, true);
         metadataManager = new MetadataManager(zkClient, conf, lakeCatalogLoader);
         tableManager =
-                new ConsumerOffsetTableManager(
+                new ConsumerGroupManager(
+                        TABLET_SERVER_ID,
+                        replicaManager,
                         ConsumerOffsetTableConfig.from(conf),
                         zkClient,
                         metadataManager,
@@ -105,6 +110,27 @@ class ConsumerOffsetTableInitializationTest extends ReplicaTestBase {
         assertThat(expected.getNumBuckets()).isEqualTo(TEST_ROUTING_BUCKET_COUNT);
         assertThat(first).succeedsWithin(Duration.ofSeconds(10)).isEqualTo(expected);
         assertThat(tableManager.ensureTableAsync()).isSameAs(first);
+    }
+
+    @Test
+    void testFailedFindPreservesMetadataReceivedFromCoordinator() throws Exception {
+        CompletableFuture<TableInfo> pending = tableManager.ensureTableAsync();
+        TableInfo published =
+                zkClient.getTable(SystemTables.CONSUMER_OFFSETS)
+                        .get()
+                        .toTableInfo(
+                                SystemTables.CONSUMER_OFFSETS,
+                                new SchemaInfo(ConsumerOffsetSchema.getTableSchema(), 1));
+        TableMetadata update = new TableMetadata(published, Collections.emptyList());
+        serverMetadataCache.updateTableMetadata(update);
+        tableManager.onTableMetadataUpdate(Collections.singletonList(update));
+
+        executor.triggerAll();
+        assertThatThrownBy(pending::join)
+                .cause()
+                .isInstanceOf(ConsumerGroupOwnerNotAvailableException.class);
+        assertThat(tableManager.ensureTableAsync()).isCompletedWithValue(published);
+        assertThat(executor.numQueuedRunnables()).isZero();
     }
 
     @Test

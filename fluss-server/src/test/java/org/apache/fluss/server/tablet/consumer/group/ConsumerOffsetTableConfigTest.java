@@ -26,6 +26,7 @@ import org.junit.jupiter.api.Test;
 import java.time.Duration;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for {@link ConsumerOffsetTableConfig}. */
 class ConsumerOffsetTableConfigTest {
@@ -44,6 +45,8 @@ class ConsumerOffsetTableConfigTest {
                 .isEqualTo(ConfigOptions.OFFSETS_TABLE_REPLICATION_FACTOR.defaultValue());
         assertThat(config.getOffsetCommitTimeout())
                 .isEqualTo(ConfigOptions.OFFSET_COMMIT_TIMEOUT.defaultValue());
+        assertThat(config.getOffsetCommitTimeout().toMillis())
+                .isEqualTo(config.getOffsetCommitTimeoutMs());
     }
 
     @Test
@@ -62,5 +65,16 @@ class ConsumerOffsetTableConfigTest {
         assertThat(config.getOffsetsTableNumBuckets()).isEqualTo(16);
         assertThat(config.getOffsetsTableReplicationFactor()).isEqualTo(2);
         assertThat(config.getOffsetCommitTimeout()).isEqualTo(Duration.ofSeconds(3));
+        assertThat(config.getOffsetCommitTimeoutMs()).isEqualTo(3000);
+    }
+
+    @Test
+    void testCommitTimeoutExceedsReplicaTimeoutRange() {
+        Configuration configuration = new Configuration();
+        configuration.set(
+                ConfigOptions.OFFSET_COMMIT_TIMEOUT, Duration.ofMillis(Integer.MAX_VALUE + 1L));
+
+        assertThatThrownBy(() -> ConsumerOffsetTableConfig.from(configuration))
+                .isInstanceOf(ArithmeticException.class);
     }
 }
