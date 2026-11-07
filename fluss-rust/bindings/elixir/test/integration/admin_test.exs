@@ -351,7 +351,10 @@ defmodule Fluss.Integration.AdminTest do
 
       # Schema round-trips: columns in definition order, PK preserved.
       assert info.schema == %Fluss.Schema{
-               columns: [{"id", {:not_null, :int}}, {"name", :string}],
+               columns: [
+                 %Fluss.Column{name: "id", data_type: {:not_null, :int}},
+                 %Fluss.Column{name: "name", data_type: :string}
+               ],
                primary_key: ["id"]
              }
 
@@ -400,9 +403,9 @@ defmodule Fluss.Integration.AdminTest do
 
       assert info.schema == %Fluss.Schema{
                columns: [
-                 {"id", {:not_null, :int}},
-                 {"region", {:not_null, :string}},
-                 {"name", :string}
+                 %Fluss.Column{name: "id", data_type: {:not_null, :int}},
+                 %Fluss.Column{name: "region", data_type: {:not_null, :string}},
+                 %Fluss.Column{name: "name", data_type: :string}
                ],
                primary_key: ["id", "region"]
              }
@@ -465,7 +468,10 @@ defmodule Fluss.Integration.AdminTest do
                Fluss.Admin.get_table_schema(admin, @database, table)
 
       assert info.schema == %Fluss.Schema{
-               columns: [{"id", {:not_null, :int}}, {"name", :string}],
+               columns: [
+                 %Fluss.Column{name: "id", data_type: {:not_null, :int}},
+                 %Fluss.Column{name: "name", data_type: :string}
+               ],
                primary_key: ["id"]
              }
 
@@ -495,16 +501,45 @@ defmodule Fluss.Integration.AdminTest do
 
       assert info.schema == %Fluss.Schema{
                columns: [
-                 {"id", {:not_null, :int}},
-                 {"tags", {:array, :string}},
-                 {"scores", {:array, {:not_null, :int}}},
+                 %Fluss.Column{name: "id", data_type: {:not_null, :int}},
+                 %Fluss.Column{name: "tags", data_type: {:array, :string}},
+                 %Fluss.Column{name: "scores", data_type: {:array, {:not_null, :int}}},
                  # map keys are non-null by Fluss spec, so the `:string`
                  # key reads back wrapped even though it was written bare.
-                 {"attrs", {:map, {:not_null, :string}, :int}},
-                 {"point", {:row, [{"x", :int}, {"y", :int}]}}
+                 %Fluss.Column{name: "attrs", data_type: {:map, {:not_null, :string}, :int}},
+                 %Fluss.Column{name: "point", data_type: {:row, [{"x", :int}, {"y", :int}]}}
                ],
                primary_key: ["id"]
              }
+    end
+
+    test "round-trips column comments", %{admin: admin} do
+      table = "fluss_table_#{:rand.uniform(100_000)}"
+
+      schema =
+        Fluss.Schema.new()
+        |> Fluss.Schema.column("id", :int, comment: "The order id")
+        |> Fluss.Schema.column("tags", {:array, :string}, comment: "Free-form tags")
+        |> Fluss.Schema.column("note", :string)
+        |> Fluss.Schema.primary_key(["id"])
+
+      :ok = Fluss.Admin.create_table(admin, @database, table, Fluss.TableDescriptor.new!(schema))
+
+      on_exit(fn ->
+        Fluss.Admin.drop_table(admin, @database, table, ignore_if_not_exists: true)
+      end)
+
+      expected = [
+        %Fluss.Column{name: "id", data_type: {:not_null, :int}, comment: "The order id"},
+        %Fluss.Column{name: "tags", data_type: {:array, :string}, comment: "Free-form tags"},
+        %Fluss.Column{name: "note", data_type: :string, comment: nil}
+      ]
+
+      assert {:ok, schema_info} = Fluss.Admin.get_table_schema(admin, @database, table)
+      assert schema_info.schema.columns == expected
+
+      assert {:ok, table_info} = Fluss.Admin.get_table_info(admin, @database, table)
+      assert table_info.schema.columns == expected
     end
 
     test "fetches a specific schema version by id", %{admin: admin} do
