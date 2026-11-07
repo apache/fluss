@@ -240,7 +240,7 @@ pub struct Config {
     #[arg(long, default_value_t = 25600)]
     pub lookup_queue_size: usize,
 
-    /// Maximum batch size of merging lookup operations to one lookup request
+    /// Maximum number of lookup operations in a batch. Must be greater than zero.
     /// Default: 128 (matching Java CLIENT_LOOKUP_MAX_BATCH_SIZE)
     #[arg(long, default_value_t = 128)]
     pub lookup_max_batch_size: usize,
@@ -495,6 +495,9 @@ impl Config {
         if self.lookup_queue_size == 0 {
             return Err("lookup_queue_size must be > 0".to_string());
         }
+        if self.lookup_max_batch_size == 0 {
+            return Err("lookup_max_batch_size must be > 0".to_string());
+        }
         if self.lookup_max_inflight_requests == 0 {
             return Err("lookup_max_inflight_requests must be > 0".to_string());
         }
@@ -677,13 +680,15 @@ mod tests {
 
     #[test]
     fn test_lookup_zero_capacity_rejected() {
-        for (queue_size, max_inflight, expected) in [
-            (0, 128, "lookup_queue_size must be > 0"),
-            (25600, 0, "lookup_max_inflight_requests must be > 0"),
-            (0, 0, "lookup_queue_size must be > 0"),
+        for (queue_size, max_batch_size, max_inflight, expected) in [
+            (0, 128, 128, "lookup_queue_size must be > 0"),
+            (25600, 0, 128, "lookup_max_batch_size must be > 0"),
+            (25600, 128, 0, "lookup_max_inflight_requests must be > 0"),
+            (0, 0, 0, "lookup_queue_size must be > 0"),
         ] {
             let config = Config {
                 lookup_queue_size: queue_size,
+                lookup_max_batch_size: max_batch_size,
                 lookup_max_inflight_requests: max_inflight,
                 ..Config::default()
             };
@@ -696,6 +701,7 @@ mod tests {
         assert!(Config::default().validate_lookup().is_ok());
         let config = Config {
             lookup_queue_size: 1,
+            lookup_max_batch_size: 1,
             lookup_max_inflight_requests: 1,
             lookup_batch_timeout_ms: 0,
             ..Config::default()
