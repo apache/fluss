@@ -39,6 +39,9 @@ defmodule Fluss.Native do
   def admin_drop_database(_admin, _name, _opts),
     do: :erlang.nif_error(:nif_not_loaded)
 
+  def admin_alter_database(_admin, _name, _changes, _opts),
+    do: :erlang.nif_error(:nif_not_loaded)
+
   def admin_list_databases(_admin), do: :erlang.nif_error(:nif_not_loaded)
 
   def admin_database_exists(_admin, _database_name), do: :erlang.nif_error(:nif_not_loaded)
@@ -47,6 +50,9 @@ defmodule Fluss.Native do
     do: :erlang.nif_error(:nif_not_loaded)
 
   def admin_drop_table(_admin, _db, _table, _opts),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def admin_alter_table(_admin, _database_name, _table_name, _changes, _opts),
     do: :erlang.nif_error(:nif_not_loaded)
 
   def admin_list_tables(_admin, _database), do: :erlang.nif_error(:nif_not_loaded)

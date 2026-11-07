@@ -41,6 +41,8 @@ defmodule Fluss.Schema do
 
   """
 
+  import Fluss.ArgumentValidation
+
   defstruct columns: [], primary_key: []
 
   # Keep in sync with `data_type()` below.
@@ -101,7 +103,7 @@ defmodule Fluss.Schema do
   """
   @spec column(t(), String.t(), data_type(), column_opts()) :: t()
   def column(%__MODULE__{} = schema, name, data_type, opts \\ []) do
-    opts = validate_opts!(opts)
+    opts = validate_keyword!(opts, comment: nil)
 
     column =
       validate_column!(%Fluss.Column{name: name, data_type: data_type, comment: opts[:comment]})
@@ -127,23 +129,10 @@ defmodule Fluss.Schema do
   defp validate_primary_key!(keys),
     do: validate_items!(keys, "primary_key", &validate_string!(&1, "primary key column"))
 
-  defp validate_items!(list, field, validate_item) when is_list(list) do
-    if List.improper?(list) do
-      raise ArgumentError, "expected #{field} to be a proper list, got: #{inspect(list)}"
-    end
-
-    Enum.each(list, validate_item)
-    list
-  end
-
-  defp validate_items!(other, field, _validate_item) do
-    raise ArgumentError, "expected #{field} to be a list, got: #{inspect(other)}"
-  end
-
   defp validate_column!(
          %Fluss.Column{name: name, data_type: data_type, comment: comment} = column
        ) do
-    validate_string!(name, "column name")
+    validate_name!(name, "column")
     validate_data_type!(data_type, name)
     unless is_nil(comment), do: validate_string!(comment, "column comment")
     column
@@ -154,7 +143,10 @@ defmodule Fluss.Schema do
           "expected a %Fluss.Column{} (see Fluss.Schema.column/4), got: #{inspect(other)}"
   end
 
-  defp validate_data_type!(data_type, column_name) do
+  # Also used by `Fluss.Admin.alter_table/5`.
+  @doc false
+  @spec validate_data_type!(term(), String.t()) :: data_type()
+  def validate_data_type!(data_type, column_name) do
     unless valid_data_type?(data_type) do
       raise ArgumentError,
             "invalid data type for column `#{column_name}` (see Fluss.Schema), " <>
@@ -183,16 +175,4 @@ defmodule Fluss.Schema do
 
   defp valid_row_field?({name, type}) when is_binary(name), do: valid_data_type?(type)
   defp valid_row_field?(_field), do: false
-
-  defp validate_string!(value, _what) when is_binary(value), do: value
-
-  defp validate_string!(value, what) do
-    raise ArgumentError, "expected the #{what} to be a string, got: #{inspect(value)}"
-  end
-
-  defp validate_opts!(opts) when is_list(opts), do: Keyword.validate!(opts, comment: nil)
-
-  defp validate_opts!(opts) do
-    raise ArgumentError, "expected options to be a keyword list, got: #{inspect(opts)}"
-  end
 end
