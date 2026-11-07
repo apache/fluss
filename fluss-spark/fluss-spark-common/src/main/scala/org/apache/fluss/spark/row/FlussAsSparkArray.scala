@@ -18,7 +18,7 @@
 package org.apache.fluss.spark.row
 
 import org.apache.fluss.row.{InternalArray => FlussInternalArray}
-import org.apache.fluss.types.{ArrayType => FlussArrayType, BigIntType => FlussBigIntType, BinaryType => FlussBinaryType, DataType => FlussDataType, LocalZonedTimestampType => FlussTimestampLTZType, MapType => FlussMapType, RowType, TimestampType => FlussTimestampNTZType}
+import org.apache.fluss.types.{ArrayType => FlussArrayType, BigIntType => FlussBigIntType, BinaryType => FlussBinaryType, BytesType => FlussBytesType, DataType => FlussDataType, LocalZonedTimestampType => FlussTimestampLTZType, MapType => FlussMapType, RowType, TimestampType => FlussTimestampNTZType}
 import org.apache.fluss.utils.InternalRowUtils
 
 import org.apache.spark.sql.catalyst.{InternalRow => SparkInternalRow}
@@ -28,7 +28,7 @@ import org.apache.spark.sql.types.{DataType => SparkDataType, Decimal => SparkDe
 import org.apache.spark.unsafe.types.{CalendarInterval, UTF8String}
 
 /** Wraps a Fluss [[FlussInternalArray]] as a Spark [[SparkArrayData]]. */
-class FlussAsSparkArray(elementType: FlussDataType) extends SparkArrayData {
+class FlussAsSparkArray(elementType: FlussDataType) extends SparkArrayData with SparkRowGetters {
 
   var flussArray: FlussInternalArray = _
 
@@ -93,8 +93,10 @@ class FlussAsSparkArray(elementType: FlussDataType) extends SparkArrayData {
   }
 
   override def getBinary(ordinal: Int): Array[Byte] = {
-    val binaryType = elementType.asInstanceOf[FlussBinaryType]
-    flussArray.getBinary(ordinal, binaryType.getLength)
+    elementType match {
+      case binaryType: FlussBinaryType => flussArray.getBinary(ordinal, binaryType.getLength)
+      case _: FlussBytesType => flussArray.getBytes(ordinal)
+    }
   }
 
   override def getInterval(ordinal: Int): CalendarInterval =

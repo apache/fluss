@@ -107,7 +107,7 @@ object SupportsFlussPartitionManagement {
             case PhysicalFloatType => partValue.toFloat
             case PhysicalLongType => partValue.toLong
             case PhysicalShortType => partValue.toShort
-            case PhysicalStringType => UTF8String.fromString(partValue)
+            case _: PhysicalStringType => UTF8String.fromString(partValue)
           }
       }
       row.update(i, value)

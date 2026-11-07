@@ -30,7 +30,7 @@
     <name>Apache Fluss : Engine Spark : 3.5</name>
 
     <properties>
-        <spark.version>3.5.7</spark.version>
+        <spark.version>${spark35.version}</spark.version>
     </properties>
 
     <dependencies>

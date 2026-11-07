@@ -98,12 +98,15 @@
         <hudi.version>1.1.0</hudi.version>
         <roaringbitmap.version>1.3.0</roaringbitmap.version>
 
-        <!-- spark & scala -->
+        <!-- Spark and Scala versions, also used by shared test utilities. -->
+        <spark34.version>3.4.3</spark34.version>
+        <spark35.version>3.5.7</spark35.version>
+        <spark4.version>4.2.0</spark4.version>
+        <spark.version>${spark35.version}</spark.version>
         <scala212.version>2.12.18</scala212.version>
-        <scala213.version>2.13.16</scala213.version>
+        <scala213.version>2.13.18</scala213.version>
         <scala.binary.version>2.12</scala.binary.version>
         <scala.version>${scala212.version}</scala.version>
-        <spark.version>3.5.7</spark.version>
         <scalatest.version>3.1.0</scalatest.version>
 
         <fluss.hadoop.version>3.4.3</fluss.hadoop.version>

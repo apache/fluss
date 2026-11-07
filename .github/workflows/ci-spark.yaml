@@ -91,3 +91,11 @@ jobs:
     with:
       java-version: "11"
       modules: '["spark3","spark3-lake","spark3-scala213"]'
+
+  build-on-jdk17:
+    name: "Java 17"
+    uses: ./.github/workflows/ci-template.yaml
+    with:
+      java-version: "17"
+      maven-parameters: "-Pspark4"
+      modules: '["spark4","spark4-lake"]'
