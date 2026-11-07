@@ -91,8 +91,9 @@ public class CoordinatorContext {
     private final Map<TablePartition, Integer> partitionBucketCounts = new HashMap<>();
     // a map from partition_id -> physicalTablePath
     private final Map<Long, PhysicalTablePath> pathByPartitionId = new HashMap<>();
-    private final Map<PhysicalTablePath, Long> partitionIdByPath = new HashMap<>();
+    private final Map<PhysicalTablePath, TablePartition> partitionByPath = new HashMap<>();
     private final Map<Long, PartitionInfo> partitionInfoById = new HashMap<>();
+    private final Map<Long, Integer> partitionCountByTable = new HashMap<>();
 
     // a map from table_id to the table path
     private final Map<Long, TablePath> tablePathById = new HashMap<>();
@@ -429,10 +430,19 @@ public class CoordinatorContext {
         this.tableInfoById.put(tableInfo.getTableId(), tableInfo);
     }
 
+    /**
+     * Registers partition metadata under its physical table and partition IDs. Refreshing a
+     * partition preserves its owning table ID.
+     */
     public void putPartition(
-            long partitionId, PhysicalTablePath physicalTablePath, PartitionInfo partitionInfo) {
-        this.pathByPartitionId.put(partitionId, physicalTablePath);
-        this.partitionIdByPath.put(physicalTablePath, partitionId);
+            long tableId,
+            long partitionId,
+            PhysicalTablePath physicalTablePath,
+            PartitionInfo partitionInfo) {
+        if (this.pathByPartitionId.put(partitionId, physicalTablePath) == null) {
+            partitionCountByTable.merge(tableId, 1, Integer::sum);
+        }
+        this.partitionByPath.put(physicalTablePath, new TablePartition(tableId, partitionId));
         this.partitionInfoById.put(partitionId, partitionInfo);
     }
 
@@ -479,8 +489,14 @@ public class CoordinatorContext {
         return Optional.ofNullable(pathByPartitionId.get(partitionId));
     }
 
+    /** Returns the partition ID belonging to the current table instance at this path. */
     public Optional<Long> getPartitionId(PhysicalTablePath physicalTablePath) {
-        return Optional.ofNullable(partitionIdByPath.get(physicalTablePath));
+        TablePartition partition = partitionByPath.get(physicalTablePath);
+        if (partition == null
+                || partition.getTableId() != getTableIdByPath(physicalTablePath.getTablePath())) {
+            return Optional.empty();
+        }
+        return Optional.of(partition.getPartitionId());
     }
 
     public PartitionInfo getPartitionInfoById(long partitionId) {
@@ -618,6 +634,11 @@ public class CoordinatorContext {
                             }
                         });
         return allReplicas;
+    }
+
+    /** Returns whether partition metadata still belongs to the physical table ID. */
+    boolean hasPartitions(long tableId) {
+        return partitionCountByTable.containsKey(tableId);
     }
 
     public boolean hasPartitionsToDelete(long tableId) {
@@ -816,7 +837,7 @@ public class CoordinatorContext {
 
         TablePath tablePath = tablePathById.remove(tableId);
         if (tablePath != null) {
-            tableIdByPath.remove(tablePath);
+            tableIdByPath.remove(tablePath, tableId);
         }
         tableInfoById.remove(tableId);
     }
@@ -845,7 +866,14 @@ public class CoordinatorContext {
         PhysicalTablePath physicalTablePath =
                 pathByPartitionId.remove(tablePartition.getPartitionId());
         if (physicalTablePath != null) {
-            partitionIdByPath.remove(physicalTablePath);
+            partitionByPath.remove(physicalTablePath, tablePartition);
+            long tableId = tablePartition.getTableId();
+            int count = partitionCountByTable.get(tableId);
+            if (count == 1) {
+                partitionCountByTable.remove(tableId);
+            } else {
+                partitionCountByTable.put(tableId, count - 1);
+            }
         }
 
         partitionInfoById.remove(tablePartition.getPartitionId());
@@ -884,7 +912,8 @@ public class CoordinatorContext {
         tableIdByPath.clear();
         tableInfoById.clear();
         pathByPartitionId.clear();
-        partitionIdByPath.clear();
+        partitionByPath.clear();
+        partitionCountByTable.clear();
         kvBuckets.clear();
     }
 
