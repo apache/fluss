@@ -23,6 +23,7 @@ import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidConfigException;
+import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.Schema;
@@ -42,6 +43,8 @@ import java.util.List;
 import static org.apache.fluss.config.ConfigOptions.DATALAKE_ENABLED;
 import static org.apache.fluss.config.ConfigOptions.DATALAKE_FORMAT;
 import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_ENABLED;
+import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_FORMAT;
+import static org.apache.fluss.metadata.DataLakeFormat.ICEBERG;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -389,5 +392,33 @@ class LakeEnableTableITCase extends ClientToServerITCaseBase {
         assertThat(updatedTableInfo.getTableConfig().isDataLakeEnabled()).isTrue();
         assertThat(updatedTableInfo.getTableConfig().getDataLakeFormat())
                 .hasValue(DataLakeFormat.PAIMON);
+    }
+
+    @Test
+    void testCreateTableWithUnsupportedIcebergBucketKeys() throws Exception {
+        String databaseName = "test_db";
+        String tableName = "invalid_iceberg_bucket";
+        TablePath tablePath = TablePath.of(databaseName, tableName);
+
+        admin.createDatabase(databaseName, DatabaseDescriptor.EMPTY, true).get();
+
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("a", DataTypes.INT())
+                                        .column("b", DataTypes.INT())
+                                        .build())
+                        .distributedBy(4, "a", "b")
+                        .property(TABLE_DATALAKE_FORMAT, ICEBERG)
+                        .property(TABLE_DATALAKE_ENABLED, false)
+                        .build();
+
+        assertThatThrownBy(() -> admin.createTable(tablePath, tableDescriptor, false).get())
+                .cause()
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining("Only one bucket key is supported for Iceberg");
+
+        assertThat(admin.tableExists(tablePath).get()).isFalse();
     }
 }
