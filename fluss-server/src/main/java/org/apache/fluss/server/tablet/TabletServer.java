@@ -485,13 +485,9 @@ public class TabletServer extends ServerBase {
                 exception = ExceptionUtils.firstOrSuppressed(t, exception);
             }
 
-            try {
-                if (replicaStateChangeExecutor != null) {
-                    ExecutorUtils.gracefulShutdown(5, TimeUnit.SECONDS, replicaStateChangeExecutor);
-                }
-            } catch (Throwable t) {
-                exception = ExceptionUtils.firstOrSuppressed(t, exception);
-            }
+            // Recovery can be blocked in storage I/O. Never close its dependencies while a
+            // coordinator or recovery worker is still accessing them.
+            shutdownReplicaStateChanges();
 
             try {
                 // TODO currently, rpc client don't have timeout logic. After implementing the
@@ -567,6 +563,25 @@ public class TabletServer extends ServerBase {
                 terminationFutures.add(FutureUtils.completedExceptionally(exception));
             }
             return FutureUtils.completeAll(terminationFutures);
+        }
+    }
+
+    @VisibleForTesting
+    void shutdownReplicaStateChanges() {
+        boolean interrupted = false;
+        if (replicaStateChangeExecutor != null) {
+            replicaStateChangeExecutor.shutdown();
+            while (!replicaStateChangeExecutor.isTerminated()) {
+                try {
+                    replicaStateChangeExecutor.awaitTermination(
+                            Long.MAX_VALUE, TimeUnit.NANOSECONDS);
+                } catch (InterruptedException e) {
+                    interrupted = true;
+                }
+            }
+        }
+        if (interrupted) {
+            Thread.currentThread().interrupt();
         }
     }
 
