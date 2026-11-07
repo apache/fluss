@@ -61,8 +61,9 @@ public class RequestsMetrics {
 
     private RequestsMetrics(MetricGroup serverMetricsGroup, Collection<String> requestNames) {
         this.serverMetricsGroup = serverMetricsGroup;
-        this.requestMetricGroup = serverMetricsGroup.addGroup("request");
+        // Register named requests first so "request" is created as a key for reporter labels.
         registerRequests(requestNames);
+        this.requestMetricGroup = serverMetricsGroup.addGroup("request");
     }
 
     /**
