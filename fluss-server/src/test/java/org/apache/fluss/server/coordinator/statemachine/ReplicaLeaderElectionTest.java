@@ -228,6 +228,10 @@ public class ReplicaLeaderElectionTest {
         assertThat(leaderOpt).isPresent();
         assertThat(leaderOpt.get().getLeaderAndIsr().leader()).isEqualTo(2);
 
+        reassignmentLeaderElection = new ReassignmentLeaderElection(targetReplicas, false);
+        leaderOpt = reassignmentLeaderElection.leaderElection(liveReplicas, leaderAndIsr, false);
+        assertThat(leaderOpt).isEmpty();
+
         targetReplicas = Arrays.asList(1, 2, 3);
         reassignmentLeaderElection = new ReassignmentLeaderElection(targetReplicas);
         liveReplicas = Arrays.asList(1, 2);
