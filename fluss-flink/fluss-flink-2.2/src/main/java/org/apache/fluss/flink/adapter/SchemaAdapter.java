@@ -19,7 +19,9 @@ package org.apache.fluss.flink.adapter;
 
 import org.apache.flink.table.api.Schema;
 
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * An adapter for the schema with Index.
@@ -31,8 +33,11 @@ public class SchemaAdapter {
 
     public static Schema withIndex(Schema unresolvedSchema, List<List<String>> indexes) {
         Schema.Builder newSchemaBuilder = Schema.newBuilder().fromSchema(unresolvedSchema);
+        Set<List<String>> registeredIndexes = new HashSet<>();
         for (List<String> index : indexes) {
-            newSchemaBuilder.index(index);
+            if (registeredIndexes.add(index)) {
+                newSchemaBuilder.index(index);
+            }
         }
         return newSchemaBuilder.build();
     }
