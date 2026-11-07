@@ -53,6 +53,62 @@ defmodule Fluss.SchemaTest do
     end
   end
 
+  describe "data types" do
+    test "accepts every simple type, the parameterized bounds and nested types" do
+      simple_types =
+        ~w(boolean tinyint smallint int bigint float double string bytes date time timestamp
+           timestamp_ltz)a
+
+      types =
+        simple_types ++
+          [
+            {:decimal, 1, 0},
+            {:decimal, 38, 38},
+            {:char, 1},
+            {:char, 0xFFFFFFFF},
+            {:binary, 0xFFFFFFFFFFFFFFFF},
+            {:row, []},
+            {:not_null, {:not_null, :int}},
+            {:row, [{"a", {:array, {:map, {:char, 1}, {:binary, 16}}}}]}
+          ]
+
+      for type <- types do
+        schema = Schema.column(Schema.new(), "c", type)
+        assert is_reference(Fluss.TableDescriptor.new!(schema)), inspect(type)
+      end
+    end
+
+    test "raises ArgumentError for an invalid type, in column/4 and in a hand-built schema" do
+      for type <- [
+            :bogus,
+            nil,
+            "int",
+            {:row, [{"a", :int} | :oops]},
+            {:row, [{"b", {:row, [{"x", :int} | :oops]}}]},
+            {:row, [{:a, :int}]},
+            {:array, :bogus},
+            {:map, :int},
+            {:not_null, :bogus},
+            {:decimal, 0, 0},
+            {:decimal, 39, 2},
+            {:decimal, 10, 11},
+            {:decimal, 10.0, 2},
+            {:char, 0},
+            {:char, 0x100000000},
+            {:binary, -1},
+            {:binary, 0x10000000000000000}
+          ] do
+        message = ~r/invalid data type for column `c`.*#{Regex.escape(inspect(type))}/
+
+        assert_raise ArgumentError, message, fn -> Schema.column(Schema.new(), "c", type) end
+
+        assert_raise ArgumentError, message, fn ->
+          Fluss.TableDescriptor.new!(%Schema{columns: [%Column{name: "c", data_type: type}]})
+        end
+      end
+    end
+  end
+
   describe "primary_key/2" do
     test "takes a list of column names, even for one column" do
       assert Schema.primary_key(Schema.new(), ["id"]).primary_key == ["id"]

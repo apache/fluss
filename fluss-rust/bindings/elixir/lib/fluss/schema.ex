@@ -22,7 +22,8 @@ defmodule Fluss.Schema do
   Simple types: `:boolean`, `:tinyint`, `:smallint`, `:int`, `:bigint`,
   `:float`, `:double`, `:string`, `:bytes`, `:date`, `:time`, `:timestamp`, `:timestamp_ltz`
 
-  Parameterized types: `{:decimal, precision, scale}`, `{:char, length}`, `{:binary, length}`
+  Parameterized types: `{:decimal, precision, scale}` (precision 1..38, scale 0..precision),
+  `{:char, length}`, `{:binary, length}` (length at least 1)
 
   Complex types: `{:array, dt}`, `{:map, key_dt, value_dt}`, `{:row, [{name, dt}]}`
   (e.g. `{:row, [{"x", :int}, {"y", :string}]}`).
@@ -42,6 +43,23 @@ defmodule Fluss.Schema do
 
   defstruct columns: [], primary_key: []
 
+  # Keep in sync with `data_type()` below.
+  @simple_types [
+    :boolean,
+    :tinyint,
+    :smallint,
+    :int,
+    :bigint,
+    :float,
+    :double,
+    :string,
+    :bytes,
+    :date,
+    :time,
+    :timestamp,
+    :timestamp_ltz
+  ]
+
   @type data_type ::
           :boolean
           | :tinyint
@@ -56,9 +74,9 @@ defmodule Fluss.Schema do
           | :time
           | :timestamp
           | :timestamp_ltz
-          | {:decimal, non_neg_integer(), non_neg_integer()}
-          | {:char, non_neg_integer()}
-          | {:binary, non_neg_integer()}
+          | {:decimal, pos_integer(), non_neg_integer()}
+          | {:char, pos_integer()}
+          | {:binary, pos_integer()}
           | {:array, data_type()}
           | {:map, data_type(), data_type()}
           | {:row, [{String.t(), data_type()}]}
@@ -122,8 +140,11 @@ defmodule Fluss.Schema do
     raise ArgumentError, "expected #{field} to be a list, got: #{inspect(other)}"
   end
 
-  defp validate_column!(%Fluss.Column{name: name, comment: comment} = column) do
+  defp validate_column!(
+         %Fluss.Column{name: name, data_type: data_type, comment: comment} = column
+       ) do
     validate_string!(name, "column name")
+    validate_data_type!(data_type, name)
     unless is_nil(comment), do: validate_string!(comment, "column comment")
     column
   end
@@ -132,6 +153,36 @@ defmodule Fluss.Schema do
     raise ArgumentError,
           "expected a %Fluss.Column{} (see Fluss.Schema.column/4), got: #{inspect(other)}"
   end
+
+  defp validate_data_type!(data_type, column_name) do
+    unless valid_data_type?(data_type) do
+      raise ArgumentError,
+            "invalid data type for column `#{column_name}` (see Fluss.Schema), " <>
+              "got: #{inspect(data_type, limit: :infinity)}"
+    end
+
+    data_type
+  end
+
+  # Mirrors the NIF's `DataType`.
+  defp valid_data_type?(type) when type in @simple_types, do: true
+
+  defp valid_data_type?({:decimal, precision, scale}) when precision in 1..38,
+    do: scale in 0..precision
+
+  defp valid_data_type?({:char, length}) when length in 1..0xFFFFFFFF, do: true
+  defp valid_data_type?({:binary, length}) when length in 1..0xFFFFFFFFFFFFFFFF, do: true
+  defp valid_data_type?({:array, item}), do: valid_data_type?(item)
+  defp valid_data_type?({:map, key, value}), do: valid_data_type?(key) and valid_data_type?(value)
+  defp valid_data_type?({:not_null, type}), do: valid_data_type?(type)
+
+  defp valid_data_type?({:row, fields}) when is_list(fields),
+    do: not List.improper?(fields) and Enum.all?(fields, &valid_row_field?/1)
+
+  defp valid_data_type?(_type), do: false
+
+  defp valid_row_field?({name, type}) when is_binary(name), do: valid_data_type?(type)
+  defp valid_row_field?(_field), do: false
 
   defp validate_string!(value, _what) when is_binary(value), do: value
 
