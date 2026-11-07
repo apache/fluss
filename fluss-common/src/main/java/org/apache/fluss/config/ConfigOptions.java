@@ -657,6 +657,15 @@ public class ConfigOptions {
                                     + "from 'security.sasl.plain.credentials' when that credential map is set, "
                                     + "and can also be configured directly for compatibility.");
 
+    public static final ConfigOption<Map<String, String>> SERVER_IMPERSONATION_PROXY_USERS =
+            key("security.impersonation.proxy-users")
+                    .mapType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Users each proxy account may act as on an Impersonation listener, "
+                                    + "e.g. `gateway:alice;bob,admin:*`. The wildcard `*` allows any target "
+                                    + "except a super user. Users in `super.users` cannot be impersonated.");
+
     // ------------------------------------------------------------------------
     //  Server-side TLS (transport encryption + mTLS) options
     // ------------------------------------------------------------------------
@@ -1950,7 +1959,7 @@ public class ConfigOptions {
                     .stringType()
                     .noDefaultValue()
                     .withDescription(
-                            "The password to use for client-side SASL JAAS authentication. "
+                            "The username to use for client-side SASL JAAS authentication. "
                                     + "This is used when the client connects to the Fluss cluster with SASL authentication enabled. "
                                     + "If not provided, the username will be read from the JAAS configuration string specified by `client.security.sasl.jaas.config`.");
 
@@ -1959,9 +1968,19 @@ public class ConfigOptions {
                     .stringType()
                     .noDefaultValue()
                     .withDescription(
-                            "The username to use for client-side SASL JAAS authentication. "
+                            "The password to use for client-side SASL JAAS authentication. "
                                     + "This is used when the client connects to the Fluss cluster with SASL authentication enabled. "
                                     + "If not provided, the password will be read from the JAAS configuration string specified by `client.security.sasl.jaas.config`.");
+
+    public static final ConfigOption<String> CLIENT_IMPERSONATION_ACT_AS_USER =
+            key("client.security.impersonation.act-as-user")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The user to act as with the Impersonation protocol. Set the proxy account's "
+                                    + "`client.security.sasl.username` and `client.security.sasl.password` explicitly. "
+                                    + "If the target is unset, the connection acts as the proxy account. A different "
+                                    + "target requires a grant in `security.impersonation.proxy-users`.");
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for Fluss Table

@@ -11,6 +11,7 @@ Fluss provides a pluggable authentication mechanism, allowing users to configure
 Authentication in Fluss is handled through listeners, where each connection triggers a specific authentication protocol based on the configuration. Supported mechanisms include:
 * **PLAINTEXT**: Default, no authentication.
 * **SASL**: This mechanism is based on SASL (Simple Authentication and Security Layer) authentication. Currently, only SASL/PLAIN is supported, which involves authentication using a username and password.
+* **Impersonation**: A separate authentication protocol for services that need to act as explicitly authorized end users.
 * **Custom plugins**: Extendable via interfaces for enterprise or third-party integrations.
 
 You can configure different authentication protocols per listener using the `security.protocol.map` property in `conf/server.yaml`.
@@ -90,9 +91,9 @@ Clients must specify the appropriate security protocol and authentication mechan
 
 | Option                           | Type   | Default Value | Description                                                                                                                                                                                                                                                                               |
 |----------------------------------|--------|---------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| client.security.protocol         | String | PLAINTEXT     | The security protocol used to communicate with brokers. Currently, only `PLAINTEXT` and `SASL` are supported, the configuration value is case insensitive.                                                                                                                                |
+| client.security.protocol         | String | PLAINTEXT     | The security protocol used to communicate with brokers. Supported protocols include `PLAINTEXT`, `SASL` and `IMPERSONATION`. The configuration value is case insensitive.                                                                                                                 |
 | client.security.sasl.mechanism   | String | PLAIN         | The SASL mechanism used for authentication. Only support PLAIN now, but will support more mechanisms in the future.                                                                                                                                                                       |
-| client.security.sasl.username    | String | (none)        | The password to use for client-side SASL JAAS authentication. This is used when the client connects to the Fluss cluster with SASL authentication enabled. If not provided, the username will be read from the JAAS configuration string specified by `client.security.sasl.jaas.config`. |
+| client.security.sasl.username    | String | (none)        | The username to use for client-side SASL JAAS authentication. This is used when the client connects to the Fluss cluster with SASL authentication enabled. If not provided, the username will be read from the JAAS configuration string specified by `client.security.sasl.jaas.config`. |
 | client.security.sasl.password    | String | (none)        | The password to use for client-side SASL JAAS authentication. This is used when the client connects to the Fluss cluster with SASL authentication enabled. If not provided, the password will be read from the JAAS configuration string specified by `client.security.sasl.jaas.config`. |
 | client.security.sasl.jaas.config | String | (none)        | JAAS configuration for SASL. If not set, fallback to system property `-Djava.security.auth.login.config`.                                                                                                                                                                                 |
 
@@ -111,6 +112,29 @@ CREATE CATALOG fluss_catalog WITH (
 );
 ```
 
+
+## Impersonation
+
+A service can use its own credentials to act as another user. For example, configure the `CLIENT` listener to allow `gateway` to act as `alice` or `bob`:
+
+```yaml title="conf/server.yaml"
+security.protocol.map: CLIENT:IMPERSONATION, INTERNAL:PLAINTEXT
+security.sasl.plain.credentials: gateway:gateway-pass
+security.impersonation.proxy-users: gateway:alice;bob
+```
+
+On the client, supply the service account's username and password explicitly and select the target user:
+
+```properties
+client.security.protocol=IMPERSONATION
+client.security.sasl.username=gateway
+client.security.sasl.password=gateway-pass
+client.security.impersonation.act-as-user=alice
+```
+
+Fluss verifies the credentials and the proxy grant before checking ACLs as `alice`. Omit the target user to act as `gateway`.
+A wildcard grant (`gateway:*`) permits any target except a user in `super.users`. Super users cannot be impersonated, even with an explicit grant.
+Use TLS to protect the password in transit.
 
 ## Extending Authentication Methods (For Developers)
 

@@ -112,12 +112,15 @@ import static org.assertj.core.api.Assertions.catchThrowable;
 
 /** It case to test authorization of admin operation, read and write operation. */
 public class FlussAuthorizationITCase {
+    private static final String LISTENERS =
+            "FLUSS://localhost:0, CLIENT://localhost:0, PROXY://localhost:0";
+
     @RegisterExtension
     public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
             FlussClusterExtension.builder()
                     .setNumOfTabletServers(3)
-                    .setCoordinatorServerListeners("FLUSS://localhost:0, CLIENT://localhost:0")
-                    .setTabletServerListeners("FLUSS://localhost:0, CLIENT://localhost:0")
+                    .setCoordinatorServerListeners(LISTENERS)
+                    .setTabletServerListeners(LISTENERS)
                     .setClusterConf(initConfig())
                     .build();
 
@@ -190,8 +193,8 @@ public class FlussAuthorizationITCase {
         FlussClusterExtension flussClusterExtension =
                 FlussClusterExtension.builder()
                         .setNumOfTabletServers(1)
-                        .setCoordinatorServerListeners("FLUSS://localhost:0, CLIENT://localhost:0")
-                        .setTabletServerListeners("FLUSS://localhost:0, CLIENT://localhost:0")
+                        .setCoordinatorServerListeners(LISTENERS)
+                        .setTabletServerListeners(LISTENERS)
                         .setClusterConf(configuration)
                         .build();
 
@@ -347,6 +350,43 @@ public class FlussAuthorizationITCase {
         guestAdmin.createDatabase("test-database2", DatabaseDescriptor.EMPTY, false).get();
         assertThat(rootAdmin.databaseExists("test-database1").get()).isFalse();
         assertThat(rootAdmin.databaseExists("test-database2").get()).isTrue();
+    }
+
+    @Test
+    void testImpersonation() throws Exception {
+        // proxy authenticates with its own credentials but acts as guest,
+        // so authorization is evaluated against the guest principal
+        Configuration proxyConf = proxyConfig("proxy", "password3", "guest");
+        try (Connection proxyConn = ConnectionFactory.createConnection(proxyConf);
+                Admin proxyAdmin = proxyConn.getAdmin()) {
+            // guest has no DESCRIBE permission on the table yet
+            assertNoTableDescribeAuth(() -> proxyAdmin.getTableInfo(DATA1_TABLE_PATH_PK).get());
+
+            // grant DESCRIBE to guest, then the impersonated connection can access it
+            List<AclBinding> aclBindings =
+                    Collections.singletonList(
+                            new AclBinding(
+                                    Resource.table(DATA1_TABLE_PATH_PK),
+                                    new AccessControlEntry(
+                                            guestPrincipal,
+                                            "*",
+                                            OperationType.DESCRIBE,
+                                            PermissionType.ALLOW)));
+            rootAdmin.createAcls(aclBindings).all().get();
+            FLUSS_CLUSTER_EXTENSION.waitUntilAuthenticationSync(aclBindings, true);
+            assertThat(proxyAdmin.getTableInfo(DATA1_TABLE_PATH_PK).get().getTablePath())
+                    .isEqualTo(DATA1_TABLE_PATH_PK);
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"proxy", "root"})
+    void testImpersonationRejectedForUngrantedUser(String targetUser) {
+        // Guest has no proxy grants. Both ordinary targets and super users must be rejected.
+        Configuration proxyConf = proxyConfig("guest", "password2", targetUser);
+        assertThatThrownBy(() -> ConnectionFactory.createConnection(proxyConf))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("is not allowed to act as '" + targetUser + "'");
     }
 
     @Test
@@ -1502,6 +1542,15 @@ public class FlussAuthorizationITCase {
         rootAdmin.dropTable(testTablePath, true).get();
     }
 
+    private static Configuration proxyConfig(String username, String password, String targetUser) {
+        Configuration conf = FLUSS_CLUSTER_EXTENSION.getClientConfig("PROXY");
+        conf.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "IMPERSONATION");
+        conf.set(ConfigOptions.CLIENT_SASL_JAAS_USERNAME, username);
+        conf.set(ConfigOptions.CLIENT_SASL_JAAS_PASSWORD, password);
+        conf.set(ConfigOptions.CLIENT_IMPERSONATION_ACT_AS_USER, targetUser);
+        return conf;
+    }
+
     private static Configuration initConfig() {
         Configuration conf = new Configuration();
         conf.setInt(ConfigOptions.DEFAULT_REPLICATION_FACTOR, 3);
@@ -1513,14 +1562,17 @@ public class FlussAuthorizationITCase {
         conf.set(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE, MemorySize.parse("1mb"));
         conf.set(ConfigOptions.CLIENT_WRITER_BATCH_SIZE, MemorySize.parse("1kb"));
 
-        // set security information.
-        conf.setString(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT:sasl");
+        conf.setString(
+                ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(),
+                "CLIENT:sasl,PROXY:impersonation");
         conf.setString("security.sasl.enabled.mechanisms", "plain");
         conf.setString(
                 "security.sasl.plain.jaas.config",
                 "org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required "
                         + "    user_root=\"password\" "
-                        + "    user_guest=\"password2\";");
+                        + "    user_guest=\"password2\" "
+                        + "    user_proxy=\"password3\";");
+        conf.setString(ConfigOptions.SERVER_IMPERSONATION_PROXY_USERS.key(), "proxy:guest");
         conf.set(ConfigOptions.SUPER_USERS, "User:root");
         conf.set(ConfigOptions.AUTHORIZER_ENABLED, true);
         return conf;
