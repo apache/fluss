@@ -34,6 +34,7 @@ import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerRequest;
 import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerResponse;
 import org.apache.fluss.server.metadata.SystemTables;
+import org.apache.fluss.server.tablet.TabletServer;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.utils.ExceptionUtils;
@@ -90,9 +91,14 @@ class ConsumerOffsetTableITCase {
                         .bucketing(
                                 ConsumerOffsetSchema.encodeGroupPrefix(groupId),
                                 tableRegistration.bucketCount);
-        assertThat(
-                        GroupManager.from(clusterConfiguration())
-                                .bucketFor(groupId, tableRegistration.bucketCount))
+        TabletServer tabletServer = FLUSS_CLUSTER_EXTENSION.getTabletServers().iterator().next();
+        GroupManager groupManager =
+                GroupManager.from(
+                        clusterConfiguration(),
+                        tabletServer.getServerId(),
+                        tabletServer.getReplicaManager(),
+                        tabletServer.getMetadataCache());
+        assertThat(groupManager.bucketFor(groupId, tableRegistration.bucketCount))
                 .isEqualTo(standardBucket);
     }
 

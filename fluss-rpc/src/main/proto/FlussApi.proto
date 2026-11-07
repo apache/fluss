@@ -469,6 +469,9 @@ message FindConsumerGroupOwnerResponse {
 }
 
 // Commit consumer offsets request and response.
+// Each tablet server appends accepted non-empty commits for the same group in submission order,
+// including when initializing the system table. Replication acknowledgements may overlap.
+// Offset values may decrease for intentional consumption resets.
 message CommitConsumerOffsetsRequest {
   required string group_id = 1;
   // An empty list, or tables containing no buckets, is a valid no-op and produces an empty
@@ -1550,6 +1553,7 @@ message PbCommitConsumerOffsetsRequestTable {
 }
 
 message PbCommitConsumerOffsetsRequestBucket {
+  // Omit for non-partitioned tables; -1 is reserved for internal offset storage and must not be sent.
   optional int64 partition_id = 1;
   required int32 bucket_id = 2;
   required int64 offset = 3;

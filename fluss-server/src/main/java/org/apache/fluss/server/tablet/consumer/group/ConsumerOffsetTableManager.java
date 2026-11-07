@@ -26,6 +26,7 @@ import org.apache.fluss.exception.ConsumerGroupOwnerNotAvailableException;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.messages.CreateDatabaseRequest;
@@ -66,7 +67,7 @@ public final class ConsumerOffsetTableManager {
     private final TabletServerMetadataProvider metadataProvider;
     private final CoordinatorGateway coordinatorGateway;
     private final ExecutorService ioExecutor;
-    private final AtomicReference<CompletableFuture<Integer>> tableInitFuture =
+    private final AtomicReference<CompletableFuture<TableInfo>> tableInitFuture =
             new AtomicReference<>();
 
     public ConsumerOffsetTableManager(
@@ -183,18 +184,18 @@ public final class ConsumerOffsetTableManager {
     /**
      * Ensures that the consumer-offset table exists without blocking an RPC worker thread.
      * Concurrent requests share the same initialization future. The completed future contains the
-     * actual bucket count of the existing or newly created table.
+     * table id, schema id and actual bucket count of the existing or newly created table.
      */
-    public CompletableFuture<Integer> ensureTableAsync() {
+    public CompletableFuture<TableInfo> ensureTableAsync() {
         // Retry only when another thread wins the CAS and its initialization is concurrently
         // cleared after a fast failure. This loop never waits for the initialization itself.
         while (true) {
-            CompletableFuture<Integer> current = tableInitFuture.get();
+            CompletableFuture<TableInfo> current = tableInitFuture.get();
             if (current != null) {
                 return current;
             }
 
-            CompletableFuture<Integer> created = new CompletableFuture<>();
+            CompletableFuture<TableInfo> created = new CompletableFuture<>();
             if (tableInitFuture.compareAndSet(null, created)) {
                 submitTableInitialization(created);
                 return created;
@@ -202,12 +203,12 @@ public final class ConsumerOffsetTableManager {
         }
     }
 
-    private void submitTableInitialization(CompletableFuture<Integer> initializationFuture) {
+    private void submitTableInitialization(CompletableFuture<TableInfo> initializationFuture) {
         try {
             ioExecutor.execute(
                     () -> {
                         try {
-                            initializationFuture.complete(createOrResolveTableBucketCount());
+                            initializationFuture.complete(createOrResolveTableInfo());
                         } catch (Exception e) {
                             completeInitializationExceptionally(initializationFuture, e);
                         } catch (Error error) {
@@ -224,7 +225,7 @@ public final class ConsumerOffsetTableManager {
     }
 
     private void completeInitializationExceptionally(
-            CompletableFuture<Integer> initializationFuture, Exception cause) {
+            CompletableFuture<TableInfo> initializationFuture, Exception cause) {
         tableInitFuture.compareAndSet(initializationFuture, null);
         ConsumerGroupOwnerNotAvailableException exception =
                 cause instanceof ConsumerGroupOwnerNotAvailableException
@@ -236,16 +237,16 @@ public final class ConsumerOffsetTableManager {
     }
 
     private void abortInitializationAfterFatalError(
-            CompletableFuture<Integer> initializationFuture, Error error) {
+            CompletableFuture<TableInfo> initializationFuture, Error error) {
         tableInitFuture.compareAndSet(initializationFuture, null);
         initializationFuture.completeExceptionally(error);
     }
 
-    private int createOrResolveTableBucketCount() {
+    private TableInfo createOrResolveTableInfo() {
         try {
             if (zkClient.tableExist(SystemTables.CONSUMER_OFFSETS)) {
                 LOG.debug("System table {} already exists.", SystemTables.CONSUMER_OFFSETS);
-                return metadataManager.getTable(SystemTables.CONSUMER_OFFSETS).getNumBuckets();
+                return metadataManager.getTable(SystemTables.CONSUMER_OFFSETS);
             }
 
             String databaseName = SystemTables.CONSUMER_OFFSETS.getDatabaseName();
@@ -283,7 +284,7 @@ public final class ConsumerOffsetTableManager {
                     .setDatabaseName(SystemTables.CONSUMER_OFFSETS.getDatabaseName())
                     .setTableName(SystemTables.CONSUMER_OFFSETS.getTableName());
             coordinatorGateway.createTable(createTableRequest).get();
-            return metadataManager.getTable(SystemTables.CONSUMER_OFFSETS).getNumBuckets();
+            return metadataManager.getTable(SystemTables.CONSUMER_OFFSETS);
         } catch (Exception e) {
             throw new ConsumerGroupOwnerNotAvailableException(
                     "Failed to get or create system table: " + SystemTables.CONSUMER_OFFSETS, e);

@@ -315,7 +315,7 @@ public class TabletServer extends ServerBase {
                             pluginManager);
             replicaManager.startup();
 
-            this.groupManager = GroupManager.from(conf);
+            this.groupManager = GroupManager.from(conf, serverId, replicaManager, metadataCache);
 
             this.tabletService =
                     new TabletService(
