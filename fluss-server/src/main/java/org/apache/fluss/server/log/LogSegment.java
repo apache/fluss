@@ -593,8 +593,8 @@ public final class LogSegment {
     }
 
     // NOTE: Server-side filter pushdown currently only works for ARROW format log tables.
-    // INDEXED and COMPACTED formats don't write batch-level statistics (min/max/nullCount).
-    // Without statistics, the predicate cannot be evaluated
+    // INDEXED and COMPACTED formats use V0 batch magic which does not include batch-level
+    // statistics (min/max/nullCount). Without statistics, the predicate cannot be evaluated
     // against a batch, so all batches are included as a safe fallback.
     @Nullable
     private FetchDataInfo readWithFilter(

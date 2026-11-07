@@ -17,7 +17,6 @@
 
 package org.apache.fluss.client.write;
 
-import org.apache.fluss.compression.LogCompressionInfo;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.memory.PreAllocatedPagedOutputView;
 import org.apache.fluss.metadata.TableBucket;
@@ -257,8 +256,7 @@ public class CompactedLogWriteBatchTest {
                 writeLimit,
                 new PreAllocatedPagedOutputView(Collections.singletonList(memorySegment)),
                 false,
-                System.currentTimeMillis(),
-                LogCompressionInfo.NO_COMPRESSION);
+                System.currentTimeMillis());
     }
 
     private TableInfo withTableIdAndSchemaId(long tableId, int schemaId) {

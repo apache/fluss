@@ -1162,8 +1162,7 @@ public final class RecordAccumulator {
                         writeLimit,
                         outputView,
                         isHistoricalPartition,
-                        clock.milliseconds(),
-                        tableInfo.getTableConfig().getCompactedLogCompressionInfo());
+                        clock.milliseconds());
 
             case INDEXED_LOG:
                 return new IndexedLogWriteBatch(

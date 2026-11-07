@@ -63,52 +63,6 @@ class TableDescriptorValidationTest {
     }
 
     @Test
-    void testCompactedCompressionZstdLevel() {
-        TableDescriptorValidation.validateTableDescriptor(
-                logTableWithProperty(
-                        ConfigOptions.TABLE_LOG_COMPACTED_COMPRESSION_ZSTD_LEVEL.key(), "22"),
-                100,
-                null);
-        assertThatThrownBy(
-                        () ->
-                                TableDescriptorValidation.validateTableDescriptor(
-                                        logTableWithProperty(
-                                                ConfigOptions
-                                                        .TABLE_LOG_COMPACTED_COMPRESSION_ZSTD_LEVEL
-                                                        .key(),
-                                                "0"),
-                                        100,
-                                        null))
-                .isInstanceOf(InvalidConfigException.class)
-                .hasMessageContaining("Invalid ZSTD compression level: 0");
-    }
-
-    @Test
-    void testCompactedCompressionRequiresCompactedLogFormat() {
-        // the default log format is ARROW
-        assertThatThrownBy(
-                        () ->
-                                TableDescriptorValidation.validateTableDescriptor(
-                                        logTableWithProperty(
-                                                ConfigOptions.TABLE_LOG_COMPACTED_COMPRESSION_TYPE
-                                                        .key(),
-                                                "ZSTD"),
-                                        100,
-                                        null))
-                .isInstanceOf(InvalidConfigException.class)
-                .hasMessageContaining(
-                        "'table.log.compacted.compression.type' is only supported for tables with "
-                                + "'table.log.format' = 'COMPACTED', but the log format is 'ARROW'.");
-
-        // NONE is allowed for every log format
-        TableDescriptorValidation.validateTableDescriptor(
-                logTableWithProperty(
-                        ConfigOptions.TABLE_LOG_COMPACTED_COMPRESSION_TYPE.key(), "NONE"),
-                100,
-                null);
-    }
-
-    @Test
     void testSkipUnchangedUpsertsRequiresPrimaryKey() {
         assertThatThrownBy(
                         () ->

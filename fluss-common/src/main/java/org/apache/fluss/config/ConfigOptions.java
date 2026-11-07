@@ -20,7 +20,6 @@ package org.apache.fluss.config;
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.compression.ArrowCompressionType;
-import org.apache.fluss.compression.LogCompressionType;
 import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DeleteBehavior;
@@ -2001,26 +2000,6 @@ public class ConfigOptions {
                     .defaultValue(3)
                     .withDescription(
                             "The compression level of ZSTD for the log records if the log format is set to `ARROW` "
-                                    + "and the compression type is set to `ZSTD`. The valid range is 1 to 22.");
-
-    public static final ConfigOption<LogCompressionType> TABLE_LOG_COMPACTED_COMPRESSION_TYPE =
-            key("table.log.compacted.compression.type")
-                    .enumType(LogCompressionType.class)
-                    .defaultValue(LogCompressionType.NONE)
-                    .withDescription(
-                            "The compression type of the log record batches if the log format is set to `COMPACTED`. "
-                                    + "The candidate compression type is "
-                                    + Arrays.toString(LogCompressionType.values())
-                                    + ". Compressed batches use log batch format V3, which Fluss versions before 1.1 "
-                                    + "can't read: older clients and tablet servers fail with an 'Unsupported magic value' error. "
-                                    + "Upgrade all tablet servers and consumers (e.g., Flink jobs) before enabling compression.");
-
-    public static final ConfigOption<Integer> TABLE_LOG_COMPACTED_COMPRESSION_ZSTD_LEVEL =
-            key("table.log.compacted.compression.zstd.level")
-                    .intType()
-                    .defaultValue(3)
-                    .withDescription(
-                            "The compression level of ZSTD for the log record batches if the log format is set to `COMPACTED` "
                                     + "and the compression type is set to `ZSTD`. The valid range is 1 to 22.");
 
     public static final ConfigOption<KvFormat> TABLE_KV_FORMAT =
