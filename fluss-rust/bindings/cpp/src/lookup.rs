@@ -26,12 +26,60 @@ use fluss as fcore;
 use fluss::metadata::TableInfo;
 use fluss::row::GenericRow;
 use fluss::rpc::FlussError as CoreFlussError;
+use tokio::sync::OwnedSemaphorePermit;
+use tokio::sync::mpsc::error::TryRecvError;
 use tokio::task::JoinHandle;
 
 use crate::{
     CLIENT_ERROR_CODE, GenericRowInner, LookupResultInner, Lookuper, PrefixLookupResultInner,
     PrefixLookuper, RUNTIME, client_err_ptr, err_from_core_error, ffi, ok_ptr, types,
 };
+
+enum PollOutcome<T> {
+    Completion(T),
+    Empty,
+    Closed,
+}
+
+fn poll_receiver<T>(
+    receiver: &tokio::sync::Mutex<tokio::sync::mpsc::Receiver<T>>,
+    timeout_ms: i64,
+) -> PollOutcome<T>
+where
+    T: Send + 'static,
+{
+    RUNTIME.block_on(async {
+        if timeout_ms < 0 {
+            let mut receiver = receiver.lock().await;
+            return match receiver.recv().await {
+                Some(completion) => PollOutcome::Completion(completion),
+                None => PollOutcome::Closed,
+            };
+        }
+
+        if timeout_ms == 0 {
+            let Ok(mut receiver) = receiver.try_lock() else {
+                return PollOutcome::Empty;
+            };
+            return match receiver.try_recv() {
+                Ok(completion) => PollOutcome::Completion(completion),
+                Err(TryRecvError::Empty) => PollOutcome::Empty,
+                Err(TryRecvError::Disconnected) => PollOutcome::Closed,
+            };
+        }
+
+        match tokio::time::timeout(Duration::from_millis(timeout_ms as u64), async {
+            let mut receiver = receiver.lock().await;
+            receiver.recv().await
+        })
+        .await
+        {
+            Ok(Some(completion)) => PollOutcome::Completion(completion),
+            Ok(None) => PollOutcome::Closed,
+            Err(_) => PollOutcome::Empty,
+        }
+    })
+}
 
 /// A lookup result for C++, or the error in its place.
 trait Outcome: Send + 'static {
@@ -107,6 +155,42 @@ pub struct PendingLookup(Pending<Box<LookupResultInner>>);
 
 pub struct PendingPrefixLookup(Pending<Box<PrefixLookupResultInner>>);
 
+pub struct LookupCompletion {
+    request_id: u64,
+    result: Option<Box<LookupResultInner>>,
+    _permit: Option<OwnedSemaphorePermit>,
+}
+
+pub struct PrefixLookupCompletion {
+    request_id: u64,
+    result: Option<Box<PrefixLookupResultInner>>,
+    _permit: Option<OwnedSemaphorePermit>,
+}
+
+impl LookupCompletion {
+    pub(crate) fn lookup_completion_request_id(&self) -> u64 {
+        self.request_id
+    }
+
+    pub(crate) fn lookup_completion_take_result(&mut self) -> Box<LookupResultInner> {
+        self.result
+            .take()
+            .expect("lookup completion result already taken")
+    }
+}
+
+impl PrefixLookupCompletion {
+    pub(crate) fn prefix_lookup_completion_request_id(&self) -> u64 {
+        self.request_id
+    }
+
+    pub(crate) fn prefix_lookup_completion_take_result(&mut self) -> Box<PrefixLookupResultInner> {
+        self.result
+            .take()
+            .expect("prefix lookup completion result already taken")
+    }
+}
+
 impl PendingLookup {
     pub(crate) fn lookup_wait(&mut self, timeout_ms: i64) -> Box<LookupResultInner> {
         self.0.wait(timeout_ms)
@@ -139,6 +223,22 @@ pub(crate) unsafe fn delete_pending_prefix_lookup(pending: *mut PendingPrefixLoo
     if !pending.is_null() {
         unsafe {
             drop(Box::from_raw(pending));
+        }
+    }
+}
+
+pub(crate) unsafe fn delete_lookup_completion(completion: *mut LookupCompletion) {
+    if !completion.is_null() {
+        unsafe {
+            drop(Box::from_raw(completion));
+        }
+    }
+}
+
+pub(crate) unsafe fn delete_prefix_lookup_completion(completion: *mut PrefixLookupCompletion) {
+    if !completion.is_null() {
+        unsafe {
+            drop(Box::from_raw(completion));
         }
     }
 }
@@ -177,6 +277,51 @@ impl Lookuper {
                 ok_ptr(Box::into_raw(Box::new(pending)) as usize)
             }
             Err(e) => client_err_ptr(e),
+        }
+    }
+
+    pub(crate) fn lookup_async_poll(
+        &self,
+        pk_row: &GenericRowInner,
+        request_id: u64,
+    ) -> ffi::FfiResult {
+        match self.key(pk_row) {
+            Ok(key) => {
+                let permit = self
+                    .completion_permits
+                    .clone()
+                    .try_acquire_owned()
+                    .map_err(|_| "Too many outstanding asynchronous lookups".to_string());
+                let permit = match permit {
+                    Ok(permit) => permit,
+                    Err(message) => return crate::err_result(CLIENT_ERROR_CODE, message),
+                };
+                let sender = self.completion_sender.clone();
+                let inner = Arc::clone(&self.inner);
+                let table_info = Arc::clone(&self.table_info);
+                RUNTIME.spawn(async move {
+                    let result = to_lookup_result(inner.lookup(&key).await, &table_info);
+                    let _ = sender
+                        .send(LookupCompletion {
+                            request_id,
+                            result: Some(result),
+                            _permit: Some(permit),
+                        })
+                        .await;
+                });
+                crate::ok_result()
+            }
+            Err(e) => crate::err_result(CLIENT_ERROR_CODE, e),
+        }
+    }
+
+    pub(crate) fn poll_lookup(&self, timeout_ms: i64) -> ffi::FfiPtrResult {
+        match poll_receiver(&self.completion_receiver, timeout_ms) {
+            PollOutcome::Completion(completion) => {
+                ok_ptr(Box::into_raw(Box::new(completion)) as usize)
+            }
+            PollOutcome::Closed => client_err_ptr("Lookup completion queue closed".to_string()),
+            PollOutcome::Empty => ok_ptr(0),
         }
     }
 }
@@ -218,6 +363,51 @@ impl PrefixLookuper {
                 ok_ptr(Box::into_raw(Box::new(pending)) as usize)
             }
             Err(e) => client_err_ptr(e),
+        }
+    }
+
+    pub(crate) fn prefix_lookup_async_poll(
+        &self,
+        prefix_row: &GenericRowInner,
+        request_id: u64,
+    ) -> ffi::FfiResult {
+        match self.key(prefix_row) {
+            Ok(key) => {
+                let permit = self
+                    .completion_permits
+                    .clone()
+                    .try_acquire_owned()
+                    .map_err(|_| "Too many outstanding asynchronous lookups".to_string());
+                let permit = match permit {
+                    Ok(permit) => permit,
+                    Err(message) => return crate::err_result(CLIENT_ERROR_CODE, message),
+                };
+                let sender = self.completion_sender.clone();
+                let inner = Arc::clone(&self.inner);
+                let table_info = Arc::clone(&self.table_info);
+                RUNTIME.spawn(async move {
+                    let result = to_prefix_lookup_result(inner.lookup(&key).await, &table_info);
+                    let _ = sender
+                        .send(PrefixLookupCompletion {
+                            request_id,
+                            result: Some(result),
+                            _permit: Some(permit),
+                        })
+                        .await;
+                });
+                crate::ok_result()
+            }
+            Err(e) => crate::err_result(CLIENT_ERROR_CODE, e),
+        }
+    }
+
+    pub(crate) fn poll_prefix_lookup(&self, timeout_ms: i64) -> ffi::FfiPtrResult {
+        match poll_receiver(&self.completion_receiver, timeout_ms) {
+            PollOutcome::Completion(completion) => {
+                ok_ptr(Box::into_raw(Box::new(completion)) as usize)
+            }
+            PollOutcome::Closed => client_err_ptr("Lookup completion queue closed".to_string()),
+            PollOutcome::Empty => ok_ptr(0),
         }
     }
 }

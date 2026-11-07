@@ -58,6 +58,8 @@ struct Lookuper;
 struct PrefixLookuper;
 struct PendingLookup;
 struct PendingPrefixLookup;
+struct LookupCompletion;
+struct PrefixLookupCompletion;
 struct ScanResultInner;
 struct GenericRowInner;
 struct LookupResultInner;
@@ -1696,7 +1698,7 @@ struct Configuration {
     std::string security_sasl_username;
     // SASL password (required when security_protocol is "sasl")
     std::string security_sasl_password;
-    // Maximum number of pending lookup operations
+    // Maximum number of pending lookup operations, including async polling completions
     size_t lookup_queue_size{25600};
     // Maximum batch size of merging lookup operations to one lookup request
     size_t lookup_max_batch_size{128};
@@ -2167,6 +2169,18 @@ class PendingPrefixLookup {
     ffi::PendingPrefixLookup* pending_{nullptr};
 };
 
+struct LookupCompletion {
+    uint64_t request_id{0};
+    Result result;
+    LookupResult lookup;
+};
+
+struct PrefixLookupCompletion {
+    uint64_t request_id{0};
+    Result result;
+    PrefixLookupResult lookup;
+};
+
 class Lookuper {
    public:
     Lookuper() noexcept;
@@ -2187,6 +2201,15 @@ class Lookuper {
     /// Starts the lookup without blocking; `out` waits for its row. Lookups started this way
     /// share batches too, so one thread can keep many in flight.
     Result Lookup(const GenericRow& pk_row, PendingLookup& out) const;
+
+    /// Starts a lookup and reports its completion through Poll(). The request ID is returned
+    /// unchanged in the corresponding LookupCompletion.
+    Result LookupAsync(const GenericRow& pk_row, uint64_t request_id) const;
+
+    /// Waits up to `timeout_ms` (including lock acquisition) for one completion, then drains
+    /// up to 1024 completions already available. A timeout is successful and leaves unfinished
+    /// lookups active.
+    Result Poll(int64_t timeout_ms, std::vector<LookupCompletion>& out) const;
 
    private:
     friend class Table;
@@ -2215,6 +2238,15 @@ class PrefixLookuper {
 
     /// Starts the lookup without blocking, like Lookuper::Lookup(pk_row, PendingLookup&).
     Result PrefixLookup(const GenericRow& prefix_row, PendingPrefixLookup& out) const;
+
+    /// Starts a prefix lookup and reports its completion through Poll(). The request ID is
+    /// returned unchanged in the corresponding PrefixLookupCompletion.
+    Result PrefixLookupAsync(const GenericRow& prefix_row, uint64_t request_id) const;
+
+    /// Waits up to `timeout_ms` (including lock acquisition) for one completion, then drains
+    /// up to 1024 completions already available. A timeout is successful and leaves unfinished
+    /// lookups active.
+    Result Poll(int64_t timeout_ms, std::vector<PrefixLookupCompletion>& out) const;
 
    private:
     friend class Table;
