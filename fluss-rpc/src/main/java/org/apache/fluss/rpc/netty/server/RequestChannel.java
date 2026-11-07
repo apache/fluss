@@ -83,8 +83,13 @@ public class RequestChannel {
     /**
      * Lock to protect backpressure state transitions and task submissions. This lock ensures that:
      * 1. State checks and task submissions are atomic (preventing permanent channel blocking) 2.
-     * Pause and resume operations are mutually exclusive 3. New channel registration correctly
-     * synchronizes with current backpressure state
+     * Pause and resume operations are mutually exclusive
+     *
+     * <p>Channel registration does not take this lock: it adds the channel to {@link
+     * #associatedChannels} before reading the volatile {@link #isBackpressureActive} flag, so a
+     * concurrent pause either sees the new channel in the set and pauses it, or the registration
+     * observes the active flag and leaves the channel paused. Read-state changes run on the
+     * channel's event loop, so a pause task submitted after registration cannot be overtaken by it.
      *
      * <p>The lock eliminates the need for CAS operations - simple boolean checks and assignments
      * under the lock are sufficient for correctness.
@@ -151,16 +156,19 @@ public class RequestChannel {
      * Registers a Netty channel as being associated with this RequestChannel. This is called when a
      * channel becomes active and is hashed to this RequestChannel.
      *
-     * <p>IMPORTANT: New channels are NOT immediately paused even if backpressure is active. This is
-     * critical for system health: 1. Health check connections must not be blocked at startup 2. New
-     * connections will naturally be controlled by the next backpressure check 3. Immediately
-     * pausing new connections can cause deadlock at startup when queue is full but processing is
-     * slow
+     * <p>The channel's reads are aligned with the current backpressure state: registered while
+     * backpressure is inactive, reads are enabled; registered while backpressure is active, the
+     * channel joins the paused set and is released by the next resume transition once the queue
+     * drains below the resume threshold. Server channels start with reads disabled (see {@code
+     * ServerChannelInitializer}), so this is the single point that grants reads.
      *
      * @param channel the channel to register
      */
     public void registerChannel(Channel channel) {
         associatedChannels.add(channel);
+        if (channel.isActive()) {
+            channel.config().setAutoRead(!isBackpressureActive);
+        }
 
         if (LOG.isDebugEnabled()) {
             LOG.debug(
