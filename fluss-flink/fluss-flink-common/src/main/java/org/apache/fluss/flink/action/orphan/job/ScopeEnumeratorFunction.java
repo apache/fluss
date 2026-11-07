@@ -99,18 +99,7 @@ public final class ScopeEnumeratorFunction extends ProcessFunction<Integer, Clea
     @Override
     public void processElement(Integer trigger, Context ctx, Collector<CleanTask> out)
             throws Exception {
-        if (!config.extraConfigs().isEmpty()) {
-            FileSystem.initialize(Configuration.fromMap(config.extraConfigs()), null);
-        }
-
-        Configuration flussConfig = new Configuration();
-        flussConfig.setString(ConfigOptions.BOOTSTRAP_SERVERS.key(), config.bootstrapServer());
-        // Pass through client-related extra configs (e.g. security/auth).
-        for (Map.Entry<String, String> entry : config.extraConfigs().entrySet()) {
-            if (entry.getKey().startsWith("client.")) {
-                flussConfig.setString(entry.getKey(), entry.getValue());
-            }
-        }
+        Configuration flussConfig = createFlussClientConfiguration(config);
 
         try (Connection connection = ConnectionFactory.createConnection(flussConfig);
                 Admin admin = connection.getAdmin()) {
@@ -146,6 +135,38 @@ public final class ScopeEnumeratorFunction extends ProcessFunction<Integer, Clea
                         dbState, tracker, clusterRoots, audit, remoteFsOpRateLimiter, out);
             }
         }
+    }
+
+    static Configuration createFlussClientConfiguration(OrphanCleanConfig config) {
+        Configuration flussConfig = new Configuration();
+        flussConfig.setString(ConfigOptions.BOOTSTRAP_SERVERS.key(), config.bootstrapServer());
+
+        // Preserve explicit client options such as security and authentication settings.
+        for (Map.Entry<String, String> entry : config.extraConfigs().entrySet()) {
+            if (entry.getKey().startsWith("client.")) {
+                flussConfig.setString(entry.getKey(), entry.getValue());
+            }
+        }
+
+        // FlussConnection initializes FileSystem exclusively from client.fs.* options.
+        for (Map.Entry<String, String> entry : config.extraConfigs().entrySet()) {
+            if (!entry.getKey().startsWith("fs.")) {
+                continue;
+            }
+
+            String clientKey = "client." + entry.getKey();
+            String explicitClientValue = config.extraConfigs().get(clientKey);
+            if (explicitClientValue != null && !explicitClientValue.equals(entry.getValue())) {
+                throw new IllegalArgumentException(
+                        "Conflicting filesystem configurations for '"
+                                + entry.getKey()
+                                + "' and '"
+                                + clientKey
+                                + "'.");
+            }
+            flussConfig.setString(clientKey, entry.getValue());
+        }
+        return flussConfig;
     }
 
     /** Normalizes each root in the list and returns a deduplicated ordered list. */
