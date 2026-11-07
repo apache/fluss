@@ -62,6 +62,8 @@ public final class FetchParams {
     private int maxFetchBytes;
     // the offset to start fetching from
     private long fetchOffset;
+    @Nullable private Long stoppingOffset;
+    private short apiVersion;
     // whether column projection is enabled
     private boolean projectionEnabled = false;
     // filter info per table (predicate + schema ID), null if no filters
@@ -229,6 +231,27 @@ public final class FetchParams {
 
     public boolean fetchOnlyLeader() {
         return isFromFollower() || fetchOnlyLeader;
+    }
+
+    /** Sets the wire version retained throughout delayed fetch retries. */
+    public void setApiVersion(short apiVersion) {
+        this.apiVersion = apiVersion;
+    }
+
+    /** Returns the negotiated wire version. */
+    public short apiVersion() {
+        return apiVersion;
+    }
+
+    /** Sets the stopping offset of the current bucket, including null for an unbounded bucket. */
+    public void setStoppingOffset(@Nullable Long stoppingOffset) {
+        this.stoppingOffset = stoppingOffset;
+    }
+
+    /** Returns the exclusive stopping offset for the current bucket. */
+    @Nullable
+    public Long stoppingOffset() {
+        return stoppingOffset;
     }
 
     public long fetchOffset() {

@@ -521,9 +521,29 @@ public final class LogSegment {
             @Nullable FileLogProjection projection,
             @Nullable FilterContext filterContext)
             throws IOException {
+        return read(
+                startOffset, maxSize, maxPosition, minOneMessage, projection, filterContext, null);
+    }
+
+    /** Reads log data with an optional exclusive stopping offset. */
+    public FetchDataInfo read(
+            long startOffset,
+            int maxSize,
+            long maxPosition,
+            boolean minOneMessage,
+            @Nullable FileLogProjection projection,
+            @Nullable FilterContext filterContext,
+            @Nullable Long stoppingOffset)
+            throws IOException {
         if (filterContext != null) {
             return readWithFilter(
-                    startOffset, maxSize, maxPosition, minOneMessage, projection, filterContext);
+                    startOffset,
+                    maxSize,
+                    maxPosition,
+                    minOneMessage,
+                    projection,
+                    filterContext,
+                    stoppingOffset);
         } else {
             return readWithoutFilter(startOffset, maxSize, maxPosition, minOneMessage, projection);
         }
@@ -603,7 +623,8 @@ public final class LogSegment {
             long maxPosition,
             boolean minOneMessage,
             @Nullable FileLogProjection projection,
-            FilterContext filterContext)
+            FilterContext filterContext,
+            @Nullable Long stoppingOffset)
             throws IOException {
 
         if (logFormat != LogFormat.ARROW) {
@@ -641,9 +662,14 @@ public final class LogSegment {
         int adjustedMaxSize = maxSize;
         int filterEvalFailures = 0;
         boolean sizeBreak = false;
+        boolean reachedStoppingOffset = false;
 
         while (iter.hasNext()) {
             FileChannelLogRecordBatch batch = iter.next();
+            if (stoppingOffset != null && batch.baseLogOffset() >= stoppingOffset) {
+                reachedStoppingOffset = true;
+                break;
+            }
 
             lastScannedBatch = batch;
 
@@ -731,6 +757,11 @@ public final class LogSegment {
         }
 
         if (firstIncludedBatch == null) {
+            if (reachedStoppingOffset) {
+                return FetchDataInfo.createFilteredEmptyResponse(
+                        new LogOffsetMetadata(startOffset, this.baseOffset, startPosition),
+                        stoppingOffset);
+            }
             // All batches were filtered out in this segment. Return a filtered empty response
             // with filteredEndOffset so the caller can advance past this segment's filtered
             // range and decide whether to continue scanning subsequent segments.
@@ -738,7 +769,10 @@ public final class LogSegment {
                 LogOffsetMetadata offsetMetadata =
                         new LogOffsetMetadata(startOffset, this.baseOffset, startPosition);
                 return FetchDataInfo.createFilteredEmptyResponse(
-                        offsetMetadata, lastScannedBatch.nextLogOffset());
+                        offsetMetadata,
+                        stoppingOffset == null
+                                ? lastScannedBatch.nextLogOffset()
+                                : Math.min(lastScannedBatch.nextLogOffset(), stoppingOffset));
             }
             return null;
         }
@@ -749,12 +783,16 @@ public final class LogSegment {
         // When the loop exhausted naturally (not by size break) and the last scanned batch
         // extends beyond the last included batch, trailing batches were filtered out.
         // Set filteredEndOffset so the client can skip these already-scanned filtered batches.
-        long filteredEndOffset = -1L;
-        if (!sizeBreak
+        long filteredEndOffset = reachedStoppingOffset ? stoppingOffset : -1L;
+        if (!reachedStoppingOffset
+                && !sizeBreak
                 && lastScannedBatch != null
                 && lastIncludedBatch != null
                 && lastScannedBatch.nextLogOffset() > lastIncludedBatch.nextLogOffset()) {
-            filteredEndOffset = lastScannedBatch.nextLogOffset();
+            filteredEndOffset =
+                    stoppingOffset == null
+                            ? lastScannedBatch.nextLogOffset()
+                            : Math.min(lastScannedBatch.nextLogOffset(), stoppingOffset);
         }
 
         return new FetchDataInfo(

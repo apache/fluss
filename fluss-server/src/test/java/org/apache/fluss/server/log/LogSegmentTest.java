@@ -78,6 +78,14 @@ final class LogSegmentTest extends LogTestBase {
                 Arguments.of(2147483648L, 4294967296L));
     }
 
+    static Stream<Arguments> boundedFilterParameters() {
+        return Stream.of(
+                // The stop falls in an offset gap before the next batch.
+                Arguments.of(50L, 60L, 66L, 54L, 55L),
+                // The stop falls inside a filtered batch.
+                Arguments.of(50L, 53L, 56L, 50L, 54L));
+    }
+
     @ParameterizedTest
     @MethodSource("offsetParameters")
     void testAppendForLogSegmentOffsetOverflowException(long baseOffset, long largestOffset)
@@ -1251,6 +1259,61 @@ final class LogSegmentTest extends LogTestBase {
             assertThat(read.getRecords().sizeInBytes()).isGreaterThan(0);
             // Last batch matches — no trailing filtered batches
             assertThat(read.hasFilteredEndOffset()).isFalse();
+        }
+    }
+
+    @ParameterizedTest
+    @MethodSource("boundedFilterParameters")
+    void testBoundedFilterProgress(
+            long firstBatchOffset,
+            long secondBatchOffset,
+            long thirdBatchOffset,
+            long fetchOffset,
+            long stoppingOffset)
+            throws Exception {
+        LogSegment segment = createSegment(40L);
+        List<Object[]> firstRows =
+                Arrays.asList(new Object[] {1, "a"}, new Object[] {2, "b"}, new Object[] {3, "c"});
+        List<Object[]> secondRows =
+                Arrays.asList(new Object[] {4, "d"}, new Object[] {5, "e"}, new Object[] {6, "f"});
+        List<Object[]> thirdRows =
+                Arrays.asList(new Object[] {7, "g"}, new Object[] {8, "h"}, new Object[] {9, "i"});
+        MemoryLogRecords firstBatch =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        firstRows, DATA1_ROW_TYPE, firstBatchOffset, DEFAULT_SCHEMA_ID);
+        MemoryLogRecords secondBatch =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        secondRows, DATA1_ROW_TYPE, secondBatchOffset, DEFAULT_SCHEMA_ID);
+        MemoryLogRecords thirdBatch =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        thirdRows, DATA1_ROW_TYPE, thirdBatchOffset, DEFAULT_SCHEMA_ID);
+
+        segment.append(firstBatchOffset + 2, -1L, -1L, firstBatch);
+        segment.append(secondBatchOffset + 2, -1L, -1L, secondBatch);
+        segment.append(thirdBatchOffset + 2, -1L, -1L, thirdBatch);
+
+        Predicate predicate = new PredicateBuilder(DATA1_ROW_TYPE).greaterThan(0, 100);
+
+        try (LogRecordReadContext readContext =
+                LogRecordReadContext.createArrowReadContext(
+                        DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER)) {
+            FilterContext filterContext =
+                    new FilterContext(
+                            predicate, readContext, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER);
+            FetchDataInfo result =
+                    segment.read(
+                            fetchOffset,
+                            1000,
+                            segment.getSizeInBytes(),
+                            true,
+                            null,
+                            filterContext,
+                            stoppingOffset);
+
+            assertThat(result).isNotNull();
+            assertThat(result.getRecords().sizeInBytes()).isZero();
+            assertThat(result.hasFilteredEndOffset()).isTrue();
+            assertThat(result.getFilteredEndOffset()).isEqualTo(stoppingOffset);
         }
     }
 
