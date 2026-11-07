@@ -660,12 +660,14 @@ class ZooKeeperClientTest {
         long partitionId = 2L;
         Map<Integer, BucketAssignment> partitionBucketAssignments =
                 Collections.singletonMap(0, BucketAssignment.of(0));
+        TablePath partitionedTablePath = TablePath.of("db", "partitioned_table");
+        registerPartitionedTable(partitionedTablePath, tableId);
         zookeeperClient.registerPartitionAssignmentAndMetadata(
                 partitionId,
                 "p1",
                 new PartitionAssignment(tableId, partitionBucketAssignments),
                 remoteDataDir,
-                TablePath.of("db", "partitioned_table"),
+                partitionedTablePath,
                 tableId,
                 partitionBucketAssignments.size());
         TableBucket partitionBucket = new TableBucket(tableId, partitionId, 0);
@@ -724,6 +726,62 @@ class ZooKeeperClientTest {
 
         assertThat(raceTestingClient.getTableLatestBucketSnapshot(tableId))
                 .containsEntry(tableBucket.getBucket(), Optional.empty());
+    }
+
+    private static void registerPartitionedTable(TablePath tablePath, long tableId)
+            throws Exception {
+        long currentMillis = System.currentTimeMillis();
+        zookeeperClient.registerTable(
+                tablePath,
+                new TableRegistration(
+                        tableId,
+                        "partitioned table",
+                        Arrays.asList("a", "b"),
+                        new TableDescriptor.TableDistribution(16, Collections.singletonList("a")),
+                        Collections.emptyMap(),
+                        Collections.emptyMap(),
+                        remoteDataDir,
+                        currentMillis,
+                        currentMillis));
+    }
+
+    @Test
+    void testRegisterPartitionForDroppedTableDoesNotRecreateDatabase() throws Exception {
+        TablePath tablePath = TablePath.of("db", "tb");
+        long tableId = 12;
+        registerPartitionedTable(tablePath, tableId);
+        assertThat(zookeeperClient.databaseExists("db")).isTrue();
+
+        // the database is dropped (cascade) before a pending partition creation is registered
+        zookeeperClient.deleteDatabase("db");
+
+        PartitionAssignment partitionAssignment =
+                new PartitionAssignment(
+                        tableId,
+                        generateAssignment(
+                                        3,
+                                        3,
+                                        new TabletServerInfo[] {
+                                            new TabletServerInfo(0, "rack0"),
+                                            new TabletServerInfo(1, "rack1"),
+                                            new TabletServerInfo(2, "rack2")
+                                        })
+                                .getBucketAssignments());
+        assertThatThrownBy(
+                        () ->
+                                zookeeperClient.registerPartitionAssignmentAndMetadata(
+                                        1L,
+                                        "p1",
+                                        partitionAssignment,
+                                        remoteDataDir,
+                                        tablePath,
+                                        tableId,
+                                        partitionAssignment.getBucketAssignments().size()))
+                .isInstanceOf(KeeperException.NoNodeException.class);
+
+        // the dropped database and table must not be resurrected as empty znodes
+        assertThat(zookeeperClient.databaseExists("db")).isFalse();
+        assertThat(zookeeperClient.getTable(tablePath)).isNotPresent();
     }
 
     @Test
