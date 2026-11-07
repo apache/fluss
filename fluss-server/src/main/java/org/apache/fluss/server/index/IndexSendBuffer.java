@@ -22,6 +22,7 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.exception.RecordTooLargeException;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.shaded.guava32.com.google.common.collect.Iterables;
 
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
@@ -47,15 +48,15 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  * TabletServer-global staging area that accumulates pre-encoded {@link IndexBatch}es per target
  * index-table bucket. Producers ({@link IndexReplicator}s, running on the read worker pool) append
  * batches; consumers ({@link IndexSender} workers) claim batches front-to-back. A claimed batch
- * remains at the front until the buffer acknowledges, retries, or discards it, preserving
- * per-bucket order without a second sender-owned registry.
+ * remains at the front until the sender completes or retries its exact claim, preserving per-bucket
+ * order without a second sender-owned registry.
  *
  * <p>The buffer has no knowledge of leaders, RPC, or retry policy. It owns per-bucket ordering,
  * claims, and pending-byte accounting. It accounts for retained payload pages during construction,
  * queuing and active delivery against a shared hard budget. Retiring windows after sustained
  * failures returns shared capacity so other source buckets can compete for it.
  *
- * <p>Lock order is {@code window} then the per-bucket {@code deque}. Code inside a {@code deque}
+ * <p>Lock order is {@code window} then the per-bucket {@code queue}. Code inside a {@code queue}
  * critical section may only read volatile or atomic state of a window or batch: calling a {@code
  * synchronized} method on a window from there inverts the order and deadlocks against {@link
  * #tryAppendWindow} and {@link #retryClaim}.
@@ -64,10 +65,7 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 @ThreadSafe
 public final class IndexSendBuffer {
 
-    private final ConcurrentMap<TableBucket, Deque<IndexBatch>> batches = new ConcurrentHashMap<>();
-
-    /** The front batch currently claimed for sending, at most one per target bucket. */
-    private final ConcurrentMap<TableBucket, IndexBatch> claimedBatches = new ConcurrentHashMap<>();
+    private final ConcurrentMap<TableBucket, BucketQueue> queues = new ConcurrentHashMap<>();
 
     /** Hard upper bound on pending retained bytes across this TabletServer sendBuffer. */
     private final long maxTotalPendingBytes;
@@ -96,7 +94,7 @@ public final class IndexSendBuffer {
     }
 
     /** Registers a listener invoked when append or source cleanup may make a bucket ready. */
-    public void setAppendListener(Consumer<TableBucket> appendListener) {
+    public void setReadyBucketListener(Consumer<TableBucket> appendListener) {
         this.appendListener = appendListener;
     }
 
@@ -244,14 +242,14 @@ public final class IndexSendBuffer {
     }
 
     private void publishStaged(IndexBatch batch) {
-        batches.compute(
+        queues.compute(
                 batch.targetBucket(),
                 (ignored, current) -> {
-                    Deque<IndexBatch> deque = current == null ? new ArrayDeque<>() : current;
-                    synchronized (deque) {
-                        deque.addLast(batch);
+                    BucketQueue queue = current == null ? new BucketQueue() : current;
+                    synchronized (queue) {
+                        queue.batches.addLast(batch);
                     }
-                    return deque;
+                    return queue;
                 });
     }
 
@@ -273,12 +271,12 @@ public final class IndexSendBuffer {
 
     @VisibleForTesting
     boolean hasRetriedBatchForTesting(TableBucket bucket) {
-        Deque<IndexBatch> deque = batches.get(bucket);
-        if (deque == null) {
+        BucketQueue queue = queues.get(bucket);
+        if (queue == null) {
             return false;
         }
-        synchronized (deque) {
-            for (IndexBatch batch : deque) {
+        synchronized (queue) {
+            for (IndexBatch batch : queue.batches) {
                 if (batch.attempts() > 0) {
                     return true;
                 }
@@ -311,17 +309,17 @@ public final class IndexSendBuffer {
 
     /** Snapshot of the buckets currently tracked. May include buckets that have just drained. */
     public Set<TableBucket> buckets() {
-        return new HashSet<>(batches.keySet());
+        return new HashSet<>(queues.keySet());
     }
 
     /** Returns {@code true} if the bucket currently has at least one queued batch. */
     public boolean hasPending(TableBucket bucket) {
-        Deque<IndexBatch> deque = batches.get(bucket);
-        if (deque == null) {
+        BucketQueue queue = queues.get(bucket);
+        if (queue == null) {
             return false;
         }
-        synchronized (deque) {
-            return !deque.isEmpty();
+        synchronized (queue) {
+            return !queue.batches.isEmpty();
         }
     }
 
@@ -332,27 +330,26 @@ public final class IndexSendBuffer {
     @Nullable
     public IndexBatch claimFirstReady(TableBucket bucket) {
         IndexBatch[] result = new IndexBatch[1];
-        batches.computeIfPresent(
+        queues.computeIfPresent(
                 bucket,
-                (ignored, deque) -> {
-                    synchronized (deque) {
-                        if (claimedBatches.containsKey(bucket)) {
-                            return deque;
+                (ignored, queue) -> {
+                    synchronized (queue) {
+                        if (queue.claimed != null) {
+                            return queue;
                         }
-                        IndexBatch head = deque.peekFirst();
+                        IndexBatch head = queue.batches.peekFirst();
                         if (head == null) {
                             return null;
                         }
                         if (!head.window().isAdmitted()) {
-                            return deque;
+                            return queue;
                         }
                         if (!head.window().isReadyForSend()) {
-                            return deque;
+                            return queue;
                         }
-                        if (claimedBatches.putIfAbsent(bucket, head) == null) {
-                            result[0] = head;
-                        }
-                        return deque;
+                        queue.claimed = head;
+                        result[0] = head;
+                        return queue;
                     }
                 });
         return result[0];
@@ -360,12 +357,14 @@ public final class IndexSendBuffer {
 
     /** Returns whether this buffer still owns the exact claimed batch. */
     public boolean ownsClaim(IndexBatch batch) {
-        return claimedBatches.get(batch.targetBucket()) == batch;
+        BucketQueue queue = queues.get(batch.targetBucket());
+        return queue != null && queue.claimed == batch;
     }
 
     /** Returns whether the bucket currently has a claimed front batch. */
     public boolean hasClaim(TableBucket bucket) {
-        return claimedBatches.containsKey(bucket);
+        BucketQueue queue = queues.get(bucket);
+        return queue != null && queue.claimed != null;
     }
 
     /** Releases the exact claim for retry while leaving the batch at the queue front. */
@@ -377,22 +376,23 @@ public final class IndexSendBuffer {
                 return false;
             }
             batch.window().onFailure();
-            batches.computeIfPresent(
+            queues.computeIfPresent(
                     batch.targetBucket(),
-                    (ignored, deque) -> {
-                        synchronized (deque) {
-                            if (!claimedBatches.remove(batch.targetBucket(), batch)) {
-                                return deque;
+                    (ignored, queue) -> {
+                        synchronized (queue) {
+                            if (queue.claimed != batch) {
+                                return queue;
                             }
-                            if (deque.peekFirst() == batch
+                            queue.claimed = null;
+                            if (queue.batches.peekFirst() == batch
                                     && batch.ownerActive()
                                     && !batch.isReleased()) {
                                 batch.reEnqueued();
                                 retried[0] = true;
                             } else {
-                                discarded[0] = removeExact(deque, batch);
+                                discarded[0] = removeExact(queue.batches, batch);
                             }
-                            return deque.isEmpty() ? null : deque;
+                            return queue.batches.isEmpty() ? null : queue;
                         }
                     });
         }
@@ -402,55 +402,49 @@ public final class IndexSendBuffer {
         return retried[0];
     }
 
-    /** Acknowledges and removes the exact claimed batch. */
-    public boolean acknowledgeClaim(IndexBatch batch) {
-        boolean removed = removeClaim(batch);
-        if (removed) {
+    /** Removes and releases an exact claim, whether acknowledged or discarded by the sender. */
+    boolean completeClaim(IndexBatch batch) {
+        boolean[] removed = new boolean[1];
+        queues.computeIfPresent(
+                batch.targetBucket(),
+                (ignored, queue) -> {
+                    synchronized (queue) {
+                        if (queue.claimed == batch) {
+                            queue.claimed = null;
+                            removed[0] = removeExact(queue.batches, batch);
+                        }
+                        return queue.batches.isEmpty() ? null : queue;
+                    }
+                });
+        if (removed[0]) {
             release(batch);
         }
-        return removed;
-    }
-
-    /** Discards and releases the exact claimed batch. */
-    public boolean discardClaim(IndexBatch batch) {
-        boolean removed = removeClaim(batch);
-        if (removed) {
-            release(batch);
-        }
-        return removed;
+        return removed[0];
     }
 
     /** Discards every batch currently claimed by a sender that is closing. */
     public void discardClaims() {
-        for (IndexBatch batch : new ArrayList<>(claimedBatches.values())) {
-            discardClaim(batch);
+        List<IndexBatch> claimed = new ArrayList<>();
+        for (BucketQueue queue : queues.values()) {
+            IndexBatch batch = queue.claimed;
+            if (batch != null) {
+                claimed.add(batch);
+            }
         }
-    }
-
-    private boolean removeClaim(IndexBatch batch) {
-        boolean[] removed = new boolean[1];
-        batches.computeIfPresent(
-                batch.targetBucket(),
-                (ignored, deque) -> {
-                    synchronized (deque) {
-                        if (claimedBatches.remove(batch.targetBucket(), batch)) {
-                            removed[0] = removeExact(deque, batch);
-                        }
-                        return deque.isEmpty() ? null : deque;
-                    }
-                });
-        return removed[0];
+        for (IndexBatch batch : claimed) {
+            completeClaim(batch);
+        }
     }
 
     /** Remove the exact batch from its target queue without changing pending-byte accounting. */
     private boolean remove(IndexBatch batch) {
         boolean[] removed = new boolean[1];
-        batches.computeIfPresent(
+        queues.computeIfPresent(
                 batch.targetBucket(),
-                (ignored, deque) -> {
-                    synchronized (deque) {
-                        removed[0] = removeExact(deque, batch);
-                        return deque.isEmpty() ? null : deque;
+                (ignored, queue) -> {
+                    synchronized (queue) {
+                        removed[0] = removeExact(queue.batches, batch);
+                        return queue.batches.isEmpty() ? null : queue;
                     }
                 });
         return removed[0];
@@ -530,6 +524,14 @@ public final class IndexSendBuffer {
         private static final long serialVersionUID = 1L;
     }
 
+    private static final class BucketQueue {
+        private final Deque<IndexBatch> batches = new ArrayDeque<>();
+
+        // Null or the queue head. Mutations hold the queue monitor inside a per-key map compute;
+        // sender lifecycle checks read the claim without taking the queue lock.
+        @Nullable private volatile IndexBatch claimed;
+    }
+
     private static boolean removeExact(Deque<IndexBatch> deque, IndexBatch batch) {
         Iterator<IndexBatch> iterator = deque.iterator();
         while (iterator.hasNext()) {
@@ -541,17 +543,12 @@ public final class IndexSendBuffer {
         return false;
     }
 
-    /**
-     * Discard every queued batch produced by the given source main-table bucket, returning how many
-     * were dropped. Called when a producer stops (its main-table bucket lost leadership or the
-     * table was dropped) so its undelivered batches do not loop forever in the sender's
-     * at-least-once retry, pinning memory and holding back-pressure. Cleanup is scoped to the
-     * producing source bucket: batches from other sources are left untouched, including other
-     * buckets of the same index table that may still have a live leader.
-     */
-    public int dropForSource(TableBucket source) {
+    /** Releases a stopped source's retired windows without scanning unrelated target queues. */
+    int dropWindows(Set<IndexReplicationWindow> windows) {
         return dropBatches(
-                new ArrayList<>(batches.keySet()), batch -> batch.sourceBucket().equals(source));
+                Iterables.concat(
+                        Iterables.transform(windows, IndexReplicationWindow::targetBuckets)),
+                batch -> windows.contains(batch.window()));
     }
 
     /** Releases one retired index window while preserving every other producer's batches. */
@@ -560,39 +557,37 @@ public final class IndexSendBuffer {
     }
 
     private int dropBatches(Iterable<TableBucket> targets, Predicate<IndexBatch> shouldDrop) {
-        Set<IndexBatch> droppedBatches = new HashSet<>();
+        List<IndexBatch> droppedBatches = new ArrayList<>();
         Set<TableBucket> affectedBuckets = new HashSet<>();
         for (TableBucket bucket : targets) {
-            batches.computeIfPresent(
+            queues.computeIfPresent(
                     bucket,
-                    (ignored, deque) -> {
-                        synchronized (deque) {
-                            Iterator<IndexBatch> it = deque.iterator();
+                    (ignored, queue) -> {
+                        synchronized (queue) {
+                            Iterator<IndexBatch> it = queue.batches.iterator();
                             while (it.hasNext()) {
                                 IndexBatch batch = it.next();
                                 if (shouldDrop.test(batch)) {
                                     it.remove();
-                                    claimedBatches.remove(bucket, batch);
+                                    if (queue.claimed == batch) {
+                                        queue.claimed = null;
+                                    }
                                     droppedBatches.add(batch);
                                     affectedBuckets.add(bucket);
                                 }
                             }
-                            return deque.isEmpty() ? null : deque;
+                            return queue.batches.isEmpty() ? null : queue;
                         }
                     });
         }
-        releaseDroppedBatches(droppedBatches);
+        for (IndexBatch batch : droppedBatches) {
+            release(batch);
+        }
         // Removing a claimed head can expose another source's batch after its ready notification
         // was consumed. Notify outside the queue locks even if the queue has since changed.
         for (TableBucket bucket : affectedBuckets) {
             notifyReadyBucket(bucket);
         }
         return droppedBatches.size();
-    }
-
-    private void releaseDroppedBatches(Iterable<IndexBatch> droppedBatches) {
-        for (IndexBatch batch : droppedBatches) {
-            release(batch);
-        }
     }
 }

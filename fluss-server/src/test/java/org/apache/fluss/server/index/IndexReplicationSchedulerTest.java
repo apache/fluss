@@ -49,6 +49,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Supplier;
 
 import static org.apache.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
 import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
@@ -57,11 +58,11 @@ import static org.apache.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
 import static org.apache.fluss.testutils.DataTestUtils.createBasicMemoryLogRecords;
 import static org.assertj.core.api.Assertions.assertThat;
 
-class FairIndexReplicationSchedulerTest {
+class IndexReplicationSchedulerTest {
 
     @Test
     void inputAdmissionRotatesTablesAcrossWorkersAndReleasesOnClose() throws Exception {
-        FairIndexReplicationScheduler scheduler = new FairIndexReplicationScheduler(1);
+        IndexReplicationScheduler scheduler = new IndexReplicationScheduler(1);
         IndexSendBuffer buffer = new IndexSendBuffer();
         ManualClock clock = new ManualClock();
         QueuedExecutor io = new QueuedExecutor();
@@ -132,7 +133,7 @@ class FairIndexReplicationSchedulerTest {
 
     @Test
     void capacityRetryKeepsInputAdmissionUntilItsBuildFinishes() throws Exception {
-        FairIndexReplicationScheduler scheduler = new FairIndexReplicationScheduler(1);
+        IndexReplicationScheduler scheduler = new IndexReplicationScheduler(1);
         IndexSendBuffer buffer = new IndexSendBuffer(8192);
         ManualClock clock = new ManualClock();
         QueuedExecutor io = new QueuedExecutor();
@@ -180,7 +181,7 @@ class FairIndexReplicationSchedulerTest {
 
     @Test
     void serviceOnAnotherWorkerDoesNotConsumeLocalTablePosition() throws Exception {
-        FairIndexReplicationScheduler scheduler = new FairIndexReplicationScheduler(8);
+        IndexReplicationScheduler scheduler = new IndexReplicationScheduler(8);
         IndexSendBuffer buffer = new IndexSendBuffer();
         ManualClock clock = new ManualClock();
         try (Source firstA =
@@ -231,7 +232,7 @@ class FairIndexReplicationSchedulerTest {
 
     @Test
     void syncLookaheadChecksStartWithoutTruncatingEndAndIncludesBlockedMinimum() throws Exception {
-        FairIndexReplicationScheduler scheduler = new FairIndexReplicationScheduler(8);
+        IndexReplicationScheduler scheduler = new IndexReplicationScheduler(8);
         IndexSendBuffer buffer = new IndexSendBuffer();
         ManualClock clock = new ManualClock();
         try (Source source =
@@ -251,7 +252,7 @@ class FairIndexReplicationSchedulerTest {
             IndexBatch ahead = buffer.claimFirstReady(new TableBucket(10L, 0));
             assertThat(ahead).isNotNull();
             assertThat(ahead.sourceEndOffset()).isEqualTo(4L);
-            assertThat(buffer.acknowledgeClaim(ahead)).isTrue();
+            assertThat(buffer.completeClaim(ahead)).isTrue();
             ahead.window().onBatchAcked();
             assertThat(scheduler.pollWorker(0)).isFalse();
             assertThat(source.reads).hasValue(2);
@@ -272,7 +273,7 @@ class FairIndexReplicationSchedulerTest {
 
     @Test
     void unavailableAsyncDoesNotHideHealthyWorkAndRecoversWithItsOwnProbe() throws Exception {
-        FairIndexReplicationScheduler scheduler = new FairIndexReplicationScheduler(8);
+        IndexReplicationScheduler scheduler = new IndexReplicationScheduler(8);
         IndexSendBuffer buffer = new IndexSendBuffer();
         ManualClock clock = new ManualClock();
         AtomicBoolean broken = new AtomicBoolean(true);
@@ -316,17 +317,17 @@ class FairIndexReplicationSchedulerTest {
             assertThat(async).isNotNull();
             assertThat(async.sourceEndOffset()).isEqualTo(4L);
             assertThat(source.replicator.getSyncIndexPushedOffset()).isEqualTo(2L);
-            assertThat(buffer.acknowledgeClaim(async)).isTrue();
+            assertThat(buffer.completeClaim(async)).isTrue();
             async.window().onBatchAcked();
             assertThat(scheduler.pollWorker(0)).isFalse();
             acknowledge(buffer, 10L, 0);
             broken.set(false);
             clock.advanceTime(10, TimeUnit.MILLISECONDS);
-            for (int attempt = 0; attempt < 6 && source.replicator.isFailed(); attempt++) {
+            for (int attempt = 0; attempt < 6 && source.replicator.hasFailure(); attempt++) {
                 scheduler.pollWorker(0);
                 drain(buffer);
             }
-            assertThat(source.replicator.isFailed()).isFalse();
+            assertThat(source.replicator.hasFailure()).isFalse();
             assertThat(source.replicator.getAllIndexPushedOffset()).isGreaterThanOrEqualTo(2L);
             assertThat(source.replicator.getSyncIndexPushedOffset()).isGreaterThanOrEqualTo(4L);
         }
@@ -335,7 +336,7 @@ class FairIndexReplicationSchedulerTest {
 
     @Test
     void capacityHandoffIsByTableAndReadyOwnerProtectsBeforePagesAreFree() throws Exception {
-        FairIndexReplicationScheduler scheduler = new FairIndexReplicationScheduler(8);
+        IndexReplicationScheduler scheduler = new IndexReplicationScheduler(8);
         IndexSendBuffer buffer = new IndexSendBuffer(8192);
         ManualClock clock = new ManualClock();
         QueuedExecutor io = new QueuedExecutor();
@@ -403,16 +404,16 @@ class FairIndexReplicationSchedulerTest {
             assertThat(second.replicator.getAllIndexPushedOffset()).isEqualTo(2L);
             assertThat(first.replicator.getAllIndexPushedOffset()).isZero();
             assertThat(sameTable.replicator.getAllIndexPushedOffset()).isZero();
-            assertThat(first.replicator.isFailed()).isFalse();
-            assertThat(sameTable.replicator.isFailed()).isFalse();
-            assertThat(second.replicator.isFailed()).isFalse();
+            assertThat(first.replicator.hasFailure()).isFalse();
+            assertThat(sameTable.replicator.hasFailure()).isFalse();
+            assertThat(second.replicator.hasFailure()).isFalse();
         }
         assertThat(buffer.pendingBytes()).isZero();
     }
 
     @Test
     void ordinaryPublicationDoesNotConsumeCapacityOwnersTableTurn() throws Exception {
-        FairIndexReplicationScheduler scheduler = new FairIndexReplicationScheduler(8);
+        IndexReplicationScheduler scheduler = new IndexReplicationScheduler(8);
         IndexSendBuffer buffer = new IndexSendBuffer(4096);
         ManualClock clock = new ManualClock();
         QueuedExecutor io = new QueuedExecutor();
@@ -524,7 +525,7 @@ class FairIndexReplicationSchedulerTest {
 
     @Test
     void coldCapacityWaiterDoesNotFreezeOthersAndErrorReleasesProtection() throws Exception {
-        FairIndexReplicationScheduler scheduler = new FairIndexReplicationScheduler(8);
+        IndexReplicationScheduler scheduler = new IndexReplicationScheduler(8);
         IndexSendBuffer buffer = new IndexSendBuffer(8192);
         ManualClock clock = new ManualClock();
         QueuedExecutor io = new QueuedExecutor();
@@ -580,7 +581,7 @@ class FairIndexReplicationSchedulerTest {
 
     @Test
     void oldUnregisterCannotRemoveReplacementForSameBucket() throws Exception {
-        FairIndexReplicationScheduler scheduler = new FairIndexReplicationScheduler(8);
+        IndexReplicationScheduler scheduler = new IndexReplicationScheduler(8);
         IndexSendBuffer buffer = new IndexSendBuffer();
         ManualClock clock = new ManualClock();
         TableBucket bucket = new TableBucket(1L, 0);
@@ -642,7 +643,7 @@ class FairIndexReplicationSchedulerTest {
     private static void acknowledge(IndexSendBuffer buffer, long table, int bucket) {
         IndexBatch batch = buffer.claimFirstReady(new TableBucket(table, bucket));
         assertThat(batch).isNotNull();
-        assertThat(buffer.acknowledgeClaim(batch)).isTrue();
+        assertThat(buffer.completeClaim(batch)).isTrue();
         batch.window().onBatchAcked();
     }
 
@@ -650,7 +651,7 @@ class FairIndexReplicationSchedulerTest {
         for (TableBucket target : buffer.buckets()) {
             IndexBatch batch;
             while ((batch = buffer.claimFirstReady(target)) != null) {
-                assertThat(buffer.acknowledgeClaim(batch)).isTrue();
+                assertThat(buffer.completeClaim(batch)).isTrue();
                 batch.window().onBatchAcked();
             }
         }
@@ -671,14 +672,14 @@ class FairIndexReplicationSchedulerTest {
     }
 
     private static final class Source implements AutoCloseable {
-        private final FairIndexReplicationScheduler scheduler;
+        private final IndexReplicationScheduler scheduler;
         private final int worker;
         private final AtomicInteger reads = new AtomicInteger();
         private final AtomicLong highWatermark = new AtomicLong(16L);
         private final IndexReplicator replicator;
 
         private Source(
-                FairIndexReplicationScheduler scheduler,
+                IndexReplicationScheduler scheduler,
                 int worker,
                 TableBucket bucket,
                 IndexSendBuffer buffer,
@@ -689,7 +690,7 @@ class FairIndexReplicationSchedulerTest {
         }
 
         private Source(
-                FairIndexReplicationScheduler scheduler,
+                IndexReplicationScheduler scheduler,
                 int worker,
                 TableBucket bucket,
                 IndexSendBuffer buffer,
@@ -762,7 +763,7 @@ class FairIndexReplicationSchedulerTest {
                             return new FetchDataInfo(records);
                         }
                     };
-            IndexSourceReader.RemoteFetcherFactory remoteFactory =
+            Supplier<IndexSourceReader.RemoteFetcher> remoteFactory =
                     remote == null
                             ? null
                             : () ->
@@ -783,21 +784,19 @@ class FairIndexReplicationSchedulerTest {
             replicator =
                     new IndexReplicator(
                             new IndexSourceReader(
-                                    log,
-                                    remoteFactory,
-                                    remote == null ? Runnable::run : remote,
-                                    context),
+                                    log, remoteFactory, remote == null ? Runnable::run : remote),
                             Arrays.asList(specs),
                             buffer,
                             context,
                             0L,
                             1,
                             (sync, all) -> {},
+                            scheduler,
+                            () -> {},
                             new ExponentialBackoff(10, 2, 100, 0),
                             clock,
                             null,
                             ConfigOptions.NETTY_SERVER_MAX_REQUEST_SIZE.defaultValue().getBytes());
-            replicator.setScheduler(scheduler);
             scheduler.register(worker, replicator);
         }
 

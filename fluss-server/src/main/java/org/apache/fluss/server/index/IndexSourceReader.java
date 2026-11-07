@@ -21,14 +21,15 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.record.LogRecordBatch;
-import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.server.kv.RemoteLogFetcher;
 import org.apache.fluss.server.log.FetchDataInfo;
 import org.apache.fluss.server.log.FetchIsolation;
 import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.log.remote.RemoteLogManager;
 import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
+import org.apache.fluss.shaded.guava32.com.google.common.collect.AbstractIterator;
 import org.apache.fluss.utils.CloseableIterator;
+import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import javax.annotation.Nullable;
 
@@ -36,11 +37,11 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.NoSuchElementException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 
 /** Reads a continuous, high-watermark-bounded source WAL range for index replication. */
 @Internal
@@ -62,11 +63,6 @@ public final class IndexSourceReader implements AutoCloseable {
                 throws IOException;
     }
 
-    @FunctionalInterface
-    interface RemoteFetcherFactory {
-        RemoteFetcher open();
-    }
-
     interface RemoteFetcher extends AutoCloseable {
         Iterable<LogRecordBatch> fetch(long startOffset, long localLogStartOffset) throws Exception;
 
@@ -75,20 +71,21 @@ public final class IndexSourceReader implements AutoCloseable {
     }
 
     private final SourceLog sourceLog;
-    @Nullable private final RemoteFetcherFactory remoteFetcherFactory;
+    /** Opens a fresh, independently owned remote WAL session. */
+    @Nullable private final Supplier<RemoteFetcher> remoteFetcherFactory;
+
     private final Executor remoteExecutor;
-    private final LogRecordReadContext readContext;
     @Nullable private final TabletServerMetricGroup metrics;
     private final AtomicBoolean closed = new AtomicBoolean();
     private final AtomicReference<CompletableFuture<ReadResult>> pendingRemoteRead =
             new AtomicReference<>();
+    /** Removing the session transfers responsibility for closing it. */
     private final AtomicReference<RemoteFetcher> remoteFetcherSession = new AtomicReference<>();
 
     public IndexSourceReader(
             LogTablet logTablet,
             RemoteLogManager remoteLogManager,
             Executor remoteExecutor,
-            LogRecordReadContext readContext,
             @Nullable TabletServerMetricGroup metrics) {
         this(
                 new LogTabletSourceLog(logTablet),
@@ -101,28 +98,24 @@ public final class IndexSourceReader implements AutoCloseable {
                                         1,
                                         1)),
                 remoteExecutor,
-                readContext,
                 metrics);
     }
 
     IndexSourceReader(
             SourceLog sourceLog,
-            @Nullable RemoteFetcherFactory remoteFetcherFactory,
-            Executor remoteExecutor,
-            LogRecordReadContext readContext) {
-        this(sourceLog, remoteFetcherFactory, remoteExecutor, readContext, null);
+            @Nullable Supplier<RemoteFetcher> remoteFetcherFactory,
+            Executor remoteExecutor) {
+        this(sourceLog, remoteFetcherFactory, remoteExecutor, null);
     }
 
     IndexSourceReader(
             SourceLog sourceLog,
-            @Nullable RemoteFetcherFactory remoteFetcherFactory,
+            @Nullable Supplier<RemoteFetcher> remoteFetcherFactory,
             Executor remoteExecutor,
-            LogRecordReadContext readContext,
             @Nullable TabletServerMetricGroup metrics) {
         this.sourceLog = sourceLog;
         this.remoteFetcherFactory = remoteFetcherFactory;
         this.remoteExecutor = remoteExecutor;
-        this.readContext = readContext;
         this.metrics = metrics;
     }
 
@@ -152,12 +145,12 @@ public final class IndexSourceReader implements AutoCloseable {
                 return CompletableFuture.completedFuture(
                         readLocal(nextOffset, highWatermark, maxBytes, null));
             } catch (Throwable failure) {
-                return failedFuture(failure);
+                return FutureUtils.completedExceptionally(failure);
             }
         }
 
         if (remoteFetcherFactory == null) {
-            return failedFuture(
+            return FutureUtils.completedExceptionally(
                     corruption(
                             "offset "
                                     + nextOffset
@@ -225,9 +218,8 @@ public final class IndexSourceReader implements AutoCloseable {
                                 + remoteEnd);
             }
 
-            AutoCloseable resultResource =
-                    remoteSessionResource(remoteFetcher, collector.nextOffset() == remoteEnd);
-            collector.attachResource(resultResource);
+            collector.attachResource(
+                    remoteSessionResource(remoteFetcher, collector.nextOffset() == remoteEnd));
 
             ReadResult result;
             if (!collector.limitReached()
@@ -241,7 +233,7 @@ public final class IndexSourceReader implements AutoCloseable {
                                 collector.remainingBytes(),
                                 collector);
             } else {
-                result = collector.finish(resultResource);
+                result = collector.finish();
             }
             if (closed.get() || future.isCancelled()) {
                 result.close();
@@ -268,7 +260,7 @@ public final class IndexSourceReader implements AutoCloseable {
         if (existing != null) {
             return existing;
         }
-        RemoteFetcher opened = new CloseOnceRemoteFetcher(remoteFetcherFactory.open());
+        RemoteFetcher opened = remoteFetcherFactory.get();
         if (remoteFetcherSession.compareAndSet(null, opened)) {
             return opened;
         }
@@ -319,12 +311,11 @@ public final class IndexSourceReader implements AutoCloseable {
         collector.collect(fetch.getRecords().batches(), highWatermark);
         if (collector.nextOffset() == beforeReadOffset && beforeReadOffset < highWatermark) {
             if (collector.limitReached()) {
-                return collector.finish(
-                        existingCollector == null ? null : existingCollector.resource());
+                return collector.finish();
             }
             throw corruption("local WAL has no record at expected offset " + beforeReadOffset);
         }
-        return collector.finish(existingCollector == null ? null : existingCollector.resource());
+        return collector.finish();
     }
 
     @Override
@@ -359,12 +350,6 @@ public final class IndexSourceReader implements AutoCloseable {
                 "Corrupt source WAL for " + sourceLog.tableBucket() + ": " + message, cause);
     }
 
-    private static <T> CompletableFuture<T> failedFuture(Throwable failure) {
-        CompletableFuture<T> future = new CompletableFuture<>();
-        future.completeExceptionally(failure);
-        return future;
-    }
-
     /** Owns the batches and any downloaded files backing them until {@link #close()}. */
     public static final class ReadResult implements AutoCloseable {
         private final List<SourceBatchSlice> batches;
@@ -379,14 +364,12 @@ public final class IndexSourceReader implements AutoCloseable {
                 List<SourceBatchSlice> batches,
                 long nextOffset,
                 boolean byteLimited,
+                long bytes,
                 @Nullable AutoCloseable resource,
                 @Nullable Runnable onClose) {
-            this.batches = Collections.unmodifiableList(new ArrayList<>(batches));
-            long size = 0;
-            for (SourceBatchSlice batch : batches) {
-                size += batch.delegate.sizeInBytes();
-            }
-            this.bytes = size;
+            // The collector no longer appends after handing this list to the result.
+            this.batches = Collections.unmodifiableList(batches);
+            this.bytes = bytes;
             this.nextOffset = nextOffset;
             this.byteLimited = byteLimited;
             this.resource = resource;
@@ -394,7 +377,7 @@ public final class IndexSourceReader implements AutoCloseable {
         }
 
         private static ReadResult empty(long nextOffset) {
-            return new ReadResult(Collections.emptyList(), nextOffset, false, null, null);
+            return new ReadResult(Collections.emptyList(), nextOffset, false, 0L, null, null);
         }
 
         List<SourceBatchSlice> batches() {
@@ -534,12 +517,13 @@ public final class IndexSourceReader implements AutoCloseable {
             }
         }
 
-        private ReadResult finish(@Nullable AutoCloseable resource) {
-            this.resource = resource;
-            CompletableFuture<ReadResult> future = pendingRemoteRead.get();
+        private ReadResult finish() {
+            // Keep the completion hook independent of the collector's lifetime.
+            AtomicReference<CompletableFuture<ReadResult>> pendingRead = pendingRemoteRead;
+            CompletableFuture<ReadResult> future = pendingRead.get();
             Runnable onClose =
-                    future == null ? null : () -> pendingRemoteRead.compareAndSet(future, null);
-            return new ReadResult(batches, nextOffset, byteLimitReached, resource, onClose);
+                    future == null ? null : () -> pendingRead.compareAndSet(future, null);
+            return new ReadResult(batches, nextOffset, byteLimitReached, bytes, resource, onClose);
         }
 
         private void attachResource(AutoCloseable resource) {
@@ -554,17 +538,8 @@ public final class IndexSourceReader implements AutoCloseable {
             return (int) Math.max(1L, maxBytes - bytes);
         }
 
-        private long bytes() {
-            return bytes;
-        }
-
         private boolean limitReached() {
             return byteLimitReached;
-        }
-
-        @Nullable
-        private AutoCloseable resource() {
-            return resource;
         }
     }
 
@@ -579,24 +554,19 @@ public final class IndexSourceReader implements AutoCloseable {
             this.endOffset = endOffset;
         }
 
-        long nextOffset() {
-            return endOffset;
-        }
-
         CloseableIterator<LogRecord> records(LogRecordBatch.ReadContext context) {
             return new OffsetBoundedIterator(
                     delegate.records(context), delegate.baseLogOffset(), startOffset, endOffset);
         }
     }
 
-    private final class OffsetBoundedIterator implements CloseableIterator<LogRecord> {
+    private final class OffsetBoundedIterator extends AbstractIterator<LogRecord>
+            implements CloseableIterator<LogRecord> {
         private final CloseableIterator<LogRecord> delegate;
         private final long startOffset;
         private final long endOffset;
         private long expectedRecordOffset;
-        @Nullable private LogRecord next;
         private boolean sawRecord;
-        private boolean finished;
 
         private OffsetBoundedIterator(
                 CloseableIterator<LogRecord> delegate,
@@ -610,8 +580,8 @@ public final class IndexSourceReader implements AutoCloseable {
         }
 
         @Override
-        public boolean hasNext() {
-            while (next == null && !finished && delegate.hasNext()) {
+        protected LogRecord computeNext() {
+            while (delegate.hasNext()) {
                 LogRecord candidate = delegate.next();
                 long candidateOffset = candidate.logOffset();
                 if (candidateOffset != expectedRecordOffset) {
@@ -626,33 +596,16 @@ public final class IndexSourceReader implements AutoCloseable {
                 if (candidateOffset < startOffset) {
                     continue;
                 }
-                if (candidateOffset >= endOffset) {
-                    finished = true;
-                    break;
-                }
-                next = candidate;
+                return candidateOffset < endOffset ? candidate : endOfData();
             }
-            if (next == null && !finished && !delegate.hasNext()) {
-                finished = true;
-                if (sawRecord && expectedRecordOffset < endOffset) {
-                    throw corruption(
-                            "record range ended at offset "
-                                    + expectedRecordOffset
-                                    + " before expected offset "
-                                    + endOffset);
-                }
+            if (sawRecord && expectedRecordOffset < endOffset) {
+                throw corruption(
+                        "record range ended at offset "
+                                + expectedRecordOffset
+                                + " before expected offset "
+                                + endOffset);
             }
-            return next != null;
-        }
-
-        @Override
-        public LogRecord next() {
-            if (!hasNext()) {
-                throw new NoSuchElementException();
-            }
-            LogRecord result = next;
-            next = null;
-            return result;
+            return endOfData();
         }
 
         @Override
@@ -712,28 +665,6 @@ public final class IndexSourceReader implements AutoCloseable {
         @Override
         public void close() {
             delegate.close();
-        }
-    }
-
-    private static final class CloseOnceRemoteFetcher implements RemoteFetcher {
-        private final RemoteFetcher delegate;
-        private final AtomicBoolean closed = new AtomicBoolean();
-
-        private CloseOnceRemoteFetcher(RemoteFetcher delegate) {
-            this.delegate = delegate;
-        }
-
-        @Override
-        public Iterable<LogRecordBatch> fetch(long startOffset, long localLogStartOffset)
-                throws Exception {
-            return delegate.fetch(startOffset, localLogStartOffset);
-        }
-
-        @Override
-        public void close() {
-            if (closed.compareAndSet(false, true)) {
-                delegate.close();
-            }
         }
     }
 }

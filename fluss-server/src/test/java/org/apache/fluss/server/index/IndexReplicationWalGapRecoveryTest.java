@@ -36,6 +36,7 @@ import java.io.IOException;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Supplier;
 
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -55,7 +56,7 @@ class IndexReplicationWalGapRecoveryTest {
         IndexSendBuffer sendBuffer = new IndexSendBuffer();
 
         // The remote WAL yields nothing for [0, 5), so the range is unrecoverable from either side.
-        IndexSourceReader.RemoteFetcherFactory emptyRemoteWal =
+        Supplier<IndexSourceReader.RemoteFetcher> emptyRemoteWal =
                 remoteFetcher(
                         remoteFetches,
                         (startOffset, localLogStartOffset) -> Collections.emptyList());
@@ -82,7 +83,7 @@ class IndexReplicationWalGapRecoveryTest {
         AtomicInteger remoteFetches = new AtomicInteger();
         IndexSendBuffer sendBuffer = new IndexSendBuffer();
 
-        IndexSourceReader.RemoteFetcherFactory unavailableRemoteWal =
+        Supplier<IndexSourceReader.RemoteFetcher> unavailableRemoteWal =
                 remoteFetcher(
                         remoteFetches,
                         (startOffset, localLogStartOffset) -> {
@@ -106,14 +107,14 @@ class IndexReplicationWalGapRecoveryTest {
     }
 
     private static IndexReplicator replicator(
-            IndexSourceReader.RemoteFetcherFactory remoteFetcherFactory,
+            Supplier<IndexSourceReader.RemoteFetcher> remoteFetcherFactory,
             IndexSendBuffer sendBuffer) {
         LogRecordReadContext readContext =
                 LogRecordReadContext.createCompactedRowReadContext(
                         RowType.of(DataTypes.INT()), 1, null);
         IndexSourceReader sourceReader =
-                new IndexSourceReader(
-                        gappedSourceLog(), remoteFetcherFactory, Runnable::run, readContext);
+                new IndexSourceReader(gappedSourceLog(), remoteFetcherFactory, Runnable::run);
+        IndexReplicationScheduler scheduler = new IndexReplicationScheduler(8);
         IndexReplicator replicator =
                 new IndexReplicator(
                         sourceReader,
@@ -122,9 +123,9 @@ class IndexReplicationWalGapRecoveryTest {
                         readContext,
                         PUSHED_OFFSET,
                         1024,
-                        (syncOffset, allOffset) -> {});
-        IndexReplicationScheduler scheduler = new FairIndexReplicationScheduler(8);
-        replicator.setScheduler(scheduler);
+                        (syncOffset, allOffset) -> {},
+                        scheduler,
+                        () -> {});
         scheduler.register(0, replicator);
         return replicator;
     }
@@ -159,7 +160,7 @@ class IndexReplicationWalGapRecoveryTest {
         };
     }
 
-    private static IndexSourceReader.RemoteFetcherFactory remoteFetcher(
+    private static Supplier<IndexSourceReader.RemoteFetcher> remoteFetcher(
             AtomicInteger fetchCount, RemoteRangeFetch fetch) {
         return () ->
                 new IndexSourceReader.RemoteFetcher() {

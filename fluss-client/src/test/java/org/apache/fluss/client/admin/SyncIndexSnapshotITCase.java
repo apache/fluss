@@ -105,7 +105,7 @@ class SyncIndexSnapshotITCase {
             int leader = CLUSTER.waitAndGetLeader(bucket);
             CLUSTER.getTabletServerById(leader)
                     .getReplicaManager()
-                    .getIndexReplicatorPool()
+                    .getIndexReplicationManager()
                     .close();
 
             CompletableFuture<PutKvResponse> write =

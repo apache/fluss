@@ -58,13 +58,10 @@ import static org.apache.fluss.utils.Preconditions.checkArgument;
  * Factory for building {@link IndexSpec} instances from main-table metadata and the server-side
  * metadata cache.
  *
- * <p>Extracted from {@code Replica} so that the spec-building logic (schema resolution, encoder
- * construction, bucket assignment) lives in one place rather than being scattered across a
- * 2600-line God Class.
- *
- * <p>Caller contract: the {@link IndexSpec.EntryEncoder} instances produced by this factory are
- * {@link NotThreadSafe} because they capture a mutable {@link RowEncoder}. The caller (typically
- * {@link IndexReplicator}) must guarantee single-threaded invocation.
+ * <p>Caller contract: the {@link IndexSpec.EntryEncoder} and {@link IndexSpec.ProgressEncoder}
+ * instances produced by this factory are {@link NotThreadSafe} because they share mutable {@link
+ * RowEncoder}s. The caller (typically {@link IndexReplicator}) must guarantee single-threaded
+ * invocation.
  */
 @Internal
 public final class IndexSpecFactory {
@@ -195,11 +192,6 @@ public final class IndexSpecFactory {
         CompactedKeyEncoder physicalBucketKeyEncoder =
                 new CompactedKeyEncoder(
                         physicalRowType, new int[] {recordKindPosition, routingKeyPosition});
-        byte[][] progressRoutingKeys = new byte[indexBucketCount][];
-        for (int targetBucket = 0; targetBucket < indexBucketCount; targetBucket++) {
-            progressRoutingKeys[targetBucket] =
-                    ByteBuffer.allocate(Integer.BYTES).putInt(targetBucket).array();
-        }
         IndexSpec.EntryEncoder entryEncoder =
                 row -> {
                     identityRowEncoder.startNewRow();
@@ -230,6 +222,7 @@ public final class IndexSpecFactory {
                             physicalKeyEncoder.encodeKey(value), value, targetBucket);
                 };
 
+        ByteBuffer progressRoutingKey = ByteBuffer.allocate(Integer.BYTES);
         IndexSpec.ProgressEncoder progressEncoder =
                 (sourceBucket, targetBucket, sourceEndOffset) -> {
                     checkArgument(
@@ -252,8 +245,9 @@ public final class IndexSpecFactory {
                                 "Unpartitioned source bucket must not contain partition ID");
                     }
                     physicalRowEncoder.encodeField(recordKindPosition, PROGRESS_RECORD_KIND);
+                    // The row encoder copies the bytes before this buffer is reused.
                     physicalRowEncoder.encodeField(
-                            routingKeyPosition, progressRoutingKeys[targetBucket]);
+                            routingKeyPosition, progressRoutingKey.putInt(0, targetBucket).array());
                     physicalRowEncoder.encodeField(
                             rowKeyPosition, encodeSourceBucket(sourceBucket));
                     physicalRowEncoder.encodeField(sourceProgressPosition, sourceEndOffset);

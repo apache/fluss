@@ -18,7 +18,6 @@
 package org.apache.fluss.server.replica;
 
 import org.apache.fluss.annotation.VisibleForTesting;
-import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.TableConfig;
@@ -58,7 +57,6 @@ import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.record.ProjectionPushdownCache;
 import org.apache.fluss.remote.RemoteLogFetchInfo;
-import org.apache.fluss.rpc.GatewayClientProxy;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.entity.LimitScanResultForBucket;
@@ -70,7 +68,6 @@ import org.apache.fluss.rpc.entity.PutKvResultForBucket;
 import org.apache.fluss.rpc.entity.TableStatsResultForBucket;
 import org.apache.fluss.rpc.entity.WriteResultForBucket;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
-import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.NotifyKvSnapshotOffsetResponse;
 import org.apache.fluss.rpc.messages.NotifyLakeTableOffsetResponse;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsResponse;
@@ -93,9 +90,7 @@ import org.apache.fluss.server.entity.PutKvDataForBucket;
 import org.apache.fluss.server.entity.StopReplicaData;
 import org.apache.fluss.server.entity.StopReplicaResultForBucket;
 import org.apache.fluss.server.entity.UserContext;
-import org.apache.fluss.server.index.IndexReplicatorPool;
-import org.apache.fluss.server.index.IndexSendBuffer;
-import org.apache.fluss.server.index.IndexSender;
+import org.apache.fluss.server.index.IndexReplicationManager;
 import org.apache.fluss.server.kv.KvManager;
 import org.apache.fluss.server.kv.KvSnapshotResource;
 import org.apache.fluss.server.kv.scan.ScannerManager;
@@ -189,7 +184,6 @@ public class ReplicaManager implements ServerReconfigurable {
     private static final Logger LOG = LoggerFactory.getLogger(ReplicaManager.class);
 
     public static final String HIGH_WATERMARK_CHECKPOINT_FILE_NAME = "high-watermark-checkpoint";
-    private static final long INDEX_REPLICATION_WORKER_BACKOFF_MS = 50L;
 
     /**
      * The first PUT_KV API version whose clients understand the {@link
@@ -215,9 +209,7 @@ public class ReplicaManager implements ServerReconfigurable {
     private final TabletServerMetadataCache metadataCache;
     @Nullable private final MetadataProvider metadataProvider;
     private final RpcClient rpcClient;
-    private final IndexSendBuffer indexSendBuffer;
-    private final IndexReplicatorPool indexReplicatorPool;
-    private final IndexSender indexSender;
+    private final IndexReplicationManager indexReplicationManager;
     private final TabletServerMetricGroup.GaugeRegistration indexReplicationGaugeRegistration;
     private final ExecutorService ioExecutor;
     private final ProjectionPushdownCache projectionsCache = new ProjectionPushdownCache();
@@ -350,39 +342,18 @@ public class ReplicaManager implements ServerReconfigurable {
         this.metadataCache = metadataCache;
         this.metadataProvider = metadataProvider;
         this.rpcClient = rpcClient;
-        long sourceMaxBytes = conf.get(ConfigOptions.INDEX_REPLICATION_SOURCE_MAX_BYTES).getBytes();
-        checkArgument(
-                sourceMaxBytes > 0 && sourceMaxBytes <= Integer.MAX_VALUE,
-                "%s must be between 1 and %s bytes, but was %s",
-                ConfigOptions.INDEX_REPLICATION_SOURCE_MAX_BYTES.key(),
-                Integer.MAX_VALUE,
-                sourceMaxBytes);
-        this.indexSendBuffer =
-                new IndexSendBuffer(
-                        conf.get(ConfigOptions.INDEX_REPLICATION_BUFFER_MAX_BYTES).getBytes());
-        this.indexReplicatorPool =
-                new IndexReplicatorPool(
-                        conf.getInt(ConfigOptions.INDEX_REPLICATION_READER_THREADS),
-                        (int) sourceMaxBytes,
-                        conf.get(ConfigOptions.INDEX_REPLICATION_RETRY_BACKOFF_MAX).toMillis(),
-                        INDEX_REPLICATION_WORKER_BACKOFF_MS,
+        this.indexReplicationManager =
+                new IndexReplicationManager(
+                        conf,
+                        metadataCache,
+                        metadataProvider,
+                        rpcClient,
+                        remoteLogManager,
                         ioExecutor,
-                        conf.get(ConfigOptions.NETTY_SERVER_MAX_REQUEST_SIZE).getBytes());
-        indexSendBuffer.setCapacityListener(indexReplicatorPool::wakeup);
-        this.indexSender =
-                new IndexSender(
-                        indexSendBuffer,
-                        metadataCache::getBucketLeader,
-                        this::indexPushGatewayFor,
-                        serverMetricGroup,
-                        conf.getInt(ConfigOptions.INDEX_REPLICATION_SENDER_THREADS),
-                        INDEX_REPLICATION_WORKER_BACKOFF_MS,
-                        conf.get(ConfigOptions.INDEX_REPLICATION_REQUEST_TARGET_BYTES).getBytes(),
-                        conf.get(ConfigOptions.NETTY_SERVER_MAX_REQUEST_SIZE).getBytes(),
-                        IndexSender.DEFAULT_REQUEST_TIMEOUT_MS);
+                        serverMetricGroup);
         this.indexReplicationGaugeRegistration =
                 serverMetricGroup.registerIndexReplicationGauges(
-                        indexSendBuffer::pendingBytes,
+                        indexReplicationManager::pendingBytes,
                         this::maxIndexReplicationNoProgressTimeMs,
                         this::failedIndexReplicationSourceBucketCount);
 
@@ -616,7 +587,7 @@ public class ReplicaManager implements ServerReconfigurable {
     private long failedIndexReplicationSourceBucketCount() {
         return onlineReplicas()
                 .filter(Replica::isLeader)
-                .filter(replica -> replica.getIndexManager().isFailed())
+                .filter(replica -> replica.getIndexManager().hasFailure())
                 .count();
     }
 
@@ -2725,7 +2696,6 @@ public class ReplicaManager implements ServerReconfigurable {
                                 adjustIsrManager,
                                 kvSnapshotContext,
                                 metadataCache,
-                                metadataProvider,
                                 fatalErrorHandler,
                                 bucketMetricGroup,
                                 tableInfo,
@@ -2734,9 +2704,7 @@ public class ReplicaManager implements ServerReconfigurable {
                                 remoteLogManager,
                                 scannerManager,
                                 ioExecutor,
-                                indexReplicatorPool,
-                                indexSendBuffer,
-                                serverMetricGroup);
+                                indexReplicationManager);
                 // Initialize the routing state before the replica becomes visible, so a
                 // ready leader always has its routing bucket count ready.
                 replica.updateRoutingState(data);
@@ -2865,7 +2833,7 @@ public class ReplicaManager implements ServerReconfigurable {
             if (entry.getValue() instanceof OnlineReplica) {
                 Replica replica = ((OnlineReplica) entry.getValue()).getReplica();
                 replica.getIndexManager()
-                        .retryStart(
+                        .retryDeferredStart(
                                 replica.getLogTablet(),
                                 replica.getSchemaGetter(),
                                 replica::advanceIndexProgress,
@@ -2874,29 +2842,10 @@ public class ReplicaManager implements ServerReconfigurable {
         }
     }
 
-    /** Returns the server-global index replicator pool (read layer). */
-    public IndexReplicatorPool getIndexReplicatorPool() {
-        return indexReplicatorPool;
-    }
-
-    /** Returns the server-global index sendBuffer (staging area). */
-    public IndexSendBuffer getIndexSendBuffer() {
-        return indexSendBuffer;
-    }
-
-    private TabletServerGateway indexPushGatewayFor(int serverId) {
-        String listenerName = conf.get(ConfigOptions.INTERNAL_LISTENER_NAME);
-        ServerNode node =
-                metadataCache
-                        .getTabletServer(serverId, listenerName)
-                        .orElseThrow(
-                                () ->
-                                        new IllegalStateException(
-                                                "TabletServer "
-                                                        + serverId
-                                                        + " not found in cache"));
-        return GatewayClientProxy.createGatewayProxy(
-                () -> node, rpcClient, TabletServerGateway.class);
+    /** Returns the node's index replication owner. */
+    @VisibleForTesting
+    public IndexReplicationManager getIndexReplicationManager() {
+        return indexReplicationManager;
     }
 
     /**
@@ -2931,8 +2880,15 @@ public class ReplicaManager implements ServerReconfigurable {
         kvSnapshotResource.close();
         historicalPartitionManager.close();
         replicaFetcherManager.shutdown();
-        indexSender.close();
-        indexReplicatorPool.close();
+        // Close per-replica sources before the shared index replication workers and buffers.
+        inLock(
+                replicaStateChangeLock,
+                () -> {
+                    for (Replica replica : getOnlineReplicaList()) {
+                        replica.getIndexManager().close();
+                    }
+                });
+        indexReplicationManager.close();
         delayedWriteManager.shutdown();
         delayedFetchLogManager.shutdown();
 
