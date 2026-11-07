@@ -17,7 +17,6 @@
 
 package org.apache.fluss.record;
 
-import org.apache.fluss.compression.LogCompressionType;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
 
 import java.nio.ByteBuffer;
@@ -62,49 +61,6 @@ public class LogRecordBatchFormat {
 
     // Statistics format version
     public static final byte STATISTICS_VERSION = 1;
-
-    // ----------------------------------------------------------------------------------------
-    // Format of Magic Version: V3
-    // ----------------------------------------------------------------------------------------
-
-    /**
-     * LogRecordBatch implementation for magic 3 (V3). The header layout is identical to {@link
-     * #LOG_MAGIC_VALUE_V2}. V3 is only used for batches whose records section is compressed, which
-     * currently only the {@code COMPACTED} log format does. Batches that are not compressed keep
-     * their previous magic, so they stay readable by older readers.
-     *
-     * <p>The current attributes are given below:
-     *
-     * <pre>
-     * ----------------------------------------------------------------------
-     * |  Unused (3-7)  |  Compression Codec (1-2)  |  AppendOnly Flag (0)  |
-     * ----------------------------------------------------------------------
-     * </pre>
-     *
-     * <p>The compression codec is the id of a {@link LogCompressionType}. The records section is
-     * laid out as:
-     *
-     * <pre>
-     * +----------------------------+------------------------------------+
-     * | UncompressedSize (4 bytes) | Compressed Records (variable size) |
-     * +----------------------------+------------------------------------+
-     * </pre>
-     *
-     * <p>The CRC covers the stored (compressed) bytes. A new magic is used instead of only new
-     * attribute bits, so that readers without compression support fail with an unsupported magic
-     * error instead of misreading the compressed bytes as records.
-     *
-     * @since 1.1
-     */
-    public static final byte LOG_MAGIC_VALUE_V3 = 3;
-
-    /** Mask of the compression codec in the attributes of {@link #LOG_MAGIC_VALUE_V3} batches. */
-    public static final byte COMPRESSION_CODEC_MASK = 0x06;
-
-    public static final int COMPRESSION_CODEC_SHIFT = 1;
-
-    /** Length of the uncompressed-size prefix of a compressed records section. */
-    public static final int UNCOMPRESSED_SIZE_LENGTH = 4;
 
     // ----------------------------------------------------------------------------------------
     // Format of Magic Version: V2
@@ -321,7 +277,6 @@ public class LogRecordBatchFormat {
             case LOG_MAGIC_VALUE_V1:
                 throw new UnsupportedOperationException("Leader epoch is not supported in V0/V1");
             case LOG_MAGIC_VALUE_V2:
-            case LOG_MAGIC_VALUE_V3:
                 return V2_LEADER_EPOCH_OFFSET;
             default:
                 throw new IllegalArgumentException("Unsupported magic value " + magic);
@@ -335,7 +290,6 @@ public class LogRecordBatchFormat {
             case LOG_MAGIC_VALUE_V1:
                 return V1_CRC_OFFSET;
             case LOG_MAGIC_VALUE_V2:
-            case LOG_MAGIC_VALUE_V3:
                 return V2_CRC_OFFSET;
             default:
                 throw new IllegalArgumentException("Unsupported magic value " + magic);
@@ -349,7 +303,6 @@ public class LogRecordBatchFormat {
             case LOG_MAGIC_VALUE_V1:
                 return V1_SCHEMA_ID_OFFSET;
             case LOG_MAGIC_VALUE_V2:
-            case LOG_MAGIC_VALUE_V3:
                 return V2_SCHEMA_ID_OFFSET;
             default:
                 throw new IllegalArgumentException("Unsupported magic value " + magic);
@@ -363,7 +316,6 @@ public class LogRecordBatchFormat {
             case LOG_MAGIC_VALUE_V1:
                 return V1_ATTRIBUTES_OFFSET;
             case LOG_MAGIC_VALUE_V2:
-            case LOG_MAGIC_VALUE_V3:
                 return V2_ATTRIBUTES_OFFSET;
             default:
                 throw new IllegalArgumentException("Unsupported magic value " + magic);
@@ -377,7 +329,6 @@ public class LogRecordBatchFormat {
             case LOG_MAGIC_VALUE_V1:
                 return V1_LAST_OFFSET_DELTA_OFFSET;
             case LOG_MAGIC_VALUE_V2:
-            case LOG_MAGIC_VALUE_V3:
                 return V2_LAST_OFFSET_DELTA_OFFSET;
             default:
                 throw new IllegalArgumentException("Unsupported magic value " + magic);
@@ -391,7 +342,6 @@ public class LogRecordBatchFormat {
             case LOG_MAGIC_VALUE_V1:
                 return V1_WRITE_CLIENT_ID_OFFSET;
             case LOG_MAGIC_VALUE_V2:
-            case LOG_MAGIC_VALUE_V3:
                 return V2_WRITE_CLIENT_ID_OFFSET;
             default:
                 throw new IllegalArgumentException("Unsupported magic value " + magic);
@@ -405,7 +355,6 @@ public class LogRecordBatchFormat {
             case LOG_MAGIC_VALUE_V1:
                 return V1_BATCH_SEQUENCE_OFFSET;
             case LOG_MAGIC_VALUE_V2:
-            case LOG_MAGIC_VALUE_V3:
                 return V2_BATCH_SEQUENCE_OFFSET;
             default:
                 throw new IllegalArgumentException("Unsupported magic value " + magic);
@@ -419,7 +368,6 @@ public class LogRecordBatchFormat {
             case LOG_MAGIC_VALUE_V1:
                 return V1_RECORDS_COUNT_OFFSET;
             case LOG_MAGIC_VALUE_V2:
-            case LOG_MAGIC_VALUE_V3:
                 return V2_RECORDS_COUNT_OFFSET;
             default:
                 throw new IllegalArgumentException("Unsupported magic value " + magic);
@@ -433,7 +381,6 @@ public class LogRecordBatchFormat {
             case LOG_MAGIC_VALUE_V1:
                 return V1_RECORD_BATCH_HEADER_SIZE;
             case LOG_MAGIC_VALUE_V2:
-            case LOG_MAGIC_VALUE_V3:
                 return V2_RECORD_BATCH_HEADER_SIZE;
             default:
                 throw new IllegalArgumentException("Unsupported magic value " + magic);
@@ -452,7 +399,6 @@ public class LogRecordBatchFormat {
             case LOG_MAGIC_VALUE_V1:
                 return V1_STATISTICS_LENGTH_OFFSET;
             case LOG_MAGIC_VALUE_V2:
-            case LOG_MAGIC_VALUE_V3:
                 return V2_STATISTICS_LENGTH_OFFSET;
             default:
                 throw new IllegalArgumentException("Unsupported magic value " + magic);
@@ -471,7 +417,6 @@ public class LogRecordBatchFormat {
             case LOG_MAGIC_VALUE_V1:
                 return V1_STATISTICS_DATA_OFFSET;
             case LOG_MAGIC_VALUE_V2:
-            case LOG_MAGIC_VALUE_V3:
                 return V2_STATISTICS_DATA_OFFSET;
             default:
                 throw new IllegalArgumentException("Unsupported magic value " + magic);

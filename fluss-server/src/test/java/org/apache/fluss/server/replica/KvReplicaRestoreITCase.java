@@ -17,7 +17,6 @@
 
 package org.apache.fluss.server.replica;
 
-import org.apache.fluss.compression.LogCompressionType;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
@@ -85,22 +84,16 @@ class KvReplicaRestoreITCase {
     @Test
     void testRestore() throws Exception {
         // create multiple tables for testing
-        // ARROW, COMPACTED and compressed COMPACTED changelogs
-        int tableNum = 3;
+        int tableNum = 2;
         int bucketNum = 3;
         List<TableBucket> tableBuckets = new ArrayList<>();
         for (int i = 0; i < tableNum; i++) {
-            TableDescriptor.Builder builder =
+            TableDescriptor tableDescriptor =
                     TableDescriptor.builder()
                             .schema(DATA1_SCHEMA_PK)
                             .distributedBy(3, "a")
-                            .logFormat(i == 0 ? LogFormat.ARROW : LogFormat.COMPACTED);
-            if (i == 2) {
-                builder.property(
-                        ConfigOptions.TABLE_LOG_COMPACTED_COMPRESSION_TYPE.key(),
-                        LogCompressionType.ZSTD.name());
-            }
-            TableDescriptor tableDescriptor = builder.build();
+                            .logFormat(i % 2 == 0 ? LogFormat.ARROW : LogFormat.COMPACTED)
+                            .build();
             TablePath tablePath = TablePath.of("test_db", "test_table_" + i);
             long tableId = createTable(FLUSS_CLUSTER_EXTENSION, tablePath, tableDescriptor);
             for (int bucket = 0; bucket < bucketNum; bucket++) {

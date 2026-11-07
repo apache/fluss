@@ -18,7 +18,6 @@
 package org.apache.fluss.client.write;
 
 import org.apache.fluss.annotation.Internal;
-import org.apache.fluss.compression.LogCompressionInfo;
 import org.apache.fluss.memory.AbstractPagedOutputView;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.record.MemoryLogRecordsCompactedBuilder;
@@ -49,8 +48,7 @@ public final class CompactedLogWriteBatch extends AbstractRowLogWriteBatch<Compa
             int writeLimit,
             AbstractPagedOutputView outputView,
             boolean isHistoricalPartition,
-            long createdMs,
-            LogCompressionInfo compressionInfo) {
+            long createdMs) {
         super(
                 tableId,
                 bucketId,
@@ -61,8 +59,7 @@ public final class CompactedLogWriteBatch extends AbstractRowLogWriteBatch<Compa
                 isHistoricalPartition,
                 createdMs,
                 outputView,
-                MemoryLogRecordsCompactedBuilder.builder(
-                        schemaId, writeLimit, outputView, true, compressionInfo),
+                MemoryLogRecordsCompactedBuilder.builder(schemaId, writeLimit, outputView, true),
                 "Failed to build compacted log record batch.");
     }
 
