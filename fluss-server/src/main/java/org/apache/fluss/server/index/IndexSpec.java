@@ -49,7 +49,8 @@ final class IndexSpec {
     /**
      * One encoded physical Index Table entry. The key and target bucket remain stable. The value
      * may be backed by a reusable row encoder and is valid only until the next {@link
-     * IndexSpec#encodeEntry(InternalRow)} call on the same spec.
+     * IndexSpec#encodeEntry(InternalRow)} or {@link IndexSpec#encodeProgress(TableBucket, int,
+     * long)} call on the same spec.
      */
     static final class IndexEntry {
         private final byte[] key;
@@ -133,7 +134,7 @@ final class IndexSpec {
         return progressEncoder.encode(sourceBucket, targetBucket, sourceEndOffset);
     }
 
-    boolean hasIndexColumns(InternalRow row) {
+    boolean hasNonNullIndexValues(InternalRow row) {
         for (int idxColumnIndex : idxColumnIndices) {
             if (row.isNullAt(idxColumnIndex)) {
                 return false;

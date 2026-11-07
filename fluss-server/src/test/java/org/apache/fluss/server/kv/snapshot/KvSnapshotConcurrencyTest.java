@@ -274,6 +274,7 @@ class KvSnapshotConcurrencyTest {
                             () -> 1,
                             () -> 1,
                             0,
+                            null,
                             0);
         }
 

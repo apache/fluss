@@ -76,6 +76,38 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class IndexReplicatorTest {
 
     @Test
+    void closingSourceReleasesEveryIndexWindowAndFencesLateAcknowledgements() throws Exception {
+        MemoryLogRecords records = sourceRecords(RowType.of(DataTypes.INT()), 0);
+        IndexSendBuffer buffer = new IndexSendBuffer();
+        try (IndexReplicator replicator =
+                replicator(
+                        sourceLog(() -> records, new AtomicInteger()),
+                        buffer,
+                        new ManualClock(),
+                        Arrays.asList(
+                                indexSpec("first", 2L, new AtomicInteger()),
+                                indexSpec("second", 3L, new AtomicInteger())))) {
+            assertThat(replicator.poll()).isTrue();
+            IndexBatch first = buffer.claimFirstReady(new TableBucket(2L, 0));
+            IndexBatch second = buffer.claimFirstReady(new TableBucket(3L, 0));
+            assertThat(first).isNotNull();
+            assertThat(second).isNotNull();
+
+            replicator.close();
+
+            assertThat(buffer.buckets()).isEmpty();
+            assertThat(buffer.pendingBytes()).isZero();
+            for (IndexBatch batch : Arrays.asList(first, second)) {
+                assertThat(batch.isReleased()).isTrue();
+                assertThat(buffer.completeClaim(batch)).isFalse();
+                assertThat(buffer.retryClaim(batch)).isFalse();
+                batch.window().onBatchAcked();
+            }
+            assertThat(replicator.getAllIndexPushedOffset()).isZero();
+        }
+    }
+
+    @Test
     void acknowledgedAsyncHandsOffTheSourceLockAndReusesPendingInput() throws Exception {
         MemoryLogRecords first = sourceRecords(RowType.of(DataTypes.INT()), 0);
         MemoryLogRecords second = sourceRecords(RowType.of(DataTypes.INT()), 2);
@@ -103,7 +135,7 @@ class IndexReplicatorTest {
                             }
                             IndexBatch batch = buffer.claimFirstReady(new TableBucket(3L, 0));
                             assertThat(batch).isNotNull();
-                            assertThat(buffer.acknowledgeClaim(batch)).isTrue();
+                            assertThat(buffer.completeClaim(batch)).isTrue();
                             completion.set(
                                     CompletableFuture.runAsync(batch.window()::onBatchAcked));
                             // The ACK has arrived, but its owner callback needs the lock held by
@@ -168,7 +200,7 @@ class IndexReplicatorTest {
                         Arrays.asList(indexSpec("sync", 2L, new AtomicInteger()), async))) {
             assertThat(replicator.poll()).isTrue();
             assertThat(reads).hasValue(1);
-            assertThat(replicator.isFailed()).isFalse();
+            assertThat(replicator.hasFailure()).isFalse();
             acknowledge(buffer, new TableBucket(2L, 0));
             assertThat(replicator.getSyncIndexPushedOffset()).isEqualTo(2L);
             assertThat(replicator.getAllIndexPushedOffset()).isZero();
@@ -225,27 +257,29 @@ class IndexReplicatorTest {
         IndexSendBuffer buffer = new IndexSendBuffer(payloadLimited ? 4096 : Long.MAX_VALUE);
         LogRecordReadContext context =
                 LogRecordReadContext.createIndexedReadContext(RowType.of(DataTypes.INT()), 1, null);
+        IndexReplicationScheduler scheduler = new IndexReplicationScheduler(8);
         try (IndexReplicator replicator =
                 new IndexReplicator(
                         new IndexSourceReader(
                                 sourceLog(new TableBucket(1L, 0), () -> records, reads, () -> 4L),
                                 null,
-                                Runnable::run,
-                                context),
+                                Runnable::run),
                         Collections.singletonList(index),
                         buffer,
                         context,
                         0,
                         1024,
                         (sync, all) -> {},
+                        scheduler,
+                        () -> {},
                         new ExponentialBackoff(10, 2, 100, 0),
                         clock,
                         null,
                         payloadLimited ? Long.MAX_VALUE : 3500)) {
-            bindScheduler(replicator);
+            scheduler.register(0, replicator);
             assertThat(replicator.poll()).isTrue();
             assertThat(buffer.pendingBytes()).isZero();
-            assertThat(replicator.isFailed()).isFalse();
+            assertThat(replicator.hasFailure()).isFalse();
             assertThat(replicator.poll()).isTrue();
             acknowledge(buffer, new TableBucket(2L, 0));
             assertThat(replicator.getAllIndexPushedOffset()).isEqualTo(2L);
@@ -258,45 +292,13 @@ class IndexReplicatorTest {
     }
 
     @Test
-    void retryMaximumKeepsInitialDelayAndBoundsLongFailures() throws Exception {
-        try (IndexReplicatorPool pool =
-                        new IndexReplicatorPool(
-                                1,
-                                1024,
-                                20_000,
-                                1,
-                                Runnable::run,
-                                ConfigOptions.NETTY_SERVER_MAX_REQUEST_SIZE
-                                        .defaultValue()
-                                        .getBytes());
-                IndexReplicatorPool fixedDelayPool =
-                        new IndexReplicatorPool(
-                                1,
-                                1024,
-                                100,
-                                1,
-                                Runnable::run,
-                                ConfigOptions.NETTY_SERVER_MAX_REQUEST_SIZE
-                                        .defaultValue()
-                                        .getBytes())) {
-            assertThat(pool.retryBackoff().backoff(0)).isBetween(80L, 120L);
-            assertThat(pool.retryBackoff().backoff(100))
-                    .isGreaterThan(10_000L)
-                    .isLessThanOrEqualTo(20_000L);
-            assertThat(fixedDelayPool.retryBackoff().backoff(100)).isEqualTo(100L);
-        }
+    void retryMaximumKeepsInitialDelayAndBoundsLongFailures() {
+        ExponentialBackoff backoff = IndexReplicationManager.createRetryBackoff(20_000);
+        assertThat(backoff.backoff(0)).isBetween(80L, 120L);
+        assertThat(backoff.backoff(100)).isGreaterThan(10_000L).isLessThanOrEqualTo(20_000L);
+        assertThat(IndexReplicationManager.createRetryBackoff(100).backoff(100)).isEqualTo(100L);
         for (long invalidMaximum : new long[] {0, 99, (long) Integer.MAX_VALUE + 1}) {
-            assertThatThrownBy(
-                            () ->
-                                    new IndexReplicatorPool(
-                                            1,
-                                            1024,
-                                            invalidMaximum,
-                                            1,
-                                            Runnable::run,
-                                            ConfigOptions.NETTY_SERVER_MAX_REQUEST_SIZE
-                                                    .defaultValue()
-                                                    .getBytes()))
+            assertThatThrownBy(() -> IndexReplicationManager.createRetryBackoff(invalidMaximum))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("maxRetryBackoffMs");
         }
@@ -319,40 +321,45 @@ class IndexReplicatorTest {
                             return records;
                         },
                         reads);
+        IndexReplicationScheduler scheduler = new IndexReplicationScheduler(1);
+        IndexReplicationManager.ReplicatorWorker worker =
+                new IndexReplicationManager.ReplicatorWorker(
+                        "index-replicator-pool-0", 0, 1, scheduler);
+        worker.start();
         try (IndexSendBuffer.Reservation blocker = buffer.newReservation();
                 IndexReplicator replicator =
-                        unboundReplicator(
-                                log, buffer, clock, Collections.singletonList(fanoutSpec()));
-                IndexReplicatorPool pool =
-                        new IndexReplicatorPool(
-                                1,
-                                1024,
-                                100,
-                                1,
-                                Runnable::run,
-                                ConfigOptions.NETTY_SERVER_MAX_REQUEST_SIZE
-                                        .defaultValue()
-                                        .getBytes())) {
+                        unregisteredReplicator(
+                                log,
+                                buffer,
+                                clock,
+                                Collections.singletonList(fanoutSpec()),
+                                scheduler,
+                                worker::wakeup)) {
             blocker.allocatePage(4096);
             buffer.setCapacityListener(
                     () -> {
-                        pool.wakeup();
+                        worker.wakeup();
                         yielded.complete(null);
                     });
-            pool.register(log.tableBucket(), replicator);
+            scheduler.register(0, replicator);
+            worker.wakeup();
             yielded.get(5, TimeUnit.SECONDS);
             assertThatThrownBy(() -> secondRead.get(200, TimeUnit.MILLISECONDS))
                     .isInstanceOf(TimeoutException.class);
             assertThat(reads).hasValue(1);
-            assertThat(replicator.isFailed()).isFalse();
+            assertThat(replicator.hasFailure()).isFalse();
             assertThat(buffer.pendingBytes()).isEqualTo(4096);
             blocker.close();
             clock.advanceTime(50, TimeUnit.MILLISECONDS);
-            pool.signal(log.tableBucket());
+            worker.wakeup();
             retry(Duration.ofSeconds(5), () -> acknowledge(buffer, new TableBucket(2L, 1)));
             acknowledge(buffer, new TableBucket(2L, 2));
             assertThat(replicator.getAllIndexPushedOffset()).isEqualTo(2L);
             assertThat(buffer.pendingBytes()).isZero();
+        } finally {
+            worker.initiateShutdown();
+            worker.wakeup();
+            worker.awaitShutdown();
         }
     }
 
@@ -450,10 +457,10 @@ class IndexReplicatorTest {
             assertThat(rebuiltOther.sourceEndOffset()).isEqualTo(2L);
             oldOther.window().onBatchAcked();
             replicator.onWindowComplete(oldOther.window(), 0L);
-            assertThat(buffer.acknowledgeClaim(oldOther)).isFalse();
+            assertThat(buffer.completeClaim(oldOther)).isFalse();
             assertThat(buffer.retryClaim(oldOther)).isFalse();
             assertThat(buffer.ownsClaim(rebuiltOther)).isTrue();
-            assertThat(buffer.acknowledgeClaim(rebuiltOther)).isTrue();
+            assertThat(buffer.completeClaim(rebuiltOther)).isTrue();
             rebuiltOther.window().onBatchAcked();
             assertThat(buffer.retryClaim(oldBatch)).isTrue();
             assertThat(replicator.poll()).isFalse();
@@ -467,15 +474,15 @@ class IndexReplicatorTest {
             assertThat(rebuilt.window()).isNotSameAs(oldWindow);
             oldWindow.onBatchAcked();
             replicator.onWindowComplete(oldWindow, 0L);
-            assertThat(buffer.acknowledgeClaim(oldBatch)).isFalse();
+            assertThat(buffer.completeClaim(oldBatch)).isFalse();
             assertThat(buffer.retryClaim(oldBatch)).isFalse();
             assertThat(replicator.getAllIndexPushedOffset()).isZero();
             assertThat(buffer.ownsClaim(rebuilt)).isTrue();
-            assertThat(buffer.acknowledgeClaim(rebuilt)).isTrue();
+            assertThat(buffer.completeClaim(rebuilt)).isTrue();
             rebuilt.window().onBatchAcked();
             acknowledge(buffer, new TableBucket(2L, 2));
             assertThat(replicator.getAllIndexPushedOffset()).isEqualTo(2L);
-            assertThat(replicator.isFailed()).isFalse();
+            assertThat(replicator.hasFailure()).isFalse();
             assertThat(replicator.poll()).isTrue();
             acknowledge(buffer, new TableBucket(2L, 3));
             acknowledge(buffer, new TableBucket(3L, 0));
@@ -637,19 +644,19 @@ class IndexReplicatorTest {
             highWatermark.set(4);
             failed.set(true);
             assertThat(replicator.poll()).isTrue();
-            assertThat(replicator.isFailed()).isTrue();
+            assertThat(replicator.hasFailure()).isTrue();
             acknowledge(buffer, new TableBucket(3L, 0));
-            assertThat(replicator.isFailed()).isTrue();
+            assertThat(replicator.hasFailure()).isTrue();
             assertThat(replicator.poll()).isTrue();
             assertThat(reads).hasValue(3);
             acknowledge(buffer, new TableBucket(3L, 0));
-            assertThat(replicator.isFailed()).isTrue();
+            assertThat(replicator.hasFailure()).isTrue();
             failed.set(false);
             clock.advanceTime(10, TimeUnit.MILLISECONDS);
             assertThat(replicator.poll()).isTrue();
             acknowledge(buffer, new TableBucket(2L, 0));
             assertThat(replicator.getAllIndexPushedOffset()).isEqualTo(4L);
-            assertThat(replicator.isFailed()).isFalse();
+            assertThat(replicator.hasFailure()).isFalse();
             assertThat(buffer.pendingBytes()).isZero();
         }
     }
@@ -671,7 +678,7 @@ class IndexReplicatorTest {
                         clock,
                         Collections.singletonList(indexSpec("idx", 2L, new AtomicInteger())))) {
             assertThat(replicator.poll()).isTrue();
-            assertThat(replicator.isFailed()).isTrue();
+            assertThat(replicator.hasFailure()).isTrue();
             assertThat(reads).hasValue(1);
             repaired.set(true);
             assertThat(replicator.poll()).isFalse();
@@ -681,7 +688,7 @@ class IndexReplicatorTest {
             assertThat(replicator.getAllIndexPushedOffset()).isZero();
             acknowledge(buffer, new TableBucket(2L, 0));
             assertThat(replicator.getAllIndexPushedOffset()).isEqualTo(2L);
-            assertThat(replicator.isFailed()).isFalse();
+            assertThat(replicator.hasFailure()).isFalse();
             assertThat(buffer.pendingBytes()).isZero();
         }
     }
@@ -698,7 +705,7 @@ class IndexReplicatorTest {
         try (IndexReplicator replicator =
                 replicator(log, small, clock, Collections.singletonList(fanout))) {
             assertThat(replicator.poll()).isTrue();
-            assertThat(replicator.isFailed()).isTrue();
+            assertThat(replicator.hasFailure()).isTrue();
             assertThat(small.pendingBytes()).isZero();
             assertThat(small.buckets()).isEmpty();
             clock.advanceTime(10, TimeUnit.MILLISECONDS);
@@ -798,18 +805,18 @@ class IndexReplicatorTest {
         IndexSendBuffer buffer = new IndexSendBuffer();
         LogRecordReadContext context =
                 LogRecordReadContext.createIndexedReadContext(rowType, 1, null);
-        FairIndexReplicationScheduler scheduler = new FairIndexReplicationScheduler(8);
+        IndexReplicationScheduler scheduler = new IndexReplicationScheduler(8);
         try (IndexReplicator replicator =
                 new IndexReplicator(
-                        new IndexSourceReader(
-                                sourceLog(() -> records, reads), null, Runnable::run, context),
+                        new IndexSourceReader(sourceLog(() -> records, reads), null, Runnable::run),
                         Arrays.asList(first, empty, interrupted),
                         buffer,
                         context,
                         0L,
                         1024,
-                        (sync, all) -> {})) {
-            replicator.setScheduler(scheduler);
+                        (sync, all) -> {},
+                        scheduler,
+                        () -> {})) {
             scheduler.register(0, replicator);
             assertThatThrownBy(replicator::poll).isInstanceOf(AssertionError.class);
             assertThat(replicator.pollServiced()).isTrue();
@@ -907,31 +914,32 @@ class IndexReplicatorTest {
             IndexSendBuffer buffer,
             ManualClock clock,
             java.util.List<IndexSpec> indexes) {
-        return bindScheduler(unboundReplicator(log, buffer, clock, indexes));
-    }
-
-    private static IndexReplicator bindScheduler(IndexReplicator replicator) {
-        FairIndexReplicationScheduler scheduler = new FairIndexReplicationScheduler(8);
-        replicator.setScheduler(scheduler);
+        IndexReplicationScheduler scheduler = new IndexReplicationScheduler(8);
+        IndexReplicator replicator =
+                unregisteredReplicator(log, buffer, clock, indexes, scheduler, () -> {});
         scheduler.register(0, replicator);
         return replicator;
     }
 
-    private static IndexReplicator unboundReplicator(
+    private static IndexReplicator unregisteredReplicator(
             IndexSourceReader.SourceLog log,
             IndexSendBuffer buffer,
             ManualClock clock,
-            java.util.List<IndexSpec> indexes) {
+            java.util.List<IndexSpec> indexes,
+            IndexReplicationScheduler scheduler,
+            Runnable wakeupSignal) {
         LogRecordReadContext context =
                 LogRecordReadContext.createIndexedReadContext(RowType.of(DataTypes.INT()), 1, null);
         return new IndexReplicator(
-                new IndexSourceReader(log, null, Runnable::run, context),
+                new IndexSourceReader(log, null, Runnable::run),
                 indexes,
                 buffer,
                 context,
                 0L,
                 1024,
                 (sync, all) -> {},
+                scheduler,
+                wakeupSignal,
                 new ExponentialBackoff(10, 2, 100, 0),
                 clock,
                 null,
@@ -1012,16 +1020,19 @@ class IndexReplicatorTest {
         IndexSendBuffer buffer = new IndexSendBuffer();
         LogRecordReadContext context =
                 LogRecordReadContext.createIndexedReadContext(rowType, 1, null);
+        IndexReplicationScheduler scheduler = new IndexReplicationScheduler(8);
         try (IndexReplicator replicator =
                 new IndexReplicator(
-                        new IndexSourceReader(log, null, Runnable::run, context),
+                        new IndexSourceReader(log, null, Runnable::run),
                         Collections.singletonList(indexSpec("idx", 2L, encodes)),
                         buffer,
                         context,
                         0L,
                         1024,
-                        (sync, all) -> {})) {
-            bindScheduler(replicator);
+                        (sync, all) -> {},
+                        scheduler,
+                        () -> {})) {
+            scheduler.register(0, replicator);
             assertThat(replicator.poll()).isTrue();
             assertThat(encodes).hasValue(2);
             assertThat(replicator.getAllIndexPushedOffset()).isZero();
@@ -1105,12 +1116,12 @@ class IndexReplicatorTest {
 
         LogRecordReadContext readContext =
                 LogRecordReadContext.createCompactedRowReadContext(rowType, 1, null);
-        IndexSourceReader sourceReader =
-                new IndexSourceReader(sourceLog, null, Runnable::run, readContext);
+        IndexSourceReader sourceReader = new IndexSourceReader(sourceLog, null, Runnable::run);
         IndexSpec first = indexSpec("idx_first", 2L, firstIndexEncodes);
         IndexSpec second = indexSpec("idx_second", 3L, secondIndexEncodes);
         IndexSendBuffer sendBuffer = new IndexSendBuffer();
 
+        IndexReplicationScheduler scheduler = new IndexReplicationScheduler(8);
         try (IndexReplicator replicator =
                 new IndexReplicator(
                         sourceReader,
@@ -1119,8 +1130,10 @@ class IndexReplicatorTest {
                         readContext,
                         0L,
                         1024,
-                        (syncOffset, allOffset) -> {})) {
-            bindScheduler(replicator);
+                        (syncOffset, allOffset) -> {},
+                        scheduler,
+                        () -> {})) {
+            scheduler.register(0, replicator);
             assertThat(replicator.poll()).isTrue();
             assertThat(sourceReads).hasValue(1);
             assertThat(recordDecodes).hasValue(1);
@@ -1169,7 +1182,7 @@ class IndexReplicatorTest {
     private static void acknowledge(IndexSendBuffer sendBuffer, TableBucket target) {
         IndexBatch batch = sendBuffer.claimFirstReady(target);
         assertThat(batch).isNotNull();
-        assertThat(sendBuffer.acknowledgeClaim(batch)).isTrue();
+        assertThat(sendBuffer.completeClaim(batch)).isTrue();
         batch.window().onBatchAcked();
     }
 }

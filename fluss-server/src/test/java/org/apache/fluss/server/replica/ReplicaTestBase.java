@@ -650,7 +650,6 @@ public class ReplicaTestBase {
                 replicaManager.getAdjustIsrManager(),
                 snapshotContext,
                 serverMetadataCache,
-                null,
                 NOPErrorHandler.INSTANCE,
                 metricGroup,
                 tableInfo,
@@ -659,9 +658,7 @@ public class ReplicaTestBase {
                 remoteLogManager,
                 scannerManager,
                 ioExecutor,
-                replicaManager.getIndexReplicatorPool(),
-                replicaManager.getIndexSendBuffer(),
-                replicaManager.getServerMetricGroup());
+                replicaManager.getIndexReplicationManager());
     }
 
     private void initRemoteLogEnv() throws Exception {

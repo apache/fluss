@@ -29,6 +29,7 @@ import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.entity.PutKvResultForBucket;
 import org.apache.fluss.rpc.protocol.MergeMode;
+import org.apache.fluss.server.metadata.BucketMetadata;
 import org.apache.fluss.server.metadata.ClusterMetadata;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.metadata.TableMetadata;
@@ -41,6 +42,7 @@ import org.apache.fluss.utils.IndexTableUtils;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
@@ -59,7 +61,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Verifies that a main-table leader whose index replication was deferred for missing index-table
- * metadata resumes replication once that metadata reaches the server metadata cache.
+ * metadata resumes replication once that metadata reaches the server metadata cache and releases
+ * its staged work when the replica manager shuts down.
  */
 class IndexReplicationDeferredRecoveryTest extends ReplicaTestBase {
 
@@ -72,7 +75,7 @@ class IndexReplicationDeferredRecoveryTest extends ReplicaTestBase {
             TablePath.of("test_db_1", "deferred_index_main_pk");
 
     @Test
-    void testDeferredIndexReplicationResumesAfterMetadataArrives() throws Exception {
+    void testDeferredIndexReplicationResumesAndReleasesResourcesOnShutdown() throws Exception {
         // 1. Register the main table (carrying one secondary index) in ZooKeeper only. The index
         // table metadata is deliberately absent from the TabletServer metadata cache, which is what
         // IndexSpecFactory reads, so becoming leader must defer index replication.
@@ -87,7 +90,7 @@ class IndexReplicationDeferredRecoveryTest extends ReplicaTestBase {
 
         makeKvTableAsLeader(MAIN_TABLE_ID, MAIN_TABLE_PATH, 0);
         TableBucket sourceBucket = new TableBucket(MAIN_TABLE_ID, 0);
-        IndexSendBuffer sendBuffer = replicaManager.getIndexSendBuffer();
+        IndexSendBuffer sendBuffer = replicaManager.getIndexReplicationManager().sendBuffer();
 
         // 2. Pre-condition: nothing has been staged for this source bucket yet.
         assertThat(sendBuffer.pendingBytes()).isZero();
@@ -120,14 +123,20 @@ class IndexReplicationDeferredRecoveryTest extends ReplicaTestBase {
                         DEFAULT_REMOTE_DATA_DIR,
                         now,
                         now);
+        List<BucketMetadata> indexBuckets = new ArrayList<>();
+        for (int bucket = 0; bucket < indexTableInfo.getNumBuckets(); bucket++) {
+            indexBuckets.add(new BucketMetadata(bucket, null, null, Collections.emptyList()));
+        }
         replicaManager.maybeUpdateMetadataCache(
                 INITIAL_COORDINATOR_EPOCH,
                 new ClusterMetadata(
                         coordinatorServerInfo(),
                         aliveTabletServerInfos(),
-                        Collections.singletonList(
-                                new TableMetadata(indexTableInfo, Collections.emptyList())),
+                        Collections.singletonList(new TableMetadata(indexTableInfo, indexBuckets)),
                         Collections.emptyList()));
+
+        // Keep the window queued so shutdown must release the source's undelivered payload.
+        sendBuffer.setReadyBucketListener(bucket -> {});
 
         // 4. Write rows to the main-table leader so index batches can be derived from the WAL.
         CompletableFuture<List<PutKvResultForBucket>> putFuture = new CompletableFuture<>();
@@ -145,6 +154,11 @@ class IndexReplicationDeferredRecoveryTest extends ReplicaTestBase {
         retry(
                 Duration.ofSeconds(30),
                 () -> assertThat(sendBuffer.pendingBytes()).isGreaterThan(0L));
+
+        replicaManager.shutdown();
+
+        assertThat(sendBuffer.pendingBytes()).isZero();
+        assertThat(sendBuffer.buckets()).isEmpty();
     }
 
     private static Schema mainSchema() {

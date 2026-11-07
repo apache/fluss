@@ -19,6 +19,8 @@ package org.apache.fluss.server.index;
 
 import org.apache.fluss.exception.RecordTooLargeException;
 import org.apache.fluss.memory.MemorySegment;
+import org.apache.fluss.metadata.IndexVisibility;
+import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metrics.registry.NOPMetricRegistry;
 import org.apache.fluss.record.LogRecordReadContext;
@@ -26,10 +28,14 @@ import org.apache.fluss.record.bytesview.MemorySegmentBytesView;
 import org.apache.fluss.rpc.TestingTabletGatewayService;
 import org.apache.fluss.rpc.messages.PutIndexRequest;
 import org.apache.fluss.rpc.messages.PutIndexResponse;
+import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.rpc.protocol.Errors;
+import org.apache.fluss.rpc.protocol.MessageCodec;
 import org.apache.fluss.server.log.FetchDataInfo;
 import org.apache.fluss.server.log.FetchIsolation;
 import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.UnpooledByteBufAllocator;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.concurrent.FutureUtils;
@@ -40,7 +46,9 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.List;
 import java.util.OptionalInt;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
@@ -113,7 +121,7 @@ class IndexSendBufferTest {
             assertThat(buffer.tryAppendWindow(Collections.singletonList(batch))).isTrue();
             assertThat(buffer.isFull()).isTrue();
             assertThat(buffer.claimFirstReady(batch.targetBucket())).isSameAs(batch);
-            assertThat(buffer.acknowledgeClaim(batch)).isTrue();
+            assertThat(buffer.completeClaim(batch)).isTrue();
             assertThat(wakeups).hasValue(1);
             assertThat(buffer.pendingBytes()).isZero();
         }
@@ -132,13 +140,13 @@ class IndexSendBufferTest {
                             new byte[0],
                             new MemorySegmentBytesView(page, 0, 1),
                             4096,
-                            new IndexReplicationWindow("idx", 1L, 1, owner));
+                            window(owner));
             assertThat(buffer.tryAppendWindow(Collections.singletonList(batch), reservation))
                     .isTrue();
             reservation.close();
             assertThat(buffer.pendingBytes()).isEqualTo(4096);
             assertThat(buffer.claimFirstReady(batch.targetBucket())).isSameAs(batch);
-            assertThat(buffer.acknowledgeClaim(batch)).isTrue();
+            assertThat(buffer.completeClaim(batch)).isTrue();
             batch.window().onBatchAcked();
             assertThat(owner.getAllIndexPushedOffset()).isEqualTo(1L);
             assertThat(buffer.pendingBytes()).isZero();
@@ -194,7 +202,7 @@ class IndexSendBufferTest {
                                 assertThat(metrics.indexReplicationRetries().getCount())
                                         .isGreaterThanOrEqualTo(2));
                 assertThat(batch.window().isActive()).isTrue();
-                assertThat(owner.isFailed()).isTrue();
+                assertThat(owner.hasFailure()).isTrue();
                 assertThat(owner.isClosed()).isFalse();
                 assertThat(owner.getAllIndexPushedOffset()).isZero();
                 assertThat(buffer.pendingBytes()).isEqualTo(1);
@@ -263,11 +271,13 @@ class IndexSendBufferTest {
         }
     }
 
-    @Test
-    void sourceCleanupReschedulesRemainingBatchAndFencesLateCompletion() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void sourceCleanupReschedulesRemainingBatchAndFencesLateCompletion(boolean successorQueued)
+            throws Exception {
         IndexSendBuffer buffer = new IndexSendBuffer();
         Queue<TableBucket> ready = new ArrayDeque<>();
-        buffer.setAppendListener(ready::add);
+        buffer.setReadyBucketListener(ready::add);
         TableBucket target = new TableBucket(2L, 0);
         try (IndexReplicator first = owner(buffer, 0);
                 IndexReplicator second = owner(buffer, 1)) {
@@ -275,24 +285,75 @@ class IndexSendBufferTest {
             IndexBatch secondBatch = batch(second, target);
             assertThat(buffer.tryAppendWindow(Collections.singletonList(firstBatch))).isTrue();
             assertThat(buffer.claimFirstReady(ready.remove())).isSameAs(firstBatch);
-            assertThat(buffer.tryAppendWindow(Collections.singletonList(secondBatch))).isTrue();
-            assertThat(buffer.hasClaim(ready.remove())).isTrue();
+            if (successorQueued) {
+                assertThat(buffer.tryAppendWindow(Collections.singletonList(secondBatch))).isTrue();
+                assertThat(buffer.hasClaim(ready.remove())).isTrue();
+            }
             assertThat(ready).isEmpty();
 
             first.close();
 
             assertThat(ready).containsExactly(target);
+            if (!successorQueued) {
+                assertThat(buffer.buckets()).isEmpty();
+                assertThat(buffer.pendingBytes()).isZero();
+                ready.clear();
+                assertThat(buffer.tryAppendWindow(Collections.singletonList(secondBatch))).isTrue();
+            }
             assertThat(buffer.pendingBytes()).isEqualTo(1L);
             assertThat(buffer.claimFirstReady(ready.remove())).isSameAs(secondBatch);
-            assertThat(buffer.acknowledgeClaim(firstBatch)).isFalse();
+            assertThat(buffer.completeClaim(firstBatch)).isFalse();
             assertThat(buffer.retryClaim(firstBatch)).isFalse();
             assertThat(buffer.ownsClaim(secondBatch)).isTrue();
             assertThat(buffer.pendingBytes()).isEqualTo(1L);
-            assertThat(buffer.acknowledgeClaim(secondBatch)).isTrue();
+            assertThat(buffer.completeClaim(secondBatch)).isTrue();
             secondBatch.window().onBatchAcked();
             assertThat(second.getAllIndexPushedOffset()).isEqualTo(1L);
             assertThat(buffer.pendingBytes()).isZero();
             assertThat(buffer.buckets()).isEmpty();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {127, 128, 16383, 16384})
+    void requestSizeMatchesEncodedFrame(int payloadBytes) {
+        IndexSendBuffer buffer = new IndexSendBuffer();
+        try (IndexReplicator source = owner(buffer, 0)) {
+            long timeoutMs = 128L;
+            IndexReplicationWindow window =
+                    new IndexReplicationWindow(source.indexStates().get(0), 128L, 2, source);
+            List<IndexBatch> batches = new ArrayList<>();
+            IndexRequestFactory.SizeAccumulator size =
+                    new IndexRequestFactory.SizeAccumulator(2L, 1L, timeoutMs);
+            for (int bucket = 0; bucket < 2; bucket++) {
+                IndexBatch batch =
+                        new IndexBatch(
+                                new TableBucket(2L, bucket),
+                                new byte[128],
+                                new MemorySegmentBytesView(
+                                        MemorySegment.wrap(new byte[payloadBytes]),
+                                        0,
+                                        payloadBytes),
+                                payloadBytes,
+                                window);
+                batches.add(batch);
+                size.addBucket(batch);
+            }
+            PutIndexRequest request = IndexRequestFactory.build(2L, batches, timeoutMs);
+            ByteBuf encoded =
+                    MessageCodec.encodeRequest(
+                            UnpooledByteBufAllocator.DEFAULT,
+                            ApiKeys.PUT_INDEX.id,
+                            (short) 0,
+                            1,
+                            request);
+            try {
+                assertThat(size.framedBytes()).isEqualTo(encoded.readableBytes());
+                assertThat(size.exceedsLimit(encoded.readableBytes())).isFalse();
+                assertThat(size.exceedsLimit(encoded.readableBytes() - 1L)).isTrue();
+            } finally {
+                encoded.release();
+            }
         }
     }
 
@@ -302,7 +363,14 @@ class IndexSendBufferTest {
                 new byte[0],
                 new MemorySegmentBytesView(MemorySegment.wrap(new byte[1]), 0, 1),
                 1L,
-                new IndexReplicationWindow("idx", 1L, 1, owner));
+                window(owner));
+    }
+
+    private static IndexReplicationWindow window(IndexReplicator owner) {
+        IndexReplicator.IndexProgressState index = owner.indexStates().get(0);
+        IndexReplicationWindow window = new IndexReplicationWindow(index, 1L, 1, owner);
+        index.installWindow(window);
+        return window;
     }
 
     private static IndexReplicator owner(IndexSendBuffer buffer, int bucket) {
@@ -335,13 +403,33 @@ class IndexSendBufferTest {
         LogRecordReadContext context =
                 LogRecordReadContext.createCompactedRowReadContext(
                         RowType.of(DataTypes.INT()), 1, null);
-        return new IndexReplicator(
-                new IndexSourceReader(log, null, Runnable::run, context),
-                Collections.emptyList(),
-                buffer,
-                context,
-                0L,
-                1024,
-                (syncOffset, allOffset) -> {});
+        IndexSpec spec =
+                new IndexSpec(
+                        "idx",
+                        IndexVisibility.SYNC,
+                        2L,
+                        1,
+                        KvFormat.COMPACTED,
+                        new int[] {0},
+                        row -> {
+                            throw new AssertionError("unexpected source read");
+                        },
+                        (source, target, end) -> {
+                            throw new AssertionError("unexpected source read");
+                        });
+        IndexReplicationScheduler scheduler = new IndexReplicationScheduler(1);
+        IndexReplicator owner =
+                new IndexReplicator(
+                        new IndexSourceReader(log, null, Runnable::run),
+                        Collections.singletonList(spec),
+                        buffer,
+                        context,
+                        0L,
+                        1024,
+                        (syncOffset, allOffset) -> {},
+                        scheduler,
+                        () -> {});
+        scheduler.register(0, owner);
+        return owner;
     }
 }

@@ -61,6 +61,7 @@ import org.apache.fluss.server.SequenceIDCounter;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.entity.PutIndexDataForBucket;
+import org.apache.fluss.server.index.IndexReplicationManager;
 import org.apache.fluss.server.index.IndexReplicationSupervisor;
 import org.apache.fluss.server.index.IndexTableStorage;
 import org.apache.fluss.server.kv.KvManager;
@@ -100,7 +101,6 @@ import org.apache.fluss.server.log.LogReadInfo;
 import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.log.checkpoint.OffsetCheckpointFile;
 import org.apache.fluss.server.log.remote.RemoteLogManager;
-import org.apache.fluss.server.metadata.MetadataProvider;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.metrics.group.BucketMetricGroup;
 import org.apache.fluss.server.metrics.group.TableMetricGroup;
@@ -291,7 +291,6 @@ public final class Replica {
             AdjustIsrManager adjustIsrManager,
             SnapshotContext snapshotContext,
             TabletServerMetadataCache metadataCache,
-            @Nullable MetadataProvider metadataProvider,
             FatalErrorHandler fatalErrorHandler,
             BucketMetricGroup bucketMetricGroup,
             TableInfo tableInfo,
@@ -300,9 +299,7 @@ public final class Replica {
             RemoteLogManager remoteLogManager,
             ScannerManager scannerManager,
             Executor ioExecutor,
-            org.apache.fluss.server.index.IndexReplicatorPool indexReplicatorPool,
-            org.apache.fluss.server.index.IndexSendBuffer indexSendBuffer,
-            TabletServerMetricGroup serverMetricGroup)
+            IndexReplicationManager indexReplicationManager)
             throws Exception {
         this.physicalPath = physicalPath;
         this.tableBucket = tableBucket;
@@ -339,16 +336,7 @@ public final class Replica {
         this.clock = clock;
         this.remoteLogManager = remoteLogManager;
         this.scannerManager = checkNotNull(scannerManager, "scannerManager");
-        this.indexManager =
-                new IndexReplicationSupervisor(
-                        tableInfo,
-                        tableBucket,
-                        metadataCache,
-                        metadataProvider,
-                        indexReplicatorPool,
-                        indexSendBuffer,
-                        remoteLogManager,
-                        serverMetricGroup);
+        this.indexManager = indexReplicationManager.createSupervisor(tableInfo, tableBucket);
         this.indexTableStorage =
                 new IndexTableStorage(tableInfo, tableBucket, metadataCache, schemaGetter);
         List<Schema.Index> secondaryIndexes = tableInfo.getSchema().getIndexes();

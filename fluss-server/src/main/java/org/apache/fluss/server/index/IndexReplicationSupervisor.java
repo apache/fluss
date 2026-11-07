@@ -26,12 +26,9 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.LogRecordReadContext.SchemaResolution;
 import org.apache.fluss.server.log.LogTablet;
-import org.apache.fluss.server.log.remote.RemoteLogManager;
 import org.apache.fluss.server.metadata.MetadataProvider;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
-import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.utils.IndexTableUtils;
-import org.apache.fluss.utils.clock.SystemClock;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -40,7 +37,6 @@ import javax.annotation.Nullable;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicReference;
 
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
@@ -48,10 +44,10 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  * Per-{@code Replica} supervisor for source-table index replication.
  *
  * <p>This supervisor does not drive replication itself. It registers the leader-side {@link
- * IndexReplicator} into the server-global {@link IndexReplicatorPool} (the read layer); the pool
- * workers poll the replicator, which stages encoded batches into the shared {@link
- * IndexSendBuffer}, from which the {@link IndexSender} workers dispatch them. HW advances merely
- * signal the owning pool worker to poll.
+ * IndexReplicator} with the server-global {@link IndexReplicationManager}. Its workers use {@link
+ * IndexReplicationScheduler} to drive replication, staging encoded batches into the shared {@link
+ * IndexSendBuffer} for {@link IndexSender} to dispatch. HW advances signal the owning worker to
+ * poll.
  *
  * <h3>State machine</h3>
  *
@@ -64,6 +60,13 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  */
 @Internal
 public final class IndexReplicationSupervisor {
+
+    /** Receives sync and all-index progress after an index window advances. */
+    @FunctionalInterface
+    public interface IndexProgressListener {
+        /** Called with the current sync ack watermark and conservative all-index replay floor. */
+        void onProgress(long syncIndexPushedOffset, long allIndexPushedOffset);
+    }
 
     /** Lifecycle state of the index replicator for this replica. */
     enum State {
@@ -78,32 +81,23 @@ public final class IndexReplicationSupervisor {
     private final TableBucket tableBucket;
     private final TabletServerMetadataCache metadataCache;
     @Nullable private final MetadataProvider metadataProvider;
-    private final IndexReplicatorPool replicatorPool;
-    private final IndexSendBuffer sendBuffer;
-    private final RemoteLogManager remoteLogManager;
-    private final TabletServerMetricGroup metrics;
-    private final AtomicReference<State> state = new AtomicReference<>(State.NOT_STARTED);
+    private final IndexReplicationManager manager;
+    private volatile State state = State.NOT_STARTED;
     private final Object lifecycleLock = new Object();
 
     @Nullable private volatile IndexReplicator indexReplicator;
 
-    public IndexReplicationSupervisor(
+    IndexReplicationSupervisor(
             TableInfo tableInfo,
             TableBucket tableBucket,
             TabletServerMetadataCache metadataCache,
             @Nullable MetadataProvider metadataProvider,
-            IndexReplicatorPool replicatorPool,
-            IndexSendBuffer sendBuffer,
-            RemoteLogManager remoteLogManager,
-            TabletServerMetricGroup metrics) {
+            IndexReplicationManager manager) {
         this.tableInfo = tableInfo;
         this.tableBucket = tableBucket;
         this.metadataCache = metadataCache;
         this.metadataProvider = metadataProvider;
-        this.replicatorPool = checkNotNull(replicatorPool, "replicatorPool");
-        this.sendBuffer = checkNotNull(sendBuffer, "sendBuffer");
-        this.remoteLogManager = remoteLogManager;
-        this.metrics = metrics;
+        this.manager = checkNotNull(manager, "manager");
     }
 
     // ------------------------------------------------------------------------------------
@@ -130,7 +124,7 @@ public final class IndexReplicationSupervisor {
     public void onBecomeLeader(
             LogTablet logTablet,
             SchemaGetter schemaGetter,
-            IndexReplicator.IndexProgressListener onProgress,
+            IndexProgressListener onProgress,
             long initialOffset) {
         prepareForLeader();
 
@@ -152,12 +146,12 @@ public final class IndexReplicationSupervisor {
      * Retries starting the index replicator if it was previously deferred due to missing metadata.
      * Called by {@code ReplicaManager} after a metadata update.
      */
-    public void retryStart(
+    public void retryDeferredStart(
             LogTablet logTablet,
             SchemaGetter schemaGetter,
-            IndexReplicator.IndexProgressListener onProgress,
+            IndexProgressListener onProgress,
             long initialOffset) {
-        if (state.get() != State.DEFERRED) {
+        if (state != State.DEFERRED) {
             return;
         }
         List<Schema.Index> indexes = tableInfo.getSchema().getIndexes();
@@ -184,14 +178,14 @@ public final class IndexReplicationSupervisor {
         IndexReplicator replicator = indexReplicator;
         if (replicator != null) {
             replicator.onHighWatermarkAdvanced();
-            replicatorPool.signal(tableBucket);
+            replicator.wakeup();
         }
     }
 
     /** Returns how long the active replicator has been behind without advancing. */
     public long noProgressTimeMs() {
         IndexReplicator r = this.indexReplicator;
-        return state.get() == State.RUNNING && r != null ? r.noProgressTimeMs() : 0L;
+        return state == State.RUNNING && r != null ? r.noProgressTimeMs() : 0L;
     }
 
     // ------------------------------------------------------------------------------------
@@ -201,9 +195,9 @@ public final class IndexReplicationSupervisor {
     /**
      * Returns whether the source or one of its indexes has a reported failure awaiting progress.
      */
-    public boolean isFailed() {
+    public boolean hasFailure() {
         IndexReplicator replicator = indexReplicator;
-        return replicator != null && replicator.isFailed();
+        return replicator != null && replicator.hasFailure();
     }
 
     // ------------------------------------------------------------------------------------
@@ -214,7 +208,7 @@ public final class IndexReplicationSupervisor {
             LogTablet logTablet,
             SchemaGetter schemaGetter,
             List<Schema.Index> indexes,
-            IndexReplicator.IndexProgressListener onProgress,
+            IndexProgressListener onProgress,
             long initialOffset) {
         List<TablePath> indexTablePaths = new ArrayList<>(indexes.size());
         for (Schema.Index index : indexes) {
@@ -246,27 +240,9 @@ public final class IndexReplicationSupervisor {
         LogRecordReadContext readContext =
                 LogRecordReadContext.createReadContext(
                         tableInfo, false, SchemaResolution.DYNAMIC, null, schemaGetter, null);
-        IndexSourceReader sourceReader =
-                new IndexSourceReader(
-                        logTablet,
-                        remoteLogManager,
-                        replicatorPool.remoteReadExecutor(),
-                        readContext,
-                        metrics);
-        // Use the owning replica's explicit non-negative next-read offset.
         IndexReplicator replicator =
-                new IndexReplicator(
-                        sourceReader,
-                        indexSpecs,
-                        sendBuffer,
-                        readContext,
-                        initialOffset,
-                        replicatorPool.maxWindowBytes(),
-                        onProgress,
-                        replicatorPool.retryBackoff(),
-                        SystemClock.getInstance(),
-                        metrics,
-                        replicatorPool.maxTransportRequestBytes());
+                manager.createReplicator(
+                        logTablet, indexSpecs, readContext, initialOffset, onProgress);
         // Register with the read pool; the pool worker will catch up on any WAL entries already
         // committed before this replicator was created.
         installIndexReplicator(replicator);
@@ -275,7 +251,7 @@ public final class IndexReplicationSupervisor {
     }
 
     private void deferIndexReplication(RuntimeException metadataFailure) {
-        state.set(State.DEFERRED);
+        state = State.DEFERRED;
         LOG.info(
                 "Index table metadata is unavailable or inconsistent for {}; deferring "
                         + "IndexReplicator until the next metadata update.",
@@ -287,19 +263,19 @@ public final class IndexReplicationSupervisor {
         RuntimeException registrationFailure = null;
         Error registrationError = null;
         synchronized (lifecycleLock) {
-            State previousState = state.get();
+            State previousState = state;
             IndexReplicator previousReplicator = indexReplicator;
             indexReplicator = replicator;
-            state.set(State.RUNNING);
+            state = State.RUNNING;
             try {
-                replicatorPool.register(tableBucket, replicator);
+                manager.register(replicator);
             } catch (RuntimeException e) {
                 indexReplicator = previousReplicator;
-                state.set(previousState);
+                state = previousState;
                 registrationFailure = e;
             } catch (Error e) {
                 indexReplicator = previousReplicator;
-                state.set(previousState);
+                state = previousState;
                 registrationError = e;
             }
         }
@@ -321,26 +297,16 @@ public final class IndexReplicationSupervisor {
         synchronized (lifecycleLock) {
             r = indexReplicator;
             indexReplicator = null;
-            state.set(State.NOT_STARTED);
+            state = State.NOT_STARTED;
         }
         if (r == null) {
             return;
         }
-        replicatorPool.unregister(tableBucket, r);
+        manager.unregister(r);
         try {
             r.close();
         } catch (Exception e) {
             LOG.warn("Error closing IndexReplicator for {}", tableBucket, e);
-        }
-        // Drop any batches still queued for this replicator. Once it is gone (table dropped or
-        // leadership moved) those batches can never resolve a leader and would otherwise loop
-        // forever in the sender's at-least-once retry, pinning memory and holding back-pressure.
-        int dropped = sendBuffer.dropForSource(r.sourceBucket());
-        if (dropped > 0) {
-            LOG.info(
-                    "Discarded {} queued index batch(es) for {} after stopping its replicator",
-                    dropped,
-                    tableBucket);
         }
     }
 }

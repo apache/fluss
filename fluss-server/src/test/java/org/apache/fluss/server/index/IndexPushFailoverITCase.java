@@ -367,7 +367,8 @@ class IndexPushFailoverITCase {
                 FLUSS_CLUSTER_EXTENSION
                         .getTabletServerById(mainLeader)
                         .getReplicaManager()
-                        .getIndexSendBuffer();
+                        .getIndexReplicationManager()
+                        .sendBuffer();
         boolean coordinatorStopped = false;
         boolean targetLeaderStopped = false;
         Throwable primaryFailure = null;

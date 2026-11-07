@@ -22,13 +22,12 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.exception.RecordTooLargeException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
-import org.apache.fluss.rpc.messages.PbPutIndexReqForBucket;
 import org.apache.fluss.rpc.messages.PbPutIndexRespForBucket;
 import org.apache.fluss.rpc.messages.PutIndexRequest;
 import org.apache.fluss.rpc.messages.PutIndexResponse;
 import org.apache.fluss.rpc.protocol.Errors;
+import org.apache.fluss.server.index.IndexRequestFactory.SizeAccumulator;
 import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
-import org.apache.fluss.utils.ProtoCodecUtils;
 import org.apache.fluss.utils.concurrent.FutureUtils;
 import org.apache.fluss.utils.concurrent.ShutdownableThread;
 
@@ -38,11 +37,11 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 
-import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.OptionalInt;
@@ -54,7 +53,6 @@ import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Function;
 
-import static org.apache.fluss.rpc.protocol.MessageCodec.REQUEST_HEADER_LENGTH;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
 
@@ -92,22 +90,10 @@ public final class IndexSender implements AutoCloseable {
 
     private static final Logger LOG = LoggerFactory.getLogger(IndexSender.class);
 
-    private static final int DEFAULT_ACKS = -1;
-
-    private static final long MAX_CODEC_FRAMED_BYTES = Integer.MAX_VALUE;
-    private static final int LENGTH_PREFIX_BYTES = Integer.BYTES;
-    private static final int PUT_INDEX_BUCKETS_REQ_FIELD_NUMBER = 5;
-    private static final int BUCKETS_REQ_TAG_SIZE =
-            ProtoCodecUtils.computeVarIntSize(
-                    (PUT_INDEX_BUCKETS_REQ_FIELD_NUMBER << ProtoCodecUtils.TAG_TYPE_BITS)
-                            | ProtoCodecUtils.WIRETYPE_LENGTH_DELIMITED);
-
     private final IndexSendBuffer sendBuffer;
     private final LeaderResolver leaderResolver;
     private final Function<Integer, TabletServerGateway> gatewayFactory;
     private final TabletServerMetricGroup metrics;
-    /** Timeout used by replication requests and their exact prepublication size check. */
-    public static final long DEFAULT_REQUEST_TIMEOUT_MS = 30_000L;
 
     private final SenderWorker[] workers;
     private final AtomicBoolean bucketRescanRequired = new AtomicBoolean();
@@ -167,7 +153,7 @@ public final class IndexSender implements AutoCloseable {
         for (int i = 0; i < numWorkers; i++) {
             this.workers[i] = new SenderWorker("index-sender-" + i, i, backoffMs);
         }
-        sendBuffer.setAppendListener(this::notifyReadyBucket);
+        sendBuffer.setReadyBucketListener(this::notifyReadyBucket);
         for (TableBucket bucket : sendBuffer.buckets()) {
             enqueueReadyBucket(bucket);
         }
@@ -266,19 +252,8 @@ public final class IndexSender implements AutoCloseable {
     }
 
     private void awaitClosedLocked() {
-        boolean interrupted = false;
-        try {
-            while (lifecyclePhase != LifecyclePhase.CLOSED) {
-                try {
-                    lifecycleDrained.await();
-                } catch (InterruptedException e) {
-                    interrupted = true;
-                }
-            }
-        } finally {
-            if (interrupted) {
-                Thread.currentThread().interrupt();
-            }
+        while (lifecyclePhase != LifecyclePhase.CLOSED) {
+            lifecycleDrained.awaitUninterruptibly();
         }
     }
 
@@ -289,8 +264,7 @@ public final class IndexSender implements AutoCloseable {
         private final long backoffMs;
         private final ReentrantLock lock = new ReentrantLock();
         private final Condition condition = lock.newCondition();
-        private final Deque<TableBucket> readyBuckets = new ArrayDeque<>();
-        private final Set<TableBucket> queuedBuckets = new HashSet<>();
+        private final Set<TableBucket> readyBuckets = new LinkedHashSet<>();
 
         SenderWorker(String name, int workerId, long backoffMs) {
             super(name, false);
@@ -306,11 +280,9 @@ public final class IndexSender implements AutoCloseable {
             inLock(
                     lock,
                     () -> {
-                        if (!queuedBuckets.add(bucket)) {
-                            return;
+                        if (readyBuckets.add(bucket)) {
+                            condition.signalAll();
                         }
-                        readyBuckets.addLast(bucket);
-                        condition.signalAll();
                     });
         }
 
@@ -319,10 +291,12 @@ public final class IndexSender implements AutoCloseable {
             return inLock(
                     lock,
                     () -> {
-                        TableBucket bucket = readyBuckets.pollFirst();
-                        if (bucket != null) {
-                            queuedBuckets.remove(bucket);
+                        Iterator<TableBucket> iterator = readyBuckets.iterator();
+                        if (!iterator.hasNext()) {
+                            return null;
                         }
+                        TableBucket bucket = iterator.next();
+                        iterator.remove();
                         return bucket;
                     });
         }
@@ -400,28 +374,28 @@ public final class IndexSender implements AutoCloseable {
                 return false;
             }
 
-            List<IndexBatch> activeClaimed = new ArrayList<>(claimed.size());
-            for (IndexBatch batch : claimed) {
-                if (!batch.ownerActive()) {
-                    discardClaimedBatch(batch);
-                    continue;
-                }
-                RequestSizeAccumulator singleton =
-                        newRequestSizeAccumulator(
-                                batch.targetBucket().getTableId(),
-                                batch.sourceBucket().getTableId(),
-                                requestTimeoutMs);
-                singleton.addBucket(batch);
-                if (isOversized(singleton)) {
-                    retryOversizedBatch(batch, singleton);
-                } else if (batch.ownerActive()) {
-                    activeClaimed.add(batch);
-                }
-            }
+            claimed.removeIf(
+                    batch -> {
+                        if (!batch.ownerActive()) {
+                            discardClaimedBatch(batch);
+                            return true;
+                        }
+                        SizeAccumulator singleton =
+                                new SizeAccumulator(
+                                        batch.targetBucket().getTableId(),
+                                        batch.sourceBucket().getTableId(),
+                                        requestTimeoutMs);
+                        singleton.addBucket(batch);
+                        if (singleton.exceedsLimit(maxTransportRequestBytes)) {
+                            retryOversizedBatch(batch, singleton);
+                            return true;
+                        }
+                        return !batch.ownerActive();
+                    });
 
             // Group claimed batches by target leader server.
             Map<Integer, List<IndexBatch>> byServer = new HashMap<>();
-            for (IndexBatch batch : activeClaimed) {
+            for (IndexBatch batch : claimed) {
                 if (!batch.ownerActive()) {
                     discardClaimedBatch(batch);
                     continue;
@@ -444,7 +418,7 @@ public final class IndexSender implements AutoCloseable {
         }
 
         private void sendToServer(int serverId, List<IndexBatch> batches) {
-            batches = activeBatches(batches);
+            removeInactiveBatches(batches);
             if (batches.isEmpty()) {
                 return;
             }
@@ -471,7 +445,7 @@ public final class IndexSender implements AutoCloseable {
             } finally {
                 lifecycleLock.unlock();
             }
-            runAccounting(actions);
+            applyBatchActions(actions);
 
             if (createTarget) {
                 createTargetAndDispatch(serverId, batches);
@@ -510,14 +484,14 @@ public final class IndexSender implements AutoCloseable {
             if (failure != null) {
                 LOG.warn("Failed to get gateway for server {}, re-enqueuing", serverId, failure);
             }
-            runAccounting(actions);
+            applyBatchActions(actions);
             if (target != null) {
                 dispatchIfCurrent(target, batches);
             }
         }
 
         private void dispatchIfCurrent(TargetContext target, List<IndexBatch> batches) {
-            batches = activeBatches(batches);
+            removeInactiveBatches(batches);
             if (batches.isEmpty()) {
                 return;
             }
@@ -541,7 +515,7 @@ public final class IndexSender implements AutoCloseable {
             if (requestChunk == null) {
                 return;
             }
-            if (isOversized(requestChunk.size)) {
+            if (requestChunk.size.exceedsLimit(maxTransportRequestBytes)) {
                 for (IndexBatch batch : requestChunk.batches) {
                     retryOversizedBatch(batch, requestChunk.size);
                 }
@@ -552,7 +526,8 @@ public final class IndexSender implements AutoCloseable {
                 return;
             }
             List<IndexBatch> requestBatches = requestChunk.batches;
-            PutIndexRequest request = buildRequest(tableId, requestBatches);
+            PutIndexRequest request =
+                    IndexRequestFactory.build(tableId, requestBatches, requestTimeoutMs);
             boolean leadersCurrent = leadersMatch(target.serverId, requestBatches);
             List<BatchAction> actions = new ArrayList<>();
             boolean registered = false;
@@ -560,9 +535,9 @@ public final class IndexSender implements AutoCloseable {
             try {
                 if (!targetIsCurrentLocked(target) || !leadersCurrent) {
                     invalidateTargetLocked(target);
-                    addRetryOrReleaseActionsLocked(actions, requestBatches);
+                    addBatchActionsLocked(actions, requestBatches, BatchDisposition.REQUEUE);
                 } else if (!batchesActiveAndClaimed(requestBatches)) {
-                    addRetryOrReleaseActionsLocked(actions, requestBatches);
+                    addBatchActionsLocked(actions, requestBatches, BatchDisposition.REQUEUE);
                 } else {
                     registerAsyncOperationLocked();
                     registered = true;
@@ -570,7 +545,7 @@ public final class IndexSender implements AutoCloseable {
             } finally {
                 lifecycleLock.unlock();
             }
-            runAccounting(actions);
+            applyBatchActions(actions);
             if (!registered) {
                 return;
             }
@@ -600,32 +575,33 @@ public final class IndexSender implements AutoCloseable {
 
         @Nullable
         private RequestChunk activeChunk(long tableId, RequestChunk chunk) {
-            List<IndexBatch> active = activeBatches(chunk.batches);
-            if (active.isEmpty()) {
+            boolean changed = removeInactiveBatches(chunk.batches);
+            if (chunk.batches.isEmpty()) {
                 return null;
             }
-            if (active.size() == chunk.batches.size()) {
+            if (!changed) {
                 return chunk;
             }
-            RequestSizeAccumulator activeSize =
-                    newRequestSizeAccumulator(
-                            tableId, active.get(0).sourceBucket().getTableId(), requestTimeoutMs);
-            for (IndexBatch batch : active) {
+            SizeAccumulator activeSize =
+                    new SizeAccumulator(
+                            tableId,
+                            chunk.batches.get(0).sourceBucket().getTableId(),
+                            requestTimeoutMs);
+            for (IndexBatch batch : chunk.batches) {
                 activeSize.addBucket(batch);
             }
-            return new RequestChunk(active, activeSize);
+            return new RequestChunk(chunk.batches, activeSize);
         }
 
-        private List<IndexBatch> activeBatches(List<IndexBatch> batches) {
-            List<IndexBatch> active = new ArrayList<>(batches.size());
-            for (IndexBatch batch : batches) {
-                if (batch.ownerActive()) {
-                    active.add(batch);
-                } else {
-                    discardClaimedBatch(batch);
-                }
-            }
-            return active;
+        private boolean removeInactiveBatches(List<IndexBatch> batches) {
+            return batches.removeIf(
+                    batch -> {
+                        if (batch.ownerActive()) {
+                            return false;
+                        }
+                        discardClaimedBatch(batch);
+                        return true;
+                    });
         }
 
         private void completePutIndexRequest(
@@ -641,7 +617,7 @@ public final class IndexSender implements AutoCloseable {
             try {
                 if (!targetIsCurrentLocked(target) || !leadersCurrent) {
                     invalidateTargetLocked(target);
-                    addRetryOrReleaseActionsLocked(actions, chunk);
+                    addBatchActionsLocked(actions, chunk, BatchDisposition.REQUEUE);
                 } else if (error != null) {
                     invalidateTargetLocked(target);
                     metrics.indexReplicationFailures().inc(chunk.size());
@@ -655,7 +631,7 @@ public final class IndexSender implements AutoCloseable {
                                 batch.sourceEndOffset(),
                                 error);
                     }
-                    addRetryOrReleaseActionsLocked(actions, chunk);
+                    addBatchActionsLocked(actions, chunk, BatchDisposition.REQUEUE);
                 } else {
                     addResponseActionsLocked(actions, chunk, response);
                 }
@@ -665,7 +641,7 @@ public final class IndexSender implements AutoCloseable {
             metrics.indexReplicationRequestLatencyHistogram()
                     .update((System.nanoTime() - requestStartNs) / 1_000_000L);
             try {
-                runAccountingAndCallbacks(actions);
+                applyBatchActionsAndNotifyWindows(actions);
             } finally {
                 completeAsyncOperation();
             }
@@ -716,15 +692,11 @@ public final class IndexSender implements AutoCloseable {
     private void completeAsyncOperation() {
         lifecycleLock.lock();
         try {
-            completeAsyncOperationLocked();
+            if (--outstandingAsyncOperations == 0) {
+                lifecycleDrained.signalAll();
+            }
         } finally {
             lifecycleLock.unlock();
-        }
-    }
-
-    private void completeAsyncOperationLocked() {
-        if (--outstandingAsyncOperations == 0) {
-            lifecycleDrained.signalAll();
         }
     }
 
@@ -739,86 +711,14 @@ public final class IndexSender implements AutoCloseable {
     }
 
     private static final class RequestChunk {
+        // Worker-owned until RPC registration; callbacks retain the list unchanged afterward.
         private final List<IndexBatch> batches;
-        private final RequestSizeAccumulator size;
+        private final SizeAccumulator size;
 
-        private RequestChunk(List<IndexBatch> batches, RequestSizeAccumulator size) {
+        private RequestChunk(List<IndexBatch> batches, SizeAccumulator size) {
             this.batches = batches;
             this.size = size;
         }
-    }
-
-    /** Incremental codec-derived size of one index PutIndex request. */
-    static final class RequestSizeAccumulator {
-        private final PbPutIndexReqForBucket bucketSizer;
-        private long bodyBytes;
-        private boolean overflow;
-        private boolean codecRepresentable;
-
-        private RequestSizeAccumulator(long tableId, long sourceTableId, long requestTimeoutMs) {
-            this.bucketSizer = new PbPutIndexReqForBucket();
-            this.bodyBytes =
-                    newPutIndexRequest(tableId, sourceTableId, (int) requestTimeoutMs).totalSize();
-            this.codecRepresentable = bodyBytes >= 0;
-        }
-
-        private RequestSizeAccumulator(RequestSizeAccumulator source) {
-            this.bucketSizer = source.bucketSizer;
-            this.bodyBytes = source.bodyBytes;
-            this.overflow = source.overflow;
-            this.codecRepresentable = source.codecRepresentable;
-        }
-
-        void addBucket(IndexBatch batch) {
-            if (overflow || !codecRepresentable) {
-                return;
-            }
-            try {
-                bucketSizer.clear();
-                fillBucketRequest(bucketSizer, batch);
-                int bucketBodyBytes = bucketSizer.totalSize();
-                if (bucketBodyBytes < 0) {
-                    codecRepresentable = false;
-                    return;
-                }
-                long bucketBytes =
-                        (long) BUCKETS_REQ_TAG_SIZE
-                                + ProtoCodecUtils.computeVarIntSize(bucketBodyBytes)
-                                + bucketBodyBytes;
-                bodyBytes = Math.addExact(bodyBytes, bucketBytes);
-                codecRepresentable = bodyBytes <= Integer.MAX_VALUE;
-            } catch (ArithmeticException e) {
-                overflow = true;
-                codecRepresentable = false;
-            }
-        }
-
-        long framedBytes() {
-            if (arithmeticOverflow()) {
-                return Long.MAX_VALUE;
-            }
-            return bodyBytes + REQUEST_HEADER_LENGTH + LENGTH_PREFIX_BYTES;
-        }
-
-        boolean arithmeticOverflow() {
-            return overflow
-                    || bodyBytes > Long.MAX_VALUE - REQUEST_HEADER_LENGTH - LENGTH_PREFIX_BYTES;
-        }
-
-        boolean codecRepresentable() {
-            return codecRepresentable
-                    && !arithmeticOverflow()
-                    && framedBytes() <= MAX_CODEC_FRAMED_BYTES;
-        }
-
-        private RequestSizeAccumulator copy() {
-            return new RequestSizeAccumulator(this);
-        }
-    }
-
-    static RequestSizeAccumulator newRequestSizeAccumulator(
-            long tableId, long sourceTableId, long requestTimeoutMs) {
-        return new RequestSizeAccumulator(tableId, sourceTableId, requestTimeoutMs);
     }
 
     private static long saturatedAdd(long left, long right) {
@@ -838,18 +738,18 @@ public final class IndexSender implements AutoCloseable {
         List<IndexBatch> current = new ArrayList<>();
         long currentPayloadBytes = 0L;
         long sourceTableId = batches.get(0).sourceBucket().getTableId();
-        RequestSizeAccumulator currentSize =
-                newRequestSizeAccumulator(tableId, sourceTableId, requestTimeoutMs);
+        SizeAccumulator currentSize = new SizeAccumulator(tableId, sourceTableId, requestTimeoutMs);
         for (IndexBatch batch : batches) {
             long batchBytes = batch.encoded().getBytesLength();
-            RequestSizeAccumulator candidate = currentSize.copy();
+            SizeAccumulator candidate = currentSize.copy();
             candidate.addBucket(batch);
             long candidatePayloadBytes = saturatedAdd(currentPayloadBytes, batchBytes);
             boolean exceedsPreferred = candidatePayloadBytes > maxRequestBytes;
-            if (!current.isEmpty() && (exceedsPreferred || isOversized(candidate))) {
+            if (!current.isEmpty()
+                    && (exceedsPreferred || candidate.exceedsLimit(maxTransportRequestBytes))) {
                 chunks.add(new RequestChunk(current, currentSize));
                 current = new ArrayList<>();
-                currentSize = newRequestSizeAccumulator(tableId, sourceTableId, requestTimeoutMs);
+                currentSize = new SizeAccumulator(tableId, sourceTableId, requestTimeoutMs);
                 currentPayloadBytes = 0L;
                 currentSize.addBucket(batch);
             } else {
@@ -916,12 +816,8 @@ public final class IndexSender implements AutoCloseable {
         }
     }
 
-    private boolean isOversized(RequestSizeAccumulator size) {
-        return !size.codecRepresentable() || size.framedBytes() > maxTransportRequestBytes;
-    }
-
-    private void retryOversizedBatch(IndexBatch batch, RequestSizeAccumulator size) {
-        RecordTooLargeException failure = oversizedFailure(batch, size);
+    private void retryOversizedBatch(IndexBatch batch, SizeAccumulator size) {
+        RecordTooLargeException failure = size.oversizedFailure(batch, maxTransportRequestBytes);
         if (batch.attempts() == 0) {
             LOG.error(
                     "Cannot send index batch from {} to {}; retrying with backoff until "
@@ -934,34 +830,6 @@ public final class IndexSender implements AutoCloseable {
         retryClaimedBatch(batch);
     }
 
-    private RecordTooLargeException oversizedFailure(
-            IndexBatch batch, RequestSizeAccumulator size) {
-        long tableId = batch.targetBucket().getTableId();
-        if (size.arithmeticOverflow()) {
-            return new RecordTooLargeException(
-                    "Index PutIndex request for table "
-                            + tableId
-                            + " overflows exact size arithmetic and cannot be represented by "
-                            + "the request codec");
-        }
-        if (!size.codecRepresentable()) {
-            return new RecordTooLargeException(
-                    "Index PutIndex request for table "
-                            + tableId
-                            + " is "
-                            + size.framedBytes()
-                            + " bytes, exceeding codec maximum framed size="
-                            + MAX_CODEC_FRAMED_BYTES);
-        }
-        return new RecordTooLargeException(
-                "Index PutIndex request for table "
-                        + tableId
-                        + " is "
-                        + size.framedBytes()
-                        + " bytes, exceeding netty.server.max-request-size="
-                        + maxTransportRequestBytes);
-    }
-
     private void discardClaimedBatch(IndexBatch batch) {
         List<BatchAction> actions = new ArrayList<>(1);
         lifecycleLock.lock();
@@ -970,34 +838,18 @@ public final class IndexSender implements AutoCloseable {
         } finally {
             lifecycleLock.unlock();
         }
-        runAccounting(actions);
+        applyBatchActions(actions);
     }
 
     private void retryClaimedBatch(IndexBatch batch) {
         List<BatchAction> actions = new ArrayList<>();
         lifecycleLock.lock();
         try {
-            addRetryOrReleaseActionLocked(actions, batch);
+            addBatchActionLocked(actions, batch, BatchDisposition.REQUEUE);
         } finally {
             lifecycleLock.unlock();
         }
-        runAccounting(actions);
-    }
-
-    private void addRetryOrReleaseActionsLocked(
-            List<BatchAction> actions, List<IndexBatch> batches) {
-        for (IndexBatch batch : batches) {
-            addRetryOrReleaseActionLocked(actions, batch);
-        }
-    }
-
-    private void addRetryOrReleaseActionLocked(List<BatchAction> actions, IndexBatch batch) {
-        addBatchActionLocked(
-                actions,
-                batch,
-                lifecyclePhase == LifecyclePhase.OPEN
-                        ? BatchDisposition.REQUEUE
-                        : BatchDisposition.RELEASE);
+        applyBatchActions(actions);
     }
 
     private void addBatchActionsLocked(
@@ -1019,10 +871,7 @@ public final class IndexSender implements AutoCloseable {
         actions.add(new BatchAction(batch, disposition));
     }
 
-    private void runAccounting(List<BatchAction> actions) {
-        if (actions.isEmpty()) {
-            return;
-        }
+    private void applyBatchActions(List<BatchAction> actions) {
         for (BatchAction action : actions) {
             if (action.disposition == BatchDisposition.REQUEUE) {
                 IndexBatch batch = action.batch;
@@ -1030,10 +879,8 @@ public final class IndexSender implements AutoCloseable {
                 if (action.transitioned) {
                     metrics.indexReplicationRetries().inc();
                 }
-            } else if (action.disposition == BatchDisposition.ACK) {
-                action.transitioned = sendBuffer.acknowledgeClaim(action.batch);
             } else {
-                action.transitioned = sendBuffer.discardClaim(action.batch);
+                action.transitioned = sendBuffer.completeClaim(action.batch);
             }
         }
         for (BatchAction action : actions) {
@@ -1044,8 +891,8 @@ public final class IndexSender implements AutoCloseable {
         }
     }
 
-    private void runAccountingAndCallbacks(List<BatchAction> actions) {
-        runAccounting(actions);
+    private void applyBatchActionsAndNotifyWindows(List<BatchAction> actions) {
+        applyBatchActions(actions);
         for (BatchAction action : actions) {
             if (action.disposition != BatchDisposition.ACK || !action.transitioned) {
                 continue;
@@ -1077,37 +924,5 @@ public final class IndexSender implements AutoCloseable {
             this.batch = batch;
             this.disposition = disposition;
         }
-    }
-
-    private PutIndexRequest buildRequest(long tableId, List<IndexBatch> batches) {
-        long sourceTableId = batches.get(0).sourceBucket().getTableId();
-        PutIndexRequest req = newPutIndexRequest(tableId, sourceTableId, (int) requestTimeoutMs);
-        for (IndexBatch batch : batches) {
-            checkArgument(
-                    batch.sourceBucket().getTableId() == sourceTableId,
-                    "A PutIndex request cannot mix source tables");
-            fillBucketRequest(req.addBucketsReq(), batch);
-        }
-        return req;
-    }
-
-    private static void fillBucketRequest(PbPutIndexReqForBucket request, IndexBatch batch) {
-        request.setBucketId(batch.targetBucket().getBucket())
-                .setSourceBucketId(batch.sourceBucket().getBucket())
-                .setSourceEndOffset(batch.sourceEndOffset())
-                .setProgressKey(batch.progressKey())
-                .setRecordsBytesView(batch.encoded());
-        if (batch.sourceBucket().getPartitionId() != null) {
-            request.setSourcePartitionId(batch.sourceBucket().getPartitionId());
-        }
-    }
-
-    private static PutIndexRequest newPutIndexRequest(
-            long tableId, long sourceTableId, int timeoutMs) {
-        return new PutIndexRequest()
-                .setTableId(tableId)
-                .setSourceTableId(sourceTableId)
-                .setAcks(DEFAULT_ACKS)
-                .setTimeoutMs(timeoutMs);
     }
 }
