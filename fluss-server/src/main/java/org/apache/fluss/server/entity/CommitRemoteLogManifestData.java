@@ -21,6 +21,8 @@ import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.rpc.messages.CommitRemoteLogManifestRequest;
 
+import javax.annotation.Nullable;
+
 import java.util.Objects;
 
 /** The data for request {@link CommitRemoteLogManifestRequest}. */
@@ -47,6 +49,8 @@ public class CommitRemoteLogManifestData {
     /** The leader epoch of the bucket when the snapshot is triggered. */
     private final int bucketLeaderEpoch;
 
+    @Nullable private final String expectedManifestPath;
+
     public CommitRemoteLogManifestData(
             TableBucket tableBucket,
             FsPath remoteLogManifestPath,
@@ -72,6 +76,26 @@ public class CommitRemoteLogManifestData {
             long highestCopiedEndOffset,
             int coordinatorEpoch,
             int bucketLeaderEpoch) {
+        this(
+                tableBucket,
+                remoteLogManifestPath,
+                remoteLogStartOffset,
+                remoteLogEndOffset,
+                highestCopiedEndOffset,
+                coordinatorEpoch,
+                bucketLeaderEpoch,
+                null);
+    }
+
+    public CommitRemoteLogManifestData(
+            TableBucket tableBucket,
+            FsPath remoteLogManifestPath,
+            long remoteLogStartOffset,
+            long remoteLogEndOffset,
+            long highestCopiedEndOffset,
+            int coordinatorEpoch,
+            int bucketLeaderEpoch,
+            @Nullable String expectedManifestPath) {
         this.tableBucket = tableBucket;
         this.remoteLogManifestPath = remoteLogManifestPath;
         this.remoteLogStartOffset = remoteLogStartOffset;
@@ -79,6 +103,13 @@ public class CommitRemoteLogManifestData {
         this.highestCopiedEndOffset = highestCopiedEndOffset;
         this.coordinatorEpoch = coordinatorEpoch;
         this.bucketLeaderEpoch = bucketLeaderEpoch;
+        this.expectedManifestPath = expectedManifestPath;
+    }
+
+    /** Returns the predecessor path, empty for an absent handle, or null for v0 commits. */
+    @Nullable
+    public String getExpectedManifestPath() {
+        return expectedManifestPath;
     }
 
     public TableBucket getTableBucket() {
@@ -138,6 +169,7 @@ public class CommitRemoteLogManifestData {
         CommitRemoteLogManifestData that = (CommitRemoteLogManifestData) o;
         return Objects.equals(tableBucket, that.tableBucket)
                 && Objects.equals(remoteLogManifestPath, that.remoteLogManifestPath)
+                && Objects.equals(expectedManifestPath, that.expectedManifestPath)
                 && remoteLogEndOffset == that.remoteLogEndOffset
                 && highestCopiedEndOffset == that.highestCopiedEndOffset
                 && coordinatorEpoch == that.coordinatorEpoch
@@ -152,6 +184,7 @@ public class CommitRemoteLogManifestData {
                 remoteLogEndOffset,
                 highestCopiedEndOffset,
                 coordinatorEpoch,
-                bucketLeaderEpoch);
+                bucketLeaderEpoch,
+                expectedManifestPath);
     }
 }

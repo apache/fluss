@@ -392,12 +392,31 @@ public class TestCoordinatorGateway implements CoordinatorGateway {
                 getCommitRemoteLogManifestData(request);
         CommitRemoteLogManifestResponse response = new CommitRemoteLogManifestResponse();
         try {
-            zkClient.upsertRemoteLogManifestHandle(
-                    commitRemoteLogManifestData.getTableBucket(),
+            RemoteLogManifestHandle handle =
                     new RemoteLogManifestHandle(
                             commitRemoteLogManifestData.getRemoteLogManifestPath(),
-                            commitRemoteLogManifestData.getRemoteLogEndOffset()));
+                            commitRemoteLogManifestData.getRemoteLogEndOffset());
+            if (request.hasExpectedManifestPath()) {
+                // This gateway bypasses the Coordinator lifecycle that creates bucket parents.
+                String parent =
+                        org.apache.fluss.server.zk.data.ZkData.BucketIdZNode.path(
+                                commitRemoteLogManifestData.getTableBucket());
+                if (zkClient.getCuratorClient().checkExists().forPath(parent) == null) {
+                    zkClient.getCuratorClient().create().creatingParentsIfNeeded().forPath(parent);
+                }
+                return CompletableFuture.completedFuture(
+                        response.setCommitSuccess(
+                                zkClient.compareAndSetRemoteLogManifestHandle(
+                                        commitRemoteLogManifestData.getTableBucket(),
+                                        handle,
+                                        request.getExpectedManifestPath())));
+            }
+            zkClient.upsertRemoteLogManifestHandle(
+                    commitRemoteLogManifestData.getTableBucket(), handle);
         } catch (Exception e) {
+            if (request.hasExpectedManifestPath()) {
+                return org.apache.fluss.utils.concurrent.FutureUtils.completedExceptionally(e);
+            }
             return CompletableFuture.completedFuture(response.setCommitSuccess(false));
         }
 

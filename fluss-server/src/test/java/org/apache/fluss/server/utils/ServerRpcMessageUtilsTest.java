@@ -48,6 +48,7 @@ import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.messages.PutKvResponse;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.rpc.util.CommonRpcMessageUtils;
+import org.apache.fluss.server.entity.CommitRemoteLogManifestData;
 import org.apache.fluss.server.entity.ProduceLogDataForBucket;
 import org.apache.fluss.server.entity.PutKvDataForBucket;
 import org.apache.fluss.server.metadata.BucketMetadata;
@@ -77,6 +78,26 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for {@link ServerRpcMessageUtils}. */
 class ServerRpcMessageUtilsTest {
+
+    @Test
+    void testConditionalManifestPredecessorRoundTrip() {
+        for (String predecessor : Arrays.asList(null, "", "file:///previous.manifest")) {
+            CommitRemoteLogManifestData data =
+                    new CommitRemoteLogManifestData(
+                            new TableBucket(123L, 0),
+                            new FsPath("file:///next.manifest"),
+                            0,
+                            10,
+                            10,
+                            1,
+                            2,
+                            predecessor);
+            assertThat(
+                            ServerRpcMessageUtils.getCommitRemoteLogManifestData(
+                                    ServerRpcMessageUtils.makeCommitRemoteLogManifestRequest(data)))
+                    .isEqualTo(data);
+        }
+    }
 
     @Test
     void testUnknownPartitionCountRemainsAbsentOnWire() {

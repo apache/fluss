@@ -662,6 +662,17 @@ public final class LogTablet {
      */
     public void updateRemoteLogOffsets(
             long newRemoteLogStartOffset, long remoteLogEndOffset, long highestCopiedEndOffset) {
+        if (publishRemoteLogOffsets(
+                newRemoteLogStartOffset, remoteLogEndOffset, highestCopiedEndOffset)) {
+            deleteSegmentsAlreadyExistsInRemote();
+        }
+    }
+
+    /**
+     * Publishes committed offsets without filesystem I/O; returns whether local cleanup is needed.
+     */
+    public boolean publishRemoteLogOffsets(
+            long newRemoteLogStartOffset, long remoteLogEndOffset, long highestCopiedEndOffset) {
         updateRemoteLogStartOffset(newRemoteLogStartOffset);
 
         boolean shouldCleanup = false;
@@ -687,9 +698,7 @@ public final class LogTablet {
                     this.highestCopiedEndOffset,
                     getTableBucket());
         }
-        if (shouldCleanup) {
-            deleteSegmentsAlreadyExistsInRemote();
-        }
+        return shouldCleanup;
     }
 
     /**

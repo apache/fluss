@@ -52,6 +52,8 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Collectors;
 
 import static org.apache.fluss.utils.FlussPaths.INDEX_FILE_SUFFIX;
 import static org.apache.fluss.utils.FlussPaths.TIME_INDEX_FILE_SUFFIX;
@@ -89,28 +91,55 @@ public class DefaultRemoteLogStorage implements RemoteLogStorage {
             FsPath remoteLogDir, RemoteLogSegment remoteLogSegment, LogSegmentFiles logSegmentFiles)
             throws RemoteStorageException {
         LOG.debug("copying log segment and indexes for remoteLogSegment: {}", remoteLogSegment);
+        List<Upload> uploads = new ArrayList<>();
+        Throwable failure = null;
+        boolean interrupted = false;
         try {
-            List<CompletableFuture<Void>> futures =
-                    createUploadFutures(remoteLogDir, remoteLogSegment, logSegmentFiles);
-            FutureUtils.waitForAll(futures).get();
-        } catch (ExecutionException e) {
-            Throwable throwable = ExceptionUtils.stripExecutionException(e);
-            throwable = ExceptionUtils.stripException(throwable, RuntimeException.class);
+            FsPath segmentDir = createRemoteLogSegmentDir(remoteLogDir, remoteLogSegment);
+            for (Path localFile : logSegmentFiles.getAllPaths()) {
+                Upload upload =
+                        new Upload(
+                                () ->
+                                        writeToRemote(
+                                                Files.newInputStream(localFile),
+                                                segmentDir,
+                                                localFile.getFileName().toString()));
+                uploads.add(upload);
+                ioExecutor.execute(upload);
+            }
+        } catch (Exception e) {
+            failure = e;
+            uploads.forEach(Upload::cancelBeforeStart);
+        }
+
+        CompletableFuture<Void> completion =
+                FutureUtils.completeAll(
+                        uploads.stream()
+                                .map(upload -> upload.completion)
+                                .collect(Collectors.toList()));
+        while (true) {
+            try {
+                completion.get();
+                break;
+            } catch (InterruptedException e) {
+                interrupted = true;
+                failure = ExceptionUtils.firstOrSuppressed(e, failure);
+                uploads.forEach(Upload::cancelBeforeStart);
+            } catch (ExecutionException e) {
+                failure =
+                        ExceptionUtils.firstOrSuppressed(
+                                ExceptionUtils.stripExecutionException(e), failure);
+                break;
+            }
+        }
+        if (interrupted) {
+            Thread.currentThread().interrupt();
+        }
+        if (failure != null) {
             throw new RemoteStorageException(
                     "Failed to copy log segment and indexes to remote dir for path: "
                             + remoteLogSegment,
-                    throwable);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new RemoteStorageException(
-                    "Interrupted while copying log segment and indexes to remote for path: "
-                            + remoteLogSegment,
-                    e);
-        } catch (Exception e) {
-            throw new RemoteStorageException(
-                    "Failed to copy log segment and indexes to remote for path: "
-                            + remoteLogSegment,
-                    e);
+                    failure);
         }
     }
 
@@ -270,27 +299,6 @@ public class DefaultRemoteLogStorage implements RemoteLogStorage {
         }
     }
 
-    private List<CompletableFuture<Void>> createUploadFutures(
-            FsPath remoteLogDir, RemoteLogSegment remoteLogSegment, LogSegmentFiles logSegmentFiles)
-            throws IOException {
-        FsPath rlsPath = createRemoteLogSegmentDir(remoteLogDir, remoteLogSegment);
-        List<Path> localFiles = logSegmentFiles.getAllPaths();
-        List<CompletableFuture<Void>> list = new ArrayList<>();
-        for (Path localFile : localFiles) {
-            CompletableFuture<Void> voidCompletableFuture =
-                    CompletableFuture.runAsync(
-                            ThrowingRunnable.unchecked(
-                                    () ->
-                                            writeToRemote(
-                                                    Files.newInputStream(localFile),
-                                                    rlsPath,
-                                                    localFile.getFileName().toString())),
-                            ioExecutor);
-            list.add(voidCompletableFuture);
-        }
-        return list;
-    }
-
     /**
      * Write input stream to remote.
      *
@@ -326,6 +334,38 @@ public class DefaultRemoteLogStorage implements RemoteLogStorage {
                 result = null;
             }
             return result;
+        }
+    }
+
+    /**
+     * Cancellation can prevent a queued upload, but only the running action can signal its end.
+     * This keeps copy completion distinct from cancellation of a future that may still be writing.
+     */
+    private static final class Upload implements Runnable {
+        private final AtomicBoolean claimed = new AtomicBoolean();
+        private final CompletableFuture<Void> completion = new CompletableFuture<>();
+        private final ThrowingRunnable<Exception> action;
+
+        private Upload(ThrowingRunnable<Exception> action) {
+            this.action = action;
+        }
+
+        @Override
+        public void run() {
+            if (claimed.compareAndSet(false, true)) {
+                try {
+                    action.run();
+                    completion.complete(null);
+                } catch (Throwable t) {
+                    completion.completeExceptionally(t);
+                }
+            }
+        }
+
+        private void cancelBeforeStart() {
+            if (claimed.compareAndSet(false, true)) {
+                completion.complete(null);
+            }
         }
     }
 

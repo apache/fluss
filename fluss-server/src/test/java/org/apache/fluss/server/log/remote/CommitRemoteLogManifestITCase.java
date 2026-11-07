@@ -20,15 +20,25 @@ package org.apache.fluss.server.log.remote;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.remote.RemoteLogManifest;
+import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
+import org.apache.fluss.rpc.messages.CommitRemoteLogManifestRequest;
 import org.apache.fluss.server.log.LogTablet;
+import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.stream.Collectors;
@@ -53,6 +63,58 @@ class CommitRemoteLogManifestITCase {
                     .setNumOfTabletServers(3)
                     .setClusterConf(initConfig())
                     .build();
+
+    @Test
+    void testConditionalCommitRejectsDelayedPredecessor(@TempDir Path tempDir) throws Exception {
+        TablePath table = TablePath.of(DATA1_TABLE_PATH.getDatabaseName(), "conditional_manifest");
+        long tableId = createTable(FLUSS_CLUSTER_EXTENSION, table, DATA1_TABLE_DESCRIPTOR);
+        TableBucket bucket = new TableBucket(tableId, 0);
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(bucket);
+        Replica replica = FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(bucket);
+        byte[] manifestBytes =
+                new RemoteLogManifest(
+                                replica.getPhysicalTablePath(), bucket, Collections.emptyList())
+                        .toJsonBytes();
+        Path first = tempDir.resolve("first.manifest");
+        Path second = tempDir.resolve("second.manifest");
+        Files.write(first, manifestBytes);
+        Files.write(second, manifestBytes);
+        CoordinatorGateway gateway = FLUSS_CLUSTER_EXTENSION.newCoordinatorClient();
+        CommitRemoteLogManifestRequest firstRequest =
+                new CommitRemoteLogManifestRequest()
+                        .setTableId(tableId)
+                        .setBucketId(0)
+                        .setCoordinatorEpoch(replica.getCoordinatorEpoch())
+                        .setBucketLeaderEpoch(replica.getBucketEpoch())
+                        .setRemoteLogStartOffset(Long.MAX_VALUE)
+                        .setRemoteLogEndOffset(-1)
+                        .setHighestCopiedEndOffset(-1)
+                        .setRemoteLogManifestPath(first.toString())
+                        .setExpectedManifestPath("");
+        assertThat(gateway.commitRemoteLogManifest(firstRequest).get().isCommitSuccess()).isTrue();
+        // Retrying a successful request must remain successful and keep the existing notify path.
+        assertThat(gateway.commitRemoteLogManifest(firstRequest).get().isCommitSuccess()).isTrue();
+        CommitRemoteLogManifestRequest successor =
+                new CommitRemoteLogManifestRequest()
+                        .setTableId(tableId)
+                        .setBucketId(0)
+                        .setCoordinatorEpoch(replica.getCoordinatorEpoch())
+                        .setBucketLeaderEpoch(replica.getBucketEpoch())
+                        .setRemoteLogStartOffset(Long.MAX_VALUE)
+                        .setRemoteLogEndOffset(-1)
+                        .setHighestCopiedEndOffset(-1)
+                        .setRemoteLogManifestPath(second.toString())
+                        .setExpectedManifestPath(first.toString());
+        assertThat(gateway.commitRemoteLogManifest(successor).get().isCommitSuccess()).isTrue();
+        assertThat(gateway.commitRemoteLogManifest(firstRequest).get().isCommitSuccess()).isFalse();
+        assertThat(
+                        FLUSS_CLUSTER_EXTENSION
+                                .getZooKeeperClient()
+                                .getRemoteLogManifestHandle(bucket)
+                                .get()
+                                .getRemoteLogManifestPath())
+                .isEqualTo(new FsPath(second.toString()));
+    }
 
     @Test
     void testDeleteOutOfSyncReplicaLogAfterCommit() throws Exception {

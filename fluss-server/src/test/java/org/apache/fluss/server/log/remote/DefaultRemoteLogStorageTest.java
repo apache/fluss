@@ -30,15 +30,28 @@ import org.apache.fluss.utils.FlussPaths;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.File;
 import java.io.InputStream;
+import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.AbstractExecutorService;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -208,6 +221,158 @@ class DefaultRemoteLogStorageTest extends RemoteLogTestBase {
                                         IndexType.OFFSET))
                 .isInstanceOf(RemoteStorageException.class)
                 .hasMessageContaining("Failed to fetch index file type: OFFSET from path");
+    }
+
+    @Test
+    void testFailedCopyWaitsForOtherUploadsBeforeCleanup() throws Exception {
+        ControlledUploadExecutor executor = new ControlledUploadExecutor(4);
+        DefaultRemoteLogStorage storage = new DefaultRemoteLogStorage(conf, executor);
+        RemoteLogSegment segment =
+                createRemoteLogSegmentList(makeLogTabletAndAddSegments(false)).get(0);
+        LogSegmentFiles files = createUploadFiles(segment);
+        java.nio.file.Files.delete(files.logSegment());
+        FutureTask<Void> copy =
+                new FutureTask<>(
+                        () -> {
+                            storage.copyLogSegmentFiles(
+                                    FlussPaths.remoteLogDir(conf), segment, files);
+                            return null;
+                        });
+        Thread caller = new Thread(copy);
+        caller.start();
+        List<Runnable> uploads = executor.takeUploads(4);
+        try {
+            uploads.get(0).run();
+            assertThatThrownBy(() -> copy.get(100, TimeUnit.MILLISECONDS))
+                    .isInstanceOf(TimeoutException.class);
+        } finally {
+            uploads.forEach(Runnable::run);
+            caller.join(5000);
+        }
+        assertThat(caller.isAlive()).isFalse();
+        assertThatThrownBy(copy::get)
+                .isInstanceOf(ExecutionException.class)
+                .hasCauseInstanceOf(RemoteStorageException.class);
+        storage.deleteLogSegmentFiles(FlussPaths.remoteLogDir(conf), segment);
+        uploads.forEach(Runnable::run);
+        assertThat(getTestingRemoteLogSegmentDir(segment)).doesNotExist();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testAbortedCopyPreventsQueuedUploads(boolean interrupt) throws Exception {
+        ControlledUploadExecutor executor = new ControlledUploadExecutor(interrupt ? 4 : 2);
+        DefaultRemoteLogStorage storage = new DefaultRemoteLogStorage(conf, executor);
+        RemoteLogSegment segment =
+                createRemoteLogSegmentList(makeLogTabletAndAddSegments(false)).get(0);
+        LogSegmentFiles files = createUploadFiles(segment);
+        AtomicBoolean interrupted = new AtomicBoolean();
+        FutureTask<Void> copy =
+                new FutureTask<>(
+                        () -> {
+                            try {
+                                storage.copyLogSegmentFiles(
+                                        FlussPaths.remoteLogDir(conf), segment, files);
+                                return null;
+                            } finally {
+                                interrupted.set(Thread.currentThread().isInterrupted());
+                            }
+                        });
+        Thread caller = new Thread(copy);
+        caller.start();
+        List<Runnable> uploads = executor.takeUploads(interrupt ? 4 : 2);
+        if (interrupt) {
+            caller.interrupt();
+        }
+        try {
+            assertThatThrownBy(() -> copy.get(5, TimeUnit.SECONDS))
+                    .isInstanceOf(ExecutionException.class)
+                    .hasCauseInstanceOf(RemoteStorageException.class);
+            assertThat(interrupted.get()).isEqualTo(interrupt);
+            storage.deleteLogSegmentFiles(FlussPaths.remoteLogDir(conf), segment);
+            uploads.forEach(Runnable::run);
+            assertThat(getTestingRemoteLogSegmentDir(segment)).doesNotExist();
+        } finally {
+            uploads.forEach(Runnable::run);
+            caller.join(5000);
+        }
+        assertThat(caller.isAlive()).isFalse();
+    }
+
+    private LogSegmentFiles createUploadFiles(RemoteLogSegment segment) throws Exception {
+        Path directory = tempDir.toPath().resolve("upload-source");
+        java.nio.file.Files.createDirectories(directory);
+        Path log =
+                directory.resolve(
+                        FlussPaths.filenamePrefixFromOffset(segment.remoteLogStartOffset())
+                                + ".log");
+        Path index =
+                directory.resolve(
+                        FlussPaths.filenamePrefixFromOffset(segment.remoteLogStartOffset())
+                                + ".index");
+        Path time =
+                directory.resolve(
+                        FlussPaths.filenamePrefixFromOffset(segment.remoteLogStartOffset())
+                                + ".timeindex");
+        Path writer =
+                directory.resolve(
+                        FlussPaths.filenamePrefixFromOffset(segment.remoteLogEndOffset())
+                                + ".writer_snapshot");
+        for (Path file : java.util.Arrays.asList(log, index, time, writer)) {
+            java.nio.file.Files.write(file, new byte[] {1, 2, 3});
+        }
+        return new LogSegmentFiles(log, index, time, writer);
+    }
+
+    private static class ControlledUploadExecutor extends AbstractExecutorService {
+        private final BlockingQueue<Runnable> tasks = new LinkedBlockingQueue<>();
+        private final int accepted;
+        private int submitted;
+
+        private ControlledUploadExecutor(int accepted) {
+            this.accepted = accepted;
+        }
+
+        @Override
+        public void execute(Runnable command) {
+            if (submitted++ >= accepted) {
+                throw new RejectedExecutionException("Injected upload submission failure");
+            }
+            tasks.add(command);
+        }
+
+        private List<Runnable> takeUploads(int count) throws Exception {
+            List<Runnable> result = new ArrayList<>();
+            for (int i = 0; i < count; i++) {
+                Runnable task = tasks.poll(5, TimeUnit.SECONDS);
+                assertThat(task).isNotNull();
+                result.add(task);
+            }
+            return result;
+        }
+
+        @Override
+        public void shutdown() {}
+
+        @Override
+        public List<Runnable> shutdownNow() {
+            return Collections.emptyList();
+        }
+
+        @Override
+        public boolean isShutdown() {
+            return false;
+        }
+
+        @Override
+        public boolean isTerminated() {
+            return false;
+        }
+
+        @Override
+        public boolean awaitTermination(long timeout, TimeUnit unit) {
+            return false;
+        }
     }
 
     private File getTestingRemoteLogSegmentDir(RemoteLogSegment remoteLogSegment) {

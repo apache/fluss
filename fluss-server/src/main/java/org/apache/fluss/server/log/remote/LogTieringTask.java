@@ -19,7 +19,7 @@ package org.apache.fluss.server.log.remote;
 
 import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.RemoteStorageException;
-import org.apache.fluss.exception.RetriableException;
+import org.apache.fluss.exception.UnsupportedVersionException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
@@ -27,11 +27,15 @@ import org.apache.fluss.remote.RemoteLogManifest;
 import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.messages.CommitRemoteLogManifestRequest;
+import org.apache.fluss.rpc.messages.CommitRemoteLogManifestResponse;
 import org.apache.fluss.server.entity.CommitRemoteLogManifestData;
 import org.apache.fluss.server.log.LogSegment;
 import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.metrics.group.TableMetricGroup;
 import org.apache.fluss.server.replica.Replica;
+import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
+import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.clock.Clock;
 
 import org.slf4j.Logger;
@@ -40,11 +44,15 @@ import org.slf4j.LoggerFactory;
 import java.io.File;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeCommitRemoteLogManifestRequest;
@@ -70,6 +78,10 @@ public class LogTieringTask implements Runnable {
     private volatile Long copiedOffset = null;
 
     private volatile boolean cancelled = false;
+    private final Object commitLock = new Object();
+    private final ZooKeeperClient zkClient;
+    private volatile PendingCommit pendingCommit;
+    private boolean running;
 
     public LogTieringTask(
             Replica replica,
@@ -77,6 +89,7 @@ public class LogTieringTask implements Runnable {
             RemoteLogStorage remoteLogStorage,
             RemoteLogIndexCache remoteLogIndexCache,
             CoordinatorGateway coordinatorGateway,
+            ZooKeeperClient zkClient,
             Clock clock,
             int maxUploadSegmentsPerTask) {
         this.replica = replica;
@@ -86,133 +99,204 @@ public class LogTieringTask implements Runnable {
         this.remoteLogStorage = remoteLogStorage;
         this.remoteLogIndexCache = remoteLogIndexCache;
         this.coordinatorGateway = coordinatorGateway;
+        this.zkClient = zkClient;
         this.clock = clock;
         this.maxUploadSegmentsPerTask = maxUploadSegmentsPerTask;
     }
 
     @Override
     public void run() {
-        if (isCancelled()) {
-            return;
-        }
-
-        try {
-            // Try to copy these candidate copy log segments to remote storage and try to clean
-            // up these expired remote log segments from remote.
-            runOnce();
-        } catch (InterruptedException ex) {
-            if (!isCancelled()) {
-                LOG.warn(
-                        "Current thread for table-bucket {} is interrupted. Reason: {}",
-                        tableBucket,
-                        ex.getMessage());
+        synchronized (commitLock) {
+            if (cancelled || running) {
+                return;
             }
-        } catch (RetriableException ex) {
-            LOG.debug(
-                    "Encountered a retryable error while executing current task for table-bucket {}",
-                    tableBucket,
-                    ex);
-        } catch (Exception ex) {
-            if (!isCancelled()) {
-                LOG.warn(
-                        "Current task for table-bucket {} received error but it will be scheduled. "
-                                + "Reason: {}",
-                        tableBucket,
-                        ex.getMessage());
+            running = true;
+        }
+        try {
+            runOnce();
+        } catch (InterruptedException e) {
+            if (!cancelled) {
+                LOG.warn("Remote log task for {} was interrupted.", tableBucket, e);
+            }
+        } finally {
+            PendingCommit retired = null;
+            synchronized (commitLock) {
+                running = false;
+                if (cancelled) {
+                    retired = pendingCommit;
+                    pendingCommit = null;
+                }
+            }
+            if (retired != null) {
+                cleanupRetired(retired);
             }
         }
     }
 
-    private void runOnce() throws InterruptedException {
-        if (isCancelled()) {
-            LOG.info("Returning from LogTieringTask runOnes as the task state is changed");
+    /**
+     * Transfers idle cancelled work to the existing worker executor without blocking cancellation.
+     */
+    void cleanupAfterCancellation(Executor executor) {
+        PendingCommit retired;
+        synchronized (commitLock) {
+            if (!cancelled || running) {
+                return;
+            }
+            retired = pendingCommit;
+            pendingCommit = null;
+        }
+        if (retired != null) {
+            try {
+                executor.execute(() -> cleanupRetired(retired));
+            } catch (RuntimeException e) {
+                LOG.warn(
+                        "Could not schedule retirement cleanup for manifest {} of {}.",
+                        retired.manifestPath,
+                        tableBucket,
+                        e);
+            }
+        }
+    }
+
+    private void cleanupRetired(PendingCommit batch) {
+        if (batch.state == CommitState.COMMITTING) {
+            LOG.warn(
+                    "Retaining unresolved manifest {} for retired task {}.",
+                    batch.manifestPath,
+                    tableBucket);
             return;
         }
-
         try {
-            LogTablet logTablet = replica.getLogTablet();
-            TableMetricGroup metricGroup = replica.tableMetrics();
-            maybeUpdateCopiedOffset(logTablet);
+            cleanupPending(batch);
+        } catch (Exception e) {
+            LOG.warn(
+                    "Retirement cleanup failed for manifest {} of {}.",
+                    batch.manifestPath,
+                    tableBucket,
+                    e);
+        }
+    }
 
-            // Get these candidate log segments to copy and these expired remote log segments to
-            // clean up.
-            List<EnrichedLogSegment> candidateToCopySegments =
-                    candidateToCopyLogSegments(logTablet);
-            // Only delete segments that have been tiered to lake to ensure data safety
-            TableConfig tableConfig = replica.getTableInfo().getTableConfig();
-            List<RemoteLogSegment> expiredRemoteLogSegments =
-                    remoteLog.expiredRemoteLogSegments(
-                            clock.milliseconds(),
-                            tableConfig.isDataLakeEnabled()
-                                    ? logTablet.getLakeLogEndOffset()
-                                    : null,
-                            tableConfig.getLogTTLMs());
-
-            // 1. For these candidateToCopySegments, we will first copy segment files to
-            // remote before commit the remote log manifest.
-            List<RemoteLogSegment> copiedSegments = new ArrayList<>();
-            long endOffset =
-                    copyLogSegmentFilesToRemote(
-                            logTablet, candidateToCopySegments, copiedSegments, metricGroup);
-
-            // 2. try to commit the remote log manifest snapshot to coordinator server and
-            // update the local cache of remote log manifest.
-            if (!copiedSegments.isEmpty() || !expiredRemoteLogSegments.isEmpty()) {
-                RemoteLogManifest currentManifest = remoteLog.currentManifest();
-                RemoteLogManifest newManifest;
-                try {
-                    newManifest =
-                            currentManifest.trimAndMerge(expiredRemoteLogSegments, copiedSegments);
-                } catch (IllegalArgumentException mergeError) {
-                    deleteRemoteLogSegmentFiles(copiedSegments, metricGroup);
-                    throw mergeError;
+    private void runOnce() throws InterruptedException {
+        PendingCommit batch = pendingCommit;
+        try {
+            if (isCancelled()) {
+                return;
+            }
+            if (batch == null) {
+                LogTablet log = replica.getLogTablet();
+                maybeUpdateCopiedOffset(log);
+                List<EnrichedLogSegment> candidates = candidateToCopyLogSegments(log);
+                TableConfig tableConfig = replica.getTableInfo().getTableConfig();
+                List<RemoteLogSegment> expired =
+                        remoteLog.expiredRemoteLogSegments(
+                                clock.milliseconds(),
+                                tableConfig.isDataLakeEnabled() ? log.getLakeLogEndOffset() : null,
+                                tableConfig.getLogTTLMs());
+                if (candidates.isEmpty() && expired.isEmpty()) {
+                    return;
                 }
-                boolean success = tryToCommitRemoteLogManifest(remoteLog, newManifest);
-
-                if (success) {
-                    List<RemoteLogSegment> segmentsToDelete =
-                            segmentsToDeleteAfterCommit(
-                                    currentManifest, copiedSegments, newManifest);
-                    if (!segmentsToDelete.isEmpty()) {
-                        // 3. For these expiredRemoteLogSegments, we will delete remote log
-                        // segment files from remote after commit the remote log manifest.
-                        // TODO introduce the read reference count to avoid deleting remote log
-                        // segments while there are readers is in progress.
-                        deleteRemoteLogSegmentFiles(segmentsToDelete, metricGroup);
-
-                        remoteLogIndexCache.removeAll(
-                                segmentsToDelete.stream()
-                                        .map(RemoteLogSegment::remoteLogSegmentId)
-                                        .collect(Collectors.toList()));
+                batch =
+                        new PendingCommit(
+                                remoteLog.currentManifest(), remoteLog.currentManifestPath());
+                synchronized (commitLock) {
+                    if (cancelled) {
+                        return;
                     }
-
-                    if (endOffset > 0) {
-                        // endOffset is the next segment base offset, so we need to decrement it
-                        // by 1 to get the last copied segment's highest offset.
-                        copiedOffset = endOffset - 1;
+                    pendingCommit = batch;
+                }
+                try {
+                    copyLogSegmentFilesToRemote(
+                            log,
+                            candidates,
+                            batch.copiedSegments,
+                            batch.uploadedSegments,
+                            replica.tableMetrics());
+                    if (!batch.copiedSegments.isEmpty() || !expired.isEmpty()) {
+                        batch.manifest = batch.previous.trimAndMerge(expired, batch.copiedSegments);
+                        batch.manifestPath =
+                                remoteLogStorage.writeRemoteLogManifestSnapshot(
+                                        remoteLog.getRemoteLogDir(), batch.manifest);
                     }
-                } else {
-                    LOG.error(
-                            "Failed commit remote log manifest snapshot to coordinator server "
-                                    + "for bucket: {}, copied segments: {}, expired segments: {}",
-                            tableBucket,
-                            copiedSegments,
-                            expiredRemoteLogSegments);
-
-                    if (!copiedSegments.isEmpty()) {
-                        // 4. For these copiedSegments, if snapshot commit failed, we need to
-                        // delete remote log segment files already copied in step 1.
-                        deleteRemoteLogSegmentFiles(copiedSegments, metricGroup);
+                } catch (Exception e) {
+                    try {
+                        cleanupPending(batch);
+                    } catch (Exception cleanupFailure) {
+                        e.addSuppressed(cleanupFailure);
                     }
+                    throw e;
+                }
+                if (batch.manifestPath != null && !commitPending(batch)) {
+                    return;
                 }
             }
-
-        } catch (InterruptedException | RetriableException ex) {
-            throw ex;
-        } catch (Exception ex) {
+            resumePending(batch);
+        } catch (InterruptedException e) {
+            throw e;
+        } catch (Exception e) {
             if (!isCancelled()) {
-                LOG.error(
-                        "Error occurred while copying log segments of bucket: {}", tableBucket, ex);
+                LOG.warn(
+                        "Remote log round for {} will be retried without new uploads.",
+                        tableBucket,
+                        e);
+            }
+        }
+    }
+
+    private void resumePending(PendingCommit batch) throws Exception {
+        if (batch.state == CommitState.COMMITTING) {
+            if (!commitPending(batch)) {
+                return;
+            }
+        }
+        if (batch.state == CommitState.PUBLISHING) {
+            synchronized (commitLock) {
+                if (cancelled) {
+                    return;
+                }
+                remoteLog.loadRemoteLogManifest(
+                        batch.manifest,
+                        batch.manifestPath == null ? "" : batch.manifestPath.toString());
+                LogTablet log = replica.getLogTablet();
+                log.publishRemoteLogOffsets(
+                        batch.manifest.getRemoteLogStartOffset(),
+                        batch.manifest.getRemoteLogEndOffset(),
+                        batch.manifest.getHighestCopiedEndOffset());
+                log.updateRemoteLogSize(batch.manifest.getRemoteLogSize());
+                batch.state = CommitState.CLEANING;
+            }
+        }
+        if (batch.state == CommitState.CLEANING || batch.state == CommitState.UNSUBMITTED) {
+            cleanupPending(batch);
+        }
+    }
+
+    private void cleanupPending(PendingCommit batch) throws Exception {
+        while (batch.cleanupIndex < batch.cleanupSegments.size()) {
+            RemoteLogSegment segment = batch.cleanupSegments.get(batch.cleanupIndex);
+            try {
+                remoteLogStorage.deleteLogSegmentFiles(remoteLog.getRemoteLogDir(), segment);
+                replica.tableMetrics().remoteLogDeleteRequests().inc();
+                remoteLogIndexCache.removeAll(
+                        Collections.singletonList(segment.remoteLogSegmentId()));
+                batch.cleanupIndex++;
+            } catch (Exception e) {
+                replica.tableMetrics().remoteLogDeleteErrors().inc();
+                throw e;
+            }
+        }
+        if (batch.state == CommitState.UNSUBMITTED && batch.manifestPath != null) {
+            remoteLogStorage.deleteRemoteLogManifestSnapshot(batch.manifestPath);
+        }
+        if (batch.state == CommitState.CLEANING && !cancelled) {
+            // This method reads the currently published boundary; it performs I/O outside
+            // commitLock.
+            replica.getLogTablet().deleteSegmentsAlreadyExistsInRemote();
+            copiedOffset = findCopiedOffset(replica.getLogTablet());
+        }
+        synchronized (commitLock) {
+            if (pendingCommit == batch) {
+                pendingCommit = null;
             }
         }
     }
@@ -265,17 +349,14 @@ public class LogTieringTask implements Runnable {
      * <p>If a segment copy fails (e.g., due to rate limiting or transient errors), the method stops
      * copying further segments but retains all previously successful copies so they can still be
      * committed, avoiding wasted uploads.
-     *
-     * @return the end offset of the last segment successfully copied to remote, or -1 if no
-     *     segments were copied.
      */
-    private long copyLogSegmentFilesToRemote(
+    private void copyLogSegmentFilesToRemote(
             LogTablet log,
             List<EnrichedLogSegment> segments,
             List<RemoteLogSegment> copiedSegments,
+            List<RemoteLogSegment> uploadedSegments,
             TableMetricGroup metricGroup)
             throws Exception {
-        long endOffset = -1;
         for (EnrichedLogSegment enrichedSegment : segments) {
             LogSegment segment = enrichedSegment.logSegment;
             File logFile = segment.getFileLogRecords().file();
@@ -308,6 +389,7 @@ public class LogTieringTask implements Runnable {
                             .maxTimestamp(segment.maxTimestampSoFar())
                             .segmentSizeInBytes(sizeInBytes)
                             .build();
+            uploadedSegments.add(copyRemoteLogSegment);
             try {
                 remoteLogStorage.copyLogSegmentFiles(
                         remoteLog.getRemoteLogDir(), copyRemoteLogSegment, logSegmentFiles);
@@ -333,101 +415,93 @@ public class LogTieringTask implements Runnable {
             metricGroup.remoteLogCopyRequests().inc();
             metricGroup.remoteLogCopyBytes().inc(sizeInBytes);
             copiedSegments.add(copyRemoteLogSegment);
-            endOffset = segmentEndOffset;
         }
-        return endOffset;
     }
 
-    /**
-     * Try to commit remote log manifest. Including three steps.
-     *
-     * <pre>
-     *     1. apply the build snapshot method (may be copy to/delete from remote)
-     *     2. upload the remote log manifest file to remote storage.
-     *     3. sending the CommitRemoteLogManifestRequest to coordinator server to try to commit this snapshot.
-     *        - If commit success, we will apply the commit success action (e.g., delete expired remote segments), and return true.
-     *        - If commit failed, we will apply rollback action (i.e., delete the new added remote segments), and return false.
-     * </pre>
-     */
-    private boolean tryToCommitRemoteLogManifest(
-            RemoteLogTablet remoteLogTablet, RemoteLogManifest newRemoteLogManifest) {
-        FsPath remoteLogManifestPath;
-        try {
-            // 1. upload the remote log manifest file to remote storage.
-            remoteLogManifestPath =
-                    remoteLogStorage.writeRemoteLogManifestSnapshot(
-                            remoteLog.getRemoteLogDir(), newRemoteLogManifest);
-        } catch (Exception e) {
-            LOG.error(
-                    "Write remote log manifest file to remote storage failed for bucket {}.",
-                    tableBucket,
-                    e);
-            return false;
-        }
-
-        // 2. sending the CommitRemoteLogManifestRequest to coordinator server
-        // to try to commit this snapshot.
-        long newRemoteLogStartOffset = newRemoteLogManifest.getRemoteLogStartOffset();
-        long newRemoteLogEndOffset = newRemoteLogManifest.getRemoteLogEndOffset();
-        long newRemoteLogSize = newRemoteLogManifest.getRemoteLogSize();
-        int retrySendCommitTimes = 1;
-        while (retrySendCommitTimes <= 10) {
+    private boolean commitPending(PendingCommit batch) throws Exception {
+        boolean previouslySubmitted = batch.state == CommitState.COMMITTING;
+        for (int attempt = 1; attempt <= 10; attempt++) {
+            CommitRemoteLogManifestRequest request =
+                    makeCommitRemoteLogManifestRequest(
+                            new CommitRemoteLogManifestData(
+                                    tableBucket,
+                                    batch.manifestPath,
+                                    batch.manifest.getRemoteLogStartOffset(),
+                                    batch.manifest.getRemoteLogEndOffset(),
+                                    batch.manifest.getHighestCopiedEndOffset(),
+                                    batch.coordinatorEpoch,
+                                    batch.bucketEpoch,
+                                    batch.legacy ? null : batch.expectedPath));
+            CompletableFuture<CommitRemoteLogManifestResponse> response;
             try {
-                boolean success =
-                        commitRemoteLogManifest(
-                                new CommitRemoteLogManifestData(
-                                        tableBucket,
-                                        remoteLogManifestPath,
-                                        newRemoteLogStartOffset,
-                                        newRemoteLogEndOffset,
-                                        newRemoteLogManifest.getHighestCopiedEndOffset(),
-                                        // TODO: manifest snapshot should include the epoch info,
-                                        //  and this should be moved into Replica under read lock of
-                                        //  leaderIsrUpdateLock, see FLUSS-56282058
-                                        replica.getCoordinatorEpoch(),
-                                        replica.getBucketEpoch()));
-                if (!success) {
-                    // the commit failed, it means the commit snapshot is invalid or register zk
-                    // failed, we will revert this commit and delete the remote log manifest
-                    // file.
-                    // TODO: add the fail reason in the future.
-                    LOG.error(
-                            "Commit remote log manifest failed for table bucket {}. We will delete the"
-                                    + " written remote log manifest file",
-                            tableBucket);
-                    remoteLogStorage.deleteRemoteLogManifestSnapshot(remoteLogManifestPath);
-                    return false;
-                } else {
-                    // commit succeed.
-                    // TODO: commit with version to avoid the manifest has been updated
-                    remoteLogTablet.loadRemoteLogManifest(newRemoteLogManifest);
-                    LogTablet logTablet = replica.getLogTablet();
-
-                    logTablet.updateRemoteLogOffsets(
-                            newRemoteLogStartOffset,
-                            newRemoteLogEndOffset,
-                            newRemoteLogManifest.getHighestCopiedEndOffset());
-                    logTablet.updateRemoteLogSize(newRemoteLogSize);
+                synchronized (commitLock) {
+                    if (cancelled) {
+                        return false;
+                    }
+                    batch.state = CommitState.COMMITTING;
+                    response = coordinatorGateway.commitRemoteLogManifest(request);
+                }
+                if (response.get().isCommitSuccess()) {
+                    preparePublication(batch);
                     return true;
                 }
+                return batch.legacy ? false : resolveCommitResult(batch);
+            } catch (InterruptedException e) {
+                throw e;
             } catch (Exception e) {
-                // the commit failed with unexpected exception, like network error, we will
-                // retry send.
-                LOG.error(
-                        "The {} time try to commit remote log manifest failed for bucket {}.",
-                        retrySendCommitTimes,
+                Throwable cause = ExceptionUtils.stripExecutionException(e);
+                if (cause instanceof UnsupportedVersionException && !batch.legacy) {
+                    // The transport rejects conditional v1 requests before dispatch to a v0 peer.
+                    if (previouslySubmitted) {
+                        // An uncertain conditional submission must not be replayed unconditionally.
+                        return false;
+                    }
+                    batch.state = CommitState.UNSUBMITTED;
+                    batch.legacy = true;
+                    continue;
+                }
+                previouslySubmitted = true;
+                LOG.debug(
+                        "Remote log commit attempt {} for {} has an unknown outcome.",
+                        attempt,
                         tableBucket,
                         e);
-                retrySendCommitTimes++;
             }
         }
+        return batch.legacy ? false : resolveCommitResult(batch);
+    }
 
-        LOG.error(
-                "Commit remote log manifest failed after retry 10 times for table-bucket {}. "
-                        + "We will ignore this commit but don't delete the remote log "
-                        + "manifest file",
-                tableBucket);
-        return false;
+    private boolean resolveCommitResult(PendingCommit batch) throws Exception {
+        Optional<RemoteLogManifestHandle> handle = zkClient.getRemoteLogManifestHandle(tableBucket);
+        String currentPath = handle.map(h -> h.getRemoteLogManifestPath().toString()).orElse("");
+        if (currentPath.equals(batch.manifestPath.toString())) {
+            preparePublication(batch);
+            return true;
+        }
+        if (currentPath.equals(batch.expectedPath)) {
+            // The request may still execute against this predecessor. Keep the same upload owner.
+            return false;
+        }
+        RemoteLogManifest current =
+                handle.isPresent()
+                        ? remoteLogStorage.readRemoteLogManifestSnapshot(
+                                handle.get().getRemoteLogManifestPath())
+                        : new RemoteLogManifest(physicalTablePath, tableBucket, new ArrayList<>());
+        // The head advanced past the predecessor: delayed conditional requests cannot install this
+        // candidate. Transfer files referenced by that head, and retain ownership of the rest until
+        // cleanup succeeds. A possibly committed manifest snapshot follows the existing history
+        // policy.
+        batch.manifest = current;
+        batch.manifestPath =
+                handle.map(RemoteLogManifestHandle::getRemoteLogManifestPath).orElse(null);
+        preparePublication(batch);
+        return true;
+    }
+
+    private void preparePublication(PendingCommit batch) {
+        batch.cleanupSegments =
+                segmentsToDeleteAfterCommit(batch.previous, batch.uploadedSegments, batch.manifest);
+        batch.state = CommitState.PUBLISHING;
     }
 
     private List<RemoteLogSegment> segmentsToDeleteAfterCommit(
@@ -460,11 +534,6 @@ public class LogTieringTask implements Runnable {
                 target.add(candidate);
             }
         }
-    }
-
-    private boolean commitRemoteLogManifest(CommitRemoteLogManifestData data) throws Exception {
-        CommitRemoteLogManifestRequest request = makeCommitRemoteLogManifestRequest(data);
-        return coordinatorGateway.commitRemoteLogManifest(request).get().isCommitSuccess();
     }
 
     private Path toPathIfExists(File file) {
@@ -534,28 +603,10 @@ public class LogTieringTask implements Runnable {
         return candidateLogSegments;
     }
 
-    /** Delete the remote log segment files. */
-    private void deleteRemoteLogSegmentFiles(
-            List<RemoteLogSegment> remoteLogSegmentList, TableMetricGroup metricGroup) {
-        for (RemoteLogSegment remoteLogSegment : remoteLogSegmentList) {
-            try {
-                remoteLogStorage.deleteLogSegmentFiles(
-                        remoteLog.getRemoteLogDir(), remoteLogSegment);
-                metricGroup.remoteLogDeleteRequests().inc();
-            } catch (Exception e) {
-                LOG.error(
-                        "Error occurred while deleting remote log segment files: {} for bucket {}, "
-                                + "the delete files operation will be skipped.",
-                        tableBucket,
-                        remoteLogSegment,
-                        e);
-                metricGroup.remoteLogDeleteErrors().inc();
-            }
-        }
-    }
-
     public void cancel() {
-        cancelled = true;
+        synchronized (commitLock) {
+            cancelled = true;
+        }
     }
 
     public boolean isCancelled() {
@@ -564,6 +615,34 @@ public class LogTieringTask implements Runnable {
 
     public String toString() {
         return this.getClass() + "[" + tableBucket + "]";
+    }
+
+    private enum CommitState {
+        UNSUBMITTED,
+        COMMITTING,
+        PUBLISHING,
+        CLEANING
+    }
+
+    /** One owned upload and cleanup set; no streams or local files are retained between rounds. */
+    private final class PendingCommit {
+        private final RemoteLogManifest previous;
+        private final String expectedPath;
+        private final int coordinatorEpoch = replica.getCoordinatorEpoch();
+        private final int bucketEpoch = replica.getBucketEpoch();
+        private final List<RemoteLogSegment> copiedSegments = new ArrayList<>();
+        private final List<RemoteLogSegment> uploadedSegments = new ArrayList<>();
+        private List<RemoteLogSegment> cleanupSegments = uploadedSegments;
+        private int cleanupIndex;
+        private RemoteLogManifest manifest;
+        private FsPath manifestPath;
+        private CommitState state = CommitState.UNSUBMITTED;
+        private boolean legacy;
+
+        private PendingCommit(RemoteLogManifest previous, String expectedPath) {
+            this.previous = previous;
+            this.expectedPath = expectedPath;
+        }
     }
 
     private static class EnrichedLogSegment {
