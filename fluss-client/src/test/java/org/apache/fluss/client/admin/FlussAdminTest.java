@@ -25,7 +25,12 @@ import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.AuthorizationException;
+import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.exception.UnsupportedVersionException;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TableOrPartition;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.messages.ApiMessage;
 import org.apache.fluss.rpc.messages.DescribeClusterResponse;
 import org.apache.fluss.rpc.messages.MetadataResponse;
@@ -37,16 +42,22 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import javax.annotation.Nullable;
+
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR_PK;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
-/** Tests for cluster discovery and inspection through {@link FlussAdmin}. */
+/** Tests for {@link FlussAdmin}. */
 class FlussAdminTest {
 
     private static final ServerNode OLD_COORDINATOR =
@@ -173,6 +184,80 @@ class FlussAdminTest {
                     .containsExactly(
                             new ServerNode(0, "coordinator", 9123, ServerType.COORDINATOR),
                             new ServerNode(1, "tablet", 9124, ServerType.TABLET_SERVER));
+        }
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+        "1, 1, true",
+        "1, 99, true",
+        "5, 5, true",
+        "5, -1, true",
+        "5, 4, false",
+        "1, 0, false",
+        ", 99, false",
+        ", -1, false"
+    })
+    void testListOffsetsValidatesBucketsUsingRefreshedMetadata(
+            @Nullable Integer bucketCount, int bucket, boolean expectInvalidBucket)
+            throws Exception {
+        TablePath tablePath = TablePath.of("db", "tbl");
+        TableInfo tableInfo = TableInfo.of(tablePath, 1L, 1, DATA1_TABLE_DESCRIPTOR_PK, "", 0L, 0L);
+        Cluster refreshedCluster =
+                new Cluster(
+                        Collections.emptyMap(),
+                        null,
+                        Collections.emptyMap(),
+                        Collections.singletonMap(tablePath, tableInfo.getTableId()),
+                        Collections.emptyMap(),
+                        bucketCount != null
+                                ? Collections.singletonMap(
+                                        TableOrPartition.ofTable(1L), bucketCount)
+                                : Collections.emptyMap(),
+                        Collections.emptyMap());
+        LeaderNotAvailableException missingLeader =
+                new LeaderNotAvailableException("Bucket leader is not available");
+        TestingRpcClient client =
+                new TestingRpcClient(
+                        (node, api) -> {
+                            throw new AssertionError("Unexpected RPC: " + api);
+                        });
+        MetadataUpdater updater =
+                new MetadataUpdater(client, new Configuration(), Cluster.empty()) {
+                    @Override
+                    public void updateTableOrPartitionMetadata(
+                            TablePath path, @Nullable Long partitionId) {
+                        cluster = refreshedCluster;
+                    }
+
+                    @Override
+                    public int leaderFor(TablePath path, TableBucket tableBucket) {
+                        throw missingLeader;
+                    }
+                };
+        try (FlussAdmin admin =
+                new FlussAdmin(client, updater) {
+                    @Override
+                    public CompletableFuture<TableInfo> getTableInfo(TablePath path) {
+                        return CompletableFuture.completedFuture(tableInfo);
+                    }
+                }) {
+            Throwable thrown =
+                    catchThrowable(
+                            () ->
+                                    admin.listOffsets(
+                                            tablePath,
+                                            Arrays.asList(0, bucket),
+                                            new OffsetSpec.LatestSpec()));
+            if (expectInvalidBucket) {
+                assertThat(thrown)
+                        .isInstanceOf(IllegalArgumentException.class)
+                        .hasMessage(
+                                "Bucket %d does not exist in %s, which has %d buckets.",
+                                bucket, tablePath, bucketCount);
+            } else {
+                assertThat(thrown).isSameAs(missingLeader);
+            }
         }
     }
 
