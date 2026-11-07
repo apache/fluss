@@ -434,8 +434,7 @@ public final class TableDescriptor implements Serializable {
     private static List<String> defaultBucketKeyOfPrimaryKeyTable(
             Schema schema, List<String> partitionKeys) {
         checkArgument(schema.getPrimaryKey().isPresent(), "Primary key must be set.");
-        List<String> bucketKeys = new ArrayList<>(schema.getPrimaryKey().get().getColumnNames());
-        bucketKeys.removeAll(partitionKeys);
+        List<String> bucketKeys = schema.getPhysicalPrimaryKeys(partitionKeys);
         if (bucketKeys.isEmpty()) {
             throw new IllegalArgumentException(
                     String.format(

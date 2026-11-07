@@ -31,7 +31,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.stream.Collectors;
 
 /**
  * Information of a created table metadata, includes table id (unique identifier of the table in the
@@ -124,7 +123,7 @@ public final class TableInfo {
         this.schema = schema;
         this.rowType = schema.getRowType();
         this.primaryKeys = schema.getPrimaryKeyColumnNames();
-        this.physicalPrimaryKeys = generatePhysicalPrimaryKey(primaryKeys, partitionKeys);
+        this.physicalPrimaryKeys = schema.getPhysicalPrimaryKeys(partitionKeys);
         this.bucketKeys = bucketKeys;
         this.partitionKeys = partitionKeys;
         this.numBuckets = numBuckets;
@@ -605,10 +604,4 @@ public final class TableInfo {
 
     // --------------------------------------------------------------------------------------------
 
-    private static List<String> generatePhysicalPrimaryKey(
-            List<String> primaryKeys, List<String> partitionKeys) {
-        return primaryKeys.stream()
-                .filter(pk -> !partitionKeys.contains(pk))
-                .collect(Collectors.toList());
-    }
 }
