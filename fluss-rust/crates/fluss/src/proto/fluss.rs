@@ -609,24 +609,23 @@ pub struct FindConsumerGroupOwnerResponse {
     pub owner: PbServerNode,
 }
 /// Commit consumer offsets request and response.
-/// Each tablet server appends accepted non-empty commits for the same group in submission order,
-/// including when initializing the system table. Replication acknowledgements may overlap.
+/// Concurrent commits for the same group may be appended in any order.
 /// Offset values may decrease for intentional consumption resets.
+/// Within one request, the last entry for each bucket supplies its offset and metadata.
+/// If that entry exceeds the metadata limit, the bucket returns a size error and is not updated.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommitConsumerOffsetsRequest {
     #[prost(string, required, tag = "1")]
     pub group_id: ::prost::alloc::string::String,
-    /// An empty list, or tables containing no buckets, is a valid no-op and produces an empty
-    /// successful response.
+    /// Once the group and ownership are validated, a request with no buckets succeeds.
     #[prost(message, repeated, tag = "2")]
     pub tables: ::prost::alloc::vec::Vec<PbCommitConsumerOffsetsRequestTable>,
 }
-/// Request-level failures, such as authentication, authorization, malformed requests, or an
-/// unexpected server failure, are returned through the RPC ErrorResponse envelope. Logical commit
-/// failures, including group validation, ownership, and bucket write failures, are reported in each
-/// PbCommitConsumerOffsetsResponseBucket.
+/// Group validation, owner availability, authorization, and malformed requests use the RPC
+/// ErrorResponse envelope. Offset validation and write failures are reported per bucket.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommitConsumerOffsetsResponse {
+    /// One result per distinct bucket in the request.
     #[prost(message, repeated, tag = "1")]
     pub tables: ::prost::alloc::vec::Vec<PbCommitConsumerOffsetsResponseTable>,
 }
@@ -2142,6 +2141,7 @@ pub struct PbCommitConsumerOffsetsRequestBucket {
     pub bucket_id: i32,
     #[prost(int64, required, tag = "3")]
     pub offset: i64,
+    /// Omitted metadata is stored as null. An explicit empty string is preserved.
     #[prost(string, optional, tag = "4")]
     pub metadata: ::core::option::Option<::prost::alloc::string::String>,
 }

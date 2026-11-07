@@ -44,6 +44,7 @@ public final class ConsumerOffsetTableConfig {
     private final int offsetsTableNumBuckets;
     private final int offsetsTableReplicationFactor;
     private final Duration offsetCommitTimeout;
+    private final int offsetCommitTimeoutMs;
 
     /** Creates a consumer-offset table configuration. */
     public ConsumerOffsetTableConfig(
@@ -58,6 +59,7 @@ public final class ConsumerOffsetTableConfig {
         this.offsetsTableReplicationFactor = offsetsTableReplicationFactor;
         this.offsetCommitTimeout =
                 checkNotNull(offsetCommitTimeout, "offsetCommitTimeout must not be null");
+        this.offsetCommitTimeoutMs = Math.toIntExact(offsetCommitTimeout.toMillis());
     }
 
     /** Creates the table configuration from the canonical {@link ConfigOptions} definitions. */
@@ -94,6 +96,11 @@ public final class ConsumerOffsetTableConfig {
     /** Returns the timeout for committing consumer offsets. */
     public Duration getOffsetCommitTimeout() {
         return offsetCommitTimeout;
+    }
+
+    /** Returns the replica acknowledgement timeout in milliseconds. */
+    public int getOffsetCommitTimeoutMs() {
+        return offsetCommitTimeoutMs;
     }
 
     @Override

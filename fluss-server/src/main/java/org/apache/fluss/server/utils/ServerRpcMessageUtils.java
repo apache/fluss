@@ -27,8 +27,8 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.config.cluster.ColumnPositionType;
 import org.apache.fluss.config.cluster.ConfigEntry;
-import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.InvalidConfigException;
+import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
 import org.apache.fluss.lake.committer.LakeCommitResult;
@@ -79,6 +79,7 @@ import org.apache.fluss.rpc.messages.DescribeClusterResponse;
 import org.apache.fluss.rpc.messages.DropAclsResponse;
 import org.apache.fluss.rpc.messages.FetchLogRequest;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
+import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerResponse;
 import org.apache.fluss.rpc.messages.GetFileSystemSecurityTokenResponse;
 import org.apache.fluss.rpc.messages.GetKvSnapshotMetadataResponse;
 import org.apache.fluss.rpc.messages.GetLakeSnapshotResponse;
@@ -233,7 +234,6 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -1229,15 +1229,15 @@ public class ServerRpcMessageUtils {
         return fetchLogResponse;
     }
 
-    /** Decodes offset commits, rejecting duplicate buckets and reserved partition IDs. */
+    /** Decodes the last offset and metadata supplied for each bucket. */
     public static Map<TableBucket, ConsumerOffsetAndMetadata> decodeCommitConsumerOffsetsRequest(
             CommitConsumerOffsetsRequest request) {
-        Map<TableBucket, ConsumerOffsetAndMetadata> offsets = new LinkedHashMap<>();
+        Map<TableBucket, ConsumerOffsetAndMetadata> offsets = new HashMap<>();
         for (PbCommitConsumerOffsetsRequestTable table : request.getTablesList()) {
             for (PbCommitConsumerOffsetsRequestBucket bucket : table.getBucketsList()) {
                 Long partitionId = bucket.hasPartitionId() ? bucket.getPartitionId() : null;
                 if (partitionId != null && partitionId == NON_PARTITIONED_PARTITION_ID) {
-                    throw new InvalidBucketRoutingException(
+                    throw new InvalidPartitionException(
                             "partition_id="
                                     + NON_PARTITIONED_PARTITION_ID
                                     + " is reserved for internal offset storage; "
@@ -1245,16 +1245,11 @@ public class ServerRpcMessageUtils {
                 }
                 TableBucket tableBucket =
                         new TableBucket(table.getTableId(), partitionId, bucket.getBucketId());
-                if (offsets.containsKey(tableBucket)) {
-                    throw new InvalidBucketRoutingException(
-                            "Duplicate table bucket in CommitConsumerOffsets request: "
-                                    + tableBucket);
-                }
                 offsets.put(
                         tableBucket,
                         new ConsumerOffsetAndMetadata(
                                 bucket.getOffset(),
-                                bucket.hasMetadata() ? bucket.getMetadata() : ""));
+                                bucket.hasMetadata() ? bucket.getMetadata() : null));
             }
         }
         return offsets;
@@ -1393,7 +1388,18 @@ public class ServerRpcMessageUtils {
         return targetColumns.length == 0 ? null : targetColumns;
     }
 
-    /** Builds an offset commit response preserving the result map's table and bucket order. */
+    /** Builds the discovery response with the owner's advertised endpoint. */
+    public static FindConsumerGroupOwnerResponse makeFindConsumerGroupOwnerResponse(
+            ServerNode owner) {
+        return new FindConsumerGroupOwnerResponse()
+                .setOwner(
+                        new PbServerNode()
+                                .setNodeId(owner.id())
+                                .setHost(owner.host())
+                                .setPort(owner.port()));
+    }
+
+    /** Groups the per-bucket offset commit results by table. */
     public static CommitConsumerOffsetsResponse makeCommitConsumerOffsetsResponse(
             Map<TableBucket, Errors> results) {
         CommitConsumerOffsetsResponse response = new CommitConsumerOffsetsResponse();
