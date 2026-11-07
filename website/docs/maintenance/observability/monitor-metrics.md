@@ -1176,6 +1176,40 @@ These metrics provide a server-wide view of RocksDB resource usage. The total me
   </tbody>
 </table>
 
+The following cumulative counters add 10 series per TabletServer, with no table, partition or
+bucket labels. Values come from RocksDB Statistics and retain previously sampled totals when DBs
+close or migrate. Counters reset on TabletServer restart. The Prometheus reporter exports Fluss
+counters as gauges; use their cumulative values with `rate()` over a suitable interval.
+
+| Metric | Labels | Description | Type |
+| --- | --- | --- | --- |
+| rocksdbSharedBlockCacheHitsTotal | `block_type=data/index/filter` | Native block cache hits from DBs using this server's shared block cache. | Counter |
+| rocksdbSharedBlockCacheMissesTotal | `block_type=data/index/filter` | Corresponding native cache misses, not physical disk reads. | Counter |
+| rocksdbNativeReadCountTotal | `operation=get/multiGet` | Count reported by the native `DB_GET` or `DB_MULTIGET` histogram. | Counter |
+| rocksdbNativeReadTimeUsTotal | `operation=get/multiGet` | Sum reported by the corresponding native histogram, in microseconds. | Counter |
+
+Shared cache counters exclude independent DB caches, write buffer accounting caches and the OS page
+cache. They remain zero when the shared block cache is disabled; native read counters remain
+available independently of shared-cache configuration. Read counts and times follow RocksDB's
+instrumentation and configured Statistics level. They measure native Get and MultiGet, excluding
+JNI conversion and Java result construction.
+
+Collection reuses the Statistics already enabled for KV storage without increasing its Statistics
+level. It adds no per-request Java timing or counter updates. Each counter read samples one native
+ticker or histogram per distinct Statistics object under the same synchronization as Statistics
+acquisition and release. A histogram sample reads both count and sum; exporting both counters reads
+the histogram twice per scrape. This collection can delay DB open/close and has not been benchmarked.
+
+Buckets sharing the same Statistics share one sampling baseline. The last DB close collects the
+final interval before releasing Statistics. Failed samples preserve the baseline and cumulative
+totals so the next successful sample catches up; a failed final sample can lose unsampled events.
+Detected native counter resets start a new epoch without subtracting previously sampled totals.
+
+`rate(time) / rate(count)` estimates the average native operation time; neither cumulative wall time
+nor cache misses directly measure CPU usage or physical disk I/O. Cache access rate is `rate(hits) +
+rate(misses)` and miss ratio is `rate(misses) / (rate(hits) + rate(misses))`; a zero denominator means
+no observed accesses. Use CPU/disk metrics and on-demand profiling to investigate CPU versus I/O.
+
 #### Table-level RocksDB Memory Metrics (Sum Aggregation)
 
 <table class="table table-bordered">

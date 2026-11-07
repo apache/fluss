@@ -30,8 +30,10 @@ import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.metrics.Counter;
 import org.apache.fluss.metrics.Gauge;
 import org.apache.fluss.metrics.MetricNames;
+import org.apache.fluss.metrics.groups.AbstractMetricGroup;
 import org.apache.fluss.metrics.registry.NOPMetricRegistry;
 import org.apache.fluss.record.KvRecord;
 import org.apache.fluss.record.KvRecordBatch;
@@ -56,6 +58,8 @@ import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.fluss.utils.concurrent.FlussScheduler;
 
+import io.github.fluss_contrib.rocksdb.HistogramData;
+import io.github.fluss_contrib.rocksdb.HistogramType;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -1040,6 +1044,53 @@ final class KvManagerTest {
         } else {
             tableBucket1 = new TableBucket(15001L, 11L, 1);
             tableBucket2 = new TableBucket(15002L, 11L, 1);
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testNativeReadMetricsFromManagedKv(boolean sharedCacheEnabled) throws Exception {
+        kvManager.shutdown();
+        kvManager = null;
+        conf.set(
+                ConfigOptions.KV_SHARED_BLOCK_CACHE_SIZE,
+                MemorySize.ofMebiBytes(sharedCacheEnabled ? 1 : 0));
+        TabletServerMetricGroup metricGroup =
+                new TabletServerMetricGroup(
+                        NOPMetricRegistry.INSTANCE, "cluster", "rack", "host", 1);
+        kvManager = KvManager.create(conf, zkClient, logManager, metricGroup, localDiskManager);
+        kvManager.startup();
+        initTableBuckets(null);
+        KvTablet kv = getOrCreateKv(tablePath1, null, tableBucket1);
+        byte[] key = "key".getBytes(StandardCharsets.UTF_8);
+        KvRecord record = kvRecordFactory.ofRecord(key, new Object[] {1, "value"});
+        put(kv, record);
+        assertThat(kv.getRocksDBKv().get(key)).isEqualTo(valueOf(record));
+        verifyMultiGet(kv, key, valueOf(record));
+
+        String[] operations = {"get", "multiGet"};
+        HistogramType[] histograms = {HistogramType.DB_GET, HistogramType.DB_MULTIGET};
+        for (int i = 0; i < operations.length; i++) {
+            HistogramData data = kv.getRocksDBKv().getStatistics().getHistogramData(histograms[i]);
+            assertThat(data.getCount()).isPositive();
+            AbstractMetricGroup group =
+                    (AbstractMetricGroup) metricGroup.addGroup("operation", operations[i]);
+            assertThat(
+                            ((Counter)
+                                            group.getMetrics()
+                                                    .get(
+                                                            MetricNames
+                                                                    .ROCKSDB_NATIVE_READ_COUNT_TOTAL))
+                                    .getCount())
+                    .isEqualTo(data.getCount());
+            assertThat(
+                            ((Counter)
+                                            group.getMetrics()
+                                                    .get(
+                                                            MetricNames
+                                                                    .ROCKSDB_NATIVE_READ_TIME_US_TOTAL))
+                                    .getCount())
+                    .isEqualTo(data.getSum());
         }
     }
 
