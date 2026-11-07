@@ -7,7 +7,7 @@ sidebar_position: 1
 # File Systems
 
 Fluss uses file systems as remote storage to store snapshots for Primary-Key Table and store tiered log segments for Log Table. These
-are some of the file systems that Fluss supports currently, including *local*, *hadoop*, *Aliyun OSS*, *Tencent Cloud COS*.
+are some of the file systems that Fluss supports currently, including *local*, *hadoop*, *Aliyun OSS*, *Tencent Cloud COS*, *Baidu Cloud BOS*.
 
 The file system used for a particular file is determined by its URI scheme. For example, `file:///home/user/text.txt` refers to a file in the local file system,
 while `hdfs://namenode:50010/data/user/text.txt` is a file in a specific HDFS cluster.
@@ -45,3 +45,5 @@ The Fluss project supports the following file systems:
 - **[Tencent Cloud COS](cos.md)** is supported by `fluss-fs-cos` and registered under the `cosn://` URI scheme. Please make sure to [manually install the COS plugin](cos.md#install-cos-plugin-manually).
 
 The implementation is based on [Hadoop Project](https://hadoop.apache.org/) but is self-contained with no dependency footprint.
+
+**[Baidu Cloud BOS](bos.md)** is not based on Hadoop. It is supported by `fluss-fs-bos` and registered under the `bos://` URI scheme. Please make sure to [manually install the BOS plugin](bos.md#install-bos-plugin-manually). `fluss-fs-bos` calls BOS through the Baidu BOS Java SDK, and that SDK is bundled in the plugin jar.
