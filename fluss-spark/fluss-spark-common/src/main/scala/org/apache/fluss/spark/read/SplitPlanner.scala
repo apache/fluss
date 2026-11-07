@@ -320,10 +320,9 @@ class AppendPlanner(
       if (value > 0) Some(value) else None
     }
 
-    // Only the max-records splitter needs concrete earliest offsets; otherwise the earliest
-    // sentinel (-2) is enough.
+    // Resolve concrete earliest offsets so buckets emptied by log retention are skipped.
     val bucketOffsetsRetrieverImpl =
-      new BucketOffsetsRetrieverImpl(admin, tablePath, maxRecordsPerPartition.isDefined)
+      new BucketOffsetsRetrieverImpl(admin, tablePath, true)
     val buckets = (0 until tableInfo.getNumBuckets).toSeq
 
     def splitOffsetRange(
@@ -375,7 +374,11 @@ class AppendPlanner(
             maxRecordsPerPartition match {
               case Some(maxRecs) => splitOffsetRange(tableBucket, startOffset, stopOffset, maxRecs)
               case _ =>
-                Seq(FlussAppendInputPartition(tableBucket, startOffset, stopOffset, timeRange))
+                // Keep resolving a full scan's start at fetch time in case retention advances
+                // between planning and task execution. Incremental scans keep their timestamp bound.
+                val readStartOffset =
+                  if (incrementalMode) startOffset else LogScanner.EARLIEST_OFFSET
+                Seq(FlussAppendInputPartition(tableBucket, readStartOffset, stopOffset, timeRange))
             }
           }
       }.toArray
