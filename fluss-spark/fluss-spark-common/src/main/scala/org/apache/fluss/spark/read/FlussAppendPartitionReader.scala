@@ -30,8 +30,9 @@ class FlussAppendPartitionReader(
     pushedPredicate: Option[Predicate],
     limit: Option[Int],
     flussPartition: FlussAppendInputPartition,
-    flussConfig: Configuration)
-  extends FlussPartitionReader(tablePath, flussConfig, limit) {
+    flussConfig: Configuration,
+    expectedTableInfo: Option[HistoricalReadMetadata] = None)
+  extends FlussPartitionReader(tablePath, flussConfig, limit, expectedTableInfo) {
 
   override protected lazy val projectedRowType: RowType = rowType.project(projection)
 
@@ -54,39 +55,54 @@ class FlussAppendPartitionReader(
   // non-decreasing within a bucket, so no later record can belong to the window either.
   private var reachedWindowEnd = false
 
+  private var batchConsumedOffset: Option[Long] = None
+
   // initialize log scanner
   initializeResources(initialize())
 
+  private def finishBatch(): Unit = {
+    if (!currentRecords.hasNext) {
+      batchConsumedOffset.foreach(offset => currentOffset = math.max(currentOffset, offset))
+      batchConsumedOffset = None
+    }
+  }
+
   private def pollMoreRecords(): Unit = {
     val scanRecords = logScanner.poll(POLL_TIMEOUT)
-    if ((scanRecords == null || scanRecords.isEmpty) && currentOffset < flussPartition.stopOffset) {
+    if (
+      (scanRecords == null || !scanRecords.hasProgress) && currentOffset < flussPartition.stopOffset
+    ) {
       throw new IllegalStateException(s"No more data from fluss server," +
         s" but current offset $currentOffset not reach the stop offset ${flussPartition.stopOffset}")
     }
     currentRecords = scanRecords.records(tableBucket).iterator()
+    batchConsumedOffset = Option(scanRecords.consumedUpToOffset(tableBucket)).map(_.longValue())
+    finishBatch()
   }
 
   override def next0(): Boolean = {
+    finishBatch()
     while (!closed && !reachedWindowEnd && currentOffset < flussPartition.stopOffset) {
       if (!currentRecords.hasNext) {
         pollMoreRecords()
       }
-      if (!currentRecords.hasNext) {
-        throw new IllegalStateException(s"No more data from fluss server," +
-          s" but current offset $currentOffset not reach the stop offset ${flussPartition.stopOffset}")
+      if (currentRecords.hasNext) {
+        val scanRecord = currentRecords.next()
+        currentOffset = scanRecord.logOffset() + 1
+        if (scanRecord.logOffset() >= flussPartition.stopOffset) {
+          return false
+        }
+        timeRange match {
+          case Some(range) if range.isAfter(scanRecord.timestamp()) => reachedWindowEnd = true
+          // The record precedes the requested window: the start offset resolved from the start
+          // timestamp is only time-index accurate on tiered segments, so it can undershoot.
+          case Some(range) if !range.contains(scanRecord.timestamp()) => // skip
+          case _ =>
+            currentRow = convertToSparkRow(scanRecord)
+            return true
+        }
       }
-
-      val scanRecord = currentRecords.next()
-      currentOffset = scanRecord.logOffset() + 1
-      timeRange match {
-        case Some(range) if range.isAfter(scanRecord.timestamp()) => reachedWindowEnd = true
-        // The record precedes the requested window: the start offset resolved from the start
-        // timestamp is only time-index accurate on tiered segments, so it can undershoot.
-        case Some(range) if !range.contains(scanRecord.timestamp()) => // skip
-        case _ =>
-          currentRow = convertToSparkRow(scanRecord)
-          return true
-      }
+      finishBatch()
     }
     false
   }
