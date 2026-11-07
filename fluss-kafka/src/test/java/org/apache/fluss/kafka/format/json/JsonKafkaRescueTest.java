@@ -143,6 +143,41 @@ class JsonKafkaRescueTest {
 
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
+    void testRescuePreservesExtremeNumberTokensAndParserPosition(boolean nested) {
+        KafkaDecodedValue decoded =
+                decoder(nested, true)
+                        .decode(
+                                bytes(
+                                        "{\"ratio\":-1e400,\"id\":7,"
+                                                + "\"extra\":1e2147483648,\"details\":{\"known\":3}}"));
+
+        GenericRow row =
+                nested
+                        ? (GenericRow) decoded.valueFields()[0]
+                        : GenericRow.of(decoded.valueFields());
+        assertThat(row.getInt(0)).isEqualTo(7);
+        assertThat(row.getRow(1, 2).getInt(0)).isEqualTo(3);
+        assertThat(row.isNullAt(4)).isTrue();
+        assertThat(decoded.rescue()).isEqualTo("{\"ratio\":-1e400,\"extra\":1e2147483648}");
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testArrayRescueRetainsTrailingPositions(boolean nested) throws Exception {
+        KafkaDecodedValue decoded =
+                decoder(nested, true)
+                        .decode(
+                                bytes(
+                                        "{\"items\":[{\"known\":\"bad\"},{\"known\":2},"
+                                                + "{\"known\":3}]}"));
+
+        ObjectMapper mapper = new ObjectMapper();
+        assertThat(mapper.readTree(decoded.rescue()))
+                .isEqualTo(mapper.readTree("{\"items\":[{\"known\":\"bad\"},null,null]}"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
     void testStrictConversionsAndInvalidJsonAreStillRejected(boolean nested) {
         KafkaFieldDecoder strictDecoder = decoder(nested, false);
         String[][] invalidFields = {
