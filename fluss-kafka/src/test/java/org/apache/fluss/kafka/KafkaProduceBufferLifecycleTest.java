@@ -64,7 +64,7 @@ import java.util.Collections;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
 
-import static org.apache.fluss.kafka.KafkaMetricsTestUtils.createRequestMetrics;
+import static org.apache.fluss.rpc.netty.server.KafkaMetricsTestUtils.createRequestMetrics;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Tests borrowed Produce payloads across decoding, worker cleanup and response completion. */

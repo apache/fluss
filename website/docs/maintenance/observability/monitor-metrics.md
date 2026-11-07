@@ -716,6 +716,8 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
           request_metadata
           request_fetchLogClient
           request_fetchLogFollower
+          request_kafka_produce
+          request_kafka_metadata
       </td>
       <td>requestsPerSecond</td>
       <td>The total number of requests processed per second for each request type.</td>
@@ -788,63 +790,6 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>requestsInFlight</td>
       <td>The in flight requests count send from client to another server.</td>
       <td>Gauge</td>
-    </tr>
-  </tbody>
-</table>
-
-#### Kafka Request Metrics
-
-Kafka request metrics are aggregated across all Kafka listeners on each TabletServer under the
-`tabletserver_kafka_request` namespace. The `request` label is `kafkaProduce` for Produce and
-`default` for other Kafka APIs.
-
-<table class="table table-bordered">
-  <thead>
-    <tr>
-      <th class="text-left" style={{width: '30pt'}}>Scope</th>
-      <th class="text-left" style={{width: '150pt'}}>Infix</th>
-      <th class="text-left" style={{width: '80pt'}}>Metrics</th>
-      <th class="text-left" style={{width: '300pt'}}>Description</th>
-      <th class="text-left" style={{width: '40pt'}}>Type</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <th rowspan="7">tabletserver</th>
-      <td rowspan="7">kafka_request</td>
-      <td>requestsPerSecond</td>
-      <td>Successfully processed Kafka requests per second.</td>
-      <td>Meter</td>
-    </tr>
-    <tr>
-      <td>errorsPerSecond</td>
-      <td>Failed Kafka requests per second.</td>
-      <td>Meter</td>
-    </tr>
-    <tr>
-      <td>requestBytes</td>
-      <td>Size of Kafka requests in bytes.</td>
-      <td>Histogram</td>
-    </tr>
-    <tr>
-      <td>totalTimeMs</td>
-      <td>Total request time in milliseconds, including queueing, processing, and response handling.</td>
-      <td>Histogram</td>
-    </tr>
-    <tr>
-      <td>requestProcessTimeMs</td>
-      <td>Time spent processing the request, in milliseconds.</td>
-      <td>Histogram</td>
-    </tr>
-    <tr>
-      <td>requestQueueTimeMs</td>
-      <td>Time spent waiting in the request queue, in milliseconds.</td>
-      <td>Histogram</td>
-    </tr>
-    <tr>
-      <td>responseSendTimeMs</td>
-      <td>Time from processing completion to response submission, in milliseconds.</td>
-      <td>Histogram</td>
     </tr>
   </tbody>
 </table>

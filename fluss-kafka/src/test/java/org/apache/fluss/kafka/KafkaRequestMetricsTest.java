@@ -19,6 +19,7 @@ package org.apache.fluss.kafka;
 
 import org.apache.fluss.rpc.netty.server.RequestChannel;
 import org.apache.fluss.rpc.netty.server.RequestsMetrics;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.Unpooled;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelOutboundHandlerAdapter;
@@ -27,13 +28,17 @@ import org.apache.fluss.shaded.netty4.io.netty.channel.embedded.EmbeddedChannel;
 import org.apache.fluss.shaded.netty4.io.netty.util.ReferenceCountUtil;
 
 import org.apache.kafka.common.message.ApiVersionsResponseData;
+import org.apache.kafka.common.message.MetadataResponseData;
 import org.apache.kafka.common.message.ProduceRequestData;
 import org.apache.kafka.common.message.ProduceResponseData;
 import org.apache.kafka.common.protocol.Errors;
 import org.apache.kafka.common.record.MemoryRecords;
 import org.apache.kafka.common.requests.AbstractRequest;
+import org.apache.kafka.common.requests.AbstractResponse;
 import org.apache.kafka.common.requests.ApiVersionsRequest;
 import org.apache.kafka.common.requests.ApiVersionsResponse;
+import org.apache.kafka.common.requests.MetadataRequest;
+import org.apache.kafka.common.requests.MetadataResponse;
 import org.apache.kafka.common.requests.ProduceRequest;
 import org.apache.kafka.common.requests.ProduceResponse;
 import org.apache.kafka.common.requests.RequestHeader;
@@ -46,8 +51,8 @@ import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.Collections;
 
-import static org.apache.fluss.kafka.KafkaMetricsTestUtils.createRequestMetrics;
-import static org.apache.fluss.rpc.netty.server.RequestsMetrics.KAFKA_DEFAULT_REQUEST_NAME;
+import static org.apache.fluss.rpc.netty.server.KafkaMetricsTestUtils.createRequestMetrics;
+import static org.apache.fluss.rpc.netty.server.RequestsMetrics.KAFKA_METADATA_REQUEST_NAME;
 import static org.apache.fluss.rpc.netty.server.RequestsMetrics.KAFKA_PRODUCE_REQUEST_NAME;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -55,16 +60,36 @@ import static org.assertj.core.api.Assertions.assertThat;
 class KafkaRequestMetricsTest {
 
     @Test
+    void testApiVersionsDoesNotUpdateRequestMetrics() {
+        try (Harness harness = new Harness()) {
+            ApiVersionsRequest apiVersions = new ApiVersionsRequest.Builder().build((short) 0);
+            harness.receive(apiVersions)
+                    .complete(new ApiVersionsResponse(new ApiVersionsResponseData()));
+            harness.receive(apiVersions).fail(new IOException("test processing failure"));
+            harness.channel.runPendingTasks();
+
+            assertThat(harness.channel.outboundMessages()).hasSize(2);
+            for (String name :
+                    Arrays.asList(KAFKA_PRODUCE_REQUEST_NAME, KAFKA_METADATA_REQUEST_NAME)) {
+                RequestsMetrics.Metrics metrics = harness.metrics(name);
+                assertThat(metrics.getRequestsCount().getCount()).isZero();
+                assertThat(metrics.getErrorsCount().getCount()).isZero();
+                assertThat(metrics.getTotalTimeMs().getCount()).isZero();
+            }
+        }
+    }
+
+    @Test
     void testRecordsAtResponseSubmission() {
         try (Harness harness = new Harness()) {
             PendingWrite write = new PendingWrite();
             harness.channel.pipeline().addFirst(write);
-            KafkaRequest request =
-                    harness.receive(new ApiVersionsRequest.Builder().build((short) 0));
-            RequestsMetrics.Metrics metrics = harness.metrics(KAFKA_DEFAULT_REQUEST_NAME);
+            KafkaRequest request = harness.receive(metadataRequest());
+            RequestsMetrics.Metrics metrics = harness.metrics(KAFKA_METADATA_REQUEST_NAME);
             assertThat(metrics.getRequestsCount().getCount()).isZero();
 
-            request.complete(new ApiVersionsResponse(new ApiVersionsResponseData()));
+            request.complete(
+                    new MetadataResponse(new MetadataResponseData(), request.apiVersion()));
             harness.channel.runPendingTasks();
 
             assertThat(write.promise.isDone()).isFalse();
@@ -104,25 +129,34 @@ class KafkaRequestMetricsTest {
         }
     }
 
-    @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void testProcessingAndSerializationFailures(boolean serializationFailure) {
+    @Test
+    void testFirstCompletionDeterminesMetricsForUnacknowledgedProduce() {
         try (Harness harness = new Harness()) {
-            KafkaRequest request =
-                    harness.receive(new ApiVersionsRequest.Builder().build((short) 0));
-            if (serializationFailure) {
-                request.complete(
-                        new ApiVersionsResponse(new ApiVersionsResponseData()) {
-                            @Override
-                            public ApiVersionsResponseData data() {
-                                throw new IllegalStateException("test serialization failure");
-                            }
-                        });
-            } else {
-                request.fail(new IOException("test processing failure"));
-            }
+            RequestsMetrics.Metrics metrics = harness.metrics(KAFKA_PRODUCE_REQUEST_NAME);
+            KafkaRequest success = harness.receive(produce((short) 0));
+            success.complete(response(Errors.NONE));
+            success.fail(new IOException("channel inactive"));
             harness.channel.runPendingTasks();
-            RequestsMetrics.Metrics metrics = harness.metrics(KAFKA_DEFAULT_REQUEST_NAME);
+            assertThat(metrics.getRequestsCount().getCount()).isOne();
+            assertThat(metrics.getErrorsCount().getCount()).isZero();
+
+            KafkaRequest failure = harness.receive(produce((short) 0));
+            failure.fail(new IOException("channel inactive"));
+            failure.complete(response(Errors.NONE));
+            harness.channel.runPendingTasks();
+            assertThat(metrics.getRequestsCount().getCount()).isOne();
+            assertThat(metrics.getErrorsCount().getCount()).isOne();
+            assertThat(metrics.getTotalTimeMs().getCount()).isOne();
+        }
+    }
+
+    @Test
+    void testProcessingFailureCountsAsRequestError() {
+        try (Harness harness = new Harness()) {
+            KafkaRequest request = harness.receive(metadataRequest());
+            request.fail(new IOException("test processing failure"));
+            harness.channel.runPendingTasks();
+            RequestsMetrics.Metrics metrics = harness.metrics(KAFKA_METADATA_REQUEST_NAME);
             assertThat(metrics.getErrorsCount().getCount()).isOne();
             assertThat(metrics.getRequestsCount().getCount()).isZero();
             assertThat(metrics.getTotalTimeMs().getCount()).isZero();
@@ -130,20 +164,47 @@ class KafkaRequestMetricsTest {
     }
 
     @Test
+    void testSerializationFailureAfterSuccessfulProcessing() {
+        try (Harness harness = new Harness()) {
+            KafkaRequest request = harness.receive(metadataRequest());
+            request.complete(
+                    new MetadataResponse(new MetadataResponseData(), request.apiVersion()) {
+                        @Override
+                        public MetadataResponseData data() {
+                            throw new IllegalStateException("test serialization failure");
+                        }
+                    });
+            harness.channel.runPendingTasks();
+
+            ByteBuf buffer = harness.channel.readOutbound();
+            try {
+                AbstractResponse response =
+                        AbstractResponse.parseResponse(buffer.nioBuffer(), request.header());
+                assertThat(response.errorCounts()).containsEntry(Errors.UNKNOWN_SERVER_ERROR, 1);
+            } finally {
+                buffer.release();
+            }
+            RequestsMetrics.Metrics metrics = harness.metrics(KAFKA_METADATA_REQUEST_NAME);
+            assertThat(metrics.getErrorsCount().getCount()).isZero();
+            assertThat(metrics.getRequestsCount().getCount()).isOne();
+            assertThat(metrics.getTotalTimeMs().getCount()).isOne();
+        }
+    }
+
+    @Test
     void testOrderedResponsesAndCancellation() {
         try (Harness harness = new Harness()) {
             KafkaRequest first = harness.receive(produce((short) 0));
-            KafkaRequest second =
-                    harness.receive(new ApiVersionsRequest.Builder().build((short) 0));
-            RequestsMetrics.Metrics defaultMetrics = harness.metrics(KAFKA_DEFAULT_REQUEST_NAME);
+            KafkaRequest second = harness.receive(metadataRequest());
+            RequestsMetrics.Metrics metadataMetrics = harness.metrics(KAFKA_METADATA_REQUEST_NAME);
             RequestsMetrics.Metrics produceMetrics = harness.metrics(KAFKA_PRODUCE_REQUEST_NAME);
-            second.complete(new ApiVersionsResponse(new ApiVersionsResponseData()));
+            second.complete(new MetadataResponse(new MetadataResponseData(), second.apiVersion()));
             harness.channel.runPendingTasks();
-            assertThat(defaultMetrics.getRequestsCount().getCount()).isZero();
+            assertThat(metadataMetrics.getRequestsCount().getCount()).isZero();
 
             first.complete(response(Errors.NONE));
             harness.channel.runPendingTasks();
-            assertThat(defaultMetrics.getRequestsCount().getCount()).isOne();
+            assertThat(metadataMetrics.getRequestsCount().getCount()).isOne();
             assertThat(produceMetrics.getRequestsCount().getCount()).isOne();
 
             KafkaRequest cancelled = harness.receive(produce((short) 1));
@@ -153,6 +214,11 @@ class KafkaRequestMetricsTest {
             assertThat(produceMetrics.getRequestsCount().getCount()).isOne();
             assertThat(produceMetrics.getErrorsCount().getCount()).isZero();
         }
+    }
+
+    private static MetadataRequest metadataRequest() {
+        return new MetadataRequest.Builder(Collections.singletonList("orders"), false)
+                .build((short) 9);
     }
 
     private static ProduceRequest produce(short acks) {

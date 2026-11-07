@@ -15,25 +15,19 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.kafka;
+package org.apache.fluss.rpc.netty.server;
 
 import org.apache.fluss.metrics.util.NOPMetricsGroup;
-import org.apache.fluss.rpc.netty.server.RequestsMetrics;
-
-import java.util.Arrays;
-import java.util.Collections;
-
-import static org.apache.fluss.rpc.netty.server.RequestsMetrics.KAFKA_DEFAULT_REQUEST_NAME;
-import static org.apache.fluss.rpc.netty.server.RequestsMetrics.KAFKA_PRODUCE_REQUEST_NAME;
 
 /** Metric setup shared by Kafka protocol tests. */
-final class KafkaMetricsTestUtils {
+public final class KafkaMetricsTestUtils {
     private KafkaMetricsTestUtils() {}
 
-    static RequestsMetrics createRequestMetrics() {
-        return new RequestsMetrics(
-                NOPMetricsGroup.newInstance(),
-                Collections.emptyList(),
-                Arrays.asList(KAFKA_PRODUCE_REQUEST_NAME, KAFKA_DEFAULT_REQUEST_NAME));
+    /** Creates TabletServer request metrics with the Kafka request types registered. */
+    public static RequestsMetrics createRequestMetrics() {
+        RequestsMetrics metrics =
+                RequestsMetrics.createTabletServerRequestMetrics(NOPMetricsGroup.newInstance());
+        metrics.registerKafkaRequestMetrics();
+        return metrics;
     }
 }

@@ -22,7 +22,6 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.cluster.ServerReconfigurable;
 import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.kafka.mapping.KafkaTopicMapper;
-import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.rpc.RpcGatewayService;
 import org.apache.fluss.rpc.netty.server.RequestChannel;
 import org.apache.fluss.rpc.netty.server.RequestHandler;
@@ -37,7 +36,6 @@ import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandler;
 
 import javax.annotation.Nullable;
 
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
@@ -45,8 +43,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.function.Supplier;
 
-import static org.apache.fluss.rpc.netty.server.RequestsMetrics.KAFKA_DEFAULT_REQUEST_NAME;
-import static org.apache.fluss.rpc.netty.server.RequestsMetrics.KAFKA_PRODUCE_REQUEST_NAME;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
@@ -61,7 +57,6 @@ public class KafkaProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
     private Map<String, Supplier<ServerAuthenticator>> authenticatorSuppliers =
             Collections.emptyMap();
     private Set<String> saslListenerNames = Collections.emptySet();
-    private RequestsMetrics requestMetrics;
 
     @Override
     public String name() {
@@ -85,7 +80,9 @@ public class KafkaProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
 
     @Override
     public ChannelHandler createChannelHandler(
-            RequestChannel[] requestChannels, String listenerName, MetricGroup serverMetricGroup) {
+            RequestChannel[] requestChannels,
+            String listenerName,
+            RequestsMetrics requestsMetrics) {
         Supplier<ServerAuthenticator> authenticatorSupplier = null;
         if (saslListenerNames.contains(listenerName)) {
             authenticatorSupplier =
@@ -94,20 +91,13 @@ public class KafkaProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
                             "No SASL server authenticator is configured for Kafka listener %s.",
                             listenerName);
         }
-        if (requestMetrics == null) {
-            requestMetrics =
-                    new RequestsMetrics(
-                            serverMetricGroup.addGroup("kafka"),
-                            Collections.emptyList(),
-                            Arrays.asList(KAFKA_PRODUCE_REQUEST_NAME, KAFKA_DEFAULT_REQUEST_NAME));
-        }
         return new KafkaChannelInitializer(
                 requestChannels,
                 listenerName,
                 conf.get(ConfigOptions.NETTY_CONNECTION_MAX_IDLE_TIME).getSeconds(),
                 (int) conf.get(ConfigOptions.NETTY_SERVER_MAX_REQUEST_SIZE).getBytes(),
                 authenticatorSupplier,
-                requestMetrics);
+                requestsMetrics);
     }
 
     @Override

@@ -64,7 +64,6 @@ public class KafkaRequest implements RpcRequest {
     private final AtomicBoolean bufferReleased = new AtomicBoolean();
     private volatile boolean cancelled = false;
     private volatile boolean closeConnectionAfterResponse;
-    private volatile boolean failed;
 
     /** Creates a request that snapshots identity from the supplied connection security state. */
     protected KafkaRequest(
@@ -149,20 +148,12 @@ public class KafkaRequest implements RpcRequest {
         return future;
     }
 
-    public synchronized void complete(AbstractResponse response) {
-        if (future.isDone()) {
-            return;
-        }
+    public void complete(AbstractResponse response) {
         requestCompletedTimeMs = System.currentTimeMillis();
         future.complete(response);
     }
 
-    public synchronized void fail(Throwable t) {
-        if (future.isDone()) {
-            return;
-        }
-        requestCompletedTimeMs = System.currentTimeMillis();
-        failed = true;
+    public void fail(Throwable t) {
         future.completeExceptionally(t);
     }
 
@@ -189,7 +180,6 @@ public class KafkaRequest implements RpcRequest {
             AbstractResponse response = future.join();
             return serialize(response);
         } catch (Throwable t) {
-            failed = true;
             AbstractResponse response = request.getErrorResponse(t);
             return serialize(response);
         } finally {
@@ -214,7 +204,7 @@ public class KafkaRequest implements RpcRequest {
     }
 
     boolean failed() {
-        if (failed) {
+        if (future.isCompletedExceptionally()) {
             return true;
         }
         for (Map.Entry<Errors, Integer> error : future.join().errorCounts().entrySet()) {

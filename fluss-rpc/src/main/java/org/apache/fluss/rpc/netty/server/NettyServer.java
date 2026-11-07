@@ -31,6 +31,7 @@ import org.apache.fluss.rpc.RpcServer;
 import org.apache.fluss.rpc.netty.NettyMetrics;
 import org.apache.fluss.rpc.netty.NettyUtils;
 import org.apache.fluss.rpc.protocol.NetworkProtocolPlugin;
+import org.apache.fluss.rpc.protocol.RequestType;
 import org.apache.fluss.shaded.netty4.io.netty.bootstrap.ServerBootstrap;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.PooledByteBufAllocator;
 import org.apache.fluss.shaded.netty4.io.netty.channel.AdaptiveRecvByteBufAllocator;
@@ -82,6 +83,7 @@ public final class NettyServer implements RpcServer {
     private final List<ServerRpcResources> resources;
     private final String internalListenerName;
     private final MetricGroup serverMetricGroup;
+    private final RequestsMetrics requestsMetrics;
     private final List<NetworkProtocolPlugin> protocols;
     private final List<Channel> bindChannels;
     private final List<Endpoint> bindEndpoints;
@@ -105,7 +107,7 @@ public final class NettyServer implements RpcServer {
                 service,
                 serverMetricGroup,
                 requestsMetrics,
-                loadProtocols(conf, service.providerType(), endpoints, requestsMetrics));
+                loadProtocols(conf, service.providerType(), endpoints));
     }
 
     @VisibleForTesting
@@ -118,10 +120,14 @@ public final class NettyServer implements RpcServer {
             List<NetworkProtocolPlugin> protocols) {
         this.conf = checkNotNull(conf, "conf");
         this.serverMetricGroup = checkNotNull(serverMetricGroup, "serverMetricGroup");
+        this.requestsMetrics = checkNotNull(requestsMetrics, "requestsMetrics");
         this.endpoints = checkNotNull(endpoints, "endpoints");
         this.protocols = protocols;
 
         this.requestHandlers = RequestProcessorPool.createRequestHandlers(protocols, service);
+        if (requestHandlers[RequestType.KAFKA.id] != null) {
+            requestsMetrics.registerKafkaRequestMetrics();
+        }
         this.internalListenerName = conf.get(ConfigOptions.INTERNAL_LISTENER_NAME);
         this.externalResources =
                 new ServerRpcResources(conf, service, requestHandlers, requestsMetrics, 0, "");
@@ -230,7 +236,7 @@ public final class NettyServer implements RpcServer {
         final String protocolName = protocol.name();
         channelHandler =
                 protocol.createChannelHandler(
-                        resource.requestChannels(), endpoint.getListenerName(), serverMetricGroup);
+                        resource.requestChannels(), endpoint.getListenerName(), requestsMetrics);
         bootstrap.childHandler(channelHandler);
 
         // --------------------------------------------------------------------
@@ -284,10 +290,7 @@ public final class NettyServer implements RpcServer {
     }
 
     private static List<NetworkProtocolPlugin> loadProtocols(
-            Configuration conf,
-            ServerType serverType,
-            Collection<Endpoint> endpoints,
-            RequestsMetrics requestsMetrics) {
+            Configuration conf, ServerType serverType, Collection<Endpoint> endpoints) {
         List<String> listeners =
                 endpoints.stream().map(Endpoint::getListenerName).collect(Collectors.toList());
         List<NetworkProtocolPlugin> protocolPlugins = new ArrayList<>();
@@ -310,8 +313,7 @@ public final class NettyServer implements RpcServer {
 
         // Add the Fluss protocol plugin in the end to allow other protocol
         // pick their listener names first
-        NetworkProtocolPlugin flussPlugin =
-                new FlussProtocolPlugin(serverType, listeners, requestsMetrics);
+        NetworkProtocolPlugin flussPlugin = new FlussProtocolPlugin(serverType, listeners);
         flussPlugin.setup(conf);
         protocolPlugins.add(flussPlugin);
         return protocolPlugins;

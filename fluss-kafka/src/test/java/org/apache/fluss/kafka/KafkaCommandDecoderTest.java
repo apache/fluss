@@ -41,7 +41,7 @@ import org.junit.jupiter.api.Test;
 
 import java.nio.ByteBuffer;
 
-import static org.apache.fluss.kafka.KafkaMetricsTestUtils.createRequestMetrics;
+import static org.apache.fluss.rpc.netty.server.KafkaMetricsTestUtils.createRequestMetrics;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Tests response ordering and ownership in {@link KafkaCommandDecoder}. */

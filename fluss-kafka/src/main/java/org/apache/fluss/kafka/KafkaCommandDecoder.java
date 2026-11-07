@@ -52,7 +52,7 @@ import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 
-import static org.apache.fluss.rpc.netty.server.RequestsMetrics.KAFKA_DEFAULT_REQUEST_NAME;
+import static org.apache.fluss.rpc.netty.server.RequestsMetrics.KAFKA_METADATA_REQUEST_NAME;
 import static org.apache.fluss.rpc.netty.server.RequestsMetrics.KAFKA_PRODUCE_REQUEST_NAME;
 import static org.apache.kafka.common.protocol.ApiKeys.API_VERSIONS;
 import static org.apache.kafka.common.protocol.ApiKeys.PRODUCE;
@@ -264,13 +264,18 @@ public class KafkaCommandDecoder extends SimpleChannelInboundHandler<ByteBuf> {
     }
 
     private void updateRequestMetrics(KafkaRequest request) {
-        RequestsMetrics.Metrics metrics =
-                requestMetrics
-                        .getMetrics(
-                                request.apiKey() == PRODUCE
-                                        ? KAFKA_PRODUCE_REQUEST_NAME
-                                        : KAFKA_DEFAULT_REQUEST_NAME)
-                        .get();
+        String requestName;
+        switch (request.apiKey()) {
+            case PRODUCE:
+                requestName = KAFKA_PRODUCE_REQUEST_NAME;
+                break;
+            case METADATA:
+                requestName = KAFKA_METADATA_REQUEST_NAME;
+                break;
+            default:
+                return;
+        }
+        RequestsMetrics.Metrics metrics = requestMetrics.getMetrics(requestName).get();
         if (request.failed()) {
             metrics.getErrorsCount().inc();
         } else {

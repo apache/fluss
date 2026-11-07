@@ -25,20 +25,18 @@ import org.apache.fluss.metrics.groups.AbstractMetricGroup;
 import org.apache.fluss.metrics.groups.GenericMetricGroup;
 import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.metrics.registry.MetricRegistry;
-import org.apache.fluss.metrics.util.NOPMetricsGroup;
 import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.rpc.protocol.Errors;
 
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
-import static org.apache.fluss.rpc.netty.server.RequestsMetrics.KAFKA_DEFAULT_REQUEST_NAME;
+import static org.apache.fluss.rpc.netty.server.RequestsMetrics.KAFKA_METADATA_REQUEST_NAME;
 import static org.apache.fluss.rpc.netty.server.RequestsMetrics.KAFKA_PRODUCE_REQUEST_NAME;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -46,14 +44,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 class RequestsMetricsTest {
 
     @Test
-    void testRegistersNativeVariantsAndKafkaNames() {
+    void testTabletServerRegistersNativeRequests() {
         RecordingMetricRegistry registry = new RecordingMetricRegistry();
         MetricGroup serverMetricGroup = new GenericMetricGroup(registry, null, "tabletserver");
         RequestsMetrics metrics =
-                new RequestsMetrics(
-                        serverMetricGroup,
-                        Arrays.asList(ApiKeys.FETCH_LOG, ApiKeys.LOOKUP, ApiKeys.PUT_KV),
-                        Arrays.asList(KAFKA_PRODUCE_REQUEST_NAME, KAFKA_DEFAULT_REQUEST_NAME));
+                RequestsMetrics.createTabletServerRequestMetrics(serverMetricGroup);
 
         assertThat(metrics.getMetrics(ApiKeys.FETCH_LOG.id, false, false)).isPresent();
         assertThat(metrics.getMetrics(ApiKeys.FETCH_LOG.id, true, false)).isPresent();
@@ -61,18 +56,70 @@ class RequestsMetricsTest {
         assertThat(metrics.getMetrics(ApiKeys.LOOKUP.id, false, true)).isPresent();
         assertThat(metrics.getMetrics(ApiKeys.PUT_KV.id, false, false)).isPresent();
         assertThat(metrics.getMetrics(ApiKeys.PUT_KV.id, false, true)).isPresent();
+        assertThat(registry.metrics(MetricNames.REQUESTS_RATE))
+                .extracting(metric -> metric.group.getAllVariables().get("request"))
+                .containsExactlyInAnyOrder(
+                        "produceLog",
+                        "putKv",
+                        "historicalPutKv",
+                        "lookup",
+                        "historicalLookup",
+                        "fetchLogClient",
+                        "fetchLogFollower",
+                        "prefixLookup",
+                        "metadata");
+    }
+
+    @Test
+    void testCoordinatorServerCreatesOnlyRequestGaugeGroup() {
+        RecordingMetricRegistry registry = new RecordingMetricRegistry();
+        AtomicInteger requestGroupLookups = new AtomicInteger();
+        MetricGroup serverMetricGroup =
+                new GenericMetricGroup(registry, null, "coordinator") {
+                    @Override
+                    public MetricGroup addGroup(String name) {
+                        if ("request".equals(name)) {
+                            requestGroupLookups.incrementAndGet();
+                        }
+                        return super.addGroup(name);
+                    }
+                };
+        RequestsMetrics metrics =
+                RequestsMetrics.createCoordinatorServerRequestMetrics(serverMetricGroup);
+
+        metrics.gauge(MetricNames.REQUEST_QUEUE_SIZE, () -> 0);
+        metrics.gauge("processor_index", "0", MetricNames.REQUEST_QUEUE_SIZE, () -> 0);
+        assertThat(requestGroupLookups.get()).isOne();
+        assertThat(registry.metrics(MetricNames.REQUESTS_RATE)).isEmpty();
+        assertThat(registry.metrics(MetricNames.REQUEST_QUEUE_SIZE))
+                .extracting(
+                        metric -> metric.group.getLogicalScope(CharacterFilter.NO_OP_FILTER, '_'))
+                .containsExactlyInAnyOrder(
+                        "coordinator_request", "coordinator_request_processor_index");
+    }
+
+    @Test
+    void testKafkaRegistersOnlyProduceAndMetadata() {
+        RecordingMetricRegistry registry = new RecordingMetricRegistry();
+        MetricGroup serverMetricGroup = new GenericMetricGroup(registry, null, "tabletserver");
+        RequestsMetrics metrics =
+                RequestsMetrics.createTabletServerRequestMetrics(serverMetricGroup);
+        List<RegisteredMetric> nativeRates = registry.metrics(MetricNames.REQUESTS_RATE);
+        metrics.registerKafkaRequestMetrics();
+
         assertThat(metrics.getMetrics(KAFKA_PRODUCE_REQUEST_NAME)).isPresent();
-        assertThat(metrics.getMetrics(KAFKA_DEFAULT_REQUEST_NAME)).isPresent();
-        assertThat(registry.metrics(MetricNames.REQUESTS_RATE)).hasSize(8);
+        assertThat(metrics.getMetrics(KAFKA_METADATA_REQUEST_NAME)).isPresent();
+        assertThat(registry.metrics(MetricNames.REQUESTS_RATE))
+                .filteredOn(metric -> !nativeRates.contains(metric))
+                .extracting(metric -> String.join("_", metric.group.getScopeComponents()))
+                .containsExactlyInAnyOrder(
+                        "tabletserver_request_kafka_produce",
+                        "tabletserver_request_kafka_metadata");
     }
 
     @Test
     void testRequestMetricsCalculations() {
-        RequestsMetrics kafka =
-                new RequestsMetrics(
-                        NOPMetricsGroup.newInstance(),
-                        Collections.emptyList(),
-                        Collections.singletonList(KAFKA_PRODUCE_REQUEST_NAME));
+        RequestsMetrics kafka = KafkaMetricsTestUtils.createRequestMetrics();
         RequestsMetrics.Metrics metrics = kafka.getMetrics(KAFKA_PRODUCE_REQUEST_NAME).get();
         metrics.recordRequest(42, 100, 105, 116, 123);
 

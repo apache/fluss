@@ -70,7 +70,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
-import static org.apache.fluss.kafka.KafkaMetricsTestUtils.createRequestMetrics;
+import static org.apache.fluss.rpc.netty.server.KafkaMetricsTestUtils.createRequestMetrics;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.tuple;
