@@ -1036,7 +1036,10 @@ fn select_readable_snapshots(
             // TODO: Improve this rare case. More retained snapshots and a longer log TTL
             // can preserve the history needed to start a full read.
             return Err(Error::UnexpectedError {
-                message: format!("No readable KV snapshot and complete changelog history for bucket {}. Increase kv.snapshot.num-retained and log TTL.", bucket.bucket_id),
+                message: format!(
+                    "No readable KV snapshot and complete changelog history for bucket {}. Increase kv.snapshot.num-retained and log TTL.",
+                    bucket.bucket_id
+                ),
                 source: None,
             });
         }
@@ -1291,21 +1294,25 @@ mod tests {
             )
             .unwrap();
             assert_eq!(selected.latest_snapshots[0].snapshot_id, expected);
-            assert!(super::select_readable_snapshots(
-                snapshots.clone(),
-                &candidates,
-                &HashMap::from([(0, 90)]),
-                &HashMap::from([(0, 81)]),
-            )
-            .is_err());
-            if expected.is_none() {
-                assert!(super::select_readable_snapshots(
-                    snapshots,
+            assert!(
+                super::select_readable_snapshots(
+                    snapshots.clone(),
                     &candidates,
-                    &HashMap::from([(0, visible)]),
-                    &HashMap::from([(0, 1)])
+                    &HashMap::from([(0, 90)]),
+                    &HashMap::from([(0, 81)]),
                 )
-                .is_err());
+                .is_err()
+            );
+            if expected.is_none() {
+                assert!(
+                    super::select_readable_snapshots(
+                        snapshots,
+                        &candidates,
+                        &HashMap::from([(0, visible)]),
+                        &HashMap::from([(0, 1)])
+                    )
+                    .is_err()
+                );
             }
         }
     }
