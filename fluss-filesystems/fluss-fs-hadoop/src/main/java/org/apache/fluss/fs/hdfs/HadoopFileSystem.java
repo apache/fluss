@@ -19,12 +19,21 @@ package org.apache.fluss.fs.hdfs;
 
 import org.apache.fluss.fs.FileStatus;
 import org.apache.fluss.fs.FileSystem;
+import org.apache.fluss.fs.FileSystemFailure;
+import org.apache.fluss.fs.FileSystemOperationException;
+import org.apache.fluss.fs.FileSystemPathNotFoundException;
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.utils.function.SupplierWithException;
 
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.ipc.RemoteException;
+import org.apache.hadoop.security.AccessControlException;
 
+import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.net.SocketTimeoutException;
 import java.net.URI;
+import java.nio.file.AccessDeniedException;
 
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
@@ -37,6 +46,29 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  * Hadoop File System}.
  */
 public abstract class HadoopFileSystem extends FileSystem {
+
+    /** File system operations whose failures are translated at this adapter boundary. */
+    protected enum Operation {
+        GET_FILE_STATUS("get_file_status"),
+        OPEN("open"),
+        CREATE("create"),
+        DELETE("delete"),
+        EXISTS("exists"),
+        LIST_STATUS("list_status"),
+        MKDIRS("mkdirs"),
+        RENAME("rename");
+
+        private final String code;
+
+        Operation(String code) {
+            this.code = code;
+        }
+
+        /** Returns the stable name used in failure diagnostics. */
+        public String code() {
+            return code;
+        }
+    }
 
     /** The wrapped Hadoop File System. */
     private final org.apache.hadoop.fs.FileSystem fs;
@@ -62,56 +94,109 @@ public abstract class HadoopFileSystem extends FileSystem {
 
     @Override
     public FileStatus getFileStatus(final FsPath f) throws IOException {
-        org.apache.hadoop.fs.FileStatus status = this.fs.getFileStatus(toHadoopPath(f));
-        return HadoopFileStatus.fromHadoopStatus(status);
+        return execute(
+                Operation.GET_FILE_STATUS,
+                () -> HadoopFileStatus.fromHadoopStatus(fs.getFileStatus(toHadoopPath(f))));
     }
 
     @Override
     public HadoopDataInputStream open(final FsPath f) throws IOException {
-        final Path path = toHadoopPath(f);
-        final org.apache.hadoop.fs.FSDataInputStream fdis = fs.open(path);
-        return new HadoopDataInputStream(fdis);
+        return execute(Operation.OPEN, () -> new HadoopDataInputStream(fs.open(toHadoopPath(f))));
     }
 
     @Override
     public HadoopDataOutputStream create(final FsPath f, final WriteMode overwrite)
             throws IOException {
-        final org.apache.hadoop.fs.FSDataOutputStream fsDataOutputStream =
-                this.fs.create(toHadoopPath(f), overwrite == WriteMode.OVERWRITE);
-        return new HadoopDataOutputStream(fsDataOutputStream);
+        return execute(
+                Operation.CREATE,
+                () ->
+                        new HadoopDataOutputStream(
+                                fs.create(toHadoopPath(f), overwrite == WriteMode.OVERWRITE)));
     }
 
     @Override
     public boolean delete(final FsPath f, final boolean recursive) throws IOException {
-        return this.fs.delete(toHadoopPath(f), recursive);
+        return execute(Operation.DELETE, () -> fs.delete(toHadoopPath(f), recursive));
     }
 
     @Override
     public boolean exists(FsPath f) throws IOException {
-        return this.fs.exists(toHadoopPath(f));
+        return execute(Operation.EXISTS, () -> fs.exists(toHadoopPath(f)));
     }
 
     @Override
     public FileStatus[] listStatus(final FsPath f) throws IOException {
-        final org.apache.hadoop.fs.FileStatus[] hadoopFiles = this.fs.listStatus(toHadoopPath(f));
-        final FileStatus[] files = new FileStatus[hadoopFiles.length];
+        return execute(
+                Operation.LIST_STATUS,
+                () -> {
+                    final org.apache.hadoop.fs.FileStatus[] hadoopFiles =
+                            fs.listStatus(toHadoopPath(f));
+                    final FileStatus[] files = new FileStatus[hadoopFiles.length];
 
-        // Convert types
-        for (int i = 0; i < files.length; i++) {
-            files[i] = HadoopFileStatus.fromHadoopStatus(hadoopFiles[i]);
-        }
+                    for (int i = 0; i < files.length; i++) {
+                        files[i] = HadoopFileStatus.fromHadoopStatus(hadoopFiles[i]);
+                    }
 
-        return files;
+                    return files;
+                });
     }
 
     @Override
     public boolean mkdirs(final FsPath f) throws IOException {
-        return this.fs.mkdirs(toHadoopPath(f));
+        return execute(Operation.MKDIRS, () -> fs.mkdirs(toHadoopPath(f)));
     }
 
     @Override
     public boolean rename(final FsPath src, final FsPath dst) throws IOException {
-        return this.fs.rename(toHadoopPath(src), toHadoopPath(dst));
+        return execute(Operation.RENAME, () -> fs.rename(toHadoopPath(src), toHadoopPath(dst)));
+    }
+
+    private <T> T execute(Operation operation, SupplierWithException<T, IOException> action)
+            throws IOException {
+        try {
+            return action.get();
+        } catch (IOException | RuntimeException failure) {
+            throw normalize(failure, operation);
+        }
+    }
+
+    /** Translates native failures once, before they cross the Fluss filesystem interface. */
+    protected IOException normalize(Exception failure, Operation operation) {
+        if (failure instanceof RuntimeException) {
+            throw (RuntimeException) failure;
+        }
+        IOException ioFailure = (IOException) failure;
+        if (failure instanceof FileSystemFailure) {
+            return ioFailure;
+        }
+        IOException classified =
+                ioFailure instanceof RemoteException
+                        ? ((RemoteException) ioFailure)
+                                .unwrapRemoteException(
+                                        AccessControlException.class, FileNotFoundException.class)
+                        : ioFailure;
+        if (classified instanceof FileNotFoundException
+                && (operation == Operation.GET_FILE_STATUS
+                        || operation == Operation.LIST_STATUS
+                        || operation == Operation.OPEN
+                        || operation == Operation.EXISTS)) {
+            return new FileSystemPathNotFoundException(operation.code(), null, null, ioFailure);
+        }
+        FileSystemFailure.Kind kind =
+                classified instanceof AccessDeniedException
+                                || classified instanceof AccessControlException
+                        ? FileSystemFailure.Kind.PERMISSION_DENIED
+                        : classified instanceof FileNotFoundException
+                                ? FileSystemFailure.Kind.NOT_FOUND
+                                : FileSystemFailure.Kind.UNEXPECTED;
+        return new FileSystemOperationException(
+                kind,
+                FileSystemFailure.Resource.UNKNOWN,
+                operation.code(),
+                classified instanceof SocketTimeoutException,
+                null,
+                null,
+                ioFailure);
     }
 
     // ------------------------------------------------------------------------

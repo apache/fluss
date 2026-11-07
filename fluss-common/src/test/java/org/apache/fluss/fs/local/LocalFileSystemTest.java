@@ -21,10 +21,14 @@ import org.apache.fluss.fs.FSDataInputStream;
 import org.apache.fluss.fs.FSDataOutputStream;
 import org.apache.fluss.fs.FileStatus;
 import org.apache.fluss.fs.FileSystem;
+import org.apache.fluss.fs.FileSystemFailure;
+import org.apache.fluss.fs.FileSystemOperationException;
+import org.apache.fluss.fs.FileSystemPathNotFoundException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.utils.ExecutorUtils;
 import org.apache.fluss.utils.function.ThrowingConsumer;
 
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -33,10 +37,14 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.channels.ClosedChannelException;
+import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermission;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -56,6 +64,98 @@ import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 class LocalFileSystemTest {
 
     @TempDir private Path temporaryFolder;
+
+    @Test
+    void listStatusReportsAConfirmedMissingPath() {
+        FsPath missing = new FsPath(temporaryFolder.resolve("missing").toUri());
+
+        assertThatExceptionOfType(FileSystemPathNotFoundException.class)
+                .isThrownBy(() -> LocalFileSystem.getSharedInstance().listStatus(missing));
+    }
+
+    @Test
+    void openReportsAConfirmedMissingPath() {
+        FsPath missing = new FsPath(temporaryFolder.resolve("missing-file").toUri());
+
+        assertThatExceptionOfType(FileSystemPathNotFoundException.class)
+                .isThrownBy(() -> LocalFileSystem.getSharedInstance().open(missing));
+    }
+
+    @Test
+    void listStatusReportsDirectoryPermissionFailure() throws IOException {
+        Assumptions.assumeTrue(
+                FileSystems.getDefault().supportedFileAttributeViews().contains("posix"));
+        Path directory = Files.createDirectory(temporaryFolder.resolve("restricted"));
+        Set<PosixFilePermission> permissions = Files.getPosixFilePermissions(directory);
+        try {
+            Files.setPosixFilePermissions(
+                    directory, Collections.singleton(PosixFilePermission.OWNER_EXECUTE));
+            Assumptions.assumeFalse(Files.isReadable(directory));
+
+            assertThatExceptionOfType(FileSystemOperationException.class)
+                    .isThrownBy(
+                            () ->
+                                    LocalFileSystem.getSharedInstance()
+                                            .listStatus(new FsPath(directory.toUri())))
+                    .satisfies(
+                            failure ->
+                                    assertThat(failure.kind())
+                                            .isEqualTo(FileSystemFailure.Kind.PERMISSION_DENIED));
+        } finally {
+            Files.setPosixFilePermissions(directory, permissions);
+        }
+    }
+
+    @Test
+    void openReportsFilePermissionFailure() throws IOException {
+        Assumptions.assumeTrue(
+                FileSystems.getDefault().supportedFileAttributeViews().contains("posix"));
+        Path file = Files.createFile(temporaryFolder.resolve("restricted-file"));
+        Set<PosixFilePermission> permissions = Files.getPosixFilePermissions(file);
+        try {
+            Files.setPosixFilePermissions(file, Collections.emptySet());
+            Assumptions.assumeFalse(Files.isReadable(file));
+
+            assertThatExceptionOfType(FileSystemOperationException.class)
+                    .isThrownBy(
+                            () ->
+                                    LocalFileSystem.getSharedInstance()
+                                            .open(new FsPath(file.toUri())))
+                    .satisfies(
+                            failure ->
+                                    assertThat(failure.kind())
+                                            .isEqualTo(FileSystemFailure.Kind.PERMISSION_DENIED));
+        } finally {
+            Files.setPosixFilePermissions(file, permissions);
+        }
+    }
+
+    @Test
+    void recursiveDeleteReportsInaccessibleDirectory() throws IOException {
+        Assumptions.assumeTrue(
+                FileSystems.getDefault().supportedFileAttributeViews().contains("posix"));
+        Path directory = Files.createDirectory(temporaryFolder.resolve("tree"));
+        Path restricted = Files.createDirectory(directory.resolve("restricted"));
+        Files.createFile(restricted.resolve("file"));
+        Set<PosixFilePermission> permissions = Files.getPosixFilePermissions(restricted);
+        try {
+            Files.setPosixFilePermissions(restricted, Collections.emptySet());
+            Assumptions.assumeFalse(Files.isReadable(restricted));
+
+            assertThatExceptionOfType(FileSystemOperationException.class)
+                    .isThrownBy(
+                            () ->
+                                    LocalFileSystem.getSharedInstance()
+                                            .delete(new FsPath(directory.toUri()), true))
+                    .satisfies(
+                            failure ->
+                                    assertThat(failure.kind())
+                                            .isEqualTo(FileSystemFailure.Kind.PERMISSION_DENIED));
+        } finally {
+            Files.setPosixFilePermissions(restricted, permissions);
+            LocalFileSystem.getSharedInstance().delete(new FsPath(directory.toUri()), true);
+        }
+    }
 
     /**
      * This test checks the functionality of the {@link org.apache.fluss.fs.local.LocalFileSystem}
