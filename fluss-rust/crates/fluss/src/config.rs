@@ -235,12 +235,12 @@ pub struct Config {
     #[arg(long, default_value_t = String::new())]
     #[serde(skip_serializing)]
     pub security_sasl_password: String,
-    /// Maximum number of pending lookup operations
+    /// Maximum number of pending lookup operations. Must be greater than zero.
     /// Default: 25600 (matching Java CLIENT_LOOKUP_QUEUE_SIZE)
     #[arg(long, default_value_t = 25600)]
     pub lookup_queue_size: usize,
 
-    /// Maximum batch size of merging lookup operations to one lookup request
+    /// Maximum number of lookup operations in a batch. Must be greater than zero.
     /// Default: 128 (matching Java CLIENT_LOOKUP_MAX_BATCH_SIZE)
     #[arg(long, default_value_t = 128)]
     pub lookup_max_batch_size: usize,
@@ -250,7 +250,7 @@ pub struct Config {
     #[arg(long, default_value_t = 100)]
     pub lookup_batch_timeout_ms: u64,
 
-    /// Maximum number of unacknowledged lookup requests
+    /// Maximum number of unacknowledged lookup requests. Must be greater than zero.
     /// Default: 128 (matching Java CLIENT_LOOKUP_MAX_INFLIGHT_SIZE)
     #[arg(long, default_value_t = 128)]
     pub lookup_max_inflight_requests: usize,
@@ -492,6 +492,15 @@ impl Config {
     }
 
     pub fn validate_lookup(&self) -> Result<(), String> {
+        if self.lookup_queue_size == 0 {
+            return Err("lookup_queue_size must be > 0".to_string());
+        }
+        if self.lookup_max_batch_size == 0 {
+            return Err("lookup_max_batch_size must be > 0".to_string());
+        }
+        if self.lookup_max_inflight_requests == 0 {
+            return Err("lookup_max_inflight_requests must be > 0".to_string());
+        }
         if self.lookup_retry_backoff_ms > self.lookup_retry_max_backoff_ms {
             return Err(
                 "lookup_retry_backoff_ms must be <= lookup_retry_max_backoff_ms".to_string(),
@@ -667,6 +676,37 @@ mod tests {
             ..Config::default()
         };
         assert!(config.validate_scanner().is_err());
+    }
+
+    #[test]
+    fn test_lookup_zero_capacity_rejected() {
+        for (queue_size, max_batch_size, max_inflight, expected) in [
+            (0, 128, 128, "lookup_queue_size must be > 0"),
+            (25600, 0, 128, "lookup_max_batch_size must be > 0"),
+            (25600, 128, 0, "lookup_max_inflight_requests must be > 0"),
+            (0, 0, 0, "lookup_queue_size must be > 0"),
+        ] {
+            let config = Config {
+                lookup_queue_size: queue_size,
+                lookup_max_batch_size: max_batch_size,
+                lookup_max_inflight_requests: max_inflight,
+                ..Config::default()
+            };
+            assert_eq!(config.validate_lookup(), Err(expected.to_string()));
+        }
+    }
+
+    #[test]
+    fn test_lookup_positive_capacity_valid() {
+        assert!(Config::default().validate_lookup().is_ok());
+        let config = Config {
+            lookup_queue_size: 1,
+            lookup_max_batch_size: 1,
+            lookup_max_inflight_requests: 1,
+            lookup_batch_timeout_ms: 0,
+            ..Config::default()
+        };
+        assert!(config.validate_lookup().is_ok());
     }
 
     #[test]
