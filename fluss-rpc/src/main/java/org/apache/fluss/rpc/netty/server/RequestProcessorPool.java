@@ -68,7 +68,12 @@ final class RequestProcessorPool {
             // same channel processed serializable
             int processorIndex = processorIndexOffset + i;
             processors[i] =
-                    new RequestProcessor(processorIndex, requestChannel, service, requestHandlers);
+                    new RequestProcessor(
+                            processorIndex,
+                            requestChannel,
+                            service,
+                            requestHandlers,
+                            requestsMetrics);
             requestsMetrics.gauge(
                     PROCESSOR_INDEX,
                     String.valueOf(processorIndex),
