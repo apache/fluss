@@ -409,7 +409,7 @@ class IndexSourceRemoteRecoveryITCase {
         for (Map.Entry<Integer, String> expectedRow : expectedRows.entrySet()) {
             PhysicalIndexRow physical =
                     physicalIndexRow(
-                            recovery.indexSpec, expectedRow.getKey(), expectedRow.getValue());
+                            recovery.indexEncoder, expectedRow.getKey(), expectedRow.getValue());
             TableBucket target = new TableBucket(recovery.indexTableId, physical.targetBucket);
             waitUntil(
                     () -> {
@@ -429,7 +429,8 @@ class IndexSourceRemoteRecoveryITCase {
         Map<TableBucket, Map<String, String>> expected = emptyIndexProjection(recovery);
         for (Map.Entry<Integer, String> sourceRow : expectedRows.entrySet()) {
             PhysicalIndexRow physical =
-                    physicalIndexRow(recovery.indexSpec, sourceRow.getKey(), sourceRow.getValue());
+                    physicalIndexRow(
+                            recovery.indexEncoder, sourceRow.getKey(), sourceRow.getValue());
             TableBucket bucket = new TableBucket(recovery.indexTableId, physical.targetBucket);
             String previous =
                     expected.get(bucket).put(encode(physical.key), encode(physical.value));
@@ -439,8 +440,7 @@ class IndexSourceRemoteRecoveryITCase {
         Map<TableBucket, Map<String, String>> actual = emptyIndexProjection(recovery);
         for (int bucket = 0; bucket < INDEX_BUCKET_COUNT; bucket++) {
             TableBucket tableBucket = new TableBucket(recovery.indexTableId, bucket);
-            byte[] progressKey =
-                    recovery.indexSpec.encodeProgress(recovery.sourceTableBucket, bucket, 0L).key();
+            byte[] progressKey = recovery.indexEncoder.encodeProgress(bucket, 0L).key();
             Replica replica = CLUSTER.waitAndGetLeaderReplica(tableBucket);
             org.apache.fluss.server.kv.KvTabletTestUtils.flushAndWait(
                     replica.getKvTablet(), Long.MAX_VALUE);
@@ -473,7 +473,8 @@ class IndexSourceRemoteRecoveryITCase {
     private static void assertIndexKeyAbsent(
             RemoteRecoveryFixture recovery, String indexedValue, int primaryKey, String description)
             throws Exception {
-        PhysicalIndexRow physical = physicalIndexRow(recovery.indexSpec, primaryKey, indexedValue);
+        PhysicalIndexRow physical =
+                physicalIndexRow(recovery.indexEncoder, primaryKey, indexedValue);
         TableBucket target = new TableBucket(recovery.indexTableId, physical.targetBucket);
         assertThat(
                         CLUSTER.waitAndGetLeaderReplica(target)
@@ -493,20 +494,20 @@ class IndexSourceRemoteRecoveryITCase {
     }
 
     private static PhysicalIndexRow physicalIndexRow(
-            IndexSpec indexSpec, int primaryKey, String indexedValue) {
-        IndexSpec.IndexEntry entry =
-                indexSpec.encodeEntry(GenericRow.of(primaryKey, fromString(indexedValue)));
+            IndexReplicationEncoder indexEncoder, int primaryKey, String indexedValue) {
+        IndexReplicationEncoder.IndexEntry entry =
+                indexEncoder.encodeDataEntry(GenericRow.of(primaryKey, fromString(indexedValue)));
         return new PhysicalIndexRow(
                 entry.key(),
-                ValueEncoder.encodeValue((short) indexSpec.getIndexSchemaId(), entry.value()),
+                ValueEncoder.encodeValue((short) indexEncoder.getIndexSchemaId(), entry.value()),
                 entry.targetBucket());
     }
 
     private static String valueForIndexBucket(
-            IndexSpec indexSpec, String prefix, int targetBucket) {
+            IndexReplicationEncoder indexEncoder, String prefix, int targetBucket) {
         for (int suffix = 0; suffix < 100_000; suffix++) {
             String candidate = prefix + '-' + suffix;
-            if (physicalIndexRow(indexSpec, 0, candidate).targetBucket == targetBucket) {
+            if (physicalIndexRow(indexEncoder, 0, candidate).targetBucket == targetBucket) {
                 return candidate;
             }
         }
@@ -577,7 +578,7 @@ class IndexSourceRemoteRecoveryITCase {
     private static final class RemoteRecoveryFixture implements AutoCloseable {
         private final long mainTableId;
         private final long indexTableId;
-        private final IndexSpec indexSpec;
+        private final IndexReplicationEncoder indexEncoder;
         private final TableBucket sourceTableBucket;
         private final int sourceLeader;
         private final int recoveryFollower;
@@ -628,11 +629,11 @@ class IndexSourceRemoteRecoveryITCase {
                     .hasSize(REPLICATION_FACTOR)
                     .doesNotContainAnyElementsOf(sourceReplicas)
                     .contains(CLUSTER.waitAndGetLeader(targetBucket));
-            this.indexSpec = table.indexSpec(sourceBucket);
+            this.indexEncoder = table.indexEncoder(sourceBucket);
             this.firstIndexValue =
-                    valueForIndexBucket(indexSpec, "remote-old", targetBucket.getBucket());
+                    valueForIndexBucket(indexEncoder, "remote-old", targetBucket.getBucket());
             this.secondIndexValue =
-                    valueForIndexBucket(indexSpec, "remote-new", targetBucket.getBucket());
+                    valueForIndexBucket(indexEncoder, "remote-new", targetBucket.getBucket());
         }
 
         private void stopServer(int serverId) throws Exception {

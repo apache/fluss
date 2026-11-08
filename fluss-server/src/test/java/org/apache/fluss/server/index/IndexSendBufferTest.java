@@ -437,8 +437,8 @@ class IndexSendBufferTest {
         LogRecordReadContext context =
                 LogRecordReadContext.createCompactedRowReadContext(
                         RowType.of(DataTypes.INT()), 1, null);
-        IndexSpec spec =
-                new IndexSpec(
+        IndexReplicationEncoder encoder =
+                new IndexReplicationEncoder(
                         "idx",
                         IndexVisibility.SYNC,
                         2L,
@@ -448,14 +448,14 @@ class IndexSendBufferTest {
                         row -> {
                             throw new AssertionError("unexpected source read");
                         },
-                        (source, target, end) -> {
+                        (target, end) -> {
                             throw new AssertionError("unexpected source read");
                         });
         IndexReplicationScheduler scheduler = new IndexReplicationScheduler(1);
         IndexReplicator owner =
                 new IndexReplicator(
                         new IndexSourceReader(log, null, Runnable::run),
-                        Collections.singletonList(spec),
+                        Collections.singletonList(encoder),
                         buffer,
                         context,
                         0L,

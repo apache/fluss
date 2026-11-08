@@ -78,7 +78,7 @@ class IndexReplicationDeferredRecoveryTest extends ReplicaTestBase {
     void testDeferredIndexReplicationResumesAndReleasesResourcesOnShutdown() throws Exception {
         // 1. Register the main table (carrying one secondary index) in ZooKeeper only. The index
         // table metadata is deliberately absent from the TabletServer metadata cache, which is what
-        // IndexSpecFactory reads, so becoming leader must defer index replication.
+        // IndexReplicationEncoder reads, so becoming leader must defer index replication.
         Map<String, String> mainProperties = new HashMap<>();
         mainProperties.put(ConfigOptions.TABLE_REPLICATION_FACTOR.key(), "1");
         registerTableInZkClient(

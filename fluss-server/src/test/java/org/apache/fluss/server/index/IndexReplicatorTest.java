@@ -86,8 +86,8 @@ class IndexReplicatorTest {
                         buffer,
                         new ManualClock(),
                         Arrays.asList(
-                                indexSpec("first", 2L, new AtomicInteger()),
-                                indexSpec("second", 3L, new AtomicInteger())))) {
+                                indexEncoder("first", 2L, new AtomicInteger()),
+                                indexEncoder("second", 3L, new AtomicInteger())))) {
             assertThat(replicator.poll()).isTrue();
             IndexBatch first = buffer.claimFirstReady(new TableBucket(2L, 0));
             IndexBatch second = buffer.claimFirstReady(new TableBucket(3L, 0));
@@ -116,16 +116,16 @@ class IndexReplicatorTest {
         AtomicLong highWatermark = new AtomicLong(2);
         AtomicReference<CompletableFuture<Void>> completion = new AtomicReference<>();
         IndexSendBuffer buffer = new IndexSendBuffer(8192);
-        IndexSpec delegate = indexSpec("async", 3L, new AtomicInteger());
-        IndexSpec async =
-                new IndexSpec(
+        IndexReplicationEncoder delegate = indexEncoder("async", 3L, new AtomicInteger());
+        IndexReplicationEncoder async =
+                new IndexReplicationEncoder(
                         "async",
                         IndexVisibility.ASYNC,
                         3L,
                         1,
                         KvFormat.COMPACTED,
                         new int[] {0},
-                        delegate::encodeEntry,
+                        delegate::encodeDataEntry,
                         delegate::encodeProgress);
         IndexSourceReader.SourceLog log =
                 sourceLog(
@@ -157,7 +157,7 @@ class IndexReplicatorTest {
                         log,
                         buffer,
                         new ManualClock(),
-                        Arrays.asList(indexSpec("sync", 2L, new AtomicInteger()), async))) {
+                        Arrays.asList(indexEncoder("sync", 2L, new AtomicInteger()), async))) {
             assertThat(replicator.poll()).isTrue();
             acknowledge(buffer, new TableBucket(2L, 0));
             highWatermark.set(4);
@@ -181,16 +181,16 @@ class IndexReplicatorTest {
         MemoryLogRecords records = sourceRecords(RowType.of(DataTypes.INT()), 0);
         AtomicInteger reads = new AtomicInteger();
         AtomicInteger asyncEncodes = new AtomicInteger();
-        IndexSpec delegate = indexSpec("async", 3L, asyncEncodes);
-        IndexSpec async =
-                new IndexSpec(
+        IndexReplicationEncoder delegate = indexEncoder("async", 3L, asyncEncodes);
+        IndexReplicationEncoder async =
+                new IndexReplicationEncoder(
                         "async",
                         IndexVisibility.ASYNC,
                         3L,
                         1,
                         KvFormat.COMPACTED,
                         new int[] {0},
-                        delegate::encodeEntry,
+                        delegate::encodeDataEntry,
                         delegate::encodeProgress);
         IndexSendBuffer buffer = new IndexSendBuffer(payloadBudget);
         try (IndexReplicator replicator =
@@ -198,7 +198,7 @@ class IndexReplicatorTest {
                         sourceLog(() -> records, reads),
                         buffer,
                         new ManualClock(),
-                        Arrays.asList(indexSpec("sync", 2L, new AtomicInteger()), async))) {
+                        Arrays.asList(indexEncoder("sync", 2L, new AtomicInteger()), async))) {
             assertThat(replicator.poll()).isTrue();
             assertThat(reads).hasValue(1);
             assertThat(replicator.hasFailure()).isFalse();
@@ -240,8 +240,8 @@ class IndexReplicatorTest {
                     }
                 };
         CompactedRow value = binaryValue(1000);
-        IndexSpec index =
-                new IndexSpec(
+        IndexReplicationEncoder index =
+                new IndexReplicationEncoder(
                         "idx",
                         IndexVisibility.SYNC,
                         2L,
@@ -249,10 +249,11 @@ class IndexReplicatorTest {
                         KvFormat.COMPACTED,
                         new int[] {0},
                         row ->
-                                new IndexSpec.IndexEntry(
+                                new IndexReplicationEncoder.IndexEntry(
                                         new byte[] {(byte) row.getInt(0)}, value, 0),
-                        (source, target, end) ->
-                                new IndexSpec.IndexEntry(new byte[] {0}, value, target));
+                        (target, end) ->
+                                new IndexReplicationEncoder.IndexEntry(
+                                        new byte[] {0}, value, target));
         ManualClock clock = new ManualClock();
         AtomicInteger reads = new AtomicInteger();
         IndexSendBuffer buffer = new IndexSendBuffer(payloadLimited ? 4096 : Long.MAX_VALUE);
@@ -399,9 +400,9 @@ class IndexReplicatorTest {
         AtomicBoolean encodingFailed = new AtomicBoolean(true);
         CompactedRow largeValue = binaryValue(5000);
         CompactedRow smallValue = binaryValue(1);
-        IndexSpec delegate = indexSpec("idx", 2L, new AtomicInteger());
-        IndexSpec fanout =
-                new IndexSpec(
+        IndexReplicationEncoder delegate = indexEncoder("idx", 2L, new AtomicInteger());
+        IndexReplicationEncoder fanout =
+                new IndexReplicationEncoder(
                         "idx",
                         IndexVisibility.SYNC,
                         2L,
@@ -413,7 +414,7 @@ class IndexReplicatorTest {
                                 throw new IllegalStateException("index needs repair");
                             }
                             int target = row.getInt(0);
-                            return new IndexSpec.IndexEntry(
+                            return new IndexReplicationEncoder.IndexEntry(
                                     new byte[] {(byte) target},
                                     target == 2 ? smallValue : largeValue,
                                     target);
@@ -430,7 +431,7 @@ class IndexReplicatorTest {
                                 highWatermark::get),
                         buffer,
                         clock,
-                        Arrays.asList(fanout, indexSpec("other", 3L, new AtomicInteger())))) {
+                        Arrays.asList(fanout, indexEncoder("other", 3L, new AtomicInteger())))) {
             assertThat(replicator.poll()).isTrue();
             assertThat(buffer.pendingBytes()).isEqualTo(4096L);
             encodingFailed.set(false);
@@ -527,7 +528,7 @@ class IndexReplicatorTest {
                                 buffer,
                                 clock,
                                 Collections.singletonList(
-                                        indexSpec("stalled", 2L, new AtomicInteger())));
+                                        indexEncoder("stalled", 2L, new AtomicInteger())));
                 IndexReplicator healthy =
                         replicator(
                                 sourceLog(
@@ -535,7 +536,7 @@ class IndexReplicatorTest {
                                 buffer,
                                 clock,
                                 Collections.singletonList(
-                                        indexSpec("healthy", 3L, new AtomicInteger())))) {
+                                        indexEncoder("healthy", 3L, new AtomicInteger())))) {
             assertThat(stalled.poll()).isTrue();
             try (IndexSender sender =
                     new IndexSender(
@@ -603,9 +604,9 @@ class IndexReplicatorTest {
                         0L,
                         offset -> offset == 0 ? first : second,
                         reads);
-        IndexSpec delegate = indexSpec("fast", 2L, new AtomicInteger());
-        IndexSpec fast =
-                new IndexSpec(
+        IndexReplicationEncoder delegate = indexEncoder("fast", 2L, new AtomicInteger());
+        IndexReplicationEncoder fast =
+                new IndexReplicationEncoder(
                         "fast",
                         IndexVisibility.SYNC,
                         2L,
@@ -616,7 +617,7 @@ class IndexReplicatorTest {
                             if (failed.get()) {
                                 throw new IllegalStateException("index needs repair");
                             }
-                            return delegate.encodeEntry(row);
+                            return delegate.encodeDataEntry(row);
                         },
                         delegate::encodeProgress);
         IndexSendBuffer buffer = new IndexSendBuffer();
@@ -626,7 +627,7 @@ class IndexReplicatorTest {
                         log,
                         buffer,
                         clock,
-                        Arrays.asList(fast, indexSpec("slow", 3L, new AtomicInteger())))) {
+                        Arrays.asList(fast, indexEncoder("slow", 3L, new AtomicInteger())))) {
             assertThat(replicator.poll()).isTrue();
             acknowledge(buffer, new TableBucket(2L, 0));
             highWatermark.set(4);
@@ -713,7 +714,7 @@ class IndexReplicatorTest {
                         new IndexSourceReader(log, fetcher, Runnable::run),
                         buffer,
                         clock,
-                        Collections.singletonList(indexSpec("idx", 2L, new AtomicInteger())))) {
+                        Collections.singletonList(indexEncoder("idx", 2L, new AtomicInteger())))) {
             assertThat(replicator.poll()).isTrue();
             assertThat(replicator.hasFailure()).isTrue();
             assertThat(reads).hasValue(1);
@@ -746,7 +747,7 @@ class IndexReplicatorTest {
         AtomicInteger reads = new AtomicInteger();
         IndexSourceReader.SourceLog log = sourceLog(() -> records, reads);
         ManualClock clock = new ManualClock();
-        IndexSpec fanout = fanoutSpec();
+        IndexReplicationEncoder fanout = fanoutSpec();
         IndexSendBuffer small = new IndexSendBuffer(4096);
         try (IndexReplicator replicator =
                 replicator(log, small, clock, Collections.singletonList(fanout))) {
@@ -785,8 +786,8 @@ class IndexReplicatorTest {
                         buffer,
                         clock,
                         Arrays.asList(
-                                indexSpec("first", 2L, new AtomicInteger()),
-                                indexSpec("second", 3L, new AtomicInteger())))) {
+                                indexEncoder("first", 2L, new AtomicInteger()),
+                                indexEncoder("second", 3L, new AtomicInteger())))) {
             assertThat(replicator.poll()).isTrue();
             assertThat(buffer.pendingBytes()).isEqualTo(4096);
             acknowledge(buffer, new TableBucket(2L, 0));
@@ -817,9 +818,9 @@ class IndexReplicatorTest {
                         DEFAULT_COMPRESSION);
         AtomicInteger reads = new AtomicInteger();
         AtomicBoolean fail = new AtomicBoolean(true);
-        IndexSpec first = indexSpec("published", 2L, new AtomicInteger());
-        IndexSpec empty =
-                new IndexSpec(
+        IndexReplicationEncoder first = indexEncoder("published", 2L, new AtomicInteger());
+        IndexReplicationEncoder empty =
+                new IndexReplicationEncoder(
                         "empty",
                         IndexVisibility.SYNC,
                         3L,
@@ -829,24 +830,24 @@ class IndexReplicatorTest {
                         row -> {
                             throw new AssertionError("null index must not encode an entry");
                         },
-                        (source, target, end) -> {
+                        (target, end) -> {
                             throw new AssertionError("empty window must not encode progress");
                         });
-        IndexSpec delegate = indexSpec("interrupted", 4L, new AtomicInteger());
-        IndexSpec interrupted =
-                new IndexSpec(
+        IndexReplicationEncoder delegate = indexEncoder("interrupted", 4L, new AtomicInteger());
+        IndexReplicationEncoder interrupted =
+                new IndexReplicationEncoder(
                         "interrupted",
                         IndexVisibility.SYNC,
                         4L,
                         1,
                         KvFormat.COMPACTED,
                         new int[] {0},
-                        delegate::encodeEntry,
-                        (source, target, end) -> {
+                        delegate::encodeDataEntry,
+                        (target, end) -> {
                             if (fail.get()) {
                                 throw new AssertionError("construction interrupted");
                             }
-                            return delegate.encodeProgress(source, target, end);
+                            return delegate.encodeProgress(target, end);
                         });
         IndexSendBuffer buffer = new IndexSendBuffer();
         LogRecordReadContext context =
@@ -879,9 +880,9 @@ class IndexReplicatorTest {
         }
     }
 
-    private static IndexSpec fanoutSpec() {
-        IndexSpec delegate = indexSpec("idx", 2L, new AtomicInteger());
-        return new IndexSpec(
+    private static IndexReplicationEncoder fanoutSpec() {
+        IndexReplicationEncoder delegate = indexEncoder("idx", 2L, new AtomicInteger());
+        return new IndexReplicationEncoder(
                 "idx",
                 IndexVisibility.SYNC,
                 2L,
@@ -889,8 +890,9 @@ class IndexReplicatorTest {
                 KvFormat.COMPACTED,
                 new int[] {0},
                 row -> {
-                    IndexSpec.IndexEntry entry = delegate.encodeEntry(row);
-                    return new IndexSpec.IndexEntry(entry.key(), entry.value(), row.getInt(0));
+                    IndexReplicationEncoder.IndexEntry entry = delegate.encodeDataEntry(row);
+                    return new IndexReplicationEncoder.IndexEntry(
+                            entry.key(), entry.value(), row.getInt(0));
                 },
                 delegate::encodeProgress);
     }
@@ -933,7 +935,7 @@ class IndexReplicatorTest {
             IndexSourceReader.SourceLog log,
             IndexSendBuffer buffer,
             ManualClock clock,
-            java.util.List<IndexSpec> indexes) {
+            java.util.List<IndexReplicationEncoder> indexes) {
         return replicator(new IndexSourceReader(log, null, Runnable::run), buffer, clock, indexes);
     }
 
@@ -941,7 +943,7 @@ class IndexReplicatorTest {
             IndexSourceReader sourceReader,
             IndexSendBuffer buffer,
             ManualClock clock,
-            java.util.List<IndexSpec> indexes) {
+            java.util.List<IndexReplicationEncoder> indexes) {
         IndexReplicationScheduler scheduler = new IndexReplicationScheduler(8);
         IndexReplicator replicator =
                 unregisteredReplicator(sourceReader, buffer, clock, indexes, scheduler, () -> {});
@@ -953,7 +955,7 @@ class IndexReplicatorTest {
             IndexSourceReader sourceReader,
             IndexSendBuffer buffer,
             ManualClock clock,
-            java.util.List<IndexSpec> indexes,
+            java.util.List<IndexReplicationEncoder> indexes,
             IndexReplicationScheduler scheduler,
             Runnable wakeupSignal) {
         LogRecordReadContext context =
@@ -1030,8 +1032,8 @@ class IndexReplicatorTest {
         LogRecordReadContext readContext =
                 LogRecordReadContext.createCompactedRowReadContext(rowType, 1, null);
         IndexSourceReader sourceReader = new IndexSourceReader(sourceLog, null, Runnable::run);
-        IndexSpec first = indexSpec("idx_first", 2L, firstIndexEncodes);
-        IndexSpec second = indexSpec("idx_second", 3L, secondIndexEncodes);
+        IndexReplicationEncoder first = indexEncoder("idx_first", 2L, firstIndexEncodes);
+        IndexReplicationEncoder second = indexEncoder("idx_second", 3L, secondIndexEncodes);
         IndexSendBuffer sendBuffer = new IndexSendBuffer();
 
         IndexReplicationScheduler scheduler = new IndexReplicationScheduler(8);
@@ -1072,12 +1074,13 @@ class IndexReplicatorTest {
         return value;
     }
 
-    private static IndexSpec indexSpec(String name, long tableId, AtomicInteger encodes) {
+    private static IndexReplicationEncoder indexEncoder(
+            String name, long tableId, AtomicInteger encodes) {
         CompactedRowWriter writer = new CompactedRowWriter(1);
         writer.writeByte((byte) 1);
         CompactedRow value = new CompactedRow(new DataType[] {DataTypes.TINYINT()});
         value.pointTo(writer.segment(), 0, writer.position());
-        return new IndexSpec(
+        return new IndexReplicationEncoder(
                 name,
                 IndexVisibility.SYNC,
                 tableId,
@@ -1086,10 +1089,10 @@ class IndexReplicatorTest {
                 new int[] {0},
                 ignored -> {
                     encodes.incrementAndGet();
-                    return new IndexSpec.IndexEntry(name.getBytes(), value, 0);
+                    return new IndexReplicationEncoder.IndexEntry(name.getBytes(), value, 0);
                 },
-                (sourceBucket, targetBucket, sourceEndOffset) ->
-                        new IndexSpec.IndexEntry(
+                (targetBucket, sourceEndOffset) ->
+                        new IndexReplicationEncoder.IndexEntry(
                                 (name + "-progress").getBytes(), value, targetBucket));
     }
 

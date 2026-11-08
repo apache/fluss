@@ -404,12 +404,12 @@ final class IndexReplicationScheduler {
             return false;
         }
         for (IndexReplicationState index : group.states()) {
-            if (!index.spec().isSync() || index.hasFailure()) {
+            if (!index.encoder().isSync() || index.hasFailure()) {
                 return false;
             }
         }
         for (IndexReplicationState index : source.indexStates()) {
-            if (index.spec().isSync() && !group.states().contains(index)) {
+            if (index.encoder().isSync() && !group.states().contains(index)) {
                 return false;
             }
         }
@@ -433,7 +433,7 @@ final class IndexReplicationScheduler {
         }
         List<IndexReplicationState> selected = new ArrayList<>();
         for (IndexReplicationState index : source.indexStates()) {
-            if (!index.spec().isSync()
+            if (!index.encoder().isSync()
                     && !index.hasFailure()
                     && index.pushedOffset() == syncGroup.startOffset()
                     && index.canRead(result.nextOffset())
@@ -460,7 +460,7 @@ final class IndexReplicationScheduler {
             if (!eligible(source, index, highWatermark, probe)) {
                 continue;
             }
-            if (index.spec().isSync()) {
+            if (index.encoder().isSync()) {
                 if (index.pushedOffset() <= syncLimit
                         && (sync == null || index.pushedOffset() < sync.pushedOffset())) {
                     sync = index;
@@ -482,7 +482,7 @@ final class IndexReplicationScheduler {
             if (index.pushedOffset() != start || !eligible(source, index, highWatermark, probe)) {
                 continue;
             }
-            if (index.spec().isSync()) {
+            if (index.encoder().isSync()) {
                 if (start > syncLimit) {
                     continue;
                 }
@@ -503,13 +503,13 @@ final class IndexReplicationScheduler {
     private static long syncStartLimit(List<IndexReplicationState> indexes) {
         long minimum = Long.MAX_VALUE;
         for (IndexReplicationState index : indexes) {
-            if (index.spec().isSync()) {
+            if (index.encoder().isSync()) {
                 minimum = Math.min(minimum, index.pushedOffset());
             }
         }
         long covered = Long.MAX_VALUE;
         for (IndexReplicationState index : indexes) {
-            if (index.spec().isSync() && index.pushedOffset() == minimum) {
+            if (index.encoder().isSync() && index.pushedOffset() == minimum) {
                 long windowEnd = index.healthyWindowEnd();
                 if (windowEnd < 0) {
                     return minimum;
@@ -523,7 +523,7 @@ final class IndexReplicationScheduler {
     private static long asyncLimit(List<IndexReplicationState> indexes, long highWatermark) {
         long limit = highWatermark;
         for (IndexReplicationState index : indexes) {
-            if (index.spec().isSync()) {
+            if (index.encoder().isSync()) {
                 long windowEnd = index.healthyWindowEnd();
                 limit = Math.min(limit, windowEnd >= 0 ? windowEnd : index.pushedOffset());
             }
@@ -590,7 +590,7 @@ final class IndexReplicationScheduler {
                 for (IndexReplicationState index : source.indexStates()) {
                     // Drop the source lock only for an ACK already received. The original owner
                     // callback advances progress and wakes this source; no network wait is added.
-                    if (!index.spec().isSync()
+                    if (!index.encoder().isSync()
                             && !index.hasFailure()
                             && index.acknowledgedWindowEnd() == pendingGroup.startOffset()
                             && reusableRange(source, index, result)) {
@@ -650,7 +650,7 @@ final class IndexReplicationScheduler {
             call.normalWorkSelected = true;
         }
         for (IndexReplicationState index : selected.states()) {
-            if (!index.spec().isSync()) {
+            if (!index.encoder().isSync()) {
                 state.asyncService.put(index, ++state.serviceSequence);
             }
         }
@@ -702,7 +702,7 @@ final class IndexReplicationScheduler {
         if (state == null) {
             return;
         }
-        state.asyncTurnOwed = index.spec().isSync();
+        state.asyncTurnOwed = index.encoder().isSync();
         removeIndexWait(source, index, false);
     }
 

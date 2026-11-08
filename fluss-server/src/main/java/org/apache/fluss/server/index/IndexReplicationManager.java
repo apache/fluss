@@ -151,7 +151,7 @@ public final class IndexReplicationManager implements AutoCloseable {
      */
     IndexReplicator createReplicator(
             LogTablet log,
-            List<IndexSpec> indexes,
+            List<IndexReplicationEncoder> indexes,
             LogRecordReadContext readContext,
             long replayStartOffset,
             IndexProgressListener onProgress) {

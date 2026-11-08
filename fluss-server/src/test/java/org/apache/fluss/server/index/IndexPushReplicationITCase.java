@@ -122,7 +122,7 @@ class IndexPushReplicationITCase {
         TabletServerGateway mainGateway =
                 FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(
                         FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(source));
-        IndexSpec indexSpec = f.indexSpec(source);
+        IndexReplicationEncoder indexEncoder = f.indexEncoder(source);
 
         // (1) Insert (a=1, b="hello"); wait for the index entry to land.
         mainGateway
@@ -130,8 +130,8 @@ class IndexPushReplicationITCase {
                         newPutKvRequest(
                                 f.mainTableId, 0, 1, genKvRecordBatch(new Object[] {1, "hello"})))
                 .get();
-        byte[] oldIndexKey = encodeIndexKey(indexSpec, "hello", 1);
-        assertIndexEntry(f.indexTableId, oldIndexKey, targetBucket(indexSpec, "hello", 1), true);
+        byte[] oldIndexKey = encodeIndexKey(indexEncoder, "hello", 1);
+        assertIndexEntry(f.indexTableId, oldIndexKey, targetBucket(indexEncoder, "hello", 1), true);
         assertThat(mainLeader.getSyncIndexPushedOffset()).isEqualTo(1L);
 
         // (2) Update the same PK row with a different idx column value.
@@ -142,23 +142,25 @@ class IndexPushReplicationITCase {
                 .get();
 
         // (3) The old composite key disappears, the new one appears.
-        byte[] newIndexKey = encodeIndexKey(indexSpec, "world", 1);
-        assertIndexEntry(f.indexTableId, newIndexKey, targetBucket(indexSpec, "world", 1), true);
-        assertIndexEntry(f.indexTableId, oldIndexKey, targetBucket(indexSpec, "hello", 1), false);
+        byte[] newIndexKey = encodeIndexKey(indexEncoder, "world", 1);
+        assertIndexEntry(f.indexTableId, newIndexKey, targetBucket(indexEncoder, "world", 1), true);
+        assertIndexEntry(
+                f.indexTableId, oldIndexKey, targetBucket(indexEncoder, "hello", 1), false);
 
         mainGateway
                 .putKv(
                         newPutKvRequest(
                                 f.mainTableId, 0, 1, genKvRecordBatch(new Object[] {1, null})))
                 .get();
-        assertIndexEntry(f.indexTableId, newIndexKey, targetBucket(indexSpec, "world", 1), false);
+        assertIndexEntry(
+                f.indexTableId, newIndexKey, targetBucket(indexEncoder, "world", 1), false);
 
         mainGateway
                 .putKv(
                         newPutKvRequest(
                                 f.mainTableId, 0, 1, genKvRecordBatch(new Object[] {1, "hello"})))
                 .get();
-        assertIndexEntry(f.indexTableId, oldIndexKey, targetBucket(indexSpec, "hello", 1), true);
+        assertIndexEntry(f.indexTableId, oldIndexKey, targetBucket(indexEncoder, "hello", 1), true);
         mainGateway
                 .putKv(
                         newPutKvRequest(
@@ -169,7 +171,8 @@ class IndexPushReplicationITCase {
                                         Collections.singletonList(
                                                 Tuple2.of(new Object[] {1}, null)))))
                 .get();
-        assertIndexEntry(f.indexTableId, oldIndexKey, targetBucket(indexSpec, "hello", 1), false);
+        assertIndexEntry(
+                f.indexTableId, oldIndexKey, targetBucket(indexEncoder, "hello", 1), false);
 
         long beforeEmptyBatch = mainLeader.getLocalLogEndOffset();
         mainGateway
@@ -201,15 +204,16 @@ class IndexPushReplicationITCase {
         TableBucket oldSource = new TableBucket(fixture.mainTableId, oldPartitionId, mainBucket);
         Replica oldMainReplica = FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(oldSource);
         int oldMainLeader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(oldSource);
-        IndexSpec oldSpec =
-                IndexSpecFactory.buildIndexSpecs(
+        IndexReplicationEncoder oldEncoder =
+                IndexReplicationEncoder.createAll(
                                 oldMainReplica.getTableInfo(),
                                 oldSource,
                                 FLUSS_CLUSTER_EXTENSION
                                         .getTabletServerById(oldMainLeader)
                                         .getMetadataCache())
                         .get(0);
-        IndexSpec.IndexEntry oldEntry = oldSpec.encodeEntry(partitionedMainRow());
+        IndexReplicationEncoder.IndexEntry oldEntry =
+                oldEncoder.encodeDataEntry(partitionedMainRow());
         byte[] oldKey = oldEntry.key();
         BinaryRow oldValue = oldEntry.value().copy();
         int indexBucket = oldEntry.targetBucket();
@@ -219,7 +223,7 @@ class IndexPushReplicationITCase {
         PutIndexRequest delayedUpsert =
                 newPutIndexRequest(
                         fixture.indexTableId,
-                        oldSpec,
+                        oldEncoder,
                         oldSource,
                         indexBucket,
                         2L,
@@ -227,8 +231,8 @@ class IndexPushReplicationITCase {
                         oldValue);
         PutIndexRequest delayedDelete =
                 newPutIndexRequest(
-                        fixture.indexTableId, oldSpec, oldSource, indexBucket, 3L, oldKey, null);
-        byte[] oldProgressKey = oldSpec.encodeProgress(oldSource, indexBucket, 1L).key();
+                        fixture.indexTableId, oldEncoder, oldSource, indexBucket, 3L, oldKey, null);
+        byte[] oldProgressKey = oldEncoder.encodeProgress(indexBucket, 1L).key();
 
         putPartitionedMainRow(fixture.mainTableId, oldPartitionId, mainBucket);
         assertVisible(target, oldKey, true, "old partition incarnation is indexed");
@@ -263,19 +267,20 @@ class IndexPushReplicationITCase {
         TableBucket newSource = new TableBucket(fixture.mainTableId, newPartitionId, mainBucket);
         Replica newMainReplica = FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(newSource);
         int newMainLeader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(newSource);
-        IndexSpec newSpec =
-                IndexSpecFactory.buildIndexSpecs(
+        IndexReplicationEncoder newEncoder =
+                IndexReplicationEncoder.createAll(
                                 newMainReplica.getTableInfo(),
                                 newSource,
                                 FLUSS_CLUSTER_EXTENSION
                                         .getTabletServerById(newMainLeader)
                                         .getMetadataCache())
                         .get(0);
-        IndexSpec.IndexEntry newEntry = newSpec.encodeEntry(partitionedMainRow());
+        IndexReplicationEncoder.IndexEntry newEntry =
+                newEncoder.encodeDataEntry(partitionedMainRow());
         byte[] newKey = newEntry.key();
         assertThat(newKey).isNotEqualTo(oldKey);
         assertThat(newEntry.targetBucket()).isEqualTo(indexBucket);
-        byte[] newProgressKey = newSpec.encodeProgress(newSource, indexBucket, 1L).key();
+        byte[] newProgressKey = newEncoder.encodeProgress(indexBucket, 1L).key();
 
         putPartitionedMainRow(fixture.mainTableId, newPartitionId, mainBucket);
         assertVisible(target, newKey, true, "new partition incarnation is indexed");
@@ -300,8 +305,8 @@ class IndexPushReplicationITCase {
     /**
      * An index-safe {@code ALTER TABLE ADD COLUMN} on a table with secondary indexes must be
      * accepted, and the WAL-driven index replication must stay healthy across the schema evolution:
-     * re-deriving the index specs on the leader still succeeds, and records written under the old
-     * schema id keep replicating (WAL decoding keys off the record's schema id).
+     * re-deriving the index encoders on the leader still succeeds, and records written under the
+     * old schema id keep replicating (WAL decoding keys off the record's schema id).
      */
     @Test
     void testSchemaEvolutionKeepsIndexReplicationHealthy() throws Exception {
@@ -312,7 +317,7 @@ class IndexPushReplicationITCase {
         TabletServerGateway mainGateway =
                 FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(
                         FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(source));
-        IndexSpec indexSpec = f.indexSpec(source);
+        IndexReplicationEncoder indexEncoder = f.indexEncoder(source);
 
         // (1) Write one batch under the original schema (id 1) and wait for the index entry.
         mainGateway
@@ -325,8 +330,8 @@ class IndexPushReplicationITCase {
                 .get(30, TimeUnit.SECONDS);
         assertIndexEntry(
                 f.indexTableId,
-                encodeIndexKey(indexSpec, "before", 1),
-                targetBucket(indexSpec, "before", 1),
+                encodeIndexKey(indexEncoder, "before", 1),
+                targetBucket(indexEncoder, "before", 1),
                 true);
 
         // (2) ALTER TABLE ADD COLUMN at the last position — must be accepted for indexed tables.
@@ -380,8 +385,8 @@ class IndexPushReplicationITCase {
                 .get(30, TimeUnit.SECONDS);
         waitForIndexEntry(
                 f.indexTableId,
-                encodeIndexKey(indexSpec, "after", 2),
-                targetBucket(indexSpec, "after", 2),
+                encodeIndexKey(indexEncoder, "after", 2),
+                targetBucket(indexEncoder, "after", 2),
                 true);
     }
 
@@ -483,12 +488,12 @@ class IndexPushReplicationITCase {
                 .build();
     }
 
-    private static byte[] encodeIndexKey(IndexSpec spec, String b, int a) {
-        return spec.encodeEntry(GenericRow.of(a, fromString(b))).key();
+    private static byte[] encodeIndexKey(IndexReplicationEncoder encoder, String b, int a) {
+        return encoder.encodeDataEntry(GenericRow.of(a, fromString(b))).key();
     }
 
-    private static int targetBucket(IndexSpec spec, String b, int a) {
-        return spec.encodeEntry(GenericRow.of(a, fromString(b))).targetBucket();
+    private static int targetBucket(IndexReplicationEncoder encoder, String b, int a) {
+        return encoder.encodeDataEntry(GenericRow.of(a, fromString(b))).targetBucket();
     }
 
     private static PartitionSpec partitionSpec() {
@@ -529,18 +534,18 @@ class IndexPushReplicationITCase {
 
     private static PutIndexRequest newPutIndexRequest(
             long indexTableId,
-            IndexSpec spec,
+            IndexReplicationEncoder encoder,
             TableBucket sourceBucket,
             int targetBucket,
             long sourceEndOffset,
             byte[] key,
             @Nullable BinaryRow value)
             throws Exception {
-        IndexSpec.IndexEntry progress =
-                spec.encodeProgress(sourceBucket, targetBucket, sourceEndOffset);
+        IndexReplicationEncoder.IndexEntry progress =
+                encoder.encodeProgress(targetBucket, sourceEndOffset);
         IndexReplicator.BucketBatchBuilder builder =
                 new IndexReplicator.BucketBatchBuilder(
-                        (short) spec.getIndexSchemaId(), spec.getIndexKvFormat());
+                        (short) encoder.getIndexSchemaId(), encoder.getIndexKvFormat());
         if (value == null) {
             builder.appendDelete(key);
         } else {
