@@ -163,13 +163,17 @@ public final class TableDescriptor implements Serializable {
      * Check if the table is using a default bucket key. A default bucket key is:
      *
      * <ul>
-     *   <li>the same as the primary keys excluding the partition keys.
-     *   <li>empty if the table is not a primary key table.
+     *   <li>the primary or deduplication key excluding partition columns for a keyed table.
+     *   <li>empty for other log tables.
      * </ul>
      */
     public boolean isDefaultBucketKey() {
         if (schema.getPrimaryKey().isPresent()) {
             return getBucketKeys().equals(defaultBucketKeyOfPrimaryKeyTable(schema, partitionKeys));
+        } else if (schema.getDeduplicationKey().isPresent()) {
+            List<String> physicalKeys = new ArrayList<>(schema.getDeduplicationKeyColumnNames());
+            physicalKeys.removeAll(partitionKeys);
+            return getBucketKeys().equals(physicalKeys);
         } else {
             return getBucketKeys().isEmpty();
         }
@@ -382,6 +386,9 @@ public final class TableDescriptor implements Serializable {
             Schema schema,
             List<String> partitionKeys,
             @Nullable TableDistribution originDistribution) {
+        if (schema.getDeduplicationKey().isPresent()) {
+            return normalizeDeduplicationDistribution(schema, partitionKeys, originDistribution);
+        }
         if (originDistribution != null) {
             // we may need to check and normalize bucket key
             List<String> bucketKeys = originDistribution.getBucketKeys();
@@ -444,6 +451,33 @@ public final class TableDescriptor implements Serializable {
         }
 
         return bucketKeys;
+    }
+
+    private static TableDistribution normalizeDeduplicationDistribution(
+            Schema schema, List<String> partitionKeys, @Nullable TableDistribution distribution) {
+        List<String> keyColumns = schema.getDeduplicationKeyColumnNames();
+        checkArgument(
+                keyColumns.containsAll(partitionKeys),
+                "Partition columns %s must be included in deduplication key %s.",
+                partitionKeys,
+                keyColumns);
+        List<String> physicalKeys = new ArrayList<>(keyColumns);
+        physicalKeys.removeAll(partitionKeys);
+        checkArgument(
+                !physicalKeys.isEmpty(),
+                "Deduplication key must contain at least one non-partition column.");
+        List<String> bucketKeys =
+                distribution == null || distribution.getBucketKeys().isEmpty()
+                        ? physicalKeys
+                        : distribution.getBucketKeys();
+        checkArgument(
+                physicalKeys.containsAll(bucketKeys),
+                "Bucket keys %s must be a subset of non-partition deduplication key columns %s.",
+                bucketKeys,
+                physicalKeys);
+        return new TableDistribution(
+                distribution == null ? null : distribution.getBucketCount().orElse(null),
+                bucketKeys);
     }
 
     // ----------------------------------------------------------------------------------------

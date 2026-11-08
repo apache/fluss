@@ -76,6 +76,77 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 public class FlinkConversionsTest {
 
     @Test
+    void testDeduplicationKeyRoundTripRemainsLogTable() {
+        ResolvedSchema resolvedSchema =
+                ResolvedSchema.of(
+                        Column.physical(
+                                "id", org.apache.flink.table.api.DataTypes.BIGINT().notNull()),
+                        Column.physical("payload", org.apache.flink.table.api.DataTypes.STRING()));
+        CatalogTable catalogTable =
+                CatalogTable.of(
+                        Schema.newBuilder().fromResolvedSchema(resolvedSchema).build(),
+                        null,
+                        Collections.emptyList(),
+                        Collections.singletonMap("deduplication.key", "id"));
+        TableDescriptor descriptor =
+                FlinkConversions.toFlussTable(
+                        new ResolvedCatalogTable(catalogTable, resolvedSchema));
+
+        assertThat(descriptor.hasPrimaryKey()).isFalse();
+        assertThat(descriptor.getSchema().getDeduplicationKeyColumnNames()).containsExactly("id");
+        assertThat(descriptor.getBucketKeys()).containsExactly("id");
+        assertThat(descriptor.getCustomProperties()).doesNotContainKey("deduplication.key");
+        TableInfo tableInfo =
+                TableInfo.of(
+                        TablePath.of("db", "events"),
+                        1L,
+                        1,
+                        descriptor.withBucketCount(4),
+                        DEFAULT_REMOTE_DATA_DIR,
+                        0L,
+                        0L);
+        CatalogTable restored = (CatalogTable) FlinkConversions.toFlinkTable(tableInfo);
+        assertThat(restored.getOptions()).containsEntry("deduplication.key", "id");
+        assertThat(new TestSchemaResolver().resolve(restored.getUnresolvedSchema()).getPrimaryKey())
+                .isEmpty();
+    }
+
+    @Test
+    void testDeduplicationRequiresExplicitNotNullInSql() {
+        ResolvedSchema resolvedSchema =
+                ResolvedSchema.of(
+                        Column.physical("id", org.apache.flink.table.api.DataTypes.BIGINT()));
+        CatalogTable catalogTable =
+                CatalogTable.of(
+                        Schema.newBuilder().fromResolvedSchema(resolvedSchema).build(),
+                        null,
+                        Collections.emptyList(),
+                        Collections.singletonMap("deduplication.key", "id"));
+        assertThatThrownBy(
+                        () ->
+                                FlinkConversions.toFlussTable(
+                                        new ResolvedCatalogTable(catalogTable, resolvedSchema)))
+                .isInstanceOf(org.apache.flink.table.catalog.exceptions.CatalogException.class)
+                .hasMessageContaining("NOT NULL");
+    }
+
+    @Test
+    void testDeduplicationCannotBeChangedThroughOptions() {
+        assertThatThrownBy(
+                        () ->
+                                FlinkConversions.toFlussTableChanges(
+                                        org.apache.flink.table.catalog.TableChange.set(
+                                                "deduplication.key", "id")))
+                .isInstanceOf(UnsupportedOperationException.class);
+        assertThatThrownBy(
+                        () ->
+                                FlinkConversions.toFlussTableChanges(
+                                        org.apache.flink.table.catalog.TableChange.reset(
+                                                "deduplication.key")))
+                .isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    @Test
     void testConvertBucketCountChange() {
         assertThat(
                         FlinkConversions.toFlussTableChanges(

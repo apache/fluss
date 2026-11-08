@@ -49,6 +49,7 @@ import org.apache.fluss.server.kv.historical.LocalValueLookupResult;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.TruncateReason;
 import org.apache.fluss.server.kv.rowmerger.DefaultRowMerger;
+import org.apache.fluss.server.kv.rowmerger.FirstRowRowMerger;
 import org.apache.fluss.server.kv.rowmerger.RowMerger;
 import org.apache.fluss.server.kv.wal.ArrowWalBuilder;
 import org.apache.fluss.server.kv.wal.CompactedWalBuilder;
@@ -99,6 +100,7 @@ public final class KvWriteProcessor {
     private final KvFormat kvFormat;
     // defines how to merge rows on the same primary key
     private final RowMerger rowMerger;
+    private final boolean deduplicating;
     // Pre-created DefaultRowMerger for OVERWRITE mode (undo recovery scenarios)
     // This avoids creating a new instance on every putAsLeader call
     private final RowMerger overwriteRowMerger;
@@ -137,7 +139,9 @@ public final class KvWriteProcessor {
         this.memorySegmentPool = memorySegmentPool;
         this.logFormat = logTablet.getLogFormat();
         this.kvFormat = kvFormat;
-        this.rowMerger = rowMerger;
+        this.deduplicating =
+                schemaGetter.getLatestSchemaInfo().getSchema().getDeduplicationKey().isPresent();
+        this.rowMerger = deduplicating ? new FirstRowRowMerger(DeleteBehavior.DISABLE) : rowMerger;
         // Pre-create DefaultRowMerger for OVERWRITE mode to avoid creating new instances
         // on every putAsLeader call. Used for undo recovery scenarios.
         this.overwriteRowMerger = new DefaultRowMerger(kvFormat, DeleteBehavior.ALLOW);
@@ -276,6 +280,9 @@ public final class KvWriteProcessor {
                     "MergeMode.OVERWRITE cannot be used with table.upsert.skip-unchanged enabled.");
         }
 
+        if (deduplicating && (targetColumns != null || mergeMode != MergeMode.DEFAULT)) {
+            throw new InvalidTableException("Deduplicating log tables require full INSERT rows.");
+        }
         SchemaInfo schemaInfo = schemaGetter.getLatestSchemaInfo();
         Schema latestSchema = schemaInfo.getSchema();
         short latestSchemaId = (short) schemaInfo.getSchemaId();
@@ -324,12 +331,26 @@ public final class KvWriteProcessor {
         KvRecordBatch.ReadContext readContext =
                 KvRecordReadContext.createReadContext(kvFormat, schemaGetter);
 
+        Schema inputSchema = deduplicating ? schemaGetter.getSchema(schemaIdOfNewData) : null;
         for (KvRecord kvRecord : kvRecords.records(readContext)) {
             byte[] keyBytes = BytesUtils.toArray(kvRecord.getKey());
             KvPreWriteBuffer.Key key = stateAccessor.encodeKey(keyBytes, originalPartitionName);
             BinaryRow row = kvRecord.getRow();
             BinaryValue currentValue = row == null ? null : new BinaryValue(schemaIdOfNewData, row);
 
+            if (deduplicating) {
+                if (currentValue == null) {
+                    throw new InvalidTableException(
+                            "DELETE is not supported for deduplicating log tables.");
+                }
+                for (int field = 0; field < inputSchema.getColumns().size(); field++) {
+                    Schema.Column column = inputSchema.getColumns().get(field);
+                    if (!column.getDataType().isNullable() && row.isNullAt(field)) {
+                        throw new InvalidTableException(
+                                "Column must not be null: " + column.getName());
+                    }
+                }
+            }
             if (currentValue == null) {
                 logOffset =
                         processDeletion(
@@ -413,6 +434,19 @@ public final class KvWriteProcessor {
             byte[] primaryKey,
             @Nullable HistoricalValueLookup historicalValueLookup)
             throws Exception {
+        if (deduplicating) {
+            if (stateAccessor.lookupLocal(key).isPresent()) {
+                return logOffset;
+            }
+            return applyInsert(
+                    key,
+                    currentValue,
+                    walBuilder,
+                    latestSchemaRow,
+                    logOffset,
+                    autoIncrementUpdater,
+                    stateAccessor);
+        }
         if (canSkipOldValueLookup(currentMerger, autoIncrementUpdater)) {
             return applyUpdate(
                     key, null, currentValue, walBuilder, latestSchemaRow, logOffset, stateAccessor);
@@ -551,7 +585,7 @@ public final class KvWriteProcessor {
     private WalBuilder createWalBuilder(int schemaId, RowType rowType) throws Exception {
         switch (logFormat) {
             case INDEXED:
-                if (kvFormat == KvFormat.COMPACTED) {
+                if (kvFormat == KvFormat.COMPACTED && !deduplicating) {
                     // convert from compacted row to indexed row is time cost, and gain
                     // less benefits, currently we won't support compacted as kv format and
                     // indexed as cdc log format.
@@ -559,7 +593,9 @@ public final class KvWriteProcessor {
                     throw new IllegalArgumentException(
                             "Primary Key Table with COMPACTED kv format doesn't support INDEXED cdc log format.");
                 }
-                return new IndexWalBuilder(schemaId, memorySegmentPool);
+                return deduplicating
+                        ? new IndexWalBuilder(schemaId, memorySegmentPool, rowType)
+                        : new IndexWalBuilder(schemaId, memorySegmentPool);
             case COMPACTED:
                 return new CompactedWalBuilder(schemaId, rowType, memorySegmentPool);
             case ARROW:

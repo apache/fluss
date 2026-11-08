@@ -188,6 +188,7 @@ public class ClientRpcMessageUtils {
         // check the target columns in the batch list should be the same. If not same,
         // we throw exception directly currently.
         KvWriteBatch firstBatch = (KvWriteBatch) readyWriteBatches.get(0).writeBatch();
+        request.setDeduplicatingAppend(firstBatch.isDeduplicating());
         int[] targetColumns = firstBatch.getTargetColumns();
         MergeMode mergeMode = firstBatch.getMergeMode();
         for (int i = 1; i < readyWriteBatches.size(); i++) {

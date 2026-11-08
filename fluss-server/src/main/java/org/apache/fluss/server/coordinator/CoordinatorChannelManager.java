@@ -343,6 +343,39 @@ public class CoordinatorChannelManager {
         }
     }
 
+    /** Checks that an online tablet server can persist deduplicating append batches. */
+    public CompletableFuture<Void> requireDeduplicatingAppend(int serverId) {
+        TabletServerGateway gateway =
+                getTabletServerGateway(serverId)
+                        .orElseThrow(
+                                () ->
+                                        new IllegalStateException(
+                                                "Tablet server went offline: " + serverId));
+        return gateway.apiVersions(
+                        new org.apache.fluss.rpc.messages.ApiVersionsRequest()
+                                .setClientSoftwareName("fluss")
+                                .setClientSoftwareVersion("0.1.0"))
+                .thenAccept(
+                        response -> {
+                            boolean supported =
+                                    response.getApiVersionsList().stream()
+                                            .anyMatch(
+                                                    api ->
+                                                            api.getApiKey()
+                                                                            == org.apache.fluss.rpc
+                                                                                    .protocol
+                                                                                    .ApiKeys.PUT_KV
+                                                                                    .id
+                                                                    && api.getMaxVersion() >= 4);
+                            if (!supported) {
+                                throw new org.apache.fluss.exception.UnsupportedVersionException(
+                                        "Tablet server "
+                                                + serverId
+                                                + " does not support deduplicating append.");
+                            }
+                        });
+    }
+
     protected Optional<TabletServerGateway> getTabletServerGateway(int targetServerId) {
         return rpcGatewayManager.getRpcGateway(targetServerId);
     }

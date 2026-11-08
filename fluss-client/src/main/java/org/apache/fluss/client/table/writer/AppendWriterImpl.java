@@ -18,22 +18,29 @@
 package org.apache.fluss.client.table.writer;
 
 import org.apache.fluss.client.table.BucketCalculator;
+import org.apache.fluss.client.write.WriteFormat;
 import org.apache.fluss.client.write.WriteRecord;
 import org.apache.fluss.client.write.WriterClient;
+import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.InternalRow.FieldGetter;
 import org.apache.fluss.row.compacted.CompactedRow;
 import org.apache.fluss.row.encode.CompactedRowEncoder;
 import org.apache.fluss.row.encode.IndexedRowEncoder;
+import org.apache.fluss.row.encode.KeyEncoder;
 import org.apache.fluss.row.indexed.IndexedRow;
 import org.apache.fluss.types.DataType;
 
 import javax.annotation.Nullable;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 /** The writer to write data to the log table. */
@@ -47,6 +54,7 @@ class AppendWriterImpl extends AbstractTableWriter implements AppendWriter {
     private final CompactedRowEncoder compactedRowEncoder;
     private final FieldGetter[] fieldGetters;
     private final TableInfo tableInfo;
+    private final @Nullable KeyEncoder deduplicationKeyEncoder;
 
     AppendWriterImpl(TablePath tablePath, TableInfo tableInfo, WriterClient writerClient) {
         super(tablePath, tableInfo, writerClient);
@@ -61,19 +69,59 @@ class AppendWriterImpl extends AbstractTableWriter implements AppendWriter {
         this.compactedRowEncoder = new CompactedRowEncoder(fieldDataTypes);
         this.fieldGetters = InternalRow.createFieldGetters(tableInfo.getRowType());
         this.tableInfo = tableInfo;
+        if (tableInfo.hasDeduplicationKey()) {
+            List<String> keys = new ArrayList<>(tableInfo.getDeduplicationKeys());
+            keys.removeAll(tableInfo.getPartitionKeys());
+            this.deduplicationKeyEncoder =
+                    KeyEncoder.ofPrimaryKeyEncoder(
+                            tableInfo.getRowType(),
+                            keys,
+                            tableInfo.getTableConfig(),
+                            tableInfo.isDefaultBucketKey());
+        } else {
+            this.deduplicationKeyEncoder = null;
+        }
     }
 
     /**
      * Append row into Fluss non-pk table.
      *
      * @param row the row to append.
-     * @return A {@link CompletableFuture} that always returns null when complete normally.
+     * @return A future completed when the append request succeeds.
      */
     public CompletableFuture<AppendResult> append(InternalRow row) {
         checkFieldCount(row);
 
+        if (deduplicationKeyEncoder != null) {
+            for (int field = 0; field < tableInfo.getSchema().getColumns().size(); field++) {
+                Schema.Column column = tableInfo.getSchema().getColumns().get(field);
+                if (!column.getDataType().isNullable() && row.isNullAt(field)) {
+                    throw new IllegalArgumentException(
+                            "Column must not be null: " + column.getName());
+                }
+            }
+        }
+
         PhysicalTablePath physicalPath = getPhysicalPath(row);
         byte[] bucketKey = bucketCalculator != null ? bucketCalculator.encodeKey(row) : null;
+
+        if (deduplicationKeyEncoder != null) {
+            KvFormat kvFormat = tableInfo.getTableConfig().getKvFormat();
+            BinaryRow binaryRow =
+                    kvFormat == KvFormat.COMPACTED
+                            ? encodeCompactedRow(row)
+                            : encodeIndexedRow(row);
+            WriteRecord deduplicating =
+                    WriteRecord.forUpsert(
+                            tableInfo,
+                            physicalPath,
+                            binaryRow,
+                            deduplicationKeyEncoder.encodeKey(row),
+                            bucketKey,
+                            WriteFormat.fromKvFormat(kvFormat),
+                            null);
+            return send(deduplicating).thenApply(ignored -> APPEND_SUCCESS);
+        }
 
         final WriteRecord record;
         if (logFormat == LogFormat.INDEXED) {

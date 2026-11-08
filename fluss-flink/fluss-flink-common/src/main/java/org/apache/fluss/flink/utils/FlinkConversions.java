@@ -78,6 +78,7 @@ import static org.apache.fluss.config.FlussConfigUtils.isTableStorageConfig;
 import static org.apache.fluss.flink.FlinkConnectorOptions.AUTO_INCREMENT_FIELDS;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_KEY;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_NUMBER;
+import static org.apache.fluss.flink.FlinkConnectorOptions.DEDUPLICATION_KEY;
 import static org.apache.fluss.flink.FlinkConnectorOptions.MATERIALIZED_TABLE_DEFINITION_QUERY;
 import static org.apache.fluss.flink.FlinkConnectorOptions.MATERIALIZED_TABLE_EXPANDED_QUERY;
 import static org.apache.fluss.flink.FlinkConnectorOptions.MATERIALIZED_TABLE_INTERVAL_FRESHNESS;
@@ -168,6 +169,11 @@ public class FlinkConversions {
 
         // now, put distribution information to options
         newOptions.put(BUCKET_NUMBER.key(), String.valueOf(tableInfo.getNumBuckets()));
+        newOptions.remove(DEDUPLICATION_KEY.key());
+        if (tableInfo.hasDeduplicationKey()) {
+            newOptions.put(
+                    DEDUPLICATION_KEY.key(), String.join(",", tableInfo.getDeduplicationKeys()));
+        }
         if (!tableInfo.getBucketKeys().isEmpty()) {
             newOptions.put(BUCKET_KEY.key(), String.join(",", tableInfo.getBucketKeys()));
         }
@@ -223,6 +229,29 @@ public class FlinkConversions {
                         column ->
                                 addColumnToSchema(
                                         schemBuilder, column, flinkTableConf, isAggregationEngine));
+
+        if (flinkTableConf.containsKey(DEDUPLICATION_KEY.key())) {
+            List<String> keyColumns =
+                    Arrays.stream(flinkTableConf.get(DEDUPLICATION_KEY).split(",", -1))
+                            .map(String::trim)
+                            .collect(Collectors.toList());
+            for (String keyColumn : keyColumns) {
+                Column column =
+                        resolvedSchema
+                                .getColumn(keyColumn)
+                                .orElseThrow(
+                                        () ->
+                                                new CatalogException(
+                                                        "Deduplication key column does not exist: "
+                                                                + keyColumn));
+                if (!column.isPhysical() || column.getDataType().getLogicalType().isNullable()) {
+                    throw new CatalogException(
+                            "Deduplication key column must be a NOT NULL physical column: "
+                                    + keyColumn);
+                }
+            }
+            schemBuilder.deduplicationKey(keyColumns);
+        }
 
         // Configure auto-increment columns based on the 'auto-increment.fields' option.
         if (flinkTableConf.containsKey(AUTO_INCREMENT_FIELDS.key())) {
@@ -519,6 +548,9 @@ public class FlinkConversions {
 
     private static TableChange convertSetOption(
             org.apache.flink.table.catalog.TableChange.SetOption flinkSetOption) {
+        if (DEDUPLICATION_KEY.key().equals(flinkSetOption.getKey())) {
+            throw new UnsupportedOperationException("The deduplication key cannot be changed.");
+        }
         if (BUCKET_NUMBER.key().equals(flinkSetOption.getKey())) {
             return TableChange.modifyBucketCount(Integer.parseInt(flinkSetOption.getValue()));
         }
@@ -527,6 +559,9 @@ public class FlinkConversions {
 
     private static TableChange.ResetOption convertResetOption(
             org.apache.flink.table.catalog.TableChange.ResetOption flinkResetOption) {
+        if (DEDUPLICATION_KEY.key().equals(flinkResetOption.getKey())) {
+            throw new UnsupportedOperationException("The deduplication key cannot be removed.");
+        }
         return TableChange.reset(flinkResetOption.getKey());
     }
 
@@ -806,6 +841,7 @@ public class FlinkConversions {
         // properties.
         customProperties.remove(BUCKET_KEY.key());
         customProperties.remove(BUCKET_NUMBER.key());
+        customProperties.remove(DEDUPLICATION_KEY.key());
         return customProperties;
     }
 }

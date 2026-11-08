@@ -933,7 +933,9 @@ public final class Replica {
                     logManager.initializeEmptyLocalTail(tableBucket, restoreStartOffset);
                 }
                 rowCount =
-                        supportsExactRowCount(tableConfig) ? completedSnapshot.getRowCount() : null;
+                        supportsExactRowCount(tableConfig) && !getTableInfo().hasDeduplicationKey()
+                                ? completedSnapshot.getRowCount()
+                                : null;
                 // currently, we only support one auto-increment column.
                 autoIncIDRange = completedSnapshot.getFirstAutoIncIDRange();
             } else {
@@ -960,6 +962,7 @@ public final class Replica {
 
                 rowCount =
                         isHistoricalPartition()
+                                        || getTableInfo().hasDeduplicationKey()
                                         || tableConfig.getChangelogImage() == ChangelogImage.WAL
                                         || tableConfig.getKvTTL().isPresent()
                                 ? null
@@ -1270,11 +1273,10 @@ public final class Replica {
                                         "Leader not local for bucket %s on tabletServer %d",
                                         tableBucket, localTabletServerId));
                     }
-                    // Primary-key writes must go through PUT_KV so the log and local KV state are
-                    // updated together. PRODUCE_LOG is only valid for append-only tables.
+                    // Writes with persistent key state must update the log and KV state together.
                     if (isKvTable()) {
                         throw new InvalidPartitionException(
-                                "Produce-log request must not target a primary-key table.");
+                                "Produce-log request must not target a table with persistent key state.");
                     }
 
                     validateInSyncReplicaSize(requiredAcks);
@@ -1705,7 +1707,7 @@ public final class Replica {
     }
 
     public List<ByteArraySlice> lookups(List<byte[]> keys) {
-        if (!isKvTable()) {
+        if (!getTableInfo().hasPrimaryKey()) {
             throw new NonPrimaryKeyTableException(
                     "the primary key table not exists for " + tableBucket);
         }
@@ -1740,7 +1742,7 @@ public final class Replica {
      * flush may not have materialized the insert into RocksDB yet).
      */
     public List<ByteArraySlice> lookupsFromBufferOrKv(List<byte[]> keys) {
-        if (!isKvTable()) {
+        if (!getTableInfo().hasPrimaryKey()) {
             throw new NonPrimaryKeyTableException(
                     "the primary key table not exists for " + tableBucket);
         }
@@ -1769,7 +1771,7 @@ public final class Replica {
     }
 
     public List<ByteArraySlice> prefixLookup(byte[] prefixKey) {
-        if (!isKvTable()) {
+        if (!getTableInfo().hasPrimaryKey()) {
             throw new NonPrimaryKeyTableException(
                     "Try to do prefix lookup on a non primary key table: " + getTablePath());
         }
@@ -1799,7 +1801,7 @@ public final class Replica {
     }
 
     public DefaultValueRecordBatch limitKvScan(int limit) {
-        if (!isKvTable()) {
+        if (!getTableInfo().hasPrimaryKey()) {
             throw new NonPrimaryKeyTableException(
                     "the primary key table not exists for " + tableBucket);
         }
@@ -1848,7 +1850,7 @@ public final class Replica {
     public OpenScanResult openScan(
             ScannerManager scannerManager, String scannerId, long limit, long initialAccessTimeMs)
             throws IOException {
-        if (!isKvTable()) {
+        if (!getTableInfo().hasPrimaryKey()) {
             throw new NonPrimaryKeyTableException(
                     "the primary key table not exists for " + tableBucket);
         }
@@ -1881,6 +1883,10 @@ public final class Replica {
     }
 
     public LogRecords limitLogScan(int limit) {
+        if (getTableInfo().hasDeduplicationKey()) {
+            throw new org.apache.fluss.exception.InvalidTableException(
+                    "Deduplicating log tables require bounded log scans for limits.");
+        }
         return inReadLock(
                 leaderIsrUpdateLock,
                 () -> {
@@ -1951,11 +1957,15 @@ public final class Replica {
     }
 
     public long getRowCount() {
+        if (getTableInfo().hasDeduplicationKey()) {
+            throw new org.apache.fluss.exception.InvalidTableException(
+                    "Exact row-count statistics are unavailable for deduplicating log tables.");
+        }
         return inReadLock(
                 leaderIsrUpdateLock,
                 () -> {
                     KvTablet kv = this.kvTablet;
-                    if (kv != null) {
+                    if (kv != null && !getTableInfo().hasDeduplicationKey()) {
                         // return materialized row count for primary key table
                         return kv.getRowCount();
                     } else {

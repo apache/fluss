@@ -322,7 +322,10 @@ public class PushdownUtils {
                 Table table = connection.getTable(tablePath);
                 BatchScanner batchScanner =
                         table.newScan()
-                                .project(projectedFields)
+                                .project(
+                                        projectedFields != null && projectedFields.length == 0
+                                                ? new int[] {0}
+                                                : projectedFields)
                                 .limit(limit)
                                 .createBatchScanner()) {
             List<InternalRow> scannedRows = collectRows(batchScanner);

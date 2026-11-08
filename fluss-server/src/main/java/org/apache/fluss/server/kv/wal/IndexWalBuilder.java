@@ -24,7 +24,11 @@ import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.record.MemoryLogRecordsIndexedBuilder;
 import org.apache.fluss.record.bytesview.BytesView;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.encode.IndexedRowEncoder;
 import org.apache.fluss.row.indexed.IndexedRow;
+import org.apache.fluss.types.RowType;
+
+import javax.annotation.Nullable;
 
 import java.io.IOException;
 
@@ -36,8 +40,19 @@ public class IndexWalBuilder implements WalBuilder {
     private final MemoryLogRecordsIndexedBuilder recordsBuilder;
     private final MemorySegmentPool memorySegmentPool;
     private final ManagedPagedOutputView outputView;
+    @Nullable private final IndexedRowEncoder rowEncoder;
+    @Nullable private final InternalRow.FieldGetter[] fieldGetters;
 
     public IndexWalBuilder(int schemaId, MemorySegmentPool memorySegmentPool) throws IOException {
+        this(schemaId, memorySegmentPool, null);
+    }
+
+    /** Creates an indexed WAL builder with optional conversion from another row format. */
+    public IndexWalBuilder(
+            int schemaId, MemorySegmentPool memorySegmentPool, @Nullable RowType rowType)
+            throws IOException {
+        this.rowEncoder = rowType == null ? null : new IndexedRowEncoder(rowType);
+        this.fieldGetters = rowType == null ? null : InternalRow.createFieldGetters(rowType);
         this.memorySegmentPool = memorySegmentPool;
         this.outputView = new ManagedPagedOutputView(memorySegmentPool);
         // unlimited write size as we don't know the WAL size in advance
@@ -48,6 +63,13 @@ public class IndexWalBuilder implements WalBuilder {
 
     @Override
     public void append(ChangeType changeType, InternalRow row) throws Exception {
+        if (!(row instanceof IndexedRow) && rowEncoder != null) {
+            rowEncoder.startNewRow();
+            for (int field = 0; field < fieldGetters.length; field++) {
+                rowEncoder.encodeField(field, fieldGetters[field].getFieldOrNull(row));
+            }
+            row = rowEncoder.finishRow();
+        }
         checkArgument(
                 row instanceof IndexedRow,
                 "IndexWalBuilder requires the log row to be IndexedRow.");
