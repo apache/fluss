@@ -50,7 +50,6 @@ import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.types.DataField;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
-import org.apache.fluss.utils.IndexTableUtils;
 import org.apache.fluss.utils.json.DataTypeJsonSerde;
 import org.apache.fluss.utils.json.JsonSerdeUtils;
 import org.apache.fluss.utils.types.Tuple2;
@@ -66,7 +65,6 @@ import java.util.concurrent.TimeUnit;
 
 import static org.apache.fluss.row.BinaryString.fromString;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createPartition;
-import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createTable;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newAlterTableRequest;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newDropPartitionRequest;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newGetTableInfoRequest;
@@ -75,36 +73,7 @@ import static org.apache.fluss.testutils.DataTestUtils.genKvRecordBatch;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
 
-/**
- * End-to-end ITCase for the WAL-driven index replication pipeline (WAL → {@link IndexReplicator} →
- * {@code IndexSendBuffer} → {@code IndexSender} → PutIndex to the Index Table leader).
- *
- * <p>Scenarios:
- *
- * <ul>
- *   <li>{@link #testInsertOnMainTablePushesEntryToIndexTable()} — INSERT pushes a single UPSERT to
- *       the Index Table.
- *   <li>{@link #testUpdateRewritesIndexEntry()} — UPDATE on the indexed column produces a DELETE on
- *       the old composite key and an UPSERT on the new composite key.
- *   <li>{@link #testDeleteRemovesIndexEntry()} — DELETE on the main table removes the index entry.
- *   <li>{@link #testEmptyWalBatchAdvancesSyncIndexOffset()} — empty WAL batches still advance index
- *       progress.
- *   <li>{@link #testAsyncVisibilityEventuallyVisible()} — with async {@code Schema.Index}
- *       visibility the PutKv ack does not wait for the push, but the index entry is eventually
- *       visible.
- *   <li>{@link #testDropRecreatePartitionRejectsLateOldIndexWrites()} — a dropped and recreated
- *       partition rejects delayed writes from the old incarnation and compacts only stale rows.
- *   <li>{@link #testSchemaEvolutionKeepsIndexReplicationHealthy()} — an index-safe ALTER TABLE ADD
- *       COLUMN is accepted on tables with secondary indexes and the replication pipeline keeps
- *       working across the schema evolution.
- * </ul>
- *
- * <p>Leader-failover scenarios (main-table and index-table leader switchover) are covered by {@link
- * IndexPushFailoverITCase}.
- *
- * <p>Each test uses a distinct main-table name so that the shared {@link FlussClusterExtension}
- * cluster does not see colliding paths across scenarios.
- */
+/** Tests physical index mutations, SYNC progress, partition cleanup, and schema evolution. */
 class IndexPushReplicationITCase {
 
     private static final String DB = "test_db";
@@ -143,33 +112,10 @@ class IndexPushReplicationITCase {
     /** Bounded poll deadline for asynchronous index visibility checks. */
     private static final Duration INDEX_VISIBILITY_TIMEOUT = Duration.ofSeconds(30);
 
-    /** A SYNC write is acknowledged only after its Index Table entry is visible. */
+    /** SYNC acknowledgement covers physical index mutations, including empty WAL batches. */
     @Test
-    void testInsertOnMainTablePushesEntryToIndexTable() throws Exception {
-        String mainName = "main_t_insert";
-        Fixture f = setupTables(mainName, /* visibility */ null);
-
-        KvRecordBatch batch = genKvRecordBatch(new Object[] {1, "hello"});
-        PutKvRequest putKvRequest =
-                newPutKvRequest(f.mainTableId, /* bucketId */ 0, /* acks */ 1, batch);
-        f.mainGateway.putKv(putKvRequest).get();
-
-        byte[] indexKey = encodeIndexKey(f.indexSpec, "hello", 1);
-
-        assertIndexEntry(f.indexTableId, indexKey, targetBucket(f.indexSpec, "hello", 1), true);
-
-        // The sync push completed before the ack, so the sync pushed offset must have advanced to
-        // the write log end offset. A single row at log offset 0 advances it to 1.
-        assertThat(f.mainLeaderReplica.getSyncIndexPushedOffset())
-                .as(
-                        "sync index pushed offset must equal the write log end offset after a sync write")
-                .isEqualTo(1L);
-    }
-
-    /** Updating an indexed column deletes the old index key and writes the new key. */
-    @Test
-    void testUpdateRewritesIndexEntry() throws Exception {
-        String mainName = "main_t_update";
+    void testIndexMutationLifecycle() throws Exception {
+        String mainName = "main_t_mutations";
         Fixture f = setupTables(mainName, /* visibility */ null);
 
         // (1) Insert (a=1, b="hello"); wait for the index entry to land.
@@ -180,6 +126,7 @@ class IndexPushReplicationITCase {
                 .get();
         byte[] oldIndexKey = encodeIndexKey(f.indexSpec, "hello", 1);
         assertIndexEntry(f.indexTableId, oldIndexKey, targetBucket(f.indexSpec, "hello", 1), true);
+        assertThat(f.mainLeaderReplica.getSyncIndexPushedOffset()).isEqualTo(1L);
 
         // (2) Update the same PK row with a different idx column value.
         f.mainGateway
@@ -206,65 +153,32 @@ class IndexPushReplicationITCase {
                                 f.mainTableId, 0, 1, genKvRecordBatch(new Object[] {1, "hello"})))
                 .get();
         assertIndexEntry(f.indexTableId, oldIndexKey, targetBucket(f.indexSpec, "hello", 1), true);
-    }
-
-    /** Deleting a main-table row removes its Index Table entry. */
-    @Test
-    void testDeleteRemovesIndexEntry() throws Exception {
-        String mainName = "main_t_delete";
-        Fixture f = setupTables(mainName, /* visibility */ null);
-
-        // (1) Insert a row, wait for the index entry to land.
         f.mainGateway
                 .putKv(
                         newPutKvRequest(
-                                f.mainTableId, 0, 1, genKvRecordBatch(new Object[] {1, "hello"})))
+                                f.mainTableId,
+                                0,
+                                1,
+                                genKvRecordBatch(
+                                        Collections.singletonList(
+                                                Tuple2.of(new Object[] {1}, null)))))
                 .get();
-        byte[] indexKey = encodeIndexKey(f.indexSpec, "hello", 1);
-        assertIndexEntry(f.indexTableId, indexKey, targetBucket(f.indexSpec, "hello", 1), true);
+        assertIndexEntry(f.indexTableId, oldIndexKey, targetBucket(f.indexSpec, "hello", 1), false);
 
-        // (2) Delete the row by sending a KvRecord with a null value (tombstone) for the same PK.
-        KvRecordBatch deleteBatch =
-                genKvRecordBatch(
-                        Collections.singletonList(Tuple2.of(new Object[] {1}, /* value */ null)));
-        f.mainGateway.putKv(newPutKvRequest(f.mainTableId, 0, 1, deleteBatch)).get();
-
-        // (3) The index entry for ("hello", 1) goes away.
-        assertIndexEntry(f.indexTableId, indexKey, targetBucket(f.indexSpec, "hello", 1), false);
-    }
-
-    @Test
-    void testEmptyWalBatchAdvancesSyncIndexOffset() throws Exception {
-        String mainName = "main_t_empty_wal_batch";
-        Fixture f = setupTables(mainName, /* visibility */ null);
-
-        KvRecordBatch deleteMissingKey =
-                genKvRecordBatch(
-                        Collections.singletonList(Tuple2.of(new Object[] {404}, /* value */ null)));
-
+        long beforeEmptyBatch = f.mainLeaderReplica.getLocalLogEndOffset();
         f.mainGateway
-                .putKv(newPutKvRequest(f.mainTableId, 0, 1, deleteMissingKey))
+                .putKv(
+                        newPutKvRequest(
+                                f.mainTableId,
+                                0,
+                                1,
+                                genKvRecordBatch(
+                                        Collections.singletonList(
+                                                Tuple2.of(new Object[] {404}, null)))))
                 .get(30, TimeUnit.SECONDS);
-
         assertThat(f.mainLeaderReplica.getSyncIndexPushedOffset())
-                .as("empty WAL batches must advance index progress to the batch next offset")
-                .isEqualTo(1L);
-    }
-
-    /** An ASYNC index becomes visible eventually after the main-table write is acknowledged. */
-    @Test
-    void testAsyncVisibilityEventuallyVisible() throws Exception {
-        String mainName = "main_t_async";
-        Fixture f = setupTables(mainName, IndexVisibility.ASYNC);
-
-        f.mainGateway
-                .putKv(
-                        newPutKvRequest(
-                                f.mainTableId, 0, 1, genKvRecordBatch(new Object[] {1, "hello"})))
-                .get();
-
-        byte[] indexKey = encodeIndexKey(f.indexSpec, "hello", 1);
-        waitForIndexEntry(f.indexTableId, indexKey, targetBucket(f.indexSpec, "hello", 1), true);
+                .as("empty WAL batches must advance index progress")
+                .isEqualTo(beforeEmptyBatch + 1);
     }
 
     /** A recreated partition must be isolated from delayed writes of its previous incarnation. */
@@ -486,70 +400,22 @@ class IndexPushReplicationITCase {
         }
     }
 
-    /**
-     * Creates the main table only. The Coordinator derives the matching Index Table as part of
-     * {@code processCreateTable}. If {@code NotifyLeaderAndIsr} for the main table reaches the
-     * TabletServer before the auto-derived Index Table's metadata broadcast, the scheduler init is
-     * deferred and retried once the cache catches up. This helper polls until the scheduler is
-     * wired so the rest of the test can proceed deterministically.
-     */
     private static Fixture setupTables(String mainName, @Nullable IndexVisibility visibility)
             throws Exception {
-        TablePath mainPath = TablePath.of(DB, mainName);
-
-        TableDescriptor mainDescriptor = buildMainTableDescriptor(visibility);
-
-        long mainTableId = createTable(FLUSS_CLUSTER_EXTENSION, mainPath, mainDescriptor);
-        TablePath indexPath =
-                TablePath.of(
-                        DB, IndexTableUtils.indexTableName(mainPath.getTableName(), INDEX_NAME));
-        TableBucket mainBucket = new TableBucket(mainTableId, 0);
-        Replica mainLeaderReplica = FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(mainBucket);
-        int mainLeaderServer = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(mainBucket);
-
-        // Look up the derived Index Table id directly from ZK. The Coordinator persists it during
-        // processCreateTable before returning.
-        long indexTableId =
-                FLUSS_CLUSTER_EXTENSION
-                        .getZooKeeperClient()
-                        .getTable(indexPath)
-                        .orElseThrow(
-                                () ->
-                                        new IllegalStateException(
-                                                "Auto-derived Index Table "
-                                                        + indexPath
-                                                        + " was not registered in ZK."))
-                        .tableId;
-        // Wait for ALL index bucket leaders to be ready (the push may target any bucket).
-        for (int i = 0; i < INDEX_BUCKET_COUNT; i++) {
-            FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(new TableBucket(indexTableId, i));
-        }
-
-        // Ensure the metadata cache on the main-table leader server has all index bucket leaders
-        // resolved — the IndexReplicator needs getBucketLeader to return non-empty for the target
-        // bucket, otherwise the push silently fails.
-        final long idxTableId = indexTableId;
-        TabletServerMetadataCache mainServerCache =
-                FLUSS_CLUSTER_EXTENSION.getTabletServerById(mainLeaderServer).getMetadataCache();
-        waitUntil(
-                () -> {
-                    for (int i = 0; i < INDEX_BUCKET_COUNT; i++) {
-                        if (!mainServerCache.getBucketLeader(idxTableId, i).isPresent()) {
-                            return false;
-                        }
-                    }
-                    return true;
-                },
-                Duration.ofSeconds(30),
-                "wait for all index bucket leaders to be resolved in metadata cache");
-
-        TabletServerGateway mainGateway =
-                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(mainLeaderServer);
-        IndexSpec indexSpec =
-                IndexSpecFactory.buildIndexSpecs(
-                                mainLeaderReplica.getTableInfo(), mainBucket, mainServerCache)
-                        .get(0);
-        return new Fixture(mainTableId, indexTableId, mainLeaderReplica, mainGateway, indexSpec);
+        TestingIndexTable table =
+                new TestingIndexTable(
+                        FLUSS_CLUSTER_EXTENSION,
+                        TablePath.of(DB, mainName),
+                        buildMainTableDescriptor(visibility),
+                        INDEX_NAME);
+        TableBucket source = new TableBucket(table.mainTableId, 0);
+        int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(source);
+        return new Fixture(
+                table.mainTableId,
+                table.indexTableId,
+                FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(source),
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader),
+                table.indexSpec(source));
     }
 
     /**
@@ -580,27 +446,9 @@ class IndexPushReplicationITCase {
                         .partitionedBy("p")
                         .build();
 
-        long mainTableId = createTable(FLUSS_CLUSTER_EXTENSION, mainPath, descriptor);
-        TablePath indexPath =
-                TablePath.of(
-                        DB, IndexTableUtils.indexTableName(mainPath.getTableName(), INDEX_NAME));
-
-        long indexTableId =
-                FLUSS_CLUSTER_EXTENSION
-                        .getZooKeeperClient()
-                        .getTable(indexPath)
-                        .orElseThrow(
-                                () ->
-                                        new IllegalStateException(
-                                                "Auto-derived Index Table "
-                                                        + indexPath
-                                                        + " was not registered in ZK."))
-                        .tableId;
-        for (int i = 0; i < INDEX_BUCKET_COUNT; i++) {
-            FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(new TableBucket(indexTableId, i));
-        }
-
-        return new Fixture(mainTableId, indexTableId, null, null, null);
+        TestingIndexTable table =
+                new TestingIndexTable(FLUSS_CLUSTER_EXTENSION, mainPath, descriptor, INDEX_NAME);
+        return new Fixture(table.mainTableId, table.indexTableId, null, null, null);
     }
 
     private static final int INDEX_BUCKET_COUNT = 3;

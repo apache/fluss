@@ -352,7 +352,7 @@ public final class IndexSourceReader implements AutoCloseable {
 
     /** Owns the batches and any downloaded files backing them until {@link #close()}. */
     public static final class ReadResult implements AutoCloseable {
-        private final List<SourceBatchSlice> batches;
+        private final List<LogRecordBatch> batches;
         private final long nextOffset;
         private final boolean byteLimited;
         private final long bytes;
@@ -361,7 +361,7 @@ public final class IndexSourceReader implements AutoCloseable {
         private final AtomicBoolean closed = new AtomicBoolean();
 
         private ReadResult(
-                List<SourceBatchSlice> batches,
+                List<LogRecordBatch> batches,
                 long nextOffset,
                 boolean byteLimited,
                 long bytes,
@@ -380,7 +380,7 @@ public final class IndexSourceReader implements AutoCloseable {
             return new ReadResult(Collections.emptyList(), nextOffset, false, 0L, null, null);
         }
 
-        List<SourceBatchSlice> batches() {
+        List<LogRecordBatch> batches() {
             return batches;
         }
 
@@ -399,7 +399,7 @@ public final class IndexSourceReader implements AutoCloseable {
             }
             long bytes = 0;
             for (int i = 0; i < batches.size() / 2; i++) {
-                bytes += batches.get(i).delegate.sizeInBytes();
+                bytes += batches.get(i).sizeInBytes();
             }
             return (int) Math.min(Integer.MAX_VALUE, bytes);
         }
@@ -430,7 +430,7 @@ public final class IndexSourceReader implements AutoCloseable {
     }
 
     private final class BatchCollector {
-        private final List<SourceBatchSlice> batches = new ArrayList<>();
+        private final List<LogRecordBatch> batches = new ArrayList<>();
         private final long highWatermark;
         private final int maxBytes;
         private long bytes;
@@ -477,7 +477,7 @@ public final class IndexSourceReader implements AutoCloseable {
                                         + batch.nextLogOffset()
                                         + ")");
                     }
-                    batches.add(new SourceBatchSlice(batch, start, end));
+                    batches.add(batch);
                     bytes += batch.sizeInBytes();
                     if (metrics != null) {
                         metrics.indexReplicationSourceBytes().inc(batch.sizeInBytes());
@@ -543,39 +543,22 @@ public final class IndexSourceReader implements AutoCloseable {
         }
     }
 
-    final class SourceBatchSlice {
-        private final LogRecordBatch delegate;
-        private final long startOffset;
-        private final long endOffset;
-
-        private SourceBatchSlice(LogRecordBatch delegate, long startOffset, long endOffset) {
-            this.delegate = delegate;
-            this.startOffset = startOffset;
-            this.endOffset = endOffset;
-        }
-
-        CloseableIterator<LogRecord> records(LogRecordBatch.ReadContext context) {
-            return new OffsetBoundedIterator(
-                    delegate.records(context), delegate.baseLogOffset(), startOffset, endOffset);
-        }
+    CloseableIterator<LogRecord> records(LogRecordBatch batch, LogRecordBatch.ReadContext context) {
+        return new ValidatingRecordIterator(
+                batch.records(context), batch.baseLogOffset(), batch.nextLogOffset());
     }
 
-    private final class OffsetBoundedIterator extends AbstractIterator<LogRecord>
+    private final class ValidatingRecordIterator extends AbstractIterator<LogRecord>
             implements CloseableIterator<LogRecord> {
         private final CloseableIterator<LogRecord> delegate;
-        private final long startOffset;
         private final long endOffset;
         private long expectedRecordOffset;
         private boolean sawRecord;
 
-        private OffsetBoundedIterator(
-                CloseableIterator<LogRecord> delegate,
-                long baseOffset,
-                long startOffset,
-                long endOffset) {
+        private ValidatingRecordIterator(
+                CloseableIterator<LogRecord> delegate, long baseOffset, long endOffset) {
             this.delegate = delegate;
             this.expectedRecordOffset = baseOffset;
-            this.startOffset = startOffset;
             this.endOffset = endOffset;
         }
 
@@ -593,9 +576,6 @@ public final class IndexSourceReader implements AutoCloseable {
                 }
                 expectedRecordOffset++;
                 sawRecord = true;
-                if (candidateOffset < startOffset) {
-                    continue;
-                }
                 return candidateOffset < endOffset ? candidate : endOfData();
             }
             if (sawRecord && expectedRecordOffset < endOffset) {

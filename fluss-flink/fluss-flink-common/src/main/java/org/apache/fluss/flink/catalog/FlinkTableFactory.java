@@ -31,7 +31,6 @@ import org.apache.fluss.flink.source.ChangelogFlinkTableSource;
 import org.apache.fluss.flink.source.FlinkTableSource;
 import org.apache.fluss.flink.source.reader.LeaseContext;
 import org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils;
-import org.apache.fluss.flink.utils.SecondaryIndexColumnNames;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.TablePath;
 
@@ -53,8 +52,6 @@ import org.apache.flink.table.factories.DynamicTableSourceFactory;
 import org.apache.flink.table.factories.FactoryUtil;
 import org.apache.flink.table.types.logical.RowType;
 
-import javax.annotation.Nullable;
-
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -63,8 +60,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_FORMAT;
 import static org.apache.fluss.config.ConfigOptions.TABLE_DELETE_BEHAVIOR;
@@ -159,8 +154,6 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                 tableOptions.get(FlinkConnectorOptions.SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE);
 
         LeaseContext leaseContext = LeaseContext.fromConf(tableOptions);
-        int[][] secondaryIndexes =
-                parseSecondaryIndexes(context.getCatalogTable().getOptions(), tableOutputType);
         return new FlinkTableSource(
                 toFlussTablePath(context.getObjectIdentifier()),
                 toFlussClientConfig(
@@ -182,33 +175,7 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                 tableOptions.get(toFlinkOption(ConfigOptions.TABLE_DATALAKE_ENABLED)),
                 tableOptions.get(toFlinkOption(ConfigOptions.TABLE_MERGE_ENGINE)),
                 context.getCatalogTable().getOptions(),
-                leaseContext,
-                secondaryIndexes);
-    }
-
-    @Nullable
-    private static int[][] parseSecondaryIndexes(
-            Map<String, String> tableOptions,
-            org.apache.flink.table.types.logical.RowType tableOutputType) {
-        Pattern pattern = Pattern.compile("secondary-index\\.([A-Za-z0-9_]+)\\.columns");
-        List<int[]> indexList = new ArrayList<>();
-        for (Map.Entry<String, String> entry : tableOptions.entrySet()) {
-            Matcher matcher = pattern.matcher(entry.getKey());
-            if (matcher.matches()) {
-                List<String> columnList = SecondaryIndexColumnNames.decode(entry.getValue());
-                int[] columnIndexes = new int[columnList.size()];
-                for (int i = 0; i < columnList.size(); i++) {
-                    int fieldIndex = tableOutputType.getFieldIndex(columnList.get(i));
-                    if (fieldIndex < 0) {
-                        throw new IllegalArgumentException(
-                                "Column '" + columnList.get(i) + "' not found in table schema");
-                    }
-                    columnIndexes[i] = fieldIndex;
-                }
-                indexList.add(columnIndexes);
-            }
-        }
-        return indexList.isEmpty() ? null : indexList.toArray(new int[0][]);
+                leaseContext);
     }
 
     @Override

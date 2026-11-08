@@ -35,7 +35,6 @@ import org.apache.fluss.rpc.messages.PutIndexResponse;
 import org.apache.fluss.rpc.messages.PutKvResponse;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.log.LogTablet;
-import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.replica.ReplicaManager;
 import org.apache.fluss.server.replica.fetcher.InitialFetchStatus;
@@ -45,7 +44,6 @@ import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.ByteArraySlice;
-import org.apache.fluss.utils.IndexTableUtils;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.junit.jupiter.api.Test;
@@ -58,7 +56,6 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.apache.fluss.row.BinaryString.fromString;
-import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createTable;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newPutKvRequest;
 import static org.apache.fluss.testutils.DataTestUtils.genKvRecordBatch;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
@@ -95,16 +92,11 @@ class IndexTargetRecoveryITCase {
                         .build();
         TableDescriptor mainDescriptor =
                 TableDescriptor.builder().schema(mainSchema).distributedBy(1, "a").build();
-        long mainTableId = createTable(FLUSS_CLUSTER_EXTENSION, mainPath, mainDescriptor);
-        TablePath indexPath =
-                TablePath.of(
-                        DB, IndexTableUtils.indexTableName(mainPath.getTableName(), INDEX_NAME));
-        long indexTableId =
-                FLUSS_CLUSTER_EXTENSION
-                        .getZooKeeperClient()
-                        .getTable(indexPath)
-                        .orElseThrow(AssertionError::new)
-                        .tableId;
+        TestingIndexTable table =
+                new TestingIndexTable(
+                        FLUSS_CLUSTER_EXTENSION, mainPath, mainDescriptor, INDEX_NAME);
+        long mainTableId = table.mainTableId;
+        long indexTableId = table.indexTableId;
         TableBucket indexBucket = new TableBucket(indexTableId, 0);
         FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(indexBucket);
         TableBucket mainBucket = new TableBucket(mainTableId, 0);
@@ -113,12 +105,7 @@ class IndexTargetRecoveryITCase {
         int mainLeaderId = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(mainBucket);
         TabletServerGateway mainGateway =
                 FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(mainLeaderId);
-        TabletServerMetadataCache mainMetadataCache =
-                FLUSS_CLUSTER_EXTENSION.getTabletServerById(mainLeaderId).getMetadataCache();
-        IndexSpec indexSpec =
-                IndexSpecFactory.buildIndexSpecs(
-                                mainLeader.getTableInfo(), mainBucket, mainMetadataCache)
-                        .get(0);
+        IndexSpec indexSpec = table.indexSpec(mainBucket);
 
         int originalLeader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(indexBucket);
         ZooKeeperClient zkClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
@@ -176,7 +163,7 @@ class IndexTargetRecoveryITCase {
                                 indexBucket,
                                 new InitialFetchStatus(
                                         indexTableId,
-                                        indexPath,
+                                        table.indexPath,
                                         originalLeader,
                                         pausedFollowerOffset)));
         FLUSS_CLUSTER_EXTENSION.waitUntilReplicaExpandToIsr(indexBucket, followerToPromote);
@@ -195,7 +182,7 @@ class IndexTargetRecoveryITCase {
                         current.coordinatorEpoch(),
                         current.bucketEpoch() + 1);
         FLUSS_CLUSTER_EXTENSION.notifyLeaderAndIsr(
-                followerToPromote, indexPath, indexBucket, promoted, replicas);
+                followerToPromote, table.indexPath, indexBucket, promoted, replicas);
         waitUntil(
                 recoveredReplica::isLeader,
                 Duration.ofMinutes(3),

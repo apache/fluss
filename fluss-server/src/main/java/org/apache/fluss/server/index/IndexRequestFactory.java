@@ -81,7 +81,6 @@ final class IndexRequestFactory {
     static final class SizeAccumulator {
         private final PbPutIndexReqForBucket bucketSizer;
         private long bodyBytes;
-        private boolean overflow;
         private boolean codecRepresentable;
 
         SizeAccumulator(long tableId, long sourceTableId, long requestTimeoutMs) {
@@ -94,50 +93,33 @@ final class IndexRequestFactory {
         private SizeAccumulator(SizeAccumulator source) {
             this.bucketSizer = source.bucketSizer;
             this.bodyBytes = source.bodyBytes;
-            this.overflow = source.overflow;
             this.codecRepresentable = source.codecRepresentable;
         }
 
         void addBucket(IndexBatch batch) {
-            if (overflow || !codecRepresentable) {
+            if (!codecRepresentable) {
                 return;
             }
-            try {
-                bucketSizer.clear();
-                fillBucketRequest(bucketSizer, batch);
-                int bucketBodyBytes = bucketSizer.totalSize();
-                if (bucketBodyBytes < 0) {
-                    codecRepresentable = false;
-                    return;
-                }
-                long bucketBytes =
-                        (long) BUCKETS_REQ_TAG_SIZE
-                                + ProtoCodecUtils.computeVarIntSize(bucketBodyBytes)
-                                + bucketBodyBytes;
-                bodyBytes = Math.addExact(bodyBytes, bucketBytes);
-                codecRepresentable = bodyBytes <= Integer.MAX_VALUE;
-            } catch (ArithmeticException e) {
-                overflow = true;
+            bucketSizer.clear();
+            fillBucketRequest(bucketSizer, batch);
+            int bucketBodyBytes = bucketSizer.totalSize();
+            if (bucketBodyBytes < 0) {
                 codecRepresentable = false;
+                return;
             }
+            bodyBytes +=
+                    (long) BUCKETS_REQ_TAG_SIZE
+                            + ProtoCodecUtils.computeVarIntSize(bucketBodyBytes)
+                            + bucketBodyBytes;
+            codecRepresentable = bodyBytes <= Integer.MAX_VALUE;
         }
 
         long framedBytes() {
-            if (arithmeticOverflow()) {
-                return Long.MAX_VALUE;
-            }
             return bodyBytes + REQUEST_HEADER_LENGTH + LENGTH_PREFIX_BYTES;
         }
 
-        boolean arithmeticOverflow() {
-            return overflow
-                    || bodyBytes > Long.MAX_VALUE - REQUEST_HEADER_LENGTH - LENGTH_PREFIX_BYTES;
-        }
-
         boolean codecRepresentable() {
-            return codecRepresentable
-                    && !arithmeticOverflow()
-                    && framedBytes() <= MAX_CODEC_FRAMED_BYTES;
+            return codecRepresentable && framedBytes() <= MAX_CODEC_FRAMED_BYTES;
         }
 
         boolean exceedsLimit(long maxTransportRequestBytes) {
@@ -152,11 +134,6 @@ final class IndexRequestFactory {
                             + batch.targetBucket()
                             + " at source end offset "
                             + batch.sourceEndOffset();
-            if (arithmeticOverflow()) {
-                return new RecordTooLargeException(
-                        prefix
-                                + " overflows exact size arithmetic and cannot be represented by the request codec");
-            }
             long limit = codecRepresentable() ? maxTransportRequestBytes : MAX_CODEC_FRAMED_BYTES;
             String option =
                     codecRepresentable()
