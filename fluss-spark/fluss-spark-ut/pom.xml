@@ -30,6 +30,11 @@
     <artifactId>fluss-spark-ut_${scala.binary.version}</artifactId>
     <name>Apache Fluss : Engine Spark : UT</name>
 
+    <properties>
+        <!-- skipTests skips execution only; test compile and test-jar stay enabled. -->
+        <skipTests>${skip.on.java8}</skipTests>
+    </properties>
+
     <dependencies>
         <dependency>
             <groupId>org.apache.fluss</groupId>
