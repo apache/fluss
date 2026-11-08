@@ -725,7 +725,7 @@ class UpsertPlanner(
             FlussUpsertInputPartition(
               tableBucket,
               TableBucketSnapshot.NO_SNAPSHOT_ID,
-              LogScanner.EARLIEST_OFFSET,
+              logStartingOffsetOpt.orElse(LogScanner.EARLIEST_OFFSET),
               logEndingOffset)
           }
       }

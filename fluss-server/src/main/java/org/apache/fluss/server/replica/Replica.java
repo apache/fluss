@@ -1094,7 +1094,7 @@ public final class Replica {
                 if (recovery.initializeLocalLog) {
                     logManager.initializeEmptyLocalTail(tableBucket, restoreStartOffset);
                 }
-                restoreIndexProgress(completedSnapshot.getIndexPushedOffset());
+                restoreIndexProgress(completedSnapshot);
                 rowCount =
                         supportsExactRowCount(tableConfig) ? completedSnapshot.getRowCount() : null;
                 // currently, we only support one auto-increment column.
@@ -1185,14 +1185,26 @@ public final class Replica {
                             + "indexPushedOffset, but was "
                             + indexPushedOffset);
         }
+        if (hasSyncIndexes
+                && (snapshot.getSyncIndexPushedOffset() == null
+                        || snapshot.getSyncIndexPushedOffset() < indexPushedOffset)) {
+            throw new KvStorageException(
+                    "KV snapshot "
+                            + snapshot.getSnapshotID()
+                            + " for "
+                            + tableBucket
+                            + " has invalid SYNC index progress: "
+                            + snapshot.getSyncIndexPushedOffset());
+        }
     }
 
-    private void restoreIndexProgress(Long indexPushedOffset) {
+    private void restoreIndexProgress(CompletedSnapshot snapshot) {
+        Long indexPushedOffset = snapshot.getIndexPushedOffset();
         if (indexPushedOffset == null) {
             return;
         }
         if (hasSyncIndexes) {
-            syncIndexPushedOffset = indexPushedOffset;
+            syncIndexPushedOffset = checkNotNull(snapshot.getSyncIndexPushedOffset());
         }
         if (hasSecondaryIndexes) {
             allIndexPushedOffset = indexPushedOffset;
@@ -1385,12 +1397,15 @@ public final class Replica {
             long lastCompletedSnapshotId = -1;
             long lastCompletedSnapshotLogOffset = 0;
             Long lastCompletedSnapshotIndexPushedOffset = null;
+            Long lastCompletedSnapshotSyncIndexPushedOffset = null;
             long snapshotSize = 0L;
             Map<Long, Collection<KvFileHandleAndLocalPath>> uploadedSstFiles = new HashMap<>();
             if (completedSnapshot != null) {
                 lastCompletedSnapshotId = completedSnapshot.getSnapshotID();
                 lastCompletedSnapshotLogOffset = completedSnapshot.getLogOffset();
                 lastCompletedSnapshotIndexPushedOffset = completedSnapshot.getIndexPushedOffset();
+                lastCompletedSnapshotSyncIndexPushedOffset =
+                        completedSnapshot.getSyncIndexPushedOffset();
                 snapshotSize = completedSnapshot.getSnapshotSize();
                 uploadedSstFiles.put(
                         completedSnapshot.getSnapshotID(),
@@ -1427,11 +1442,13 @@ public final class Replica {
                             closeableRegistryForKv,
                             snapshotIDCounter,
                             () -> augmentTabletState(kvTablet.getTabletState()),
+                            hasSyncIndexes ? this::getSyncIndexPushedOffset : null,
                             logTablet::updateMinRetainOffset,
                             leaderEpoch,
                             coordinatorEpochSupplier,
                             lastCompletedSnapshotLogOffset,
                             lastCompletedSnapshotIndexPushedOffset,
+                            lastCompletedSnapshotSyncIndexPushedOffset,
                             snapshotSize);
             this.kvSnapshotManager =
                     PeriodicSnapshotManager.create(

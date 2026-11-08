@@ -77,6 +77,7 @@ import org.apache.fluss.rpc.messages.MetadataRequest;
 import org.apache.fluss.rpc.messages.MetadataResponse;
 import org.apache.fluss.rpc.messages.PbApiVersion;
 import org.apache.fluss.rpc.messages.PbBucketInfo;
+import org.apache.fluss.rpc.messages.PbKvSnapshot;
 import org.apache.fluss.rpc.messages.PbTablePath;
 import org.apache.fluss.rpc.messages.TableExistsRequest;
 import org.apache.fluss.rpc.messages.TableExistsResponse;
@@ -528,14 +529,20 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                             + tablePath
                             + "' is a partitioned table, but partition name is not provided.");
         }
+        String partitionName = hasPartitionName ? request.getPartitionName() : null;
+        return CompletableFuture.supplyAsync(
+                () -> loadLatestKvSnapshots(tableInfo, partitionName), ioExecutor);
+    }
+
+    private GetLatestKvSnapshotsResponse loadLatestKvSnapshots(
+            TableInfo tableInfo, @Nullable String partitionName) {
         try {
-            // get table id
             long tableId = tableInfo.getTableId();
             int numBuckets = tableInfo.getNumBuckets();
             Long partitionId = null;
-            if (hasPartitionName) {
+            if (partitionName != null) {
                 PartitionRegistration partition =
-                        getPartition(tablePath, request.getPartitionName());
+                        getPartition(tableInfo.getTablePath(), partitionName);
                 partitionId = partition.getPartitionId();
                 numBuckets =
                         partition.getBucketCountOrDefault(
@@ -547,16 +554,56 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
             } else {
                 snapshots = zkClient.getTableLatestBucketSnapshot(tableId);
             }
+            boolean hasSyncIndexes =
+                    tableInfo.getSchema().getIndexes().stream()
+                            .anyMatch(index -> index.getVisibility() == IndexVisibility.SYNC);
+            if (hasSyncIndexes) {
+                for (Map.Entry<Integer, Optional<BucketSnapshot>> entry : snapshots.entrySet()) {
+                    entry.setValue(
+                            selectReadableSnapshot(
+                                    new TableBucket(tableId, partitionId, entry.getKey()),
+                                    entry.getValue()));
+                }
+            }
             GetLatestKvSnapshotsResponse response =
                     makeGetLatestKvSnapshotsResponse(tableId, partitionId, snapshots, numBuckets);
-            if (tableInfo.getSchema().getIndexes().stream()
-                    .anyMatch(index -> index.getVisibility() == IndexVisibility.SYNC)) {
-                response.setHasSyncIndexes(true);
+            if (hasSyncIndexes) {
+                for (PbKvSnapshot snapshot : response.getLatestSnapshotsList()) {
+                    if (!snapshot.hasSnapshotId()) {
+                        // Full reconstruction starts at zero, never at the current earliest WAL.
+                        // TODO: Improve missing-history recovery. More retained snapshots and
+                        // a longer log TTL can preserve a usable starting point.
+                        snapshot.setLogOffset(0L);
+                    }
+                }
             }
-            return CompletableFuture.completedFuture(response);
+            return response;
         } catch (Exception e) {
-            throw new RuntimeException(e);
+            throw new FlussRuntimeException(
+                    "Failed to load KV snapshots for " + tableInfo.getTablePath(), e);
         }
+    }
+
+    private Optional<BucketSnapshot> selectReadableSnapshot(
+            TableBucket bucket, Optional<BucketSnapshot> latest) throws Exception {
+        if (!latest.isPresent()) {
+            return latest;
+        }
+        Long visibleOffset = latest.get().getSyncIndexPushedOffset();
+        if (visibleOffset == null || visibleOffset < 0) {
+            throw new FlussRuntimeException(
+                    "Missing or invalid SYNC index progress for snapshot "
+                            + latest.get().getSnapshotId()
+                            + " of "
+                            + bucket);
+        }
+        if (latest.get().getLogOffset() <= visibleOffset) {
+            return latest;
+        }
+        return zkClient.getTableBucketAllSnapshotAndIds(bucket).stream()
+                .map(snapshot -> snapshot.f0)
+                .filter(snapshot -> snapshot.getLogOffset() <= visibleOffset)
+                .max(Comparator.comparingLong(BucketSnapshot::getSnapshotId));
     }
 
     private PartitionRegistration getPartition(TablePath tablePath, String partitionName) {

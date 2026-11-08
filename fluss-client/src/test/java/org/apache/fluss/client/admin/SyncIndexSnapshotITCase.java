@@ -32,10 +32,13 @@ import org.apache.fluss.rpc.messages.PutKvResponse;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
@@ -87,21 +90,6 @@ class SyncIndexSnapshotITCase {
                                     .get()
                                     .getActiveSnapshotsList())
                     .allSatisfy(snapshot -> assertThat(snapshot.hasLogOffset()).isFalse());
-            snapshotIds.setIncludeLogOffsets(true);
-            assertThat(
-                            CLUSTER.newCoordinatorClient()
-                                    .listKvSnapshots(snapshotIds)
-                                    .get()
-                                    .getActiveSnapshotsList())
-                    .filteredOn(
-                            snapshot ->
-                                    snapshot.getBucketId() == 0
-                                            && snapshot.getSnapshotId() == older.getSnapshotID())
-                    .singleElement()
-                    .satisfies(
-                            snapshot ->
-                                    assertThat(snapshot.getLogOffset())
-                                            .isEqualTo(older.getLogOffset()));
             int leader = CLUSTER.waitAndGetLeader(bucket);
             CLUSTER.getTabletServerById(leader)
                     .getReplicaManager()
@@ -132,9 +120,51 @@ class SyncIndexSnapshotITCase {
                         .deleteTableBucketSnapshot(bucket, older.getSnapshotID());
                 KvSnapshots fallback = admin.getLatestKvSnapshots(path).get(10, TimeUnit.SECONDS);
                 assertThat(fallback.getSnapshotId(0)).isEmpty();
-                assertThat(fallback.getLogOffset(0)).isEmpty();
+                assertThat(fallback.getLogOffset(0)).hasValue(0L);
             } finally {
                 write.cancel(false);
+            }
+        }
+    }
+
+    @ParameterizedTest
+    @CsvSource({"120,3", "100,2", "90,1", "70,0"})
+    void testDiscoveryUsesCommittedSyncProgress(long syncProgress, int expected) throws Exception {
+        TablePath path = TablePath.of("snapshot_visibility", "stored_progress_" + syncProgress);
+        try (Connection connection = ConnectionFactory.createConnection(CLUSTER.getClientConfig());
+                Admin admin = connection.getAdmin()) {
+            admin.createDatabase(path.getDatabaseName(), DatabaseDescriptor.EMPTY, true).get();
+            admin.createTable(
+                            path,
+                            TableDescriptor.builder()
+                                    .schema(
+                                            Schema.newBuilder()
+                                                    .column("id", DataTypes.INT())
+                                                    .column("name", DataTypes.STRING())
+                                                    .primaryKey("id")
+                                                    .index("idx_name", "name")
+                                                    .build())
+                                    .distributedBy(1, "id")
+                                    .build(),
+                            false)
+                    .get();
+            long tableId = admin.getTableInfo(path).get().getTableId();
+            TableBucket bucket = new TableBucket(tableId, 0);
+            // Discovery must use committed evidence even though the live source is still empty.
+            // These metadata-only fixtures also ensure no snapshot file is opened for selection.
+            for (int id = 1; id <= 3; id++) {
+                CLUSTER.getZooKeeperClient()
+                        .registerTableBucketSnapshot(
+                                bucket,
+                                new BucketSnapshot(id, 60 + 20 * id, "unused", syncProgress));
+            }
+            KvSnapshots snapshots = admin.getLatestKvSnapshots(path).get(10, TimeUnit.SECONDS);
+            if (expected == 0) {
+                assertThat(snapshots.getSnapshotId(0)).isEmpty();
+                assertThat(snapshots.getLogOffset(0)).hasValue(0);
+            } else {
+                assertThat(snapshots.getSnapshotId(0)).hasValue(expected);
+                assertThat(snapshots.getLogOffset(0)).hasValue(60 + 20 * expected);
             }
         }
     }

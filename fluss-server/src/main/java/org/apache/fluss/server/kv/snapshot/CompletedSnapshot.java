@@ -81,6 +81,8 @@ public class CompletedSnapshot {
 
     @Nullable private final Long indexPushedOffset;
 
+    @Nullable private final Long syncIndexPushedOffset;
+
     /**
      * The auto-increment ID ranges of the snapshot, null for legacy tables that doesn't support or
      * doesn't have auto-increment columns.
@@ -111,6 +113,7 @@ public class CompletedSnapshot {
                 logOffset,
                 rowCount,
                 null,
+                null,
                 autoIncIDRanges);
     }
 
@@ -122,6 +125,7 @@ public class CompletedSnapshot {
             long logOffset,
             @Nullable Long rowCount,
             @Nullable Long indexPushedOffset,
+            @Nullable Long syncIndexPushedOffset,
             @Nullable List<AutoIncIDRange> autoIncIDRanges) {
         this.tableBucket = tableBucket;
         this.snapshotID = snapshotID;
@@ -130,6 +134,7 @@ public class CompletedSnapshot {
         this.logOffset = logOffset;
         this.rowCount = rowCount;
         this.indexPushedOffset = indexPushedOffset;
+        this.syncIndexPushedOffset = syncIndexPushedOffset;
         this.autoIncIDRanges = autoIncIDRanges;
     }
 
@@ -139,7 +144,16 @@ public class CompletedSnapshot {
             long snapshotID,
             FsPath snapshotLocation,
             KvSnapshotHandle kvSnapshotHandle) {
-        this(tableBucket, snapshotID, snapshotLocation, kvSnapshotHandle, 0, null, null, null);
+        this(
+                tableBucket,
+                snapshotID,
+                snapshotLocation,
+                kvSnapshotHandle,
+                0,
+                null,
+                null,
+                null,
+                null);
     }
 
     public long getSnapshotID() {
@@ -175,6 +189,12 @@ public class CompletedSnapshot {
     @Nullable
     public Long getIndexPushedOffset() {
         return indexPushedOffset;
+    }
+
+    /** Returns the confirmed SYNC index prefix recorded before snapshot commit. */
+    @Nullable
+    public Long getSyncIndexPushedOffset() {
+        return syncIndexPushedOffset;
     }
 
     @Nullable
@@ -310,6 +330,7 @@ public class CompletedSnapshot {
                 && Objects.equals(kvSnapshotHandle, that.kvSnapshotHandle)
                 && Objects.equals(rowCount, that.rowCount)
                 && Objects.equals(indexPushedOffset, that.indexPushedOffset)
+                && Objects.equals(syncIndexPushedOffset, that.syncIndexPushedOffset)
                 && Objects.equals(autoIncIDRanges, that.autoIncIDRanges)
                 && Objects.equals(snapshotLocation, that.snapshotLocation);
     }
@@ -323,6 +344,7 @@ public class CompletedSnapshot {
                 logOffset,
                 rowCount,
                 indexPushedOffset,
+                syncIndexPushedOffset,
                 autoIncIDRanges,
                 snapshotLocation);
     }

@@ -314,11 +314,8 @@ public class ClientRpcMessageUtils {
             snapshotIds.put(bucketId, snapshotId);
             Long logOffset = pbKvSnapshot.hasLogOffset() ? pbKvSnapshot.getLogOffset() : null;
             logOffsets.put(bucketId, logOffset);
-            boolean bothNull = snapshotId == null && logOffset == null;
-            boolean bothNotNull = snapshotId != null && logOffset != null;
             checkState(
-                    bothNull || bothNotNull,
-                    "snapshotId and logOffset should be both null or not null");
+                    snapshotId == null || logOffset != null, "A snapshot must have a log offset");
         }
         return new KvSnapshots(tableId, partitionId, snapshotIds, logOffsets);
     }
