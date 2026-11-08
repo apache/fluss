@@ -26,7 +26,6 @@ import org.apache.fluss.server.log.FetchDataInfo;
 import org.apache.fluss.server.log.FetchIsolation;
 import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.log.remote.RemoteLogManager;
-import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.shaded.guava32.com.google.common.collect.AbstractIterator;
 import org.apache.fluss.utils.CloseableIterator;
 import org.apache.fluss.utils.concurrent.FutureUtils;
@@ -75,16 +74,12 @@ final class IndexSourceReader implements AutoCloseable {
     @Nullable private final Supplier<RemoteFetcher> remoteFetcherFactory;
 
     private final Executor remoteExecutor;
-    @Nullable private final TabletServerMetricGroup metrics;
     private final AtomicBoolean closed = new AtomicBoolean();
     /** Removing the session transfers responsibility for closing it. */
     private final AtomicReference<RemoteFetcher> remoteFetcherSession = new AtomicReference<>();
 
     IndexSourceReader(
-            LogTablet logTablet,
-            RemoteLogManager remoteLogManager,
-            Executor remoteExecutor,
-            @Nullable TabletServerMetricGroup metrics) {
+            LogTablet logTablet, RemoteLogManager remoteLogManager, Executor remoteExecutor) {
         this(
                 new LogTabletSourceLog(logTablet),
                 () ->
@@ -95,26 +90,16 @@ final class IndexSourceReader implements AutoCloseable {
                                         logTablet.getLogDir(),
                                         1,
                                         1)),
-                remoteExecutor,
-                metrics);
+                remoteExecutor);
     }
 
     IndexSourceReader(
             SourceLog sourceLog,
             @Nullable Supplier<RemoteFetcher> remoteFetcherFactory,
             Executor remoteExecutor) {
-        this(sourceLog, remoteFetcherFactory, remoteExecutor, null);
-    }
-
-    IndexSourceReader(
-            SourceLog sourceLog,
-            @Nullable Supplier<RemoteFetcher> remoteFetcherFactory,
-            Executor remoteExecutor,
-            @Nullable TabletServerMetricGroup metrics) {
         this.sourceLog = sourceLog;
         this.remoteFetcherFactory = remoteFetcherFactory;
         this.remoteExecutor = remoteExecutor;
-        this.metrics = metrics;
     }
 
     /**
@@ -194,7 +179,6 @@ final class IndexSourceReader implements AutoCloseable {
             long localLogStartOffset,
             int maxBytes) {
         RemoteFetcher remoteFetcher = null;
-        boolean localHandoffStarted = false;
         try {
             remoteFetcher = getOrOpenRemoteFetcher();
             if (closed.get()) {
@@ -221,7 +205,6 @@ final class IndexSourceReader implements AutoCloseable {
             if (!collector.limitReached()
                     && collector.nextOffset() == localLogStartOffset
                     && collector.nextOffset() < endOffsetLimit) {
-                localHandoffStarted = true;
                 result =
                         readLocal(
                                 collector.nextOffset(),
@@ -238,9 +221,6 @@ final class IndexSourceReader implements AutoCloseable {
                 result.close();
             }
         } catch (Throwable failure) {
-            if (metrics != null && !localHandoffStarted) {
-                metrics.indexReplicationFailures().inc();
-            }
             if (remoteFetcher != null) {
                 discardRemoteFetcher(remoteFetcher);
             }
@@ -272,16 +252,9 @@ final class IndexSourceReader implements AutoCloseable {
     private AutoCloseable remoteSessionResource(
             RemoteFetcher remoteFetcher, boolean retireSession) {
         return () -> {
-            try {
-                if (retireSession) {
-                    // Retire the session after the result's batch views have been consumed.
-                    discardRemoteFetcher(remoteFetcher);
-                }
-            } catch (RuntimeException | Error failure) {
-                if (metrics != null) {
-                    metrics.indexReplicationFailures().inc();
-                }
-                throw failure;
+            if (retireSession) {
+                // Retire the session after the result's batch views have been consumed.
+                discardRemoteFetcher(remoteFetcher);
             }
         };
     }
@@ -454,9 +427,6 @@ final class IndexSourceReader implements AutoCloseable {
                     }
                     batches.add(batch);
                     bytes += batch.sizeInBytes();
-                    if (metrics != null) {
-                        metrics.indexReplicationSourceBytes().inc(batch.sizeInBytes());
-                    }
                     nextOffset = end;
                     if (bytes >= maxBytes
                             && nextOffset < upperBound

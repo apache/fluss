@@ -32,7 +32,6 @@ import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.PutKvResponse;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.log.LogTablet;
-import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.tablet.TabletServer;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
@@ -260,11 +259,6 @@ class IndexSourceRemoteRecoveryITCase {
                 .as("the selected recovery follower must have discarded the baseline range")
                 .isGreaterThan(baselinePushedOffset);
 
-        TabletServer recoveryTabletServer = sourceTabletServer(recovery.recoveryFollower);
-        TabletServerMetricGroup recoveryMetrics =
-                recoveryTabletServer.getReplicaManager().getServerMetricGroup();
-        long remoteBytesBefore = recoveryMetrics.indexReplicationSourceBytes().getCount();
-
         recovery.stopServer(recovery.sourceLeader);
         waitUntil(
                 () ->
@@ -275,21 +269,12 @@ class IndexSourceRemoteRecoveryITCase {
         Replica newSourceReplica = CLUSTER.waitAndGetLeaderReplica(recovery.sourceTableBucket);
         assertThat(CLUSTER.waitAndGetLeader(recovery.sourceTableBucket))
                 .isEqualTo(recovery.recoveryFollower);
-        waitUntil(
-                () -> recoveryMetrics.indexReplicationSourceBytes().getCount() > remoteBytesBefore,
-                TIMEOUT,
-                "wait for recovered source to consume remote WAL");
-        long remoteBytesWhileTargetUnavailable =
-                recoveryMetrics.indexReplicationSourceBytes().getCount();
         assertThat(newSourceReplica.getLogTablet().localLogStartOffset())
                 .as("the replay start must be unavailable from local source WAL")
                 .isGreaterThan(baselinePushedOffset);
         assertThat(newSourceReplica.getAllIndexPushedOffset())
                 .as("the unavailable target must preserve the snapshot-restored baseline")
                 .isEqualTo(baselinePushedOffset);
-        assertThat(remoteBytesWhileTargetUnavailable)
-                .as("raw remote source bytes must be consumed before target progress advances")
-                .isGreaterThan(remoteBytesBefore);
         return newSourceReplica;
     }
 

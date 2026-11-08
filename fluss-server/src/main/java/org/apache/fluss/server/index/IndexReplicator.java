@@ -98,7 +98,6 @@ final class IndexReplicator implements AutoCloseable {
     private final LogRecordReadContext readContext;
     private final IndexProgressListener onProgress;
     @Nullable private final TabletServerMetricGroup metrics;
-    private final IndexReplicationNoProgressTracker noProgressTracker;
     private final int sourceReadTargetBytes;
     private final long maxTransportRequestBytes;
 
@@ -184,8 +183,6 @@ final class IndexReplicator implements AutoCloseable {
         this.lifecycleLock = new ReentrantLock();
         this.onProgress = onProgress;
         this.metrics = metrics;
-        this.noProgressTracker =
-                new IndexReplicationNoProgressTracker(replayStartOffset, replayStartOffset);
     }
 
     void checkScheduler(IndexReplicationScheduler scheduler) {
@@ -556,7 +553,7 @@ final class IndexReplicator implements AutoCloseable {
         lastFailure = failure;
         retry.onFailure();
         if (metrics != null) {
-            metrics.indexReplicationFailures().inc();
+            metrics.indexReplicationRetries().inc();
         }
     }
 
@@ -749,21 +746,6 @@ final class IndexReplicator implements AutoCloseable {
         return min;
     }
 
-    void onHighWatermarkAdvanced() {
-        if (closed) {
-            return;
-        }
-        noProgressTracker.update(getAllIndexPushedOffset(), sourceReader.highWatermark());
-    }
-
-    long noProgressTimeMs() {
-        if (closed) {
-            return 0L;
-        }
-        return noProgressTracker.noProgressTimeMs(
-                getAllIndexPushedOffset(), sourceReader.highWatermark());
-    }
-
     private void notifyProgress(@Nullable IndexReplicationState advancedState) {
         long allIndexPushedOffset = getAllIndexPushedOffset();
         if (allIndexPushedOffset > sourceFailureOffset) {
@@ -772,7 +754,6 @@ final class IndexReplicator implements AutoCloseable {
         if (!hasFailure()) {
             lastFailure = null;
         }
-        noProgressTracker.update(allIndexPushedOffset, sourceReader.highWatermark());
         if (advancedState != null) {
             scheduler.onProgress(this, advancedState);
         }
@@ -1148,47 +1129,6 @@ final class IndexReplicator implements AutoCloseable {
             beforeKey = null;
             builders.clear();
             reservation.close();
-        }
-    }
-
-    /** Tracks how long this source bucket has remained behind without advancing index progress. */
-    private static final class IndexReplicationNoProgressTracker {
-
-        private static final long NOT_TRACKING = Long.MIN_VALUE;
-
-        private long highestPushedOffset;
-        private long noProgressStartNanos = NOT_TRACKING;
-
-        private IndexReplicationNoProgressTracker(
-                long initialPushedOffset, long initialHighWatermark) {
-            this.highestPushedOffset = initialPushedOffset;
-            update(initialPushedOffset, initialHighWatermark);
-        }
-
-        private synchronized void update(long pushedOffset, long highWatermark) {
-            update(pushedOffset, highWatermark, System.nanoTime());
-        }
-
-        private synchronized long noProgressTimeMs(long pushedOffset, long highWatermark) {
-            long now = System.nanoTime();
-            update(pushedOffset, highWatermark, now);
-            if (noProgressStartNanos == NOT_TRACKING) {
-                return 0L;
-            }
-            return TimeUnit.NANOSECONDS.toMillis(Math.max(0L, now - noProgressStartNanos));
-        }
-
-        private void update(long pushedOffset, long highWatermark, long now) {
-            if (pushedOffset >= highWatermark) {
-                highestPushedOffset = Math.max(highestPushedOffset, pushedOffset);
-                noProgressStartNanos = NOT_TRACKING;
-                return;
-            }
-
-            if (noProgressStartNanos == NOT_TRACKING || pushedOffset > highestPushedOffset) {
-                noProgressStartNanos = now;
-            }
-            highestPushedOffset = Math.max(highestPushedOffset, pushedOffset);
         }
     }
 

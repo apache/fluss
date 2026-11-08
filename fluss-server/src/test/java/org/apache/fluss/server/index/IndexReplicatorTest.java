@@ -572,7 +572,6 @@ class IndexReplicatorTest {
                         () ->
                                 assertThat(metrics.indexReplicationRetries().getCount())
                                         .isGreaterThan(retries));
-                assertThat(metrics.indexReplicationFailures().getCount()).isGreaterThanOrEqualTo(2);
                 assertThat(stalled.poll()).isFalse();
                 assertThat(buffer.pendingBytes()).isZero();
                 assertThat(stalled.poll()).isFalse();
@@ -709,20 +708,36 @@ class IndexReplicatorTest {
                         };
         ManualClock clock = new ManualClock();
         IndexSendBuffer buffer = new IndexSendBuffer();
+        TabletServerMetricGroup metrics =
+                new TabletServerMetricGroup(NOPMetricRegistry.INSTANCE, "test", "rack", "host", 0);
+        IndexReplicationScheduler scheduler = new IndexReplicationScheduler(8);
         try (IndexReplicator replicator =
-                replicator(
+                new IndexReplicator(
                         new IndexSourceReader(log, fetcher, Runnable::run),
+                        Collections.singletonList(indexEncoder("idx", 2L, new AtomicInteger())),
                         buffer,
+                        LogRecordReadContext.createIndexedReadContext(rowType, 1, null),
+                        0L,
+                        1024,
+                        (sync, all) -> {},
+                        scheduler,
+                        () -> {},
+                        new ExponentialBackoff(10, 2, 100, 0),
                         clock,
-                        Collections.singletonList(indexEncoder("idx", 2L, new AtomicInteger())))) {
+                        metrics,
+                        ConfigOptions.NETTY_SERVER_MAX_REQUEST_SIZE.defaultValue().getBytes())) {
+            scheduler.register(0, replicator);
             assertThat(replicator.poll()).isTrue();
             assertThat(replicator.hasFailure()).isTrue();
             assertThat(reads).hasValue(1);
+            assertThat(metrics.indexReplicationRetries().getCount()).isEqualTo(1);
             assertThat(replicator.poll()).isFalse();
             assertThat(reads).hasValue(1);
+            assertThat(metrics.indexReplicationRetries().getCount()).isEqualTo(1);
             clock.advanceTime(10, TimeUnit.MILLISECONDS);
             assertThat(replicator.poll()).isTrue();
             assertThat(reads).hasValue(2);
+            assertThat(metrics.indexReplicationRetries().getCount()).isEqualTo(2);
             assertThat(replicator.getAllIndexPushedOffset()).isZero();
             assertThat(replicator.getSyncIndexPushedOffset()).isZero();
             assertThat(buffer.buckets()).isEmpty();
@@ -731,6 +746,7 @@ class IndexReplicatorTest {
             clock.advanceTime(20, TimeUnit.MILLISECONDS);
             assertThat(replicator.poll()).isTrue();
             assertThat(reads).hasValue(3);
+            assertThat(metrics.indexReplicationRetries().getCount()).isEqualTo(2);
             assertThat(replicator.getAllIndexPushedOffset()).isZero();
             acknowledge(buffer, new TableBucket(2L, 0));
             assertThat(replicator.getAllIndexPushedOffset()).isEqualTo(2L);

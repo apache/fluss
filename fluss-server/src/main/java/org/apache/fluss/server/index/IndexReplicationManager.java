@@ -142,7 +142,12 @@ public final class IndexReplicationManager implements AutoCloseable {
     public IndexReplicationSupervisor createSupervisor(
             TableInfo tableInfo, TableBucket tableBucket) {
         return new IndexReplicationSupervisor(
-                tableInfo, tableBucket, metadataCache, metadataProvider, this);
+                tableInfo,
+                tableBucket,
+                metadataCache,
+                metadataProvider,
+                this,
+                metrics.indexReplicationRetries());
     }
 
     /**
@@ -156,7 +161,7 @@ public final class IndexReplicationManager implements AutoCloseable {
             long replayStartOffset,
             IndexProgressListener onProgress) {
         return new IndexReplicator(
-                new IndexSourceReader(log, remoteLogManager, remoteReadExecutor, metrics),
+                new IndexSourceReader(log, remoteLogManager, remoteReadExecutor),
                 indexes,
                 sendBuffer,
                 readContext,
@@ -182,9 +187,9 @@ public final class IndexReplicationManager implements AutoCloseable {
         scheduler.unregister(workerFor(replicator.sourceBucket()).workerId, replicator);
     }
 
-    /** Retained payload page bytes across construction, queued and in-flight windows. */
-    public long pendingBytes() {
-        return sendBuffer.pendingBytes();
+    /** Charged payload page bytes across construction, queued and in-flight windows / capacity. */
+    public double bufferUsageRatio() {
+        return (double) sendBuffer.pendingBytes() / sendBuffer.capacityBytes();
     }
 
     @VisibleForTesting

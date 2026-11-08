@@ -353,9 +353,22 @@ public class ReplicaManager implements ServerReconfigurable {
                         serverMetricGroup);
         this.indexReplicationGaugeRegistration =
                 serverMetricGroup.registerIndexReplicationGauges(
-                        indexReplicationManager::pendingBytes,
-                        this::maxIndexReplicationNoProgressTimeMs,
-                        this::failedIndexReplicationSourceBucketCount);
+                        indexReplicationManager::bufferUsageRatio,
+                        () ->
+                                indexReplicationLags()
+                                        .mapToLong(IndexReplicationLag::lagOffsets)
+                                        .max()
+                                        .orElse(0L),
+                        () ->
+                                indexReplicationLags()
+                                        .mapToLong(IndexReplicationLag::syncLagOffsets)
+                                        .max()
+                                        .orElse(0L),
+                        () ->
+                                indexReplicationLags()
+                                        .mapToLong(IndexReplicationLag::noProgressTimeMs)
+                                        .max()
+                                        .orElse(0L));
 
         this.highWatermarkCheckpoints = new HashMap<>();
         for (File dataDir : localDiskManager.dataDirs()) {
@@ -584,19 +597,8 @@ public class ReplicaManager implements ServerReconfigurable {
         return onlineReplicas().filter(Replica::isAtMinIsr).count();
     }
 
-    private long failedIndexReplicationSourceBucketCount() {
-        return onlineReplicas()
-                .filter(Replica::isLeader)
-                .filter(replica -> replica.getIndexReplicationSupervisor().hasFailure())
-                .count();
-    }
-
-    private long maxIndexReplicationNoProgressTimeMs() {
-        return onlineReplicas()
-                .filter(Replica::isLeader)
-                .mapToLong(replica -> replica.getIndexReplicationSupervisor().noProgressTimeMs())
-                .max()
-                .orElse(0L);
+    private Stream<IndexReplicationLag> indexReplicationLags() {
+        return onlineReplicas().map(Replica::indexReplicationLag).filter(lag -> lag != null);
     }
 
     @VisibleForTesting
@@ -2470,6 +2472,10 @@ public class ReplicaManager implements ServerReconfigurable {
         // Shrink ISRs for non-offline replicas.
         for (Replica replica : getOnlineReplicaList()) {
             replica.maybeShrinkIsr();
+            IndexReplicationLag lag = replica.indexReplicationLag();
+            if (lag != null) {
+                lag.logIfStalled();
+            }
         }
     }
 
