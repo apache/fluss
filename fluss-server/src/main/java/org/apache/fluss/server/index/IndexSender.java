@@ -406,8 +406,14 @@ public final class IndexSender implements AutoCloseable {
                 if (leaderOpt.isPresent()) {
                     int leader = leaderOpt.getAsInt();
                     byServer.computeIfAbsent(leader, k -> new ArrayList<>()).add(batch);
-                } else {
-                    retryClaimedBatch(batch);
+                } else if (retryClaimedBatch(batch) && batch.attempts() == 1) {
+                    // Reuse the batch's retry history to avoid logging every metadata retry.
+                    LOG.warn(
+                            "No leader available for index target {} from source {} at source "
+                                    + "end offset {}. Retrying with backoff",
+                            tb,
+                            batch.sourceBucket(),
+                            batch.sourceEndOffset());
                 }
             }
 
@@ -841,7 +847,7 @@ public final class IndexSender implements AutoCloseable {
         applyBatchActions(actions);
     }
 
-    private void retryClaimedBatch(IndexBatch batch) {
+    private boolean retryClaimedBatch(IndexBatch batch) {
         List<BatchAction> actions = new ArrayList<>();
         lifecycleLock.lock();
         try {
@@ -850,6 +856,9 @@ public final class IndexSender implements AutoCloseable {
             lifecycleLock.unlock();
         }
         applyBatchActions(actions);
+        return !actions.isEmpty()
+                && actions.get(0).disposition == BatchDisposition.REQUEUE
+                && actions.get(0).transitioned;
     }
 
     private void addBatchActionsLocked(

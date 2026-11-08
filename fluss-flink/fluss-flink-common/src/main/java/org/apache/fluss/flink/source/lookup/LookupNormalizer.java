@@ -33,6 +33,8 @@ import org.apache.flink.table.data.StringData;
 import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.LogicalTypeRoot;
 import org.apache.flink.table.types.logical.RowType;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
@@ -61,6 +63,8 @@ import static org.apache.fluss.utils.Preconditions.checkState;
 public class LookupNormalizer implements Serializable {
 
     private static final long serialVersionUID = 1L;
+
+    private static final Logger LOG = LoggerFactory.getLogger(LookupNormalizer.class);
 
     /** Mapping from normalized key index to the lookup key index (in the lookup row). */
     @Nullable private final FieldGetter[] normalizedKeyGetters;
@@ -119,23 +123,33 @@ public class LookupNormalizer implements Serializable {
     }
 
     Lookuper createLookuper(Table table, RowType flinkRowType, boolean insertIfNotExists) {
+        List<String> lookupColumns =
+                FlinkUtils.projectRowType(flinkRowType, lookupKeyIndexes).getFieldNames();
         if (lookupType == LookupType.SECONDARY_INDEX_LOOKUP) {
-            RowType lookupKeyRowType = FlinkUtils.projectRowType(flinkRowType, lookupKeyIndexes);
-            List<String> lookupColumns = lookupKeyRowType.getFieldNames();
             String indexName =
                     LookupNormalizer.findMatchingSecondaryIndexName(
                             table.getTableInfo().getSchema(), lookupColumns);
-            return table.getSecondaryIndexLookuper(indexName);
+            Lookuper lookuper = table.getSecondaryIndexLookuper(indexName);
+            LOG.info(
+                    "Created secondary-index lookup for table {} on columns {} using index {}",
+                    table.getTableInfo().getTablePath(),
+                    lookupColumns,
+                    indexName);
+            return lookuper;
         } else {
             Lookup lookup = table.newLookup();
             if (lookupType == LookupType.PREFIX_LOOKUP) {
-                RowType lookupKeyRowType =
-                        FlinkUtils.projectRowType(flinkRowType, lookupKeyIndexes);
-                lookup = lookup.lookupBy(lookupKeyRowType.getFieldNames());
+                lookup = lookup.lookupBy(lookupColumns);
             } else if (insertIfNotExists) {
                 lookup = lookup.enableInsertIfNotExists();
             }
-            return lookup.createLookuper();
+            Lookuper lookuper = lookup.createLookuper();
+            LOG.info(
+                    "Created {} lookup for table {} on columns {}",
+                    lookupType == LookupType.PREFIX_LOOKUP ? "prefix" : "primary-key",
+                    table.getTableInfo().getTablePath(),
+                    lookupColumns);
+            return lookuper;
         }
     }
 
