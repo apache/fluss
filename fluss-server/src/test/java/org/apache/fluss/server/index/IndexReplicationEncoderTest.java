@@ -41,8 +41,8 @@ import static org.apache.fluss.row.BinaryString.fromString;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** Tests for {@link IndexSpecFactory}. */
-class IndexSpecFactoryTest {
+/** Tests for {@link IndexReplicationEncoder}. */
+class IndexReplicationEncoderTest {
 
     private static final TablePath MAIN_PATH = TablePath.of("db", "main");
     private static final TablePath INDEX_PATH =
@@ -57,18 +57,18 @@ class IndexSpecFactoryTest {
                         original, 1L, original.getSchema().getIndexes().get(0));
         TabletServerMetadataCache cache = indexCache(index);
         TableBucket source = new TableBucket(1L, 10L, 0);
-        IndexSpec before =
-                IndexSpecFactory.buildIndexSpecs(tableInfo(MAIN_PATH, 1L, original), source, cache)
+        IndexReplicationEncoder before =
+                IndexReplicationEncoder.createAll(tableInfo(MAIN_PATH, 1L, original), source, cache)
                         .get(0);
         TableDescriptor rescaled = TableDescriptor.builder(original).distributedBy(5, "id").build();
-        IndexSpec after =
-                IndexSpecFactory.buildIndexSpecs(tableInfo(MAIN_PATH, 1L, rescaled), source, cache)
+        IndexReplicationEncoder after =
+                IndexReplicationEncoder.createAll(tableInfo(MAIN_PATH, 1L, rescaled), source, cache)
                         .get(0);
 
         for (int id = 0; id < 20; id++) {
             GenericRow row = GenericRow.of(id, fromString("name" + id), fromString("p"));
-            IndexSpec.IndexEntry expected = before.encodeEntry(row);
-            IndexSpec.IndexEntry actual = after.encodeEntry(row);
+            IndexReplicationEncoder.IndexEntry expected = before.encodeDataEntry(row);
+            IndexReplicationEncoder.IndexEntry actual = after.encodeDataEntry(row);
             assertThat(actual.targetBucket()).isEqualTo(expected.targetBucket());
             assertThat(actual.key()).isEqualTo(expected.key());
         }
@@ -87,7 +87,7 @@ class IndexSpecFactoryTest {
 
         assertThatThrownBy(
                         () ->
-                                IndexSpecFactory.buildIndexSpecs(
+                                IndexReplicationEncoder.createAll(
                                         tableInfo(MAIN_PATH, 1L, main),
                                         new TableBucket(1L, 10L, 0),
                                         cache))

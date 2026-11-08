@@ -220,9 +220,10 @@ public final class IndexReplicationSupervisor {
                                     index.getIndexName())));
         }
 
-        List<IndexSpec> indexSpecs;
+        List<IndexReplicationEncoder> indexEncoders;
         try {
-            indexSpecs = IndexSpecFactory.buildIndexSpecs(tableInfo, tableBucket, metadataCache);
+            indexEncoders =
+                    IndexReplicationEncoder.createAll(tableInfo, tableBucket, metadataCache);
         } catch (IllegalStateException initialFailure) {
             if (metadataProvider == null) {
                 deferIndexReplication(initialFailure);
@@ -230,8 +231,8 @@ public final class IndexReplicationSupervisor {
             }
             try {
                 metadataProvider.getTablesMetadataFromZK(indexTablePaths);
-                indexSpecs =
-                        IndexSpecFactory.buildIndexSpecs(tableInfo, tableBucket, metadataCache);
+                indexEncoders =
+                        IndexReplicationEncoder.createAll(tableInfo, tableBucket, metadataCache);
             } catch (RuntimeException refreshFailure) {
                 deferIndexReplication(refreshFailure);
                 return;
@@ -242,7 +243,7 @@ public final class IndexReplicationSupervisor {
                         tableInfo, false, SchemaResolution.DYNAMIC, null, schemaGetter, null);
         IndexReplicator replicator =
                 manager.createReplicator(
-                        logTablet, indexSpecs, readContext, replayStartOffset, onProgress);
+                        logTablet, indexEncoders, readContext, replayStartOffset, onProgress);
         // Register with the read pool; the pool worker will catch up on any WAL entries already
         // committed before this replicator was created.
         installIndexReplicator(replicator);

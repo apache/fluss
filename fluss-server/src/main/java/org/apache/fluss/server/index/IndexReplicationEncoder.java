@@ -23,6 +23,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.metadata.ChangelogImage;
+import org.apache.fluss.metadata.IndexVisibility;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.Schema;
@@ -31,6 +32,7 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.BinaryRow;
+import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.CompactedKeyEncoder;
 import org.apache.fluss.row.encode.RowEncoder;
@@ -41,6 +43,7 @@ import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.IndexTableUtils;
 
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.NotThreadSafe;
 
 import java.nio.ByteBuffer;
@@ -53,31 +56,84 @@ import java.util.Set;
 import static org.apache.fluss.utils.IndexTableUtils.DATA_RECORD_KIND;
 import static org.apache.fluss.utils.IndexTableUtils.PROGRESS_RECORD_KIND;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /**
- * Factory for building {@link IndexSpec} instances from main-table metadata and the server-side
- * metadata cache.
+ * Encodes DATA and PROGRESS records for one secondary index of one source bucket.
  *
- * <p>Caller contract: the {@link IndexSpec.EntryEncoder} and {@link IndexSpec.ProgressEncoder}
- * instances produced by this factory are {@link NotThreadSafe} because they share mutable {@link
- * RowEncoder}s. The caller (typically {@link IndexReplicator}) must guarantee single-threaded
- * invocation.
+ * <p>Owned by one source replicator. Encoding calls must be serialized because encoders reuse
+ * mutable row storage; encoded values are borrowed until the next encoding call.
  */
 @Internal
-final class IndexSpecFactory {
-
-    private IndexSpecFactory() {}
+@NotThreadSafe
+final class IndexReplicationEncoder {
 
     /**
-     * Builds the list of {@link IndexSpec}s for every secondary index declared on the main table.
+     * Encodes one complete physical Index Table entry from a base row. Encoders may reuse storage
+     * for entry values between calls, but each returned key and target bucket must remain stable.
+     */
+    @FunctionalInterface
+    interface DataEntryEncoder {
+        IndexEntry encode(InternalRow row);
+    }
+
+    /** Encodes the bound source bucket's durable progress record for one target bucket. */
+    @FunctionalInterface
+    interface ProgressEncoder {
+        IndexEntry encode(int targetBucket, long sourceEndOffset);
+    }
+
+    /**
+     * One encoded physical Index Table entry. The key and target bucket remain stable. The value
+     * may be backed by a reusable row encoder and is valid only until the next {@link
+     * IndexReplicationEncoder#encodeDataEntry(InternalRow)} or {@link
+     * IndexReplicationEncoder#encodeProgress(int, long)} call on the same encoder.
+     */
+    static final class IndexEntry {
+        private final byte[] key;
+        private final BinaryRow value;
+        private final int targetBucket;
+
+        IndexEntry(byte[] key, BinaryRow value, int targetBucket) {
+            this.key = checkNotNull(key, "key");
+            this.value = checkNotNull(value, "value");
+            this.targetBucket = targetBucket;
+        }
+
+        byte[] key() {
+            return key;
+        }
+
+        /** Returns the encoder-backed value, which must be consumed before the next encode call. */
+        BinaryRow value() {
+            return value;
+        }
+
+        int targetBucket() {
+            return targetBucket;
+        }
+    }
+
+    private final long indexTableId;
+    private final String indexName;
+    private final IndexVisibility visibility;
+    private final int indexSchemaId;
+    private final KvFormat indexKvFormat;
+    private final int[] idxColumnIndices;
+    private final DataEntryEncoder dataEncoder;
+    private final ProgressEncoder progressEncoder;
+
+    /**
+     * Builds the list of {@link IndexReplicationEncoder}s for every secondary index declared on the
+     * main table.
      *
      * @param mainTableInfo the main (data) table's info
      * @param mainTableBucket the bucket of the main table replica that will drive the replicators
      * @param metadataCache server-wide metadata cache for resolving index-table IDs and bucket
      *     counts
-     * @return an unmodifiable list of specs; empty if the main table has no indexes
+     * @return an unmodifiable list of encoders; empty if the main table has no indexes
      */
-    static List<IndexSpec> buildIndexSpecs(
+    static List<IndexReplicationEncoder> createAll(
             TableInfo mainTableInfo,
             TableBucket mainTableBucket,
             TabletServerMetadataCache metadataCache) {
@@ -89,44 +145,92 @@ final class IndexSpecFactory {
         }
 
         int[] basePkColumnIndices = schema.getPrimaryKeyIndexes();
-        boolean partitioned = mainTableInfo.isPartitioned();
-        RowType mainRowType = mainTableInfo.getRowType();
-
-        Long partitionId = partitioned ? mainTableBucket.getPartitionId() : null;
-
-        List<IndexSpec> specs = new ArrayList<>(indexes.size());
+        List<IndexReplicationEncoder> encoders = new ArrayList<>(indexes.size());
         for (Schema.Index index : indexes) {
-            specs.add(
-                    buildOneSpec(
+            encoders.add(
+                    createEncoder(
                             index,
-                            schema,
                             mainTableInfo,
-                            mainRowType,
+                            mainTableBucket,
                             basePkColumnIndices,
-                            partitioned,
-                            partitionId,
                             metadataCache));
         }
-        return Collections.unmodifiableList(specs);
+        return Collections.unmodifiableList(encoders);
     }
 
-    // ---- internal helpers ----
+    IndexReplicationEncoder(
+            String indexName,
+            IndexVisibility visibility,
+            long indexTableId,
+            int indexSchemaId,
+            KvFormat indexKvFormat,
+            int[] idxColumnIndices,
+            DataEntryEncoder dataEncoder,
+            ProgressEncoder progressEncoder) {
+        this.indexName = checkNotNull(indexName, "indexName");
+        this.visibility = checkNotNull(visibility, "visibility");
+        this.indexTableId = indexTableId;
+        this.indexSchemaId = indexSchemaId;
+        this.indexKvFormat = indexKvFormat;
+        this.idxColumnIndices = checkNotNull(idxColumnIndices, "idxColumnIndices").clone();
+        checkArgument(idxColumnIndices.length > 0, "idxColumnIndices must not be empty.");
+        this.dataEncoder = checkNotNull(dataEncoder, "dataEncoder");
+        this.progressEncoder = checkNotNull(progressEncoder, "progressEncoder");
+    }
 
-    private static IndexSpec buildOneSpec(
+    long getIndexTableId() {
+        return indexTableId;
+    }
+
+    String getIndexName() {
+        return indexName;
+    }
+
+    boolean isSync() {
+        return visibility == IndexVisibility.SYNC;
+    }
+
+    int getIndexSchemaId() {
+        return indexSchemaId;
+    }
+
+    KvFormat getIndexKvFormat() {
+        return indexKvFormat;
+    }
+
+    /** Returns no DATA entry when any indexed column is null. */
+    @Nullable
+    IndexEntry encodeDataEntry(InternalRow row) {
+        for (int idxColumnIndex : idxColumnIndices) {
+            if (row.isNullAt(idxColumnIndex)) {
+                return null;
+            }
+        }
+        return dataEncoder.encode(row);
+    }
+
+    IndexEntry encodeProgress(int targetBucket, long sourceEndOffset) {
+        return progressEncoder.encode(targetBucket, sourceEndOffset);
+    }
+
+    private static IndexReplicationEncoder createEncoder(
             Schema.Index index,
-            Schema schema,
             TableInfo mainTableInfo,
-            RowType mainRowType,
+            TableBucket sourceBucket,
             int[] basePkColumnIndices,
-            boolean partitioned,
-            Long partitionId,
             TabletServerMetadataCache metadataCache) {
+        Schema schema = mainTableInfo.getSchema();
+        RowType mainRowType = mainTableInfo.getRowType();
+        boolean partitioned = mainTableInfo.isPartitioned();
+        Long partitionId = sourceBucket.getPartitionId();
+        checkArgument(
+                partitioned == (partitionId != null),
+                "Source bucket partition identity must match the main table");
 
         int[] idxColumnIndices = schema.getColumnIndexes(index.getColumnNames());
         int[] indexValueColumnIndices =
                 composeIndexValueColumnIndices(idxColumnIndices, basePkColumnIndices);
 
-        String indexName = index.getIndexName();
         TableInfo indexTable = resolveIndexTable(mainTableInfo, index, metadataCache);
         long indexTableId = indexTable.getTableId();
         int indexBucketCount = indexTable.getNumBuckets();
@@ -151,18 +255,9 @@ final class IndexSpecFactory {
         }
 
         KvFormat indexKvFormat = KvFormat.COMPACTED;
-        RowEncoder identityRowEncoder = RowEncoder.create(indexKvFormat, identityFieldTypes);
-        int[] identityIndices = new int[totalColCount];
-        for (int i = 0; i < totalColCount; i++) {
-            identityIndices[i] = i;
-        }
-        RowType identityRowType = RowType.of(identityFieldTypes);
         CompactedKeyEncoder identityKeyEncoder =
-                new CompactedKeyEncoder(identityRowType, identityIndices);
-        InternalRow.FieldGetter[] identityGetters = new InternalRow.FieldGetter[totalColCount];
-        for (int i = 0; i < totalColCount; i++) {
-            identityGetters[i] = InternalRow.createFieldGetter(identityFieldTypes[i], i);
-        }
+                new CompactedKeyEncoder(RowType.of(identityFieldTypes));
+        GenericRow identity = new GenericRow(totalColCount);
 
         int recordKindPosition = totalColCount;
         int routingKeyPosition = totalColCount + 1;
@@ -192,39 +287,44 @@ final class IndexSpecFactory {
         CompactedKeyEncoder physicalBucketKeyEncoder =
                 new CompactedKeyEncoder(
                         physicalRowType, new int[] {recordKindPosition, routingKeyPosition});
-        IndexSpec.EntryEncoder entryEncoder =
+        DataEntryEncoder dataEncoder =
                 row -> {
-                    identityRowEncoder.startNewRow();
-                    for (int i = 0; i < valueFieldGetters.length; i++) {
-                        identityRowEncoder.encodeField(i, valueFieldGetters[i].getFieldOrNull(row));
+                    try {
+                        for (int i = 0; i < valueFieldGetters.length; i++) {
+                            identity.setField(i, valueFieldGetters[i].getFieldOrNull(row));
+                        }
+                        if (partitioned) {
+                            identity.setField(storedColCount, partitionId);
+                        }
+                        byte[] routingKey = logicalIndexKeyEncoder.encodeKey(row);
+                        byte[] rowKey = identityKeyEncoder.encodeKey(identity);
+                        physicalRowEncoder.startNewRow();
+                        for (int i = 0; i < totalColCount; i++) {
+                            physicalRowEncoder.encodeField(i, identity.getField(i));
+                        }
+                        physicalRowEncoder.encodeField(recordKindPosition, DATA_RECORD_KIND);
+                        physicalRowEncoder.encodeField(routingKeyPosition, routingKey);
+                        physicalRowEncoder.encodeField(rowKeyPosition, rowKey);
+                        physicalRowEncoder.encodeField(sourceProgressPosition, null);
+                        BinaryRow value = physicalRowEncoder.finishRow();
+                        int targetBucket =
+                                bucketingFunction.bucketing(
+                                        physicalBucketKeyEncoder.encodeKey(value),
+                                        indexBucketCount);
+                        return new IndexReplicationEncoder.IndexEntry(
+                                physicalKeyEncoder.encodeKey(value), value, targetBucket);
+                    } finally {
+                        // Source fields may reference WAL pages; do not retain them between calls.
+                        for (int i = 0; i < totalColCount; i++) {
+                            identity.setField(i, null);
+                        }
                     }
-                    if (partitioned) {
-                        identityRowEncoder.encodeField(storedColCount, partitionId);
-                    }
-                    BinaryRow identity = identityRowEncoder.finishRow();
-                    byte[] routingKey = logicalIndexKeyEncoder.encodeKey(row);
-                    byte[] rowKey = identityKeyEncoder.encodeKey(identity);
-
-                    physicalRowEncoder.startNewRow();
-                    for (int i = 0; i < totalColCount; i++) {
-                        physicalRowEncoder.encodeField(
-                                i, identityGetters[i].getFieldOrNull(identity));
-                    }
-                    physicalRowEncoder.encodeField(recordKindPosition, DATA_RECORD_KIND);
-                    physicalRowEncoder.encodeField(routingKeyPosition, routingKey);
-                    physicalRowEncoder.encodeField(rowKeyPosition, rowKey);
-                    physicalRowEncoder.encodeField(sourceProgressPosition, null);
-                    BinaryRow value = physicalRowEncoder.finishRow();
-                    int targetBucket =
-                            bucketingFunction.bucketing(
-                                    physicalBucketKeyEncoder.encodeKey(value), indexBucketCount);
-                    return new IndexSpec.IndexEntry(
-                            physicalKeyEncoder.encodeKey(value), value, targetBucket);
                 };
 
+        byte[] sourceIdentity = encodeSourceBucket(sourceBucket);
         ByteBuffer progressRoutingKey = ByteBuffer.allocate(Integer.BYTES);
-        IndexSpec.ProgressEncoder progressEncoder =
-                (sourceBucket, targetBucket, sourceEndOffset) -> {
+        ProgressEncoder progressEncoder =
+                (targetBucket, sourceEndOffset) -> {
                     checkArgument(
                             targetBucket >= 0 && targetBucket < indexBucketCount,
                             "Invalid target Index Table bucket %s",
@@ -234,36 +334,27 @@ final class IndexSpecFactory {
                         physicalRowEncoder.encodeField(i, null);
                     }
                     if (partitioned) {
-                        checkArgument(
-                                sourceBucket.getPartitionId() != null,
-                                "Partitioned source bucket must contain partition ID");
-                        physicalRowEncoder.encodeField(
-                                storedColCount, sourceBucket.getPartitionId());
-                    } else {
-                        checkArgument(
-                                sourceBucket.getPartitionId() == null,
-                                "Unpartitioned source bucket must not contain partition ID");
+                        physicalRowEncoder.encodeField(storedColCount, partitionId);
                     }
                     physicalRowEncoder.encodeField(recordKindPosition, PROGRESS_RECORD_KIND);
                     // The row encoder copies the bytes before this buffer is reused.
                     physicalRowEncoder.encodeField(
                             routingKeyPosition, progressRoutingKey.putInt(0, targetBucket).array());
-                    physicalRowEncoder.encodeField(
-                            rowKeyPosition, encodeSourceBucket(sourceBucket));
+                    physicalRowEncoder.encodeField(rowKeyPosition, sourceIdentity);
                     physicalRowEncoder.encodeField(sourceProgressPosition, sourceEndOffset);
                     BinaryRow value = physicalRowEncoder.finishRow();
-                    return new IndexSpec.IndexEntry(
+                    return new IndexReplicationEncoder.IndexEntry(
                             physicalKeyEncoder.encodeKey(value), value, targetBucket);
                 };
 
-        return new IndexSpec(
+        return new IndexReplicationEncoder(
                 index.getIndexName(),
                 index.getVisibility(),
                 indexTableId,
                 indexSchemaId,
                 indexKvFormat,
                 idxColumnIndices,
-                entryEncoder,
+                dataEncoder,
                 progressEncoder);
     }
 
@@ -284,7 +375,8 @@ final class IndexSpecFactory {
     /**
      * Compose index-value column indices: idx columns followed by base-PK columns, deduplicated.
      */
-    static int[] composeIndexValueColumnIndices(int[] idxColumnIndices, int[] basePkColumnIndices) {
+    private static int[] composeIndexValueColumnIndices(
+            int[] idxColumnIndices, int[] basePkColumnIndices) {
         Set<Integer> seen = new HashSet<>();
         int[] tmp = new int[idxColumnIndices.length + basePkColumnIndices.length];
         int len = 0;

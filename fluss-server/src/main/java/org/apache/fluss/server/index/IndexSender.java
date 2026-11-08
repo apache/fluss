@@ -39,7 +39,6 @@ import javax.annotation.concurrent.ThreadSafe;
 
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -110,7 +109,6 @@ public final class IndexSender implements AutoCloseable {
     private final ReentrantLock lifecycleLock = new ReentrantLock();
     private final Condition lifecycleDrained = lifecycleLock.newCondition();
     private final Map<Integer, TargetContext> targetsByServer = new HashMap<>();
-    private final Set<Integer> creatingTargets = new HashSet<>();
     private volatile LifecyclePhase lifecyclePhase = LifecyclePhase.OPEN;
     private int outstandingAsyncOperations;
 
@@ -119,7 +117,7 @@ public final class IndexSender implements AutoCloseable {
      *
      * @param sendBuffer shared buffer of index batches awaiting delivery
      * @param leaderResolver resolver for target index-bucket leaders
-     * @param gatewayFactory factory for tablet-server gateways
+     * @param gatewayFactory factory for non-owning tablet-server gateway proxies
      * @param metrics tablet-server metrics updated by the sender
      * @param numWorkers number of sender workers
      * @param backoffMs idle-worker backoff in milliseconds
@@ -200,7 +198,6 @@ public final class IndexSender implements AutoCloseable {
             }
             lifecyclePhase = LifecyclePhase.CLOSING;
             targetsByServer.clear();
-            creatingTargets.clear();
         } finally {
             lifecycleLock.unlock();
         }
@@ -428,71 +425,45 @@ public final class IndexSender implements AutoCloseable {
             if (batches.isEmpty()) {
                 return;
             }
-            TargetContext target = null;
-            boolean createTarget = false;
-            boolean dispatch = false;
-            List<BatchAction> actions = new ArrayList<>();
-            lifecycleLock.lock();
-            try {
-                if (lifecyclePhase != LifecyclePhase.OPEN) {
-                    addBatchActionsLocked(actions, batches, BatchDisposition.RELEASE);
-                } else {
-                    target = targetsByServer.get(serverId);
-                    if (target == null) {
-                        if (creatingTargets.add(serverId)) {
-                            createTarget = true;
-                        } else {
-                            addBatchActionsLocked(actions, batches, BatchDisposition.REQUEUE);
-                        }
-                    } else {
-                        dispatch = true;
-                    }
-                }
-            } finally {
-                lifecycleLock.unlock();
-            }
-            applyBatchActions(actions);
-
-            if (createTarget) {
-                createTargetAndDispatch(serverId, batches);
-                return;
-            }
-            if (dispatch) {
+            TargetContext target = targetFor(serverId);
+            if (target == null) {
+                retryClaimedBatches(batches);
+            } else {
                 dispatchIfCurrent(target, batches);
             }
         }
 
-        private void createTargetAndDispatch(int serverId, List<IndexBatch> batches) {
-            TabletServerGateway gateway = null;
-            Throwable failure = null;
-            try {
-                gateway = gatewayFactory.apply(serverId);
-            } catch (Throwable t) {
-                failure = t;
-            }
-            boolean leadersCurrent = failure == null && leadersMatch(serverId, batches);
-            TargetContext target = null;
-            List<BatchAction> actions = new ArrayList<>();
+        @Nullable
+        private TargetContext targetFor(int serverId) {
             lifecycleLock.lock();
             try {
-                creatingTargets.remove(serverId);
                 if (lifecyclePhase != LifecyclePhase.OPEN) {
-                    addBatchActionsLocked(actions, batches, BatchDisposition.RELEASE);
-                } else if (failure != null || gateway == null || !leadersCurrent) {
-                    addBatchActionsLocked(actions, batches, BatchDisposition.REQUEUE);
-                } else {
-                    target = new TargetContext(serverId, gateway);
-                    targetsByServer.put(serverId, target);
+                    return null;
+                }
+                TargetContext cached = targetsByServer.get(serverId);
+                if (cached != null) {
+                    return cached;
                 }
             } finally {
                 lifecycleLock.unlock();
             }
-            if (failure != null) {
+            final TabletServerGateway gateway;
+            try {
+                gateway = gatewayFactory.apply(serverId);
+            } catch (Throwable failure) {
                 LOG.warn("Failed to get gateway for server {}, re-enqueuing", serverId, failure);
+                return null;
             }
-            applyBatchActions(actions);
-            if (target != null) {
-                dispatchIfCurrent(target, batches);
+            // Proxies share the RPC client; a concurrent cache miss may discard this local proxy.
+            lifecycleLock.lock();
+            try {
+                if (lifecyclePhase != LifecyclePhase.OPEN || gateway == null) {
+                    return null;
+                }
+                return targetsByServer.computeIfAbsent(
+                        serverId, ignored -> new TargetContext(serverId, gateway));
+            } finally {
+                lifecycleLock.unlock();
             }
         }
 
@@ -535,24 +506,20 @@ public final class IndexSender implements AutoCloseable {
             PutIndexRequest request =
                     IndexRequestFactory.build(tableId, requestBatches, requestTimeoutMs);
             boolean leadersCurrent = leadersMatch(target.serverId, requestBatches);
-            List<BatchAction> actions = new ArrayList<>();
             boolean registered = false;
             lifecycleLock.lock();
             try {
                 if (!targetIsCurrentLocked(target) || !leadersCurrent) {
                     invalidateTargetLocked(target);
-                    addBatchActionsLocked(actions, requestBatches, BatchDisposition.REQUEUE);
-                } else if (!batchesActiveAndClaimed(requestBatches)) {
-                    addBatchActionsLocked(actions, requestBatches, BatchDisposition.REQUEUE);
-                } else {
+                } else if (batchesActiveAndClaimed(requestBatches)) {
                     registerAsyncOperationLocked();
                     registered = true;
                 }
             } finally {
                 lifecycleLock.unlock();
             }
-            applyBatchActions(actions);
             if (!registered) {
+                retryClaimedBatches(requestBatches);
                 return;
             }
             long requestStartNs = System.nanoTime();
@@ -618,12 +585,12 @@ public final class IndexSender implements AutoCloseable {
                 @Nullable PutIndexResponse response,
                 @Nullable Throwable error) {
             boolean leadersCurrent = leadersMatch(target.serverId, chunk);
-            List<BatchAction> actions = new ArrayList<>();
+            boolean accepted;
             lifecycleLock.lock();
             try {
-                if (!targetIsCurrentLocked(target) || !leadersCurrent) {
+                accepted = targetIsCurrentLocked(target) && leadersCurrent;
+                if (!accepted) {
                     invalidateTargetLocked(target);
-                    addBatchActionsLocked(actions, chunk, BatchDisposition.REQUEUE);
                 } else if (error != null) {
                     invalidateTargetLocked(target);
                     metrics.indexReplicationFailures().inc(chunk.size());
@@ -637,9 +604,6 @@ public final class IndexSender implements AutoCloseable {
                                 batch.sourceEndOffset(),
                                 error);
                     }
-                    addBatchActionsLocked(actions, chunk, BatchDisposition.REQUEUE);
-                } else {
-                    addResponseActionsLocked(actions, chunk, response);
                 }
             } finally {
                 lifecycleLock.unlock();
@@ -647,7 +611,11 @@ public final class IndexSender implements AutoCloseable {
             metrics.indexReplicationRequestLatencyHistogram()
                     .update((System.nanoTime() - requestStartNs) / 1_000_000L);
             try {
-                applyBatchActionsAndNotifyWindows(actions);
+                if (accepted && error == null) {
+                    completeResponse(chunk, response);
+                } else {
+                    retryClaimedBatches(chunk);
+                }
             } finally {
                 completeAsyncOperation();
             }
@@ -706,6 +674,7 @@ public final class IndexSender implements AutoCloseable {
         }
     }
 
+    /** A cached gateway generation whose identity fences callbacks after replacement. */
     private static final class TargetContext {
         private final int serverId;
         private final TabletServerGateway gateway;
@@ -782,8 +751,8 @@ public final class IndexSender implements AutoCloseable {
      * progress and retries with backoff. During sustained failures, its window can yield the staged
      * payload and later rebuild from retained WAL.
      */
-    private void addResponseActionsLocked(
-            List<BatchAction> actions, List<IndexBatch> batches, PutIndexResponse response) {
+    private void completeResponse(List<IndexBatch> batches, PutIndexResponse response) {
+        List<IndexBatch> acknowledged = new ArrayList<>();
         Map<Integer, PbPutIndexRespForBucket> respByBucket = new HashMap<>();
         for (PbPutIndexRespForBucket bucketResp : response.getBucketsRespsList()) {
             respByBucket.put(bucketResp.getBucketId(), bucketResp);
@@ -815,9 +784,19 @@ public final class IndexSender implements AutoCloseable {
                                     ? bucketResp.getErrorMessage()
                                     : error.message());
                 }
-                addBatchActionLocked(actions, batch, BatchDisposition.REQUEUE);
+                retryOrDiscardClaim(batch);
             } else {
-                addBatchActionLocked(actions, batch, BatchDisposition.ACK);
+                boolean canAcknowledge = isOpenAndActive(batch);
+                if (sendBuffer.completeClaim(batch) && canAcknowledge) {
+                    acknowledged.add(batch);
+                }
+            }
+        }
+        // Resolve every claim before a window callback can publish more work.
+        enqueuePendingBuckets(batches);
+        for (IndexBatch batch : acknowledged) {
+            if (isOpenAndActive(batch)) {
+                batch.window().onBatchAcked();
             }
         }
     }
@@ -837,101 +816,48 @@ public final class IndexSender implements AutoCloseable {
     }
 
     private void discardClaimedBatch(IndexBatch batch) {
-        List<BatchAction> actions = new ArrayList<>(1);
-        lifecycleLock.lock();
-        try {
-            addBatchActionLocked(actions, batch, BatchDisposition.RELEASE);
-        } finally {
-            lifecycleLock.unlock();
-        }
-        applyBatchActions(actions);
+        sendBuffer.completeClaim(batch);
+        enqueuePendingBucket(batch.targetBucket());
     }
 
     private boolean retryClaimedBatch(IndexBatch batch) {
-        List<BatchAction> actions = new ArrayList<>();
-        lifecycleLock.lock();
-        try {
-            addBatchActionLocked(actions, batch, BatchDisposition.REQUEUE);
-        } finally {
-            lifecycleLock.unlock();
-        }
-        applyBatchActions(actions);
-        return !actions.isEmpty()
-                && actions.get(0).disposition == BatchDisposition.REQUEUE
-                && actions.get(0).transitioned;
+        boolean retried = retryOrDiscardClaim(batch);
+        enqueuePendingBucket(batch.targetBucket());
+        return retried;
     }
 
-    private void addBatchActionsLocked(
-            List<BatchAction> actions, List<IndexBatch> batches, BatchDisposition disposition) {
+    private void retryClaimedBatches(List<IndexBatch> batches) {
         for (IndexBatch batch : batches) {
-            addBatchActionLocked(actions, batch, disposition);
+            retryOrDiscardClaim(batch);
+        }
+        enqueuePendingBuckets(batches);
+    }
+
+    private boolean retryOrDiscardClaim(IndexBatch batch) {
+        if (!isOpenAndActive(batch)) {
+            sendBuffer.completeClaim(batch);
+            return false;
+        }
+        boolean retried = sendBuffer.retryClaim(batch);
+        if (retried) {
+            metrics.indexReplicationRetries().inc();
+        }
+        return retried;
+    }
+
+    private boolean isOpenAndActive(IndexBatch batch) {
+        return lifecyclePhase == LifecyclePhase.OPEN && batch.ownerActive();
+    }
+
+    private void enqueuePendingBuckets(List<IndexBatch> batches) {
+        for (IndexBatch batch : batches) {
+            enqueuePendingBucket(batch.targetBucket());
         }
     }
 
-    private void addBatchActionLocked(
-            List<BatchAction> actions, IndexBatch batch, BatchDisposition requestedDisposition) {
-        if (!sendBuffer.ownsClaim(batch)) {
-            return;
-        }
-        BatchDisposition disposition = requestedDisposition;
-        if (lifecyclePhase != LifecyclePhase.OPEN || !batch.ownerActive()) {
-            disposition = BatchDisposition.RELEASE;
-        }
-        actions.add(new BatchAction(batch, disposition));
-    }
-
-    private void applyBatchActions(List<BatchAction> actions) {
-        for (BatchAction action : actions) {
-            if (action.disposition == BatchDisposition.REQUEUE) {
-                IndexBatch batch = action.batch;
-                action.transitioned = sendBuffer.retryClaim(batch);
-                if (action.transitioned) {
-                    metrics.indexReplicationRetries().inc();
-                }
-            } else {
-                action.transitioned = sendBuffer.completeClaim(action.batch);
-            }
-        }
-        for (BatchAction action : actions) {
-            TableBucket bucket = action.batch.targetBucket();
-            if (sendBuffer.hasPending(bucket)) {
-                enqueueReadyBucket(bucket);
-            }
-        }
-    }
-
-    private void applyBatchActionsAndNotifyWindows(List<BatchAction> actions) {
-        applyBatchActions(actions);
-        for (BatchAction action : actions) {
-            if (action.disposition != BatchDisposition.ACK || !action.transitioned) {
-                continue;
-            }
-            lifecycleLock.lock();
-            try {
-                if (lifecyclePhase != LifecyclePhase.OPEN || !action.batch.ownerActive()) {
-                    continue;
-                }
-            } finally {
-                lifecycleLock.unlock();
-            }
-            action.batch.window().onBatchAcked();
-        }
-    }
-
-    private enum BatchDisposition {
-        ACK,
-        REQUEUE,
-        RELEASE
-    }
-
-    private static final class BatchAction {
-        private final IndexBatch batch;
-        private final BatchDisposition disposition;
-        private boolean transitioned;
-
-        private BatchAction(IndexBatch batch, BatchDisposition disposition) {
-            this.batch = batch;
-            this.disposition = disposition;
+    private void enqueuePendingBucket(TableBucket bucket) {
+        if (sendBuffer.hasPending(bucket)) {
+            enqueueReadyBucket(bucket);
         }
     }
 }

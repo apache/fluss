@@ -105,7 +105,7 @@ class IndexTargetRecoveryITCase {
         int mainLeaderId = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(mainBucket);
         TabletServerGateway mainGateway =
                 FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(mainLeaderId);
-        IndexSpec indexSpec = table.indexSpec(mainBucket);
+        IndexReplicationEncoder indexEncoder = table.indexEncoder(mainBucket);
 
         int originalLeader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(indexBucket);
         ZooKeeperClient zkClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
@@ -188,10 +188,10 @@ class IndexTargetRecoveryITCase {
                 Duration.ofMinutes(3),
                 "wait for production promotion and synchronous KV replay");
 
-        byte[] oldUpdatedKey = encodeIndexKey(indexSpec, "before-update", 1);
-        byte[] updatedKey = encodeIndexKey(indexSpec, "after-update", 1);
-        byte[] deletedKey = encodeIndexKey(indexSpec, "removed-after-snapshot", 2);
-        byte[] insertedKey = encodeIndexKey(indexSpec, "inserted-after-snapshot", 3);
+        byte[] oldUpdatedKey = encodeIndexKey(indexEncoder, "before-update", 1);
+        byte[] updatedKey = encodeIndexKey(indexEncoder, "after-update", 1);
+        byte[] deletedKey = encodeIndexKey(indexEncoder, "removed-after-snapshot", 2);
+        byte[] insertedKey = encodeIndexKey(indexEncoder, "inserted-after-snapshot", 3);
         List<ByteArraySlice> recoveredValues =
                 recoveredReplica.lookups(
                         Arrays.asList(oldUpdatedKey, updatedKey, deletedKey, insertedKey));
@@ -208,7 +208,7 @@ class IndexTargetRecoveryITCase {
         putIndexMutation(
                 promotedGateway,
                 indexTableId,
-                indexSpec,
+                indexEncoder,
                 mainBucket,
                 0,
                 expectedFence - 1,
@@ -236,8 +236,8 @@ class IndexTargetRecoveryITCase {
         return conf;
     }
 
-    private static byte[] encodeIndexKey(IndexSpec spec, String b, int a) {
-        return spec.encodeEntry(GenericRow.of(a, fromString(b))).key();
+    private static byte[] encodeIndexKey(IndexReplicationEncoder encoder, String b, int a) {
+        return encoder.encodeDataEntry(GenericRow.of(a, fromString(b))).key();
     }
 
     private static void putMainMutation(
@@ -290,17 +290,17 @@ class IndexTargetRecoveryITCase {
     private static void putIndexMutation(
             TabletServerGateway gateway,
             long indexTableId,
-            IndexSpec spec,
+            IndexReplicationEncoder encoder,
             TableBucket sourceBucket,
             int targetBucket,
             long sourceEndOffset,
             byte[] key)
             throws Exception {
-        IndexSpec.IndexEntry progress =
-                spec.encodeProgress(sourceBucket, targetBucket, sourceEndOffset);
+        IndexReplicationEncoder.IndexEntry progress =
+                encoder.encodeProgress(targetBucket, sourceEndOffset);
         IndexReplicator.BucketBatchBuilder builder =
                 new IndexReplicator.BucketBatchBuilder(
-                        (short) spec.getIndexSchemaId(), spec.getIndexKvFormat());
+                        (short) encoder.getIndexSchemaId(), encoder.getIndexKvFormat());
         builder.appendDelete(key);
         BytesView batch = builder.finish(progress.key(), progress.value());
         PutIndexRequest request =

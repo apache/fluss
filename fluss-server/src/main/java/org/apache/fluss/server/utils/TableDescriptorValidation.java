@@ -176,11 +176,11 @@ public class TableDescriptorValidation {
      * Validates that a schema evolution on a table with secondary indexes is index-safe.
      *
      * <p>The index replication pipeline extracts index columns and primary key columns by ordinal
-     * position from the main-table row (see {@code IndexSpecFactory}), so a change is index-safe
-     * iff every index column and primary key column keeps an identical name, data type and ordinal
-     * position between the old and the new schema. Changes that only touch other columns — e.g.
-     * adding a nullable column at the last position — do not affect index extraction and are
-     * allowed.
+     * position from the main-table row (see {@code IndexReplicationEncoder}), so a change is
+     * index-safe iff every index column and primary key column keeps an identical name, data type
+     * and ordinal position between the old and the new schema. Changes that only touch other
+     * columns — e.g. adding a nullable column at the last position — do not affect index extraction
+     * and are allowed.
      *
      * <p>Checking the outcome (old vs. new schema) instead of the change list keeps this rule
      * decoupled from the set of {@code TableChange} types supported by {@code SchemaUpdate}: any

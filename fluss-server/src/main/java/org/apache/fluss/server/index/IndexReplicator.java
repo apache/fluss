@@ -117,7 +117,7 @@ final class IndexReplicator implements AutoCloseable {
 
     IndexReplicator(
             IndexSourceReader sourceReader,
-            List<IndexSpec> indexSpecs,
+            List<IndexReplicationEncoder> indexEncoders,
             IndexSendBuffer sendBuffer,
             LogRecordReadContext readContext,
             long replayStartOffset,
@@ -127,7 +127,7 @@ final class IndexReplicator implements AutoCloseable {
             Runnable wakeupSignal) {
         this(
                 sourceReader,
-                indexSpecs,
+                indexEncoders,
                 sendBuffer,
                 readContext,
                 replayStartOffset,
@@ -143,7 +143,7 @@ final class IndexReplicator implements AutoCloseable {
 
     IndexReplicator(
             IndexSourceReader sourceReader,
-            List<IndexSpec> indexSpecs,
+            List<IndexReplicationEncoder> indexEncoders,
             IndexSendBuffer sendBuffer,
             LogRecordReadContext readContext,
             long replayStartOffset,
@@ -160,19 +160,19 @@ final class IndexReplicator implements AutoCloseable {
             throw new IllegalArgumentException(
                     "replayStartOffset must be non-negative, but was " + replayStartOffset);
         }
-        checkArgument(!indexSpecs.isEmpty(), "indexSpecs must not be empty");
+        checkArgument(!indexEncoders.isEmpty(), "indexEncoders must not be empty");
         this.scheduler = checkNotNull(scheduler, "scheduler");
         this.wakeupSignal = checkNotNull(wakeupSignal, "wakeupSignal");
         this.sourceReader = sourceReader;
         this.sourceRetry = new IndexReplicationRetryState(retryBackoff, clock);
-        List<IndexReplicationState> states = new ArrayList<>(indexSpecs.size());
+        List<IndexReplicationState> states = new ArrayList<>(indexEncoders.size());
         this.indexStatesByName = new LinkedHashMap<>();
-        for (IndexSpec indexSpec : indexSpecs) {
+        for (IndexReplicationEncoder indexEncoder : indexEncoders) {
             IndexReplicationState state =
-                    new IndexReplicationState(indexSpec, replayStartOffset, retryBackoff, clock);
-            if (indexStatesByName.put(indexSpec.getIndexName(), state) != null) {
+                    new IndexReplicationState(indexEncoder, replayStartOffset, retryBackoff, clock);
+            if (indexStatesByName.put(indexEncoder.getIndexName(), state) != null) {
                 throw new IllegalArgumentException(
-                        "Duplicate secondary index name: " + indexSpec.getIndexName());
+                        "Duplicate secondary index name: " + indexEncoder.getIndexName());
             }
             states.add(state);
         }
@@ -258,7 +258,8 @@ final class IndexReplicator implements AutoCloseable {
         long readOffset = group.startOffset;
         highWatermark = Math.min(highWatermark, group.endOffset);
         for (IndexReplicationState state : group.states) {
-            checkState(indexStatesByName.get(state.spec.getIndexName()) == state, "foreign index");
+            checkState(
+                    indexStatesByName.get(state.encoder.getIndexName()) == state, "foreign index");
             checkState(state.pushedOffset == readOffset, "read must start at pushed offset");
             checkState(state.inFlightWindow == null, "index already has an outstanding window");
             checkState(state.retry.remainingDelayNanos() == 0, "index is backing off");
@@ -423,10 +424,10 @@ final class IndexReplicator implements AutoCloseable {
         try {
             for (IntObjectMap.PrimitiveEntry<BucketBatchBuilder> entry : build.builders.entries()) {
                 int targetBucket = entry.key();
-                IndexSpec.IndexEntry progress;
+                IndexReplicationEncoder.IndexEntry progress;
                 BytesView encoded;
                 try {
-                    progress = state.spec.encodeProgress(sourceBucket(), targetBucket, endOffset);
+                    progress = state.encoder.encodeProgress(targetBucket, endOffset);
                     encoded = entry.value().finish(progress.key(), progress.value());
                 } catch (IOException | RuntimeException failure) {
                     deferWindow(build, failure);
@@ -434,7 +435,7 @@ final class IndexReplicator implements AutoCloseable {
                 }
                 batches.add(
                         new IndexBatch(
-                                new TableBucket(state.spec.getIndexTableId(), targetBucket),
+                                new TableBucket(state.encoder.getIndexTableId(), targetBucket),
                                 progress.key(),
                                 encoded,
                                 entry.value().retainedBytes(),
@@ -491,7 +492,7 @@ final class IndexReplicator implements AutoCloseable {
             LOG.debug(
                     "Reducing index source read for {} / {} to {} bytes at offset {}",
                     sourceBucket(),
-                    state.spec.getIndexName(),
+                    state.encoder.getIndexName(),
                     smallerBytes,
                     state.pushedOffset);
         } else {
@@ -590,7 +591,7 @@ final class IndexReplicator implements AutoCloseable {
                 LOG.warn(
                         "Yielding index {} window for source {} at offsets [{}, {}). "
                                 + "Rebuilding after backoff",
-                        state.spec.getIndexName(),
+                        state.encoder.getIndexName(),
                         sourceBucket(),
                         state.pushedOffset,
                         window.windowEndOffset());
@@ -729,7 +730,7 @@ final class IndexReplicator implements AutoCloseable {
         long min = Long.MAX_VALUE;
         boolean hasSyncIndex = false;
         for (IndexReplicationState state : indexStates) {
-            if (state.spec.isSync()) {
+            if (state.encoder.isSync()) {
                 hasSyncIndex = true;
                 min = Math.min(min, state.pushedOffset);
             }
@@ -898,7 +899,7 @@ final class IndexReplicator implements AutoCloseable {
     }
 
     static final class IndexReplicationState {
-        private final IndexSpec spec;
+        private final IndexReplicationEncoder encoder;
         private volatile long pushedOffset;
         private final IndexReplicationRetryState retry;
         private volatile long retryWindowEndOffset = -1L;
@@ -906,8 +907,11 @@ final class IndexReplicator implements AutoCloseable {
         @Nullable private volatile IndexReplicationWindow inFlightWindow;
 
         private IndexReplicationState(
-                IndexSpec spec, long replayStartOffset, ExponentialBackoff backoff, Clock clock) {
-            this.spec = spec;
+                IndexReplicationEncoder encoder,
+                long replayStartOffset,
+                ExponentialBackoff backoff,
+                Clock clock) {
+            this.encoder = encoder;
             this.pushedOffset = replayStartOffset;
             this.retry = new IndexReplicationRetryState(backoff, clock);
         }
@@ -989,8 +993,8 @@ final class IndexReplicator implements AutoCloseable {
             return true;
         }
 
-        IndexSpec spec() {
-            return spec;
+        IndexReplicationEncoder encoder() {
+            return encoder;
         }
 
         long pushedOffset() {
@@ -1098,8 +1102,8 @@ final class IndexReplicator implements AutoCloseable {
 
         void captureBefore(InternalRow row) {
             beforeKey = null;
-            if (state.spec.hasNonNullIndexValues(row)) {
-                IndexSpec.IndexEntry entry = state.spec.encodeEntry(row);
+            IndexReplicationEncoder.IndexEntry entry = state.encoder.encodeDataEntry(row);
+            if (entry != null) {
                 beforeKey = entry.key();
                 beforeBucket = entry.targetBucket();
             }
@@ -1107,11 +1111,9 @@ final class IndexReplicator implements AutoCloseable {
 
         void appendAfter(@Nullable InternalRow row) {
             try {
-                IndexSpec spec = state.spec;
-                IndexSpec.IndexEntry entry =
-                        row != null && spec.hasNonNullIndexValues(row)
-                                ? spec.encodeEntry(row)
-                                : null;
+                IndexReplicationEncoder encoder = state.encoder;
+                IndexReplicationEncoder.IndexEntry entry =
+                        row == null ? null : encoder.encodeDataEntry(row);
                 boolean keysDiffer =
                         beforeKey != null
                                 && (entry == null || !Arrays.equals(beforeKey, entry.key()));
@@ -1130,11 +1132,11 @@ final class IndexReplicator implements AutoCloseable {
         private BucketBatchBuilder bucketBuilder(int targetBucket) {
             BucketBatchBuilder builder = builders.get(targetBucket);
             if (builder == null) {
-                IndexSpec spec = state.spec;
+                IndexReplicationEncoder encoder = state.encoder;
                 builder =
                         new BucketBatchBuilder(
-                                (short) spec.getIndexSchemaId(),
-                                spec.getIndexKvFormat(),
+                                (short) encoder.getIndexSchemaId(),
+                                encoder.getIndexKvFormat(),
                                 reservation);
                 builders.put(targetBucket, builder);
             }

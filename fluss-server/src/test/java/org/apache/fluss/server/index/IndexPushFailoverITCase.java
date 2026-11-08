@@ -114,7 +114,7 @@ class IndexPushFailoverITCase {
         TableBucket mainBucket = new TableBucket(mainTableId, 0);
         int mainLeader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(mainBucket);
         Replica mainReplica = FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(mainBucket);
-        IndexSpec indexSpec = table.indexSpec(mainBucket);
+        IndexReplicationEncoder indexEncoder = table.indexEncoder(mainBucket);
 
         // Offset zero is the exclusive next-read position before the first source record.
         assertThat(mainReplica.getSyncIndexPushedOffset())
@@ -177,8 +177,9 @@ class IndexPushFailoverITCase {
                             + Arrays.toString(indexBucketLeaders));
         }
 
-        String selectedValue = valueForIndexBucket(indexSpec, "target-failover", targetIdxBucket);
-        byte[] indexKey = encodeIndexKey(indexSpec, selectedValue, 1);
+        String selectedValue =
+                valueForIndexBucket(indexEncoder, "target-failover", targetIdxBucket);
+        byte[] indexKey = encodeIndexKey(indexEncoder, selectedValue, 1);
         TableBucket idxTb = new TableBucket(indexTableId, targetIdxBucket);
         int stoppedTargetLeader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(idxTb);
         assertThat(stoppedTargetLeader)
@@ -292,18 +293,19 @@ class IndexPushFailoverITCase {
         }
     }
 
-    private static byte[] encodeIndexKey(IndexSpec spec, String b, int a) {
-        return spec.encodeEntry(GenericRow.of(a, fromString(b))).key();
+    private static byte[] encodeIndexKey(IndexReplicationEncoder encoder, String b, int a) {
+        return encoder.encodeDataEntry(GenericRow.of(a, fromString(b))).key();
     }
 
-    private static int targetBucket(IndexSpec spec, String b, int a) {
-        return spec.encodeEntry(GenericRow.of(a, fromString(b))).targetBucket();
+    private static int targetBucket(IndexReplicationEncoder encoder, String b, int a) {
+        return encoder.encodeDataEntry(GenericRow.of(a, fromString(b))).targetBucket();
     }
 
-    private static String valueForIndexBucket(IndexSpec spec, String prefix, int expectedBucket) {
+    private static String valueForIndexBucket(
+            IndexReplicationEncoder encoder, String prefix, int expectedBucket) {
         for (int suffix = 0; suffix < 100_000; suffix++) {
             String candidate = prefix + '-' + suffix;
-            if (targetBucket(spec, candidate, 1) == expectedBucket) {
+            if (targetBucket(encoder, candidate, 1) == expectedBucket) {
                 return candidate;
             }
         }

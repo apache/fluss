@@ -65,8 +65,8 @@ final class TestingIndexTable {
         }
     }
 
-    /** Resolves the index spec once the source leader knows every index bucket leader. */
-    IndexSpec indexSpec(TableBucket sourceBucket) {
+    /** Resolves the index encoder once the source leader knows every index bucket leader. */
+    IndexReplicationEncoder indexEncoder(TableBucket sourceBucket) {
         Replica source = cluster.waitAndGetLeaderReplica(sourceBucket);
         int leader = cluster.waitAndGetLeader(sourceBucket);
         TabletServerMetadataCache cache = cluster.getTabletServerById(leader).getMetadataCache();
@@ -81,9 +81,10 @@ final class TestingIndexTable {
                 },
                 Duration.ofSeconds(30),
                 "wait for index leaders in source metadata cache");
-        return IndexSpecFactory.buildIndexSpecs(source.getTableInfo(), sourceBucket, cache).stream()
-                .filter(spec -> spec.getIndexName().equals(indexName))
+        return IndexReplicationEncoder.createAll(source.getTableInfo(), sourceBucket, cache)
+                .stream()
+                .filter(encoder -> encoder.getIndexName().equals(indexName))
                 .findFirst()
-                .orElseThrow(() -> new AssertionError("Index spec missing: " + indexName));
+                .orElseThrow(() -> new AssertionError("Index encoder missing: " + indexName));
     }
 }

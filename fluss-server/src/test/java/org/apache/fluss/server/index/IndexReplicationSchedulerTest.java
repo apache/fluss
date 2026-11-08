@@ -66,10 +66,10 @@ class IndexReplicationSchedulerTest {
         buffer = new IndexSendBuffer();
         ManuallyTriggeredScheduledExecutorService io =
                 new ManuallyTriggeredScheduledExecutorService();
-        try (Source first = new Source(0, new TableBucket(1L, 0), io, spec("a", 10L));
-                Source second = new Source(1, new TableBucket(1L, 1), io, spec("b", 11L));
-                Source third = new Source(2, new TableBucket(1L, 2), io, spec("c", 12L));
-                Source otherTable = new Source(3, new TableBucket(2L, 0), io, spec("d", 13L))) {
+        try (Source first = new Source(0, new TableBucket(1L, 0), io, encoder("a", 10L));
+                Source second = new Source(1, new TableBucket(1L, 1), io, encoder("b", 11L));
+                Source third = new Source(2, new TableBucket(1L, 2), io, encoder("c", 12L));
+                Source otherTable = new Source(3, new TableBucket(2L, 0), io, encoder("d", 13L))) {
             assertThat(first.replicator.poll()).isTrue();
             assertThat(second.replicator.poll()).isFalse();
             assertThat(third.replicator.poll()).isFalse();
@@ -106,8 +106,8 @@ class IndexReplicationSchedulerTest {
         ManuallyTriggeredScheduledExecutorService io =
                 new ManuallyTriggeredScheduledExecutorService();
         try (IndexSendBuffer.Reservation blocker = buffer.newReservation();
-                Source owner = new Source(0, new TableBucket(1L, 0), io, spec("a", 10L));
-                Source other = new Source(1, new TableBucket(2L, 0), io, spec("b", 11L))) {
+                Source owner = new Source(0, new TableBucket(1L, 0), io, encoder("a", 10L));
+                Source other = new Source(1, new TableBucket(2L, 0), io, encoder("b", 11L))) {
             assertThat(owner.replicator.poll()).isTrue();
             blocker.allocatePage(8192);
             io.trigger();
@@ -135,10 +135,10 @@ class IndexReplicationSchedulerTest {
     void serviceOnAnotherWorkerDoesNotConsumeLocalTablePosition() throws Exception {
         scheduler = new IndexReplicationScheduler(8);
         buffer = new IndexSendBuffer();
-        try (Source firstA = new Source(0, new TableBucket(1L, 0), spec("a0", 10L));
-                Source secondA = new Source(1, new TableBucket(1L, 1), spec("a1", 11L));
-                Source firstB = new Source(1, new TableBucket(2L, 0), spec("b0", 12L));
-                Source secondB = new Source(1, new TableBucket(2L, 1), spec("b1", 13L))) {
+        try (Source firstA = new Source(0, new TableBucket(1L, 0), encoder("a0", 10L));
+                Source secondA = new Source(1, new TableBucket(1L, 1), encoder("a1", 11L));
+                Source firstB = new Source(1, new TableBucket(2L, 0), encoder("b0", 12L));
+                Source secondB = new Source(1, new TableBucket(2L, 1), encoder("b1", 13L))) {
             for (int round = 0; round < 6; round++) {
                 assertThat(scheduler.pollWorker(0)).isTrue();
                 drain(buffer);
@@ -158,7 +158,7 @@ class IndexReplicationSchedulerTest {
         scheduler = new IndexReplicationScheduler(8);
         buffer = new IndexSendBuffer();
         try (Source source =
-                new Source(0, new TableBucket(1L, 0), spec("fast", 10L), spec("slow", 11L))) {
+                new Source(0, new TableBucket(1L, 0), encoder("fast", 10L), encoder("slow", 11L))) {
             source.highWatermark.set(2);
             assertThat(scheduler.pollWorker(0)).isTrue();
             acknowledge(buffer, 10L, 0);
@@ -191,9 +191,9 @@ class IndexReplicationSchedulerTest {
         scheduler = new IndexReplicationScheduler(8);
         buffer = new IndexSendBuffer();
         AtomicBoolean broken = new AtomicBoolean(true);
-        IndexSpec delegate = spec("recovering", 11L);
-        IndexSpec recovering =
-                new IndexSpec(
+        IndexReplicationEncoder delegate = encoder("recovering", 11L);
+        IndexReplicationEncoder recovering =
+                new IndexReplicationEncoder(
                         "recovering",
                         IndexVisibility.ASYNC,
                         11L,
@@ -204,16 +204,16 @@ class IndexReplicationSchedulerTest {
                             if (broken.get()) {
                                 throw new IllegalStateException("index needs repair");
                             }
-                            return delegate.encodeEntry(row);
+                            return delegate.encodeDataEntry(row);
                         },
                         delegate::encodeProgress);
         try (Source source =
                 new Source(
                         0,
                         new TableBucket(1L, 0),
-                        spec("sync", 10L),
+                        encoder("sync", 10L),
                         recovering,
-                        spec("healthyAsync", 12L, IndexVisibility.ASYNC))) {
+                        encoder("healthyAsync", 12L, IndexVisibility.ASYNC))) {
             source.highWatermark.set(2);
             assertThat(scheduler.pollWorker(0)).isTrue();
             if (!buffer.hasPending(new TableBucket(12L, 0))) {
@@ -310,33 +310,33 @@ class IndexReplicationSchedulerTest {
         ManuallyTriggeredScheduledExecutorService io =
                 new ManuallyTriggeredScheduledExecutorService();
         AtomicBoolean activateOwner = new AtomicBoolean(true);
-        IndexSpec delegate = spec("a0", 10L);
+        IndexReplicationEncoder delegate = encoder("a0", 10L);
         try (IndexSendBuffer.Reservation blocker = buffer.newReservation();
-                Source owner = new Source(2, new TableBucket(3L, 0), io, spec("c", 13L));
+                Source owner = new Source(2, new TableBucket(3L, 0), io, encoder("c", 13L));
                 Source first =
                         new Source(
                                 0,
                                 new TableBucket(1L, 0),
                                 io,
-                                new IndexSpec(
+                                new IndexReplicationEncoder(
                                         "a0",
                                         IndexVisibility.SYNC,
                                         10L,
                                         1,
                                         KvFormat.COMPACTED,
                                         new int[] {0},
-                                        delegate::encodeEntry,
-                                        (source, target, end) -> {
+                                        delegate::encodeDataEntry,
+                                        (target, end) -> {
                                             if (activateOwner.compareAndSet(true, false)) {
                                                 assertThat(owner.replicator.poll()).isFalse();
                                                 assertThat(owner.replicator.hasPendingRead())
                                                         .isTrue();
                                             }
-                                            return delegate.encodeProgress(source, target, end);
+                                            return delegate.encodeProgress(target, end);
                                         }));
-                Source sameTable = new Source(0, new TableBucket(1L, 1), io, spec("a1", 11L));
-                Source second = new Source(1, new TableBucket(2L, 0), io, spec("b", 12L));
-                Source idle = new Source(3, new TableBucket(4L, 0), spec("idle", 14L))) {
+                Source sameTable = new Source(0, new TableBucket(1L, 1), io, encoder("a1", 11L));
+                Source second = new Source(1, new TableBucket(2L, 0), io, encoder("b", 12L));
+                Source idle = new Source(3, new TableBucket(4L, 0), encoder("idle", 14L))) {
             first.highWatermark.set(2);
             sameTable.highWatermark.set(2);
             second.highWatermark.set(2);
@@ -388,25 +388,25 @@ class IndexReplicationSchedulerTest {
         ManuallyTriggeredScheduledExecutorService io =
                 new ManuallyTriggeredScheduledExecutorService();
         AtomicBoolean fail = new AtomicBoolean();
-        IndexSpec delegate = fanout("owner", 10L);
-        IndexSpec owner =
-                new IndexSpec(
+        IndexReplicationEncoder delegate = fanout("owner", 10L);
+        IndexReplicationEncoder owner =
+                new IndexReplicationEncoder(
                         "owner",
                         IndexVisibility.SYNC,
                         10L,
                         1,
                         KvFormat.COMPACTED,
                         new int[] {0},
-                        delegate::encodeEntry,
-                        (source, target, end) -> {
+                        delegate::encodeDataEntry,
+                        (target, end) -> {
                             if (fail.get()) {
                                 throw new AssertionError("window construction interrupted");
                             }
-                            return delegate.encodeProgress(source, target, end);
+                            return delegate.encodeProgress(target, end);
                         });
         try (IndexSendBuffer.Reservation blocker = buffer.newReservation();
                 Source first = new Source(0, new TableBucket(1L, 0), io, owner);
-                Source other = new Source(1, new TableBucket(2L, 0), spec("other", 11L))) {
+                Source other = new Source(1, new TableBucket(2L, 0), encoder("other", 11L))) {
             first.highWatermark.set(2);
             other.highWatermark.set(4);
             blocker.allocatePage(4096);
@@ -434,8 +434,8 @@ class IndexReplicationSchedulerTest {
         scheduler = new IndexReplicationScheduler(8);
         buffer = new IndexSendBuffer();
         TableBucket bucket = new TableBucket(1L, 0);
-        try (Source previous = new Source(0, bucket, spec("old", 10L));
-                Source replacement = new Source(0, bucket, spec("new", 11L))) {
+        try (Source previous = new Source(0, bucket, encoder("old", 10L));
+                Source replacement = new Source(0, bucket, encoder("new", 11L))) {
             scheduler.unregister(0, previous.replicator);
             assertThat(scheduler.pollWorker(0)).isTrue();
             assertThat(previous.reads).hasValue(0);
@@ -452,30 +452,32 @@ class IndexReplicationSchedulerTest {
         io.trigger();
     }
 
-    private static IndexSpec spec(String name, long tableId) {
-        return spec(name, tableId, IndexVisibility.SYNC);
+    private static IndexReplicationEncoder encoder(String name, long tableId) {
+        return encoder(name, tableId, IndexVisibility.SYNC);
     }
 
-    private static IndexSpec spec(String name, long tableId, IndexVisibility visibility) {
+    private static IndexReplicationEncoder encoder(
+            String name, long tableId, IndexVisibility visibility) {
         CompactedRowWriter writer = new CompactedRowWriter(1);
         writer.writeByte((byte) 1);
         CompactedRow value = new CompactedRow(new DataType[] {DataTypes.TINYINT()});
         value.pointTo(writer.segment(), 0, writer.position());
-        return new IndexSpec(
+        return new IndexReplicationEncoder(
                 name,
                 visibility,
                 tableId,
                 1,
                 KvFormat.COMPACTED,
                 new int[] {0},
-                row -> new IndexSpec.IndexEntry(name.getBytes(), value, 0),
-                (source, target, end) ->
-                        new IndexSpec.IndexEntry((name + "-progress").getBytes(), value, target));
+                row -> new IndexReplicationEncoder.IndexEntry(name.getBytes(), value, 0),
+                (target, end) ->
+                        new IndexReplicationEncoder.IndexEntry(
+                                (name + "-progress").getBytes(), value, target));
     }
 
-    private static IndexSpec fanout(String name, long tableId) {
-        IndexSpec delegate = spec(name, tableId);
-        return new IndexSpec(
+    private static IndexReplicationEncoder fanout(String name, long tableId) {
+        IndexReplicationEncoder delegate = encoder(name, tableId);
+        return new IndexReplicationEncoder(
                 name,
                 IndexVisibility.SYNC,
                 tableId,
@@ -483,8 +485,9 @@ class IndexReplicationSchedulerTest {
                 KvFormat.COMPACTED,
                 new int[] {0},
                 row -> {
-                    IndexSpec.IndexEntry entry = delegate.encodeEntry(row);
-                    return new IndexSpec.IndexEntry(entry.key(), entry.value(), row.getInt(0));
+                    IndexReplicationEncoder.IndexEntry entry = delegate.encodeDataEntry(row);
+                    return new IndexReplicationEncoder.IndexEntry(
+                            entry.key(), entry.value(), row.getInt(0));
                 },
                 delegate::encodeProgress);
     }
@@ -513,15 +516,16 @@ class IndexReplicationSchedulerTest {
         private final AtomicLong highWatermark = new AtomicLong(16L);
         private final IndexReplicator replicator;
 
-        private Source(int worker, TableBucket bucket, IndexSpec... specs) throws Exception {
-            this(worker, bucket, null, specs);
+        private Source(int worker, TableBucket bucket, IndexReplicationEncoder... encoders)
+                throws Exception {
+            this(worker, bucket, null, encoders);
         }
 
         private Source(
                 int worker,
                 TableBucket bucket,
                 ManuallyTriggeredScheduledExecutorService remote,
-                IndexSpec... specs)
+                IndexReplicationEncoder... encoders)
                 throws Exception {
             this.scheduler = IndexReplicationSchedulerTest.this.scheduler;
             this.worker = worker;
@@ -585,7 +589,7 @@ class IndexReplicationSchedulerTest {
                     new IndexReplicator(
                             new IndexSourceReader(
                                     log, remoteFactory, remote == null ? Runnable::run : remote),
-                            Arrays.asList(specs),
+                            Arrays.asList(encoders),
                             buffer,
                             context,
                             0L,
