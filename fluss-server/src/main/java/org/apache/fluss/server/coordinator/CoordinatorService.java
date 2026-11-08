@@ -827,6 +827,16 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                             + "table properties, table schema, or table distribution.");
         }
 
+        // The alter methods below are what detect a missing table, and none of them run when the
+        // request carries no changes.
+        if (!hasConfigChanges
+                && !hasSchemaChanges
+                && !hasDistributionChanges
+                && !request.isIgnoreIfNotExists()
+                && !metadataManager.tableExists(tablePath)) {
+            throw new TableNotExistException("Table " + tablePath + " does not exist.");
+        }
+
         if (hasSchemaChanges) {
             metadataManager.alterTableSchema(
                     tablePath,
