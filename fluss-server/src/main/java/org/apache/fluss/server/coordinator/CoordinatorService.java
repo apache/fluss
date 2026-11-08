@@ -297,6 +297,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     private final CoordinatorLeaderElection coordinatorLeaderElection;
     private final RemoteDirDynamicLoader remoteDirDynamicLoader;
     private final ReplicaCapacityController replicaCapacityController;
+    private final Supplier<CoordinatorEventProcessor> eventProcessorSupplier;
 
     public CoordinatorService(
             Configuration conf,
@@ -322,6 +323,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                 authorizer,
                 dynamicConfigManager,
                 ioExecutor);
+        this.eventProcessorSupplier = coordinatorEventProcessorSupplier;
         this.defaultBucketNumber = conf.getInt(ConfigOptions.DEFAULT_BUCKET_NUMBER);
         this.defaultReplicationFactor = conf.getInt(ConfigOptions.DEFAULT_REPLICATION_FACTOR);
         this.logTableAllowCreation = conf.getBoolean(ConfigOptions.LOG_TABLE_ALLOW_CREATION);
@@ -525,6 +527,32 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         LakeCatalogDynamicLoader.LakeCatalogContainer lakeCatalogContainer =
                 lakeCatalogDynamicLoader.getLakeCatalogContainer();
 
+        if (tableDescriptor.getSchema().getDeduplicationKey().isPresent()) {
+            if (!request.hasDeduplicatingAppend()
+                    || !request.isDeduplicatingAppend()
+                    || currentSession().getApiVersion() < 1) {
+                throw new org.apache.fluss.exception.UnsupportedVersionException(
+                        "Deduplicating tables require CREATE_TABLE version 1.");
+            }
+            int[] servers =
+                    java.util.Arrays.stream(metadataCache.getLiveServers())
+                            .mapToInt(TabletServerInfo::getId)
+                            .toArray();
+            return eventProcessorSupplier
+                    .get()
+                    .requireDeduplicatingAppend(servers)
+                    .thenApplyAsync(
+                            ignored -> {
+                                createTableInternal(
+                                        tablePath,
+                                        tableDescriptor,
+                                        request.isIgnoreIfExists(),
+                                        true,
+                                        lakeCatalogContainer);
+                                return new CreateTableResponse();
+                            },
+                            ioExecutor);
+        }
         createTableInternal(
                 tablePath, tableDescriptor, request.isIgnoreIfExists(), true, lakeCatalogContainer);
 
@@ -793,7 +821,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     }
 
     private long getNewKvLeaderReplicaCount(TableDescriptor tableDescriptor) {
-        if (!tableDescriptor.hasPrimaryKey()) {
+        if (!tableDescriptor.hasPrimaryKey()
+                && !tableDescriptor.getSchema().getDeduplicationKey().isPresent()) {
             return 0;
         }
         if (tableDescriptor.isPartitioned() && !isHistoricalPartitionEnabled(tableDescriptor)) {
@@ -1152,7 +1181,10 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             return CompletableFuture.completedFuture(response);
         }
 
-        long newKvLeaderReplicaCount = tableInfo.hasPrimaryKey() ? tableInfo.getNumBuckets() : 0;
+        long newKvLeaderReplicaCount =
+                (tableInfo.hasPrimaryKey() || tableInfo.hasDeduplicationKey())
+                        ? tableInfo.getNumBuckets()
+                        : 0;
         replicaCapacityController.checkCanCreateKvLeaderReplicas(newKvLeaderReplicaCount);
 
         // third, generate the PartitionAssignment.

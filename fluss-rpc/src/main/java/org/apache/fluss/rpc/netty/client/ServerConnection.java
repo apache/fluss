@@ -387,6 +387,22 @@ final class ServerConnection {
 
     @VisibleForTesting
     void validateVersionCompatibility(ApiKeys apiKey, short version, ApiMessage rawRequest) {
+        if (apiKey == ApiKeys.CREATE_TABLE
+                && version < 1
+                && ((org.apache.fluss.rpc.messages.CreateTableRequest) rawRequest)
+                        .hasDeduplicatingAppend()
+                && ((org.apache.fluss.rpc.messages.CreateTableRequest) rawRequest)
+                        .isDeduplicatingAppend()) {
+            throw new UnsupportedVersionException(
+                    "Deduplicating log tables require CREATE_TABLE version 1.");
+        }
+        if (apiKey == ApiKeys.PUT_KV
+                && version < 4
+                && ((PutKvRequest) rawRequest).hasDeduplicatingAppend()
+                && ((PutKvRequest) rawRequest).isDeduplicatingAppend()) {
+            throw new UnsupportedVersionException(
+                    "Deduplicating append requires PUT_KV version 4.");
+        }
         if (apiKey == ApiKeys.PRODUCE_LOG && version < HISTORICAL_PRODUCE_LOG_MIN_VERSION) {
             ProduceLogRequest produceLogRequest = (ProduceLogRequest) rawRequest;
             if (hasHistoricalProduce(produceLogRequest)) {

@@ -110,6 +110,31 @@ public class FlinkSinkWriterTest extends FlinkTestBase {
     }
 
     @Test
+    void testAuthoritativeDeduplicationRejectsIgnoreDeleteWithoutDeclaredKey() throws Exception {
+        admin.createDatabase(DEFAULT_SINK_DB, DatabaseDescriptor.EMPTY, true).get();
+        createTable(
+                DEFAULT_SINK_TABLE_PATH,
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", org.apache.fluss.types.DataTypes.INT())
+                                        .column("name", org.apache.fluss.types.DataTypes.CHAR(10))
+                                        .deduplicationKey("id")
+                                        .build())
+                        .build());
+        Configuration config = FLUSS_CLUSTER_EXTENSION.getClientConfig();
+        config.setString("sink.ignore-delete", "true");
+        MockWriterInitContext context =
+                new MockWriterInitContext(new InterceptingOperatorMetricGroup());
+        try (FlinkSinkWriter<RowData> writer =
+                createSinkWriter(config, context.getMailboxExecutor())) {
+            assertThatThrownBy(() -> writer.initialize(context.metricGroup()))
+                    .isInstanceOf(org.apache.flink.table.api.ValidationException.class)
+                    .hasMessageContaining("insert-only");
+        }
+    }
+
+    @Test
     void testFlussSchemaChange() throws Exception {
         admin.createDatabase(
                 DEFAULT_SINK_TABLE_PATH.getDatabaseName(), DatabaseDescriptor.EMPTY, true);

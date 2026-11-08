@@ -191,6 +191,10 @@ class MultiTableWriterImpl implements MultiTableWriter {
         }
         metadataUpdater.updateTableOrPartitionMetadata(tablePath, null);
         TableInfo info = getTableInfo(tablePath);
+        if (info.hasDeduplicationKey()) {
+            throw new UnsupportedOperationException(
+                    "Use AppendWriter for tables with deduplication.");
+        }
         TableWriteState state = TableWriteState.forTable(tablePath, info);
         cacheState(tablePath, info.getSchemaId(), state);
         latestSchemaIdByPath.put(tablePath, info.getSchemaId());

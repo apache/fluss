@@ -197,6 +197,11 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
 
         RowType rowType = (RowType) context.getPhysicalRowDataType().getLogicalType();
 
+        if (tableOptions.getOptional(FlinkConnectorOptions.DEDUPLICATION_KEY).isPresent()
+                && tableOptions.get(FlinkConnectorOptions.SINK_IGNORE_DELETE)) {
+            throw new org.apache.flink.table.api.ValidationException(
+                    "Deduplicating log tables require insert-only input; sink.ignore-delete is unsupported.");
+        }
         MergeEngineType mergeEngineType =
                 tableOptions.get(toFlinkOption(ConfigOptions.TABLE_MERGE_ENGINE));
 
@@ -245,6 +250,7 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                                 FlinkConnectorOptions.AUTO_INCREMENT_FIELDS,
                                 FlinkConnectorOptions.BUCKET_KEY,
                                 FlinkConnectorOptions.BUCKET_NUMBER,
+                                FlinkConnectorOptions.DEDUPLICATION_KEY,
                                 FlinkConnectorOptions.SCAN_STARTUP_MODE,
                                 FlinkConnectorOptions.SCAN_STARTUP_TIMESTAMP,
                                 FlinkConnectorOptions.SCAN_BOUNDED_MODE,
@@ -292,9 +298,20 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
     private static Configuration toFlussClientConfig(
             Map<String, String> tableOptions, ReadableConfig flinkConfig) {
         Configuration flussConfig = new Configuration();
+        if (tableOptions.containsKey(FlinkConnectorOptions.SINK_IGNORE_DELETE.key())) {
+            flussConfig.setString(
+                    FlinkConnectorOptions.SINK_IGNORE_DELETE.key(),
+                    tableOptions.get(FlinkConnectorOptions.SINK_IGNORE_DELETE.key()));
+        }
         flussConfig.setString(
                 ConfigOptions.BOOTSTRAP_SERVERS.key(),
                 tableOptions.get(FlinkConnectorOptions.BOOTSTRAP_SERVERS.key()));
+
+        if (tableOptions.containsKey(FlinkConnectorOptions.DEDUPLICATION_KEY.key())) {
+            flussConfig.setString(
+                    FlinkConnectorOptions.DEDUPLICATION_KEY.key(),
+                    tableOptions.get(FlinkConnectorOptions.DEDUPLICATION_KEY.key()));
+        }
 
         // forward all client configs
         tableOptions.forEach(

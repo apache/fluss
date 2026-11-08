@@ -175,7 +175,7 @@ public class TableManager {
                 tableBuckets,
                 coordinatorContext.getTablePathById(tableId));
         TableInfo tableInfo = coordinatorContext.getTableInfoById(tableId);
-        if (tableInfo != null && tableInfo.hasPrimaryKey()) {
+        if (tableInfo != null && (tableInfo.hasPrimaryKey() || tableInfo.hasDeduplicationKey())) {
             coordinatorContext.addKvBuckets(tableBuckets);
             updateObservedKvLeaderReplicaCount();
         }
@@ -391,7 +391,7 @@ public class TableManager {
             remoteStorageCleaner.asyncDeleteTableRemoteDir(
                     tableInfo.getRemoteDataDir(),
                     tableInfo.getTablePath(),
-                    tableInfo.hasPrimaryKey(),
+                    tableInfo.hasPrimaryKey() || tableInfo.hasDeduplicationKey(),
                     tableId);
         }
     }
@@ -409,7 +409,7 @@ public class TableManager {
                 remoteStorageCleaner.asyncDeletePartitionRemoteDir(
                         partitionInfo.getRemoteDataDir(),
                         PhysicalTablePath.of(tableInfo.getTablePath(), partitionName),
-                        tableInfo.hasPrimaryKey(),
+                        tableInfo.hasPrimaryKey() || tableInfo.hasDeduplicationKey(),
                         tablePartition);
             }
         }

@@ -162,6 +162,62 @@ public class TableScan implements Scan {
                             "BatchScanner doesn't support filter pushdown. Table: %s, bucket: %s",
                             tableInfo.getTablePath(), tableBucket));
         }
+        if (tableInfo.hasDeduplicationKey()) {
+            if (tableBucket.getTableId() != tableInfo.getTableId()) {
+                throw new IllegalArgumentException("The bucket belongs to a different table.");
+            }
+            Admin admin = conn.getAdmin();
+            java.util.concurrent.CompletableFuture<Long> stoppingOffset;
+            java.util.Collection<Integer> buckets =
+                    java.util.Collections.singleton(tableBucket.getBucket());
+            if (tableBucket.getPartitionId() == null) {
+                stoppingOffset =
+                        admin.listOffsets(
+                                        tableInfo.getTablePath(),
+                                        buckets,
+                                        new org.apache.fluss.client.admin.OffsetSpec.LatestSpec())
+                                .bucketResult(tableBucket.getBucket());
+            } else {
+                stoppingOffset =
+                        admin.listPartitionInfos(tableInfo.getTablePath())
+                                .thenComposeAsync(
+                                        partitions -> {
+                                            String name =
+                                                    partitions.stream()
+                                                            .filter(
+                                                                    p ->
+                                                                            p.getPartitionId()
+                                                                                    == tableBucket
+                                                                                            .getPartitionId())
+                                                            .findFirst()
+                                                            .orElseThrow(
+                                                                    () ->
+                                                                            new IllegalStateException(
+                                                                                    "The partition instance no longer exists."))
+                                                            .getPartitionName();
+                                            return admin.listOffsets(
+                                                            tableInfo.getTablePath(),
+                                                            name,
+                                                            buckets,
+                                                            new org.apache.fluss.client.admin
+                                                                    .OffsetSpec.LatestSpec())
+                                                    .bucketResult(tableBucket.getBucket());
+                                        });
+            }
+            return new org.apache.fluss.client.table.scanner.batch.LogBatchScanner(
+                    new LogScannerImpl(
+                            conn.getConfiguration(),
+                            tableInfo,
+                            conn.getMetadataUpdater(),
+                            conn.getClientMetricGroup(),
+                            conn.getOrCreateRemoteFileDownloader(),
+                            projectedColumns,
+                            schemaGetter,
+                            null),
+                    tableBucket,
+                    stoppingOffset,
+                    limit == null ? Long.MAX_VALUE : limit);
+        }
         if (tableInfo.hasPrimaryKey() && limit == null) {
             return new KvBatchScanner(
                     tableInfo,

@@ -647,6 +647,15 @@ public class FlinkSourceEnumerator
         bucketOffsetsRetriever = new BucketOffsetsRetrieverImpl(flussAdmin, tablePath);
         try {
             tableInfo = flussAdmin.getTableInfo(tablePath).get();
+            String declared = flussConf.toMap().get("deduplication.key");
+            if (declared != null
+                    && !java.util.Arrays.stream(declared.split(",", -1))
+                            .map(String::trim)
+                            .collect(java.util.stream.Collectors.toList())
+                            .equals(tableInfo.getDeduplicationKeys())) {
+                throw new IllegalArgumentException(
+                        "Deduplication key does not match the authoritative Fluss table.");
+            }
             lakeEnabled = tableInfo.getTableConfig().isDataLakeEnabled();
         } catch (Exception e) {
             throw new FlinkRuntimeException(

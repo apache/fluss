@@ -473,6 +473,7 @@ public final class TabletService extends RpcServiceBase
                     getTargetColumns(request),
                     mergeMode,
                     currentSession().getApiVersion(),
+                    request.hasDeduplicatingAppend() && request.isDeduplicatingAppend(),
                     responseCallback);
         }
         return response;

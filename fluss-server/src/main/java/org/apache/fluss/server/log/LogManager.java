@@ -524,12 +524,13 @@ public final class LogManager extends TabletManagerBase implements ServerReconfi
                         logRecoveryPoint,
                         scheduler,
                         tableInfo.getTableConfig(),
-                        tableInfo.hasPrimaryKey(),
+                        (tableInfo.hasPrimaryKey() || tableInfo.hasDeduplicationKey()),
                         clock,
                         isCleanShutdown);
 
         currentLogs.put(tableBucket, logTablet);
-        localDiskManager.recordReplicaLoad(dataDir, tableInfo.hasPrimaryKey());
+        localDiskManager.recordReplicaLoad(
+                dataDir, (tableInfo.hasPrimaryKey() || tableInfo.hasDeduplicationKey()));
 
         return logTablet;
     }

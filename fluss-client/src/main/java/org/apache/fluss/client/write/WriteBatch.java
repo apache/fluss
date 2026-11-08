@@ -67,6 +67,7 @@ public abstract class WriteBatch {
 
     protected boolean reopened;
     protected int recordCount;
+    private boolean deduplicating;
     private long drainedMs;
     // Snapshot of the bucket's lastAckedBatchSequence taken when this attempt was sent, used to
     // tell a stale/reordered OutOfOrderSequence response (state advanced while in flight) apart
@@ -94,6 +95,11 @@ public abstract class WriteBatch {
         this.recordCount = 0;
     }
 
+    /** Returns whether this batch targets a log table with a deduplication key. */
+    public boolean isDeduplicating() {
+        return deduplicating;
+    }
+
     /**
      * Check if the batch is log batch, e.g., ArrowLogBatch or IndexedLogBatch, and should use
      * ProduceLog request. Otherwise, it is a kv batch, and should use PutKv request.
@@ -117,6 +123,7 @@ public abstract class WriteBatch {
         if (!canAppend(writeRecord)) {
             return false;
         }
+        deduplicating = writeRecord.getTableInfo().hasDeduplicationKey();
         return tryAppendRecord(writeRecord, callback);
     }
 

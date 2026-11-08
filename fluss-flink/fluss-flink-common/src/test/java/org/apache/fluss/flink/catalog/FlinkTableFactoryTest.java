@@ -94,6 +94,24 @@ abstract class FlinkTableFactoryTest {
             ObjectIdentifier.of("default", "default", "t1" + FlinkCatalog.BUCKETS_TABLE_SUFFIX);
 
     @Test
+    void testDeduplicatingLogSinkIsInsertOnly() {
+        ResolvedSchema schema =
+                ResolvedSchema.of(Column.physical("id", DataTypes.BIGINT().notNull()));
+        Map<String, String> options = getBasicOptions();
+        options.put("deduplication.key", "id");
+        options.put(FlinkConnectorOptions.BUCKET_NUMBER.key(), "1");
+        FlinkTableSink sink = (FlinkTableSink) createTableSink(schema, options);
+        assertThat(
+                        sink.getChangelogMode(
+                                org.apache.flink.table.connector.ChangelogMode.insertOnly()))
+                .isEqualTo(org.apache.flink.table.connector.ChangelogMode.insertOnly());
+        options.put(FlinkConnectorOptions.SINK_IGNORE_DELETE.key(), "true");
+        assertThatThrownBy(() -> createTableSink(schema, options))
+                .isInstanceOf(ValidationException.class)
+                .hasMessageContaining("insert-only");
+    }
+
+    @Test
     void testResolveToLakeObjectName() {
         assertThat(FlinkCatalog.isVirtualTableName("fluss_table$buckets")).isTrue();
         assertThat(FlinkCatalog.isVirtualTableName("fluss_table$lake$buckets")).isFalse();

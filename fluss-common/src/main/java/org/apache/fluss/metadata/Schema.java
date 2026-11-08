@@ -64,6 +64,7 @@ public final class Schema implements Serializable {
 
     private final List<Column> columns;
     private final @Nullable PrimaryKey primaryKey;
+    private final @Nullable DeduplicationKey deduplicationKey;
     private final List<String> autoIncrementColumnNames;
     private final RowType rowType;
 
@@ -76,11 +77,26 @@ public final class Schema implements Serializable {
     private Schema(
             List<Column> columns,
             @Nullable PrimaryKey primaryKey,
+            @Nullable DeduplicationKey deduplicationKey,
             int highestFieldId,
             List<String> autoIncrementColumnNames) {
+        checkState(
+                primaryKey == null || deduplicationKey == null,
+                "Primary key and deduplication key are mutually exclusive.");
+        if (deduplicationKey != null) {
+            checkArgument(
+                    columns.stream().noneMatch(column -> column.getAggFunction().isPresent()),
+                    "Aggregation functions are not supported for log tables with deduplication.");
+        }
         this.columns =
-                normalizeColumns(columns, primaryKey, autoIncrementColumnNames, highestFieldId);
+                normalizeColumns(
+                        columns,
+                        primaryKey,
+                        deduplicationKey,
+                        autoIncrementColumnNames,
+                        highestFieldId);
         this.primaryKey = primaryKey;
+        this.deduplicationKey = deduplicationKey;
         this.autoIncrementColumnNames = autoIncrementColumnNames;
         // pre-create the row type as it is the most frequently used part of the schema
         this.rowType =
@@ -119,6 +135,18 @@ public final class Schema implements Serializable {
 
     public Optional<PrimaryKey> getPrimaryKey() {
         return Optional.ofNullable(primaryKey);
+    }
+
+    /** Returns the key used to retain only the first committed record, if configured. */
+    public Optional<DeduplicationKey> getDeduplicationKey() {
+        return Optional.ofNullable(deduplicationKey);
+    }
+
+    /** Returns the deduplication key columns in their declared order, or an empty list. */
+    public List<String> getDeduplicationKeyColumnNames() {
+        return getDeduplicationKey()
+                .map(DeduplicationKey::getColumnNames)
+                .orElse(Collections.emptyList());
     }
 
     public List<String> getAutoIncrementColumnNames() {
@@ -231,6 +259,7 @@ public final class Schema implements Serializable {
                 + columns
                 + ", primaryKey="
                 + primaryKey
+                + (deduplicationKey == null ? "" : ", deduplicationKey=" + deduplicationKey)
                 + ", autoIncrementColumnNames="
                 + autoIncrementColumnNames
                 + ", highestFieldId="
@@ -250,12 +279,14 @@ public final class Schema implements Serializable {
         return Objects.equals(columns, schema.columns)
                 && Objects.equals(autoIncrementColumnNames, schema.autoIncrementColumnNames)
                 && Objects.equals(primaryKey, schema.primaryKey)
+                && Objects.equals(deduplicationKey, schema.deduplicationKey)
                 && highestFieldId == schema.highestFieldId;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(columns, primaryKey, autoIncrementColumnNames, highestFieldId);
+        return Objects.hash(
+                columns, primaryKey, deduplicationKey, autoIncrementColumnNames, highestFieldId);
     }
 
     // --------------------------------------------------------------------------------------------
@@ -274,6 +305,7 @@ public final class Schema implements Serializable {
     public static final class Builder {
         private final List<Column> columns;
         private @Nullable PrimaryKey primaryKey;
+        private @Nullable DeduplicationKey deduplicationKey;
         private final List<String> autoIncrementColumnNames;
         private AtomicInteger highestFieldId;
 
@@ -287,7 +319,10 @@ public final class Schema implements Serializable {
         public Builder fromSchema(Schema schema) {
             // Check that the builder is empty before adopting from an existing schema
             checkState(
-                    columns.isEmpty() && autoIncrementColumnNames.isEmpty() && primaryKey == null,
+                    columns.isEmpty()
+                            && autoIncrementColumnNames.isEmpty()
+                            && primaryKey == null
+                            && deduplicationKey == null,
                     "Schema.Builder#fromSchema should be the first API to be called on the builder.");
 
             // Adopt columns while preserving their original IDs
@@ -299,6 +334,7 @@ public final class Schema implements Serializable {
             // Copy the metadata members
             this.autoIncrementColumnNames.addAll(schema.getAutoIncrementColumnNames());
             schema.getPrimaryKey().ifPresent(pk -> this.primaryKey = pk);
+            schema.getDeduplicationKey().ifPresent(key -> this.deduplicationKey = key);
 
             return this;
         }
@@ -542,6 +578,34 @@ public final class Schema implements Serializable {
         }
 
         /**
+         * Declares a log-table deduplication key. Key columns are made non-nullable. Only the first
+         * committed record for a key is retained, independently of log retention. Partition columns
+         * must be included when this schema is used for a partitioned table. A deduplication key
+         * does not provide primary-key lookup or update capabilities.
+         */
+        @PublicEvolving
+        public Builder deduplicationKey(String... columnNames) {
+            checkNotNull(columnNames, "Deduplication key column names must not be null.");
+            return deduplicationKey(Arrays.asList(columnNames));
+        }
+
+        /** Declares a deduplication key; see {@link #deduplicationKey(String...)}. */
+        @PublicEvolving
+        public Builder deduplicationKey(List<String> columnNames) {
+            checkState(deduplicationKey == null, "Multiple deduplication keys are not supported.");
+            checkArgument(
+                    columnNames != null && !columnNames.isEmpty(),
+                    "Deduplication key must contain at least one column.");
+            for (String columnName : columnNames) {
+                checkArgument(
+                        !StringUtils.isNullOrWhitespaceOnly(columnName),
+                        "Deduplication key column name must not be empty.");
+            }
+            deduplicationKey = new DeduplicationKey(columnNames);
+            return this;
+        }
+
+        /**
          * Declares a column to be auto-incremented. With an auto-increment column in the table,
          * whenever a new row is inserted into the table, the new row will be assigned with the next
          * available value from the auto-increment sequence. A table can have at most one auto
@@ -567,7 +631,12 @@ public final class Schema implements Serializable {
 
         /** Returns an instance of an {@link Schema}. */
         public Schema build() {
-            return new Schema(columns, primaryKey, highestFieldId.get(), autoIncrementColumnNames);
+            return new Schema(
+                    columns,
+                    primaryKey,
+                    deduplicationKey,
+                    highestFieldId.get(),
+                    autoIncrementColumnNames);
         }
     }
 
@@ -736,14 +805,47 @@ public final class Schema implements Serializable {
         }
     }
 
+    /** The ordered columns identifying records for first-write deduplication in a log table. */
+    @PublicEvolving
+    public static final class DeduplicationKey implements Serializable {
+        private static final long serialVersionUID = 1L;
+
+        private final List<String> columnNames;
+
+        private DeduplicationKey(List<String> columnNames) {
+            this.columnNames = Collections.unmodifiableList(new ArrayList<>(columnNames));
+        }
+
+        /** Returns the key columns in their declared order. */
+        public List<String> getColumnNames() {
+            return columnNames;
+        }
+
+        @Override
+        public boolean equals(Object other) {
+            return other instanceof DeduplicationKey
+                    && columnNames.equals(((DeduplicationKey) other).columnNames);
+        }
+
+        @Override
+        public int hashCode() {
+            return columnNames.hashCode();
+        }
+
+        @Override
+        public String toString() {
+            return "DeduplicationKey" + columnNames;
+        }
+    }
+
     // ----------------------------------------------------------------------------------------
     // Helper methods
     // ----------------------------------------------------------------------------------------
 
-    /** Normalize columns and primary key. */
     private static List<Column> normalizeColumns(
             List<Column> columns,
             @Nullable PrimaryKey primaryKey,
+            @Nullable DeduplicationKey deduplicationKey,
             List<String> autoIncrementColumnNames,
             int highestFieldId) {
 
@@ -763,23 +865,31 @@ public final class Schema implements Serializable {
             checkState(
                     autoIncrementColumnNames.isEmpty(),
                     "Auto increment column can only be used in primary-key table.");
+        }
+        if (primaryKey == null && deduplicationKey == null) {
             return Collections.unmodifiableList(columns);
         }
 
-        List<String> primaryKeyNames = primaryKey.getColumnNames();
-        duplicateColumns = duplicate(primaryKeyNames);
+        List<String> keyColumnNames =
+                primaryKey != null
+                        ? primaryKey.getColumnNames()
+                        : deduplicationKey.getColumnNames();
+        String keyKind = primaryKey != null ? "Primary key" : "Deduplication key";
+        duplicateColumns = duplicate(keyColumnNames);
         checkState(
                 duplicateColumns.isEmpty(),
-                "Primary key constraint %s must not contain duplicate columns. Found: %s",
-                primaryKey,
+                "%s constraint %s must not contain duplicate columns. Found: %s",
+                keyKind,
+                primaryKey != null ? primaryKey : keyColumnNames,
                 duplicateColumns);
         checkState(
-                allFields.containsAll(primaryKeyNames),
-                "Table column %s should include all primary key constraint %s",
+                allFields.containsAll(keyColumnNames),
+                "Table column %s should include all %s constraint %s",
                 columnNames,
-                primaryKeyNames);
+                primaryKey != null ? "primary key" : "deduplication key",
+                keyColumnNames);
 
-        Set<String> pkSet = new HashSet<>(primaryKeyNames);
+        Set<String> keyColumns = new HashSet<>(keyColumnNames);
         for (String autoIncrementColumn : autoIncrementColumnNames) {
             checkState(
                     allFields.contains(autoIncrementColumn),
@@ -787,14 +897,14 @@ public final class Schema implements Serializable {
                     autoIncrementColumn,
                     columnNames);
             checkState(
-                    !pkSet.contains(autoIncrementColumn),
+                    !keyColumns.contains(autoIncrementColumn),
                     "Auto increment column can not be used as the primary key.");
         }
 
         // Validate that aggregation functions are only set for non-primary key columns
         for (Column column : columns) {
             // check presentation first for better performance
-            if (column.getAggFunction().isPresent() && pkSet.contains(column.getName())) {
+            if (column.getAggFunction().isPresent() && keyColumns.contains(column.getName())) {
                 throw new IllegalArgumentException(
                         String.format(
                                 "Cannot set aggregation function for primary key column '%s'. "
@@ -812,8 +922,8 @@ public final class Schema implements Serializable {
                         "The data type of auto increment column must be INT or BIGINT.");
             }
 
-            // primary key and auto increment column should not nullable
-            if (pkSet.contains(column.getName()) && column.getDataType().isNullable()) {
+            // Both primary and deduplication key columns must be non-nullable.
+            if (keyColumns.contains(column.getName()) && column.getDataType().isNullable()) {
                 newColumns.add(
                         new Column(
                                 column.getName(),

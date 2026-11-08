@@ -517,7 +517,8 @@ public class AutoPartitionManager implements AutoCloseable {
         long tableId = tableInfo.getTableId();
         int replicaFactor = tableInfo.getTableConfig().getReplicationFactor();
         TabletServerInfo[] servers = metadataCache.getLiveServers();
-        long newKvLeaderReplicaCount = tableInfo.hasPrimaryKey() ? bucketCount : 0;
+        long newKvLeaderReplicaCount =
+                tableInfo.hasPrimaryKey() || tableInfo.hasDeduplicationKey() ? bucketCount : 0;
         try {
             replicaCapacityController.checkCanCreateKvLeaderReplicas(newKvLeaderReplicaCount);
 

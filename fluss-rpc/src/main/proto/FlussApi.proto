@@ -121,6 +121,7 @@ message ListDatabasesResponse {
 
 // create table request and response
 message CreateTableRequest {
+  optional bool deduplicating_append = 100;
   required PbTablePath table_path = 1;
   required bytes table_json = 2;
   required bool ignore_if_exists = 3;
@@ -300,6 +301,7 @@ message FetchLogResponse {
 
 // put kv request and response
 message PutKvRequest {
+  optional bool deduplicating_append = 100;
   required int32 acks = 1;
   required int64 table_id = 2;
   required int32 timeout_ms = 3;
