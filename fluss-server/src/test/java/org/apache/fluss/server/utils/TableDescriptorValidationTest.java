@@ -281,7 +281,7 @@ class TableDescriptorValidationTest {
         TableDescriptor descriptor =
                 pkTableWithProperty(
                         ConfigOptions.TABLE_KV_FORMAT_VERSION.key(),
-                        String.valueOf(ConfigOptions.KV_FORMAT_VERSION_3 + 1));
+                        String.valueOf(ConfigOptions.KV_FORMAT_VERSION_2 + 1));
 
         assertThatThrownBy(
                         () ->
@@ -289,7 +289,7 @@ class TableDescriptorValidationTest {
                                         descriptor, 100, null))
                 .isInstanceOf(InvalidConfigException.class)
                 .hasMessageContaining(
-                        "maximum supported version is " + ConfigOptions.KV_FORMAT_VERSION_3);
+                        "maximum supported version is " + ConfigOptions.KV_FORMAT_VERSION_2);
     }
 
     @ParameterizedTest(name = "layoutVersion={0}, rowTtl={1}, valid={2}")
@@ -502,13 +502,21 @@ class TableDescriptorValidationTest {
                                         .primaryKey("id")
                                         .build())
                         .distributedBy(1)
-                        .property(ConfigOptions.TABLE_KV_FORMAT_VERSION, 3)
+                        .property(ConfigOptions.TABLE_KV_ORDERED_KEY_ENABLED, true)
                         .property(ConfigOptions.TABLE_REPLICATION_FACTOR, 1)
                         .build();
         validate(descriptor, null);
         TableInfo info =
                 TableInfo.of(
                         TablePath.of("db", "ordered"), 1L, 1, descriptor, "/tmp/remote", 0L, 0L);
+        assertThatThrownBy(
+                        () ->
+                                TableDescriptorValidation.validateAlterTableProperties(
+                                        info,
+                                        Collections.singleton(
+                                                ConfigOptions.TABLE_KV_ORDERED_KEY_ENABLED.key())))
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining(ConfigOptions.TABLE_KV_ORDERED_KEY_ENABLED.key());
         for (org.apache.fluss.rpc.protocol.ApiKeys api :
                 java.util.Arrays.asList(
                         org.apache.fluss.rpc.protocol.ApiKeys.PUT_KV,
@@ -532,7 +540,7 @@ class TableDescriptorValidationTest {
                                         .primaryKey("id")
                                         .build())
                         .distributedBy(1)
-                        .property(ConfigOptions.TABLE_KV_FORMAT_VERSION, 3)
+                        .property(ConfigOptions.TABLE_KV_ORDERED_KEY_ENABLED, true)
                         .property(ConfigOptions.TABLE_REPLICATION_FACTOR, 1)
                         .build();
         assertThatThrownBy(() -> validate(floatKey, null))
@@ -542,7 +550,7 @@ class TableDescriptorValidationTest {
                 TableDescriptor.builder()
                         .schema(Schema.newBuilder().column("id", DataTypes.INT()).build())
                         .distributedBy(1)
-                        .property(ConfigOptions.TABLE_KV_FORMAT_VERSION, 3)
+                        .property(ConfigOptions.TABLE_KV_ORDERED_KEY_ENABLED, true)
                         .property(ConfigOptions.TABLE_REPLICATION_FACTOR, 1)
                         .build();
         assertThatThrownBy(() -> validate(log, null))

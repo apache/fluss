@@ -139,9 +139,9 @@ public class TableDescriptorValidation {
         checkHistoricalPartition(tableDescriptor, tableConf);
         checkKvTTL(tableConf, schema, hasPrimaryKey);
         checkKvFormatVersion(tableConf);
-        if (tableConf.getOptional(ConfigOptions.TABLE_KV_FORMAT_VERSION).orElse(1) == 3) {
+        if (tableConf.get(ConfigOptions.TABLE_KV_ORDERED_KEY_ENABLED)) {
             if (!hasPrimaryKey) {
-                throw new InvalidConfigException("Ordered KV format requires a primary key table.");
+                throw new InvalidConfigException("Ordered keys require a primary key table.");
             }
             try {
                 OrderedKeyEncoder.createKeyEncoder(
@@ -417,11 +417,11 @@ public class TableDescriptorValidation {
         Optional<Integer> kvFormatVersion =
                 tableConf.getOptional(ConfigOptions.TABLE_KV_FORMAT_VERSION);
         if (kvFormatVersion.isPresent()
-                && (kvFormatVersion.get() < 1 || kvFormatVersion.get() > 3)) {
+                && (kvFormatVersion.get() < 1 || kvFormatVersion.get() > 2)) {
             throw new InvalidConfigException(
                     String.format(
                             "Unsupported kv format version %d. The maximum supported version is %d.",
-                            kvFormatVersion.get(), 3));
+                            kvFormatVersion.get(), 2));
         }
     }
 

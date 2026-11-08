@@ -58,7 +58,6 @@ public class ConfigOptions {
     public static final String DEFAULT_LISTENER_NAME = "FLUSS";
 
     public static final int KV_FORMAT_VERSION_2 = 2;
-    public static final int KV_FORMAT_VERSION_3 = 3;
     public static final int CURRENT_KV_FORMAT_VERSION = KV_FORMAT_VERSION_2;
 
     @Internal
@@ -2021,7 +2020,7 @@ public class ConfigOptions {
                                     + "Automatically set by the coordinator during table creation if not configured by users. "
                                     + "Note: The datalake encoding and bucketing strategy mentioned below only takes effect "
                                     + "when 'datalake.format' is configured at cluster level. "
-                                    + "Version Behaviors: "
+                                    + "Version Behaviors when 'table.kv.ordered-key.enabled' is false: "
                                     + "(1) Version 1: Tables created before 'table.kv.format-version' was introduced are treated as version 1. "
                                     + "Uses datalake's encoder (e.g., Paimon/Iceberg) for both primary key and bucket key encoding. "
                                     + "This may not support prefix lookup properly because some datalake encoders (like Paimon) "
@@ -2030,9 +2029,17 @@ public class ConfigOptions {
                                     + "when bucket key differs from primary key, which ensures proper prefix lookup support. "
                                     + "When bucket key equals primary key (default bucket key), it still uses datalake's encoder "
                                     + "for optimization (encoded bytes can be reused for bucket calculation). "
-                                    + "Bucket key encoding always uses datalake's encoder to align with datalake bucket calculation. "
-                                    + "(3) Version 3: Opt-in ordered primary keys support prefix lookup and range seek. "
-                                    + "Bucket routing retains the version 2 encoding. All clients and servers must support version 3.");
+                                    + "Bucket key encoding always uses datalake's encoder to align with datalake bucket calculation.");
+
+    public static final ConfigOption<Boolean> TABLE_KV_ORDERED_KEY_ENABLED =
+            key("table.kv.ordered-key.enabled")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Whether to use order-preserving encoding for index keys to support prefix lookup and range seek. "
+                                    + "This option can only be set when creating a primary key table and cannot be altered. "
+                                    + "Currently only primary key indexes are supported. Bucket routing is unchanged. "
+                                    + "All clients and servers must support ordered keys before this option is enabled.");
 
     /** The version of the physical KV value layout. */
     public static final ConfigOption<Integer> TABLE_KV_VALUE_LAYOUT_VERSION =

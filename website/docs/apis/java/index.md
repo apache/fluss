@@ -384,9 +384,11 @@ thread-safe — do not share an instance across threads.
 
 ### Batch Scan — Primary Key Range
 
-Create a new primary-key table with `table.kv.format-version=3` to enable ordered
-keys. Version 2 remains the default; existing tables cannot change their key
-format in place. Upgrade all servers and clients before using version 3.
+Set `table.kv.ordered-key.enabled=true` when creating a primary-key table to use
+order-preserving index key encoding. This option defaults to false and cannot
+be altered after table creation because it determines the persisted key format.
+Currently, range scans use the primary key index. Bucket routing is unchanged.
+Upgrade all servers and clients before enabling ordered keys.
 Ordered keys support scalar types except FLOAT and DOUBLE; null and constructed
 key fields are rejected.
 
@@ -401,7 +403,7 @@ Schema schema = Schema.newBuilder()
 TableDescriptor descriptor = TableDescriptor.builder()
         .schema(schema)
         .distributedBy(8, "group_id")
-        .property(ConfigOptions.TABLE_KV_FORMAT_VERSION, 3)
+        .property(ConfigOptions.TABLE_KV_ORDERED_KEY_ENABLED, true)
         .build();
 admin.createTable(tablePath, descriptor, false).get();
 

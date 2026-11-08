@@ -56,6 +56,7 @@ public class KeyRecordBatch implements KvRecordBatch {
     private final short schemaId;
     private final KvFormat kvFormat;
     private final short kvFormatVersion;
+    private final boolean orderedKeyEnabled;
     private final boolean defaultBucketKey;
     private final @Nullable DataLakeFormat lakeFormat;
 
@@ -71,7 +72,8 @@ public class KeyRecordBatch implements KvRecordBatch {
                 kvFormatVersion,
                 schemaId,
                 defaultBucketKey,
-                tableConfig.getDataLakeFormat().orElse(null));
+                tableConfig.getDataLakeFormat().orElse(null),
+                tableConfig.isOrderedKeyEnabled());
     }
 
     @VisibleForTesting
@@ -91,10 +93,22 @@ public class KeyRecordBatch implements KvRecordBatch {
             short schemaId,
             boolean defaultBucketKey,
             @Nullable DataLakeFormat lakeFormat) {
+        this(keyBytes, kvFormat, kvFormatVersion, schemaId, defaultBucketKey, lakeFormat, false);
+    }
+
+    private KeyRecordBatch(
+            List<byte[]> keyBytes,
+            KvFormat kvFormat,
+            short kvFormatVersion,
+            short schemaId,
+            boolean defaultBucketKey,
+            @Nullable DataLakeFormat lakeFormat,
+            boolean orderedKeyEnabled) {
         this.keyBytes = keyBytes;
         this.schemaId = schemaId;
         this.kvFormat = kvFormat;
         this.kvFormatVersion = kvFormatVersion;
+        this.orderedKeyEnabled = orderedKeyEnabled;
         this.defaultBucketKey = defaultBucketKey;
         this.lakeFormat = lakeFormat;
     }
@@ -169,7 +183,12 @@ public class KeyRecordBatch implements KvRecordBatch {
             int[] keyFieldIndexes = schema.getPrimaryKeyIndexes();
             this.keyDecoder =
                     KeyDecoder.ofPrimaryKeyDecoder(
-                            rowType, keyColumnNames, kvFormatVersion, lakeFormat, defaultBucketKey);
+                            rowType,
+                            keyColumnNames,
+                            kvFormatVersion,
+                            lakeFormat,
+                            defaultBucketKey,
+                            orderedKeyEnabled);
             this.keyFieldGetters = new InternalRow.FieldGetter[keyColumnNames.size()];
 
             // Build reverse mapping: field index -> key index

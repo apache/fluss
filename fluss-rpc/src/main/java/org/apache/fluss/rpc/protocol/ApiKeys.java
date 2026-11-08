@@ -53,13 +53,13 @@ public enum ApiKeys {
     //            KV storage engine rejects a write under pressure; older versions receive the
     //            retriable KV_STORAGE_EXCEPTION instead.
     // Version 3: Supports original_partition_name in requests and responses for historical writes.
-    // Version 4: Supports ordered primary keys (KV format version 3).
+    // Version 4: Supports ordered primary keys.
     PUT_KV(1016, 0, 4, PUBLIC),
 
     // Version 0: Uses lake's encoder for primary key encoding (legacy behavior).
     // Version 1: Uses CompactedKeyEncoder for primary key encoding when bucket key differs from
     //            primary key, enabling prefix lookup support.
-    // Version 2: Supports ordered primary keys (KV format version 3).
+    // Version 2: Supports ordered primary keys.
     LOOKUP(1017, 0, 2, PUBLIC),
 
     NOTIFY_LEADER_AND_ISR(1018, 0, 0, PRIVATE),
@@ -82,7 +82,7 @@ public enum ApiKeys {
     // Version 0: Uses lake's encoder for prefix key encoding (legacy behavior).
     // Version 1: Uses CompactedKeyEncoder for prefix key encoding when bucket key differs from
     //            primary key, ensuring encoded bucket key bytes are a prefix of primary key bytes.
-    // Version 2: Supports ordered primary-key prefixes (KV format version 3).
+    // Version 2: Supports ordered primary-key prefixes.
     PREFIX_LOOKUP(1034, 0, 2, PUBLIC),
 
     GET_DATABASE_INFO(1035, 0, 0, PUBLIC),

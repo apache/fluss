@@ -78,13 +78,18 @@ public class TableConfig {
         return config.getOptional(ConfigOptions.TABLE_KV_FORMAT_VERSION);
     }
 
+    /** Whether index keys use order-preserving encoding. */
+    public boolean isOrderedKeyEnabled() {
+        return config.get(ConfigOptions.TABLE_KV_ORDERED_KEY_ENABLED);
+    }
+
     /**
      * Gets the physical KV value layout version persisted with the table.
      *
-     * <p>The KV format version controls the key encoding strategy, while the value layout version
-     * controls the fixed header surrounding the BinaryRow payload in RocksDB. An empty value
-     * identifies tables created before value layouts were versioned; those tables use the plain
-     * layout.
+     * <p>The KV format version controls the legacy key encoding strategy, while the value layout
+     * version controls the fixed header surrounding the BinaryRow payload in RocksDB. An empty
+     * value identifies tables created before value layouts were versioned; those tables use the
+     * plain layout.
      */
     public Optional<Integer> getKvValueLayoutVersion() {
         return config.getOptional(ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION);

@@ -2749,15 +2749,11 @@ public class ReplicaManager implements ServerReconfigurable {
     /** Validates whether a client API version can access this primary-key table. */
     public static void validateClientVersionForPkTable(
             ApiKeys apiKey, int apiVersion, TableInfo tableInfo) {
-        if (tableInfo.getTableConfig().getKvFormatVersion().orElse(1) == 3) {
+        if (tableInfo.getTableConfig().isOrderedKeyEnabled()) {
             int minimum = apiKey == ApiKeys.PUT_KV ? 4 : 2;
             if (apiVersion < minimum) {
                 throw new UnsupportedVersionException(
-                        "Ordered KV format version 3 requires "
-                                + apiKey
-                                + " version "
-                                + minimum
-                                + " or newer.");
+                        "Ordered keys require " + apiKey + " version " + minimum + " or newer.");
             }
         }
         if (apiVersion >= 1) {

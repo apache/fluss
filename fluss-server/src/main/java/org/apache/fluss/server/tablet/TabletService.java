@@ -946,13 +946,9 @@ public final class TabletService extends RpcServiceBase
                 byte[] endKey = bucketReq.hasEndKey() ? bucketReq.getEndKey() : null;
                 if (startKey != null || endKey != null) {
                     if (currentSession().getApiVersion() < 1
-                            || replica.getTableInfo()
-                                            .getTableConfig()
-                                            .getKvFormatVersion()
-                                            .orElse(1)
-                                    != 3) {
+                            || !replica.getTableInfo().getTableConfig().isOrderedKeyEnabled()) {
                         throw new InvalidScanRequestException(
-                                "Key bounds require SCAN_KV v1 and ordered KV format version 3.");
+                                "Key bounds require SCAN_KV v1 and table.kv.ordered-key.enabled=true.");
                     }
                     if (startKey != null
                             && endKey != null

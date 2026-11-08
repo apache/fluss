@@ -28,7 +28,7 @@ import org.apache.fluss.lake.paimon.utils.PaimonRowAsFlussRow;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
-import org.apache.fluss.row.decode.CompactedKeyDecoder;
+import org.apache.fluss.row.decode.KeyDecoder;
 import org.apache.fluss.row.encode.paimon.PaimonKeyEncoder;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.ExceptionUtils;
@@ -127,9 +127,9 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
     private @Nullable FileStoreTable fileStoreTable;
     private @Nullable List<String> trimmedPrimaryKeys;
 
-    // CompactedKeyDecoder contains immutable type metadata and creates all decode state per
-    // invocation, so it can be shared by concurrent lookups.
-    private @Nullable CompactedKeyDecoder compactedKeyDecoder;
+    // Key decoders keep type metadata immutable and decode state local to each invocation,
+    // so they can be shared by concurrent lookups.
+    private @Nullable KeyDecoder keyDecoder;
 
     private volatile @Nullable PaimonLocalTableQuery localTableQuery;
     // Guarded by lookupStateLock.
@@ -196,7 +196,7 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
             registeredFiles.clear();
             totalBucketsByPartition.clear();
             localTableQuery = null;
-            compactedKeyDecoder = null;
+            keyDecoder = null;
             trimmedPrimaryKeys = null;
             fileStoreTable = null;
             catalog = null;
@@ -247,18 +247,23 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
             List<String> newTrimmedPrimaryKeys =
                     Collections.unmodifiableList(
                             new ArrayList<>(newFileStoreTable.schema().trimmedPrimaryKeys()));
-            CompactedKeyDecoder newCompactedKeyDecoder = null;
+            KeyDecoder newKeyDecoder = null;
 
-            // Legacy/v1 tables and v2 tables with a default bucket key already encode Fluss
-            // lookup keys with Paimon's key encoder. Only v2 tables with a non-default bucket
-            // key use the compacted key encoding and need conversion before querying Paimon.
-            if (tableConfig.getKvFormatVersion().orElse(1) == KV_FORMAT_VERSION_2
-                    && !newFileStoreTable.schema().bucketKeys().equals(newTrimmedPrimaryKeys)) {
-                // Kv-format-v2 tables with a non-default bucket key store Fluss keys using the
-                // compacted encoding to support prefix lookup. Paimon's LocalTableQuery expects
-                // its own BinaryRow encoding, so convert the key at the lake lookup boundary.
-                newCompactedKeyDecoder =
-                        CompactedKeyDecoder.createKeyDecoder(valueRowType, newTrimmedPrimaryKeys);
+            // Paimon's LocalTableQuery expects its own BinaryRow encoding. Convert keys
+            // when Fluss stores them using compacted or ordered encoding.
+            boolean defaultBucketKey =
+                    newFileStoreTable.schema().bucketKeys().equals(newTrimmedPrimaryKeys);
+            if (tableConfig.isOrderedKeyEnabled()
+                    || (tableConfig.getKvFormatVersion().orElse(1) == KV_FORMAT_VERSION_2
+                            && !defaultBucketKey)) {
+                newKeyDecoder =
+                        KeyDecoder.ofPrimaryKeyDecoder(
+                                valueRowType,
+                                newTrimmedPrimaryKeys,
+                                tableConfig.getKvFormatVersion().orElse(1).shortValue(),
+                                DataLakeFormat.PAIMON,
+                                defaultBucketKey,
+                                tableConfig.isOrderedKeyEnabled());
             }
 
             newLocalTableQuery =
@@ -269,7 +274,7 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
             catalog = newCatalog;
             fileStoreTable = newFileStoreTable;
             trimmedPrimaryKeys = newTrimmedPrimaryKeys;
-            compactedKeyDecoder = newCompactedKeyDecoder;
+            keyDecoder = newKeyDecoder;
             // Keep this volatile write last to publish all initialized fields together.
             localTableQuery = newLocalTableQuery;
             initialized = true;
@@ -325,8 +330,8 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
 
     private org.apache.paimon.data.BinaryRow getKey(byte[] key, LookupContext context) {
         byte[] paimonKey = key;
-        if (compactedKeyDecoder != null) {
-            InternalRow decodedKey = compactedKeyDecoder.decodeKey(key);
+        if (keyDecoder != null) {
+            InternalRow decodedKey = keyDecoder.decodeKey(key);
             RowType keyRowType = context.valueRowType().project(trimmedPrimaryKeys);
             PaimonKeyEncoder paimonKeyEncoder =
                     new PaimonKeyEncoder(keyRowType, trimmedPrimaryKeys);
@@ -426,18 +431,18 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
 
     /**
      * Returns the bucket key bytes the lake bucketing function expects. The lookup key already is
-     * the bucket key when the table uses the default bucket key; otherwise the primary key is
-     * decoded and the bucket key fields are re-encoded with the lake encoder.
+     * the bucket key when the table uses Paimon encoding and the default bucket key; otherwise the
+     * primary key is decoded and bucket key fields are re-encoded with the lake encoder.
      */
     private byte[] deriveBucketKey(byte[] key, LookupContext context) {
         List<String> bucketKeys = fileStoreTable.schema().bucketKeys();
-        if (bucketKeys.equals(trimmedPrimaryKeys)) {
+        if (bucketKeys.equals(trimmedPrimaryKeys) && keyDecoder == null) {
             return key;
         }
         RowType primaryKeyRowType = context.valueRowType().project(trimmedPrimaryKeys);
         InternalRow primaryKeyRow;
-        if (compactedKeyDecoder != null) {
-            primaryKeyRow = compactedKeyDecoder.decodeKey(key);
+        if (keyDecoder != null) {
+            primaryKeyRow = keyDecoder.decodeKey(key);
         } else {
             org.apache.paimon.data.BinaryRow paimonKeyRow =
                     new org.apache.paimon.data.BinaryRow(trimmedPrimaryKeys.size());
