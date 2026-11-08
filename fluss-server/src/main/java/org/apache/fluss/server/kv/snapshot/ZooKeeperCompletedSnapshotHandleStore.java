@@ -75,7 +75,8 @@ public class ZooKeeperCompletedSnapshotHandleStore implements CompletedSnapshotH
                     new BucketSnapshot(
                             snapshotId,
                             snapshotHandle.getLogOffset(),
-                            snapshotHandle.getMetadataFilePath().toString()));
+                            snapshotHandle.getMetadataFilePath().toString(),
+                            snapshotHandle.getSyncIndexPushedOffset()));
             success = true;
         } finally {
             if (!success) {

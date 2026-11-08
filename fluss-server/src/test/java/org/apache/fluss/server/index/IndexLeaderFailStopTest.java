@@ -199,6 +199,7 @@ class IndexLeaderFailStopTest extends ReplicaTestBase {
                         snapshotLogOffset,
                         null,
                         indexPushedOffset,
+                        indexPushedOffset,
                         null);
 
         FsPath metadataPath = snapshot.getMetadataFilePath();

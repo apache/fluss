@@ -83,6 +83,7 @@ public class CompletedSnapshotJsonSerde
                 completedSnapshot.getLogOffset(),
                 completedSnapshot.getRowCount(),
                 completedSnapshot.getIndexPushedOffset(),
+                completedSnapshot.getSyncIndexPushedOffset(),
                 ranges);
     }
 
@@ -108,6 +109,7 @@ public class CompletedSnapshotJsonSerde
                 metadata.getLogOffset(),
                 metadata.getRowCount(),
                 metadata.getIndexPushedOffset(),
+                metadata.getSyncIndexPushedOffset(),
                 ranges);
     }
 

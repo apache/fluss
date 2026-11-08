@@ -33,14 +33,8 @@ impl ListKvSnapshotsRequest {
             inner_request: proto::ListKvSnapshotsRequest {
                 table_id,
                 partition_id,
-                include_log_offsets: None,
             },
         }
-    }
-
-    pub(crate) fn with_log_offsets(mut self) -> Self {
-        self.inner_request.include_log_offsets = Some(true);
-        self
     }
 }
 

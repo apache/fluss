@@ -225,6 +225,7 @@ class CoordinatorServiceOrphanRpcsITCase {
                 snapshotId,
                 null,
                 null,
+                null,
                 null);
     }
 

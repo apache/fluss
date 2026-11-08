@@ -1346,6 +1346,7 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                         1000L,
                         null,
                         indexPushedOffset,
+                        indexPushedOffset,
                         null);
         CompletableFuture<CommitKvSnapshotResponse> responseCompletableFuture2 =
                 new CompletableFuture<>();

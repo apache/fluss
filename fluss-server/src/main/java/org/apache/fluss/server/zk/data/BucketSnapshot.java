@@ -20,6 +20,8 @@ package org.apache.fluss.server.zk.data;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotHandle;
 
+import javax.annotation.Nullable;
+
 import java.util.Objects;
 
 /**
@@ -31,12 +33,22 @@ public class BucketSnapshot {
 
     private final long snapshotId;
     private final long logOffset;
+    @Nullable private final Long syncIndexPushedOffset;
     private final String metadataPath;
 
     public BucketSnapshot(long snapshotId, long logOffset, String metadataPath) {
+        this(snapshotId, logOffset, metadataPath, null);
+    }
+
+    public BucketSnapshot(
+            long snapshotId,
+            long logOffset,
+            String metadataPath,
+            @Nullable Long syncIndexPushedOffset) {
         this.snapshotId = snapshotId;
         this.metadataPath = metadataPath;
         this.logOffset = logOffset;
+        this.syncIndexPushedOffset = syncIndexPushedOffset;
     }
 
     public long getSnapshotId() {
@@ -51,8 +63,14 @@ public class BucketSnapshot {
         return logOffset;
     }
 
+    @Nullable
+    public Long getSyncIndexPushedOffset() {
+        return syncIndexPushedOffset;
+    }
+
     public CompletedSnapshotHandle toCompletedSnapshotHandle() {
-        return new CompletedSnapshotHandle(snapshotId, new FsPath(metadataPath), logOffset);
+        return new CompletedSnapshotHandle(
+                snapshotId, new FsPath(metadataPath), logOffset, syncIndexPushedOffset);
     }
 
     @Override
@@ -63,11 +81,12 @@ public class BucketSnapshot {
         BucketSnapshot that = (BucketSnapshot) o;
         return snapshotId == that.snapshotId
                 && logOffset == that.logOffset
-                && Objects.equals(metadataPath, that.metadataPath);
+                && Objects.equals(metadataPath, that.metadataPath)
+                && Objects.equals(syncIndexPushedOffset, that.syncIndexPushedOffset);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(snapshotId, logOffset, metadataPath);
+        return Objects.hash(snapshotId, logOffset, metadataPath, syncIndexPushedOffset);
     }
 }

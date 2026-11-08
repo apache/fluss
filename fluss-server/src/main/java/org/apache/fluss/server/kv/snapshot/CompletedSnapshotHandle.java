@@ -22,6 +22,8 @@ import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.utils.IOUtils;
 
+import javax.annotation.Nullable;
+
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.Objects;
@@ -43,12 +45,22 @@ public class CompletedSnapshotHandle {
     private final long snapshotId;
     private final FsPath metadataFilePath;
     private final long logOffset;
+    @Nullable private final Long syncIndexPushedOffset;
 
     public CompletedSnapshotHandle(long snapshotId, FsPath metadataFilePath, long logOffset) {
+        this(snapshotId, metadataFilePath, logOffset, null);
+    }
+
+    public CompletedSnapshotHandle(
+            long snapshotId,
+            FsPath metadataFilePath,
+            long logOffset,
+            @Nullable Long syncIndexPushedOffset) {
         checkNotNull(metadataFilePath);
         this.snapshotId = snapshotId;
         this.metadataFilePath = metadataFilePath;
         this.logOffset = logOffset;
+        this.syncIndexPushedOffset = syncIndexPushedOffset;
     }
 
     public CompletedSnapshot retrieveCompleteSnapshot() throws IOException {
@@ -78,6 +90,11 @@ public class CompletedSnapshotHandle {
 
     public long getLogOffset() {
         return logOffset;
+    }
+
+    @Nullable
+    public Long getSyncIndexPushedOffset() {
+        return syncIndexPushedOffset;
     }
 
     public long getSnapshotId() {

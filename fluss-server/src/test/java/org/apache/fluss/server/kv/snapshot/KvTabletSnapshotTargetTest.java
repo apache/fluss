@@ -102,6 +102,7 @@ class KvTabletSnapshotTargetTest {
     private AtomicLong snapshotIdGenerator;
     private AtomicLong logOffsetGenerator;
     private AtomicLong indexPushedOffsetGenerator;
+    private final AtomicLong syncIndexPushedOffsetGenerator = new AtomicLong(-1);
     private AtomicLong updateMinRetainOffsetConsumer;
     private AtomicInteger updateMinRetainOffsetCount;
 
@@ -206,6 +207,55 @@ class KvTabletSnapshotTargetTest {
             assertThat(rocksDBKv.get("key1".getBytes())).isEqualTo("val1".getBytes());
             assertThat(rocksDBKv.get("key2".getBytes())).isEqualTo("val2".getBytes());
         }
+    }
+
+    @Test
+    void testSyncEvidenceIsSampledAfterUploadAndPublishedWhenReadable(@TempDir Path dir)
+            throws Throwable {
+        logOffsetGenerator.set(100);
+        indexPushedOffsetGenerator.set(20);
+        syncIndexPushedOffsetGenerator.set(30);
+        KvTabletSnapshotTarget target =
+                createSnapshotTarget(
+                        FsPath.fromLocalFile(dir.toFile()),
+                        new ZooKeeperCompletedSnapshotHandleStore(zooKeeperClient));
+        PeriodicSnapshotManager.SnapshotRunnable first = target.initSnapshot().get();
+        first.getSnapshotRunnable().run();
+        SnapshotResult result = first.getSnapshotRunnable().get();
+        syncIndexPushedOffsetGenerator.set(40);
+        target.handleSnapshotResult(
+                first.getSnapshotId(),
+                first.getCoordinatorEpoch(),
+                first.getBucketLeaderEpoch(),
+                first.getSnapshotLocation(),
+                result);
+        CompletedSnapshot committed =
+                zooKeeperClient
+                        .getTableBucketLatestSnapshot(tableBucket)
+                        .get()
+                        .toCompletedSnapshotHandle()
+                        .retrieveCompleteSnapshot();
+        assertThat(committed.getSyncIndexPushedOffset()).isEqualTo(40L);
+        assertThat(committed.getMinRetainLogOffset()).isEqualTo(20);
+        syncIndexPushedOffsetGenerator.set(99);
+        assertThat(target.initSnapshot()).isEmpty();
+        syncIndexPushedOffsetGenerator.set(100);
+        PeriodicSnapshotManager.SnapshotRunnable second = target.initSnapshot().get();
+        second.getSnapshotRunnable().run();
+        target.handleSnapshotResult(
+                second.getSnapshotId(),
+                second.getCoordinatorEpoch(),
+                second.getBucketLeaderEpoch(),
+                second.getSnapshotLocation(),
+                second.getSnapshotRunnable().get());
+        assertThat(
+                        zooKeeperClient
+                                .getTableBucketLatestSnapshot(tableBucket)
+                                .get()
+                                .getSyncIndexPushedOffset())
+                .isEqualTo(100L);
+        syncIndexPushedOffsetGenerator.set(120);
+        assertThat(target.initSnapshot()).isEmpty();
     }
 
     @Test
@@ -629,14 +679,20 @@ class KvTabletSnapshotTargetTest {
                 zooKeeperClient,
                 rocksIncrementalSnapshot,
                 remoteKvTabletDir,
+                (int) ConfigOptions.REMOTE_FS_WRITE_BUFFER_SIZE.defaultValue().getBytes(),
                 executor,
                 cancelStreamRegistry,
                 testingSnapshotIdCounter,
                 this::getCurrentTabletState,
+                syncIndexPushedOffsetGenerator.get() < 0
+                        ? null
+                        : syncIndexPushedOffsetGenerator::get,
                 this::recordMinRetainOffset,
                 bucketLeaderEpochSupplier,
                 coordinatorEpochSupplier,
                 0,
+                null,
+                null,
                 0L);
     }
 

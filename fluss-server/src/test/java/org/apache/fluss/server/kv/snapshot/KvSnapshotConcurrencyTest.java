@@ -270,10 +270,12 @@ class KvSnapshotConcurrencyTest {
                             cancelRegistry,
                             new TestingSequenceIDCounter(new AtomicLong(1)),
                             tablet::getTabletState,
+                            null,
                             ignored -> {},
                             () -> 1,
                             () -> 1,
                             0,
+                            null,
                             null,
                             0);
         }

@@ -42,6 +42,7 @@ public final class KvSnapshotFileMetadata {
     private final long logOffset;
     private final @Nullable Long rowCount;
     private final @Nullable Long indexPushedOffset;
+    private final @Nullable Long syncIndexPushedOffset;
     private final @Nullable List<AutoIncrementRange> autoIncrementRanges;
 
     /** Creates immutable standard KV snapshot file metadata. */
@@ -65,6 +66,7 @@ public final class KvSnapshotFileMetadata {
                 logOffset,
                 rowCount,
                 null,
+                null,
                 autoIncrementRanges);
     }
 
@@ -79,6 +81,7 @@ public final class KvSnapshotFileMetadata {
             long logOffset,
             @Nullable Long rowCount,
             @Nullable Long indexPushedOffset,
+            @Nullable Long syncIndexPushedOffset,
             @Nullable List<AutoIncrementRange> autoIncrementRanges) {
         this.tableBucket = checkNotNull(tableBucket, "Table bucket must not be null.");
         this.snapshotId = snapshotId;
@@ -90,6 +93,7 @@ public final class KvSnapshotFileMetadata {
         this.logOffset = logOffset;
         this.rowCount = rowCount;
         this.indexPushedOffset = indexPushedOffset;
+        this.syncIndexPushedOffset = syncIndexPushedOffset;
         this.autoIncrementRanges =
                 autoIncrementRanges == null
                         ? null
@@ -145,6 +149,12 @@ public final class KvSnapshotFileMetadata {
         return indexPushedOffset;
     }
 
+    /** Returns the confirmed SYNC index prefix recorded before snapshot commit. */
+    @Nullable
+    public Long getSyncIndexPushedOffset() {
+        return syncIndexPushedOffset;
+    }
+
     /** Returns the auto-increment ranges when present. */
     @Nullable
     public List<AutoIncrementRange> getAutoIncrementRanges() {
@@ -169,6 +179,7 @@ public final class KvSnapshotFileMetadata {
                 && Objects.equals(privateFiles, that.privateFiles)
                 && Objects.equals(rowCount, that.rowCount)
                 && Objects.equals(indexPushedOffset, that.indexPushedOffset)
+                && Objects.equals(syncIndexPushedOffset, that.syncIndexPushedOffset)
                 && Objects.equals(autoIncrementRanges, that.autoIncrementRanges);
     }
 
@@ -184,6 +195,7 @@ public final class KvSnapshotFileMetadata {
                 logOffset,
                 rowCount,
                 indexPushedOffset,
+                syncIndexPushedOffset,
                 autoIncrementRanges);
     }
 
