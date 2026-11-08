@@ -39,7 +39,7 @@ import static org.apache.fluss.utils.Preconditions.checkArgument;
  * when the dropped partition was already tombstoned.
  */
 @Internal
-public final class PartitionTombstoneAdvancer {
+final class PartitionTombstoneAdvancer {
 
     private PartitionTombstoneAdvancer() {}
 
@@ -51,7 +51,7 @@ public final class PartitionTombstoneAdvancer {
      * to fold into the floor. When the snapshot is unavailable, the update falls back to a
      * conservative explicit-set append.
      */
-    public static PartitionTombstone advanceAfterDrop(
+    static PartitionTombstone advanceAfterDrop(
             PartitionTombstone before,
             long partitionId,
             @Nullable Collection<Long> alivePartitionIdsAfterDrop) {

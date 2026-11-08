@@ -31,10 +31,10 @@ import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
+import org.apache.fluss.server.zk.data.PartitionTombstoneBinarySerde;
 import org.apache.fluss.server.zk.data.ZkData.PartitionTombstoneZNode;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.types.DataTypes;
-import org.apache.fluss.utils.serde.PartitionTombstoneBinarySerde;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.junit.jupiter.api.AfterEach;

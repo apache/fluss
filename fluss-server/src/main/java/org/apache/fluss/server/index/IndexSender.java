@@ -72,7 +72,7 @@ import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
  */
 @Internal
 @ThreadSafe
-public final class IndexSender implements AutoCloseable {
+final class IndexSender implements AutoCloseable {
 
     @VisibleForTesting
     enum LifecyclePhase {
@@ -83,7 +83,7 @@ public final class IndexSender implements AutoCloseable {
 
     /** Resolves the leader server ID for a given Index Table bucket. */
     @FunctionalInterface
-    public interface LeaderResolver {
+    interface LeaderResolver {
         OptionalInt resolveLeader(long indexTableId, int indexBucket);
     }
 
@@ -125,7 +125,7 @@ public final class IndexSender implements AutoCloseable {
      * @param maxTransportRequestBytes maximum framed request bytes accepted by the transport
      * @param requestTimeoutMs timeout for each index write request
      */
-    public IndexSender(
+    IndexSender(
             IndexSendBuffer sendBuffer,
             LeaderResolver leaderResolver,
             Function<Integer, TabletServerGateway> gatewayFactory,

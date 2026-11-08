@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.utils.serde;
+package org.apache.fluss.server.zk.data;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.metadata.PartitionTombstone;

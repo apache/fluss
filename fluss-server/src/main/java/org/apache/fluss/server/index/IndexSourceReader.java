@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.record.LogRecordBatch;
+import org.apache.fluss.server.exception.IndexSourceWalCorruptionException;
 import org.apache.fluss.server.kv.RemoteLogFetcher;
 import org.apache.fluss.server.log.FetchDataInfo;
 import org.apache.fluss.server.log.FetchIsolation;
