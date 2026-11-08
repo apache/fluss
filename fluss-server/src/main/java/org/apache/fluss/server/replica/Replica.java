@@ -48,11 +48,17 @@ import org.apache.fluss.metrics.Counter;
 import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.predicate.Predicate;
+import org.apache.fluss.record.BytesViewLogRecords;
 import org.apache.fluss.record.DefaultValueRecordBatch;
+import org.apache.fluss.record.FileChannelChunk;
+import org.apache.fluss.record.FileLogInputStream.FileChannelLogRecordBatch;
+import org.apache.fluss.record.FileLogRecords;
 import org.apache.fluss.record.KvRecordBatch;
+import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.record.bytesview.MultiBytesView;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.rpc.util.PredicateMessageUtils;
@@ -92,6 +98,7 @@ import org.apache.fluss.server.log.LogManager;
 import org.apache.fluss.server.log.LogOffsetMetadata;
 import org.apache.fluss.server.log.LogOffsetSnapshot;
 import org.apache.fluss.server.log.LogReadInfo;
+import org.apache.fluss.server.log.LogSegment;
 import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.log.checkpoint.OffsetCheckpointFile;
 import org.apache.fluss.server.log.remote.RemoteLogManager;
@@ -1894,10 +1901,6 @@ public final class Replica {
     }
 
     public LogRecords limitLogScan(int limit) {
-        if (getTableInfo().hasDeduplicationKey()) {
-            throw new org.apache.fluss.exception.InvalidTableException(
-                    "Deduplicating log tables require bounded log scans for limits.");
-        }
         return inReadLock(
                 leaderIsrUpdateLock,
                 () -> {
@@ -1924,7 +1927,22 @@ public final class Replica {
                                         true,
                                         null,
                                         null);
-                        return dataInfo.getRecords();
+                        LogRecords records = dataInfo.getRecords();
+                        long recordCount = 0;
+                        long scannedUpTo = readOffset;
+                        boolean withinHighWatermark = true;
+                        for (LogRecordBatch batch : records.batches()) {
+                            recordCount += batch.getRecordCount();
+                            scannedUpTo = batch.nextLogOffset();
+                            withinHighWatermark &= batch.lastLogOffset() < highWatermark;
+                        }
+                        if (withinHighWatermark
+                                && scannedUpTo >= highWatermark
+                                && recordCount >= limit) {
+                            return records;
+                        }
+                        // Empty control batches consume offsets without contributing rows.
+                        return readLastLogRecords(limit, highWatermark);
                     } catch (IOException e) {
                         String errorMsg =
                                 String.format(
@@ -1934,6 +1952,48 @@ public final class Replica {
                         throw new LogStorageException(errorMsg, e);
                     }
                 });
+    }
+
+    private LogRecords readLastLogRecords(int limit, long highWatermark) {
+        List<LogSegment> segments = logTablet.getSegments();
+        List<FileChannelChunk> selected = new ArrayList<>();
+        long recordCount = 0;
+        long logStartOffset = logTablet.localLogStartOffset();
+        for (int segmentIndex = segments.size() - 1;
+                segmentIndex >= 0 && recordCount < limit;
+                segmentIndex--) {
+            FileLogRecords records = segments.get(segmentIndex).getFileLogRecords();
+            List<LogRecordBatch> batches = new ArrayList<>();
+            for (LogRecordBatch batch : records.batches()) {
+                if (batch.lastLogOffset() >= highWatermark) {
+                    break;
+                }
+                if (batch.lastLogOffset() >= logStartOffset && batch.getRecordCount() > 0) {
+                    batches.add(batch);
+                }
+            }
+            for (int batchIndex = batches.size() - 1;
+                    batchIndex >= 0 && recordCount < limit;
+                    batchIndex--) {
+                FileChannelLogRecordBatch batch =
+                        (FileChannelLogRecordBatch) batches.get(batchIndex);
+                selected.add(
+                        new FileChannelChunk(
+                                records.toChunk().getFileChannel(),
+                                batch.position(),
+                                batch.sizeInBytes()));
+                recordCount += batch.getRecordCount();
+            }
+        }
+        if (selected.isEmpty()) {
+            return MemoryLogRecords.EMPTY;
+        }
+        MultiBytesView.Builder result = MultiBytesView.builder();
+        for (int index = selected.size() - 1; index >= 0; index--) {
+            FileChannelChunk chunk = selected.get(index);
+            result.addBytes(chunk.getFileChannel(), chunk.getPosition(), chunk.getSize());
+        }
+        return new BytesViewLogRecords(result.build());
     }
 
     /**

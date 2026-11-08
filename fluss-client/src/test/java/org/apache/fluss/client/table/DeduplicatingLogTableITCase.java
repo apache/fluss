@@ -180,10 +180,13 @@ class DeduplicatingLogTableITCase extends ClientToServerITCaseBase {
             first.get(60, TimeUnit.SECONDS);
             duplicate.get(60, TimeUnit.SECONDS);
             second.get(60, TimeUnit.SECONDS);
-            InternalRowListAssert.assertThatRows(
-                            collectRows(table.newScan().createBatchScanner(bucket)))
-                    .withSchema(schema.getRowType())
-                    .isEqualTo(Arrays.asList(row(1, "first"), row(2, "second")));
+            try (Connection fresh = ConnectionFactory.createConnection(clientConf);
+                    Table result = fresh.getTable(path)) {
+                InternalRowListAssert.assertThatRows(
+                                collectRows(result.newScan().limit(100).createBatchScanner(bucket)))
+                        .withSchema(schema.getRowType())
+                        .isEqualTo(Arrays.asList(row(1, "first"), row(2, "second")));
+            }
             assertThat(lost).isTrue();
         } finally {
             client.close(Duration.ZERO);
@@ -231,8 +234,14 @@ class DeduplicatingLogTableITCase extends ClientToServerITCaseBase {
                 AppendWriter writer = evolved.newAppend().createWriter();
                 writer.append(row(1, "replacement")).get(30, TimeUnit.SECONDS);
                 writer.append(row(3, "new")).get(30, TimeUnit.SECONDS);
+                writer.append(row(3, "ignored")).get(30, TimeUnit.SECONDS);
                 InternalRowListAssert.assertThatRows(
-                                collectRows(evolved.newScan().createBatchScanner(bucket)))
+                                collectRows(evolved.newScan().limit(1).createBatchScanner(bucket)))
+                        .withSchema(evolved.getTableInfo().getRowType())
+                        .isEqualTo(Collections.singletonList(row(3, "new")));
+                InternalRowListAssert.assertThatRows(
+                                collectRows(
+                                        evolved.newScan().limit(100).createBatchScanner(bucket)))
                         .withSchema(evolved.getTableInfo().getRowType())
                         .isEqualTo(Arrays.asList(row(1, null), row(2, null), row(3, "new")));
             }
@@ -261,6 +270,12 @@ class DeduplicatingLogTableITCase extends ClientToServerITCaseBase {
         TableBucket bucket = new TableBucket(tableId, null, 0);
         try (Table table = conn.getTable(path)) {
             assertThat(table.getTableInfo().hasPrimaryKey()).isFalse();
+            assertThatThrownBy(() -> table.newScan().createBatchScanner(bucket))
+                    .isInstanceOf(UnsupportedOperationException.class)
+                    .hasMessageContaining("requires limit");
+            assertThatThrownBy(() -> table.newScan().createBatchScanner(bucket, 1L))
+                    .isInstanceOf(UnsupportedOperationException.class)
+                    .hasMessageContaining("KV snapshot row scans");
             AppendWriter writer = table.newAppend().createWriter();
             List<CompletableFuture<AppendResult>> results = new ArrayList<>();
             for (int i = 0; i < 12; i++) {
@@ -287,6 +302,7 @@ class DeduplicatingLogTableITCase extends ClientToServerITCaseBase {
             assertThat(
                             collectRows(
                                     table.newScan()
+                                            .limit(100)
                                             .project(new int[] {0})
                                             .createBatchScanner(bucket)))
                     .hasSize(4);
@@ -320,7 +336,8 @@ class DeduplicatingLogTableITCase extends ClientToServerITCaseBase {
                         .hasSize(1);
                 next.append(row(10, "new")).get(30, TimeUnit.SECONDS);
                 InternalRowListAssert.assertThatRows(
-                                collectRows(recovered.newScan().createBatchScanner(bucket)))
+                                collectRows(
+                                        recovered.newScan().limit(100).createBatchScanner(bucket)))
                         .withSchema(schema.getRowType())
                         .isEqualTo(
                                 Arrays.asList(

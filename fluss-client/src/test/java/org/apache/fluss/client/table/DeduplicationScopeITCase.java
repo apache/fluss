@@ -79,6 +79,7 @@ class DeduplicationScopeITCase extends ClientToServerITCaseBase {
                 assertThat(
                                 collectRows(
                                         table.newScan()
+                                                .limit(100)
                                                 .createBatchScanner(
                                                         new TableBucket(
                                                                 table.getTableInfo().getTableId(),
@@ -116,6 +117,7 @@ class DeduplicationScopeITCase extends ClientToServerITCaseBase {
             assertThat(
                             collectRows(
                                     table.newScan()
+                                            .limit(100)
                                             .createBatchScanner(
                                                     new TableBucket(
                                                             table.getTableInfo().getTableId(),
@@ -158,6 +160,7 @@ class DeduplicationScopeITCase extends ClientToServerITCaseBase {
                 rows.addAll(
                         collectRows(
                                 table.newScan()
+                                        .limit(100)
                                         .createBatchScanner(
                                                 new TableBucket(
                                                         table.getTableInfo().getTableId(),
@@ -209,6 +212,7 @@ class DeduplicationScopeITCase extends ClientToServerITCaseBase {
             List<InternalRow> rows =
                     collectRows(
                             first.newScan()
+                                    .limit(100)
                                     .createBatchScanner(
                                             new TableBucket(
                                                     first.getTableInfo().getTableId(), null, 0)));
