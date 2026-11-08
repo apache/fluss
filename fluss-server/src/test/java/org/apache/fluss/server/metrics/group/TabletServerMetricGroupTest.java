@@ -89,6 +89,39 @@ class TabletServerMetricGroupTest {
                 .isEqualTo(256L);
     }
 
+    @Test
+    void replacementIndexGaugeRegistrationSurvivesOldOwnerClose() {
+        TabletServerMetricGroup metricGroup =
+                new TabletServerMetricGroup(
+                        NOPMetricRegistry.INSTANCE, "cluster", "rack", "host", 0);
+        TabletServerMetricGroup.GaugeRegistration old =
+                metricGroup.registerIndexReplicationGauges(
+                        () -> 0.5, () -> 100L, () -> 50L, () -> 1000L);
+        TabletServerMetricGroup.GaugeRegistration current =
+                metricGroup.registerIndexReplicationGauges(
+                        () -> 0.25, () -> 20L, () -> 10L, () -> 2000L);
+        old.close();
+        assertThat(gaugeValue(metricGroup, MetricNames.INDEX_REPLICATION_BUFFER_USAGE_RATIO))
+                .isEqualTo(0.25);
+        assertThat(gaugeValue(metricGroup, MetricNames.INDEX_REPLICATION_MAX_LAG_OFFSETS))
+                .isEqualTo(20L);
+        assertThat(gaugeValue(metricGroup, MetricNames.INDEX_REPLICATION_MAX_SYNC_LAG_OFFSETS))
+                .isEqualTo(10L);
+        assertThat(gaugeValue(metricGroup, MetricNames.INDEX_REPLICATION_MAX_NO_PROGRESS_TIME_MS))
+                .isEqualTo(2000L);
+        metricGroup.indexReplicationRetries().inc();
+        current.close();
+        assertThat(gaugeValue(metricGroup, MetricNames.INDEX_REPLICATION_MAX_LAG_OFFSETS))
+                .isEqualTo(0L);
+        assertThat(gaugeValue(metricGroup, MetricNames.INDEX_REPLICATION_MAX_SYNC_LAG_OFFSETS))
+                .isEqualTo(0L);
+        assertThat(gaugeValue(metricGroup, MetricNames.INDEX_REPLICATION_MAX_NO_PROGRESS_TIME_MS))
+                .isEqualTo(0L);
+        assertThat(gaugeValue(metricGroup, MetricNames.INDEX_REPLICATION_BUFFER_USAGE_RATIO))
+                .isEqualTo(0.0);
+        assertThat(metricGroup.indexReplicationRetries().getCount()).isEqualTo(1);
+    }
+
     private static Object gaugeValue(TabletServerMetricGroup metricGroup, String metricName) {
         return ((Gauge<?>) metricGroup.getMetrics().get(metricName)).getValue();
     }

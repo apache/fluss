@@ -23,6 +23,7 @@ import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.metrics.Counter;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.LogRecordReadContext.SchemaResolution;
 import org.apache.fluss.server.log.LogTablet;
@@ -82,6 +83,7 @@ public final class IndexReplicationSupervisor {
     private final TabletServerMetadataCache metadataCache;
     @Nullable private final MetadataProvider metadataProvider;
     private final IndexReplicationManager manager;
+    private final Counter retries;
     private volatile State state = State.NOT_STARTED;
     private final Object lifecycleLock = new Object();
 
@@ -92,12 +94,14 @@ public final class IndexReplicationSupervisor {
             TableBucket tableBucket,
             TabletServerMetadataCache metadataCache,
             @Nullable MetadataProvider metadataProvider,
-            IndexReplicationManager manager) {
+            IndexReplicationManager manager,
+            Counter retries) {
         this.tableInfo = tableInfo;
         this.tableBucket = tableBucket;
         this.metadataCache = metadataCache;
         this.metadataProvider = metadataProvider;
         this.manager = checkNotNull(manager, "manager");
+        this.retries = retries;
     }
 
     // ------------------------------------------------------------------------------------
@@ -177,27 +181,8 @@ public final class IndexReplicationSupervisor {
     public void onHighWatermarkAdvanced() {
         IndexReplicator replicator = indexReplicator;
         if (replicator != null) {
-            replicator.onHighWatermarkAdvanced();
             replicator.wakeup();
         }
-    }
-
-    /** Returns how long the active replicator has been behind without advancing. */
-    public long noProgressTimeMs() {
-        IndexReplicator r = this.indexReplicator;
-        return state == State.RUNNING && r != null ? r.noProgressTimeMs() : 0L;
-    }
-
-    // ------------------------------------------------------------------------------------
-    // State queries
-    // ------------------------------------------------------------------------------------
-
-    /**
-     * Returns whether the source or one of its indexes has a reported failure awaiting progress.
-     */
-    public boolean hasFailure() {
-        IndexReplicator replicator = indexReplicator;
-        return replicator != null && replicator.hasFailure();
     }
 
     // ------------------------------------------------------------------------------------
@@ -247,12 +232,12 @@ public final class IndexReplicationSupervisor {
         // Register with the read pool; the pool worker will catch up on any WAL entries already
         // committed before this replicator was created.
         installIndexReplicator(replicator);
-        replicator.onHighWatermarkAdvanced();
         LOG.info("IndexReplicator (WAL-driven) registered for {}", tableBucket);
     }
 
     private void deferIndexReplication(RuntimeException metadataFailure) {
         state = State.DEFERRED;
+        retries.inc();
         LOG.info(
                 "Index table metadata is unavailable or inconsistent for {}; deferring "
                         + "IndexReplicator until the next metadata update.",

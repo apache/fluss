@@ -157,24 +157,18 @@ public class MetricNames {
             "failedPrefixLookupRequestsPerSecond";
 
     // for index replication
-    public static final String INDEX_REPLICATION_SOURCE_BYTES_RATE =
-            "indexReplicationSourceBytesPerSecond";
     public static final String INDEX_REPLICATION_COMPLETED_BYTES_RATE =
             "indexReplicationCompletedBytesPerSecond";
-    public static final String INDEX_REPLICATION_PENDING_BYTES = "indexReplicationPendingBytes";
+    public static final String INDEX_REPLICATION_BUFFER_USAGE_RATIO =
+            "indexReplicationBufferUsageRatio";
     public static final String INDEX_REPLICATION_REQUEST_LATENCY_MS =
             "indexReplicationRequestLatencyMs";
-    public static final String INDEX_REPLICATION_RETRIES_RATE = "indexReplicationRetriesPerSecond";
-    public static final String INDEX_REPLICATION_FAILURES_RATE =
-            "indexReplicationFailuresPerSecond";
-    public static final String INDEX_PUSH_STALE_PROGRESS_BATCHES_RATE =
-            "indexPushStaleProgressBatchesPerSecond";
-    public static final String INDEX_PUSH_TOMBSTONE_NO_OP_BATCHES_RATE =
-            "indexPushTombstoneNoOpBatchesPerSecond";
+    public static final String INDEX_REPLICATION_RETRIES_TOTAL = "indexReplicationRetriesTotal";
+    public static final String INDEX_REPLICATION_MAX_LAG_OFFSETS = "indexReplicationMaxLagOffsets";
+    public static final String INDEX_REPLICATION_MAX_SYNC_LAG_OFFSETS =
+            "indexReplicationMaxSyncLagOffsets";
     public static final String INDEX_REPLICATION_MAX_NO_PROGRESS_TIME_MS =
             "indexReplicationMaxNoProgressTimeMs";
-    public static final String INDEX_REPLICATION_FAILED_SOURCE_BUCKET_COUNT =
-            "indexReplicationFailedSourceBucketCount";
 
     // for replica
     public static final String UNDER_REPLICATED = "underReplicated";

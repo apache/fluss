@@ -593,7 +593,6 @@ public final class IndexSender implements AutoCloseable {
                     invalidateTargetLocked(target);
                 } else if (error != null) {
                     invalidateTargetLocked(target);
-                    metrics.indexReplicationFailures().inc(chunk.size());
                     for (IndexBatch batch : chunk) {
                         LOG.error(
                                 "PutIndex RPC failed for index table {} from {} to {} at source "
@@ -762,7 +761,6 @@ public final class IndexSender implements AutoCloseable {
             PbPutIndexRespForBucket bucketResp = respByBucket.get(bucketId);
             boolean failed = bucketResp == null || bucketResp.hasErrorCode();
             if (failed) {
-                metrics.indexReplicationFailures().inc();
                 if (bucketResp == null) {
                     LOG.error(
                             "PutIndex response missing target {} for source {} at source end "
@@ -811,7 +809,6 @@ public final class IndexSender implements AutoCloseable {
                     batch.targetBucket(),
                     failure);
         }
-        metrics.indexReplicationFailures().inc();
         retryClaimedBatch(batch);
     }
 

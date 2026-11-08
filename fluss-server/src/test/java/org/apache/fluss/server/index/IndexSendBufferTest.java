@@ -221,7 +221,6 @@ class IndexSendBufferTest {
                         () ->
                                 assertThat(metrics.indexReplicationRetries().getCount())
                                         .isPositive());
-                assertThat(metrics.indexReplicationFailures().getCount()).isPositive();
                 assertThatThrownBy(() -> firstRequest.get().join())
                         .hasCauseInstanceOf(TimeoutException.class);
                 assertThat(owner.getAllIndexPushedOffset()).isZero();

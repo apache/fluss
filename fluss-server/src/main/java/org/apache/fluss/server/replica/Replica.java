@@ -242,33 +242,24 @@ public final class Replica {
     private volatile @Nullable CloseableRegistry closeableRegistryForKv;
     private @Nullable PeriodicSnapshotManager kvSnapshotManager;
 
-    /**
-     * Server-wide {@link ScannerManager}. Active sessions for this bucket are closed in {@link
-     * #dropKv()} under the {@code leaderIsrUpdateLock} write lock; {@link #openScan} registers
-     * under the read lock, so registration cannot race a leadership flip.
-     */
+    /** Scanner sessions register under the replica read lock and close under its write lock. */
     private final ScannerManager scannerManager;
 
     // ------- index management
     private final IndexReplicationSupervisor indexReplicationSupervisor;
+    @Nullable private volatile IndexReplicationLag indexReplicationLag;
     @Nullable private final IndexReplicationApplier indexReplicationApplier;
     @Nullable private IndexPartitionTombstoneFilter indexPartitionTombstoneFilter;
 
     /** Whether this main-table schema declares at least one secondary index. */
     private final boolean hasSecondaryIndexes;
 
-    /**
-     * Whether PutKv acks on this replica must block until the SYNC secondary-index mutations they
-     * generate are applied. False for ASYNC-only tables, index tables and tables without indexes.
-     */
     private final boolean hasSyncIndexes;
 
     /** Monotonically advancing SYNC index-pushed-offset used by PutKv acknowledgements. */
     private volatile long syncIndexPushedOffset;
 
-    /**
-     * Conservative all-index replay floor, persisted in snapshots and restored on leader startup.
-     */
+    /** Conservative all-index replay floor, persisted in snapshots and restored on startup. */
     private volatile long allIndexPushedOffset;
 
     // ------- metrics
@@ -681,6 +672,7 @@ public final class Replica {
 
     /** Delete the replica including drop the kv and log. */
     public void delete() {
+        indexReplicationLag = null;
         indexReplicationSupervisor.close();
         indexPartitionTombstoneFilter = null;
         // need to hold the lock to prevent appendLog, putKv from hitting I/O exceptions due
@@ -735,13 +727,24 @@ public final class Replica {
             indexReplicationSupervisor.prepareForLeader();
             indexPartitionTombstoneFilter =
                     IndexPartitionTombstoneFilter.forIndexTable(tableInfo, metadataCache);
-            resetIndexProgressForLeader();
-            // if it's become new leader, we must
-            // first destroy the old kv tablet
-            // if exist. Otherwise, it'll use still the old kv tablet which will cause data loss
+            indexReplicationLag = null;
+            if (hasSecondaryIndexes) {
+                syncIndexPushedOffset = hasSyncIndexes ? 0L : -1L;
+                allIndexPushedOffset = 0L;
+            }
+            // Rebuild leader storage rather than reusing KV state from the previous role.
             dropKv();
-            // now, we can create a new kv tablet
             createKv(checkNotNull(recovery));
+            if (hasSecondaryIndexes) {
+                indexReplicationLag =
+                        new IndexReplicationLag(
+                                tableBucket,
+                                clock,
+                                hasSyncIndexes,
+                                getLogHighWatermark(),
+                                syncIndexPushedOffset,
+                                allIndexPushedOffset);
+            }
             indexReplicationSupervisor.onBecomeLeader(
                     logTablet, schemaGetter, this::advanceIndexProgress, allIndexPushedOffset);
             if (indexPartitionTombstoneFilter != null) {
@@ -778,6 +781,7 @@ public final class Replica {
     }
 
     private void onBecomeNewFollower(int standbyReplica) {
+        indexReplicationLag = null;
         indexReplicationSupervisor.onBecomeFollower();
         indexPartitionTombstoneFilter = null;
 
@@ -979,7 +983,17 @@ public final class Replica {
         }
     }
 
-    // ---- Index management delegation ----
+    @Nullable
+    IndexReplicationLag indexReplicationLag() {
+        return isLeader() ? indexReplicationLag : null;
+    }
+
+    private void updateIndexReplicationLag() {
+        IndexReplicationLag lag = indexReplicationLag;
+        if (lag != null) {
+            lag.update(getLogHighWatermark(), syncIndexPushedOffset, allIndexPushedOffset);
+        }
+    }
 
     IndexReplicationSupervisor getIndexReplicationSupervisor() {
         return indexReplicationSupervisor;
@@ -994,11 +1008,11 @@ public final class Replica {
         if (allIndexOffset > allIndexPushedOffset) {
             allIndexPushedOffset = allIndexOffset;
         }
+        updateIndexReplicationLag();
         if (syncAdvanced) {
             delayedWriteManager.checkAndComplete(new DelayedTableBucketKey(tableBucket));
-            // The replicator can hold its lifecycle lock while publishing progress. Fetch
-            // completion acquires the replica lock, which demotion holds while closing the
-            // replicator, so it must run on another thread.
+            // Fetch completion must run outside the replicator lock: demotion holds the
+            // replica lock while closing the replicator, reversing the lock order otherwise.
             if (delayedFetchCompletionScheduled.compareAndSet(false, true)) {
                 try {
                     ioExecutor.execute(
@@ -1017,10 +1031,7 @@ public final class Replica {
         }
     }
 
-    /**
-     * Returns {@code true} when PutKv acks on this replica must wait for secondary-index mutations
-     * to be applied before returning ({@link Schema.Index#getVisibility()} is SYNC).
-     */
+    /** Whether PutKv acknowledgements must wait for SYNC index application. */
     public boolean requiresSyncIndexVisibility() {
         return hasSyncIndexes;
     }
@@ -1031,13 +1042,6 @@ public final class Replica {
 
     public long getAllIndexPushedOffset() {
         return allIndexPushedOffset;
-    }
-
-    private void resetIndexProgressForLeader() {
-        if (hasSecondaryIndexes) {
-            syncIndexPushedOffset = hasSyncIndexes ? 0L : -1L;
-            allIndexPushedOffset = 0L;
-        }
     }
 
     /**
@@ -1885,6 +1889,7 @@ public final class Replica {
                     oldWatermark.get(),
                     newHighWatermark,
                     tableBucket);
+            updateIndexReplicationLag();
             indexReplicationSupervisor.onHighWatermarkAdvanced();
             return true;
         } else {

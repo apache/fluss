@@ -27,6 +27,8 @@ import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.metrics.Gauge;
+import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
@@ -49,6 +51,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
 import static org.apache.fluss.server.coordinator.CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
@@ -150,6 +153,36 @@ class IndexLeaderFailStopTest extends ReplicaTestBase {
         assertThat(replica.getAllIndexPushedOffset()).isEqualTo(80L);
         assertThat(replica.getSyncIndexPushedOffset()).isEqualTo(90L);
         assertThat(replica.getClientLogHighWatermark()).isEqualTo(90L);
+        // Metadata is still absent: visibility and recovery backlog must remain observable
+        // even though no replicator has started.
+        assertThat(indexGauge(MetricNames.INDEX_REPLICATION_MAX_LAG_OFFSETS)).isEqualTo(20L);
+        assertThat(indexGauge(MetricNames.INDEX_REPLICATION_MAX_SYNC_LAG_OFFSETS)).isEqualTo(10L);
+        manualClock.advanceTime(500, TimeUnit.MILLISECONDS);
+        assertThat(indexGauge(MetricNames.INDEX_REPLICATION_MAX_NO_PROGRESS_TIME_MS))
+                .isEqualTo(500L);
+        assertThat(replicaManager.getServerMetricGroup().indexReplicationRetries().getCount())
+                .isEqualTo(1);
+
+        int remoteLeaderId = TABLET_SERVER_ID + 1;
+        List<Integer> replicas = Arrays.asList(TABLET_SERVER_ID, remoteLeaderId);
+        replica.makeFollower(
+                new NotifyLeaderAndIsrData(
+                        PhysicalTablePath.of(INDEXED_TABLE_PATH),
+                        tableBucket,
+                        replicas,
+                        new LeaderAndIsr(
+                                remoteLeaderId,
+                                FOLLOWER_LEADER_EPOCH + 2,
+                                replicas,
+                                Collections.emptyList(),
+                                INITIAL_COORDINATOR_EPOCH,
+                                FOLLOWER_LEADER_EPOCH + 2)));
+        assertThat(indexGauge(MetricNames.INDEX_REPLICATION_MAX_LAG_OFFSETS)).isEqualTo(0L);
+        assertThat(indexGauge(MetricNames.INDEX_REPLICATION_MAX_NO_PROGRESS_TIME_MS)).isEqualTo(0L);
+    }
+
+    private Object indexGauge(String name) {
+        return ((Gauge<?>) replicaManager.getServerMetricGroup().getMetrics().get(name)).getValue();
     }
 
     /** Ordinary KV tables do not require index progress in their snapshots. */
