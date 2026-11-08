@@ -35,6 +35,8 @@ import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.decode.KeyDecoder;
 import org.apache.fluss.row.decode.RowDecoder;
+import org.apache.fluss.rpc.protocol.MergeMode;
+import org.apache.fluss.server.entity.PutIndexDataForBucket;
 import org.apache.fluss.server.kv.KvTablet;
 import org.apache.fluss.server.log.LogAppendInfo;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
@@ -42,19 +44,12 @@ import org.apache.fluss.utils.ByteArraySlice;
 import org.apache.fluss.utils.BytesUtils;
 import org.apache.fluss.utils.IndexTableUtils;
 
-import io.github.fluss_contrib.rocksdb.AbstractCompactionFilter;
-import io.github.fluss_contrib.rocksdb.AbstractCompactionFilterFactory;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import javax.annotation.Nullable;
 
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
-import java.util.concurrent.Callable;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.ToLongFunction;
 
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_BATCH_SEQUENCE;
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
@@ -62,11 +57,9 @@ import static org.apache.fluss.utils.IndexTableUtils.DATA_RECORD_KIND;
 import static org.apache.fluss.utils.IndexTableUtils.PROGRESS_RECORD_KIND;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 
-/** Configures the storage behavior of a system-managed index table replica. */
+/** Applies replicated index windows using recoverable target progress for idempotency. */
 @Internal
-public final class IndexTableStorage {
-
-    private static final Logger LOG = LoggerFactory.getLogger(IndexTableStorage.class);
+public final class IndexReplicationApplier {
 
     private final TableInfo tableInfo;
     private final TableBucket tableBucket;
@@ -78,10 +71,8 @@ public final class IndexTableStorage {
     private final int recordKindPosition;
     private final int sourceProgressPosition;
 
-    @Nullable private TombstonedPartitionDiscriminator tombstoneDiscriminator;
-
-    /** Creates the storage policy for an Index Table replica. */
-    public IndexTableStorage(
+    /** Creates the application state for one Index Table replica. */
+    public IndexReplicationApplier(
             TableInfo tableInfo,
             TableBucket tableBucket,
             TabletServerMetadataCache metadataCache,
@@ -106,18 +97,16 @@ public final class IndexTableStorage {
         this.partitionIdKeyPosition =
                 primaryKeys.indexOf(IndexTableUtils.PARTITION_ID_SYSTEM_COLUMN);
         this.keyDecoder =
-                tableInfo.isIndexTable()
-                        ? KeyDecoder.ofPrimaryKeyDecoder(
-                                schema.getRowType(),
-                                primaryKeys,
-                                tableInfo
-                                        .getTableConfig()
-                                        .getKvFormatVersion()
-                                        .orElse(ConfigOptions.KV_FORMAT_VERSION_2)
-                                        .shortValue(),
-                                tableInfo.getTableConfig().getDataLakeFormat().orElse(null),
-                                tableInfo.isDefaultBucketKey())
-                        : null;
+                KeyDecoder.ofPrimaryKeyDecoder(
+                        schema.getRowType(),
+                        primaryKeys,
+                        tableInfo
+                                .getTableConfig()
+                                .getKvFormatVersion()
+                                .orElse(ConfigOptions.KV_FORMAT_VERSION_2)
+                                .shortValue(),
+                        tableInfo.getTableConfig().getDataLakeFormat().orElse(null),
+                        tableInfo.isDefaultBucketKey());
     }
 
     /**
@@ -126,28 +115,14 @@ public final class IndexTableStorage {
      * of its data mutations.
      */
     @Nullable
-    public LogAppendInfo putIndex(
-            KvTablet kvTablet,
-            TableBucket sourceBucket,
-            long sourceEndOffset,
-            byte[] progressKey,
-            KvRecordBatch records,
-            Callable<LogAppendInfo> append)
-            throws Exception {
+    public LogAppendInfo apply(KvTablet kvTablet, PutIndexDataForBucket data) throws Exception {
         AtomicReference<LogAppendInfo> result = new AtomicReference<>();
         AtomicReference<Throwable> failure = new AtomicReference<>();
         kvTablet.getGuardedExecutor()
                 .execute(
                         () -> {
                             try {
-                                result.set(
-                                        putIndexLocked(
-                                                kvTablet,
-                                                sourceBucket,
-                                                sourceEndOffset,
-                                                progressKey,
-                                                records,
-                                                append));
+                                result.set(applyLocked(kvTablet, data));
                             } catch (Throwable t) {
                                 failure.set(t);
                             }
@@ -163,14 +138,12 @@ public final class IndexTableStorage {
     }
 
     @Nullable
-    private LogAppendInfo putIndexLocked(
-            KvTablet kvTablet,
-            TableBucket sourceBucket,
-            long sourceEndOffset,
-            byte[] progressKey,
-            KvRecordBatch records,
-            Callable<LogAppendInfo> append)
+    private LogAppendInfo applyLocked(KvTablet kvTablet, PutIndexDataForBucket data)
             throws Exception {
+        TableBucket sourceBucket = data.sourceBucket();
+        long sourceEndOffset = data.sourceEndOffset();
+        byte[] progressKey = data.progressKey();
+        KvRecordBatch records = data.records();
         validateSource(sourceBucket);
         if (sourceIsTombstoned(sourceBucket)) {
             return null;
@@ -197,7 +170,7 @@ public final class IndexTableStorage {
                             + " is awaiting durable flush on "
                             + tableBucket);
         }
-        return append.call();
+        return kvTablet.putAsLeader(records, null, MergeMode.OVERWRITE);
     }
 
     private void validateSource(TableBucket sourceBucket) {
@@ -305,41 +278,5 @@ public final class IndexTableStorage {
             throw new CorruptRecordException("Stored Index Table progress row is invalid");
         }
         return row.getLong(sourceProgressPosition);
-    }
-
-    /** Prepares compaction and read filtering before the leader KV tablet is opened. */
-    public void prepareForLeader() {
-        tombstoneDiscriminator =
-                TombstonedPartitionDiscriminator.forIndexTable(tableInfo, metadataCache);
-    }
-
-    /** Clears state retained only while this replica is leader. */
-    public void clearLeaderState() {
-        tombstoneDiscriminator = null;
-    }
-
-    /** Creates the native partition-tombstone compaction filter when required. */
-    @Nullable
-    public AbstractCompactionFilterFactory<? extends AbstractCompactionFilter<?>>
-            createCompactionFilterFactory() {
-        TombstonedPartitionDiscriminator discriminator = tombstoneDiscriminator;
-        return discriminator == null ? null : discriminator.createCompactionFilterFactory();
-    }
-
-    /** Creates the value-tag extractor used by tagged Index Table values. */
-    @Nullable
-    public ToLongFunction<BinaryRow> createTagExtractor() {
-        TombstonedPartitionDiscriminator discriminator = tombstoneDiscriminator;
-        return discriminator == null ? null : discriminator.createTagExtractor();
-    }
-
-    /** Installs the partition-tombstone filter after the leader KV tablet is opened. */
-    public void installValueFilter(KvTablet kvTablet) {
-        TombstonedPartitionDiscriminator discriminator = tombstoneDiscriminator;
-        if (discriminator == null) {
-            return;
-        }
-        kvTablet.setValueFilter(discriminator::isTombstoned);
-        LOG.info("Index Table partition-tombstone filter installed for {}.", tableBucket);
     }
 }

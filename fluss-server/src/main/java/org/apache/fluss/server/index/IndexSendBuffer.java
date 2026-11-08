@@ -63,7 +63,7 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  */
 @Internal
 @ThreadSafe
-public final class IndexSendBuffer {
+final class IndexSendBuffer {
 
     private final ConcurrentMap<TableBucket, BucketQueue> queues = new ConcurrentHashMap<>();
 
@@ -83,23 +83,23 @@ public final class IndexSendBuffer {
     @Nullable private volatile Consumer<TableBucket> appendListener;
 
     /** Creates a buffer with no backpressure bound (primarily for tests). */
-    public IndexSendBuffer() {
+    IndexSendBuffer() {
         this(Long.MAX_VALUE);
     }
 
     /** Creates a buffer with a TabletServer-wide retained payload budget. */
-    public IndexSendBuffer(long maxTotalPendingBytes) {
+    IndexSendBuffer(long maxTotalPendingBytes) {
         checkArgument(maxTotalPendingBytes > 0, "maxTotalPendingBytes must be positive");
         this.maxTotalPendingBytes = maxTotalPendingBytes;
     }
 
     /** Registers a listener invoked when append or source cleanup may make a bucket ready. */
-    public void setReadyBucketListener(Consumer<TableBucket> appendListener) {
+    void setReadyBucketListener(Consumer<TableBucket> appendListener) {
         this.appendListener = appendListener;
     }
 
     /** Wakes readers that yielded because the total memory budget was occupied. */
-    public void setCapacityListener(Runnable capacityListener) {
+    void setCapacityListener(Runnable capacityListener) {
         this.capacityListener = capacityListener;
     }
 
@@ -118,7 +118,7 @@ public final class IndexSendBuffer {
      * publication is staged behind the window's admission flag. A rejected or failed publication
      * leaves no queue or accounting residue.
      */
-    public boolean tryAppendWindow(List<IndexBatch> windowBatches) {
+    boolean tryAppendWindow(List<IndexBatch> windowBatches) {
         return tryAppendWindow(windowBatches, null);
     }
 
@@ -291,7 +291,7 @@ public final class IndexSendBuffer {
      *
      * <p>Does not block or reserve capacity. A false result does not cancel an earlier request.
      */
-    public boolean requestCapacityWakeupIfFull() {
+    boolean requestCapacityWakeupIfFull() {
         boolean full = pendingBytes.get() >= maxTotalPendingBytes;
         if (full) {
             waitingForCapacity.set(true);
@@ -304,17 +304,17 @@ public final class IndexSendBuffer {
     }
 
     /** Total retained payload page bytes, including construction, queued and in-flight batches. */
-    public long pendingBytes() {
+    long pendingBytes() {
         return pendingBytes.get();
     }
 
     /** Snapshot of the buckets currently tracked. May include buckets that have just drained. */
-    public Set<TableBucket> buckets() {
+    Set<TableBucket> buckets() {
         return new HashSet<>(queues.keySet());
     }
 
     /** Returns {@code true} if the bucket currently has at least one queued batch. */
-    public boolean hasPending(TableBucket bucket) {
+    boolean hasPending(TableBucket bucket) {
         BucketQueue queue = queues.get(bucket);
         if (queue == null) {
             return false;
@@ -329,7 +329,7 @@ public final class IndexSendBuffer {
      * the queue until one of the exact-claim completion methods is called.
      */
     @Nullable
-    public IndexBatch claimFirstReady(TableBucket bucket) {
+    IndexBatch claimFirstReady(TableBucket bucket) {
         IndexBatch[] result = new IndexBatch[1];
         queues.computeIfPresent(
                 bucket,
@@ -357,19 +357,19 @@ public final class IndexSendBuffer {
     }
 
     /** Returns whether this buffer still owns the exact claimed batch. */
-    public boolean ownsClaim(IndexBatch batch) {
+    boolean ownsClaim(IndexBatch batch) {
         BucketQueue queue = queues.get(batch.targetBucket());
         return queue != null && queue.claimed == batch;
     }
 
     /** Returns whether the bucket currently has a claimed front batch. */
-    public boolean hasClaim(TableBucket bucket) {
+    boolean hasClaim(TableBucket bucket) {
         BucketQueue queue = queues.get(bucket);
         return queue != null && queue.claimed != null;
     }
 
     /** Releases the exact claim for retry while leaving the batch at the queue front. */
-    public boolean retryClaim(IndexBatch batch) {
+    boolean retryClaim(IndexBatch batch) {
         boolean[] retried = new boolean[1];
         boolean[] discarded = new boolean[1];
         synchronized (batch.window()) {
@@ -424,7 +424,7 @@ public final class IndexSendBuffer {
     }
 
     /** Discards every batch currently claimed by a sender that is closing. */
-    public void discardClaims() {
+    void discardClaims() {
         List<IndexBatch> claimed = new ArrayList<>();
         for (BucketQueue queue : queues.values()) {
             IndexBatch batch = queue.claimed;

@@ -24,11 +24,19 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.InternalRow;
 
+import javax.annotation.concurrent.NotThreadSafe;
+
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
-/** Write-side specification for one secondary index: column mapping, encoders, bucketing. */
+/**
+ * Write-side specification for one secondary index: column mapping, encoders, bucketing.
+ *
+ * <p>Owned by one source replicator. Encoding calls must be serialized because encoders reuse
+ * mutable row storage; encoded values are borrowed until the next encoding call.
+ */
 @Internal
+@NotThreadSafe
 final class IndexSpec {
 
     /**
