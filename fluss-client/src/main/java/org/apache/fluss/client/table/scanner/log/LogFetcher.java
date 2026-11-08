@@ -222,6 +222,7 @@ public class LogFetcher implements Closeable {
 
     public ScanRecords collectFetch() {
         logFetchBuffer.discardObsolete();
+        throwIfLegacyStartFailed();
         return logFetchCollector.collectFetch(logFetchBuffer);
     }
 
@@ -231,7 +232,19 @@ public class LogFetcher implements Closeable {
 
     public ArrowScanRecords collectArrowFetch() {
         logFetchBuffer.discardObsolete();
+        throwIfLegacyStartFailed();
         return arrowLogFetchCollector.collectFetch(logFetchBuffer);
+    }
+
+    private synchronized void throwIfLegacyStartFailed() {
+        for (Map.Entry<TableBucket, LegacyFetchState> entry : legacySubscriptions.entrySet()) {
+            LegacyFetchState legacy = entry.getValue();
+            if (legacy.terminalFailure != null
+                    && logScannerStatus.matchesRequestedRange(
+                            entry.getKey(), LogScanner.EARLIEST_OFFSET, legacy.stoppingOffset)) {
+                throw legacy.terminalFailure;
+            }
+        }
     }
 
     /**
@@ -264,7 +277,9 @@ public class LogFetcher implements Closeable {
         synchronized (this) {
             for (Map.Entry<TableBucket, LegacyFetchState> entry : legacySubscriptions.entrySet()) {
                 LegacyFetchState legacy = entry.getValue();
-                if (legacy.resolving || legacy.failed || legacy.retryAfterNanos == 0L) {
+                if (legacy.resolving
+                        || legacy.terminalFailure != null
+                        || legacy.retryAfterNanos == 0L) {
                     continue;
                 }
                 if (logScannerStatus.matchesRequestedRange(
@@ -754,7 +769,7 @@ public class LogFetcher implements Closeable {
                 legacy = null;
             }
             if (legacy != null) {
-                if (legacy.failed) {
+                if (legacy.terminalFailure != null) {
                     continue;
                 }
                 if (offset == LogScanner.EARLIEST_OFFSET) {
@@ -909,7 +924,7 @@ public class LogFetcher implements Closeable {
             LogScannerStatus.SubscriptionSnapshot snapshot,
             LegacyFetchState legacy) {
         long now = System.nanoTime();
-        if (legacy.resolving || legacy.failed || now < legacy.retryAfterNanos) {
+        if (legacy.resolving || legacy.terminalFailure != null || now < legacy.retryAfterNanos) {
             return;
         }
         Integer leader = getTableBucketLeader(tb);
@@ -985,8 +1000,8 @@ public class LogFetcher implements Closeable {
         } else if (!(cause instanceof RetriableException)
                 && !(cause instanceof IOException)
                 && !(cause instanceof TimeoutException)) {
-            legacy.failed = true;
-            enqueueFailure(tb, snapshot, cause);
+            legacy.terminalFailure = CompletedFetch.toFetchException(cause);
+            logFetchBuffer.requestFetchRetry();
             return;
         }
         legacy.retryAfterNanos = System.nanoTime() + MILLISECONDS.toNanos(100);
@@ -996,7 +1011,7 @@ public class LogFetcher implements Closeable {
     private static final class LegacyFetchState {
         private final long stoppingOffset;
         private boolean resolving;
-        private boolean failed;
+        @Nullable private RuntimeException terminalFailure;
         private long retryAfterNanos;
 
         private LegacyFetchState(long stoppingOffset) {

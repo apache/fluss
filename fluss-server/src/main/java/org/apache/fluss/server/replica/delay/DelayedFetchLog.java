@@ -44,6 +44,7 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 
 import java.io.IOException;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.function.Consumer;
@@ -131,6 +132,8 @@ public class DelayedFetchLog extends DelayedOperation {
         long accumulatedSize = completedFetchBytes;
         boolean hasLocalFetch = false;
         boolean allLocalBoundedFetchesReachedStop = true;
+        boolean hasReadableBoundedData = false;
+        Map<TableBucket, FetchReqInfo> emptyRangeCandidates = Collections.emptyMap();
 
         for (Map.Entry<TableBucket, FetchBucketStatus> entry : fetchBucketStatusMap.entrySet()) {
             TableBucket tb = entry.getKey();
@@ -164,9 +167,13 @@ public class DelayedFetchLog extends DelayedOperation {
                     }
 
                     // A bounded local fetch can stop waiting once its stopping offset is visible.
-                    if (stoppingOffset != null && endOffset.getMessageOffset() < stoppingOffset) {
+                    boolean stopVisible =
+                            stoppingOffset != null
+                                    && endOffset.getMessageOffset() >= stoppingOffset;
+                    if (stoppingOffset != null && !stopVisible) {
                         allLocalBoundedFetchesReachedStop = false;
                     }
+                    int bytesAvailable = 0;
 
                     // Go directly to the check for Case E if the log offsets are the same. If
                     // the log segment has just rolled, then the high watermark offset will remain
@@ -191,11 +198,21 @@ public class DelayedFetchLog extends DelayedOperation {
                         } else if (fetchOffset.getMessageOffset() < endOffset.getMessageOffset()) {
                             // We take the bucket fetch size as upper bound when accumulating the
                             // bytes.
-                            int bytesAvailable =
+                            bytesAvailable =
                                     Math.min(
                                             endOffset.positionDiff(fetchOffset),
                                             fetchBucketStatus.fetchReqInfo.getMaxBytes());
                             accumulatedSize += bytesAvailable;
+                        }
+                    }
+                    if (stopVisible) {
+                        if (bytesAvailable > 0) {
+                            hasReadableBoundedData = true;
+                        } else {
+                            if (emptyRangeCandidates.isEmpty()) {
+                                emptyRangeCandidates = new HashMap<>();
+                            }
+                            emptyRangeCandidates.put(tb, fetchBucketStatus.fetchReqInfo);
                         }
                     }
                 }
@@ -221,12 +238,39 @@ public class DelayedFetchLog extends DelayedOperation {
         }
 
         // Case F.
-        if (accumulatedSize >= params.minFetchBytes()
-                || (hasLocalFetch && allLocalBoundedFetchesReachedStop)) {
+        if (accumulatedSize >= params.minFetchBytes()) {
             return forceComplete();
-        } else {
-            return false;
         }
+        if (hasLocalFetch && allLocalBoundedFetchesReachedStop) {
+            if (hasReadableBoundedData) {
+                return forceComplete();
+            }
+            // A bounded range can be complete without readable bytes when the stopping offset falls
+            // in an offset gap.
+            for (Map.Entry<TableBucket, FetchReqInfo> entry : emptyRangeCandidates.entrySet()) {
+                TableBucket tb = entry.getKey();
+                boolean shouldComplete;
+                try {
+                    Replica replica = replicaManager.getReplicaOrException(tb);
+                    FetchReqInfo fetchReqInfo = entry.getValue();
+                    shouldComplete =
+                            replica.hasVisibleEmptyBoundedRange(
+                                    fetchReqInfo.getFetchOffset(),
+                                    fetchReqInfo.getStoppingOffset(),
+                                    params.isolation(),
+                                    params.fetchOnlyLeader());
+                } catch (FlussRuntimeException | IOException e) {
+                    LOG.debug("Error checking bounded empty range for bucket {}.", tb, e);
+                    shouldComplete = true;
+                }
+
+                if (shouldComplete) {
+                    return forceComplete();
+                }
+            }
+        }
+
+        return false;
     }
 
     @Override

@@ -451,6 +451,15 @@ public final class LocalLog {
             // Limit the number of segments scanned when filtering to prevent a single fetch
             // request from scanning the entire log when the filter rejects all data.
             int filteredSegmentsScanned = 0;
+            // For unfiltered reads, the stopping offset can only be used for pruning after it
+            // becomes visible at the requested fetch isolation level.
+            // Otherwise, keep the original file-slice read path.
+            Long segmentStoppingOffset =
+                    filterContext == null
+                                    && stoppingOffset != null
+                                    && maxOffsetMetadata.getMessageOffset() < stoppingOffset
+                            ? null
+                            : stoppingOffset;
             while (fetchDataInfo == null && segmentOpt.isPresent()) {
                 LogSegment segment = segmentOpt.get();
                 long baseOffset = segment.getBaseOffset();
@@ -468,7 +477,7 @@ public final class LocalLog {
                                 minOneMessage,
                                 projection,
                                 filterContext,
-                                stoppingOffset);
+                                segmentStoppingOffset);
                 if (fetchDataInfo == null) {
                     segmentOpt = segments.higherSegment(baseOffset);
                 } else if (filterContext != null

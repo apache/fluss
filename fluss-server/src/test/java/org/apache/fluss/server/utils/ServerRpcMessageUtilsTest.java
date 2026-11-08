@@ -169,6 +169,7 @@ class ServerRpcMessageUtilsTest {
                         .get(0)
                         .getBucketsRespsList()
                         .get(0);
+        assertThat(response.hasLogStartOffset()).isTrue();
         assertThat(response.getLogStartOffset()).isEqualTo(10L);
         assertThat(
                         CommonRpcMessageUtils.getFetchLogResultForBucket(
@@ -183,7 +184,24 @@ class ServerRpcMessageUtilsTest {
                         .get(0)
                         .getBucketsRespsList()
                         .get(0);
-        assertThat(legacy.getLogStartOffset()).isZero();
+        assertThat(legacy.hasLogStartOffset()).isFalse();
+    }
+
+    @Test
+    void testFetchLogResponsePreservesZeroLogStartOffset() {
+        TableBucket bucket = new TableBucket(1L, 0);
+        FetchLogResultForBucket result =
+                FetchLogResultForBucket.empty(bucket, 20L, -1L).withLogStartOffset(0L);
+
+        PbFetchLogRespForBucket response =
+                ServerRpcMessageUtils.makeFetchLogResponse(Collections.singletonMap(bucket, result))
+                        .getTablesRespsList()
+                        .get(0)
+                        .getBucketsRespsList()
+                        .get(0);
+
+        assertThat(response.hasLogStartOffset()).isTrue();
+        assertThat(response.getLogStartOffset()).isZero();
     }
 
     @Test

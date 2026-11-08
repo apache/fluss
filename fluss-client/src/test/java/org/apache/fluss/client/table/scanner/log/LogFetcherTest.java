@@ -625,18 +625,26 @@ public class LogFetcherTest {
         // FETCH_LOG v1 is rejected.
         logFetcher.sendFetches();
 
+        // Consume the retry signal from the v1 version rejection.
+        assertThat(logFetcher.awaitNotEmpty(System.nanoTime())).isTrue();
         assertThat(gateway.fetchRequests).hasSize(1);
         assertThat(gateway.onlyBucketRequest(0).hasStoppingOffset()).isTrue();
 
         // Start legacy EARLIEST resolution.
         logFetcher.sendFetches();
+        assertThat(logFetcher.awaitNotEmpty(System.nanoTime())).isFalse();
         assertThat(gateway.listOffsetRequests).isEqualTo(1);
 
         // The legacy server rejects ListOffsets with a non-retriable error.
         gateway.completeListOffsetsWithError(0, Errors.AUTHORIZATION_EXCEPTION);
-        // The error must be delivered to the caller rather than
-        // converted into an endless retry loop.
+        // The terminal failure must wake a waiting scanner.
+        assertThat(logFetcher.awaitNotEmpty(System.nanoTime() + TimeUnit.SECONDS.toNanos(1)))
+                .isTrue();
+        // Row and Arrow polling must keep reporting the terminal failure.
         assertThatThrownBy(logFetcher::collectFetch).isInstanceOf(AuthorizationException.class);
+        assertThatThrownBy(logFetcher::collectFetch).isInstanceOf(AuthorizationException.class);
+        assertThatThrownBy(logFetcher::collectArrowFetch)
+                .isInstanceOf(AuthorizationException.class);
 
         // A failed start resolution must not change the scan position.
         assertThat(status.getBucketOffset(tb1)).isEqualTo(LogScanner.EARLIEST_OFFSET);
@@ -646,6 +654,188 @@ public class LogFetcherTest {
         logFetcher.sendFetches();
         assertThat(gateway.listOffsetRequests).isEqualTo(1);
         assertThat(gateway.fetchRequests).hasSize(1);
+    }
+
+    @Test
+    void testLegacyTerminalFailureClearedOnResubscription() {
+        IOUtils.closeQuietly(logFetcher);
+
+        LegacyFetchGateway gateway = new LegacyFetchGateway(-1L);
+        metadataUpdater = initializeMetadataUpdater(gateway);
+        logFetcher = createLogFetcher(new Configuration());
+
+        LogScannerStatus status = logFetcher.getLogScannerStatus();
+        status.assignBoundedScanBucket(tb1, LogScanner.EARLIEST_OFFSET, 105L);
+
+        // Enter legacy fallback and begin ListOffsets resolution.
+        logFetcher.sendFetches();
+        logFetcher.sendFetches();
+        assertThat(gateway.listOffsetRequests).isEqualTo(1);
+
+        gateway.completeListOffsetsWithError(0, Errors.AUTHORIZATION_EXCEPTION);
+
+        assertThatThrownBy(logFetcher::collectFetch).isInstanceOf(AuthorizationException.class);
+
+        // Replace the failed subscription with a different bounded range.
+        status.assignBoundedScanBucket(tb1, 0L, 10L);
+        logFetcher.onSubscriptionChanged(tb1, true);
+
+        // The old terminal failure must no longer affect the new subscription.
+        assertThat(logFetcher.collectFetch().hasProgress()).isFalse();
+        assertThat(status.getBucketOffset(tb1)).isZero();
+
+        // A new subscription can independently attempt FETCH_LOG v1.
+        logFetcher.sendFetches();
+
+        assertThat(gateway.fetchRequests).hasSize(2);
+        assertThat(gateway.onlyBucketRequest(1).hasStoppingOffset()).isTrue();
+        assertThat(gateway.onlyBucketRequest(1).getFetchOffset()).isZero();
+        assertThat(gateway.onlyBucketRequest(1).getStoppingOffset()).isEqualTo(10L);
+    }
+
+    @Test
+    void testLegacyTerminalFailurePreservesOtherBucketRecordsUntilUnsubscribed() throws Exception {
+        IOUtils.closeQuietly(logFetcher);
+
+        TableBucket failedBucket = tb1;
+        TableBucket healthyBucket = new TableBucket(DATA1_TABLE_ID, 1);
+        LegacyFetchGateway gateway =
+                new LegacyFetchGateway(-1L, genMemoryLogRecordsByObject(DATA1));
+        metadataUpdater = initializeMetadataUpdater(gateway);
+
+        // Route both subscribed buckets to the gateway used by this test.
+        Cluster original = metadataUpdater.getCluster();
+        PhysicalTablePath physicalTablePath = PhysicalTablePath.of(DATA1_TABLE_PATH);
+        int[] replicas = {NODE1.id(), NODE2.id(), NODE3.id()};
+        List<BucketLocation> locations =
+                Arrays.asList(
+                        new BucketLocation(
+                                physicalTablePath, DATA1_TABLE_ID, 0, NODE1.id(), replicas),
+                        new BucketLocation(
+                                physicalTablePath, DATA1_TABLE_ID, 1, NODE1.id(), replicas),
+                        new BucketLocation(
+                                physicalTablePath, DATA1_TABLE_ID, 2, NODE3.id(), replicas));
+        metadataUpdater.updateCluster(
+                new Cluster(
+                        original.getAliveTabletServers(),
+                        original.getCoordinatorServer(),
+                        Collections.singletonMap(physicalTablePath, locations),
+                        original.getTableIdByPath(),
+                        original.getPartitionIdByPath(),
+                        original.getBucketCountByTableOrPartition(),
+                        original.getBucketCountEpochByTableId()));
+
+        logFetcher = createLogFetcher(new Configuration());
+        LogScannerStatus status = logFetcher.getLogScannerStatus();
+        status.assignBoundedScanBucket(failedBucket, LogScanner.EARLIEST_OFFSET, 105L);
+        status.assignBoundedScanBucket(healthyBucket, 0L, 3L);
+
+        // Reject the shared v1 request, then resolve A while buffering B's v0 response.
+        logFetcher.sendFetches();
+        assertThat(gateway.fetchRequests).hasSize(1);
+        assertThat(gateway.fetchRequests.get(0).getTablesReqAt(0).getBucketsReqsList())
+                .extracting(PbFetchLogReqForBucket::getBucketId)
+                .containsExactlyInAnyOrder(failedBucket.getBucket(), healthyBucket.getBucket());
+
+        logFetcher.sendFetches();
+        assertThat(gateway.listOffsetRequests).isEqualTo(1);
+        assertThat(gateway.fetchRequests).hasSize(2);
+        assertThat(gateway.onlyBucketRequest(1).getBucketId()).isEqualTo(healthyBucket.getBucket());
+        assertThat(gateway.onlyBucketRequest(1).hasStoppingOffset()).isFalse();
+        assertThat(logFetcher.hasAvailableFetches()).isTrue();
+
+        gateway.completeListOffsetsWithError(0, Errors.AUTHORIZATION_EXCEPTION);
+
+        for (int i = 0; i < 2; i++) {
+            assertThatThrownBy(logFetcher::collectFetch).isInstanceOf(AuthorizationException.class);
+            assertThat(status.getBucketOffset(failedBucket)).isEqualTo(LogScanner.EARLIEST_OFFSET);
+            assertThat(status.getBucketOffset(healthyBucket)).isZero();
+        }
+
+        status.unassignScanBuckets(Collections.singletonList(failedBucket));
+        logFetcher.onSubscriptionChanged(failedBucket, true);
+
+        // No new fetch: recovery must return the records that were already buffered.
+        ScanRecords recovered = logFetcher.collectFetch();
+
+        assertThat(recovered.count()).isEqualTo(3);
+        assertThat(recovered.records(healthyBucket))
+                .extracting(ScanRecord::logOffset)
+                .containsExactly(0L, 1L, 2L);
+        assertThat(recovered.consumedUpToOffset(healthyBucket)).isEqualTo(3L);
+        assertThat(recovered.finishedBuckets()).containsExactly(healthyBucket);
+        assertThat(status.getBucketOffset(healthyBucket)).isEqualTo(3L);
+        assertThat(status.getBucketOffset(failedBucket)).isNull();
+        assertThat(gateway.fetchRequests).hasSize(2);
+        assertThat(gateway.listOffsetRequests).isEqualTo(1);
+
+        assertThat(logFetcher.collectFetch().hasProgress()).isFalse();
+    }
+
+    @Test
+    void testLegacyTerminalFailureClearedOnSameRangeResubscription() throws Exception {
+        IOUtils.closeQuietly(logFetcher);
+
+        LegacyFetchGateway gateway =
+                new LegacyFetchGateway(-1L, genMemoryLogRecordsWithBaseOffset(100L, DATA1));
+        metadataUpdater = initializeMetadataUpdater(gateway);
+        logFetcher = createLogFetcher(new Configuration());
+
+        LogScannerStatus status = logFetcher.getLogScannerStatus();
+        status.assignBoundedScanBucket(tb1, LogScanner.EARLIEST_OFFSET, 105L);
+
+        logFetcher.sendFetches();
+        logFetcher.sendFetches();
+        assertThat(gateway.fetchRequests).hasSize(1);
+        assertThat(gateway.listOffsetRequests).isEqualTo(1);
+
+        gateway.completeListOffsetsWithError(0, Errors.AUTHORIZATION_EXCEPTION);
+
+        assertThatThrownBy(logFetcher::collectFetch).isInstanceOf(AuthorizationException.class);
+        assertThat(status.getBucketOffset(tb1)).isEqualTo(LogScanner.EARLIEST_OFFSET);
+
+        // Identical bounds ensure range mismatch cannot hide the old terminal failure.
+        status.assignBoundedScanBucket(tb1, LogScanner.EARLIEST_OFFSET, 105L);
+        logFetcher.onSubscriptionChanged(tb1, true);
+
+        assertThat(logFetcher.collectFetch().hasProgress()).isFalse();
+        assertThat(status.getBucketOffset(tb1)).isEqualTo(LogScanner.EARLIEST_OFFSET);
+
+        logFetcher.sendFetches();
+        assertThat(gateway.fetchRequests).hasSize(2);
+        assertThat(gateway.onlyBucketRequest(1).hasStoppingOffset()).isTrue();
+        assertThat(gateway.onlyBucketRequest(1).getFetchOffset())
+                .isEqualTo(LogScanner.EARLIEST_OFFSET);
+        assertThat(gateway.onlyBucketRequest(1).getStoppingOffset()).isEqualTo(105L);
+
+        logFetcher.sendFetches();
+        assertThat(gateway.listOffsetRequests).isEqualTo(2);
+
+        gateway.completeListOffsets(1, 100L);
+
+        ScanRecords resolution = logFetcher.collectFetch();
+        assertThat(resolution.count()).isZero();
+        assertThat(resolution.consumedUpToOffset(tb1)).isEqualTo(100L);
+        assertThat(resolution.finishedBuckets()).isEmpty();
+        assertThat(status.getBucketOffset(tb1)).isEqualTo(100L);
+
+        logFetcher.sendFetches();
+        assertThat(gateway.fetchRequests).hasSize(3);
+        assertThat(gateway.onlyBucketRequest(2).hasStoppingOffset()).isFalse();
+        assertThat(gateway.onlyBucketRequest(2).getFetchOffset()).isEqualTo(100L);
+
+        ScanRecords completed = logFetcher.collectFetch();
+        assertThat(completed.records(tb1))
+                .extracting(ScanRecord::logOffset)
+                .containsExactly(100L, 101L, 102L, 103L, 104L);
+        assertThat(completed.consumedUpToOffset(tb1)).isEqualTo(105L);
+        assertThat(completed.finishedBuckets()).containsExactly(tb1);
+        assertThat(status.getBucketOffset(tb1)).isEqualTo(105L);
+
+        logFetcher.sendFetches();
+        assertThat(gateway.fetchRequests).hasSize(3);
+        assertThat(gateway.listOffsetRequests).isEqualTo(2);
+        assertThat(logFetcher.collectFetch().hasProgress()).isFalse();
     }
 
     @Test
@@ -982,9 +1172,12 @@ public class LogFetcherTest {
         // The response contains no bucket result.
         gateway.completeMalformedListOffsets(0);
 
-        assertThatThrownBy(logFetcher::collectFetch)
-                .isInstanceOf(FetchException.class)
-                .hasMessageContaining("Missing or duplicate ListOffsets result");
+        // A terminal failure must be reported on every poll.
+        for (int i = 0; i < 2; i++) {
+            assertThatThrownBy(logFetcher::collectFetch)
+                    .isInstanceOf(FetchException.class)
+                    .hasMessageContaining("Missing or duplicate ListOffsets result");
+        }
 
         assertThat(status.getBucketOffset(tb1)).isEqualTo(LogScanner.EARLIEST_OFFSET);
         assertThat(status.drainFinishedBuckets()).isEmpty();

@@ -651,6 +651,31 @@ public final class Replica {
                 });
     }
 
+    public boolean hasVisibleEmptyBoundedRange(
+            long fetchOffset,
+            Long stoppingOffset,
+            FetchIsolation isolation,
+            boolean fetchOnlyLeader)
+            throws IOException {
+        return inReadLock(
+                leaderIsrUpdateLock,
+                () -> {
+                    LogTablet log = localLogOrThrow(fetchOnlyLeader);
+                    long readOffset =
+                            fetchOffset == FetchParams.FETCH_FROM_EARLIEST_OFFSET
+                                    ? log.logStartOffset()
+                                    : fetchOffset;
+                    if (readOffset < log.localLogStartOffset() || readOffset >= stoppingOffset) {
+                        return false;
+                    }
+                    FetchDataInfo data =
+                            log.read(readOffset, 1, isolation, false, null, null, stoppingOffset);
+                    return data != null
+                            && data.hasFilteredEndOffset()
+                            && data.getFilteredEndOffset() >= stoppingOffset;
+                });
+    }
+
     // -------------------------------------------------------------------------------------------
 
     private void onBecomeNewLeader(@Nullable KvRecovery recovery) {

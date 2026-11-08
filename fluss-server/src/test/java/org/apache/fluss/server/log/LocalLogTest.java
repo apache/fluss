@@ -982,6 +982,48 @@ final class LocalLogTest extends LogTestBase {
         }
     }
 
+    @Test
+    void testUnfilteredBoundedReadWaitsForVisibleStopAcrossOffsetGap() throws Exception {
+        // The first physical batch starts at offset 50, leaving an offset gap.
+        MemoryLogRecords records =
+                genMemoryLogRecordsWithBaseOffset(
+                        50L, Arrays.asList(new Object[] {1, "a"}, new Object[] {2, "b"}));
+
+        localLog.append(51L, -1L, 0L, records);
+
+        long segmentBaseOffset = localLog.getSegments().activeSegment().getBaseOffset();
+        int maxFetchBytes = records.sizeInBytes();
+
+        // HW=48 < stop=49. The bounded scan must not complete.
+        LogOffsetMetadata beforeStop = new LogOffsetMetadata(48L, segmentBaseOffset, 0);
+
+        FetchDataInfo pending =
+                localLog.read(0L, maxFetchBytes, false, beforeStop, null, null, 49L);
+
+        assertThat(pending.getRecords().sizeInBytes()).isZero();
+        assertThat(pending.hasFilteredEndOffset()).isFalse();
+
+        // HW reaches stop=49, but no physical batch is yet readable.
+        // The next batch starts at 50, so the requested range is empty.
+        LogOffsetMetadata atStop = new LogOffsetMetadata(49L, segmentBaseOffset, 0);
+
+        FetchDataInfo finished = localLog.read(0L, maxFetchBytes, false, atStop, null, null, 49L);
+
+        assertThat(finished.getRecords().sizeInBytes()).isZero();
+        assertThat(finished.hasFilteredEndOffset()).isTrue();
+        assertThat(finished.getFilteredEndOffset()).isEqualTo(49L);
+
+        // HW reaches stop inside a batch, but that batch is not yet
+        // fully readable. Do not incorrectly finish the bounded scan.
+        LogOffsetMetadata insideBatch = new LogOffsetMetadata(51L, segmentBaseOffset, 0);
+
+        FetchDataInfo incompleteBatch =
+                localLog.read(0L, maxFetchBytes, false, insideBatch, null, null, 51L);
+
+        assertThat(incompleteBatch.getRecords().sizeInBytes()).isZero();
+        assertThat(incompleteBatch.hasFilteredEndOffset()).isFalse();
+    }
+
     private FetchDataInfo readLog(LocalLog log, long startOffset, int maxLength) throws Exception {
         return log.read(
                 startOffset, maxLength, false, localLog.getLocalLogEndOffsetMetadata(), null, null);

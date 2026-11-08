@@ -1140,12 +1140,11 @@ public class ServerRpcMessageUtils {
                 fetchLogRespForBucket.setError(
                         bucketResult.getErrorCode(), bucketResult.getErrorMessage());
             } else {
-                fetchLogRespForBucket
-                        .setHighWatermark(bucketResult.getHighWatermark())
-                        .setLogStartOffset(
-                                bucketResult.getLogStartOffset() >= 0
-                                        ? bucketResult.getLogStartOffset()
-                                        : 0L);
+                fetchLogRespForBucket.setHighWatermark(bucketResult.getHighWatermark());
+
+                if (bucketResult.getLogStartOffset() >= 0) {
+                    fetchLogRespForBucket.setLogStartOffset(bucketResult.getLogStartOffset());
+                }
 
                 if (bucketResult.fetchFromRemote()) {
                     // set remote log fetch info.

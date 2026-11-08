@@ -49,6 +49,11 @@ public interface LogScanner extends AutoCloseable {
      * cached in memory, scanner will start either from the earliest offset or from the latest
      * offset for each bucket according to the policy.
      *
+     * <p>When all subscribed buckets have completed their bounded scans, this method returns
+     * immediately without waiting for the specified timeout. Callers should track completion
+     * through {@link ScanRecords#finishedBuckets()} and stop polling after all subscribed buckets
+     * have finished to avoid a busy loop.
+     *
      * @param timeout the timeout to poll.
      * @return the result of poll.
      * @throws java.lang.IllegalStateException if the scanner is not subscribed to any buckets to
@@ -110,6 +115,13 @@ public interface LogScanner extends AutoCloseable {
      * automatically unsubscribing the bucket.
      *
      * <p>The exclusive stopping offset may split a CDC update pair.
+     *
+     * <p>A bounded scan completes only after its consumed position reaches the exclusive stopping
+     * offset. If the stopping offset is beyond the data that will ever become available, the scan
+     * may remain incomplete because additional records cannot be assumed to exist.
+     *
+     * <p>If the table or partition is dropped during scanning, the scan may fail or remain
+     * incomplete, depending on the metadata and fetch error handling.
      *
      * <p>Please use {@link #subscribeBounded(long, int, long, long)} to subscribe a partitioned
      * table.

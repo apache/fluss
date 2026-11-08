@@ -19,6 +19,7 @@ package org.apache.fluss.client.table.scanner.log;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.client.table.scanner.ScanRecord;
+import org.apache.fluss.exception.AuthorizationException;
 import org.apache.fluss.exception.CorruptRecordException;
 import org.apache.fluss.exception.FetchException;
 import org.apache.fluss.metadata.TableBucket;
@@ -153,10 +154,7 @@ public abstract class CompletedFetch {
     }
 
     void setFailure(Throwable cause) {
-        failure =
-                cause instanceof org.apache.fluss.exception.AuthorizationException
-                        ? (org.apache.fluss.exception.AuthorizationException) cause
-                        : new FetchException(cause);
+        failure = toFetchException(cause);
     }
 
     void checkFailure() {
@@ -179,6 +177,12 @@ public abstract class CompletedFetch {
         }
         nextFetchOffset = Math.min(logStartOffset, stoppingOffset);
         return true;
+    }
+
+    static RuntimeException toFetchException(Throwable cause) {
+        return cause instanceof AuthorizationException
+                ? (AuthorizationException) cause
+                : new FetchException(cause);
     }
 
     private long capOffset(long offset) {

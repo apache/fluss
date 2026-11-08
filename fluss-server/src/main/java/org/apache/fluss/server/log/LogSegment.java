@@ -525,7 +525,12 @@ public final class LogSegment {
                 startOffset, maxSize, maxPosition, minOneMessage, projection, filterContext, null);
     }
 
-    /** Reads log data with an optional exclusive stopping offset. */
+    /**
+     * Reads log data with an optional exclusive stopping offset.
+     *
+     * <p>For unfiltered reads, the caller must only supply a stopping offset that is visible under
+     * the fetch isolation; otherwise it must pass {@code null}.
+     */
     public FetchDataInfo read(
             long startOffset,
             int maxSize,
@@ -545,7 +550,8 @@ public final class LogSegment {
                     filterContext,
                     stoppingOffset);
         } else {
-            return readWithoutFilter(startOffset, maxSize, maxPosition, minOneMessage, projection);
+            return readWithoutFilter(
+                    startOffset, maxSize, maxPosition, minOneMessage, projection, stoppingOffset);
         }
     }
 
@@ -570,7 +576,8 @@ public final class LogSegment {
             int maxSize,
             long maxPosition,
             boolean minOneMessage,
-            @Nullable FileLogProjection projection)
+            @Nullable FileLogProjection projection,
+            @Nullable Long stoppingOffset)
             throws IOException {
         if (maxSize < 0) {
             throw new IllegalArgumentException(
@@ -586,12 +593,69 @@ public final class LogSegment {
                 new LogOffsetMetadata(startOffset, this.baseOffset, startPosition);
         int adjustedMaxSize =
                 minOneMessage ? Math.max(maxSize, startOffsetAndSize.getSize()) : maxSize;
-        // use V0 size as the lower bound, since V1 header size is large than V0
+
+        // LocalLog passes a non-null stopping offset for unfiltered reads only after the visible
+        // logical upper bound has reached it.
+        // If the current byte window cannot contain the first complete batch, inspect only its
+        // header to detect an empty bounded range.
+        if (stoppingOffset != null
+                && Math.min(maxPosition - startPosition, (long) adjustedMaxSize)
+                        < startOffsetAndSize.getSize()) {
+            AbstractIterator<FileChannelLogRecordBatch> iterator =
+                    fileLogRecords.batchIterator(startPosition, fileLogRecords.sizeInBytes());
+            if (iterator.hasNext() && iterator.next().baseLogOffset() >= stoppingOffset) {
+                return FetchDataInfo.createFilteredEmptyResponse(offsetMetadata, stoppingOffset);
+            }
+        }
+
+        // Use V0 size as the lower bound, since V1 header size is larger than V0.
         if (adjustedMaxSize < V0_RECORD_BATCH_HEADER_SIZE) {
             return new FetchDataInfo(offsetMetadata, MemoryLogRecords.EMPTY);
         }
+
+        long readEndPosition = maxPosition;
+        if (stoppingOffset != null) {
+            if (maxPosition <= startPosition) {
+                // No complete batch is readable. The empty-range case has already been checked
+                // above.
+                return new FetchDataInfo(offsetMetadata, MemoryLogRecords.EMPTY);
+            }
+            // Preserve the original file-slice size limit. Projection may inspect the full readable
+            // range before applying its output limit.
+            long maxReadPosition =
+                    projection == null
+                            ? Math.min(maxPosition, (long) startPosition + adjustedMaxSize)
+                            : maxPosition;
+            // The sparse index provides a starting point, not an exact stop position. Search only
+            // within this fetch's readable byte window.
+            int scanPosition =
+                    Math.max(offsetIndex().lookup(stoppingOffset).getPosition(), startPosition);
+
+            if (scanPosition < maxReadPosition) {
+                AbstractIterator<FileChannelLogRecordBatch> iterator =
+                        fileLogRecords.batchIterator(scanPosition, (int) maxReadPosition);
+                while (iterator.hasNext()) {
+                    FileChannelLogRecordBatch batch = iterator.next();
+                    if (batch.lastLogOffset() < stoppingOffset) {
+                        continue;
+                    }
+                    // Keep the entire boundary batch if it straddles stop. Exact record-level
+                    // trimming remains the client's job.
+                    long stopPosition =
+                            batch.baseLogOffset() >= stoppingOffset
+                                    ? batch.position()
+                                    : (long) batch.position() + batch.sizeInBytes();
+                    readEndPosition = Math.min(readEndPosition, stopPosition);
+                    break;
+                }
+            }
+            if (readEndPosition <= startPosition) {
+                return FetchDataInfo.createFilteredEmptyResponse(offsetMetadata, stoppingOffset);
+            }
+        }
+
         if (projection == null) {
-            int fetchSize = Math.min((int) (maxPosition - startPosition), adjustedMaxSize);
+            int fetchSize = (int) Math.min(readEndPosition - startPosition, adjustedMaxSize);
             return new FetchDataInfo(
                     offsetMetadata, fileLogRecords.slice(startPosition, fetchSize));
         } else {
@@ -600,7 +664,7 @@ public final class LogSegment {
                         "Only Arrow log format supports column projection, but is: " + logFormat);
             }
             // allow to fetch all the data available in the segment
-            int fetchSize = (int) (maxPosition - startPosition);
+            int fetchSize = (int) (readEndPosition - startPosition);
             FileChannelChunk chunk = fileLogRecords.slice(startPosition, fetchSize).toChunk();
             LogRecords projectedRecords =
                     projection.project(

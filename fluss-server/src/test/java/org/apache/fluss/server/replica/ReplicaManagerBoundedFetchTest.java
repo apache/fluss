@@ -172,6 +172,22 @@ class ReplicaManagerBoundedFetchTest extends ReplicaTestBase {
     }
 
     @Test
+    void testBoundedFetchStartAfterStopReturnsEmpty() throws Exception {
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 1);
+        makeLogTableAsLeader(tb.getBucket());
+
+        FetchLogResultForBucket result =
+                fetch(boundedParams(0), Collections.singletonMap(tb, bounded(tb, 10L, 5L)))
+                        .get()
+                        .get(tb);
+
+        assertThat(result.succeeded()).isTrue();
+        assertThat(result.recordsOrEmpty().sizeInBytes()).isZero();
+        assertThat(result.hasFilteredEndOffset()).isTrue();
+        assertThat(result.getFilteredEndOffset()).isEqualTo(5L);
+    }
+
+    @Test
     void testFilteredBoundedFetchCompletesWithoutRecords() throws Exception {
         TableBucket tb = new TableBucket(DATA1_TABLE_ID, 1);
         makeLogTableAsLeader(tb.getBucket());
@@ -692,6 +708,181 @@ class ReplicaManagerBoundedFetchTest extends ReplicaTestBase {
         assertThat(bucketResult.getHighWatermark()).isEqualTo(3L);
         assertThat(bucketResult.recordsOrEmpty().sizeInBytes()).isGreaterThan(0);
         assertThat(bucketResult.recordsOrEmpty().sizeInBytes()).isLessThan(MAX_FETCH_BYTES);
+    }
+
+    @Test
+    void testBoundedFetchDoesNotCompleteBeforeBoundaryBatchIsReadable() throws Exception {
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 1);
+        makeLogTableAsLeader(tb.getBucket());
+
+        Replica replica = replicaManager.getReplicaOrException(tb);
+        MemoryLogRecords records =
+                genMemoryLogRecordsWithWriterId(
+                        Arrays.asList(
+                                new Object[] {7, "v"},
+                                new Object[] {8, "v"},
+                                new Object[] {9, "v"}),
+                        200L,
+                        0,
+                        0L);
+
+        append(tb, records);
+        assertThat(replica.getLocalLogEndOffset()).isEqualTo(3L);
+
+        // HW is exactly stop, but the batch [0, 3) is not fully readable.
+        replica.getLogTablet().updateHighWatermark(2L);
+
+        CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> future =
+                fetch(
+                        boundedParams(MAX_FETCH_BYTES),
+                        Collections.singletonMap(tb, bounded(tb, 0L, 2L)));
+
+        assertThat(future).isNotDone();
+
+        int completed =
+                replicaManager
+                        .getDelayedFetchLogManager()
+                        .checkAndComplete(new DelayedTableBucketKey(tb));
+
+        assertThat(completed).isZero();
+        assertThat(future).isNotDone();
+
+        // Once the complete batch becomes visible, the fetch can return data.
+        replica.getLogTablet().updateHighWatermark(3L);
+        completed =
+                replicaManager
+                        .getDelayedFetchLogManager()
+                        .checkAndComplete(new DelayedTableBucketKey(tb));
+
+        assertThat(completed).isEqualTo(1);
+
+        FetchLogResultForBucket result = future.get(5, TimeUnit.SECONDS).get(tb);
+        assertThat(result.succeeded()).isTrue();
+        assertThat(result.recordsOrEmpty().sizeInBytes()).isGreaterThan(0);
+    }
+
+    @Test
+    void testDelayedBoundedFetchCompletesAcrossOffsetGap() throws Exception {
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 1);
+        makeLogTableAsLeader(tb.getBucket());
+        Replica replica = replicaManager.getReplicaOrException(tb);
+        // Preserve explicit offsets to create a physical gap [0, 60).
+        // Leader append() would reassign offsets and remove the gap.
+        MemoryLogRecords records =
+                genMemoryLogRecordsWithWriterId(
+                        Arrays.asList(new Object[] {7, "v"}, new Object[] {8, "v"}), 200L, 0, 60L);
+
+        replica.getLogTablet().appendAsFollower(records);
+        assertThat(replica.getLocalLogEndOffset()).isEqualTo(62L);
+        assertThat(replica.getLocalLogStartOffset()).isZero();
+
+        // The next batch starts at 60, but HW has not reached stop=55.
+        replica.getLogTablet().updateHighWatermark(54L);
+        assertThat(replica.getLogHighWatermark()).isEqualTo(54L);
+
+        CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> future =
+                fetch(
+                        boundedParams(MAX_FETCH_BYTES),
+                        Collections.singletonMap(tb, bounded(tb, 0L, 55L)));
+
+        assertThat(future).isNotDone();
+
+        int completed =
+                replicaManager
+                        .getDelayedFetchLogManager()
+                        .checkAndComplete(new DelayedTableBucketKey(tb));
+
+        assertThat(completed).isZero();
+        assertThat(future).isNotDone();
+
+        // HW reaches stop, but the physical read position is still zero.
+        // The next batch starts beyond stop, so the bounded range is empty.
+        replica.getLogTablet().updateHighWatermark(55L);
+        assertThat(replica.getLogHighWatermark()).isEqualTo(55L);
+
+        completed =
+                replicaManager
+                        .getDelayedFetchLogManager()
+                        .checkAndComplete(new DelayedTableBucketKey(tb));
+
+        assertThat(completed).isEqualTo(1);
+
+        FetchLogResultForBucket result = future.get(5, TimeUnit.SECONDS).get(tb);
+
+        assertThat(result.succeeded()).isTrue();
+        assertThat(result.recordsOrEmpty().sizeInBytes()).isZero();
+        assertThat(result.hasFilteredEndOffset()).isTrue();
+        assertThat(result.getFilteredEndOffset()).isEqualTo(55L);
+
+        assertThat(replicaManager.getDelayedFetchLogManager().numDelayed()).isZero();
+    }
+
+    @Test
+    void testDelayedBoundedFetchPreservesCompleteBatchBeyondMaxBytes() throws Exception {
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 1);
+        makeLogTableAsLeader(tb.getBucket());
+        Replica replica = replicaManager.getReplicaOrException(tb);
+
+        // Create a batch substantially larger than the per-bucket byte budget.
+        StringBuilder valueBuilder = new StringBuilder();
+        for (int i = 0; i < 16_384; i++) {
+            valueBuilder.append(i).append(',');
+        }
+        String largeValue = valueBuilder.toString();
+
+        MemoryLogRecords records =
+                genMemoryLogRecordsWithWriterId(
+                        Arrays.asList(
+                                new Object[] {7, largeValue},
+                                new Object[] {8, largeValue},
+                                new Object[] {9, largeValue}),
+                        200L,
+                        0,
+                        0L);
+
+        int bucketMaxBytes = 1024;
+        int minFetchBytes = 4096;
+
+        assertThat(records.sizeInBytes()).isGreaterThan(minFetchBytes);
+
+        append(tb, records);
+        assertThat(replica.getLocalLogEndOffset()).isEqualTo(3L);
+
+        // HW reaches stop=2 but cannot expose batch [0, 3).
+        replica.getLogTablet().updateHighWatermark(2L);
+
+        FetchParams params = boundedParams(minFetchBytes);
+        FetchReqInfo request = new FetchReqInfo(tb.getTableId(), 0L, bucketMaxBytes, null, 2L);
+
+        CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> future =
+                fetch(params, Collections.singletonMap(tb, request));
+
+        assertThat(future).isNotDone();
+
+        // Make the entire batch visible.
+        replica.getLogTablet().updateHighWatermark(3L);
+
+        int completed =
+                replicaManager
+                        .getDelayedFetchLogManager()
+                        .checkAndComplete(new DelayedTableBucketKey(tb));
+
+        assertThat(completed).isEqualTo(1);
+
+        FetchLogResultForBucket result = future.get(5, TimeUnit.SECONDS).get(tb);
+
+        assertThat(result.succeeded()).isTrue();
+
+        // minOneMessage must still allow the first complete batch,
+        // even though it exceeds the per-bucket byte budget.
+        assertThat(result.recordsOrEmpty().sizeInBytes()).isEqualTo(records.sizeInBytes());
+
+        assertThat(result.recordsOrEmpty().batches().iterator().hasNext()).isTrue();
+        assertThat(result.recordsOrEmpty().batches().iterator().next().baseLogOffset()).isZero();
+        assertThat(result.recordsOrEmpty().batches().iterator().next().lastLogOffset())
+                .isEqualTo(2L);
+
+        assertThat(replicaManager.getDelayedFetchLogManager().numDelayed()).isZero();
     }
 
     private static FetchParams boundedParams(int minBytes) {
