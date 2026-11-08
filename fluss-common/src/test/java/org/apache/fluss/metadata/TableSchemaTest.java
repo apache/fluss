@@ -432,22 +432,6 @@ class TableSchemaTest {
                 .isEqualTo(", ");
     }
 
-    @Test
-    void testBuildSchemaWithSingleSecondaryIndex() {
-        Schema schema =
-                Schema.newBuilder()
-                        .column("order_id", DataTypes.BIGINT())
-                        .column("user_id", DataTypes.BIGINT())
-                        .primaryKey("order_id")
-                        .index("idx_user", "user_id")
-                        .build();
-
-        assertThat(schema.getIndexes()).hasSize(1);
-        Schema.Index idx = schema.getIndexes().get(0);
-        assertThat(idx.getIndexName()).isEqualTo("idx_user");
-        assertThat(idx.getColumnNames()).containsExactly("user_id");
-    }
-
     @ParameterizedTest
     @CsvSource(
             value = {

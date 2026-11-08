@@ -294,6 +294,46 @@ class IndexReplicatorTest {
     }
 
     @Test
+    void concurrentFailuresShareOneBackoffPeriod() {
+        ManualClock clock = new ManualClock();
+        IndexReplicationRetryState retry =
+                new IndexReplicationRetryState(new ExponentialBackoff(100, 2, 10000, 0), clock);
+        retry.onFailure();
+        clock.advanceTime(50, TimeUnit.MILLISECONDS);
+        retry.onFailure();
+        assertThat(retry.remainingDelayNanos()).isEqualTo(TimeUnit.MILLISECONDS.toNanos(50));
+        clock.advanceTime(50, TimeUnit.MILLISECONDS);
+        retry.onFailure();
+        assertThat(retry.remainingDelayNanos()).isEqualTo(TimeUnit.MILLISECONDS.toNanos(200));
+    }
+
+    @Test
+    void yieldingPreservesFailureAgeAndBackoffUntilProgress() {
+        ManualClock clock = new ManualClock();
+        IndexReplicationRetryState retry =
+                new IndexReplicationRetryState(new ExponentialBackoff(1000, 2, 10000, 0), clock);
+        retry.onFailure();
+        clock.advanceTime(1, TimeUnit.SECONDS);
+        retry.onFailure();
+        clock.advanceTime(2, TimeUnit.SECONDS);
+        retry.onFailure();
+        assertThat(retry.shouldYieldPayload(TimeUnit.SECONDS.toNanos(10))).isFalse();
+        clock.advanceTime(4, TimeUnit.SECONDS);
+        retry.onFailure();
+        assertThat(retry.shouldYieldPayload(TimeUnit.SECONDS.toNanos(10))).isTrue();
+        retry.deferRetryAfterYield();
+        assertThat(retry.remainingDelayNanos()).isEqualTo(TimeUnit.SECONDS.toNanos(8));
+        clock.advanceTime(8, TimeUnit.SECONDS);
+        retry.onFailure();
+        assertThat(retry.remainingDelayNanos()).isEqualTo(TimeUnit.SECONDS.toNanos(10));
+        assertThat(retry.shouldYieldPayload(TimeUnit.SECONDS.toNanos(10))).isTrue();
+        retry.reset();
+        assertThat(retry.hasFailure()).isFalse();
+        assertThat(retry.remainingDelayNanos()).isZero();
+        assertThat(retry.shouldYieldPayload(TimeUnit.SECONDS.toNanos(10))).isFalse();
+    }
+
+    @Test
     void retryMaximumKeepsInitialDelayAndBoundsLongFailures() {
         ExponentialBackoff backoff = IndexReplicationManager.createRetryBackoff(20_000);
         assertThat(backoff.backoff(0)).isBetween(80L, 120L);

@@ -17,6 +17,8 @@
 
 package org.apache.fluss.server.index;
 
+import org.apache.fluss.cluster.Endpoint;
+import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.fs.FSDataOutputStream;
 import org.apache.fluss.fs.FileSystem;
@@ -26,43 +28,62 @@ import org.apache.fluss.metadata.IndexVisibility;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.Gauge;
 import org.apache.fluss.metrics.MetricNames;
+import org.apache.fluss.rpc.entity.PutKvResultForBucket;
+import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotJsonSerde;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotHandle;
+import org.apache.fluss.server.metadata.BucketMetadata;
+import org.apache.fluss.server.metadata.ClusterMetadata;
+import org.apache.fluss.server.metadata.ServerInfo;
+import org.apache.fluss.server.metadata.TableMetadata;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.replica.ReplicaTestBase;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.utils.IndexTableUtils;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
+import static org.apache.fluss.record.TestData.DATA_1_WITH_KEY_AND_VALUE;
+import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.server.coordinator.CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
 import static org.apache.fluss.server.zk.data.LeaderAndIsr.INITIAL_LEADER_EPOCH;
+import static org.apache.fluss.testutils.DataTestUtils.genKvRecordBatch;
+import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Tests leader recovery from index progress and rejection of unusable snapshots. */
+/** Tests index replication startup, snapshot recovery and leader lifecycle. */
 class IndexLeaderRecoveryTest extends ReplicaTestBase {
 
     private static final long INDEXED_TABLE_ID = 710001L;
     private static final long PLAIN_TABLE_ID = 710002L;
+    private static final long INDEX_TABLE_ID = 710003L;
     private static final String INDEX_NAME = "idx_b";
     private static final TablePath INDEXED_TABLE_PATH =
             TablePath.of("test_db_1", "fail_stop_index_main_pk");
@@ -179,6 +200,81 @@ class IndexLeaderRecoveryTest extends ReplicaTestBase {
                                 FOLLOWER_LEADER_EPOCH + 2)));
         assertThat(indexGauge(MetricNames.INDEX_REPLICATION_MAX_LAG_OFFSETS)).isEqualTo(0L);
         assertThat(indexGauge(MetricNames.INDEX_REPLICATION_MAX_NO_PROGRESS_TIME_MS)).isEqualTo(0L);
+    }
+
+    @Test
+    void testDeferredIndexReplicationResumesAndReleasesResourcesOnShutdown() throws Exception {
+        // Missing index-table metadata must defer replication without blocking leadership.
+        registerMainTable(INDEXED_TABLE_PATH, INDEXED_TABLE_ID, indexedSchema());
+
+        makeKvTableAsLeader(INDEXED_TABLE_ID, INDEXED_TABLE_PATH, 0);
+        TableBucket sourceBucket = new TableBucket(INDEXED_TABLE_ID, 0);
+        IndexSendBuffer sendBuffer = replicaManager.getIndexReplicationManager().sendBuffer();
+
+        assertThat(sendBuffer.pendingBytes()).isZero();
+        assertThat(sendBuffer.buckets()).isEmpty();
+
+        // Deliver the missing metadata through the production update path.
+        Replica mainReplica = replicaManager.getReplicaOrException(sourceBucket);
+        TableInfo mainTableInfo = mainReplica.getTableInfo();
+        Schema.Index index = mainTableInfo.getSchema().getIndexes().get(0);
+        TablePath indexTablePath =
+                TablePath.of(
+                        INDEXED_TABLE_PATH.getDatabaseName(),
+                        IndexTableUtils.indexTableName(
+                                INDEXED_TABLE_PATH.getTableName(), index.getIndexName()));
+        TableDescriptor indexDescriptor =
+                IndexTableDescriptorFactory.derive(
+                        mainTableInfo.toTableDescriptor(), mainTableInfo.getTableId(), index);
+        zkClient.registerTable(
+                indexTablePath,
+                TableRegistration.newTable(
+                        INDEX_TABLE_ID, DEFAULT_REMOTE_DATA_DIR, indexDescriptor));
+        zkClient.registerFirstSchema(indexTablePath, indexDescriptor.getSchema());
+        long now = System.currentTimeMillis();
+        TableInfo indexTableInfo =
+                TableInfo.of(
+                        indexTablePath,
+                        INDEX_TABLE_ID,
+                        1,
+                        indexDescriptor,
+                        DEFAULT_REMOTE_DATA_DIR,
+                        now,
+                        now);
+        List<BucketMetadata> indexBuckets = new ArrayList<>();
+        for (int bucket = 0; bucket < indexTableInfo.getNumBuckets(); bucket++) {
+            indexBuckets.add(new BucketMetadata(bucket, null, null, Collections.emptyList()));
+        }
+        replicaManager.maybeUpdateMetadataCache(
+                INITIAL_COORDINATOR_EPOCH,
+                new ClusterMetadata(
+                        coordinatorServerInfo(),
+                        aliveTabletServerInfos(),
+                        Collections.singletonList(new TableMetadata(indexTableInfo, indexBuckets)),
+                        Collections.emptyList()));
+
+        // Keep the window queued so shutdown must release the source's undelivered payload.
+        sendBuffer.setReadyBucketListener(bucket -> {});
+
+        CompletableFuture<List<PutKvResultForBucket>> putFuture = new CompletableFuture<>();
+        replicaManager.putRecordsToKv(
+                20000,
+                1,
+                Collections.singletonMap(sourceBucket, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)),
+                null,
+                MergeMode.DEFAULT,
+                (short) 1,
+                putFuture::complete);
+        assertThat(putFuture.get()).hasSize(1);
+
+        retry(
+                Duration.ofSeconds(30),
+                () -> assertThat(sendBuffer.pendingBytes()).isGreaterThan(0L));
+
+        replicaManager.shutdown();
+
+        assertThat(sendBuffer.pendingBytes()).isZero();
+        assertThat(sendBuffer.buckets()).isEmpty();
     }
 
     private Object indexGauge(String name) {
@@ -312,5 +408,33 @@ class IndexLeaderRecoveryTest extends ReplicaTestBase {
                 .column("b", DataTypes.STRING())
                 .primaryKey("a")
                 .build();
+    }
+
+    private static ServerInfo coordinatorServerInfo() {
+        return new ServerInfo(
+                0,
+                null,
+                Endpoint.fromListenersString("CLIENT://localhost:1234"),
+                ServerType.COORDINATOR);
+    }
+
+    private static Set<ServerInfo> aliveTabletServerInfos() {
+        return new HashSet<>(
+                Arrays.asList(
+                        new ServerInfo(
+                                TABLET_SERVER_ID,
+                                "rack1",
+                                Endpoint.fromListenersString("CLIENT://localhost:90"),
+                                ServerType.TABLET_SERVER),
+                        new ServerInfo(
+                                2,
+                                "rack2",
+                                Endpoint.fromListenersString("CLIENT://localhost:91"),
+                                ServerType.TABLET_SERVER),
+                        new ServerInfo(
+                                3,
+                                "rack3",
+                                Endpoint.fromListenersString("CLIENT://localhost:92"),
+                                ServerType.TABLET_SERVER)));
     }
 }
