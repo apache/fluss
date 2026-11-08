@@ -40,6 +40,14 @@ import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.concurrent.FutureUtils;
 
+import org.apache.logging.log4j.Level;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.core.LogEvent;
+import org.apache.logging.log4j.core.LoggerContext;
+import org.apache.logging.log4j.core.appender.AbstractAppender;
+import org.apache.logging.log4j.core.config.Configuration;
+import org.apache.logging.log4j.core.config.LoggerConfig;
+import org.apache.logging.log4j.core.config.Property;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -52,13 +60,16 @@ import java.util.List;
 import java.util.OptionalInt;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -211,6 +222,146 @@ class IndexSendBufferTest {
             metrics.close();
         }
         assertThat(buffer.pendingBytes()).isZero();
+    }
+
+    @Test
+    void unresponsiveTargetTimesOutAndRecovers() throws Exception {
+        IndexSendBuffer buffer = new IndexSendBuffer();
+        AtomicBoolean repaired = new AtomicBoolean();
+        AtomicReference<CompletableFuture<PutIndexResponse>> firstRequest = new AtomicReference<>();
+        TabletServerMetricGroup metrics =
+                new TabletServerMetricGroup(NOPMetricRegistry.INSTANCE, "test", "rack", "host", 0);
+        TestingTabletGatewayService gateway =
+                new TestingTabletGatewayService() {
+                    @Override
+                    public CompletableFuture<PutIndexResponse> putIndex(PutIndexRequest request) {
+                        if (!repaired.get()) {
+                            CompletableFuture<PutIndexResponse> pending = new CompletableFuture<>();
+                            firstRequest.compareAndSet(null, pending);
+                            return pending;
+                        }
+                        PutIndexResponse response = new PutIndexResponse();
+                        response.addBucketsResp().setBucketId(0);
+                        return CompletableFuture.completedFuture(response);
+                    }
+                };
+        try (IndexReplicator owner = owner(buffer, 0)) {
+            buffer.tryAppendWindow(Collections.singletonList(batch(owner, new TableBucket(2L, 0))));
+            try (IndexSender sender =
+                    new IndexSender(
+                            buffer,
+                            (table, bucket) -> OptionalInt.of(0),
+                            server -> gateway,
+                            metrics,
+                            1,
+                            1,
+                            1024,
+                            1024,
+                            50)) {
+                retry(
+                        Duration.ofSeconds(5),
+                        () ->
+                                assertThat(metrics.indexReplicationRetries().getCount())
+                                        .isPositive());
+                assertThat(metrics.indexReplicationFailures().getCount()).isPositive();
+                assertThatThrownBy(() -> firstRequest.get().join())
+                        .hasCauseInstanceOf(TimeoutException.class);
+                assertThat(owner.getAllIndexPushedOffset()).isZero();
+                assertThat(buffer.pendingBytes()).isEqualTo(1);
+                repaired.set(true);
+                retry(
+                        Duration.ofSeconds(5),
+                        () -> assertThat(owner.getAllIndexPushedOffset()).isEqualTo(1));
+                assertThat(buffer.pendingBytes()).isZero();
+            }
+        } finally {
+            metrics.close();
+        }
+    }
+
+    @Test
+    void unknownLeaderIsReportedWithoutLoggingEveryRetryAndRecovers() throws Exception {
+        Queue<LogEvent> events = new ConcurrentLinkedQueue<>();
+        AbstractAppender appender =
+                new AbstractAppender("index-leader-test", null, null, true, Property.EMPTY_ARRAY) {
+                    @Override
+                    public void append(LogEvent event) {
+                        events.add(event.toImmutable());
+                    }
+                };
+        appender.start();
+        LoggerContext loggerContext = (LoggerContext) LogManager.getContext(false);
+        Configuration logging = loggerContext.getConfiguration();
+        String loggerName = IndexSender.class.getName();
+        LoggerConfig previous = logging.getLoggers().get(loggerName);
+        LoggerConfig logger = new LoggerConfig(loggerName, Level.WARN, false);
+        logger.addAppender(appender, Level.WARN, null);
+        logging.addLogger(loggerName, logger);
+        loggerContext.updateLoggers();
+        IndexSendBuffer buffer = new IndexSendBuffer();
+        AtomicBoolean leaderAvailable = new AtomicBoolean();
+        AtomicInteger requests = new AtomicInteger();
+        TabletServerMetricGroup metrics =
+                new TabletServerMetricGroup(NOPMetricRegistry.INSTANCE, "test", "rack", "host", 0);
+        TestingTabletGatewayService gateway =
+                new TestingTabletGatewayService() {
+                    @Override
+                    public CompletableFuture<PutIndexResponse> putIndex(PutIndexRequest request) {
+                        requests.incrementAndGet();
+                        PutIndexResponse response = new PutIndexResponse();
+                        response.addBucketsResp().setBucketId(0);
+                        return CompletableFuture.completedFuture(response);
+                    }
+                };
+        try (IndexReplicator owner = owner(buffer, 0)) {
+            TableBucket target = new TableBucket(2L, 0);
+            buffer.tryAppendWindow(Collections.singletonList(batch(owner, target)));
+            try (IndexSender sender =
+                    new IndexSender(
+                            buffer,
+                            (table, bucket) ->
+                                    leaderAvailable.get() ? OptionalInt.of(0) : OptionalInt.empty(),
+                            server -> gateway,
+                            metrics,
+                            1,
+                            1,
+                            1024,
+                            1024,
+                            1000)) {
+                retry(
+                        Duration.ofSeconds(5),
+                        () ->
+                                assertThat(metrics.indexReplicationRetries().getCount())
+                                        .isGreaterThanOrEqualTo(2));
+                assertThat(requests).hasValue(0);
+                assertThat(owner.getAllIndexPushedOffset()).isZero();
+                assertThat(owner.hasFailure()).isTrue();
+                leaderAvailable.set(true);
+                retry(
+                        Duration.ofSeconds(5),
+                        () -> assertThat(owner.getAllIndexPushedOffset()).isEqualTo(1));
+                assertThat(buffer.pendingBytes()).isZero();
+            }
+            assertThat(events)
+                    .singleElement()
+                    .satisfies(
+                            event -> {
+                                assertThat(event.getLevel()).isEqualTo(Level.WARN);
+                                assertThat(event.getMessage().getFormattedMessage())
+                                        .contains(
+                                                target.toString(),
+                                                owner.sourceBucket().toString(),
+                                                "end offset 1");
+                            });
+        } finally {
+            metrics.close();
+            logging.removeLogger(loggerName);
+            if (previous != null) {
+                logging.addLogger(loggerName, previous);
+            }
+            loggerContext.updateLoggers();
+            appender.stop();
+        }
     }
 
     @ParameterizedTest
