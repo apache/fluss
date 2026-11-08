@@ -18,7 +18,7 @@
 package org.apache.fluss.server.index;
 
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.server.index.IndexReplicator.IndexProgressState;
+import org.apache.fluss.server.index.IndexReplicator.IndexReplicationState;
 import org.apache.fluss.server.index.IndexReplicator.ReadGroup;
 
 import org.apache.commons.collections4.map.LinkedMap;
@@ -54,31 +54,33 @@ final class IndexReplicationScheduler {
     private static final Logger LOG = LoggerFactory.getLogger(IndexReplicationScheduler.class);
 
     private final ConcurrentMap<Integer, WorkerState> workers = new ConcurrentHashMap<>();
-    private final ConcurrentMap<IndexReplicator, SourceState> sources = new ConcurrentHashMap<>();
+    private final ConcurrentMap<IndexReplicator, SourceSchedulingState> sources =
+            new ConcurrentHashMap<>();
 
     private final Object capacityLock = new Object();
-    private final int maxPendingReads;
-    private final Set<IndexReplicator> admittedReads =
+    private final int maxAdmittedSources;
+    private final Set<IndexReplicator> readAdmittedSources =
             Collections.newSetFromMap(new IdentityHashMap<>());
-    private final LinkedHashMap<Long, LinkedHashSet<IndexReplicator>> readWaits =
+    private final LinkedHashMap<Long, LinkedHashSet<IndexReplicator>> readWaitersByTable =
             new LinkedHashMap<>();
 
-    private final LinkedHashMap<Long, TableWaits> waitingTables = new LinkedHashMap<>();
-    private final Map<IndexProgressState, CapacityWait> waits = new IdentityHashMap<>();
-    @Nullable private CapacityWait designated;
-    @Nullable private CapacityWait active;
-    @Nullable private PollCall buildingCall;
-    private boolean building;
+    private final LinkedHashMap<Long, TableWaits> capacityWaitsByTable = new LinkedHashMap<>();
+    private final Map<IndexReplicationState, CapacityWait> capacityWaitsByIndex =
+            new IdentityHashMap<>();
+    @Nullable private CapacityWait nextCapacityWaiter;
+    @Nullable private CapacityWait protectedCapacityWaiter;
+    @Nullable private SchedulingAttempt constructionAttempt;
+    private boolean constructionInProgress;
     private volatile boolean capacityContended;
 
-    IndexReplicationScheduler(int maxPendingReads) {
-        checkArgument(maxPendingReads > 0, "maxPendingReads must be positive");
-        this.maxPendingReads = maxPendingReads;
+    IndexReplicationScheduler(int maxAdmittedSources) {
+        checkArgument(maxAdmittedSources > 0, "maxAdmittedSources must be positive");
+        this.maxAdmittedSources = maxAdmittedSources;
     }
 
     void register(int workerId, IndexReplicator source) {
         WorkerState worker = workers.computeIfAbsent(workerId, ignored -> new WorkerState());
-        SourceState previous;
+        SourceSchedulingState previous;
         synchronized (worker) {
             long tableId = source.sourceBucket().getTableId();
             TableSources table = worker.tables.get(tableId);
@@ -88,23 +90,23 @@ final class IndexReplicationScheduler {
                 worker.tableOrder.add(table);
             }
             previous = table.sources.get(source.sourceBucket());
-            if (previous != null && previous.source == source) {
+            if (previous != null && previous.replicator == source) {
                 return;
             }
             if (previous != null) {
                 removeTableSource(worker, table, previous);
-                sources.remove(previous.source);
+                sources.remove(previous.replicator);
                 worker.sourceCount--;
             }
-            SourceState state = new SourceState(source, table);
+            SourceSchedulingState state = new SourceSchedulingState(source, table);
             sources.put(source, state);
             table.sources.put(source.sourceBucket(), state);
             worker.sourceCount++;
         }
         if (previous != null) {
-            removeSourceWaits(previous.source);
+            removeSourceWaits(previous.replicator);
             synchronized (capacityLock) {
-                removeReadWaitLocked(previous.source);
+                removeReadWaitLocked(previous.replicator);
             }
         }
         source.wakeup();
@@ -117,9 +119,9 @@ final class IndexReplicationScheduler {
         }
         synchronized (worker) {
             TableSources table = worker.tables.get(expectedSource.sourceBucket().getTableId());
-            SourceState state =
+            SourceSchedulingState state =
                     table == null ? null : table.sources.get(expectedSource.sourceBucket());
-            if (state == null || state.source != expectedSource) {
+            if (state == null || state.replicator != expectedSource) {
                 return;
             }
             removeTableSource(worker, table, state);
@@ -147,17 +149,17 @@ final class IndexReplicationScheduler {
             startRound(worker);
         }
         IndexReplicator preferred = refreshCapacity();
-        boolean allowProbe = worker.probeOwed;
-        if (pollOrder(worker, preferred, allowProbe)) {
+        boolean allowRetryProbe = worker.retryProbeOwed;
+        if (pollOrder(worker, preferred, allowRetryProbe)) {
             return true;
         }
         // No source could start ordinary work; probes may run without waiting for a credit.
-        return !allowProbe && pollOrder(worker, preferred, true);
+        return !allowRetryProbe && pollOrder(worker, preferred, true);
     }
 
     private boolean pollOrder(
-            WorkerState worker, @Nullable IndexReplicator preferred, boolean allowProbe) {
-        SourceState priority = preferred == null ? null : sources.get(preferred);
+            WorkerState worker, @Nullable IndexReplicator preferred, boolean allowRetryProbe) {
+        SourceSchedulingState priority = preferred == null ? null : sources.get(preferred);
         synchronized (worker) {
             worker.scanTable = 0;
             worker.lastScannedSource = null;
@@ -166,32 +168,32 @@ final class IndexReplicationScheduler {
                 priority = null;
             }
         }
-        SourceState state = priority == null ? nextSource(worker, null) : priority;
+        SourceSchedulingState state = priority == null ? nextSource(worker, null) : priority;
         while (state != null) {
-            if (sources.get(state.source) == state) {
-                PollCall call = worker.call;
-                call.source = state;
-                call.allowProbe = allowProbe;
-                call.healthy = false;
+            if (sources.get(state.replicator) == state) {
+                SchedulingAttempt call = worker.call;
+                call.sourceSchedule = state;
+                call.allowRetryProbe = allowRetryProbe;
+                call.normalWorkSelected = false;
                 call.attempt = null;
                 state.currentCall = call;
-                boolean serviced = false;
+                boolean attempted = false;
                 try {
-                    serviced = state.source.poll();
+                    attempted = state.replicator.poll();
                 } catch (Throwable failure) {
                     LOG.error(
                             "Error polling index replicator for {}",
-                            state.source.sourceBucket(),
+                            state.replicator.sourceBucket(),
                             failure);
                 } finally {
-                    serviced |= state.source.pollServiced();
-                    if (serviced && sources.get(state.source) == state) {
+                    attempted |= state.replicator.hasAttemptedWork();
+                    if (attempted && sources.get(state.replicator) == state) {
                         confirmService(worker, call);
                     }
                     state.currentCall = null;
                     finishBuild(call);
                 }
-                if (serviced) {
+                if (attempted) {
                     return true;
                 }
             }
@@ -201,7 +203,8 @@ final class IndexReplicationScheduler {
     }
 
     @Nullable
-    private static SourceState nextSource(WorkerState worker, @Nullable SourceState priority) {
+    private static SourceSchedulingState nextSource(
+            WorkerState worker, @Nullable SourceSchedulingState priority) {
         synchronized (worker) {
             while (worker.scanTable < worker.tableOrder.size()) {
                 TableSources table = worker.tableOrder.get(worker.scanTable);
@@ -210,7 +213,7 @@ final class IndexReplicationScheduler {
                                 ? table.sources.firstKey()
                                 : table.sources.nextKey(worker.lastScannedSource);
                 if (bucket == null) {
-                    // No healthy attempt was available in this table during the bounded scan.
+                    // No ordinary work attempt was available in this table during the bounded scan.
                     worker.remainingTables.remove(table);
                     finishRound(worker);
                     worker.scanTable++;
@@ -221,7 +224,7 @@ final class IndexReplicationScheduler {
                     return null;
                 }
                 worker.lastScannedSource = bucket;
-                SourceState source = table.sources.get(bucket);
+                SourceSchedulingState source = table.sources.get(bucket);
                 if (source != priority) {
                     return source;
                 }
@@ -230,23 +233,23 @@ final class IndexReplicationScheduler {
         }
     }
 
-    private void confirmService(WorkerState worker, PollCall call) {
-        SourceState state = call.source;
+    private void confirmService(WorkerState worker, SchedulingAttempt call) {
+        SourceSchedulingState state = call.sourceSchedule;
         synchronized (worker) {
-            if (state.table.sources.get(state.source.sourceBucket()) != state) {
+            if (state.table.sources.get(state.replicator.sourceBucket()) != state) {
                 return;
             }
-            TableBucket bucket = state.source.sourceBucket();
+            TableBucket bucket = state.replicator.sourceBucket();
             state.table.sources.remove(bucket);
             state.table.sources.put(bucket, state);
             worker.tableOrder.remove(state.table);
             worker.tableOrder.add(state.table);
-            ProbeAttempt attempt = call.attempt;
-            if (attempt != null && !attempt.charged) {
-                attempt.charged = true;
-                worker.probeOwed = false;
+            RetryProbeAttempt attempt = call.attempt;
+            if (attempt != null && !attempt.serviceCharged) {
+                attempt.serviceCharged = true;
+                worker.retryProbeOwed = false;
             }
-            if (call.healthy) {
+            if (call.normalWorkSelected) {
                 startRound(worker);
                 worker.roundServiced = true;
                 worker.remainingTables.remove(state.table);
@@ -266,14 +269,14 @@ final class IndexReplicationScheduler {
 
     private static void finishRound(WorkerState worker) {
         if (worker.roundOpen && worker.remainingTables.isEmpty()) {
-            worker.probeOwed |= worker.roundServiced;
+            worker.retryProbeOwed |= worker.roundServiced;
             worker.roundOpen = false;
         }
     }
 
     private static void removeTableSource(
-            WorkerState worker, TableSources table, SourceState source) {
-        TableBucket bucket = source.source.sourceBucket();
+            WorkerState worker, TableSources table, SourceSchedulingState source) {
+        TableBucket bucket = source.replicator.sourceBucket();
         if (worker.scanTable < worker.tableOrder.size()
                 && worker.tableOrder.get(worker.scanTable) == table
                 && bucket.equals(worker.lastScannedSource)) {
@@ -294,15 +297,20 @@ final class IndexReplicationScheduler {
         }
     }
 
-    /** Called with the source lifecycle lock held. */
+    /**
+     * Selects a read group and acquires source input admission. The source retains admission
+     * through reading and construction, then calls {@link #releaseReadAdmission}.
+     *
+     * <p>Called with the source lifecycle lock held.
+     */
     @Nullable
-    ReadGroup selectRead(IndexReplicator source, long highWatermark) {
-        SourceState state = sources.get(source);
+    ReadGroup tryAdmitRead(IndexReplicator source, long highWatermark) {
+        SourceSchedulingState state = sources.get(source);
         if (state == null || source.isClosed()) {
             return null;
         }
-        PollCall call = state.currentCall;
-        boolean probeFirst = call != null && call.allowProbe;
+        SchedulingAttempt call = state.currentCall;
+        boolean probeFirst = call != null && call.allowRetryProbe;
         ReadGroup group = chooseGroup(state, highWatermark, probeFirst);
         if (group == null && (probeFirst || call == null)) {
             group = chooseGroup(state, highWatermark, !probeFirst);
@@ -315,46 +323,46 @@ final class IndexReplicationScheduler {
             return null;
         }
         boolean failed = isProbe(source, group.states());
-        state.probeAttempt = failed ? new ProbeAttempt(group) : null;
+        state.probeAttempt = failed ? new RetryProbeAttempt(group) : null;
         if (call != null) {
             call.attempt = state.probeAttempt;
-            call.healthy |= !failed;
+            call.normalWorkSelected |= !failed;
         }
         return group;
     }
 
-    private boolean acquireRead(SourceState state) {
+    private boolean acquireRead(SourceSchedulingState state) {
         List<IndexReplicator> wakeups = new ArrayList<>();
         boolean admitted;
         synchronized (capacityLock) {
-            if (!admittedReads.contains(state.source)) {
+            if (!readAdmittedSources.contains(state.replicator)) {
                 LinkedHashSet<IndexReplicator> queue =
-                        readWaits.computeIfAbsent(
-                                state.source.sourceBucket().getTableId(),
+                        readWaitersByTable.computeIfAbsent(
+                                state.replicator.sourceBucket().getTableId(),
                                 ignored -> new LinkedHashSet<>());
-                queue.add(state.source);
+                queue.add(state.replicator);
                 admitReadsLocked(wakeups);
             }
-            admitted = admittedReads.contains(state.source);
+            admitted = readAdmittedSources.contains(state.replicator);
         }
         wakeups.forEach(IndexReplicationScheduler::wake);
         return admitted;
     }
 
     private void admitReadsLocked(List<IndexReplicator> wakeups) {
-        while (admittedReads.size() < maxPendingReads && !readWaits.isEmpty()) {
+        while (readAdmittedSources.size() < maxAdmittedSources && !readWaitersByTable.isEmpty()) {
             Map.Entry<Long, LinkedHashSet<IndexReplicator>> entry =
-                    readWaits.entrySet().iterator().next();
+                    readWaitersByTable.entrySet().iterator().next();
             long tableId = entry.getKey();
             LinkedHashSet<IndexReplicator> queue = entry.getValue();
             IndexReplicator source = queue.iterator().next();
             queue.remove(source);
-            readWaits.remove(tableId);
+            readWaitersByTable.remove(tableId);
             if (!queue.isEmpty()) {
-                readWaits.put(tableId, queue);
+                readWaitersByTable.put(tableId, queue);
             }
             if (sources.containsKey(source) && !source.isClosed()) {
-                admittedReads.add(source);
+                readAdmittedSources.add(source);
                 wakeups.add(source);
             }
         }
@@ -365,15 +373,15 @@ final class IndexReplicationScheduler {
         List<IndexReplicator> wakeups = new ArrayList<>();
         synchronized (capacityLock) {
             // A capacity owner must be able to reread without competing for another input slot.
-            if (!waits.isEmpty()) {
-                for (IndexProgressState index : source.indexStates()) {
-                    CapacityWait wait = waits.get(index);
-                    if (wait != null && wait.source.source == source) {
+            if (!capacityWaitsByIndex.isEmpty()) {
+                for (IndexReplicationState index : source.indexStates()) {
+                    CapacityWait wait = capacityWaitsByIndex.get(index);
+                    if (wait != null && wait.sourceSchedule.replicator == source) {
                         return;
                     }
                 }
             }
-            admittedReads.remove(source);
+            readAdmittedSources.remove(source);
             removeReadWaitLocked(source);
             admitReadsLocked(wakeups);
         }
@@ -381,11 +389,12 @@ final class IndexReplicationScheduler {
     }
 
     private void removeReadWaitLocked(IndexReplicator source) {
-        LinkedHashSet<IndexReplicator> queue = readWaits.get(source.sourceBucket().getTableId());
+        LinkedHashSet<IndexReplicator> queue =
+                readWaitersByTable.get(source.sourceBucket().getTableId());
         if (queue != null) {
             queue.remove(source);
             if (queue.isEmpty()) {
-                readWaits.remove(source.sourceBucket().getTableId());
+                readWaitersByTable.remove(source.sourceBucket().getTableId());
             }
         }
     }
@@ -394,12 +403,12 @@ final class IndexReplicationScheduler {
         if (source.hasSourceFailure()) {
             return false;
         }
-        for (IndexProgressState index : group.states()) {
+        for (IndexReplicationState index : group.states()) {
             if (!index.spec().isSync() || index.hasFailure()) {
                 return false;
             }
         }
-        for (IndexProgressState index : source.indexStates()) {
+        for (IndexReplicationState index : source.indexStates()) {
             if (index.spec().isSync() && !group.states().contains(index)) {
                 return false;
             }
@@ -408,19 +417,22 @@ final class IndexReplicationScheduler {
     }
 
     private static boolean reusableRange(
-            IndexReplicator source, IndexProgressState index, IndexSourceReader.ReadResult result) {
-        return (index.replayEndOffset() < 0 || index.replayEndOffset() >= result.nextOffset())
-                && source.readBudgetFor(index) >= result.bytes();
+            IndexReplicator source,
+            IndexReplicationState index,
+            IndexSourceReader.ReadResult result) {
+        return (index.retryWindowEndOffset() < 0
+                        || index.retryWindowEndOffset() >= result.nextOffset())
+                && source.readTargetBytesFor(index) >= result.bytes();
     }
 
     /** Selects optional ASYNC work only after the original SYNC group has been published. */
-    List<IndexProgressState> selectAsync(
+    List<IndexReplicationState> selectAsync(
             IndexReplicator source, ReadGroup syncGroup, IndexSourceReader.ReadResult result) {
         if (capacityContended || !alignedSyncGroup(source, syncGroup)) {
             return Collections.emptyList();
         }
-        List<IndexProgressState> selected = new ArrayList<>();
-        for (IndexProgressState index : source.indexStates()) {
+        List<IndexReplicationState> selected = new ArrayList<>();
+        for (IndexReplicationState index : source.indexStates()) {
             if (!index.spec().isSync()
                     && !index.hasFailure()
                     && index.pushedOffset() == syncGroup.startOffset()
@@ -433,18 +445,18 @@ final class IndexReplicationScheduler {
     }
 
     @Nullable
-    private ReadGroup chooseGroup(SourceState state, long highWatermark, boolean probe) {
-        IndexReplicator source = state.source;
+    private ReadGroup chooseGroup(SourceSchedulingState state, long highWatermark, boolean probe) {
+        IndexReplicator source = state.replicator;
         if (source.isClosed() || !source.isSourceRetryReady()) {
             return null;
         }
-        List<IndexProgressState> indexes = source.indexStates();
+        List<IndexReplicationState> indexes = source.indexStates();
         long syncLimit = syncStartLimit(indexes);
         long asyncLimit = asyncLimit(indexes, highWatermark);
 
-        IndexProgressState sync = null;
-        IndexProgressState async = null;
-        for (IndexProgressState index : indexes) {
+        IndexReplicationState sync = null;
+        IndexReplicationState async = null;
+        for (IndexReplicationState index : indexes) {
             if (!eligible(source, index, highWatermark, probe)) {
                 continue;
             }
@@ -458,15 +470,15 @@ final class IndexReplicationScheduler {
                 async = index;
             }
         }
-        IndexProgressState selected =
-                async != null && (state.asyncOwed || sync == null) ? async : sync;
+        IndexReplicationState selected =
+                async != null && (state.asyncTurnOwed || sync == null) ? async : sync;
         if (selected == null) {
             return null;
         }
         long start = selected.pushedOffset();
         long end = highWatermark;
-        List<IndexProgressState> group = new ArrayList<>();
-        for (IndexProgressState index : indexes) {
+        List<IndexReplicationState> group = new ArrayList<>();
+        for (IndexReplicationState index : indexes) {
             if (index.pushedOffset() != start || !eligible(source, index, highWatermark, probe)) {
                 continue;
             }
@@ -480,23 +492,23 @@ final class IndexReplicationScheduler {
                 }
                 end = Math.min(end, asyncLimit);
             }
-            if (index.replayEndOffset() >= 0) {
-                end = Math.min(end, index.replayEndOffset());
+            if (index.retryWindowEndOffset() >= 0) {
+                end = Math.min(end, index.retryWindowEndOffset());
             }
             group.add(index);
         }
         return end > start ? new ReadGroup(start, end, group) : null;
     }
 
-    private static long syncStartLimit(List<IndexProgressState> indexes) {
+    private static long syncStartLimit(List<IndexReplicationState> indexes) {
         long minimum = Long.MAX_VALUE;
-        for (IndexProgressState index : indexes) {
+        for (IndexReplicationState index : indexes) {
             if (index.spec().isSync()) {
                 minimum = Math.min(minimum, index.pushedOffset());
             }
         }
         long covered = Long.MAX_VALUE;
-        for (IndexProgressState index : indexes) {
+        for (IndexReplicationState index : indexes) {
             if (index.spec().isSync() && index.pushedOffset() == minimum) {
                 long windowEnd = index.healthyWindowEnd();
                 if (windowEnd < 0) {
@@ -508,9 +520,9 @@ final class IndexReplicationScheduler {
         return covered;
     }
 
-    private static long asyncLimit(List<IndexProgressState> indexes, long highWatermark) {
+    private static long asyncLimit(List<IndexReplicationState> indexes, long highWatermark) {
         long limit = highWatermark;
-        for (IndexProgressState index : indexes) {
+        for (IndexReplicationState index : indexes) {
             if (index.spec().isSync()) {
                 long windowEnd = index.healthyWindowEnd();
                 limit = Math.min(limit, windowEnd >= 0 ? windowEnd : index.pushedOffset());
@@ -520,13 +532,16 @@ final class IndexReplicationScheduler {
     }
 
     private static boolean eligible(
-            IndexReplicator source, IndexProgressState index, long highWatermark, boolean probe) {
+            IndexReplicator source,
+            IndexReplicationState index,
+            long highWatermark,
+            boolean probe) {
         return index.canRead(highWatermark)
                 && (source.hasSourceFailure() || index.hasFailure()) == probe;
     }
 
     private static boolean olderAsync(
-            SourceState source, IndexProgressState left, IndexProgressState right) {
+            SourceSchedulingState source, IndexReplicationState left, IndexReplicationState right) {
         int offsets = Long.compare(left.pushedOffset(), right.pushedOffset());
         return offsets < 0
                 || (offsets == 0
@@ -534,11 +549,11 @@ final class IndexReplicationScheduler {
                                 < source.asyncService.getOrDefault(right, 0L));
     }
 
-    private static boolean isProbe(IndexReplicator source, List<IndexProgressState> indexes) {
+    private static boolean isProbe(IndexReplicator source, List<IndexReplicationState> indexes) {
         if (source.hasSourceFailure()) {
             return true;
         }
-        for (IndexProgressState index : indexes) {
+        for (IndexReplicationState index : indexes) {
             if (index.hasFailure()) {
                 return true;
             }
@@ -547,21 +562,24 @@ final class IndexReplicationScheduler {
     }
 
     /**
-     * Returns null without transferring the pending result, or a group to construct immediately.
-     * Called with the source lifecycle lock held.
+     * Grants an immediate construction attempt and records its scheduling credit, or returns null
+     * without transferring the pending result. A grant does not reserve payload pages.
+     *
+     * <p>Called with the source lifecycle lock held.
      */
     @Nullable
-    ReadGroup selectBuild(
+    ReadGroup tryScheduleBuild(
             IndexReplicator source, ReadGroup pendingGroup, IndexSourceReader.ReadResult result) {
-        SourceState state = sources.get(source);
+        SourceSchedulingState state = sources.get(source);
         if (state == null || source.isClosed()) {
             return null;
         }
-        PollCall call = state.currentCall;
+        SchedulingAttempt call = state.currentCall;
         boolean failed = isProbe(source, pendingGroup.states());
-        ProbeAttempt attempt = state.probeAttempt;
-        boolean continuation = attempt != null && attempt.matches(pendingGroup) && attempt.charged;
-        if (call != null && failed && !call.allowProbe && !continuation) {
+        RetryProbeAttempt attempt = state.probeAttempt;
+        boolean continuation =
+                attempt != null && attempt.matches(pendingGroup) && attempt.serviceCharged;
+        if (call != null && failed && !call.allowRetryProbe && !continuation) {
             return null;
         }
 
@@ -569,7 +587,7 @@ final class IndexReplicationScheduler {
         IndexReplicator wake = null;
         if (!capacityContended) {
             if (alignedSyncGroup(source, pendingGroup)) {
-                for (IndexProgressState index : source.indexStates()) {
+                for (IndexReplicationState index : source.indexStates()) {
                     // Drop the source lock only for an ACK already received. The original owner
                     // callback advances progress and wakes this source; no network wait is added.
                     if (!index.spec().isSync()
@@ -584,48 +602,54 @@ final class IndexReplicationScheduler {
         } else {
             synchronized (capacityLock) {
                 chooseCapacityLocked();
-                CapacityWait owner = active != null ? active : designated;
-                if (owner != null && owner.source.source == source) {
+                CapacityWait owner =
+                        protectedCapacityWaiter != null
+                                ? protectedCapacityWaiter
+                                : nextCapacityWaiter;
+                if (owner != null && owner.sourceSchedule.replicator == source) {
                     if (owner.start != pendingGroup.startOffset()
                             || !pendingGroup.states().contains(owner.index)
                             || !source.hasReadyRead(owner.index, owner.start)) {
                         return null;
                     }
-                    active = owner;
+                    protectedCapacityWaiter = owner;
                     if (!source.hasPageCapacity()) {
-                        building = false;
-                        buildingCall = null;
+                        constructionInProgress = false;
+                        constructionAttempt = null;
                         return null;
                     }
-                    building = true;
-                    buildingCall = call;
+                    constructionInProgress = true;
+                    constructionAttempt = call;
                     selected =
                             new ReadGroup(
                                     pendingGroup.startOffset(),
                                     pendingGroup.endOffset(),
                                     Collections.singletonList(owner.index));
                 } else {
-                    if (active != null) {
+                    if (protectedCapacityWaiter != null) {
                         return null;
                     }
                     selected = pendingGroup;
                 }
-                wake = designated == null ? null : designated.source.source;
+                wake =
+                        nextCapacityWaiter == null
+                                ? null
+                                : nextCapacityWaiter.sourceSchedule.replicator;
             }
         }
         wake(wake);
         if (failed) {
             if (attempt == null || !attempt.matches(pendingGroup)) {
-                attempt = new ProbeAttempt(pendingGroup);
+                attempt = new RetryProbeAttempt(pendingGroup);
                 state.probeAttempt = attempt;
             }
             if (call != null) {
                 call.attempt = attempt;
             }
         } else if (call != null) {
-            call.healthy = true;
+            call.normalWorkSelected = true;
         }
-        for (IndexProgressState index : selected.states()) {
+        for (IndexReplicationState index : selected.states()) {
             if (!index.spec().isSync()) {
                 state.asyncService.put(index, ++state.serviceSequence);
             }
@@ -633,58 +657,58 @@ final class IndexReplicationScheduler {
         return selected;
     }
 
-    void onCapacityBlocked(IndexReplicator source, IndexProgressState index) {
-        SourceState state = sources.get(source);
+    void onCapacityBlocked(IndexReplicator source, IndexReplicationState index) {
+        SourceSchedulingState state = sources.get(source);
         if (state == null || source.isClosed()) {
             return;
         }
         state.probeAttempt = null;
         IndexReplicator wake;
         synchronized (capacityLock) {
-            CapacityWait wait = waits.get(index);
+            CapacityWait wait = capacityWaitsByIndex.get(index);
             if (wait != null && wait.start != index.pushedOffset()) {
                 removeWaitLocked(wait, false);
                 wait = null;
             }
             if (wait == null) {
                 wait = new CapacityWait(state, index, index.pushedOffset());
-                waits.put(index, wait);
+                capacityWaitsByIndex.put(index, wait);
                 capacityContended = true;
-                waitingTables
+                capacityWaitsByTable
                         .computeIfAbsent(
                                 source.sourceBucket().getTableId(), ignored -> new TableWaits())
                         .sources
                         .computeIfAbsent(state, ignored -> new ArrayDeque<>())
                         .addLast(wait);
             }
-            if (active == wait) {
+            if (protectedCapacityWaiter == wait) {
                 clearActiveLocked();
             }
-            if (designated == wait) {
-                designated = null;
+            if (nextCapacityWaiter == wait) {
+                nextCapacityWaiter = null;
             }
             chooseCapacityLocked();
-            wake = designated == null ? null : designated.source.source;
+            wake = nextCapacityWaiter == null ? null : nextCapacityWaiter.sourceSchedule.replicator;
         }
         wake(wake);
     }
 
-    void releaseCapacityWait(IndexReplicator source, IndexProgressState index) {
+    void releaseCapacityWait(IndexReplicator source, IndexReplicationState index) {
         removeIndexWait(source, index, true);
     }
 
-    void onProgress(IndexReplicator source, IndexProgressState index) {
-        SourceState state = sources.get(source);
+    void onProgress(IndexReplicator source, IndexReplicationState index) {
+        SourceSchedulingState state = sources.get(source);
         if (state == null) {
             return;
         }
-        state.asyncOwed = index.spec().isSync();
+        state.asyncTurnOwed = index.spec().isSync();
         removeIndexWait(source, index, false);
     }
 
     /** Clears probe and capacity-wait state for the source or a single index. */
-    void clearProbeAndCapacityWaits(IndexReplicator source, @Nullable IndexProgressState index) {
-        SourceState state = sources.get(source);
+    void clearProbeAndCapacityWaits(IndexReplicator source, @Nullable IndexReplicationState index) {
+        SourceSchedulingState state = sources.get(source);
         if (state == null) {
             return;
         }
@@ -692,7 +716,7 @@ final class IndexReplicationScheduler {
             state.probeAttempt = null;
             removeSourceWaits(source);
         } else {
-            ProbeAttempt attempt = state.probeAttempt;
+            RetryProbeAttempt attempt = state.probeAttempt;
             if (attempt != null && attempt.indexes.contains(index)) {
                 state.probeAttempt = null;
             }
@@ -700,18 +724,19 @@ final class IndexReplicationScheduler {
         }
     }
 
-    private void removeIndexWait(IndexReplicator source, IndexProgressState index, boolean rotate) {
+    private void removeIndexWait(
+            IndexReplicator source, IndexReplicationState index, boolean rotate) {
         if (!capacityContended) {
             return;
         }
         IndexReplicator wake;
         synchronized (capacityLock) {
-            CapacityWait wait = waits.get(index);
-            if (wait != null && wait.source.source == source) {
+            CapacityWait wait = capacityWaitsByIndex.get(index);
+            if (wait != null && wait.sourceSchedule.replicator == source) {
                 removeWaitLocked(wait, rotate);
             }
             chooseCapacityLocked();
-            wake = designated == null ? null : designated.source.source;
+            wake = nextCapacityWaiter == null ? null : nextCapacityWaiter.sourceSchedule.replicator;
         }
         wake(wake);
     }
@@ -722,48 +747,48 @@ final class IndexReplicationScheduler {
         }
         IndexReplicator wake;
         synchronized (capacityLock) {
-            for (IndexProgressState index : source.indexStates()) {
-                CapacityWait wait = waits.get(index);
-                if (wait != null && wait.source.source == source) {
+            for (IndexReplicationState index : source.indexStates()) {
+                CapacityWait wait = capacityWaitsByIndex.get(index);
+                if (wait != null && wait.sourceSchedule.replicator == source) {
                     removeWaitLocked(wait, false);
                 }
             }
             chooseCapacityLocked();
-            wake = designated == null ? null : designated.source.source;
+            wake = nextCapacityWaiter == null ? null : nextCapacityWaiter.sourceSchedule.replicator;
         }
         wake(wake);
     }
 
     private void removeWaitLocked(CapacityWait wait, boolean rotate) {
         // An older ordinary build can finish while a different waiter owns protection.
-        rotate &= active == wait;
-        waits.remove(wait.index);
-        capacityContended = !waits.isEmpty();
-        long tableId = wait.source.source.sourceBucket().getTableId();
-        TableWaits table = waitingTables.get(tableId);
+        rotate &= protectedCapacityWaiter == wait;
+        capacityWaitsByIndex.remove(wait.index);
+        capacityContended = !capacityWaitsByIndex.isEmpty();
+        long tableId = wait.sourceSchedule.replicator.sourceBucket().getTableId();
+        TableWaits table = capacityWaitsByTable.get(tableId);
         if (table != null) {
-            Deque<CapacityWait> source = table.sources.get(wait.source);
+            Deque<CapacityWait> source = table.sources.get(wait.sourceSchedule);
             if (source != null) {
                 source.remove(wait);
                 if (source.isEmpty()) {
-                    table.sources.remove(wait.source);
+                    table.sources.remove(wait.sourceSchedule);
                 } else if (rotate) {
-                    table.sources.remove(wait.source);
-                    table.sources.put(wait.source, source);
+                    table.sources.remove(wait.sourceSchedule);
+                    table.sources.put(wait.sourceSchedule, source);
                 }
             }
             if (table.sources.isEmpty()) {
-                waitingTables.remove(tableId);
+                capacityWaitsByTable.remove(tableId);
             } else if (rotate) {
-                waitingTables.remove(tableId);
-                waitingTables.put(tableId, table);
+                capacityWaitsByTable.remove(tableId);
+                capacityWaitsByTable.put(tableId, table);
             }
         }
-        if (active == wait) {
+        if (protectedCapacityWaiter == wait) {
             clearActiveLocked();
         }
-        if (designated == wait) {
-            designated = null;
+        if (nextCapacityWaiter == wait) {
+            nextCapacityWaiter = null;
         }
     }
 
@@ -774,34 +799,34 @@ final class IndexReplicationScheduler {
         }
         synchronized (capacityLock) {
             chooseCapacityLocked();
-            return designated == null ? null : designated.source.source;
+            return nextCapacityWaiter == null ? null : nextCapacityWaiter.sourceSchedule.replicator;
         }
     }
 
     private void chooseCapacityLocked() {
-        for (CapacityWait wait : new ArrayList<>(waits.values())) {
-            if (sources.get(wait.source.source) != wait.source
-                    || wait.source.source.isClosed()
+        for (CapacityWait wait : new ArrayList<>(capacityWaitsByIndex.values())) {
+            if (sources.get(wait.sourceSchedule.replicator) != wait.sourceSchedule
+                    || wait.sourceSchedule.replicator.isClosed()
                     || wait.index.pushedOffset() != wait.start) {
                 removeWaitLocked(wait, false);
             }
         }
-        if (active != null) {
-            if (building || ready(active)) {
-                designated = active;
+        if (protectedCapacityWaiter != null) {
+            if (constructionInProgress || ready(protectedCapacityWaiter)) {
+                nextCapacityWaiter = protectedCapacityWaiter;
                 return;
             }
             clearActiveLocked();
         }
-        if (designated != null && ready(designated)) {
+        if (nextCapacityWaiter != null && ready(nextCapacityWaiter)) {
             return;
         }
-        designated = null;
-        for (TableWaits table : waitingTables.values()) {
+        nextCapacityWaiter = null;
+        for (TableWaits table : capacityWaitsByTable.values()) {
             for (Deque<CapacityWait> source : table.sources.values()) {
                 for (CapacityWait wait : source) {
                     if (ready(wait)) {
-                        designated = wait;
+                        nextCapacityWaiter = wait;
                         return;
                     }
                 }
@@ -810,25 +835,30 @@ final class IndexReplicationScheduler {
     }
 
     private static boolean ready(CapacityWait wait) {
-        return wait.source.source.hasReadyRead(wait.index, wait.start);
+        return wait.sourceSchedule.replicator.hasReadyRead(wait.index, wait.start);
     }
 
     private void clearActiveLocked() {
-        active = null;
-        building = false;
-        buildingCall = null;
+        protectedCapacityWaiter = null;
+        constructionInProgress = false;
+        constructionAttempt = null;
     }
 
-    private void finishBuild(PollCall call) {
+    private void finishBuild(SchedulingAttempt call) {
         if (!capacityContended) {
             return;
         }
         IndexReplicator wake = null;
         synchronized (capacityLock) {
-            if (building && buildingCall == call && active != null) {
-                removeWaitLocked(active, true);
+            if (constructionInProgress
+                    && constructionAttempt == call
+                    && protectedCapacityWaiter != null) {
+                removeWaitLocked(protectedCapacityWaiter, true);
                 chooseCapacityLocked();
-                wake = designated == null ? null : designated.source.source;
+                wake =
+                        nextCapacityWaiter == null
+                                ? null
+                                : nextCapacityWaiter.sourceSchedule.replicator;
             }
         }
         wake(wake);
@@ -844,53 +874,53 @@ final class IndexReplicationScheduler {
         private final Map<Long, TableSources> tables = new HashMap<>();
         private final List<TableSources> tableOrder = new ArrayList<>();
         private final Set<TableSources> remainingTables = new HashSet<>();
-        private final PollCall call = new PollCall();
+        private final SchedulingAttempt call = new SchedulingAttempt();
         private int scanTable;
         @Nullable private TableBucket lastScannedSource;
         private int sourceCount;
         private int scanRemaining;
         private boolean roundOpen;
         private boolean roundServiced;
-        private boolean probeOwed;
+        private boolean retryProbeOwed;
     }
 
     private static final class TableSources {
         private final long tableId;
-        private final LinkedMap<TableBucket, SourceState> sources = new LinkedMap<>();
+        private final LinkedMap<TableBucket, SourceSchedulingState> sources = new LinkedMap<>();
 
         private TableSources(long tableId) {
             this.tableId = tableId;
         }
     }
 
-    private static final class SourceState {
-        private final IndexReplicator source;
+    private static final class SourceSchedulingState {
+        private final IndexReplicator replicator;
         private final TableSources table;
-        private final Map<IndexProgressState, Long> asyncService = new IdentityHashMap<>();
-        private volatile boolean asyncOwed;
+        private final Map<IndexReplicationState, Long> asyncService = new IdentityHashMap<>();
+        private volatile boolean asyncTurnOwed;
         private long serviceSequence;
-        @Nullable private ProbeAttempt probeAttempt;
-        @Nullable private PollCall currentCall;
+        @Nullable private RetryProbeAttempt probeAttempt;
+        @Nullable private SchedulingAttempt currentCall;
 
-        private SourceState(IndexReplicator source, TableSources table) {
-            this.source = source;
+        private SourceSchedulingState(IndexReplicator source, TableSources table) {
+            this.replicator = source;
             this.table = table;
         }
     }
 
-    private static final class PollCall {
-        private SourceState source;
-        private boolean allowProbe;
-        private boolean healthy;
-        @Nullable private ProbeAttempt attempt;
+    private static final class SchedulingAttempt {
+        private SourceSchedulingState sourceSchedule;
+        private boolean allowRetryProbe;
+        private boolean normalWorkSelected;
+        @Nullable private RetryProbeAttempt attempt;
     }
 
-    private static final class ProbeAttempt {
+    private static final class RetryProbeAttempt {
         private final long start;
-        private final List<IndexProgressState> indexes;
-        private boolean charged;
+        private final List<IndexReplicationState> indexes;
+        private boolean serviceCharged;
 
-        private ProbeAttempt(ReadGroup group) {
+        private RetryProbeAttempt(ReadGroup group) {
             start = group.startOffset();
             indexes = group.states();
         }
@@ -901,17 +931,18 @@ final class IndexReplicationScheduler {
     }
 
     private static final class TableWaits {
-        private final LinkedHashMap<SourceState, Deque<CapacityWait>> sources =
+        private final LinkedHashMap<SourceSchedulingState, Deque<CapacityWait>> sources =
                 new LinkedHashMap<>();
     }
 
     private static final class CapacityWait {
-        private final SourceState source;
-        private final IndexProgressState index;
+        private final SourceSchedulingState sourceSchedule;
+        private final IndexReplicationState index;
         private final long start;
 
-        private CapacityWait(SourceState source, IndexProgressState index, long start) {
-            this.source = source;
+        private CapacityWait(
+                SourceSchedulingState sourceSchedule, IndexReplicationState index, long start) {
+            this.sourceSchedule = sourceSchedule;
             this.index = index;
             this.start = start;
         }

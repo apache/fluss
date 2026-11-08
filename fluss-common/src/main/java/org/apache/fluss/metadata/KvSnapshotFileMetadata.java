@@ -41,7 +41,7 @@ public final class KvSnapshotFileMetadata {
     private final long incrementalSize;
     private final long logOffset;
     private final @Nullable Long rowCount;
-    private final @Nullable Long indexPushedOffset;
+    private final @Nullable Long allIndexPushedOffset;
     private final @Nullable Long syncIndexPushedOffset;
     private final @Nullable List<AutoIncrementRange> autoIncrementRanges;
 
@@ -80,7 +80,7 @@ public final class KvSnapshotFileMetadata {
             long incrementalSize,
             long logOffset,
             @Nullable Long rowCount,
-            @Nullable Long indexPushedOffset,
+            @Nullable Long allIndexPushedOffset,
             @Nullable Long syncIndexPushedOffset,
             @Nullable List<AutoIncrementRange> autoIncrementRanges) {
         this.tableBucket = checkNotNull(tableBucket, "Table bucket must not be null.");
@@ -92,7 +92,7 @@ public final class KvSnapshotFileMetadata {
         this.incrementalSize = incrementalSize;
         this.logOffset = logOffset;
         this.rowCount = rowCount;
-        this.indexPushedOffset = indexPushedOffset;
+        this.allIndexPushedOffset = allIndexPushedOffset;
         this.syncIndexPushedOffset = syncIndexPushedOffset;
         this.autoIncrementRanges =
                 autoIncrementRanges == null
@@ -143,10 +143,13 @@ public final class KvSnapshotFileMetadata {
         return rowCount;
     }
 
-    /** Returns the index replication replay offset when present. */
+    /**
+     * Returns the minimum exclusive next WAL offset across all indexes, including ASYNC indexes,
+     * captured for replay and WAL retention. Null when index progress is not applicable.
+     */
     @Nullable
     public Long getIndexPushedOffset() {
-        return indexPushedOffset;
+        return allIndexPushedOffset;
     }
 
     /** Returns the confirmed SYNC index prefix recorded before snapshot commit. */
@@ -178,7 +181,7 @@ public final class KvSnapshotFileMetadata {
                 && Objects.equals(sharedFiles, that.sharedFiles)
                 && Objects.equals(privateFiles, that.privateFiles)
                 && Objects.equals(rowCount, that.rowCount)
-                && Objects.equals(indexPushedOffset, that.indexPushedOffset)
+                && Objects.equals(allIndexPushedOffset, that.allIndexPushedOffset)
                 && Objects.equals(syncIndexPushedOffset, that.syncIndexPushedOffset)
                 && Objects.equals(autoIncrementRanges, that.autoIncrementRanges);
     }
@@ -194,7 +197,7 @@ public final class KvSnapshotFileMetadata {
                 incrementalSize,
                 logOffset,
                 rowCount,
-                indexPushedOffset,
+                allIndexPushedOffset,
                 syncIndexPushedOffset,
                 autoIncrementRanges);
     }

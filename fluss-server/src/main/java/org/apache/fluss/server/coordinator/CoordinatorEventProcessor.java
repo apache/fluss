@@ -759,7 +759,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                                                 api.getApiKey() == ApiKeys.PUT_INDEX.id
                                                         && api.getMinVersion() <= 0
                                                         && api.getMaxVersion() >= 0);
-                coordinatorContext.updateTabletServerIndexSupport(
+                coordinatorContext.updateTabletServerPutIndexSupport(
                         received.getRegistration(), supported);
             }
         } else if (event instanceof NewTabletServerEvent) {

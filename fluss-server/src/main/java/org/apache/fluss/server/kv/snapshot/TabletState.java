@@ -35,7 +35,7 @@ public class TabletState {
 
     private final long flushedLogOffset;
     @Nullable private final Long rowCount;
-    @Nullable private final Long indexPushedOffset;
+    @Nullable private final Long allIndexPushedOffset;
     @Nullable private final List<AutoIncIDRange> autoIncIDRanges;
 
     public TabletState(
@@ -48,11 +48,11 @@ public class TabletState {
     public TabletState(
             long flushedLogOffset,
             @Nullable Long rowCount,
-            @Nullable Long indexPushedOffset,
+            @Nullable Long allIndexPushedOffset,
             @Nullable List<AutoIncIDRange> autoIncIDRanges) {
         this.flushedLogOffset = flushedLogOffset;
         this.rowCount = rowCount;
-        this.indexPushedOffset = indexPushedOffset;
+        this.allIndexPushedOffset = allIndexPushedOffset;
         this.autoIncIDRanges = autoIncIDRanges;
     }
 
@@ -66,9 +66,9 @@ public class TabletState {
      * index recovery may need to replay from an earlier index-pushed watermark.
      */
     public long getMinRetainLogOffset() {
-        return indexPushedOffset == null
+        return allIndexPushedOffset == null
                 ? flushedLogOffset
-                : Math.min(flushedLogOffset, indexPushedOffset);
+                : Math.min(flushedLogOffset, allIndexPushedOffset);
     }
 
     @Nullable
@@ -76,9 +76,13 @@ public class TabletState {
         return rowCount;
     }
 
+    /**
+     * Returns the minimum exclusive next WAL offset across all indexes, including ASYNC indexes,
+     * captured for replay and WAL retention. Null when index progress is not applicable.
+     */
     @Nullable
     public Long getIndexPushedOffset() {
-        return indexPushedOffset;
+        return allIndexPushedOffset;
     }
 
     @Nullable
@@ -94,7 +98,7 @@ public class TabletState {
                 + ", rowCount="
                 + rowCount
                 + ", indexPushedOffset="
-                + indexPushedOffset
+                + allIndexPushedOffset
                 + ", autoIncIDRanges="
                 + autoIncIDRanges
                 + '}';

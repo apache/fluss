@@ -46,20 +46,12 @@ public final class PartitionTombstoneAdvancer {
     /**
      * Returns a new {@link PartitionTombstone} reflecting the drop of {@code partitionId}.
      *
-     * @param before the current tombstone snapshot
-     * @param partitionId the id of the partition being dropped
-     * @return a new tombstone with {@code partitionId} absorbed (either into the floor or into the
-     *     explicit set) and {@code version = before.getVersion() + 1}
-     */
-    /**
-     * Returns a new {@link PartitionTombstone} reflecting the drop of {@code partitionId}.
-     *
      * <p>When {@code alivePartitionIdsAfterDrop} is present, {@code floor} is advanced only to a
      * value below every alive partition id. When the set is empty, every known dropped id is safe
      * to fold into the floor. When the snapshot is unavailable, the update falls back to a
      * conservative explicit-set append.
      */
-    public static PartitionTombstone dropPartition(
+    public static PartitionTombstone advanceAfterDrop(
             PartitionTombstone before,
             long partitionId,
             @Nullable Collection<Long> alivePartitionIdsAfterDrop) {

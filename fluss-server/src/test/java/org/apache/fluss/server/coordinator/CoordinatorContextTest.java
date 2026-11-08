@@ -63,14 +63,14 @@ class CoordinatorContextTest {
         assertThatThrownBy(context::checkIndexTableCreationSupported)
                 .isInstanceOf(InvalidTableException.class)
                 .hasMessageContaining("[1, 2]");
-        context.updateTabletServerIndexSupport(first, true);
-        context.updateTabletServerIndexSupport(second, false);
+        context.updateTabletServerPutIndexSupport(first, true);
+        context.updateTabletServerPutIndexSupport(second, false);
         assertThatThrownBy(context::checkIndexTableCreationSupported).hasMessageContaining("[2]");
         context.removeLiveTabletServer(second.id());
         context.checkIndexTableCreationSupported();
         context.addLiveTabletServer(second);
         assertThatThrownBy(context::checkIndexTableCreationSupported).hasMessageContaining("[2]");
-        context.updateTabletServerIndexSupport(second, true);
+        context.updateTabletServerPutIndexSupport(second, true);
         context.checkIndexTableCreationSupported();
     }
 
@@ -81,12 +81,12 @@ class CoordinatorContextTest {
         ServerInfo current = indexServer(1);
         context.addLiveTabletServer(previous);
         context.removeLiveTabletServer(1);
-        context.updateTabletServerIndexSupport(previous, true);
+        context.updateTabletServerPutIndexSupport(previous, true);
         context.addLiveTabletServer(current);
-        context.updateTabletServerIndexSupport(previous, true);
+        context.updateTabletServerPutIndexSupport(previous, true);
         assertThatThrownBy(context::checkIndexTableCreationSupported).hasMessageContaining("[1]");
-        context.updateTabletServerIndexSupport(current, true);
-        context.updateTabletServerIndexSupport(previous, false);
+        context.updateTabletServerPutIndexSupport(current, true);
+        context.updateTabletServerPutIndexSupport(previous, false);
         context.checkIndexTableCreationSupported();
     }
 
@@ -95,11 +95,11 @@ class CoordinatorContextTest {
         CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
         ServerInfo server = indexServer(1);
         context.setLiveTabletServers(Collections.singletonList(server));
-        context.updateTabletServerIndexSupport(server, true);
+        context.updateTabletServerPutIndexSupport(server, true);
         context.checkIndexTableCreationSupported();
         context.resetContext();
         context.setLiveTabletServers(Collections.singletonList(indexServer(1)));
-        context.updateTabletServerIndexSupport(server, true);
+        context.updateTabletServerPutIndexSupport(server, true);
         assertThatThrownBy(context::checkIndexTableCreationSupported).hasMessageContaining("[1]");
     }
 

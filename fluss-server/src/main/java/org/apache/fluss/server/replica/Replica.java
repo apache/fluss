@@ -249,7 +249,7 @@ public final class Replica {
     private final ScannerManager scannerManager;
 
     // ------- index management
-    private final IndexReplicationSupervisor indexManager;
+    private final IndexReplicationSupervisor indexReplicationSupervisor;
     private final IndexTableStorage indexTableStorage;
 
     /** Whether this main-table schema declares at least one secondary index. */
@@ -336,7 +336,8 @@ public final class Replica {
         this.clock = clock;
         this.remoteLogManager = remoteLogManager;
         this.scannerManager = checkNotNull(scannerManager, "scannerManager");
-        this.indexManager = indexReplicationManager.createSupervisor(tableInfo, tableBucket);
+        this.indexReplicationSupervisor =
+                indexReplicationManager.createSupervisor(tableInfo, tableBucket);
         this.indexTableStorage =
                 new IndexTableStorage(tableInfo, tableBucket, metadataCache, schemaGetter);
         List<Schema.Index> secondaryIndexes = tableInfo.getSchema().getIndexes();
@@ -675,7 +676,7 @@ public final class Replica {
 
     /** Delete the replica including drop the kv and log. */
     public void delete() {
-        indexManager.close();
+        indexReplicationSupervisor.close();
         indexTableStorage.clearLeaderState();
         // need to hold the lock to prevent appendLog, putKv from hitting I/O exceptions due
         // to log/kv being deleted
@@ -726,7 +727,7 @@ public final class Replica {
         if (isKvTable()) {
             // Prepare index-table tombstone state before opening RocksDB. Compaction filters are
             // attached during KvTablet creation and cannot be installed afterward.
-            indexManager.prepareForLeader();
+            indexReplicationSupervisor.prepareForLeader();
             indexTableStorage.prepareForLeader();
             resetIndexProgressForLeader();
             // if it's become new leader, we must
@@ -735,7 +736,7 @@ public final class Replica {
             dropKv();
             // now, we can create a new kv tablet
             createKv(checkNotNull(recovery));
-            indexManager.onBecomeLeader(
+            indexReplicationSupervisor.onBecomeLeader(
                     logTablet, schemaGetter, this::advanceIndexProgress, allIndexPushedOffset);
             indexTableStorage.installValueFilter(kvTablet);
         }
@@ -768,7 +769,7 @@ public final class Replica {
     }
 
     private void onBecomeNewFollower(int standbyReplica) {
-        indexManager.onBecomeFollower();
+        indexReplicationSupervisor.onBecomeFollower();
         indexTableStorage.clearLeaderState();
 
         if (isKvTable()) {
@@ -971,8 +972,8 @@ public final class Replica {
 
     // ---- Index management delegation ----
 
-    IndexReplicationSupervisor getIndexManager() {
-        return indexManager;
+    IndexReplicationSupervisor getIndexReplicationSupervisor() {
+        return indexReplicationSupervisor;
     }
 
     public void advanceIndexProgress(long syncIndexOffset, long allIndexOffset) {
@@ -1873,7 +1874,7 @@ public final class Replica {
                     oldWatermark.get(),
                     newHighWatermark,
                     tableBucket);
-            indexManager.onHighWatermarkAdvanced();
+            indexReplicationSupervisor.onHighWatermarkAdvanced();
             return true;
         } else {
             return false;

@@ -305,11 +305,13 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
         return serverMetadataSnapshot.contains(tableBucket);
     }
 
-    public PartitionTombstone getPartitionTombstone(long mainTableId) {
+    /** Returns the cached tombstone, defaulting to empty while its baseline is unknown. */
+    public PartitionTombstone getPartitionTombstoneOrEmpty(long mainTableId) {
         return partitionTombstones.getOrDefault(mainTableId, PartitionTombstone.EMPTY);
     }
 
-    public Optional<PartitionTombstone> getInitializedPartitionTombstone(long mainTableId) {
+    /** Returns a tombstone only after an explicit baseline, including an empty one, is known. */
+    public Optional<PartitionTombstone> getPartitionTombstoneIfInitialized(long mainTableId) {
         return Optional.ofNullable(partitionTombstones.get(mainTableId));
     }
 

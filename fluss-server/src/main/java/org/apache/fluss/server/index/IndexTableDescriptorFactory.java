@@ -25,7 +25,6 @@ import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.row.encode.KvValueLayout;
-import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.IndexTableUtils;
 
@@ -35,7 +34,6 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
-import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
 /** Factory for descriptors of system-managed secondary index tables. */
@@ -59,14 +57,16 @@ public final class IndexTableDescriptorFactory {
             if (seen.add(c)) {
                 columns.add(
                         new Schema.Column(
-                                c, lookupColumnType(mainDescriptor.getSchema(), c).copy(true)));
+                                c,
+                                mainDescriptor.getSchema().getColumn(c).getDataType().copy(true)));
             }
         }
         for (String c : basePk) {
             if (seen.add(c)) {
                 columns.add(
                         new Schema.Column(
-                                c, lookupColumnType(mainDescriptor.getSchema(), c).copy(true)));
+                                c,
+                                mainDescriptor.getSchema().getColumn(c).getDataType().copy(true)));
             }
         }
         if (partitioned) {
@@ -130,15 +130,5 @@ public final class IndexTableDescriptorFactory {
                             IndexTableUtils.ROUTING_KEY_SYSTEM_COLUMN));
         }
         return b.build().withReplicationFactor(mainDescriptor.getReplicationFactor());
-    }
-
-    private static DataType lookupColumnType(Schema schema, String column) {
-        Schema.Column col =
-                schema.getColumns().stream()
-                        .filter(c -> c.getName().equals(column))
-                        .findFirst()
-                        .orElse(null);
-        checkArgument(col != null, "Unknown column '%s'", column);
-        return col.getDataType();
     }
 }

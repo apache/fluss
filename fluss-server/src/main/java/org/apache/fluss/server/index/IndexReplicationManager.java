@@ -67,7 +67,7 @@ public final class IndexReplicationManager implements AutoCloseable {
     private final RemoteLogManager remoteLogManager;
     private final Executor remoteReadExecutor;
     private final TabletServerMetricGroup metrics;
-    private final int maxWindowBytes;
+    private final int sourceReadTargetBytes;
     private final long maxTransportRequestBytes;
     private final ExponentialBackoff retryBackoff;
     private final IndexSendBuffer sendBuffer;
@@ -98,7 +98,7 @@ public final class IndexReplicationManager implements AutoCloseable {
                 ConfigOptions.INDEX_REPLICATION_SOURCE_MAX_BYTES.key(),
                 Integer.MAX_VALUE,
                 sourceMaxBytes);
-        this.maxWindowBytes = (int) sourceMaxBytes;
+        this.sourceReadTargetBytes = (int) sourceMaxBytes;
         this.maxTransportRequestBytes =
                 conf.get(ConfigOptions.NETTY_SERVER_MAX_REQUEST_SIZE).getBytes();
         this.retryBackoff =
@@ -153,15 +153,15 @@ public final class IndexReplicationManager implements AutoCloseable {
             LogTablet log,
             List<IndexSpec> indexes,
             LogRecordReadContext readContext,
-            long initialOffset,
+            long replayStartOffset,
             IndexProgressListener onProgress) {
         return new IndexReplicator(
                 new IndexSourceReader(log, remoteLogManager, remoteReadExecutor, metrics),
                 indexes,
                 sendBuffer,
                 readContext,
-                initialOffset,
-                maxWindowBytes,
+                replayStartOffset,
+                sourceReadTargetBytes,
                 onProgress,
                 scheduler,
                 workerFor(log.getTableBucket())::wakeup,

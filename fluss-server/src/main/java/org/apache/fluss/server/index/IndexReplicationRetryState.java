@@ -85,7 +85,7 @@ final class IndexReplicationRetryState {
      * Checks whether failure age plus remaining retry delay reaches the soft payload-retention
      * target, allowing a failed window to yield before holding capacity through a long backoff.
      */
-    synchronized boolean shouldReleaseResources(long retentionNanos) {
+    synchronized boolean shouldYieldPayload(long retentionNanos) {
         return attempts > 0
                 && clock.nanoseconds() - failureStartNanos
                         >= retentionNanos - remainingDelayNanos();
@@ -95,7 +95,7 @@ final class IndexReplicationRetryState {
      * Leaves a fresh competition opportunity after yielding. Retaining fault age and retry stage
      * prevents payload rebuilding from restarting fast retries during the same failure period.
      */
-    synchronized void onResourcesReleased() {
+    synchronized void deferRetryAfterYield() {
         long delayNanos = TimeUnit.MILLISECONDS.toNanos(backoff.backoff(attempts - 1));
         retryDeadlineNanos = clock.nanoseconds() + Math.max(remainingDelayNanos(), delayNanos);
     }

@@ -19,7 +19,7 @@ package org.apache.fluss.server.index;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.server.index.IndexReplicator.IndexProgressState;
+import org.apache.fluss.server.index.IndexReplicator.IndexReplicationState;
 
 import java.util.Collections;
 import java.util.Set;
@@ -44,7 +44,7 @@ import java.util.Set;
 @Internal
 final class IndexReplicationWindow {
 
-    private final IndexProgressState index;
+    private final IndexReplicationState index;
     private final long windowEndOffset;
     private final int expectedBatchCount;
     private int remaining;
@@ -57,7 +57,10 @@ final class IndexReplicationWindow {
     private volatile boolean failed;
 
     IndexReplicationWindow(
-            IndexProgressState index, long windowEndOffset, int batchCount, IndexReplicator owner) {
+            IndexReplicationState index,
+            long windowEndOffset,
+            int batchCount,
+            IndexReplicator owner) {
         this.index = index;
         this.windowEndOffset = windowEndOffset;
         this.expectedBatchCount = batchCount;
@@ -67,7 +70,7 @@ final class IndexReplicationWindow {
         this.admitted = false;
     }
 
-    IndexProgressState index() {
+    IndexReplicationState index() {
         return index;
     }
 

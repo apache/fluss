@@ -218,7 +218,7 @@ public final class IndexTableStorage {
         }
         PartitionTombstone tombstone =
                 metadataCache
-                        .getInitializedPartitionTombstone(sourceBucket.getTableId())
+                        .getPartitionTombstoneIfInitialized(sourceBucket.getTableId())
                         .orElseThrow(
                                 () ->
                                         new StaleMetadataException(

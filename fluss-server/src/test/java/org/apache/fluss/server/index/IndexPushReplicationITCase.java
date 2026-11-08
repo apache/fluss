@@ -244,7 +244,7 @@ class IndexPushReplicationITCase {
         waitUntil(
                 () ->
                         metadataCache
-                                .getPartitionTombstone(fixture.mainTableId)
+                                .getPartitionTombstoneOrEmpty(fixture.mainTableId)
                                 .isTombstoned(oldPartitionId),
                 INDEX_VISIBILITY_TIMEOUT,
                 "old partition tombstone publication");
