@@ -45,6 +45,7 @@ import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableIterator;
 import org.apache.fluss.utils.ExponentialBackoff;
 import org.apache.fluss.utils.clock.ManualClock;
+import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -491,8 +492,9 @@ class IndexReplicatorTest {
         }
     }
 
-    @Test
-    void stalledWindowYieldsBudgetAndRecoversAfterRepair() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void stalledWindowYieldsBudgetAndRecoversAfterRepair(boolean rpcFailure) throws Exception {
         MemoryLogRecords records = sourceRecords(RowType.of(DataTypes.INT()), 0);
         IndexSendBuffer buffer = new IndexSendBuffer(4096);
         ManualClock clock = new ManualClock();
@@ -503,6 +505,11 @@ class IndexReplicatorTest {
                 new TestingTabletGatewayService() {
                     @Override
                     public CompletableFuture<PutIndexResponse> putIndex(PutIndexRequest request) {
+                        if (request.getTableId() == 2L && !repaired.get() && rpcFailure) {
+                            return FutureUtils.completedExceptionally(
+                                    Errors.INVALID_TABLE_EXCEPTION.exception(
+                                            "Index needs operator repair"));
+                        }
                         PutIndexResponse response = new PutIndexResponse();
                         response.addBucketsResp().setBucketId(0);
                         if (request.getTableId() == 2L && !repaired.get()) {
@@ -564,6 +571,7 @@ class IndexReplicatorTest {
                         () ->
                                 assertThat(metrics.indexReplicationRetries().getCount())
                                         .isGreaterThan(retries));
+                assertThat(metrics.indexReplicationFailures().getCount()).isGreaterThanOrEqualTo(2);
                 assertThat(stalled.poll()).isFalse();
                 assertThat(buffer.pendingBytes()).isZero();
                 assertThat(stalled.poll()).isFalse();
@@ -589,32 +597,12 @@ class IndexReplicatorTest {
         AtomicInteger reads = new AtomicInteger();
         AtomicBoolean failed = new AtomicBoolean();
         IndexSourceReader.SourceLog log =
-                new IndexSourceReader.SourceLog() {
-                    @Override
-                    public TableBucket tableBucket() {
-                        return new TableBucket(1L, 0);
-                    }
-
-                    @Override
-                    public long highWatermark() {
-                        return highWatermark.get();
-                    }
-
-                    @Override
-                    public long logStartOffset() {
-                        return 0L;
-                    }
-
-                    @Override
-                    public FetchDataInfo read(
-                            long offset,
-                            int maxBytes,
-                            FetchIsolation isolation,
-                            boolean minOneMessage) {
-                        reads.incrementAndGet();
-                        return new FetchDataInfo(offset == 0 ? first : second);
-                    }
-                };
+                new TestingIndexSourceLog(
+                        new TableBucket(1L, 0),
+                        highWatermark::get,
+                        0L,
+                        offset -> offset == 0 ? first : second,
+                        reads);
         IndexSpec delegate = indexSpec("fast", 2L, new AtomicInteger());
         IndexSpec fast =
                 new IndexSpec(
@@ -937,29 +925,8 @@ class IndexReplicatorTest {
             Supplier<LogRecords> records,
             AtomicInteger reads,
             LongSupplier highWatermark) {
-        return new IndexSourceReader.SourceLog() {
-            @Override
-            public TableBucket tableBucket() {
-                return source;
-            }
-
-            @Override
-            public long highWatermark() {
-                return highWatermark.getAsLong();
-            }
-
-            @Override
-            public long logStartOffset() {
-                return 0L;
-            }
-
-            @Override
-            public FetchDataInfo read(
-                    long offset, int maxBytes, FetchIsolation isolation, boolean minOneMessage) {
-                reads.incrementAndGet();
-                return new FetchDataInfo(records.get());
-            }
-        };
+        return new TestingIndexSourceLog(
+                source, highWatermark, 0L, ignored -> records.get(), reads);
     }
 
     private static IndexReplicator replicator(
@@ -1057,32 +1024,8 @@ class IndexReplicatorTest {
                 };
 
         IndexSourceReader.SourceLog sourceLog =
-                new IndexSourceReader.SourceLog() {
-                    @Override
-                    public TableBucket tableBucket() {
-                        return sourceBucket;
-                    }
-
-                    @Override
-                    public long highWatermark() {
-                        return 4L;
-                    }
-
-                    @Override
-                    public long logStartOffset() {
-                        return 0L;
-                    }
-
-                    @Override
-                    public FetchDataInfo read(
-                            long offset,
-                            int maxBytes,
-                            org.apache.fluss.server.log.FetchIsolation isolation,
-                            boolean minOneMessage) {
-                        sourceReads.incrementAndGet();
-                        return new FetchDataInfo(records);
-                    }
-                };
+                new TestingIndexSourceLog(
+                        sourceBucket, () -> 4L, 0L, ignored -> records, sourceReads);
 
         LogRecordReadContext readContext =
                 LogRecordReadContext.createCompactedRowReadContext(rowType, 1, null);

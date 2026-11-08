@@ -243,29 +243,31 @@ class IndexTargetRecoveryITCase {
     private static void putMainMutation(
             TabletServerGateway gateway, long mainTableId, int key, String indexedValue)
             throws Exception {
-        KvRecordBatch batch = genKvRecordBatch(new Object[] {key, indexedValue});
-        try {
-            PutKvResponse response = gateway.putKv(newPutKvRequest(mainTableId, 0, 1, batch)).get();
-            assertThat(response.getBucketsRespsList())
-                    .allSatisfy(
-                            bucket ->
-                                    assertThat(bucket.hasErrorCode())
-                                            .as(
-                                                    "main-table UPSERT key=%s error=%s",
-                                                    key,
-                                                    bucket.hasErrorMessage()
-                                                            ? bucket.getErrorMessage()
-                                                            : "none")
-                                            .isFalse());
-        } catch (Exception failure) {
-            throw new AssertionError("failed main-table UPSERT for key " + key, failure);
-        }
+        writeMainMutation(
+                gateway,
+                mainTableId,
+                key,
+                genKvRecordBatch(new Object[] {key, indexedValue}),
+                "UPSERT");
     }
 
     private static void deleteMainMutation(TabletServerGateway gateway, long mainTableId, int key)
             throws Exception {
-        KvRecordBatch batch =
-                genKvRecordBatch(Collections.singletonList(Tuple2.of(new Object[] {key}, null)));
+        writeMainMutation(
+                gateway,
+                mainTableId,
+                key,
+                genKvRecordBatch(Collections.singletonList(Tuple2.of(new Object[] {key}, null))),
+                "DELETE");
+    }
+
+    private static void writeMainMutation(
+            TabletServerGateway gateway,
+            long mainTableId,
+            int key,
+            KvRecordBatch batch,
+            String operation)
+            throws Exception {
         try {
             PutKvResponse response = gateway.putKv(newPutKvRequest(mainTableId, 0, 1, batch)).get();
             assertThat(response.getBucketsRespsList())
@@ -273,14 +275,15 @@ class IndexTargetRecoveryITCase {
                             bucket ->
                                     assertThat(bucket.hasErrorCode())
                                             .as(
-                                                    "main-table DELETE key=%s error=%s",
+                                                    "main-table %s key=%s error=%s",
+                                                    operation,
                                                     key,
                                                     bucket.hasErrorMessage()
                                                             ? bucket.getErrorMessage()
                                                             : "none")
                                             .isFalse());
         } catch (Exception failure) {
-            throw new AssertionError("failed main-table DELETE for key " + key, failure);
+            throw new AssertionError("failed main-table " + operation + " for key " + key, failure);
         }
     }
 

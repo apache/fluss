@@ -77,8 +77,6 @@ final class IndexSourceReader implements AutoCloseable {
     private final Executor remoteExecutor;
     @Nullable private final TabletServerMetricGroup metrics;
     private final AtomicBoolean closed = new AtomicBoolean();
-    private final AtomicReference<CompletableFuture<ReadResult>> pendingRemoteRead =
-            new AtomicReference<>();
     /** Removing the session transfers responsibility for closing it. */
     private final AtomicReference<RemoteFetcher> remoteFetcherSession = new AtomicReference<>();
 
@@ -121,6 +119,8 @@ final class IndexSourceReader implements AutoCloseable {
 
     /**
      * Returns a bounded continuous source range, fetching remote raw WAL asynchronously if needed.
+     * The owning replicator serializes reads and cancels or closes the delivered result. An async
+     * task remains responsible for a result that its future does not accept.
      */
     CompletableFuture<ReadResult> read(long nextOffset, long endOffsetLimit, int maxBytes) {
         if (closed.get()) {
@@ -160,9 +160,6 @@ final class IndexSourceReader implements AutoCloseable {
         }
 
         CompletableFuture<ReadResult> future = new CompletableFuture<>();
-        if (!pendingRemoteRead.compareAndSet(null, future)) {
-            throw new IllegalStateException("An index source read already in progress");
-        }
         try {
             remoteExecutor.execute(
                     () ->
@@ -173,7 +170,6 @@ final class IndexSourceReader implements AutoCloseable {
                                     localLogStartOffset,
                                     maxBytes));
         } catch (Throwable failure) {
-            pendingRemoteRead.compareAndSet(future, null);
             future.completeExceptionally(failure);
         }
         return future;
@@ -248,7 +244,6 @@ final class IndexSourceReader implements AutoCloseable {
             if (remoteFetcher != null) {
                 discardRemoteFetcher(remoteFetcher);
             }
-            pendingRemoteRead.compareAndSet(future, null);
             if (!future.isCancelled()) {
                 future.completeExceptionally(failure);
             }
@@ -323,17 +318,6 @@ final class IndexSourceReader implements AutoCloseable {
         if (!closed.compareAndSet(false, true)) {
             return;
         }
-        CompletableFuture<ReadResult> future = pendingRemoteRead.getAndSet(null);
-        if (future != null) {
-            ReadResult completed =
-                    future.isDone() && !future.isCompletedExceptionally() && !future.isCancelled()
-                            ? future.getNow(null)
-                            : null;
-            future.cancel(true);
-            if (completed != null) {
-                completed.close();
-            }
-        }
         RemoteFetcher fetcher = remoteFetcherSession.getAndSet(null);
         if (fetcher != null) {
             fetcher.close();
@@ -357,7 +341,6 @@ final class IndexSourceReader implements AutoCloseable {
         private final boolean byteLimited;
         private final long bytes;
         @Nullable private final AutoCloseable resource;
-        @Nullable private final Runnable onClose;
         private final AtomicBoolean closed = new AtomicBoolean();
 
         private ReadResult(
@@ -365,19 +348,17 @@ final class IndexSourceReader implements AutoCloseable {
                 long nextOffset,
                 boolean byteLimited,
                 long bytes,
-                @Nullable AutoCloseable resource,
-                @Nullable Runnable onClose) {
+                @Nullable AutoCloseable resource) {
             // The collector no longer appends after handing this list to the result.
             this.batches = Collections.unmodifiableList(batches);
             this.bytes = bytes;
             this.nextOffset = nextOffset;
             this.byteLimited = byteLimited;
             this.resource = resource;
-            this.onClose = onClose;
         }
 
         private static ReadResult empty(long nextOffset) {
-            return new ReadResult(Collections.emptyList(), nextOffset, false, 0L, null, null);
+            return new ReadResult(Collections.emptyList(), nextOffset, false, 0L, null);
         }
 
         List<LogRecordBatch> batches() {
@@ -413,17 +394,11 @@ final class IndexSourceReader implements AutoCloseable {
             if (!closed.compareAndSet(false, true)) {
                 return;
             }
-            try {
-                if (resource != null) {
-                    try {
-                        resource.close();
-                    } catch (Exception e) {
-                        throw new RuntimeException("Failed to close index source read", e);
-                    }
-                }
-            } finally {
-                if (onClose != null) {
-                    onClose.run();
+            if (resource != null) {
+                try {
+                    resource.close();
+                } catch (Exception e) {
+                    throw new RuntimeException("Failed to close index source read", e);
                 }
             }
         }
@@ -518,12 +493,7 @@ final class IndexSourceReader implements AutoCloseable {
         }
 
         private ReadResult finish() {
-            // Keep the completion hook independent of the collector's lifetime.
-            AtomicReference<CompletableFuture<ReadResult>> pendingRead = pendingRemoteRead;
-            CompletableFuture<ReadResult> future = pendingRead.get();
-            Runnable onClose =
-                    future == null ? null : () -> pendingRead.compareAndSet(future, null);
-            return new ReadResult(batches, nextOffset, byteLimitReached, bytes, resource, onClose);
+            return new ReadResult(batches, nextOffset, byteLimitReached, bytes, resource);
         }
 
         private void attachResource(AutoCloseable resource) {

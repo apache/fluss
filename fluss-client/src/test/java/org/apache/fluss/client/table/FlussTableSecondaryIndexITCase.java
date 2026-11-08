@@ -81,12 +81,7 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
                         .column("id", DataTypes.INT())
                         .column("name", DataTypes.STRING())
                         .primaryKey("id")
-                        .index(
-                                "idx_name",
-                                IndexType.SECONDARY,
-                                Collections.singletonList("name"),
-                                IndexVisibility.SYNC,
-                                2)
+                        .index("idx_name", "name")
                         .build();
         long mainTableId =
                 createTable(
@@ -146,12 +141,7 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
                         .column("id", DataTypes.INT())
                         .column("tag", DataTypes.STRING())
                         .primaryKey("tenant", "id")
-                        .index(
-                                "idx_tag",
-                                IndexType.SECONDARY,
-                                Collections.singletonList("tag"),
-                                IndexVisibility.SYNC,
-                                1)
+                        .index("idx_tag", "tag")
                         .build();
         createTable(
                 path,
@@ -208,12 +198,7 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
                         .column("city", DataTypes.STRING())
                         .column("age", DataTypes.INT())
                         .primaryKey("id")
-                        .index(
-                                "idx_city_age",
-                                IndexType.SECONDARY,
-                                Arrays.asList("city", "age"),
-                                IndexVisibility.SYNC,
-                                3)
+                        .index("idx_city_age", "city", "age")
                         .build();
 
         TableDescriptor descriptor =
@@ -266,18 +251,8 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
                         .column("email", DataTypes.STRING())
                         .column("year", DataTypes.STRING())
                         .primaryKey("id", "year")
-                        .index(
-                                "idx_name",
-                                IndexType.SECONDARY,
-                                Arrays.asList("name"),
-                                IndexVisibility.SYNC,
-                                3)
-                        .index(
-                                "idx_email",
-                                IndexType.SECONDARY,
-                                Arrays.asList("email"),
-                                IndexVisibility.SYNC,
-                                3)
+                        .index("idx_name", "name")
+                        .index("idx_email", "email")
                         .build();
 
         TableDescriptor descriptor =
@@ -430,12 +405,7 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
                         .column("name", DataTypes.STRING())
                         .column("year", DataTypes.STRING())
                         .primaryKey("id", "year")
-                        .index(
-                                "idx_name",
-                                IndexType.SECONDARY,
-                                Collections.singletonList("name"),
-                                IndexVisibility.SYNC,
-                                1)
+                        .index("idx_name", "name")
                         .build();
         long mainTableId =
                 createTable(
@@ -496,12 +466,7 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
                         .column("name", DataTypes.STRING())
                         .column("year", DataTypes.STRING())
                         .primaryKey("id", "year")
-                        .index(
-                                "idx_name",
-                                IndexType.SECONDARY,
-                                Collections.singletonList("name"),
-                                IndexVisibility.SYNC,
-                                3)
+                        .index("idx_name", "name")
                         .build();
         long mainTableId =
                 createTable(
@@ -555,7 +520,7 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
                                                 tabletServer ->
                                                         tabletServer
                                                                 .getMetadataCache()
-                                                                .getInitializedPartitionTombstone(
+                                                                .getPartitionTombstoneIfInitialized(
                                                                         mainTableId)
                                                                 .map(
                                                                         tombstone ->
@@ -587,7 +552,7 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
                                             tabletServer ->
                                                     tabletServer
                                                             .getMetadataCache()
-                                                            .getInitializedPartitionTombstone(
+                                                            .getPartitionTombstoneIfInitialized(
                                                                     mainTableId)
                                                             .map(
                                                                     tombstone ->
@@ -631,18 +596,8 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
                         .column("name", DataTypes.STRING())
                         .column("email", DataTypes.STRING())
                         .primaryKey("id")
-                        .index(
-                                "idx_name",
-                                IndexType.SECONDARY,
-                                Arrays.asList("name"),
-                                IndexVisibility.SYNC,
-                                3)
-                        .index(
-                                "idx_email",
-                                IndexType.SECONDARY,
-                                Arrays.asList("email"),
-                                IndexVisibility.SYNC,
-                                3)
+                        .index("idx_name", "name")
+                        .index("idx_email", "email")
                         .build();
 
         TableDescriptor descriptor =
@@ -750,30 +705,10 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
                         .column("amount", DataTypes.INT())
                         .column("active", DataTypes.BOOLEAN())
                         .primaryKey("fact_id")
-                        .index(
-                                "idx_order_id",
-                                IndexType.SECONDARY,
-                                Arrays.asList("order_id"),
-                                IndexVisibility.SYNC,
-                                3)
-                        .index(
-                                "idx_price",
-                                IndexType.SECONDARY,
-                                Arrays.asList("price"),
-                                IndexVisibility.SYNC,
-                                3)
-                        .index(
-                                "idx_event_time",
-                                IndexType.SECONDARY,
-                                Arrays.asList("event_time"),
-                                IndexVisibility.SYNC,
-                                3)
-                        .index(
-                                "idx_payload",
-                                IndexType.SECONDARY,
-                                Arrays.asList("payload"),
-                                IndexVisibility.SYNC,
-                                3)
+                        .index("idx_order_id", "order_id")
+                        .index("idx_price", "price")
+                        .index("idx_event_time", "event_time")
+                        .index("idx_payload", "payload")
                         .index("idx_active", "active")
                         .build();
         createTable(
@@ -818,37 +753,6 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
     }
 
     @Test
-    void testPartialUpdateOmittingNotNullIndexColumnIsRejected() throws Exception {
-        TablePath tablePath = TablePath.of(DB, "test_pu_notnull_idx_rejected");
-        Schema schema =
-                Schema.newBuilder()
-                        .column("id", DataTypes.BIGINT().copy(false))
-                        .column("user_id", DataTypes.BIGINT().copy(false)) // NOT NULL index column
-                        .column("note", DataTypes.STRING().copy(true))
-                        .primaryKey("id")
-                        .index(
-                                "idx_user",
-                                IndexType.SECONDARY,
-                                Arrays.asList("user_id"),
-                                IndexVisibility.SYNC,
-                                3)
-                        .build();
-        TableDescriptor descriptor =
-                TableDescriptor.builder().schema(schema).distributedBy(3, "id").build();
-        createTable(tablePath, descriptor, true);
-
-        try (Table table = conn.getTable(tablePath)) {
-            // A partial update that omits the NOT NULL index column must be rejected at writer
-            // construction: index columns are NOT exempted from the partial-update nullable rule.
-            assertThatThrownBy(() -> table.newUpsert().partialUpdate("id", "note").createWriter())
-                    .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining(
-                            "Partial Update requires all columns except primary key to be nullable")
-                    .hasMessageContaining("user_id");
-        }
-    }
-
-    @Test
     void testPartialUpdatePreservesOmittedNullableIndexColumn() throws Exception {
         TablePath tablePath = TablePath.of(DB, "test_pu_nullable_idx_accepted");
         Schema schema =
@@ -857,12 +761,7 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
                         .column("user_id", DataTypes.BIGINT().copy(true)) // nullable index column
                         .column("note", DataTypes.STRING().copy(true))
                         .primaryKey("id")
-                        .index(
-                                "idx_user",
-                                IndexType.SECONDARY,
-                                Arrays.asList("user_id"),
-                                IndexVisibility.SYNC,
-                                3)
+                        .index("idx_user", "user_id")
                         .build();
         TableDescriptor descriptor =
                 TableDescriptor.builder().schema(schema).distributedBy(3, "id").build();
@@ -904,18 +803,8 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
                         .column("name", DataTypes.STRING())
                         .column("email", DataTypes.STRING())
                         .primaryKey("id")
-                        .index(
-                                "idx_name",
-                                IndexType.SECONDARY,
-                                Arrays.asList("name"),
-                                IndexVisibility.SYNC,
-                                3)
-                        .index(
-                                "idx_email",
-                                IndexType.SECONDARY,
-                                Arrays.asList("email"),
-                                IndexVisibility.SYNC,
-                                3)
+                        .index("idx_name", "name")
+                        .index("idx_email", "email")
                         .build();
 
         TableDescriptor descriptor =

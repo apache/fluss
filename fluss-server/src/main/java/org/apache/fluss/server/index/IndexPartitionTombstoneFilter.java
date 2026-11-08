@@ -25,6 +25,7 @@ import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
+import org.apache.fluss.shaded.guava32.com.google.common.primitives.Longs;
 import org.apache.fluss.utils.IndexTableUtils;
 
 import io.github.fluss_contrib.rocksdb.AbstractCompactionFilter;
@@ -33,7 +34,6 @@ import io.github.fluss_contrib.rocksdb.FloorSetCompactionFilter;
 
 import javax.annotation.Nullable;
 
-import java.util.Set;
 import java.util.function.ToLongFunction;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
@@ -111,7 +111,7 @@ public final class IndexPartitionTombstoneFilter {
                 return new FloorSetCompactionFilter(
                         INDEX_VALUE_LAYOUT.valueTagOffset(),
                         tombstone.getFloor(),
-                        toLongArray(tombstone.getExplicitSet()));
+                        Longs.toArray(tombstone.getExplicitSet()));
             }
 
             @Override
@@ -132,14 +132,5 @@ public final class IndexPartitionTombstoneFilter {
 
     private PartitionTombstone currentTombstone() {
         return metadataCache.getPartitionTombstoneOrEmpty(mainTableId);
-    }
-
-    private static long[] toLongArray(Set<Long> values) {
-        long[] result = new long[values.size()];
-        int position = 0;
-        for (long value : values) {
-            result[position++] = value;
-        }
-        return result;
     }
 }
