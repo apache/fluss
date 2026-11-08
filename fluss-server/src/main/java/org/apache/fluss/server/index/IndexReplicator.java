@@ -37,6 +37,8 @@ import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.index.IndexReplicationSupervisor.IndexProgressListener;
 import org.apache.fluss.server.index.IndexRequestFactory.SizeAccumulator;
 import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
+import org.apache.fluss.shaded.netty4.io.netty.util.collection.IntObjectHashMap;
+import org.apache.fluss.shaded.netty4.io.netty.util.collection.IntObjectMap;
 import org.apache.fluss.utils.CloseableIterator;
 import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.ExponentialBackoff;
@@ -52,7 +54,6 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -420,13 +421,13 @@ final class IndexReplicator implements AutoCloseable {
                 new IndexReplicationWindow(state, endOffset, build.builders.size(), this);
         List<IndexBatch> batches = new ArrayList<>(build.builders.size());
         try {
-            for (Map.Entry<Integer, BucketBatchBuilder> entry : build.builders.entrySet()) {
-                int targetBucket = entry.getKey();
+            for (IntObjectMap.PrimitiveEntry<BucketBatchBuilder> entry : build.builders.entries()) {
+                int targetBucket = entry.key();
                 IndexSpec.IndexEntry progress;
                 BytesView encoded;
                 try {
                     progress = state.spec.encodeProgress(sourceBucket(), targetBucket, endOffset);
-                    encoded = entry.getValue().finish(progress.key(), progress.value());
+                    encoded = entry.value().finish(progress.key(), progress.value());
                 } catch (IOException | RuntimeException failure) {
                     deferWindow(build, failure);
                     return;
@@ -436,7 +437,7 @@ final class IndexReplicator implements AutoCloseable {
                                 new TableBucket(state.spec.getIndexTableId(), targetBucket),
                                 progress.key(),
                                 encoded,
-                                entry.getValue().retainedBytes(),
+                                entry.value().retainedBytes(),
                                 window));
             }
             long largestFrame = 0;
@@ -1072,7 +1073,7 @@ final class IndexReplicator implements AutoCloseable {
     private static final class WindowBuildState implements AutoCloseable {
         private final IndexReplicationState state;
         // The index table is fixed for this window; only the target bucket ID varies.
-        private final Map<Integer, BucketBatchBuilder> builders = new HashMap<>();
+        private final IntObjectMap<BucketBatchBuilder> builders = new IntObjectHashMap<>();
         private final IndexSendBuffer.Reservation reservation;
         private final IndexSourceReader.ReadResult input;
         private final int readTargetBytes;
@@ -1246,7 +1247,7 @@ final class IndexReplicator implements AutoCloseable {
         }
 
         long retainedBytes() {
-            return Math.multiplyExact((long) output.getWrittenSegments().size(), PAGE_SIZE);
+            return Math.multiplyExact((long) output.getWrittenSegmentCount(), PAGE_SIZE);
         }
     }
 }

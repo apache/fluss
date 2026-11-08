@@ -81,6 +81,11 @@ public abstract class AbstractPagedOutputView implements OutputView, MemorySegme
      */
     public abstract List<MemorySegment> allocatedPooledSegments();
 
+    /** Gets the size of {@link #getWrittenSegments()} without creating the segment views. */
+    public int getWrittenSegmentCount() {
+        return finishedPages.size() + 1;
+    }
+
     /** Gets the list of memory segments that have been written bytes. */
     public List<MemorySegmentBytesView> getWrittenSegments() {
         List<MemorySegmentBytesView> views = new ArrayList<>(finishedPages.size() + 1);

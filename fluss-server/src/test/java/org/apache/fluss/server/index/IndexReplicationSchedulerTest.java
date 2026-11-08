@@ -56,49 +56,20 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class IndexReplicationSchedulerTest {
 
+    private final ManualClock clock = new ManualClock();
+    private IndexReplicationScheduler scheduler;
+    private IndexSendBuffer buffer;
+
     @Test
     void inputAdmissionRotatesTablesAcrossWorkersAndReleasesOnClose() throws Exception {
-        IndexReplicationScheduler scheduler = new IndexReplicationScheduler(1);
-        IndexSendBuffer buffer = new IndexSendBuffer();
-        ManualClock clock = new ManualClock();
+        scheduler = new IndexReplicationScheduler(1);
+        buffer = new IndexSendBuffer();
         ManuallyTriggeredScheduledExecutorService io =
                 new ManuallyTriggeredScheduledExecutorService();
-        try (Source first =
-                        new Source(
-                                scheduler,
-                                0,
-                                new TableBucket(1L, 0),
-                                buffer,
-                                clock,
-                                io,
-                                spec("a", 10L));
-                Source second =
-                        new Source(
-                                scheduler,
-                                1,
-                                new TableBucket(1L, 1),
-                                buffer,
-                                clock,
-                                io,
-                                spec("b", 11L));
-                Source third =
-                        new Source(
-                                scheduler,
-                                2,
-                                new TableBucket(1L, 2),
-                                buffer,
-                                clock,
-                                io,
-                                spec("c", 12L));
-                Source otherTable =
-                        new Source(
-                                scheduler,
-                                3,
-                                new TableBucket(2L, 0),
-                                buffer,
-                                clock,
-                                io,
-                                spec("d", 13L))) {
+        try (Source first = new Source(0, new TableBucket(1L, 0), io, spec("a", 10L));
+                Source second = new Source(1, new TableBucket(1L, 1), io, spec("b", 11L));
+                Source third = new Source(2, new TableBucket(1L, 2), io, spec("c", 12L));
+                Source otherTable = new Source(3, new TableBucket(2L, 0), io, spec("d", 13L))) {
             assertThat(first.replicator.poll()).isTrue();
             assertThat(second.replicator.poll()).isFalse();
             assertThat(third.replicator.poll()).isFalse();
@@ -130,30 +101,13 @@ class IndexReplicationSchedulerTest {
 
     @Test
     void capacityRetryKeepsInputAdmissionUntilItsBuildFinishes() throws Exception {
-        IndexReplicationScheduler scheduler = new IndexReplicationScheduler(1);
-        IndexSendBuffer buffer = new IndexSendBuffer(8192);
-        ManualClock clock = new ManualClock();
+        scheduler = new IndexReplicationScheduler(1);
+        buffer = new IndexSendBuffer(8192);
         ManuallyTriggeredScheduledExecutorService io =
                 new ManuallyTriggeredScheduledExecutorService();
         try (IndexSendBuffer.Reservation blocker = buffer.newReservation();
-                Source owner =
-                        new Source(
-                                scheduler,
-                                0,
-                                new TableBucket(1L, 0),
-                                buffer,
-                                clock,
-                                io,
-                                spec("a", 10L));
-                Source other =
-                        new Source(
-                                scheduler,
-                                1,
-                                new TableBucket(2L, 0),
-                                buffer,
-                                clock,
-                                io,
-                                spec("b", 11L))) {
+                Source owner = new Source(0, new TableBucket(1L, 0), io, spec("a", 10L));
+                Source other = new Source(1, new TableBucket(2L, 0), io, spec("b", 11L))) {
             assertThat(owner.replicator.poll()).isTrue();
             blocker.allocatePage(8192);
             io.trigger();
@@ -179,41 +133,12 @@ class IndexReplicationSchedulerTest {
 
     @Test
     void serviceOnAnotherWorkerDoesNotConsumeLocalTablePosition() throws Exception {
-        IndexReplicationScheduler scheduler = new IndexReplicationScheduler(8);
-        IndexSendBuffer buffer = new IndexSendBuffer();
-        ManualClock clock = new ManualClock();
-        try (Source firstA =
-                        new Source(
-                                scheduler,
-                                0,
-                                new TableBucket(1L, 0),
-                                buffer,
-                                clock,
-                                spec("a0", 10L));
-                Source secondA =
-                        new Source(
-                                scheduler,
-                                1,
-                                new TableBucket(1L, 1),
-                                buffer,
-                                clock,
-                                spec("a1", 11L));
-                Source firstB =
-                        new Source(
-                                scheduler,
-                                1,
-                                new TableBucket(2L, 0),
-                                buffer,
-                                clock,
-                                spec("b0", 12L));
-                Source secondB =
-                        new Source(
-                                scheduler,
-                                1,
-                                new TableBucket(2L, 1),
-                                buffer,
-                                clock,
-                                spec("b1", 13L))) {
+        scheduler = new IndexReplicationScheduler(8);
+        buffer = new IndexSendBuffer();
+        try (Source firstA = new Source(0, new TableBucket(1L, 0), spec("a0", 10L));
+                Source secondA = new Source(1, new TableBucket(1L, 1), spec("a1", 11L));
+                Source firstB = new Source(1, new TableBucket(2L, 0), spec("b0", 12L));
+                Source secondB = new Source(1, new TableBucket(2L, 1), spec("b1", 13L))) {
             for (int round = 0; round < 6; round++) {
                 assertThat(scheduler.pollWorker(0)).isTrue();
                 drain(buffer);
@@ -230,18 +155,10 @@ class IndexReplicationSchedulerTest {
 
     @Test
     void syncLookaheadChecksStartWithoutTruncatingEndAndIncludesBlockedMinimum() throws Exception {
-        IndexReplicationScheduler scheduler = new IndexReplicationScheduler(8);
-        IndexSendBuffer buffer = new IndexSendBuffer();
-        ManualClock clock = new ManualClock();
+        scheduler = new IndexReplicationScheduler(8);
+        buffer = new IndexSendBuffer();
         try (Source source =
-                new Source(
-                        scheduler,
-                        0,
-                        new TableBucket(1L, 0),
-                        buffer,
-                        clock,
-                        spec("fast", 10L),
-                        spec("slow", 11L))) {
+                new Source(0, new TableBucket(1L, 0), spec("fast", 10L), spec("slow", 11L))) {
             source.highWatermark.set(2);
             assertThat(scheduler.pollWorker(0)).isTrue();
             acknowledge(buffer, 10L, 0);
@@ -271,9 +188,8 @@ class IndexReplicationSchedulerTest {
 
     @Test
     void unavailableAsyncDoesNotHideHealthyWorkAndRecoversWithItsOwnProbe() throws Exception {
-        IndexReplicationScheduler scheduler = new IndexReplicationScheduler(8);
-        IndexSendBuffer buffer = new IndexSendBuffer();
-        ManualClock clock = new ManualClock();
+        scheduler = new IndexReplicationScheduler(8);
+        buffer = new IndexSendBuffer();
         AtomicBoolean broken = new AtomicBoolean(true);
         IndexSpec delegate = spec("recovering", 11L);
         IndexSpec recovering =
@@ -293,11 +209,8 @@ class IndexReplicationSchedulerTest {
                         delegate::encodeProgress);
         try (Source source =
                 new Source(
-                        scheduler,
                         0,
                         new TableBucket(1L, 0),
-                        buffer,
-                        clock,
                         spec("sync", 10L),
                         recovering,
                         spec("healthyAsync", 12L, IndexVisibility.ASYNC))) {
@@ -334,41 +247,21 @@ class IndexReplicationSchedulerTest {
 
     @Test
     void capacityHandoffIsByTableAndReadyOwnerProtectsBeforePagesAreFree() throws Exception {
-        IndexReplicationScheduler scheduler = new IndexReplicationScheduler(8);
-        IndexSendBuffer buffer = new IndexSendBuffer(8192);
-        ManualClock clock = new ManualClock();
+        scheduler = new IndexReplicationScheduler(8);
+        buffer = new IndexSendBuffer(8192);
         ManuallyTriggeredScheduledExecutorService io =
                 new ManuallyTriggeredScheduledExecutorService();
         try (IndexSendBuffer.Reservation blocker = buffer.newReservation();
                 Source first =
                         new Source(
-                                scheduler,
                                 0,
                                 new TableBucket(1L, 0),
-                                buffer,
-                                clock,
                                 io,
                                 fanout("a0", 10L),
                                 fanout("a1", 11L),
                                 fanout("a2", 12L));
-                Source sameTable =
-                        new Source(
-                                scheduler,
-                                0,
-                                new TableBucket(1L, 1),
-                                buffer,
-                                clock,
-                                io,
-                                fanout("a3", 14L));
-                Source second =
-                        new Source(
-                                scheduler,
-                                1,
-                                new TableBucket(2L, 0),
-                                buffer,
-                                clock,
-                                io,
-                                fanout("b", 13L))) {
+                Source sameTable = new Source(0, new TableBucket(1L, 1), io, fanout("a3", 14L));
+                Source second = new Source(1, new TableBucket(2L, 0), io, fanout("b", 13L))) {
             first.highWatermark.set(2);
             sameTable.highWatermark.set(2);
             second.highWatermark.set(2);
@@ -412,30 +305,18 @@ class IndexReplicationSchedulerTest {
 
     @Test
     void ordinaryPublicationDoesNotConsumeCapacityOwnersTableTurn() throws Exception {
-        IndexReplicationScheduler scheduler = new IndexReplicationScheduler(8);
-        IndexSendBuffer buffer = new IndexSendBuffer(4096);
-        ManualClock clock = new ManualClock();
+        scheduler = new IndexReplicationScheduler(8);
+        buffer = new IndexSendBuffer(4096);
         ManuallyTriggeredScheduledExecutorService io =
                 new ManuallyTriggeredScheduledExecutorService();
         AtomicBoolean activateOwner = new AtomicBoolean(true);
         IndexSpec delegate = spec("a0", 10L);
         try (IndexSendBuffer.Reservation blocker = buffer.newReservation();
-                Source owner =
-                        new Source(
-                                scheduler,
-                                2,
-                                new TableBucket(3L, 0),
-                                buffer,
-                                clock,
-                                io,
-                                spec("c", 13L));
+                Source owner = new Source(2, new TableBucket(3L, 0), io, spec("c", 13L));
                 Source first =
                         new Source(
-                                scheduler,
                                 0,
                                 new TableBucket(1L, 0),
-                                buffer,
-                                clock,
                                 io,
                                 new IndexSpec(
                                         "a0",
@@ -453,32 +334,9 @@ class IndexReplicationSchedulerTest {
                                             }
                                             return delegate.encodeProgress(source, target, end);
                                         }));
-                Source sameTable =
-                        new Source(
-                                scheduler,
-                                0,
-                                new TableBucket(1L, 1),
-                                buffer,
-                                clock,
-                                io,
-                                spec("a1", 11L));
-                Source second =
-                        new Source(
-                                scheduler,
-                                1,
-                                new TableBucket(2L, 0),
-                                buffer,
-                                clock,
-                                io,
-                                spec("b", 12L));
-                Source idle =
-                        new Source(
-                                scheduler,
-                                3,
-                                new TableBucket(4L, 0),
-                                buffer,
-                                clock,
-                                spec("idle", 14L))) {
+                Source sameTable = new Source(0, new TableBucket(1L, 1), io, spec("a1", 11L));
+                Source second = new Source(1, new TableBucket(2L, 0), io, spec("b", 12L));
+                Source idle = new Source(3, new TableBucket(4L, 0), spec("idle", 14L))) {
             first.highWatermark.set(2);
             sameTable.highWatermark.set(2);
             second.highWatermark.set(2);
@@ -525,9 +383,8 @@ class IndexReplicationSchedulerTest {
 
     @Test
     void coldCapacityWaiterDoesNotFreezeOthersAndErrorReleasesProtection() throws Exception {
-        IndexReplicationScheduler scheduler = new IndexReplicationScheduler(8);
-        IndexSendBuffer buffer = new IndexSendBuffer(8192);
-        ManualClock clock = new ManualClock();
+        scheduler = new IndexReplicationScheduler(8);
+        buffer = new IndexSendBuffer(8192);
         ManuallyTriggeredScheduledExecutorService io =
                 new ManuallyTriggeredScheduledExecutorService();
         AtomicBoolean fail = new AtomicBoolean();
@@ -548,16 +405,8 @@ class IndexReplicationSchedulerTest {
                             return delegate.encodeProgress(source, target, end);
                         });
         try (IndexSendBuffer.Reservation blocker = buffer.newReservation();
-                Source first =
-                        new Source(scheduler, 0, new TableBucket(1L, 0), buffer, clock, io, owner);
-                Source other =
-                        new Source(
-                                scheduler,
-                                1,
-                                new TableBucket(2L, 0),
-                                buffer,
-                                clock,
-                                spec("other", 11L))) {
+                Source first = new Source(0, new TableBucket(1L, 0), io, owner);
+                Source other = new Source(1, new TableBucket(2L, 0), spec("other", 11L))) {
             first.highWatermark.set(2);
             other.highWatermark.set(4);
             blocker.allocatePage(4096);
@@ -582,13 +431,11 @@ class IndexReplicationSchedulerTest {
 
     @Test
     void oldUnregisterCannotRemoveReplacementForSameBucket() throws Exception {
-        IndexReplicationScheduler scheduler = new IndexReplicationScheduler(8);
-        IndexSendBuffer buffer = new IndexSendBuffer();
-        ManualClock clock = new ManualClock();
+        scheduler = new IndexReplicationScheduler(8);
+        buffer = new IndexSendBuffer();
         TableBucket bucket = new TableBucket(1L, 0);
-        try (Source previous = new Source(scheduler, 0, bucket, buffer, clock, spec("old", 10L));
-                Source replacement =
-                        new Source(scheduler, 0, bucket, buffer, clock, spec("new", 11L))) {
+        try (Source previous = new Source(0, bucket, spec("old", 10L));
+                Source replacement = new Source(0, bucket, spec("new", 11L))) {
             scheduler.unregister(0, previous.replicator);
             assertThat(scheduler.pollWorker(0)).isTrue();
             assertThat(previous.reads).hasValue(0);
@@ -659,34 +506,24 @@ class IndexReplicationSchedulerTest {
         }
     }
 
-    private static final class Source implements AutoCloseable {
+    private final class Source implements AutoCloseable {
         private final IndexReplicationScheduler scheduler;
         private final int worker;
         private final AtomicInteger reads = new AtomicInteger();
         private final AtomicLong highWatermark = new AtomicLong(16L);
         private final IndexReplicator replicator;
 
-        private Source(
-                IndexReplicationScheduler scheduler,
-                int worker,
-                TableBucket bucket,
-                IndexSendBuffer buffer,
-                ManualClock clock,
-                IndexSpec... specs)
-                throws Exception {
-            this(scheduler, worker, bucket, buffer, clock, null, specs);
+        private Source(int worker, TableBucket bucket, IndexSpec... specs) throws Exception {
+            this(worker, bucket, null, specs);
         }
 
         private Source(
-                IndexReplicationScheduler scheduler,
                 int worker,
                 TableBucket bucket,
-                IndexSendBuffer buffer,
-                ManualClock clock,
                 ManuallyTriggeredScheduledExecutorService remote,
                 IndexSpec... specs)
                 throws Exception {
-            this.scheduler = scheduler;
+            this.scheduler = IndexReplicationSchedulerTest.this.scheduler;
             this.worker = worker;
             List<LogRecordBatch> batches = new ArrayList<>();
             AtomicInteger totalBytes = new AtomicInteger();
