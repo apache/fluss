@@ -45,7 +45,7 @@ public interface KeyDecoder {
      *
      * @param rowType the row type containing all fields
      * @param keyFields the list of primary key field names
-     * @param kvFormatVersion the KV format version (1, 2 or 3)
+     * @param kvFormatVersion the KV format version (1 or 2)
      * @param lakeFormat the data lake format, null if not using lake storage
      * @param isDefaultBucketKey whether using default bucket key (primary key as bucket key)
      * @return the corresponding key decoder
@@ -56,7 +56,19 @@ public interface KeyDecoder {
             short kvFormatVersion,
             @Nullable DataLakeFormat lakeFormat,
             boolean isDefaultBucketKey) {
-        if (kvFormatVersion == 3) {
+        return ofPrimaryKeyDecoder(
+                rowType, keyFields, kvFormatVersion, lakeFormat, isDefaultBucketKey, false);
+    }
+
+    /** Creates a primary key decoder using the table's persisted encoding configuration. */
+    static KeyDecoder ofPrimaryKeyDecoder(
+            RowType rowType,
+            List<String> keyFields,
+            short kvFormatVersion,
+            @Nullable DataLakeFormat lakeFormat,
+            boolean isDefaultBucketKey,
+            boolean orderedKeyEnabled) {
+        if (orderedKeyEnabled) {
             return OrderedKeyDecoder.createKeyDecoder(rowType, keyFields);
         }
         // Hudi's HudiKeyEncoder is lossy (4-byte hash); primary keys are encoded by

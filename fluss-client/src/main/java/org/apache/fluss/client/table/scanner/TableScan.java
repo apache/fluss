@@ -210,9 +210,8 @@ public class TableScan implements Scan {
         checkNotNull(range, "range");
         checkArgument(tableInfo.hasPrimaryKey(), "Range scans require a primary key table.");
         checkArgument(
-                tableInfo.getTableConfig().getKvFormatVersion().orElse(1)
-                        == ConfigOptions.KV_FORMAT_VERSION_3,
-                "Range scans require table.kv.format-version=3.");
+                tableInfo.getTableConfig().isOrderedKeyEnabled(),
+                "Range scans require table.kv.ordered-key.enabled=true.");
         checkArgument(recordBatchFilter == null, "Range scans cannot be combined with filter.");
         checkArgument(
                 equalityColumns != null && !equalityColumns.isEmpty() && rangeColumn != null,

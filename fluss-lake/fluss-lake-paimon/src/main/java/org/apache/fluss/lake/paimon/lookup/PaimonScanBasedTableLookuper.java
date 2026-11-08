@@ -200,7 +200,8 @@ public class PaimonScanBasedTableLookuper implements LakeTableLookuper {
                         primaryKeys,
                         tableConfig.getKvFormatVersion().orElse(1).shortValue(),
                         DataLakeFormat.PAIMON,
-                        table.schema().bucketKeys().equals(primaryKeys));
+                        table.schema().bucketKeys().equals(primaryKeys),
+                        tableConfig.isOrderedKeyEnabled());
         FlussRowAsPaimonRow keyRow =
                 new FlussRowAsPaimonRow(keyDecoder.decodeKey(key), rowType.project(primaryKeys));
         PredicateBuilder predicateBuilder = new PredicateBuilder(rowType);

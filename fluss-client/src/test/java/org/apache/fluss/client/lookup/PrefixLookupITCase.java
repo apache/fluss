@@ -112,14 +112,19 @@ class PrefixLookupITCase {
         // encoder, which for Iceberg supports a single column only
         return lakeFormats()
                 .flatMap(
-                        args ->
-                                Stream.of(1, 2, 3)
-                                        .filter(
-                                                v ->
-                                                        v >= 2
-                                                                || args.get()[1]
-                                                                        != DataLakeFormat.ICEBERG)
-                                        .map(v -> Arguments.of(args.get()[0], args.get()[1], v)));
+                        args -> {
+                            String name = (String) args.get()[0];
+                            DataLakeFormat lakeFormat = (DataLakeFormat) args.get()[1];
+                            Stream<Arguments> current =
+                                    Stream.of(
+                                            Arguments.of(name, lakeFormat, 2, false),
+                                            Arguments.of(name, lakeFormat, 2, true));
+                            return lakeFormat == DataLakeFormat.ICEBERG
+                                    ? current
+                                    : Stream.concat(
+                                            Stream.of(Arguments.of(name, lakeFormat, 1, false)),
+                                            current);
+                        });
     }
 
     static Stream<Arguments> compositeBucketKeyLakeFormats() {
@@ -127,15 +132,17 @@ class PrefixLookupITCase {
         return lakeFormats().filter(args -> args.get()[1] != DataLakeFormat.ICEBERG);
     }
 
-    @ParameterizedTest(name = "lake format = {0}, kv format version = {2}")
+    @ParameterizedTest(name = "lake format = {0}, kv format version = {2}, ordered = {3}")
     @MethodSource("lakeFormatsAndKvFormatVersions")
-    void testPrefixLookup(String name, @Nullable DataLakeFormat lakeFormat, int kvFormatVersion)
+    void testPrefixLookup(
+            String name, @Nullable DataLakeFormat lakeFormat, int kvFormatVersion, boolean ordered)
             throws Exception {
         try (Table table =
                 createTable(
-                        "prefix_" + name + "_v" + kvFormatVersion,
+                        "prefix_" + name + "_v" + kvFormatVersion + "_" + ordered,
                         lakeFormat,
                         kvFormatVersion,
+                        ordered,
                         false,
                         "a")) {
             List<Object[]> rows = rows(null);
@@ -176,16 +183,17 @@ class PrefixLookupITCase {
         }
     }
 
-    @ParameterizedTest(name = "lake format = {0}, kv format version = {2}")
+    @ParameterizedTest(name = "lake format = {0}, kv format version = {2}, ordered = {3}")
     @MethodSource("lakeFormatsAndKvFormatVersions")
     void testPrefixLookupOnPartitionedTable(
-            String name, @Nullable DataLakeFormat lakeFormat, int kvFormatVersion)
+            String name, @Nullable DataLakeFormat lakeFormat, int kvFormatVersion, boolean ordered)
             throws Exception {
         try (Table table =
                 createTable(
-                        "partitioned_" + name + "_v" + kvFormatVersion,
+                        "partitioned_" + name + "_v" + kvFormatVersion + "_" + ordered,
                         lakeFormat,
                         kvFormatVersion,
+                        ordered,
                         true,
                         "a")) {
             List<Object[]> rows = rows("p1");
@@ -231,6 +239,17 @@ class PrefixLookupITCase {
             boolean partitioned,
             String... bucketKeys)
             throws Exception {
+        return createTable(name, lakeFormat, kvFormatVersion, false, partitioned, bucketKeys);
+    }
+
+    private Table createTable(
+            String name,
+            @Nullable DataLakeFormat lakeFormat,
+            int kvFormatVersion,
+            boolean ordered,
+            boolean partitioned,
+            String... bucketKeys)
+            throws Exception {
         Schema.Builder schema =
                 Schema.newBuilder()
                         .column("a", DataTypes.BIGINT())
@@ -247,7 +266,8 @@ class PrefixLookupITCase {
                 TableDescriptor.builder()
                         .schema(schema.build())
                         .distributedBy(NUM_BUCKETS, bucketKeys)
-                        .property(ConfigOptions.TABLE_KV_FORMAT_VERSION, kvFormatVersion);
+                        .property(ConfigOptions.TABLE_KV_FORMAT_VERSION, kvFormatVersion)
+                        .property(ConfigOptions.TABLE_KV_ORDERED_KEY_ENABLED, ordered);
         if (partitioned) {
             descriptor.partitionedBy("p");
         }

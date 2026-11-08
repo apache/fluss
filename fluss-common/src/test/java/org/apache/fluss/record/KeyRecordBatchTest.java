@@ -17,13 +17,20 @@
 
 package org.apache.fluss.record;
 
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.encode.CompactedKeyEncoder;
+import org.apache.fluss.row.encode.KeyEncoder;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.Arrays;
 import java.util.Iterator;
@@ -34,6 +41,51 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link KeyRecordBatch}. */
 class KeyRecordBatchTest extends KvTestBase {
+
+    @ParameterizedTest
+    @ValueSource(ints = {1, 2})
+    void testOrderedDeleteKeyDecoding(int formatVersion) {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("value", DataTypes.STRING())
+                        .primaryKey("id")
+                        .build();
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .distributedBy(1)
+                        .property(ConfigOptions.TABLE_KV_FORMAT_VERSION, formatVersion)
+                        .property(ConfigOptions.TABLE_KV_ORDERED_KEY_ENABLED, true)
+                        .build();
+        TableInfo info =
+                TableInfo.of(
+                        TablePath.of("db", "ordered"),
+                        1L,
+                        DEFAULT_SCHEMA_ID,
+                        descriptor,
+                        "/tmp/remote",
+                        0L,
+                        0L);
+        KeyEncoder encoder =
+                KeyEncoder.ofPrimaryKeyEncoder(
+                        schema.getRowType(),
+                        schema.getPrimaryKeyColumnNames(),
+                        info.getTableConfig(),
+                        true);
+        KeyRecordBatch batch =
+                KeyRecordBatch.create(
+                        Arrays.asList(
+                                encoder.encodeKey(row(-256, null)),
+                                encoder.encodeKey(row(256, null))),
+                        info);
+        Iterator<KvRecord> records = batch.records(createContext(schema)).iterator();
+        assertThat(records.next().getRow().getInt(0)).isEqualTo(-256);
+        BinaryRow decoded = records.next().getRow();
+        assertThat(decoded.getInt(0)).isEqualTo(256);
+        assertThat(decoded.isNullAt(1)).isTrue();
+        assertThat(records.hasNext()).isFalse();
+    }
 
     @Test
     void testSingleKeyField() {

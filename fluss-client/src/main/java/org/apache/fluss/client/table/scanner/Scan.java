@@ -45,7 +45,7 @@ public interface Scan {
     /**
      * Returns a scan with named equality fields. Values supplied to the range scanner follow this
      * order. Excluding partition columns, these fields must form a complete primary-key prefix
-     * containing all bucket fields. Range scans currently require KV format version 3.
+     * containing all bucket fields. Range scans require {@code table.kv.ordered-key.enabled=true}.
      */
     default Scan equalBy(List<String> columnNames) {
         throw new UnsupportedOperationException("Equality range configuration is not supported.");

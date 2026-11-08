@@ -294,7 +294,7 @@ class TableRangeScanITCase extends ClientToServerITCaseBase {
                                             .createBatchScanner(
                                                     GenericRow.of(1), ScanRange.atLeast(key(0))))
                     .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("format-version=3");
+                    .hasMessageContaining("ordered-key.enabled=true");
         }
     }
 
@@ -313,7 +313,7 @@ class TableRangeScanITCase extends ClientToServerITCaseBase {
                         TableDescriptor.builder()
                                 .schema(schema)
                                 .distributedBy(3)
-                                .property(ConfigOptions.TABLE_KV_FORMAT_VERSION, 3)
+                                .property(ConfigOptions.TABLE_KV_ORDERED_KEY_ENABLED, true)
                                 .build(),
                         true);
         waitAllReplicasReady(id, 3);
@@ -340,7 +340,7 @@ class TableRangeScanITCase extends ClientToServerITCaseBase {
                 TableDescriptor.builder()
                         .schema(schema)
                         .distributedBy(3, "g")
-                        .property(ConfigOptions.TABLE_KV_FORMAT_VERSION, 3);
+                        .property(ConfigOptions.TABLE_KV_ORDERED_KEY_ENABLED, true);
         if (partitioned) {
             descriptor.partitionedBy("p");
         }
