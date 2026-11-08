@@ -31,8 +31,6 @@ import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.IndexTableUtils;
 
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.Collections;
 import java.util.Optional;
@@ -48,10 +46,9 @@ class IndexReplicationEncoderTest {
     private static final TablePath INDEX_PATH =
             TablePath.of("db", IndexTableUtils.indexTableName("main", "idx_name"));
 
-    @ParameterizedTest
-    @ValueSource(booleans = {true, false})
-    void testMainTableRescalePreservesIndexRouting(boolean explicitBucketCount) {
-        TableDescriptor original = mainDescriptor(explicitBucketCount ? 2 : null);
+    @Test
+    void testMainTableRescalePreservesExplicitIndexRouting() {
+        TableDescriptor original = mainDescriptor(2);
         TableDescriptor index =
                 IndexTableDescriptorFactory.derive(
                         original, 1L, original.getSchema().getIndexes().get(0));

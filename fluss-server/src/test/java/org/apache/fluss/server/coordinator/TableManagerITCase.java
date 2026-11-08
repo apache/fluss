@@ -64,6 +64,8 @@ import org.apache.fluss.rpc.messages.PbServerNode;
 import org.apache.fluss.rpc.messages.PbTableMetadata;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
+import org.apache.fluss.server.coordinator.event.DeadTabletServerEvent;
+import org.apache.fluss.server.coordinator.event.NewTabletServerEvent;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.ZooKeeperClient;
@@ -101,6 +103,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.config.ConfigOptions.CURRENT_KV_FORMAT_VERSION;
@@ -125,6 +128,7 @@ import static org.apache.fluss.testutils.common.CommonTestUtils.waitValue;
 import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.apache.fluss.utils.PartitionUtils.generateAutoPartition;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** ITCase for {@link TableManager}. */
@@ -159,6 +163,104 @@ class TableManagerITCase {
     void setup() {
         zkClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
         clientConf = FLUSS_CLUSTER_EXTENSION.getClientConfig();
+    }
+
+    @Test
+    void testUnknownServerBlocksOnlyNewIndexedTables() throws Exception {
+        CoordinatorGateway gateway = FLUSS_CLUSTER_EXTENSION.newCoordinatorClient();
+        CoordinatorEventProcessor processor =
+                FLUSS_CLUSTER_EXTENSION.getCoordinatorServer().getCoordinatorEventProcessor();
+        gateway.createDatabase(newCreateDatabaseRequest("fluss", true)).get();
+        TableDescriptor ordinary =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.INT())
+                                        .column("val", DataTypes.STRING())
+                                        .primaryKey("id")
+                                        .build())
+                        .distributedBy(1)
+                        .property(ConfigOptions.TABLE_REPLICATION_FACTOR, 1)
+                        .build();
+        TableDescriptor indexed =
+                TableDescriptor.builder(ordinary)
+                        .schema(
+                                Schema.newBuilder()
+                                        .fromSchema(ordinary.getSchema())
+                                        .index("idx_val", "val")
+                                        .build())
+                        .build();
+        TablePath existing = TablePath.of("fluss", "existing_indexed");
+        retry(
+                Duration.ofSeconds(10),
+                () ->
+                        assertThatCode(
+                                        () ->
+                                                gateway.createTable(
+                                                                newCreateTableRequest(
+                                                                        existing, indexed, false))
+                                                        .get())
+                                .doesNotThrowAnyException());
+
+        ServerInfo unknown =
+                new ServerInfo(
+                        99,
+                        null,
+                        Collections.singletonList(new Endpoint("localhost", 1, "FLUSS")),
+                        ServerType.TABLET_SERVER);
+        int liveServers =
+                FLUSS_CLUSTER_EXTENSION
+                        .getCoordinatorServer()
+                        .getMetadataCache()
+                        .getLiveServers()
+                        .length;
+        processor.getCoordinatorEventManager().put(new NewTabletServerEvent(unknown));
+        try {
+            retry(
+                    Duration.ofSeconds(10),
+                    () ->
+                            assertThat(
+                                            FLUSS_CLUSTER_EXTENSION
+                                                    .getCoordinatorServer()
+                                                    .getMetadataCache()
+                                                    .getLiveServers())
+                                    .hasSize(liveServers + 1));
+            TablePath rejected = TablePath.of("fluss", "rejected_indexed");
+            assertThatThrownBy(
+                            () ->
+                                    gateway.createTable(
+                                                    newCreateTableRequest(rejected, indexed, false))
+                                            .get(10, TimeUnit.SECONDS))
+                    .hasRootCauseMessage(
+                            "Cannot create a table with secondary indexes: "
+                                    + "TabletServers [99] have not confirmed support for PUT_INDEX v0.");
+            assertThat(FLUSS_CLUSTER_EXTENSION.getZooKeeperClient().getTable(rejected)).isEmpty();
+            gateway.createTable(newCreateTableRequest(existing, indexed, true)).get();
+            gateway.createTable(
+                            newCreateTableRequest(
+                                    TablePath.of("fluss", "ordinary_during_upgrade"),
+                                    ordinary,
+                                    false))
+                    .get();
+        } finally {
+            processor.getCoordinatorEventManager().put(new DeadTabletServerEvent(99));
+            retry(
+                    Duration.ofSeconds(10),
+                    () ->
+                            assertThat(
+                                            FLUSS_CLUSTER_EXTENSION
+                                                    .getCoordinatorServer()
+                                                    .getMetadataCache()
+                                                    .getLiveServers())
+                                    .extracting(server -> server.getId())
+                                    .doesNotContain(99));
+            gateway.dropTable(
+                            newDropTableRequest(
+                                    existing.getDatabaseName(), existing.getTableName(), true))
+                    .get();
+            gateway.dropTable(newDropTableRequest("fluss", "rejected_indexed", true)).get();
+            gateway.dropTable(newDropTableRequest("fluss", "ordinary_during_upgrade", true)).get();
+        }
     }
 
     @Test
