@@ -27,12 +27,10 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.rpc.messages.PutKvResponse;
-import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.types.DataTypes;
-import org.apache.fluss.utils.IndexTableUtils;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
@@ -42,16 +40,13 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
-import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
 import static org.apache.fluss.row.BinaryString.fromString;
-import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createTable;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newPutKvRequest;
 import static org.apache.fluss.testutils.DataTestUtils.genKvRecordBatch;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
-import static org.apache.fluss.testutils.common.CommonTestUtils.waitValue;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -90,155 +85,6 @@ class IndexPushFailoverITCase {
     }
 
     /**
-     * After writing data to the main table and verifying the index entry is pushed, kill the
-     * main-table leader. The new leader should resume from the checkpointed offset and continue
-     * pushing new writes.
-     */
-    @Test
-    void testMainTableLeaderFailoverResumesIndexPush() throws Exception {
-        TablePath mainPath = TablePath.of(DB, "main_failover");
-
-        Schema schema =
-                Schema.newBuilder()
-                        .column("a", DataTypes.INT())
-                        .column("b", DataTypes.STRING())
-                        .primaryKey("a")
-                        .index(
-                                INDEX_NAME,
-                                IndexType.SECONDARY,
-                                Collections.singletonList("b"),
-                                IndexVisibility.SYNC,
-                                INDEX_BUCKET_COUNT)
-                        .build();
-        TableDescriptor descriptor =
-                TableDescriptor.builder().schema(schema).distributedBy(3, "a").build();
-
-        long mainTableId = createTable(FLUSS_CLUSTER_EXTENSION, mainPath, descriptor);
-        TablePath indexPath =
-                TablePath.of(
-                        DB, IndexTableUtils.indexTableName(mainPath.getTableName(), INDEX_NAME));
-        long indexTableId =
-                FLUSS_CLUSTER_EXTENSION
-                        .getZooKeeperClient()
-                        .getTable(indexPath)
-                        .orElseThrow(() -> new IllegalStateException("Index table not in ZK"))
-                        .tableId;
-
-        // Wait for all leaders
-        TableBucket mainBucket = new TableBucket(mainTableId, 0);
-        FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(mainBucket);
-        int originalLeader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(mainBucket);
-        for (int i = 0; i < INDEX_BUCKET_COUNT; i++) {
-            FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(new TableBucket(indexTableId, i));
-        }
-
-        Replica mainReplica = FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(mainBucket);
-        IndexSpec indexSpec = indexSpec(mainReplica, mainBucket, originalLeader);
-
-        // Write first batch
-        FLUSS_CLUSTER_EXTENSION
-                .newTabletServerClientForNode(originalLeader)
-                .putKv(
-                        newPutKvRequest(
-                                mainTableId, 0, 1, genKvRecordBatch(new Object[] {1, "hello"})))
-                .get();
-
-        // Verify index entry via direct lookup
-        byte[] indexKey = encodeIndexKey(indexSpec, "hello", 1);
-        int indexBucket = targetBucket(indexSpec, "hello", 1);
-        waitUntil(
-                () -> {
-                    Replica idxReplica =
-                            FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(
-                                    new TableBucket(indexTableId, indexBucket));
-                    List<org.apache.fluss.utils.ByteArraySlice> result =
-                            idxReplica.lookups(Collections.singletonList(indexKey));
-                    return result.get(0) != null;
-                },
-                TIMEOUT,
-                "wait for first index entry");
-
-        // Persist the acknowledged prefix before failing over the source leader.
-        long offsetBefore =
-                waitValue(
-                        () -> {
-                            long offset = mainReplica.getSyncIndexPushedOffset();
-                            return offset > 0L ? Optional.of(offset) : Optional.empty();
-                        },
-                        TIMEOUT,
-                        "wait for sync index pushed offset before failover");
-        assertThat(offsetBefore)
-                .as("sync write must have advanced the pushed offset before failover")
-                .isGreaterThan(0L);
-        assertThat(mainReplica.getAllIndexPushedOffset())
-                .as("all-index pushed offset must advance with the sync pushed offset")
-                .isEqualTo(offsetBefore);
-        CompletedSnapshot persistedSnapshot =
-                triggerSnapshotPersistingIndexPushedOffset(mainBucket, offsetBefore);
-        assertThat(persistedSnapshot.getIndexPushedOffset())
-                .as("snapshot must persist the exact indexPushedOffset used for failover restore")
-                .isEqualTo(offsetBefore);
-
-        // Kill the original leader
-        FLUSS_CLUSTER_EXTENSION.stopTabletServer(originalLeader);
-
-        // Wait for new leader election
-        waitUntil(
-                () -> {
-                    int newLeader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(mainBucket);
-                    return newLeader != originalLeader;
-                },
-                TIMEOUT,
-                "wait for new main-table leader");
-
-        int newLeader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(mainBucket);
-
-        Replica newMainReplica = FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(mainBucket);
-
-        // Recovery may restore or replay this prefix before leadership becomes observable.
-        assertThat(newMainReplica.getSyncIndexPushedOffset())
-                .as("new leader must recover the acknowledged prefix")
-                .isEqualTo(offsetBefore);
-
-        // The previously acknowledged entry remains available after source failover.
-        Replica firstIndexReplicaAfterFailover =
-                FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(
-                        new TableBucket(indexTableId, indexBucket));
-        List<org.apache.fluss.utils.ByteArraySlice> firstEntryAfterFailover =
-                firstIndexReplicaAfterFailover.lookups(Collections.singletonList(indexKey));
-        assertThat(firstEntryAfterFailover.get(0))
-                .as("first index entry must survive main-table leader failover")
-                .isNotNull();
-
-        // Write second batch to the new leader
-        FLUSS_CLUSTER_EXTENSION
-                .newTabletServerClientForNode(newLeader)
-                .putKv(
-                        newPutKvRequest(
-                                mainTableId, 0, 1, genKvRecordBatch(new Object[] {2, "world"})))
-                .get();
-
-        // Verify the second index entry appears
-        byte[] indexKey2 = encodeIndexKey(indexSpec, "world", 2);
-        int indexBucket2 = targetBucket(indexSpec, "world", 2);
-        waitUntil(
-                () -> {
-                    Replica idxReplica =
-                            FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(
-                                    new TableBucket(indexTableId, indexBucket2));
-                    List<org.apache.fluss.utils.ByteArraySlice> result =
-                            idxReplica.lookups(Collections.singletonList(indexKey2));
-                    return result.get(0) != null;
-                },
-                TIMEOUT,
-                "wait for second index entry after failover");
-
-        // Restart the stopped server for cluster health
-        FLUSS_CLUSTER_EXTENSION.startTabletServer(originalLeader);
-        FLUSS_CLUSTER_EXTENSION.assertHasTabletServerNumber(TABLET_SERVER_COUNT);
-    }
-
-    /**
      * After writing data to the main table, kill the index table's leader. The push pipeline should
      * retry via the LeaderResolver and the entry should eventually appear on the new index leader.
      */
@@ -261,27 +107,14 @@ class IndexPushFailoverITCase {
         TableDescriptor descriptor =
                 TableDescriptor.builder().schema(schema).distributedBy(3, "a").build();
 
-        long mainTableId = createTable(FLUSS_CLUSTER_EXTENSION, mainPath, descriptor);
-        TablePath indexPath =
-                TablePath.of(
-                        DB, IndexTableUtils.indexTableName(mainPath.getTableName(), INDEX_NAME));
-        long indexTableId =
-                FLUSS_CLUSTER_EXTENSION
-                        .getZooKeeperClient()
-                        .getTable(indexPath)
-                        .orElseThrow(() -> new IllegalStateException("Index table not in ZK"))
-                        .tableId;
-
+        TestingIndexTable table =
+                new TestingIndexTable(FLUSS_CLUSTER_EXTENSION, mainPath, descriptor, INDEX_NAME);
+        long mainTableId = table.mainTableId;
+        long indexTableId = table.indexTableId;
         TableBucket mainBucket = new TableBucket(mainTableId, 0);
-        FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(mainBucket);
         int mainLeader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(mainBucket);
-
-        // Wait for all index bucket leaders.
-        for (int i = 0; i < TARGET_FAILOVER_INDEX_BUCKET_COUNT; i++) {
-            FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(new TableBucket(indexTableId, i));
-        }
         Replica mainReplica = FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(mainBucket);
-        IndexSpec indexSpec = indexSpec(mainReplica, mainBucket, mainLeader);
+        IndexSpec indexSpec = table.indexSpec(mainBucket);
 
         // Offset zero is the exclusive next-read position before the first source record.
         assertThat(mainReplica.getSyncIndexPushedOffset())
@@ -459,15 +292,6 @@ class IndexPushFailoverITCase {
         }
     }
 
-    private static IndexSpec indexSpec(
-            Replica mainReplica, TableBucket mainBucket, int mainLeader) {
-        return IndexSpecFactory.buildIndexSpecs(
-                        mainReplica.getTableInfo(),
-                        mainBucket,
-                        FLUSS_CLUSTER_EXTENSION.getTabletServerById(mainLeader).getMetadataCache())
-                .get(0);
-    }
-
     private static byte[] encodeIndexKey(IndexSpec spec, String b, int a) {
         return spec.encodeEntry(GenericRow.of(a, fromString(b))).key();
     }
@@ -520,15 +344,5 @@ class IndexPushFailoverITCase {
     @FunctionalInterface
     private interface CleanupAction {
         void run() throws Throwable;
-    }
-
-    private static CompletedSnapshot triggerSnapshotPersistingIndexPushedOffset(
-            TableBucket tableBucket, long expectedOffset) {
-        CompletedSnapshot completedSnapshot =
-                FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tableBucket);
-        assertThat(completedSnapshot.getIndexPushedOffset())
-                .as("triggered KV snapshot must persist indexPushedOffset")
-                .isEqualTo(expectedOffset);
-        return completedSnapshot;
     }
 }

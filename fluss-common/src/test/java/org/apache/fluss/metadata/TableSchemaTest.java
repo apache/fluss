@@ -21,10 +21,15 @@ import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.MethodSource;
 
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -443,59 +448,38 @@ class TableSchemaTest {
         assertThat(idx.getColumnNames()).containsExactly("user_id");
     }
 
-    @Test
-    void testRejectIndexNameWithDoubleUnderscore() {
-        Schema.Builder b =
-                Schema.newBuilder()
-                        .column("id", DataTypes.BIGINT())
-                        .column("u", DataTypes.BIGINT())
-                        .primaryKey("id");
-
-        assertThatThrownBy(() -> b.index("idx__bad", "u"))
+    @ParameterizedTest
+    @CsvSource(
+            value = {
+                "idx__bad|__",
+                "_idx_bad|cannot start with underscore",
+                "idx-bad|letters, digits, and underscores"
+            },
+            delimiter = '|')
+    void testRejectInvalidIndexName(String name, String message) {
+        assertThatThrownBy(() -> Schema.newBuilder().index(name, "u"))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("__");
+                .hasMessageContaining(message);
+        assertThatThrownBy(() -> new Schema.Index(name, Collections.singletonList("u")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(message);
     }
 
-    @Test
-    void testRejectIndexNameWithLeadingUnderscore() {
-        Schema.Builder b =
-                Schema.newBuilder()
-                        .column("id", DataTypes.BIGINT())
-                        .column("u", DataTypes.BIGINT())
-                        .primaryKey("id");
-
-        assertThatThrownBy(() -> b.index("_idx_bad", "u"))
+    @ParameterizedTest
+    @MethodSource("invalidIndexColumns")
+    void testRejectInvalidIndexColumns(String[] columns, String message) {
+        assertThatThrownBy(() -> Schema.newBuilder().index("idx_user", columns))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("cannot start with underscore");
-
-        assertThatThrownBy(
-                        () ->
-                                new Schema.Index(
-                                        "_idx_bad", java.util.Collections.singletonList("u")))
+                .hasMessageContaining(message);
+        assertThatThrownBy(() -> new Schema.Index("idx_user", Arrays.asList(columns)))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("cannot start with underscore");
+                .hasMessageContaining(message);
     }
 
-    @Test
-    void testRejectEmptyIndexColumns() {
-        Schema.Builder b = Schema.newBuilder().column("id", DataTypes.BIGINT()).primaryKey("id");
-
-        assertThatThrownBy(() -> b.index("idx_empty"))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("at least one column");
-    }
-
-    @Test
-    void testRejectIndexNameWithIllegalCharacter() {
-        Schema.Builder b =
-                Schema.newBuilder()
-                        .column("id", DataTypes.BIGINT())
-                        .column("u", DataTypes.BIGINT())
-                        .primaryKey("id");
-
-        assertThatThrownBy(() -> b.index("idx-bad", "u"))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("letters, digits, and underscores");
+    private static Stream<Arguments> invalidIndexColumns() {
+        return Stream.of(
+                Arguments.of(new String[0], "at least one column"),
+                Arguments.of(new String[] {"u", "u"}, "duplicate columns"));
     }
 
     @Test
@@ -511,23 +495,6 @@ class TableSchemaTest {
         assertThatThrownBy(() -> b.index("idx_user", "v"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Duplicate index name 'idx_user'");
-    }
-
-    @Test
-    void testRejectDuplicateIndexColumns() {
-        Schema.Builder b =
-                Schema.newBuilder()
-                        .column("id", DataTypes.BIGINT())
-                        .column("u", DataTypes.BIGINT())
-                        .primaryKey("id");
-
-        assertThatThrownBy(() -> b.index("idx_user", "u", "u"))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("duplicate columns");
-
-        assertThatThrownBy(() -> new Schema.Index("idx_user", java.util.Arrays.asList("u", "u")))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("duplicate columns");
     }
 
     @Test

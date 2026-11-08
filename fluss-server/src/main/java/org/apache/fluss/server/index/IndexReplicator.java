@@ -29,6 +29,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.KvRecordBatchBuilder;
 import org.apache.fluss.record.LogRecord;
+import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.bytesview.BytesView;
 import org.apache.fluss.row.BinaryRow;
@@ -378,8 +379,8 @@ final class IndexReplicator implements AutoCloseable {
         }
 
         try {
-            for (IndexSourceReader.SourceBatchSlice batch : readResult.batches()) {
-                try (CloseableIterator<LogRecord> iter = batch.records(readContext)) {
+            for (LogRecordBatch batch : readResult.batches()) {
+                try (CloseableIterator<LogRecord> iter = sourceReader.records(batch, readContext)) {
                     while (iter.hasNext()) {
                         appendMutationGroup(iter, iter.next(), windows);
                     }

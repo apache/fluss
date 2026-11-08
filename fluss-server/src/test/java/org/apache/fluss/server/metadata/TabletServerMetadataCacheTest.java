@@ -171,23 +171,7 @@ public class TabletServerMetadataCacheTest {
         serverMetadataCache = new TabletServerMetadataCache(metadataManager);
         TablePath indexPath = TablePath.of("test_db_1", "index_with_owner_property");
         long indexId = 200001L;
-        TableDescriptor indexDescriptor =
-                TableDescriptor.builder()
-                        .schema(DATA1_TABLE_INFO.getSchema())
-                        .distributedBy(1)
-                        .property(IndexTableUtils.TABLE_INDEX_META_MAIN_TABLE_ID, DATA1_TABLE_ID)
-                        .build();
-        TableMetadata index =
-                new TableMetadata(
-                        TableInfo.of(
-                                indexPath,
-                                indexId,
-                                0,
-                                indexDescriptor,
-                                DEFAULT_REMOTE_DATA_DIR,
-                                100L,
-                                100L),
-                        Collections.emptyList());
+        TableMetadata index = indexMetadata(indexPath, indexId);
         if (singleTableUpdate) {
             serverMetadataCache.updateTableMetadata(index);
         } else {
@@ -229,25 +213,11 @@ public class TabletServerMetadataCacheTest {
         serverMetadataCache = new TabletServerMetadataCache(metadataManager);
         TablePath indexPath = TablePath.of("test_db_1", "index_with_owner_property");
         long indexId = 200001L;
-        TableDescriptor indexDescriptor =
-                TableDescriptor.builder()
-                        .schema(DATA1_TABLE_INFO.getSchema())
-                        .distributedBy(1)
-                        .property(IndexTableUtils.TABLE_INDEX_META_MAIN_TABLE_ID, DATA1_TABLE_ID)
-                        .build();
+        TableMetadata index = indexMetadata(indexPath, indexId);
+        TableDescriptor indexDescriptor = index.getTableInfo().toTableDescriptor();
         serverMetadataCache.updateTableMetadata(
                 new TableMetadata(DATA1_TABLE_INFO, initialBucketMetadata));
-        serverMetadataCache.updateTableMetadata(
-                new TableMetadata(
-                        TableInfo.of(
-                                indexPath,
-                                indexId,
-                                0,
-                                indexDescriptor,
-                                DEFAULT_REMOTE_DATA_DIR,
-                                100L,
-                                100L),
-                        Collections.emptyList()));
+        serverMetadataCache.updateTableMetadata(index);
         TableInfo deletedMain =
                 TableInfo.of(
                         deleteById ? DELETED_TABLE_PATH : DATA1_TABLE_PATH,
@@ -313,6 +283,25 @@ public class TabletServerMetadataCacheTest {
         assertThat(serverMetadataCache.getReadAuthorizationTablePath(indexPath))
                 .isEqualTo(indexPath);
         assertThat(metadataManager.tableLookups).isZero();
+    }
+
+    private static TableMetadata indexMetadata(TablePath indexPath, long indexId) {
+        TableDescriptor indexDescriptor =
+                TableDescriptor.builder()
+                        .schema(DATA1_TABLE_INFO.getSchema())
+                        .distributedBy(1)
+                        .property(IndexTableUtils.TABLE_INDEX_META_MAIN_TABLE_ID, DATA1_TABLE_ID)
+                        .build();
+        return new TableMetadata(
+                TableInfo.of(
+                        indexPath,
+                        indexId,
+                        0,
+                        indexDescriptor,
+                        DEFAULT_REMOTE_DATA_DIR,
+                        100L,
+                        100L),
+                Collections.emptyList());
     }
 
     @Test

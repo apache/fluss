@@ -329,7 +329,7 @@ class IndexReplicatorTest {
         try (IndexSendBuffer.Reservation blocker = buffer.newReservation();
                 IndexReplicator replicator =
                         unregisteredReplicator(
-                                log,
+                                new IndexSourceReader(log, null, Runnable::run),
                                 buffer,
                                 clock,
                                 Collections.singletonList(fanoutSpec()),
@@ -661,33 +661,91 @@ class IndexReplicatorTest {
         }
     }
 
-    @Test
-    void sourceGapResumesAtTheSameOffsetAfterRepair() throws Exception {
+    @ParameterizedTest
+    @ValueSource(strings = {"local gap", "remote gap", "remote failure"})
+    void sourceFailureResumesAtTheSameOffsetAfterRepair(String failure) throws Exception {
         RowType rowType = RowType.of(DataTypes.INT());
         MemoryLogRecords valid = sourceRecords(rowType, 0);
         MemoryLogRecords gapped = sourceRecords(rowType, 1);
         AtomicBoolean repaired = new AtomicBoolean();
         AtomicInteger reads = new AtomicInteger();
-        IndexSourceReader.SourceLog log = sourceLog(() -> repaired.get() ? valid : gapped, reads);
+        boolean remote = !failure.equals("local gap");
+        IndexSourceReader.SourceLog log =
+                new IndexSourceReader.SourceLog() {
+                    @Override
+                    public TableBucket tableBucket() {
+                        return new TableBucket(1L, 0);
+                    }
+
+                    @Override
+                    public long highWatermark() {
+                        return 2L;
+                    }
+
+                    @Override
+                    public long logStartOffset() {
+                        return remote ? 2L : 0L;
+                    }
+
+                    @Override
+                    public FetchDataInfo read(
+                            long offset,
+                            int maxBytes,
+                            FetchIsolation isolation,
+                            boolean minOneMessage) {
+                        assertThat(remote)
+                                .as("a remote-only range must never be read locally")
+                                .isFalse();
+                        assertThat(offset).isZero();
+                        reads.incrementAndGet();
+                        return new FetchDataInfo(repaired.get() ? valid : gapped);
+                    }
+                };
+        Supplier<IndexSourceReader.RemoteFetcher> fetcher =
+                () ->
+                        new IndexSourceReader.RemoteFetcher() {
+                            @Override
+                            public Iterable<LogRecordBatch> fetch(long start, long localStart)
+                                    throws Exception {
+                                assertThat(start).isZero();
+                                reads.incrementAndGet();
+                                if (!repaired.get() && failure.equals("remote failure")) {
+                                    throw new java.io.IOException("remote storage unavailable");
+                                }
+                                return repaired.get() ? valid.batches() : Collections.emptyList();
+                            }
+
+                            @Override
+                            public void close() {}
+                        };
         ManualClock clock = new ManualClock();
         IndexSendBuffer buffer = new IndexSendBuffer();
         try (IndexReplicator replicator =
                 replicator(
-                        log,
+                        new IndexSourceReader(log, fetcher, Runnable::run),
                         buffer,
                         clock,
                         Collections.singletonList(indexSpec("idx", 2L, new AtomicInteger())))) {
             assertThat(replicator.poll()).isTrue();
             assertThat(replicator.hasFailure()).isTrue();
             assertThat(reads).hasValue(1);
-            repaired.set(true);
             assertThat(replicator.poll()).isFalse();
             assertThat(reads).hasValue(1);
             clock.advanceTime(10, TimeUnit.MILLISECONDS);
             assertThat(replicator.poll()).isTrue();
+            assertThat(reads).hasValue(2);
+            assertThat(replicator.getAllIndexPushedOffset()).isZero();
+            assertThat(replicator.getSyncIndexPushedOffset()).isZero();
+            assertThat(buffer.buckets()).isEmpty();
+            repaired.set(true);
+            assertThat(replicator.poll()).isFalse();
+            clock.advanceTime(20, TimeUnit.MILLISECONDS);
+            assertThat(replicator.poll()).isTrue();
+            assertThat(reads).hasValue(3);
             assertThat(replicator.getAllIndexPushedOffset()).isZero();
             acknowledge(buffer, new TableBucket(2L, 0));
             assertThat(replicator.getAllIndexPushedOffset()).isEqualTo(2L);
+            assertThat(replicator.getSyncIndexPushedOffset()).isEqualTo(2L);
             assertThat(replicator.hasFailure()).isFalse();
             assertThat(buffer.pendingBytes()).isZero();
         }
@@ -909,15 +967,23 @@ class IndexReplicatorTest {
             IndexSendBuffer buffer,
             ManualClock clock,
             java.util.List<IndexSpec> indexes) {
+        return replicator(new IndexSourceReader(log, null, Runnable::run), buffer, clock, indexes);
+    }
+
+    private static IndexReplicator replicator(
+            IndexSourceReader sourceReader,
+            IndexSendBuffer buffer,
+            ManualClock clock,
+            java.util.List<IndexSpec> indexes) {
         IndexReplicationScheduler scheduler = new IndexReplicationScheduler(8);
         IndexReplicator replicator =
-                unregisteredReplicator(log, buffer, clock, indexes, scheduler, () -> {});
+                unregisteredReplicator(sourceReader, buffer, clock, indexes, scheduler, () -> {});
         scheduler.register(0, replicator);
         return replicator;
     }
 
     private static IndexReplicator unregisteredReplicator(
-            IndexSourceReader.SourceLog log,
+            IndexSourceReader sourceReader,
             IndexSendBuffer buffer,
             ManualClock clock,
             java.util.List<IndexSpec> indexes,
@@ -926,7 +992,7 @@ class IndexReplicatorTest {
         LogRecordReadContext context =
                 LogRecordReadContext.createIndexedReadContext(RowType.of(DataTypes.INT()), 1, null);
         return new IndexReplicator(
-                new IndexSourceReader(log, null, Runnable::run),
+                sourceReader,
                 indexes,
                 buffer,
                 context,

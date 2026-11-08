@@ -41,6 +41,7 @@ import org.apache.fluss.flink.utils.FlinkUtils;
 import org.apache.fluss.flink.utils.PredicateConverter;
 import org.apache.fluss.flink.utils.PushdownUtils;
 import org.apache.fluss.flink.utils.PushdownUtils.FieldEqual;
+import org.apache.fluss.flink.utils.SecondaryIndexColumnNames;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.LakeSplit;
 import org.apache.fluss.metadata.ChangelogImage;
@@ -107,6 +108,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import static org.apache.fluss.flink.utils.LakeSourceUtils.createLakeSource;
 import static org.apache.fluss.flink.utils.PredicateConverter.convertToFlussPredicate;
@@ -218,46 +221,6 @@ public class FlinkTableSource
                 partitionKeyIndexes,
                 streaming,
                 startupOptions,
-                lookupAsync,
-                insertIfNotExists,
-                cache,
-                scanPartitionDiscoveryIntervalMs,
-                isDataLakeEnabled,
-                mergeEngineType,
-                tableOptions,
-                leaseContext,
-                null);
-    }
-
-    public FlinkTableSource(
-            TablePath tablePath,
-            Configuration flussConfig,
-            TableConfig tableConfig,
-            org.apache.flink.table.types.logical.RowType tableOutputType,
-            int[] primaryKeyIndexes,
-            int[] bucketKeyIndexes,
-            int[] partitionKeyIndexes,
-            boolean streaming,
-            FlinkConnectorOptionsUtils.StartupOptions startupOptions,
-            boolean lookupAsync,
-            boolean insertIfNotExists,
-            @Nullable LookupCache cache,
-            long scanPartitionDiscoveryIntervalMs,
-            boolean isDataLakeEnabled,
-            @Nullable MergeEngineType mergeEngineType,
-            Map<String, String> tableOptions,
-            LeaseContext leaseContext,
-            @Nullable int[][] secondaryIndexes) {
-        this(
-                tablePath,
-                flussConfig,
-                tableConfig,
-                tableOutputType,
-                primaryKeyIndexes,
-                bucketKeyIndexes,
-                partitionKeyIndexes,
-                streaming,
-                startupOptions,
                 FlinkConnectorOptionsUtils.BoundedOptions.unbounded(),
                 lookupAsync,
                 insertIfNotExists,
@@ -267,8 +230,7 @@ public class FlinkTableSource
                 isDataLakeEnabled,
                 mergeEngineType,
                 tableOptions,
-                leaseContext,
-                secondaryIndexes);
+                leaseContext);
     }
 
     /**
@@ -315,8 +277,7 @@ public class FlinkTableSource
                 isDataLakeEnabled,
                 mergeEngineType,
                 tableOptions,
-                leaseContext,
-                null);
+                leaseContext);
     }
 
     public FlinkTableSource(
@@ -378,53 +339,6 @@ public class FlinkTableSource
             boolean lookupAsync,
             boolean insertIfNotExists,
             @Nullable LookupCache cache,
-            long scanPartitionDiscoveryIntervalMs,
-            int splitPerAssignmentBatchSize,
-            boolean isDataLakeEnabled,
-            @Nullable MergeEngineType mergeEngineType,
-            Map<String, String> tableOptions,
-            LeaseContext leaseContext,
-            @Nullable int[][] secondaryIndexes) {
-        this(
-                tablePath,
-                flussConfig,
-                tableConfig,
-                tableOutputType,
-                primaryKeyIndexes,
-                bucketKeyIndexes,
-                partitionKeyIndexes,
-                streaming,
-                startupOptions,
-                boundedOptions,
-                lookupAsync,
-                insertIfNotExists,
-                cache,
-                cache == null
-                        ? LookupOptions.LookupCacheType.NONE
-                        : LookupOptions.LookupCacheType.PARTIAL,
-                scanPartitionDiscoveryIntervalMs,
-                splitPerAssignmentBatchSize,
-                isDataLakeEnabled,
-                mergeEngineType,
-                tableOptions,
-                leaseContext,
-                secondaryIndexes);
-    }
-
-    public FlinkTableSource(
-            TablePath tablePath,
-            Configuration flussConfig,
-            TableConfig tableConfig,
-            org.apache.flink.table.types.logical.RowType tableOutputType,
-            int[] primaryKeyIndexes,
-            int[] bucketKeyIndexes,
-            int[] partitionKeyIndexes,
-            boolean streaming,
-            FlinkConnectorOptionsUtils.StartupOptions startupOptions,
-            FlinkConnectorOptionsUtils.BoundedOptions boundedOptions,
-            boolean lookupAsync,
-            boolean insertIfNotExists,
-            @Nullable LookupCache cache,
             LookupOptions.LookupCacheType lookupCacheType,
             long scanPartitionDiscoveryIntervalMs,
             int splitPerAssignmentBatchSize,
@@ -432,52 +346,6 @@ public class FlinkTableSource
             @Nullable MergeEngineType mergeEngineType,
             Map<String, String> tableOptions,
             LeaseContext leaseContext) {
-        this(
-                tablePath,
-                flussConfig,
-                tableConfig,
-                tableOutputType,
-                primaryKeyIndexes,
-                bucketKeyIndexes,
-                partitionKeyIndexes,
-                streaming,
-                startupOptions,
-                boundedOptions,
-                lookupAsync,
-                insertIfNotExists,
-                cache,
-                lookupCacheType,
-                scanPartitionDiscoveryIntervalMs,
-                splitPerAssignmentBatchSize,
-                isDataLakeEnabled,
-                mergeEngineType,
-                tableOptions,
-                leaseContext,
-                null);
-    }
-
-    public FlinkTableSource(
-            TablePath tablePath,
-            Configuration flussConfig,
-            TableConfig tableConfig,
-            org.apache.flink.table.types.logical.RowType tableOutputType,
-            int[] primaryKeyIndexes,
-            int[] bucketKeyIndexes,
-            int[] partitionKeyIndexes,
-            boolean streaming,
-            FlinkConnectorOptionsUtils.StartupOptions startupOptions,
-            FlinkConnectorOptionsUtils.BoundedOptions boundedOptions,
-            boolean lookupAsync,
-            boolean insertIfNotExists,
-            @Nullable LookupCache cache,
-            LookupOptions.LookupCacheType lookupCacheType,
-            long scanPartitionDiscoveryIntervalMs,
-            int splitPerAssignmentBatchSize,
-            boolean isDataLakeEnabled,
-            @Nullable MergeEngineType mergeEngineType,
-            Map<String, String> tableOptions,
-            LeaseContext leaseContext,
-            @Nullable int[][] secondaryIndexes) {
         this.tablePath = tablePath;
         this.flussConfig = flussConfig;
         this.tableOutputType = tableOutputType;
@@ -500,7 +368,7 @@ public class FlinkTableSource
         this.leaseContext = leaseContext;
         this.mergeEngineType = mergeEngineType;
         this.tableOptions = tableOptions;
-        this.secondaryIndexes = secondaryIndexes;
+        this.secondaryIndexes = parseSecondaryIndexes(tableOptions, tableOutputType);
         // A FULL lookup reads Fluss snapshots and logs, without requiring a lake reader plugin.
         // Defer creating the lake source until this instance is actually used for a full scan.
         if (isDataLakeEnabled && lookupCacheType != LookupOptions.LookupCacheType.FULL) {
@@ -515,6 +383,31 @@ public class FlinkTableSource
         RowType flussRowType = FlinkConversions.toFlussRowType(tableOutputType);
         this.availableStatsColumns =
                 PushdownUtils.computeAvailableStatsColumns(flussRowType, tableConfig);
+    }
+
+    @Nullable
+    private static int[][] parseSecondaryIndexes(
+            Map<String, String> tableOptions,
+            org.apache.flink.table.types.logical.RowType tableOutputType) {
+        Pattern pattern = Pattern.compile("secondary-index\\.([A-Za-z0-9_]+)\\.columns");
+        List<int[]> indexList = new ArrayList<>();
+        for (Map.Entry<String, String> entry : tableOptions.entrySet()) {
+            Matcher matcher = pattern.matcher(entry.getKey());
+            if (matcher.matches()) {
+                List<String> columnList = SecondaryIndexColumnNames.decode(entry.getValue());
+                int[] columnIndexes = new int[columnList.size()];
+                for (int i = 0; i < columnList.size(); i++) {
+                    int fieldIndex = tableOutputType.getFieldIndex(columnList.get(i));
+                    if (fieldIndex < 0) {
+                        throw new IllegalArgumentException(
+                                "Column '" + columnList.get(i) + "' not found in table schema");
+                    }
+                    columnIndexes[i] = fieldIndex;
+                }
+                indexList.add(columnIndexes);
+            }
+        }
+        return indexList.isEmpty() ? null : indexList.toArray(new int[0][]);
     }
 
     private FlinkTableSource(FlinkTableSource source) {

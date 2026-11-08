@@ -57,7 +57,6 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
 
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
@@ -131,10 +130,6 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
     private static InternalRow lookupSingleRow(Table table, String indexName, Object key)
             throws Exception {
         Lookuper lookuper = table.getSecondaryIndexLookuper(indexName);
-        waitUntil(
-                () -> !lookuper.lookup(row(key)).get().getRowList().isEmpty(),
-                INDEX_VISIBILITY_TIMEOUT,
-                "index lookup for " + indexName);
         List<InternalRow> rows = lookuper.lookup(row(key)).get().getRowList();
         assertThat(rows).hasSize(1);
         assertThat(rows.get(0).getInt(0)).isEqualTo(1);
@@ -200,68 +195,6 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
                                     .get()
                                     .getRowList())
                     .hasSize(limit + 1);
-        }
-    }
-
-    @Test
-    void testSecondaryIndexLookup() throws Exception {
-        TablePath tablePath = TablePath.of(DB, "test_sec_idx_lookup");
-
-        Schema schema =
-                Schema.newBuilder()
-                        .column("id", DataTypes.INT())
-                        .column("name", DataTypes.STRING())
-                        .column("email", DataTypes.STRING())
-                        .primaryKey("id")
-                        .index(
-                                "idx_name",
-                                IndexType.SECONDARY,
-                                Arrays.asList("name"),
-                                IndexVisibility.SYNC,
-                                3)
-                        .index(
-                                "idx_email",
-                                IndexType.SECONDARY,
-                                Arrays.asList("email"),
-                                IndexVisibility.SYNC,
-                                3)
-                        .build();
-
-        TableDescriptor descriptor =
-                TableDescriptor.builder().schema(schema).distributedBy(3, "id").build();
-
-        createTable(tablePath, descriptor, true);
-
-        try (Table table = conn.getTable(tablePath)) {
-            UpsertWriter upsertWriter = table.newUpsert().createWriter();
-            upsertWriter.upsert(row(1, "Alice", "alice@example.com"));
-            upsertWriter.upsert(row(2, "Bob", "bob@example.com"));
-            upsertWriter.upsert(row(3, "Charlie", "charlie@example.com"));
-            upsertWriter.upsert(row(4, "Diana", "diana@example.com"));
-            upsertWriter.upsert(row(5, "Eve", "eve@example.com"));
-            upsertWriter.flush();
-
-            Lookuper nameLookuper = table.getSecondaryIndexLookuper("idx_name");
-            Lookuper emailLookuper = table.getSecondaryIndexLookuper("idx_email");
-
-            // SYNC index writes must be visible when flush returns.
-            LookupResult aliceResult = nameLookuper.lookup(row("Alice")).get();
-            assertThat(aliceResult.getRowList()).hasSize(1);
-            InternalRow aliceRow = aliceResult.getRowList().get(0);
-            assertThat(aliceRow.getInt(0)).isEqualTo(1);
-            assertThat(aliceRow.getString(1).toString()).isEqualTo("Alice");
-            assertThat(aliceRow.getString(2).toString()).isEqualTo("alice@example.com");
-
-            LookupResult bobResult = emailLookuper.lookup(row("bob@example.com")).get();
-            assertThat(bobResult.getRowList()).hasSize(1);
-            InternalRow bobRow = bobResult.getRowList().get(0);
-            assertThat(bobRow.getInt(0)).isEqualTo(2);
-            assertThat(bobRow.getString(1).toString()).isEqualTo("Bob");
-            assertThat(bobRow.getString(2).toString()).isEqualTo("bob@example.com");
-
-            // Verify non-existent value returns empty.
-            LookupResult notFoundResult = nameLookuper.lookup(row("NonExistent")).get();
-            assertThat(notFoundResult.getRowList()).isEmpty();
         }
     }
 
@@ -388,15 +321,6 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
             Lookuper nameLookuper = table.getSecondaryIndexLookuper("idx_name");
             Lookuper emailLookuper = table.getSecondaryIndexLookuper("idx_email");
 
-            // Wait for name index to become visible.
-            waitUntil(
-                    () -> {
-                        LookupResult r = nameLookuper.lookup(row("Alice")).get();
-                        return !r.getRowList().isEmpty();
-                    },
-                    INDEX_VISIBILITY_TIMEOUT,
-                    "wait for idx_name entry 'Alice' (partition 2023) to become visible");
-
             // Verify name lookup returns data from correct partition (2023).
             LookupResult aliceResult = nameLookuper.lookup(row("Alice")).get();
             assertThat(aliceResult.getRowList()).hasSize(1);
@@ -406,13 +330,6 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
             assertThat(aliceRow.getString(3).toString()).isEqualTo("2023");
 
             // Verify email lookup returns data from correct partition (2024).
-            waitUntil(
-                    () -> {
-                        LookupResult r = emailLookuper.lookup(row("charlie@example.com")).get();
-                        return !r.getRowList().isEmpty();
-                    },
-                    INDEX_VISIBILITY_TIMEOUT,
-                    "wait for idx_email entry 'charlie@example.com' (partition 2024) to become visible");
 
             LookupResult charlieResult = emailLookuper.lookup(row("charlie@example.com")).get();
             assertThat(charlieResult.getRowList()).hasSize(1);
@@ -763,8 +680,6 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
                         .satisfies(r -> assertThat(r.getInt(0)).isEqualTo(expectedId));
             }
 
-            // Negative anchor: values that were never written must resolve to no index entry, so a
-            // bug returning rows for absent keys would be caught.
             assertThat(
                             nameLookuper
                                     .lookup(row("NoSuchName_42"))
@@ -775,9 +690,10 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
         }
     }
 
-    @Test
-    void testSecondaryIndexLookupWithIntIndexColumn() throws Exception {
-        TablePath tablePath = TablePath.of(DB, "test_int_index_lookup");
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testSecondaryIndexLookupWithIntIndexColumn(boolean defaultDistribution) throws Exception {
+        TablePath tablePath = TablePath.of(DB, "test_int_index_lookup_" + defaultDistribution);
 
         Schema schema =
                 Schema.newBuilder()
@@ -793,10 +709,12 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
                                 3)
                         .build();
 
-        TableDescriptor descriptor =
-                TableDescriptor.builder().schema(schema).distributedBy(3, "fact_id").build();
+        TableDescriptor.Builder descriptor = TableDescriptor.builder().schema(schema);
+        if (!defaultDistribution) {
+            descriptor.distributedBy(3, "fact_id");
+        }
 
-        createTable(tablePath, descriptor, true);
+        createTable(tablePath, descriptor.build(), true);
 
         try (Table table = conn.getTable(tablePath)) {
             UpsertWriter upsertWriter = table.newUpsert().createWriter();
@@ -807,22 +725,15 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
 
             Lookuper indexLookuper = table.getSecondaryIndexLookuper("idx_product_id");
 
-            // Wait for all entries to become visible
+            Lookuper pkLookuper = table.newLookup().createLookuper();
             for (int i = 1; i <= 15; i++) {
-                final int productId = i;
-                waitUntil(
-                        () -> !indexLookuper.lookup(row(productId)).get().getRowList().isEmpty(),
-                        INDEX_VISIBILITY_TIMEOUT,
-                        "index lookup for product_id=" + productId);
+                assertThat(pkLookuper.lookup(row(i)).get().getRowList()).hasSize(1);
+                List<InternalRow> rows = indexLookuper.lookup(row(i)).get().getRowList();
+                assertThat(rows).hasSize(1);
+                assertThat(rows.get(0).getInt(0)).isEqualTo(i);
+                assertThat(rows.get(0).getInt(1)).isEqualTo(i);
+                assertThat(rows.get(0).getInt(2)).isEqualTo(i * 100);
             }
-
-            // Verify specific lookup
-            LookupResult result = indexLookuper.lookup(row(1)).get();
-            assertThat(result.getRowList()).hasSize(1);
-            InternalRow resultRow = result.getRowList().get(0);
-            assertThat(resultRow.getInt(0)).isEqualTo(1);
-            assertThat(resultRow.getInt(1)).isEqualTo(1);
-            assertThat(resultRow.getInt(2)).isEqualTo(100);
         }
     }
 
@@ -837,6 +748,7 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
                         .column("event_time", DataTypes.TIMESTAMP())
                         .column("payload", DataTypes.BYTES())
                         .column("amount", DataTypes.INT())
+                        .column("active", DataTypes.BOOLEAN())
                         .primaryKey("fact_id")
                         .index(
                                 "idx_order_id",
@@ -862,6 +774,7 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
                                 Arrays.asList("payload"),
                                 IndexVisibility.SYNC,
                                 3)
+                        .index("idx_active", "active")
                         .build();
         createTable(
                 tablePath,
@@ -875,7 +788,9 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
         byte[] payload = new byte[] {1, 2, 3};
         try (Table table = conn.getTable(tablePath)) {
             UpsertWriter writer = table.newUpsert().createWriter();
-            writer.upsert(row(1, orderId, price, eventTime, payload, 100));
+            writer.upsert(row(1, orderId, price, eventTime, payload, 100, true));
+            writer.upsert(row(2, null, null, null, null, 200, false));
+            writer.upsert(row(3, null, null, null, null, 300, true));
             writer.flush();
 
             InternalRow bigintRow = lookupSingleRow(table, "idx_order_id", orderId);
@@ -890,53 +805,15 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
 
             InternalRow bytesRow = lookupSingleRow(table, "idx_payload", new byte[] {1, 2, 3});
             assertThat(bytesRow.getBytes(4)).containsExactly(1, 2, 3);
-        }
-    }
-
-    @Test
-    void testSecondaryIndexLookupWithBooleanIndexColumn() throws Exception {
-        TablePath tablePath = TablePath.of(DB, "test_boolean_index_lookup");
-        Schema schema =
-                Schema.newBuilder()
-                        .column("fact_id", DataTypes.INT())
-                        .column("active", DataTypes.BOOLEAN())
-                        .column("amount", DataTypes.INT())
-                        .primaryKey("fact_id")
-                        .index(
-                                "idx_active",
-                                IndexType.SECONDARY,
-                                Arrays.asList("active"),
-                                IndexVisibility.SYNC,
-                                3)
-                        .build();
-        TableDescriptor descriptor =
-                TableDescriptor.builder().schema(schema).distributedBy(3, "fact_id").build();
-        createTable(tablePath, descriptor, true);
-
-        try (Table table = conn.getTable(tablePath)) {
-            UpsertWriter writer = table.newUpsert().createWriter();
-            writer.upsert(row(1, true, 100));
-            writer.upsert(row(2, false, 200));
-            writer.upsert(row(3, true, 300));
-            writer.flush();
-
-            Lookuper indexLookuper = table.getSecondaryIndexLookuper("idx_active");
-            // A boolean index is low-cardinality: lookup(true) must return both true rows.
-            waitUntil(
-                    () -> indexLookuper.lookup(row(true)).get().getRowList().size() == 2,
-                    INDEX_VISIBILITY_TIMEOUT,
-                    "index lookup for active=true returns both rows");
-
-            List<Integer> trueFactIds = new ArrayList<>();
-            for (InternalRow r : indexLookuper.lookup(row(true)).get().getRowList()) {
-                assertThat(r.getBoolean(1)).isTrue();
-                trueFactIds.add(r.getInt(0));
-            }
-            assertThat(trueFactIds).containsExactlyInAnyOrder(1, 3);
-
-            LookupResult falseResult = indexLookuper.lookup(row(false)).get();
-            assertThat(falseResult.getRowList()).hasSize(1);
-            assertThat(falseResult.getRowList().get(0).getInt(0)).isEqualTo(2);
+            Lookuper active = table.getSecondaryIndexLookuper("idx_active");
+            assertThat(active.lookup(row(true)).get().getRowList())
+                    .allSatisfy(r -> assertThat(r.getBoolean(6)).isTrue())
+                    .extracting(r -> r.getInt(0))
+                    .containsExactlyInAnyOrder(1, 3);
+            assertThat(active.lookup(row(false)).get().getRowList())
+                    .allSatisfy(r -> assertThat(r.getBoolean(6)).isFalse())
+                    .extracting(r -> r.getInt(0))
+                    .containsExactly(2);
         }
     }
 
@@ -1018,59 +895,6 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
     }
 
     @Test
-    void testSecondaryIndexLookupWithoutDistributedBy() throws Exception {
-        TablePath tablePath = TablePath.of(DB, "test_no_dist_by_index");
-
-        Schema schema =
-                Schema.newBuilder()
-                        .column("fact_id", DataTypes.INT())
-                        .column("product_id", DataTypes.INT())
-                        .column("amount", DataTypes.INT())
-                        .primaryKey("fact_id")
-                        .index(
-                                "idx_product_id",
-                                IndexType.SECONDARY,
-                                Arrays.asList("product_id"),
-                                IndexVisibility.SYNC,
-                                3)
-                        .build();
-
-        TableDescriptor descriptor = TableDescriptor.builder().schema(schema).build();
-
-        createTable(tablePath, descriptor, true);
-
-        try (Table table = conn.getTable(tablePath)) {
-            UpsertWriter upsertWriter = table.newUpsert().createWriter();
-            for (int i = 1; i <= 15; i++) {
-                upsertWriter.upsert(row(i, i, i * 100));
-            }
-            upsertWriter.flush();
-
-            // Verify PK lookup on main table works
-            Lookuper pkLookuper = table.newLookup().createLookuper();
-            for (int i = 1; i <= 3; i++) {
-                LookupResult pkResult = pkLookuper.lookup(row(i)).get();
-                assertThat(pkResult.getRowList()).hasSize(1);
-            }
-
-            // Verify secondary index lookup
-            Lookuper indexLookuper = table.getSecondaryIndexLookuper("idx_product_id");
-
-            for (int i = 1; i <= 15; i++) {
-                final int pid = i;
-                waitUntil(
-                        () -> !indexLookuper.lookup(row(pid)).get().getRowList().isEmpty(),
-                        INDEX_VISIBILITY_TIMEOUT,
-                        "secondary index lookup for product_id=" + pid);
-                LookupResult r = indexLookuper.lookup(row(pid)).get();
-                assertThat(r.getRowList())
-                        .as("Secondary index lookup for product_id=" + pid)
-                        .hasSize(1);
-            }
-        }
-    }
-
-    @Test
     void testSparseIndexWithNullIndexColumn() throws Exception {
         TablePath tablePath = TablePath.of(DB, "test_sparse_null");
 
@@ -1133,10 +957,6 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
 
             // Verify the valid row IS indexed
             Lookuper nameLookuper = table.getSecondaryIndexLookuper("idx_name");
-            waitUntil(
-                    () -> !nameLookuper.lookup(row("ValidName")).get().getRowList().isEmpty(),
-                    INDEX_VISIBILITY_TIMEOUT,
-                    "name index for ValidName");
             LookupResult validResult = nameLookuper.lookup(row("ValidName")).get();
             assertThat(validResult.getRowList()).hasSize(1);
             assertThat(validResult.getRowList().get(0).getInt(0)).isEqualTo(4);
@@ -1150,71 +970,19 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
             assertThat(nameLookuper.lookup(row("TestName")).get().getRowList())
                     .extracting(indexedRow -> indexedRow.getInt(0))
                     .containsExactly(2);
-        }
-    }
-
-    @Test
-    void testSparseIndexUpdateToNull() throws Exception {
-        TablePath tablePath = TablePath.of(DB, "test_sparse_update_null");
-
-        Schema schema =
-                Schema.newBuilder()
-                        .column("id", DataTypes.INT())
-                        .column("name", DataTypes.STRING())
-                        .column("email", DataTypes.STRING())
-                        .primaryKey("id")
-                        .index(
-                                "idx_name",
-                                IndexType.SECONDARY,
-                                Arrays.asList("name"),
-                                IndexVisibility.SYNC,
-                                3)
-                        .build();
-
-        TableDescriptor descriptor =
-                TableDescriptor.builder().schema(schema).distributedBy(3, "id").build();
-
-        createTable(tablePath, descriptor, true);
-
-        try (Table table = conn.getTable(tablePath)) {
-            UpsertWriter upsertWriter = table.newUpsert().createWriter();
-
-            // Write a row with non-NULL index column
-            upsertWriter.upsert(row(1, "Alice", "alice@example.com"));
+            upsertWriter.upsert(row(4, null, "updated@example.com"));
             upsertWriter.flush();
-
-            Lookuper nameLookuper = table.getSecondaryIndexLookuper("idx_name");
-
-            // Verify index lookup works
-            waitUntil(
-                    () -> !nameLookuper.lookup(row("Alice")).get().getRowList().isEmpty(),
-                    INDEX_VISIBILITY_TIMEOUT,
-                    "Alice should be findable");
-            assertThat(nameLookuper.lookup(row("Alice")).get().getRowList()).hasSize(1);
-
-            // Update the row to have NULL index column
-            upsertWriter.upsert(row(1, null, "alice_updated@example.com"));
-            upsertWriter.flush();
-
-            // Verify main table has updated value
-            Lookuper pkLookuper = table.newLookup().createLookuper();
-            waitUntil(
-                    () -> {
-                        InternalRow r = pkLookuper.lookup(row(1)).get().getRowList().get(0);
-                        return r.isNullAt(1);
-                    },
-                    INDEX_VISIBILITY_TIMEOUT,
-                    "main table should reflect NULL name");
-            InternalRow result = pkLookuper.lookup(row(1)).get().getRowList().get(0);
-            assertThat(result.isNullAt(1)).isTrue();
-            assertThat(result.getString(2).toString()).isEqualTo("alice_updated@example.com");
-
-            // Verify old index entry is removed (lookup by "Alice" → empty)
-            waitUntil(
-                    () -> nameLookuper.lookup(row("Alice")).get().getRowList().isEmpty(),
-                    INDEX_VISIBILITY_TIMEOUT,
-                    "Alice index entry should be deleted");
-            assertThat(nameLookuper.lookup(row("Alice")).get().getRowList()).isEmpty();
+            InternalRow updated = pkLookuper.lookup(row(4)).get().getRowList().get(0);
+            assertThat(updated.isNullAt(1)).isTrue();
+            assertThat(updated.getString(2).toString()).isEqualTo("updated@example.com");
+            assertThat(nameLookuper.lookup(row("ValidName")).get().getRowList()).isEmpty();
+            assertThat(
+                            table.getSecondaryIndexLookuper("idx_email")
+                                    .lookup(row("updated@example.com"))
+                                    .get()
+                                    .getRowList())
+                    .extracting(r -> r.getInt(0))
+                    .containsExactly(4);
         }
     }
 
@@ -1224,21 +992,11 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
     }
 
     private static void assertSinglePartitionedRow(
-            Lookuper lookuper, String indexValue, int expectedId, String expectedPartition) {
-        AtomicReference<LookupResult> result = new AtomicReference<>();
-        waitUntil(
-                () -> {
-                    LookupResult lookupResult = lookuper.lookup(row(indexValue)).get();
-                    if (lookupResult.getRowList().size() != 1) {
-                        return false;
-                    }
-                    result.set(lookupResult);
-                    return true;
-                },
-                INDEX_VISIBILITY_TIMEOUT,
-                "wait for exactly one index row for " + indexValue);
-
-        InternalRow actual = result.get().getRowList().get(0);
+            Lookuper lookuper, String indexValue, int expectedId, String expectedPartition)
+            throws Exception {
+        List<InternalRow> rows = lookuper.lookup(row(indexValue)).get().getRowList();
+        assertThat(rows).hasSize(1);
+        InternalRow actual = rows.get(0);
         assertThat(actual.getInt(0)).isEqualTo(expectedId);
         assertThat(actual.getString(1).toString()).isEqualTo(indexValue);
         assertThat(actual.getString(2).toString()).isEqualTo(expectedPartition);
