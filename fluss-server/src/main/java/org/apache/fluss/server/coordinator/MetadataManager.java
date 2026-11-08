@@ -29,6 +29,7 @@ import org.apache.fluss.exception.LakeTableAlreadyExistException;
 import org.apache.fluss.exception.PartitionAlreadyExistsException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.SchemaNotExistException;
+import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.exception.TableNotPartitionedException;
@@ -1381,17 +1382,28 @@ public class MetadataManager {
         }
 
         try {
-            long partitionId = zookeeperClient.getPartitionIdAndIncrement();
-            validatePartitionIdAboveTombstoneFloor(tablePath, partitionId);
-            // register partition assignments and partition metadata to zk in transaction
-            zookeeperClient.registerPartitionAssignmentAndMetadata(
-                    partitionId,
-                    partitionName,
-                    partitionAssignment,
-                    remoteDataDir,
-                    tablePath,
-                    tableId,
-                    bucketCount);
+            boolean guardPartitionTombstone = hasSecondaryIndexes(tablePath);
+            for (int attempt = 0; ; attempt++) {
+                long partitionId = zookeeperClient.getPartitionIdAndIncrement();
+                try {
+                    zookeeperClient.registerPartitionAssignmentAndMetadata(
+                            partitionId,
+                            partitionName,
+                            partitionAssignment,
+                            remoteDataDir,
+                            tablePath,
+                            tableId,
+                            bucketCount,
+                            guardPartitionTombstone);
+                    break;
+                } catch (StaleMetadataException e) {
+                    // A drop may cover an allocated but unpublished ID. Allocate again rather
+                    // than publish a partition that index cleanup already considers deleted.
+                    if (attempt + 1 >= PARTITION_TOMBSTONE_CAS_RETRY_LIMIT) {
+                        throw e;
+                    }
+                }
+            }
             LOG.info(
                     "Register partition {} to zookeeper for table [{}].", partitionName, tablePath);
         } catch (KeeperException.NodeExistsException nodeExistsException) {
@@ -1406,20 +1418,6 @@ public class MetadataManager {
                     String.format(
                             "Register partition to zookeeper failed to create partition %s for table [%s]",
                             partitionName, tablePath),
-                    e);
-        }
-    }
-
-    private void validatePartitionIdAboveTombstoneFloor(TablePath tablePath, long partitionId) {
-        try {
-            PartitionTombstone tombstone = zookeeperClient.getPartitionTombstone(tablePath);
-            PartitionTombstoneAdvancer.validateNewPartitionId(tombstone, partitionId);
-        } catch (RuntimeException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new FlussRuntimeException(
-                    "Failed to validate partition id against tombstone floor for table "
-                            + tablePath,
                     e);
         }
     }
@@ -1475,6 +1473,8 @@ public class MetadataManager {
         long partitionId = partitionRegistration.getPartitionId();
         Exception lastConflict = null;
         for (int attempt = 0; attempt < PARTITION_TOMBSTONE_CAS_RETRY_LIMIT; attempt++) {
+            // Read the CAS version before live partitions. Partition publication touches the
+            // same node, invalidating a floor calculated without the newly registered partition.
             Tuple2<PartitionTombstone, Optional<Integer>> current =
                     zookeeperClient.getPartitionTombstoneWithVersion(tablePath);
             Set<Long> alivePartitionIdsAfterDrop =

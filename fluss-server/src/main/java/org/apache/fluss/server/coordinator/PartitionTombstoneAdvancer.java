@@ -90,15 +90,4 @@ public final class PartitionTombstoneAdvancer {
         explicit.removeIf(explicitPartitionId -> explicitPartitionId <= floorToKeep);
         return new PartitionTombstone(newFloor, explicit, before.getVersion() + 1);
     }
-
-    /**
-     * Validates that a newly allocated source partition id is not covered by the tombstone floor.
-     */
-    public static void validateNewPartitionId(PartitionTombstone tombstone, long partitionId) {
-        checkArgument(
-                partitionId > tombstone.getFloor(),
-                "New partition id %s must be greater than tombstone floor %s.",
-                partitionId,
-                tombstone.getFloor());
-    }
 }

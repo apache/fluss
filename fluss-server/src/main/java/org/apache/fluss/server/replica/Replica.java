@@ -61,9 +61,10 @@ import org.apache.fluss.server.SequenceIDCounter;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.entity.PutIndexDataForBucket;
+import org.apache.fluss.server.index.IndexPartitionTombstoneFilter;
+import org.apache.fluss.server.index.IndexReplicationApplier;
 import org.apache.fluss.server.index.IndexReplicationManager;
 import org.apache.fluss.server.index.IndexReplicationSupervisor;
-import org.apache.fluss.server.index.IndexTableStorage;
 import org.apache.fluss.server.kv.KvManager;
 import org.apache.fluss.server.kv.KvRecoverHelper;
 import org.apache.fluss.server.kv.KvStateLookupResult;
@@ -250,7 +251,8 @@ public final class Replica {
 
     // ------- index management
     private final IndexReplicationSupervisor indexReplicationSupervisor;
-    private final IndexTableStorage indexTableStorage;
+    @Nullable private final IndexReplicationApplier indexReplicationApplier;
+    @Nullable private IndexPartitionTombstoneFilter indexPartitionTombstoneFilter;
 
     /** Whether this main-table schema declares at least one secondary index. */
     private final boolean hasSecondaryIndexes;
@@ -338,8 +340,11 @@ public final class Replica {
         this.scannerManager = checkNotNull(scannerManager, "scannerManager");
         this.indexReplicationSupervisor =
                 indexReplicationManager.createSupervisor(tableInfo, tableBucket);
-        this.indexTableStorage =
-                new IndexTableStorage(tableInfo, tableBucket, metadataCache, schemaGetter);
+        this.indexReplicationApplier =
+                tableInfo.isIndexTable()
+                        ? new IndexReplicationApplier(
+                                tableInfo, tableBucket, metadataCache, schemaGetter)
+                        : null;
         List<Schema.Index> secondaryIndexes = tableInfo.getSchema().getIndexes();
         this.hasSecondaryIndexes = !secondaryIndexes.isEmpty();
         this.hasSyncIndexes =
@@ -677,7 +682,7 @@ public final class Replica {
     /** Delete the replica including drop the kv and log. */
     public void delete() {
         indexReplicationSupervisor.close();
-        indexTableStorage.clearLeaderState();
+        indexPartitionTombstoneFilter = null;
         // need to hold the lock to prevent appendLog, putKv from hitting I/O exceptions due
         // to log/kv being deleted
         inWriteLock(
@@ -728,7 +733,8 @@ public final class Replica {
             // Prepare index-table tombstone state before opening RocksDB. Compaction filters are
             // attached during KvTablet creation and cannot be installed afterward.
             indexReplicationSupervisor.prepareForLeader();
-            indexTableStorage.prepareForLeader();
+            indexPartitionTombstoneFilter =
+                    IndexPartitionTombstoneFilter.forIndexTable(tableInfo, metadataCache);
             resetIndexProgressForLeader();
             // if it's become new leader, we must
             // first destroy the old kv tablet
@@ -738,7 +744,10 @@ public final class Replica {
             createKv(checkNotNull(recovery));
             indexReplicationSupervisor.onBecomeLeader(
                     logTablet, schemaGetter, this::advanceIndexProgress, allIndexPushedOffset);
-            indexTableStorage.installValueFilter(kvTablet);
+            if (indexPartitionTombstoneFilter != null) {
+                kvTablet.setValueFilter(indexPartitionTombstoneFilter::isTombstoned);
+                LOG.info("Index Table partition-tombstone filter installed for {}.", tableBucket);
+            }
         }
 
         updateLeaderEndOffsetSnapshot();
@@ -770,7 +779,7 @@ public final class Replica {
 
     private void onBecomeNewFollower(int standbyReplica) {
         indexReplicationSupervisor.onBecomeFollower();
-        indexTableStorage.clearLeaderState();
+        indexPartitionTombstoneFilter = null;
 
         if (isKvTable()) {
             boolean isNowStandby = (standbyReplica == localTabletServerId);
@@ -1085,8 +1094,13 @@ public final class Replica {
                                 tabletDir,
                                 schemaGetter,
                                 this::onKvFlushComplete,
-                                indexTableStorage.createCompactionFilterFactory(),
-                                indexTableStorage.createTagExtractor());
+                                indexPartitionTombstoneFilter == null
+                                        ? null
+                                        : indexPartitionTombstoneFilter
+                                                .createCompactionFilterFactory(),
+                                indexPartitionTombstoneFilter == null
+                                        ? null
+                                        : indexPartitionTombstoneFilter.createTagExtractor());
 
                 checkNotNull(kvTablet, "kv tablet should not be null.");
                 restoreStartOffset = completedSnapshot.getLogOffset();
@@ -1119,8 +1133,13 @@ public final class Replica {
                                 tableConfig,
                                 arrowCompressionInfo,
                                 this::onKvFlushComplete,
-                                indexTableStorage.createCompactionFilterFactory(),
-                                indexTableStorage.createTagExtractor());
+                                indexPartitionTombstoneFilter == null
+                                        ? null
+                                        : indexPartitionTombstoneFilter
+                                                .createCompactionFilterFactory(),
+                                indexPartitionTombstoneFilter == null
+                                        ? null
+                                        : indexPartitionTombstoneFilter.createTagExtractor());
 
                 rowCount =
                         isHistoricalPartition()
@@ -1615,15 +1634,7 @@ public final class Replica {
                                     "KvTablet for the Index Table replica must not be null.");
                     @Nullable
                     LogAppendInfo appendInfo =
-                            indexTableStorage.putIndex(
-                                    kv,
-                                    data.sourceBucket(),
-                                    data.sourceEndOffset(),
-                                    data.progressKey(),
-                                    data.records(),
-                                    () ->
-                                            kv.putAsLeader(
-                                                    data.records(), null, MergeMode.OVERWRITE));
+                            checkNotNull(indexReplicationApplier).apply(kv, data);
                     if (appendInfo == null) {
                         return -1L;
                     }

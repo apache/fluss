@@ -45,7 +45,7 @@ import java.util.function.Supplier;
 
 /** Reads a continuous, high-watermark-bounded source WAL range for index replication. */
 @Internal
-public final class IndexSourceReader implements AutoCloseable {
+final class IndexSourceReader implements AutoCloseable {
 
     interface SourceLog {
         TableBucket tableBucket();
@@ -82,7 +82,7 @@ public final class IndexSourceReader implements AutoCloseable {
     /** Removing the session transfers responsibility for closing it. */
     private final AtomicReference<RemoteFetcher> remoteFetcherSession = new AtomicReference<>();
 
-    public IndexSourceReader(
+    IndexSourceReader(
             LogTablet logTablet,
             RemoteLogManager remoteLogManager,
             Executor remoteExecutor,
@@ -122,20 +122,20 @@ public final class IndexSourceReader implements AutoCloseable {
     /**
      * Returns a bounded continuous source range, fetching remote raw WAL asynchronously if needed.
      */
-    public CompletableFuture<ReadResult> read(long nextOffset, long highWatermark, int maxBytes) {
+    CompletableFuture<ReadResult> read(long nextOffset, long endOffsetLimit, int maxBytes) {
         if (closed.get()) {
             throw new IllegalStateException("Index source reader is closed");
         }
-        if (nextOffset < 0 || highWatermark < nextOffset || maxBytes <= 0) {
+        if (nextOffset < 0 || endOffsetLimit < nextOffset || maxBytes <= 0) {
             throw new IllegalArgumentException(
                     "Invalid index source read range ["
                             + nextOffset
                             + ", "
-                            + highWatermark
+                            + endOffsetLimit
                             + ") with maxBytes="
                             + maxBytes);
         }
-        if (nextOffset >= highWatermark) {
+        if (nextOffset >= endOffsetLimit) {
             return CompletableFuture.completedFuture(ReadResult.empty(nextOffset));
         }
 
@@ -143,7 +143,7 @@ public final class IndexSourceReader implements AutoCloseable {
         if (nextOffset >= localLogStartOffset) {
             try {
                 return CompletableFuture.completedFuture(
-                        readLocal(nextOffset, highWatermark, maxBytes, null));
+                        readLocal(nextOffset, endOffsetLimit, maxBytes, null));
             } catch (Throwable failure) {
                 return FutureUtils.completedExceptionally(failure);
             }
@@ -169,7 +169,7 @@ public final class IndexSourceReader implements AutoCloseable {
                             readRemote(
                                     future,
                                     nextOffset,
-                                    highWatermark,
+                                    endOffsetLimit,
                                     localLogStartOffset,
                                     maxBytes));
         } catch (Throwable failure) {
@@ -194,7 +194,7 @@ public final class IndexSourceReader implements AutoCloseable {
     private void readRemote(
             CompletableFuture<ReadResult> future,
             long nextOffset,
-            long highWatermark,
+            long endOffsetLimit,
             long localLogStartOffset,
             int maxBytes) {
         RemoteFetcher remoteFetcher = null;
@@ -207,8 +207,8 @@ public final class IndexSourceReader implements AutoCloseable {
                 return;
             }
 
-            long remoteEnd = Math.min(localLogStartOffset, highWatermark);
-            BatchCollector collector = new BatchCollector(nextOffset, highWatermark, maxBytes);
+            long remoteEnd = Math.min(localLogStartOffset, endOffsetLimit);
+            BatchCollector collector = new BatchCollector(nextOffset, endOffsetLimit, maxBytes);
             collector.collect(remoteFetcher.fetch(nextOffset, localLogStartOffset), remoteEnd);
             if (!collector.limitReached() && collector.nextOffset() < remoteEnd) {
                 throw corruption(
@@ -224,12 +224,12 @@ public final class IndexSourceReader implements AutoCloseable {
             ReadResult result;
             if (!collector.limitReached()
                     && collector.nextOffset() == localLogStartOffset
-                    && collector.nextOffset() < highWatermark) {
+                    && collector.nextOffset() < endOffsetLimit) {
                 localHandoffStarted = true;
                 result =
                         readLocal(
                                 collector.nextOffset(),
-                                highWatermark,
+                                endOffsetLimit,
                                 collector.remainingBytes(),
                                 collector);
             } else {
@@ -293,13 +293,13 @@ public final class IndexSourceReader implements AutoCloseable {
 
     private ReadResult readLocal(
             long nextOffset,
-            long highWatermark,
+            long endOffsetLimit,
             int maxBytes,
             @Nullable BatchCollector existingCollector)
             throws IOException {
         BatchCollector collector =
                 existingCollector == null
-                        ? new BatchCollector(nextOffset, highWatermark, maxBytes)
+                        ? new BatchCollector(nextOffset, endOffsetLimit, maxBytes)
                         : existingCollector;
         long beforeReadOffset = collector.nextOffset();
         FetchDataInfo fetch =
@@ -308,8 +308,8 @@ public final class IndexSourceReader implements AutoCloseable {
                         Math.max(1, collector.remainingBytes()),
                         FetchIsolation.HIGH_WATERMARK,
                         true);
-        collector.collect(fetch.getRecords().batches(), highWatermark);
-        if (collector.nextOffset() == beforeReadOffset && beforeReadOffset < highWatermark) {
+        collector.collect(fetch.getRecords().batches(), endOffsetLimit);
+        if (collector.nextOffset() == beforeReadOffset && beforeReadOffset < endOffsetLimit) {
             if (collector.limitReached()) {
                 return collector.finish();
             }
@@ -351,7 +351,7 @@ public final class IndexSourceReader implements AutoCloseable {
     }
 
     /** Owns the batches and any downloaded files backing them until {@link #close()}. */
-    public static final class ReadResult implements AutoCloseable {
+    static final class ReadResult implements AutoCloseable {
         private final List<LogRecordBatch> batches;
         private final long nextOffset;
         private final boolean byteLimited;
@@ -384,7 +384,7 @@ public final class IndexSourceReader implements AutoCloseable {
             return batches;
         }
 
-        public long nextOffset() {
+        long nextOffset() {
             return nextOffset;
         }
 
@@ -431,16 +431,16 @@ public final class IndexSourceReader implements AutoCloseable {
 
     private final class BatchCollector {
         private final List<LogRecordBatch> batches = new ArrayList<>();
-        private final long highWatermark;
+        private final long endOffsetLimit;
         private final int maxBytes;
         private long bytes;
         private long nextOffset;
         private boolean byteLimitReached;
         @Nullable private AutoCloseable resource;
 
-        private BatchCollector(long nextOffset, long highWatermark, int maxBytes) {
+        private BatchCollector(long nextOffset, long endOffsetLimit, int maxBytes) {
             this.nextOffset = nextOffset;
-            this.highWatermark = highWatermark;
+            this.endOffsetLimit = endOffsetLimit;
             this.maxBytes = maxBytes;
         }
 
@@ -463,7 +463,7 @@ public final class IndexSourceReader implements AutoCloseable {
                 }
 
                 long start = nextOffset;
-                long end = Math.min(Math.min(batch.nextLogOffset(), upperBound), highWatermark);
+                long end = Math.min(Math.min(batch.nextLogOffset(), upperBound), endOffsetLimit);
                 if (start < end) {
                     if (start != batch.baseLogOffset() || end != batch.nextLogOffset()) {
                         throw corruption(
@@ -485,12 +485,12 @@ public final class IndexSourceReader implements AutoCloseable {
                     nextOffset = end;
                     if (bytes >= maxBytes
                             && nextOffset < upperBound
-                            && nextOffset < highWatermark) {
+                            && nextOffset < endOffsetLimit) {
                         byteLimitReached = true;
                         return;
                     }
                 }
-                if (nextOffset >= upperBound || nextOffset >= highWatermark) {
+                if (nextOffset >= upperBound || nextOffset >= endOffsetLimit) {
                     return;
                 }
             }

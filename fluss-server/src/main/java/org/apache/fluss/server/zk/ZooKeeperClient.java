@@ -24,6 +24,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.ConfigurationUtils;
 import org.apache.fluss.config.FlussConfigUtils;
 import org.apache.fluss.exception.CoordinatorEpochFencedException;
+import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.metadata.DatabaseSummary;
 import org.apache.fluss.metadata.PartitionTombstone;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -1496,6 +1497,32 @@ public class ZooKeeperClient implements AutoCloseable {
             long tableId,
             int bucketCount)
             throws Exception {
+        registerPartitionAssignmentAndMetadata(
+                partitionId,
+                partitionName,
+                partitionAssignment,
+                remoteDataDir,
+                tablePath,
+                tableId,
+                bucketCount,
+                false);
+    }
+
+    /**
+     * Registers a partition, optionally coordinating with index partition cleanup. Guarded
+     * registrations touch the tombstone in the same transaction so a concurrent drop must reload
+     * live partitions before advancing its floor.
+     */
+    public void registerPartitionAssignmentAndMetadata(
+            long partitionId,
+            String partitionName,
+            PartitionAssignment partitionAssignment,
+            String remoteDataDir,
+            TablePath tablePath,
+            long tableId,
+            int bucketCount,
+            boolean guardPartitionTombstone)
+            throws Exception {
         // Merge "registerPartitionAssignment()" and "registerPartition()"
         // into one transaction. This is to avoid the case that the partition assignment is
         // registered
@@ -1515,13 +1542,38 @@ public class ZooKeeperClient implements AutoCloseable {
         String metadataPartitionParentPath = PartitionsZNode.path(tablePath);
         String tabletServerPartitionPath = PartitionIdZNode.path(partitionId);
         String metadataPath = PartitionZNode.path(tablePath, partitionName);
+        String tombstonePath = PartitionTombstoneZNode.path(tablePath);
         Exception lastConflict = null;
         for (int attempt = 0; attempt < PARTITION_REGISTRATION_RETRY_LIMIT; attempt++) {
             Stat tableStat = getActiveTableStat(tablePath, tableId);
             boolean createMetadataPartitionParent =
                     zkClient.checkExists().forPath(metadataPartitionParentPath) == null;
+            Tuple2<PartitionTombstone, Optional<Integer>> tombstone =
+                    guardPartitionTombstone ? getPartitionTombstoneWithVersion(tablePath) : null;
+            boolean createTombstone = tombstone != null && !tombstone.f1.isPresent();
+            if (tombstone != null && partitionId <= tombstone.f0.getFloor()) {
+                throw new StaleMetadataException(
+                        "Partition id "
+                                + partitionId
+                                + " is covered by tombstone floor "
+                                + tombstone.f0.getFloor()
+                                + " for table "
+                                + tablePath);
+            }
             List<CuratorOp> ops = new ArrayList<>(4);
             ops.add(zkOp.checkOp(tablePathInZk, tableStat.getVersion()));
+            if (tombstone != null) {
+                // Only the ZNode version changes; publication does not delete any partition.
+                byte[] tombstoneBytes = PartitionTombstoneBinarySerde.serialize(tombstone.f0);
+                ops.add(
+                        createTombstone
+                                ? zkOp.createOp(
+                                        tombstonePath, tombstoneBytes, CreateMode.PERSISTENT)
+                                : zkClient.transactionOp()
+                                        .setData()
+                                        .withVersion(tombstone.f1.get())
+                                        .forPath(tombstonePath, tombstoneBytes));
+            }
             if (createMetadataPartitionParent) {
                 ops.add(zkOp.createOp(metadataPartitionParentPath, null, CreateMode.PERSISTENT));
             }
@@ -1551,7 +1603,7 @@ public class ZooKeeperClient implements AutoCloseable {
             } catch (KeeperException.BadVersionException e) {
                 lastConflict = e;
             } catch (KeeperException.NodeExistsException e) {
-                if (!createMetadataPartitionParent
+                if ((!createMetadataPartitionParent && !createTombstone)
                         || zkClient.checkExists().forPath(tabletServerPartitionPath) != null
                         || zkClient.checkExists().forPath(metadataPath) != null) {
                     throw e;

@@ -39,24 +39,14 @@ import java.util.function.ToLongFunction;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /**
- * Judges whether a partitioned Index Table value row belongs to a tombstoned partition.
+ * Filters partitioned Index Table values using the main table's cached partition tombstone.
  *
- * <p>Named "Discriminator" (not "Predicate") deliberately: this is the <em>judge</em> that reads
- * the tag (partition ID) from the main-branch tagged value layout and consults the cluster-wide
- * {@link PartitionTombstone}. It is not a {@code Predicate<byte[]>} implementation — callers wire
- * one of its methods into the three filter paths (write-time value filter, prefix-lookup filter,
- * RocksDB compaction filter) themselves.
- *
- * <p>Construction is gated by {@link #forIndexTable(TableInfo, TabletServerMetadataCache)}: only
- * partitioned Index Tables that carry the {@code __partition_id} system column and a resolvable
- * main-table back-link yield an instance; all other call sites get {@code null} and skip the
- * tombstone path entirely.
- *
- * <p>Thread-safe: {@link #isTombstoned(byte[])} reads the tag at a fixed offset without any shared
- * mutable state, and the metadata-cache lookup is itself concurrent-safe.
+ * <p>Read filtering consults the current tombstone; each native compaction filter captures one
+ * tombstone snapshot. Value tags contain the source partition ID, avoiding row decoding during
+ * filtering. Instances are thread-safe and do not own the KV tablet or its native filters.
  */
 @Internal
-final class TombstonedPartitionDiscriminator {
+public final class IndexPartitionTombstoneFilter {
 
     private static final KvValueLayout INDEX_VALUE_LAYOUT = KvValueLayout.TAGGED;
 
@@ -64,7 +54,7 @@ final class TombstonedPartitionDiscriminator {
     private final int partitionIdPosition;
     private final TabletServerMetadataCache metadataCache;
 
-    private TombstonedPartitionDiscriminator(
+    private IndexPartitionTombstoneFilter(
             long mainTableId, int partitionIdPosition, TabletServerMetadataCache metadataCache) {
         this.mainTableId = mainTableId;
         this.partitionIdPosition = partitionIdPosition;
@@ -72,11 +62,11 @@ final class TombstonedPartitionDiscriminator {
     }
 
     /**
-     * Builds a discriminator iff this table is a partitioned Index Table with a resolvable main
-     * table back-link and a {@code __partition_id} system column; returns {@code null} otherwise.
+     * Creates a filter when this table is a partitioned Index Table with a resolvable main table
+     * back-link and a {@code __partition_id} system column; returns {@code null} otherwise.
      */
     @Nullable
-    static TombstonedPartitionDiscriminator forIndexTable(
+    public static IndexPartitionTombstoneFilter forIndexTable(
             TableInfo tableInfo, TabletServerMetadataCache metadataCache) {
         if (!tableInfo.isIndexTable()) {
             return null;
@@ -91,7 +81,7 @@ final class TombstonedPartitionDiscriminator {
                 valueLayout == KvValueLayout.TAGGED,
                 "Partitioned Index Table must use tagged KV value layout, but got version %s",
                 valueLayout.version());
-        return new TombstonedPartitionDiscriminator(
+        return new IndexPartitionTombstoneFilter(
                 tableInfo.getMainTableId().getAsLong(), pidPos, metadataCache);
     }
 
@@ -99,7 +89,7 @@ final class TombstonedPartitionDiscriminator {
      * Returns {@code true} when encoded tagged value bytes contain a tombstoned partition ID. The
      * tag is read without deserializing the row.
      */
-    boolean isTombstoned(byte[] valueBytes) {
+    public boolean isTombstoned(byte[] valueBytes) {
         if (valueBytes == null || valueBytes.length < INDEX_VALUE_LAYOUT.rowPayloadOffset()) {
             return false;
         }
@@ -112,7 +102,7 @@ final class TombstonedPartitionDiscriminator {
      * PartitionTombstone}. The native filter reads the tag at a fixed offset, so no schema metadata
      * is needed during compaction.
      */
-    AbstractCompactionFilterFactory<?> createCompactionFilterFactory() {
+    public AbstractCompactionFilterFactory<?> createCompactionFilterFactory() {
         return new AbstractCompactionFilterFactory<FloorSetCompactionFilter>() {
             @Override
             public FloorSetCompactionFilter createCompactionFilter(
@@ -135,7 +125,7 @@ final class TombstonedPartitionDiscriminator {
      * Returns a tag extractor for tagged value encoding. The extractor reads the partitionId from
      * the row at the known position.
      */
-    ToLongFunction<BinaryRow> createTagExtractor() {
+    public ToLongFunction<BinaryRow> createTagExtractor() {
         final int pos = partitionIdPosition;
         return row -> row.getLong(pos);
     }

@@ -40,8 +40,8 @@ public final class IndexTableUtils {
 
     /**
      * Single system column appended to partitioned Index Tables. Carries the source main table's
-     * {@code partitionId} so that partition tombstone cleanup can filter dead rows without
-     * consulting external state.
+     * {@code partitionId} so that filtering and compaction can identify deleted partitions using
+     * the cached partition tombstone.
      */
     public static final String PARTITION_ID_SYSTEM_COLUMN = "__partition_id";
 
