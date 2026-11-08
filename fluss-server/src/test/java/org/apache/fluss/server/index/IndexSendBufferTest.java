@@ -130,7 +130,7 @@ class IndexSendBufferTest {
         try (IndexReplicator owner = owner(buffer, 0)) {
             IndexBatch batch = batch(owner, new TableBucket(2L, 0));
             assertThat(buffer.tryAppendWindow(Collections.singletonList(batch))).isTrue();
-            assertThat(buffer.isFull()).isTrue();
+            assertThat(buffer.requestCapacityWakeupIfFull()).isTrue();
             assertThat(buffer.claimFirstReady(batch.targetBucket())).isSameAs(batch);
             assertThat(buffer.completeClaim(batch)).isTrue();
             assertThat(wakeups).hasValue(1);
@@ -518,7 +518,7 @@ class IndexSendBufferTest {
     }
 
     private static IndexReplicationWindow window(IndexReplicator owner) {
-        IndexReplicator.IndexProgressState index = owner.indexStates().get(0);
+        IndexReplicator.IndexReplicationState index = owner.indexStates().get(0);
         IndexReplicationWindow window = new IndexReplicationWindow(index, 1L, 1, owner);
         index.installWindow(window);
         return window;

@@ -1525,7 +1525,7 @@ public class MetadataManager {
             Set<Long> alivePartitionIdsAfterDrop =
                     loadAlivePartitionIdsAfterDrop(tablePath, partitionId);
             PartitionTombstone updated =
-                    PartitionTombstoneAdvancer.dropPartition(
+                    PartitionTombstoneAdvancer.advanceAfterDrop(
                             current.f0, partitionId, alivePartitionIdsAfterDrop);
             try {
                 zookeeperClient.deletePartitionAndSetTombstone(

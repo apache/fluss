@@ -587,14 +587,14 @@ public class ReplicaManager implements ServerReconfigurable {
     private long failedIndexReplicationSourceBucketCount() {
         return onlineReplicas()
                 .filter(Replica::isLeader)
-                .filter(replica -> replica.getIndexManager().hasFailure())
+                .filter(replica -> replica.getIndexReplicationSupervisor().hasFailure())
                 .count();
     }
 
     private long maxIndexReplicationNoProgressTimeMs() {
         return onlineReplicas()
                 .filter(Replica::isLeader)
-                .mapToLong(replica -> replica.getIndexManager().noProgressTimeMs())
+                .mapToLong(replica -> replica.getIndexReplicationSupervisor().noProgressTimeMs())
                 .max()
                 .orElse(0L);
     }
@@ -2832,7 +2832,7 @@ public class ReplicaManager implements ServerReconfigurable {
         for (Map.Entry<TableBucket, HostedReplica> entry : allReplicas.entrySet()) {
             if (entry.getValue() instanceof OnlineReplica) {
                 Replica replica = ((OnlineReplica) entry.getValue()).getReplica();
-                replica.getIndexManager()
+                replica.getIndexReplicationSupervisor()
                         .retryDeferredStart(
                                 replica.getLogTablet(),
                                 replica.getSchemaGetter(),
@@ -2885,7 +2885,7 @@ public class ReplicaManager implements ServerReconfigurable {
                 replicaStateChangeLock,
                 () -> {
                     for (Replica replica : getOnlineReplicaList()) {
-                        replica.getIndexManager().close();
+                        replica.getIndexReplicationSupervisor().close();
                     }
                 });
         indexReplicationManager.close();

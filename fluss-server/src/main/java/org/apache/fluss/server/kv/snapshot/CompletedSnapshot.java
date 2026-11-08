@@ -79,7 +79,7 @@ public class CompletedSnapshot {
      */
     @Nullable private final Long rowCount;
 
-    @Nullable private final Long indexPushedOffset;
+    @Nullable private final Long allIndexPushedOffset;
 
     @Nullable private final Long syncIndexPushedOffset;
 
@@ -124,7 +124,7 @@ public class CompletedSnapshot {
             KvSnapshotHandle kvSnapshotHandle,
             long logOffset,
             @Nullable Long rowCount,
-            @Nullable Long indexPushedOffset,
+            @Nullable Long allIndexPushedOffset,
             @Nullable Long syncIndexPushedOffset,
             @Nullable List<AutoIncIDRange> autoIncIDRanges) {
         this.tableBucket = tableBucket;
@@ -133,7 +133,7 @@ public class CompletedSnapshot {
         this.kvSnapshotHandle = kvSnapshotHandle;
         this.logOffset = logOffset;
         this.rowCount = rowCount;
-        this.indexPushedOffset = indexPushedOffset;
+        this.allIndexPushedOffset = allIndexPushedOffset;
         this.syncIndexPushedOffset = syncIndexPushedOffset;
         this.autoIncIDRanges = autoIncIDRanges;
     }
@@ -178,7 +178,7 @@ public class CompletedSnapshot {
      * recovery may need to replay from an earlier index-pushed watermark.
      */
     public long getMinRetainLogOffset() {
-        return indexPushedOffset == null ? logOffset : Math.min(logOffset, indexPushedOffset);
+        return allIndexPushedOffset == null ? logOffset : Math.min(logOffset, allIndexPushedOffset);
     }
 
     @Nullable
@@ -186,9 +186,13 @@ public class CompletedSnapshot {
         return rowCount;
     }
 
+    /**
+     * Returns the minimum exclusive next WAL offset across all indexes, including ASYNC indexes,
+     * captured for replay and WAL retention. Null when index progress is not applicable.
+     */
     @Nullable
     public Long getIndexPushedOffset() {
-        return indexPushedOffset;
+        return allIndexPushedOffset;
     }
 
     /** Returns the confirmed SYNC index prefix recorded before snapshot commit. */
@@ -329,7 +333,7 @@ public class CompletedSnapshot {
                 && Objects.equals(tableBucket, that.tableBucket)
                 && Objects.equals(kvSnapshotHandle, that.kvSnapshotHandle)
                 && Objects.equals(rowCount, that.rowCount)
-                && Objects.equals(indexPushedOffset, that.indexPushedOffset)
+                && Objects.equals(allIndexPushedOffset, that.allIndexPushedOffset)
                 && Objects.equals(syncIndexPushedOffset, that.syncIndexPushedOffset)
                 && Objects.equals(autoIncIDRanges, that.autoIncIDRanges)
                 && Objects.equals(snapshotLocation, that.snapshotLocation);
@@ -343,7 +347,7 @@ public class CompletedSnapshot {
                 kvSnapshotHandle,
                 logOffset,
                 rowCount,
-                indexPushedOffset,
+                allIndexPushedOffset,
                 syncIndexPushedOffset,
                 autoIncIDRanges,
                 snapshotLocation);

@@ -51,19 +51,19 @@ class IndexReplicationRetryStateTest {
         retry.onFailure();
         clock.advanceTime(2, TimeUnit.SECONDS);
         retry.onFailure();
-        assertThat(retry.shouldReleaseResources(TimeUnit.SECONDS.toNanos(10))).isFalse();
+        assertThat(retry.shouldYieldPayload(TimeUnit.SECONDS.toNanos(10))).isFalse();
         clock.advanceTime(4, TimeUnit.SECONDS);
         retry.onFailure();
-        assertThat(retry.shouldReleaseResources(TimeUnit.SECONDS.toNanos(10))).isTrue();
-        retry.onResourcesReleased();
+        assertThat(retry.shouldYieldPayload(TimeUnit.SECONDS.toNanos(10))).isTrue();
+        retry.deferRetryAfterYield();
         assertThat(retry.remainingDelayNanos()).isEqualTo(TimeUnit.SECONDS.toNanos(8));
         clock.advanceTime(8, TimeUnit.SECONDS);
         retry.onFailure();
         assertThat(retry.remainingDelayNanos()).isEqualTo(TimeUnit.SECONDS.toNanos(10));
-        assertThat(retry.shouldReleaseResources(TimeUnit.SECONDS.toNanos(10))).isTrue();
+        assertThat(retry.shouldYieldPayload(TimeUnit.SECONDS.toNanos(10))).isTrue();
         retry.reset();
         assertThat(retry.hasFailure()).isFalse();
         assertThat(retry.remainingDelayNanos()).isZero();
-        assertThat(retry.shouldReleaseResources(TimeUnit.SECONDS.toNanos(10))).isFalse();
+        assertThat(retry.shouldYieldPayload(TimeUnit.SECONDS.toNanos(10))).isFalse();
     }
 }

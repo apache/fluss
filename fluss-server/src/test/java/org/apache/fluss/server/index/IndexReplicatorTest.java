@@ -877,7 +877,7 @@ class IndexReplicatorTest {
                         () -> {})) {
             scheduler.register(0, replicator);
             assertThatThrownBy(replicator::poll).isInstanceOf(AssertionError.class);
-            assertThat(replicator.pollServiced()).isTrue();
+            assertThat(replicator.hasAttemptedWork()).isTrue();
             assertThat(buffer.pendingBytes()).isEqualTo(4096L);
             assertThat(buffer.buckets()).containsExactly(new TableBucket(2L, 0));
             acknowledge(buffer, new TableBucket(2L, 0));

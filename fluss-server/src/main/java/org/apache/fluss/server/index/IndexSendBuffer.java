@@ -286,11 +286,12 @@ public final class IndexSendBuffer {
     }
 
     /**
-     * Returns {@code true} once the total pending retained bytes reach the configured bound. The
-     * read layer consults this before deriving a new window so derivation cannot outrun the send
-     * layer.
+     * Returns whether retained payload has reached the node-wide budget. If full, requests a
+     * capacity-release notification through the shared listener; repeated requests coalesce.
+     *
+     * <p>Does not block or reserve capacity. A false result does not cancel an earlier request.
      */
-    public boolean isFull() {
+    public boolean requestCapacityWakeupIfFull() {
         boolean full = pendingBytes.get() >= maxTotalPendingBytes;
         if (full) {
             waitingForCapacity.set(true);

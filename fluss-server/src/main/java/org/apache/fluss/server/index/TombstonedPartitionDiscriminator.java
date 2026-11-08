@@ -141,7 +141,7 @@ final class TombstonedPartitionDiscriminator {
     }
 
     private PartitionTombstone currentTombstone() {
-        return metadataCache.getPartitionTombstone(mainTableId);
+        return metadataCache.getPartitionTombstoneOrEmpty(mainTableId);
     }
 
     private static long[] toLongArray(Set<Long> values) {

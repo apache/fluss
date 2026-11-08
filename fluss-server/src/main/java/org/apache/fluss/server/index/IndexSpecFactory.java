@@ -64,7 +64,7 @@ import static org.apache.fluss.utils.Preconditions.checkArgument;
  * invocation.
  */
 @Internal
-public final class IndexSpecFactory {
+final class IndexSpecFactory {
 
     private IndexSpecFactory() {}
 
@@ -77,7 +77,7 @@ public final class IndexSpecFactory {
      *     counts
      * @return an unmodifiable list of specs; empty if the main table has no indexes
      */
-    public static List<IndexSpec> buildIndexSpecs(
+    static List<IndexSpec> buildIndexSpecs(
             TableInfo mainTableInfo,
             TableBucket mainTableBucket,
             TabletServerMetadataCache metadataCache) {
@@ -127,10 +127,10 @@ public final class IndexSpecFactory {
                 composeIndexValueColumnIndices(idxColumnIndices, basePkColumnIndices);
 
         String indexName = index.getIndexName();
-        ResolvedIndexTable indexTable = resolveIndexTable(mainTableInfo, index, metadataCache);
-        long indexTableId = indexTable.tableId;
-        int indexBucketCount = indexTable.bucketCount;
-        int indexSchemaId = indexTable.schemaId;
+        TableInfo indexTable = resolveIndexTable(mainTableInfo, index, metadataCache);
+        long indexTableId = indexTable.getTableId();
+        int indexBucketCount = indexTable.getNumBuckets();
+        int indexSchemaId = indexTable.getSchemaId();
 
         CompactedKeyEncoder logicalIndexKeyEncoder =
                 new CompactedKeyEncoder(mainRowType, idxColumnIndices);
@@ -310,7 +310,7 @@ public final class IndexSpecFactory {
                         mainTableInfo.getTablePath().getTableName(), indexName));
     }
 
-    private static ResolvedIndexTable resolveIndexTable(
+    private static TableInfo resolveIndexTable(
             TableInfo mainTableInfo, Schema.Index index, TabletServerMetadataCache metadataCache) {
         TablePath path = indexTablePathFor(mainTableInfo, index.getIndexName());
         long cachedTableId =
@@ -337,10 +337,7 @@ public final class IndexSpecFactory {
                             + indexTableInfo.getTableId());
         }
         validateIndexTable(mainTableInfo, index, path, indexTableInfo);
-        return new ResolvedIndexTable(
-                indexTableInfo.getTableId(),
-                indexTableInfo.getNumBuckets(),
-                indexTableInfo.getSchemaId());
+        return indexTableInfo;
     }
 
     private static void validateIndexTable(
@@ -427,17 +424,5 @@ public final class IndexSpecFactory {
     private static IllegalStateException invalidMetadata(TablePath path, String detail) {
         return new IllegalStateException(
                 "Invalid metadata for Index Table " + path + ": expected " + detail);
-    }
-
-    private static final class ResolvedIndexTable {
-        private final long tableId;
-        private final int bucketCount;
-        private final int schemaId;
-
-        private ResolvedIndexTable(long tableId, int bucketCount, int schemaId) {
-            this.tableId = tableId;
-            this.bucketCount = bucketCount;
-            this.schemaId = schemaId;
-        }
     }
 }

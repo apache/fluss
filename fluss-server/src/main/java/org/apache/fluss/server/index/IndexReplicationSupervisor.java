@@ -118,14 +118,14 @@ public final class IndexReplicationSupervisor {
      * @param schemaGetter the schema getter for the table
      * @param onProgress callback fired after each window completes with sync/all index progress;
      *     typically wired to {@code Replica::advanceIndexProgress}
-     * @param initialOffset the non-negative exclusive next source WAL offset restored by the owning
-     *     replica when the table has secondary indexes; ignored when it has none
+     * @param replayStartOffset the non-negative exclusive next source WAL offset restored by the
+     *     owning replica when the table has secondary indexes; ignored when it has none
      */
     public void onBecomeLeader(
             LogTablet logTablet,
             SchemaGetter schemaGetter,
             IndexProgressListener onProgress,
-            long initialOffset) {
+            long replayStartOffset) {
         prepareForLeader();
 
         // Start IndexReplicator for main tables with secondary indexes
@@ -134,7 +134,7 @@ public final class IndexReplicationSupervisor {
             return;
         }
 
-        maybeStartIndexReplicator(logTablet, schemaGetter, indexes, onProgress, initialOffset);
+        maybeStartIndexReplicator(logTablet, schemaGetter, indexes, onProgress, replayStartOffset);
     }
 
     /** Called when the replica becomes follower. Stops the index replicator if running. */
@@ -150,7 +150,7 @@ public final class IndexReplicationSupervisor {
             LogTablet logTablet,
             SchemaGetter schemaGetter,
             IndexProgressListener onProgress,
-            long initialOffset) {
+            long replayStartOffset) {
         if (state != State.DEFERRED) {
             return;
         }
@@ -158,7 +158,7 @@ public final class IndexReplicationSupervisor {
         if (indexes.isEmpty()) {
             return;
         }
-        maybeStartIndexReplicator(logTablet, schemaGetter, indexes, onProgress, initialOffset);
+        maybeStartIndexReplicator(logTablet, schemaGetter, indexes, onProgress, replayStartOffset);
     }
 
     /** Called when the replica is being deleted. */
@@ -209,7 +209,7 @@ public final class IndexReplicationSupervisor {
             SchemaGetter schemaGetter,
             List<Schema.Index> indexes,
             IndexProgressListener onProgress,
-            long initialOffset) {
+            long replayStartOffset) {
         List<TablePath> indexTablePaths = new ArrayList<>(indexes.size());
         for (Schema.Index index : indexes) {
             indexTablePaths.add(
@@ -242,7 +242,7 @@ public final class IndexReplicationSupervisor {
                         tableInfo, false, SchemaResolution.DYNAMIC, null, schemaGetter, null);
         IndexReplicator replicator =
                 manager.createReplicator(
-                        logTablet, indexSpecs, readContext, initialOffset, onProgress);
+                        logTablet, indexSpecs, readContext, replayStartOffset, onProgress);
         // Register with the read pool; the pool worker will catch up on any WAL entries already
         // committed before this replicator was created.
         installIndexReplicator(replicator);
