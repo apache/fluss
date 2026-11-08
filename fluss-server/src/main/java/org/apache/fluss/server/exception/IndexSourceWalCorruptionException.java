@@ -15,18 +15,21 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.server.index;
+package org.apache.fluss.server.exception;
+
+import org.apache.fluss.annotation.Internal;
 
 /** Raised when source WAL cannot prove a contiguous range of complete FULL changelog mutations. */
-final class IndexSourceWalCorruptionException extends RuntimeException {
+@Internal
+public final class IndexSourceWalCorruptionException extends RuntimeException {
 
     private static final long serialVersionUID = 1L;
 
-    IndexSourceWalCorruptionException(String message) {
+    public IndexSourceWalCorruptionException(String message) {
         super(message);
     }
 
-    IndexSourceWalCorruptionException(String message, Throwable cause) {
+    public IndexSourceWalCorruptionException(String message, Throwable cause) {
         super(message, cause);
     }
 }

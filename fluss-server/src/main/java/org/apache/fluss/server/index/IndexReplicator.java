@@ -34,6 +34,7 @@ import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.bytesview.BytesView;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.server.exception.IndexSourceWalCorruptionException;
 import org.apache.fluss.server.index.IndexReplicationSupervisor.IndexProgressListener;
 import org.apache.fluss.server.index.IndexRequestFactory.SizeAccumulator;
 import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;

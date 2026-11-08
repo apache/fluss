@@ -59,7 +59,7 @@ import static org.apache.fluss.server.zk.data.LeaderAndIsr.INITIAL_LEADER_EPOCH;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Tests leader recovery from index progress and rejection of unusable snapshots. */
-class IndexLeaderFailStopTest extends ReplicaTestBase {
+class IndexLeaderRecoveryTest extends ReplicaTestBase {
 
     private static final long INDEXED_TABLE_ID = 710001L;
     private static final long PLAIN_TABLE_ID = 710002L;

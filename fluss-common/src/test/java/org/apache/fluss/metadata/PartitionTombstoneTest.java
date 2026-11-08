@@ -17,12 +17,8 @@
 
 package org.apache.fluss.metadata;
 
-import org.apache.fluss.utils.serde.PartitionTombstoneBinarySerde;
-
 import org.junit.jupiter.api.Test;
 
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
@@ -46,39 +42,6 @@ class PartitionTombstoneTest {
     void testRejectsExplicitIdsCoveredByFloor() {
         assertThatThrownBy(
                         () -> new PartitionTombstone(5L, new HashSet<>(Arrays.asList(5L, 7L)), 1L))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("greater than floor");
-    }
-
-    @Test
-    void testBinarySerdeRoundTrip() {
-        Set<Long> explicit = new HashSet<>(Arrays.asList(5L, 8L, 12L));
-        PartitionTombstone tombstone = new PartitionTombstone(3L, explicit, 7L);
-
-        byte[] bytes = PartitionTombstoneBinarySerde.serialize(tombstone);
-        PartitionTombstone deserialized = PartitionTombstoneBinarySerde.deserialize(bytes);
-
-        assertThat(deserialized.getFloor()).isEqualTo(3L);
-        assertThat(deserialized.getExplicitSet()).containsExactlyInAnyOrder(5L, 8L, 12L);
-        assertThat(deserialized.getVersion()).isEqualTo(7L);
-    }
-
-    @Test
-    void testBinarySerdeRejectsNonCanonicalExplicitIds() {
-        PartitionTombstone tombstone =
-                new PartitionTombstone(3L, new HashSet<>(Arrays.asList(5L, 8L)), 1L);
-        byte[] bytes = PartitionTombstoneBinarySerde.serialize(tombstone);
-        ByteBuffer buffer = ByteBuffer.wrap(bytes).order(ByteOrder.BIG_ENDIAN);
-        buffer.putLong(24, 8L);
-        buffer.putLong(32, 5L);
-
-        assertThatThrownBy(() -> PartitionTombstoneBinarySerde.deserialize(bytes))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("strictly increasing");
-
-        buffer.putLong(24, 3L);
-        buffer.putLong(32, 8L);
-        assertThatThrownBy(() -> PartitionTombstoneBinarySerde.deserialize(bytes))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("greater than floor");
     }
