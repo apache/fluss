@@ -177,12 +177,7 @@ class FlussAdminSecondaryIndexITCase extends ClientToServerITCaseBase {
                         .column("age", DataTypes.INT())
                         .column("region", DataTypes.STRING())
                         .primaryKey("id", "region")
-                        .index(
-                                "name_idx",
-                                IndexType.SECONDARY,
-                                Arrays.asList("name"),
-                                IndexVisibility.SYNC,
-                                3)
+                        .index("name_idx", "name")
                         .build();
 
         TableDescriptor descriptor =
@@ -254,12 +249,7 @@ class FlussAdminSecondaryIndexITCase extends ClientToServerITCaseBase {
                 Schema.newBuilder()
                         .column("id", DataTypes.INT())
                         .column("name", DataTypes.STRING())
-                        .index(
-                                "idx_name",
-                                IndexType.SECONDARY,
-                                Arrays.asList("name"),
-                                IndexVisibility.SYNC,
-                                1)
+                        .index("idx_name", "name")
                         .build();
         TableDescriptor descriptor =
                 TableDescriptor.builder().schema(schema).distributedBy(1, "id").build();
@@ -284,18 +274,8 @@ class FlussAdminSecondaryIndexITCase extends ClientToServerITCaseBase {
                         .column("name", DataTypes.STRING())
                         .column("age", DataTypes.INT())
                         .primaryKey("id")
-                        .index(
-                                "name_idx",
-                                IndexType.SECONDARY,
-                                Arrays.asList("name"),
-                                IndexVisibility.SYNC,
-                                3)
-                        .index(
-                                "age_idx",
-                                IndexType.SECONDARY,
-                                Arrays.asList("age"),
-                                IndexVisibility.SYNC,
-                                3)
+                        .index("name_idx", "name")
+                        .index("age_idx", "age")
                         .build();
 
         TableDescriptor descriptor =
@@ -377,12 +357,7 @@ class FlussAdminSecondaryIndexITCase extends ClientToServerITCaseBase {
                         .column("id", DataTypes.INT())
                         .column("name", DataTypes.STRING())
                         .primaryKey("id")
-                        .index(
-                                "idx_name",
-                                IndexType.SECONDARY,
-                                Arrays.asList("name"),
-                                IndexVisibility.SYNC,
-                                1)
+                        .index("idx_name", "name")
                         .build();
         TableDescriptor mainDescriptor =
                 TableDescriptor.builder().schema(mainSchema).distributedBy(1, "id").build();
@@ -442,12 +417,7 @@ class FlussAdminSecondaryIndexITCase extends ClientToServerITCaseBase {
                         .column("id", DataTypes.INT())
                         .column("name", DataTypes.STRING())
                         .primaryKey("id")
-                        .index(
-                                "idx_name",
-                                IndexType.SECONDARY,
-                                Arrays.asList("name"),
-                                IndexVisibility.SYNC,
-                                1)
+                        .index("idx_name", "name")
                         .build();
         return TableDescriptor.builder().schema(schema).distributedBy(1, "id").build();
     }

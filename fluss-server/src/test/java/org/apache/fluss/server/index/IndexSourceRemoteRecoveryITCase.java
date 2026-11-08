@@ -547,19 +547,14 @@ class IndexSourceRemoteRecoveryITCase {
         }
     }
 
-    private static void reportCleanupFailures(
-            @Nullable Throwable primaryFailure, List<Throwable> cleanupFailures) {
+    private static void reportCleanupFailures(List<Throwable> cleanupFailures) {
         if (cleanupFailures.isEmpty()) {
             return;
         }
         AssertionError cleanupFailure =
                 new AssertionError("source remote-recovery IT cleanup failed");
         cleanupFailures.forEach(cleanupFailure::addSuppressed);
-        if (primaryFailure != null) {
-            primaryFailure.addSuppressed(cleanupFailure);
-        } else {
-            throw cleanupFailure;
-        }
+        throw cleanupFailure;
     }
 
     @FunctionalInterface
@@ -655,7 +650,7 @@ class IndexSourceRemoteRecoveryITCase {
                 cleanup(failures, () -> startAndUntrack(stoppedServer, stoppedServers));
             }
             cleanup(failures, () -> CLUSTER.assertHasTabletServerNumber(TABLET_SERVER_COUNT));
-            reportCleanupFailures(null, failures);
+            reportCleanupFailures(failures);
         }
     }
 }

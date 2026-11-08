@@ -23,6 +23,7 @@ import org.apache.fluss.client.lookup.Lookuper;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.flink.utils.FlinkUtils;
 import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.shaded.guava32.com.google.common.primitives.Ints;
 import org.apache.fluss.utils.ArrayUtils;
 
 import org.apache.flink.table.api.TableException;
@@ -444,12 +445,7 @@ public class LookupNormalizer implements Serializable {
         if (current == null || candidate.length != current.length) {
             return current == null || candidate.length > current.length;
         }
-        for (int i = 0; i < candidate.length; i++) {
-            if (candidate[i] != current[i]) {
-                return candidate[i] < current[i];
-            }
-        }
-        return false;
+        return Ints.lexicographicalComparator().compare(candidate, current) < 0;
     }
 
     static String findMatchingSecondaryIndexName(Schema schema, List<String> lookupColumns) {

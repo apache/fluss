@@ -849,7 +849,7 @@ public class FlinkConversions {
 
         byName.forEach(
                 (indexName, indexOptions) -> {
-                    if (!indexOptions.columnsDefined || indexOptions.columns.isEmpty()) {
+                    if (indexOptions.columns.isEmpty()) {
                         throw new CatalogException(
                                 "Secondary index '"
                                         + indexName
@@ -886,13 +886,11 @@ public class FlinkConversions {
 
     private static final class SecondaryIndexOptions {
         private List<String> columns = Collections.emptyList();
-        private boolean columnsDefined;
         private IndexVisibility visibility = IndexVisibility.SYNC;
         private @Nullable Integer bucketCount;
 
         private void set(String suffix, String value) {
             if (SECONDARY_INDEX_COLUMNS_SUFFIX.equals(suffix)) {
-                columnsDefined = true;
                 columns = SecondaryIndexColumnNames.decode(value);
             } else if (SECONDARY_INDEX_VISIBILITY_SUFFIX.equals(suffix)) {
                 visibility = IndexVisibility.valueOf(value.trim().toUpperCase(Locale.ROOT));

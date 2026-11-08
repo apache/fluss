@@ -29,8 +29,7 @@ import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.row.compacted.CompactedRow;
 import org.apache.fluss.row.compacted.CompactedRowWriter;
-import org.apache.fluss.server.log.FetchDataInfo;
-import org.apache.fluss.server.log.FetchIsolation;
+import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
@@ -39,12 +38,9 @@ import org.apache.fluss.utils.clock.ManualClock;
 
 import org.junit.jupiter.api.Test;
 
-import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Queue;
-import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -65,7 +61,8 @@ class IndexReplicationSchedulerTest {
         IndexReplicationScheduler scheduler = new IndexReplicationScheduler(1);
         IndexSendBuffer buffer = new IndexSendBuffer();
         ManualClock clock = new ManualClock();
-        QueuedExecutor io = new QueuedExecutor();
+        ManuallyTriggeredScheduledExecutorService io =
+                new ManuallyTriggeredScheduledExecutorService();
         try (Source first =
                         new Source(
                                 scheduler,
@@ -106,21 +103,21 @@ class IndexReplicationSchedulerTest {
             assertThat(second.replicator.poll()).isFalse();
             assertThat(third.replicator.poll()).isFalse();
             assertThat(otherTable.replicator.poll()).isFalse();
-            assertThat(io.queued).hasSize(1);
+            assertThat(io.numQueuedRunnables()).isEqualTo(1);
             // Cancelling a read gives its slot to the next source, not to a fresh arrival.
             first.close();
-            io.runNext();
+            io.trigger();
             assertThat(second.replicator.poll()).isTrue();
             assertThat(third.replicator.poll()).isFalse();
-            io.runNext();
+            io.trigger();
             assertThat(second.replicator.poll()).isTrue();
             // The next table gets a turn before the remaining source in the larger table.
             assertThat(third.replicator.poll()).isFalse();
             assertThat(otherTable.replicator.poll()).isTrue();
-            io.runNext();
+            io.trigger();
             assertThat(otherTable.replicator.poll()).isTrue();
             assertThat(third.replicator.poll()).isTrue();
-            io.runNext();
+            io.trigger();
             assertThat(third.replicator.poll()).isTrue();
             drain(buffer);
             assertThat(second.replicator.getAllIndexPushedOffset()).isEqualTo(2L);
@@ -136,7 +133,8 @@ class IndexReplicationSchedulerTest {
         IndexReplicationScheduler scheduler = new IndexReplicationScheduler(1);
         IndexSendBuffer buffer = new IndexSendBuffer(8192);
         ManualClock clock = new ManualClock();
-        QueuedExecutor io = new QueuedExecutor();
+        ManuallyTriggeredScheduledExecutorService io =
+                new ManuallyTriggeredScheduledExecutorService();
         try (IndexSendBuffer.Reservation blocker = buffer.newReservation();
                 Source owner =
                         new Source(
@@ -158,18 +156,18 @@ class IndexReplicationSchedulerTest {
                                 spec("b", 11L))) {
             assertThat(owner.replicator.poll()).isTrue();
             blocker.allocatePage(8192);
-            io.runNext();
+            io.trigger();
             assertThat(owner.replicator.poll()).isTrue();
             assertThat(owner.replicator.hasPendingRead()).isFalse();
             assertThat(other.replicator.poll()).isFalse();
             blocker.close();
             clock.advanceTime(50, TimeUnit.MILLISECONDS);
             assertThat(owner.replicator.poll()).isTrue();
-            io.runNext();
+            io.trigger();
             assertThat(owner.replicator.poll()).isTrue();
             // Input closes at publication; the slot is not held until the network ACK.
             assertThat(other.replicator.poll()).isTrue();
-            io.runNext();
+            io.trigger();
             acknowledge(buffer, 10L, 0);
             assertThat(other.replicator.poll()).isTrue();
             acknowledge(buffer, 11L, 0);
@@ -339,7 +337,8 @@ class IndexReplicationSchedulerTest {
         IndexReplicationScheduler scheduler = new IndexReplicationScheduler(8);
         IndexSendBuffer buffer = new IndexSendBuffer(8192);
         ManualClock clock = new ManualClock();
-        QueuedExecutor io = new QueuedExecutor();
+        ManuallyTriggeredScheduledExecutorService io =
+                new ManuallyTriggeredScheduledExecutorService();
         try (IndexSendBuffer.Reservation blocker = buffer.newReservation();
                 Source first =
                         new Source(
@@ -416,7 +415,8 @@ class IndexReplicationSchedulerTest {
         IndexReplicationScheduler scheduler = new IndexReplicationScheduler(8);
         IndexSendBuffer buffer = new IndexSendBuffer(4096);
         ManualClock clock = new ManualClock();
-        QueuedExecutor io = new QueuedExecutor();
+        ManuallyTriggeredScheduledExecutorService io =
+                new ManuallyTriggeredScheduledExecutorService();
         AtomicBoolean activateOwner = new AtomicBoolean(true);
         IndexSpec delegate = spec("a0", 10L);
         try (IndexSendBuffer.Reservation blocker = buffer.newReservation();
@@ -490,7 +490,7 @@ class IndexReplicationSchedulerTest {
             assertThat(owner.replicator.poll()).isTrue();
             blocker.allocatePage(4096);
             for (Source source : Arrays.asList(first, sameTable, second, owner)) {
-                io.runNext();
+                io.trigger();
                 assertThat(source.replicator.poll()).isTrue();
             }
             assertThat(buffer.pendingBytes()).isEqualTo(4096L);
@@ -500,11 +500,11 @@ class IndexReplicationSchedulerTest {
             assertThat(first.replicator.poll()).isTrue();
             assertThat(sameTable.replicator.poll()).isTrue();
             assertThat(second.replicator.poll()).isTrue();
-            io.runNext();
+            io.trigger();
             assertThat(scheduler.pollWorker(3)).isFalse();
-            io.runNext();
-            io.runNext();
-            io.runNext();
+            io.trigger();
+            io.trigger();
+            io.trigger();
             assertThat(first.replicator.poll()).isTrue();
             assertThat(activateOwner).isFalse();
             acknowledge(buffer, 10L, 0);
@@ -528,7 +528,8 @@ class IndexReplicationSchedulerTest {
         IndexReplicationScheduler scheduler = new IndexReplicationScheduler(8);
         IndexSendBuffer buffer = new IndexSendBuffer(8192);
         ManualClock clock = new ManualClock();
-        QueuedExecutor io = new QueuedExecutor();
+        ManuallyTriggeredScheduledExecutorService io =
+                new ManuallyTriggeredScheduledExecutorService();
         AtomicBoolean fail = new AtomicBoolean();
         IndexSpec delegate = fanout("owner", 10L);
         IndexSpec owner =
@@ -568,7 +569,7 @@ class IndexReplicationSchedulerTest {
             assertThat(other.replicator.poll()).isTrue();
             acknowledge(buffer, 11L, 0);
             blocker.close();
-            io.runNext();
+            io.trigger();
             fail.set(true);
             assertThat(scheduler.pollWorker(0)).isTrue();
             assertThat(buffer.pendingBytes()).isZero();
@@ -598,9 +599,10 @@ class IndexReplicationSchedulerTest {
         }
     }
 
-    private static void submitAndComplete(Source source, QueuedExecutor io) {
+    private static void submitAndComplete(
+            Source source, ManuallyTriggeredScheduledExecutorService io) {
         assertThat(source.replicator.poll()).isTrue();
-        io.runNext();
+        io.trigger();
     }
 
     private static IndexSpec spec(String name, long tableId) {
@@ -657,20 +659,6 @@ class IndexReplicationSchedulerTest {
         }
     }
 
-    private static final class QueuedExecutor implements Executor {
-        private final Queue<Runnable> queued = new ArrayDeque<>();
-
-        @Override
-        public void execute(Runnable runnable) {
-            queued.add(runnable);
-        }
-
-        private void runNext() {
-            assertThat(queued).isNotEmpty();
-            queued.remove().run();
-        }
-    }
-
     private static final class Source implements AutoCloseable {
         private final IndexReplicationScheduler scheduler;
         private final int worker;
@@ -695,7 +683,7 @@ class IndexReplicationSchedulerTest {
                 TableBucket bucket,
                 IndexSendBuffer buffer,
                 ManualClock clock,
-                QueuedExecutor remote,
+                ManuallyTriggeredScheduledExecutorService remote,
                 IndexSpec... specs)
                 throws Exception {
             this.scheduler = scheduler;
@@ -732,37 +720,12 @@ class IndexReplicationSchedulerTest {
                         }
                     };
             IndexSourceReader.SourceLog log =
-                    new IndexSourceReader.SourceLog() {
-                        @Override
-                        public TableBucket tableBucket() {
-                            return bucket;
-                        }
-
-                        @Override
-                        public long highWatermark() {
-                            return highWatermark.get();
-                        }
-
-                        @Override
-                        public long logStartOffset() {
-                            return 0L;
-                        }
-
-                        @Override
-                        public long localLogStartOffset() {
-                            return remote == null ? 0L : 16L;
-                        }
-
-                        @Override
-                        public FetchDataInfo read(
-                                long offset,
-                                int maxBytes,
-                                FetchIsolation isolation,
-                                boolean minOneMessage) {
-                            reads.incrementAndGet();
-                            return new FetchDataInfo(records);
-                        }
-                    };
+                    new TestingIndexSourceLog(
+                            bucket,
+                            highWatermark::get,
+                            remote == null ? 0L : 16L,
+                            ignored -> records,
+                            reads);
             Supplier<IndexSourceReader.RemoteFetcher> remoteFactory =
                     remote == null
                             ? null

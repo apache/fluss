@@ -116,44 +116,50 @@ class IndexPushReplicationITCase {
     @Test
     void testIndexMutationLifecycle() throws Exception {
         String mainName = "main_t_mutations";
-        Fixture f = setupTables(mainName, /* visibility */ null);
+        TestingIndexTable f = setupTables(mainName);
+        TableBucket source = new TableBucket(f.mainTableId, 0);
+        Replica mainLeader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(source);
+        TabletServerGateway mainGateway =
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(
+                        FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(source));
+        IndexSpec indexSpec = f.indexSpec(source);
 
         // (1) Insert (a=1, b="hello"); wait for the index entry to land.
-        f.mainGateway
+        mainGateway
                 .putKv(
                         newPutKvRequest(
                                 f.mainTableId, 0, 1, genKvRecordBatch(new Object[] {1, "hello"})))
                 .get();
-        byte[] oldIndexKey = encodeIndexKey(f.indexSpec, "hello", 1);
-        assertIndexEntry(f.indexTableId, oldIndexKey, targetBucket(f.indexSpec, "hello", 1), true);
-        assertThat(f.mainLeaderReplica.getSyncIndexPushedOffset()).isEqualTo(1L);
+        byte[] oldIndexKey = encodeIndexKey(indexSpec, "hello", 1);
+        assertIndexEntry(f.indexTableId, oldIndexKey, targetBucket(indexSpec, "hello", 1), true);
+        assertThat(mainLeader.getSyncIndexPushedOffset()).isEqualTo(1L);
 
         // (2) Update the same PK row with a different idx column value.
-        f.mainGateway
+        mainGateway
                 .putKv(
                         newPutKvRequest(
                                 f.mainTableId, 0, 1, genKvRecordBatch(new Object[] {1, "world"})))
                 .get();
 
         // (3) The old composite key disappears, the new one appears.
-        byte[] newIndexKey = encodeIndexKey(f.indexSpec, "world", 1);
-        assertIndexEntry(f.indexTableId, newIndexKey, targetBucket(f.indexSpec, "world", 1), true);
-        assertIndexEntry(f.indexTableId, oldIndexKey, targetBucket(f.indexSpec, "hello", 1), false);
+        byte[] newIndexKey = encodeIndexKey(indexSpec, "world", 1);
+        assertIndexEntry(f.indexTableId, newIndexKey, targetBucket(indexSpec, "world", 1), true);
+        assertIndexEntry(f.indexTableId, oldIndexKey, targetBucket(indexSpec, "hello", 1), false);
 
-        f.mainGateway
+        mainGateway
                 .putKv(
                         newPutKvRequest(
                                 f.mainTableId, 0, 1, genKvRecordBatch(new Object[] {1, null})))
                 .get();
-        assertIndexEntry(f.indexTableId, newIndexKey, targetBucket(f.indexSpec, "world", 1), false);
+        assertIndexEntry(f.indexTableId, newIndexKey, targetBucket(indexSpec, "world", 1), false);
 
-        f.mainGateway
+        mainGateway
                 .putKv(
                         newPutKvRequest(
                                 f.mainTableId, 0, 1, genKvRecordBatch(new Object[] {1, "hello"})))
                 .get();
-        assertIndexEntry(f.indexTableId, oldIndexKey, targetBucket(f.indexSpec, "hello", 1), true);
-        f.mainGateway
+        assertIndexEntry(f.indexTableId, oldIndexKey, targetBucket(indexSpec, "hello", 1), true);
+        mainGateway
                 .putKv(
                         newPutKvRequest(
                                 f.mainTableId,
@@ -163,10 +169,10 @@ class IndexPushReplicationITCase {
                                         Collections.singletonList(
                                                 Tuple2.of(new Object[] {1}, null)))))
                 .get();
-        assertIndexEntry(f.indexTableId, oldIndexKey, targetBucket(f.indexSpec, "hello", 1), false);
+        assertIndexEntry(f.indexTableId, oldIndexKey, targetBucket(indexSpec, "hello", 1), false);
 
-        long beforeEmptyBatch = f.mainLeaderReplica.getLocalLogEndOffset();
-        f.mainGateway
+        long beforeEmptyBatch = mainLeader.getLocalLogEndOffset();
+        mainGateway
                 .putKv(
                         newPutKvRequest(
                                 f.mainTableId,
@@ -176,7 +182,7 @@ class IndexPushReplicationITCase {
                                         Collections.singletonList(
                                                 Tuple2.of(new Object[] {404}, null)))))
                 .get(30, TimeUnit.SECONDS);
-        assertThat(f.mainLeaderReplica.getSyncIndexPushedOffset())
+        assertThat(mainLeader.getSyncIndexPushedOffset())
                 .as("empty WAL batches must advance index progress")
                 .isEqualTo(beforeEmptyBatch + 1);
     }
@@ -186,7 +192,7 @@ class IndexPushReplicationITCase {
     void testDropRecreatePartitionRejectsLateOldIndexWrites() throws Exception {
         String mainName = "main_t_partition_recreate";
         TablePath mainPath = TablePath.of(DB, mainName);
-        Fixture fixture = setupPartitionedTables(mainName);
+        TestingIndexTable fixture = setupPartitionedTables(mainName);
         createPartition(FLUSS_CLUSTER_EXTENSION, mainPath, partitionSpec(), false);
         long oldPartitionId =
                 FLUSS_CLUSTER_EXTENSION.waitUntilPartitionsCreated(mainPath, 1).get(PARTITION_NAME);
@@ -301,10 +307,15 @@ class IndexPushReplicationITCase {
     void testSchemaEvolutionKeepsIndexReplicationHealthy() throws Exception {
         String mainName = "main_t_schema_evolution";
         TablePath mainPath = TablePath.of(DB, mainName);
-        Fixture f = setupTables(mainName, /* visibility */ null);
+        TestingIndexTable f = setupTables(mainName);
+        TableBucket source = new TableBucket(f.mainTableId, 0);
+        TabletServerGateway mainGateway =
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(
+                        FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(source));
+        IndexSpec indexSpec = f.indexSpec(source);
 
         // (1) Write one batch under the original schema (id 1) and wait for the index entry.
-        f.mainGateway
+        mainGateway
                 .putKv(
                         newPutKvRequest(
                                 f.mainTableId,
@@ -314,8 +325,8 @@ class IndexPushReplicationITCase {
                 .get(30, TimeUnit.SECONDS);
         assertIndexEntry(
                 f.indexTableId,
-                encodeIndexKey(f.indexSpec, "before", 1),
-                targetBucket(f.indexSpec, "before", 1),
+                encodeIndexKey(indexSpec, "before", 1),
+                targetBucket(indexSpec, "before", 1),
                 true);
 
         // (2) ALTER TABLE ADD COLUMN at the last position — must be accepted for indexed tables.
@@ -359,7 +370,7 @@ class IndexPushReplicationITCase {
 
         // (4) Writes under the old schema id still replicate to the Index Table (mixed-schema WAL
         // decoding by record schema id).
-        f.mainGateway
+        mainGateway
                 .putKv(
                         newPutKvRequest(
                                 f.mainTableId,
@@ -369,8 +380,8 @@ class IndexPushReplicationITCase {
                 .get(30, TimeUnit.SECONDS);
         waitForIndexEntry(
                 f.indexTableId,
-                encodeIndexKey(f.indexSpec, "after", 2),
-                targetBucket(f.indexSpec, "after", 2),
+                encodeIndexKey(indexSpec, "after", 2),
+                targetBucket(indexSpec, "after", 2),
                 true);
     }
 
@@ -378,44 +389,12 @@ class IndexPushReplicationITCase {
     // Helpers
     // ---------------------------------------------------------------------------------------------
 
-    /** Per-scenario state: ids, paths, gateways, and the main-table leader replica handle. */
-    private static final class Fixture {
-        final long mainTableId;
-        final long indexTableId;
-        final Replica mainLeaderReplica;
-        final TabletServerGateway mainGateway;
-        @Nullable final IndexSpec indexSpec;
-
-        Fixture(
-                long mainTableId,
-                long indexTableId,
-                Replica mainLeaderReplica,
-                TabletServerGateway mainGateway,
-                @Nullable IndexSpec indexSpec) {
-            this.mainTableId = mainTableId;
-            this.indexTableId = indexTableId;
-            this.mainLeaderReplica = mainLeaderReplica;
-            this.mainGateway = mainGateway;
-            this.indexSpec = indexSpec;
-        }
-    }
-
-    private static Fixture setupTables(String mainName, @Nullable IndexVisibility visibility)
-            throws Exception {
-        TestingIndexTable table =
-                new TestingIndexTable(
-                        FLUSS_CLUSTER_EXTENSION,
-                        TablePath.of(DB, mainName),
-                        buildMainTableDescriptor(visibility),
-                        INDEX_NAME);
-        TableBucket source = new TableBucket(table.mainTableId, 0);
-        int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(source);
-        return new Fixture(
-                table.mainTableId,
-                table.indexTableId,
-                FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(source),
-                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader),
-                table.indexSpec(source));
+    private static TestingIndexTable setupTables(String mainName) throws Exception {
+        return new TestingIndexTable(
+                FLUSS_CLUSTER_EXTENSION,
+                TablePath.of(DB, mainName),
+                TableDescriptor.builder().schema(buildMainSchema()).distributedBy(3, "a").build(),
+                INDEX_NAME);
     }
 
     /**
@@ -423,7 +402,7 @@ class IndexPushReplicationITCase {
      * __partition_id} system column and uses {@code KvFormat.COMPACTED}. Required for testing the
      * partition tombstone value filter which only installs on partitioned Index Tables.
      */
-    private static Fixture setupPartitionedTables(String mainName) throws Exception {
+    private static TestingIndexTable setupPartitionedTables(String mainName) throws Exception {
         TablePath mainPath = TablePath.of(DB, mainName);
 
         Schema partitionedSchema =
@@ -446,9 +425,7 @@ class IndexPushReplicationITCase {
                         .partitionedBy("p")
                         .build();
 
-        TestingIndexTable table =
-                new TestingIndexTable(FLUSS_CLUSTER_EXTENSION, mainPath, descriptor, INDEX_NAME);
-        return new Fixture(table.mainTableId, table.indexTableId, null, null, null);
+        return new TestingIndexTable(FLUSS_CLUSTER_EXTENSION, mainPath, descriptor, INDEX_NAME);
     }
 
     private static final int INDEX_BUCKET_COUNT = 3;
@@ -492,7 +469,7 @@ class IndexPushReplicationITCase {
         return replica.lookups(Collections.singletonList(key)).get(0) != null;
     }
 
-    private static Schema buildMainSchema(@Nullable IndexVisibility visibility) {
+    private static Schema buildMainSchema() {
         return Schema.newBuilder()
                 .column("a", DataTypes.INT())
                 .column("b", DataTypes.STRING())
@@ -501,15 +478,8 @@ class IndexPushReplicationITCase {
                         INDEX_NAME,
                         IndexType.SECONDARY,
                         Collections.singletonList("b"),
-                        visibility == null ? IndexVisibility.SYNC : visibility,
+                        IndexVisibility.SYNC,
                         3)
-                .build();
-    }
-
-    private static TableDescriptor buildMainTableDescriptor(@Nullable IndexVisibility visibility) {
-        return TableDescriptor.builder()
-                .schema(buildMainSchema(visibility))
-                .distributedBy(3, "a")
                 .build();
     }
 

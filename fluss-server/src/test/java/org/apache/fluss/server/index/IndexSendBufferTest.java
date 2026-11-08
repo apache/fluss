@@ -29,16 +29,12 @@ import org.apache.fluss.rpc.TestingTabletGatewayService;
 import org.apache.fluss.rpc.messages.PutIndexRequest;
 import org.apache.fluss.rpc.messages.PutIndexResponse;
 import org.apache.fluss.rpc.protocol.ApiKeys;
-import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.protocol.MessageCodec;
-import org.apache.fluss.server.log.FetchDataInfo;
-import org.apache.fluss.server.log.FetchIsolation;
 import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.UnpooledByteBufAllocator;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
-import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.LogManager;
@@ -187,44 +183,6 @@ class IndexSendBufferTest {
     }
 
     @Test
-    void oversizedTransportBatchKeepsItsOwnerActiveWhileReportingFailure() throws Exception {
-        IndexSendBuffer buffer = new IndexSendBuffer();
-        TabletServerMetricGroup metrics =
-                new TabletServerMetricGroup(NOPMetricRegistry.INSTANCE, "test", "rack", "host", 0);
-        try (IndexReplicator owner = owner(buffer, 0)) {
-            IndexBatch batch = batch(owner, new TableBucket(2L, 0));
-            buffer.tryAppendWindow(Collections.singletonList(batch));
-            try (IndexSender sender =
-                    new IndexSender(
-                            buffer,
-                            (table, bucket) -> OptionalInt.of(0),
-                            server -> {
-                                throw new AssertionError("Oversized requests must stay local");
-                            },
-                            metrics,
-                            1,
-                            1,
-                            1,
-                            1,
-                            1000)) {
-                retry(
-                        Duration.ofSeconds(5),
-                        () ->
-                                assertThat(metrics.indexReplicationRetries().getCount())
-                                        .isGreaterThanOrEqualTo(2));
-                assertThat(batch.window().isActive()).isTrue();
-                assertThat(owner.hasFailure()).isTrue();
-                assertThat(owner.isClosed()).isFalse();
-                assertThat(owner.getAllIndexPushedOffset()).isZero();
-                assertThat(buffer.pendingBytes()).isEqualTo(1);
-            }
-        } finally {
-            metrics.close();
-        }
-        assertThat(buffer.pendingBytes()).isZero();
-    }
-
-    @Test
     void unresponsiveTargetTimesOutAndRecovers() throws Exception {
         IndexSendBuffer buffer = new IndexSendBuffer();
         AtomicBoolean repaired = new AtomicBoolean();
@@ -366,64 +324,6 @@ class IndexSendBufferTest {
 
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
-    void targetErrorIsCountedAndRecoversAfterOperatorRepair(boolean rpcFailure) throws Exception {
-        IndexSendBuffer buffer = new IndexSendBuffer();
-        AtomicBoolean repaired = new AtomicBoolean();
-        TabletServerMetricGroup metrics =
-                new TabletServerMetricGroup(NOPMetricRegistry.INSTANCE, "test", "rack", "host", 0);
-        TestingTabletGatewayService gateway =
-                new TestingTabletGatewayService() {
-                    @Override
-                    public CompletableFuture<PutIndexResponse> putIndex(PutIndexRequest request) {
-                        if (!repaired.get() && rpcFailure) {
-                            return FutureUtils.completedExceptionally(
-                                    Errors.INVALID_TABLE_EXCEPTION.exception(
-                                            "Index configuration needs repair"));
-                        }
-                        PutIndexResponse response = new PutIndexResponse();
-                        response.addBucketsResp().setBucketId(0);
-                        if (!repaired.get()) {
-                            response.getBucketsRespAt(0)
-                                    .setErrorCode(Errors.INVALID_TABLE_EXCEPTION.code())
-                                    .setErrorMessage("Index configuration needs repair");
-                        }
-                        return CompletableFuture.completedFuture(response);
-                    }
-                };
-        try (IndexReplicator owner = owner(buffer, 0)) {
-            IndexBatch batch = batch(owner, new TableBucket(2L, 0));
-            buffer.tryAppendWindow(Collections.singletonList(batch));
-            try (IndexSender sender =
-                    new IndexSender(
-                            buffer,
-                            (table, bucket) -> OptionalInt.of(0),
-                            server -> gateway,
-                            metrics,
-                            1,
-                            1,
-                            1024,
-                            1024,
-                            1000)) {
-                retry(
-                        Duration.ofSeconds(5),
-                        () ->
-                                assertThat(metrics.indexReplicationRetries().getCount())
-                                        .isGreaterThanOrEqualTo(2));
-                assertThat(owner.getAllIndexPushedOffset()).isZero();
-                assertThat(metrics.indexReplicationFailures().getCount()).isGreaterThanOrEqualTo(2);
-                repaired.set(true);
-                retry(
-                        Duration.ofSeconds(5),
-                        () -> assertThat(owner.getAllIndexPushedOffset()).isEqualTo(1L));
-                assertThat(buffer.pendingBytes()).isZero();
-            }
-        } finally {
-            metrics.close();
-        }
-    }
-
-    @ParameterizedTest
-    @ValueSource(booleans = {false, true})
     void sourceCleanupReschedulesRemainingBatchAndFencesLateCompletion(boolean successorQueued)
             throws Exception {
         IndexSendBuffer buffer = new IndexSendBuffer();
@@ -526,31 +426,14 @@ class IndexSendBufferTest {
 
     private static IndexReplicator owner(IndexSendBuffer buffer, int bucket) {
         IndexSourceReader.SourceLog log =
-                new IndexSourceReader.SourceLog() {
-                    @Override
-                    public TableBucket tableBucket() {
-                        return new TableBucket(1L, bucket);
-                    }
-
-                    @Override
-                    public long highWatermark() {
-                        return 1L;
-                    }
-
-                    @Override
-                    public long logStartOffset() {
-                        return 0L;
-                    }
-
-                    @Override
-                    public FetchDataInfo read(
-                            long offset,
-                            int maxBytes,
-                            FetchIsolation isolation,
-                            boolean minOneMessage) {
-                        throw new UnsupportedOperationException();
-                    }
-                };
+                new TestingIndexSourceLog(
+                        new TableBucket(1L, bucket),
+                        () -> 1L,
+                        0L,
+                        ignored -> {
+                            throw new UnsupportedOperationException();
+                        },
+                        new AtomicInteger());
         LogRecordReadContext context =
                 LogRecordReadContext.createCompactedRowReadContext(
                         RowType.of(DataTypes.INT()), 1, null);

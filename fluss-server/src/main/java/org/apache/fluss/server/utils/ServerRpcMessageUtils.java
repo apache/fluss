@@ -215,6 +215,7 @@ import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.lake.LakeTable;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
+import org.apache.fluss.shaded.guava32.com.google.common.primitives.Longs;
 import org.apache.fluss.utils.ByteArraySlice;
 import org.apache.fluss.utils.json.DataTypeJsonSerde;
 import org.apache.fluss.utils.json.JsonSerdeUtils;
@@ -638,15 +639,7 @@ public class ServerRpcMessageUtils {
                         .setTableId(tableId)
                         .setFloor(tombstone.getFloor())
                         .setVersion(tombstone.getVersion());
-        Set<Long> explicitSet = tombstone.getExplicitSet();
-        if (!explicitSet.isEmpty()) {
-            long[] arr = new long[explicitSet.size()];
-            int i = 0;
-            for (Long v : explicitSet) {
-                arr[i++] = v;
-            }
-            pb.setExplicitSets(arr);
-        }
+        pb.setExplicitSets(Longs.toArray(tombstone.getExplicitSet()));
         return pb;
     }
 
