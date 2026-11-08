@@ -900,7 +900,7 @@ public class ReplicaManager implements ServerReconfigurable {
                 throw new InvalidPartitionException(
                         "Historical write request must target a historical partition.");
             }
-            validateClientVersionForPkTable(apiVersion, replica.getTableInfo());
+            validateClientVersionForPkTable(ApiKeys.PUT_KV, apiVersion, replica.getTableInfo());
 
             KvRecordBatch records = putData.records();
             checkArgument(
@@ -1099,7 +1099,7 @@ public class ReplicaManager implements ServerReconfigurable {
             TableBucket tb = entry.getKey();
             try {
                 Replica replica = getReplicaOrException(tb);
-                validateClientVersionForPkTable(apiVersion, replica.getTableInfo());
+                validateClientVersionForPkTable(ApiKeys.LOOKUP, apiVersion, replica.getTableInfo());
                 tableMetrics = replica.tableMetrics();
                 tableMetrics.totalLookupRequests().inc();
                 lookupResultForBucketMap.put(
@@ -1229,7 +1229,8 @@ public class ReplicaManager implements ServerReconfigurable {
             List<List<ByteArraySlice>> resultForBucket = new ArrayList<>();
             try {
                 Replica replica = getReplicaOrException(tb);
-                validateClientVersionForPkTable(apiVersion, replica.getTableInfo());
+                validateClientVersionForPkTable(
+                        ApiKeys.PREFIX_LOOKUP, apiVersion, replica.getTableInfo());
                 tableMetrics = replica.tableMetrics();
                 tableMetrics.totalPrefixLookupRequests().inc();
                 for (byte[] prefixKey : entry.getValue()) {
@@ -1698,7 +1699,7 @@ public class ReplicaManager implements ServerReconfigurable {
             try {
                 LOG.trace("Put records to local kv tablet for table bucket {}", tb);
                 Replica replica = getReplicaOrException(tb);
-                validateClientVersionForPkTable(apiVersion, replica.getTableInfo());
+                validateClientVersionForPkTable(ApiKeys.PUT_KV, apiVersion, replica.getTableInfo());
                 tableMetrics = replica.tableMetrics();
                 tableMetrics.totalPutKvRequests().inc();
                 LogAppendInfo appendInfo =
@@ -2749,7 +2750,19 @@ public class ReplicaManager implements ServerReconfigurable {
     }
 
     /** Validates whether a client API version can access this primary-key table. */
-    public static void validateClientVersionForPkTable(int apiVersion, TableInfo tableInfo) {
+    public static void validateClientVersionForPkTable(
+            ApiKeys apiKey, int apiVersion, TableInfo tableInfo) {
+        if (tableInfo.getTableConfig().getKvFormatVersion().orElse(1) == 3) {
+            int minimum = apiKey == ApiKeys.PUT_KV ? 4 : 2;
+            if (apiVersion < minimum) {
+                throw new UnsupportedVersionException(
+                        "Ordered KV format version 3 requires "
+                                + apiKey
+                                + " version "
+                                + minimum
+                                + " or newer.");
+            }
+        }
         if (apiVersion >= 1) {
             return;
         }

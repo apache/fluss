@@ -113,10 +113,10 @@ class PrefixLookupITCase {
         return lakeFormats()
                 .flatMap(
                         args ->
-                                Stream.of(1, 2)
+                                Stream.of(1, 2, 3)
                                         .filter(
                                                 v ->
-                                                        v == 2
+                                                        v >= 2
                                                                 || args.get()[1]
                                                                         != DataLakeFormat.ICEBERG)
                                         .map(v -> Arguments.of(args.get()[0], args.get()[1], v)));

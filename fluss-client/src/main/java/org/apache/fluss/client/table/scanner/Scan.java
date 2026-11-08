@@ -23,10 +23,12 @@ import org.apache.fluss.client.table.scanner.log.LogScanner;
 import org.apache.fluss.client.table.scanner.log.TypedLogScanner;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.predicate.Predicate;
+import org.apache.fluss.row.InternalRow;
 
 import javax.annotation.Nullable;
 
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -39,6 +41,35 @@ import java.util.List;
  */
 @PublicEvolving
 public interface Scan {
+
+    /**
+     * Returns a scan with named equality fields. Values supplied to the range scanner follow this
+     * order. Excluding partition columns, these fields must form a complete primary-key prefix
+     * containing all bucket fields. Range scans currently require KV format version 3.
+     */
+    default Scan equalBy(List<String> columnNames) {
+        throw new UnsupportedOperationException("Equality range configuration is not supported.");
+    }
+
+    /** Configures equality fields; see {@link #equalBy(List)}. */
+    default Scan equalBy(String... columnNames) {
+        return equalBy(Arrays.asList(columnNames));
+    }
+
+    /** Returns a scan whose range field immediately follows the equality primary-key prefix. */
+    default Scan rangeBy(String columnName) {
+        throw new UnsupportedOperationException("Range configuration is not supported.");
+    }
+
+    /**
+     * Creates a bounded scan of one routed bucket using equality values and a single-field range.
+     * Reads a fixed KV view opened on the server, without promising SQL output ordering. Input rows
+     * may be reused after this method returns. Missing partitions produce an empty scanner.
+     * Non-null filter configuration, log tables and unordered key formats are rejected.
+     */
+    default BatchScanner createBatchScanner(InternalRow equalityKey, ScanRange range) {
+        throw new UnsupportedOperationException("Range scans are not supported.");
+    }
 
     /**
      * Returns a new scan from this that will read the given data columns.

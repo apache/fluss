@@ -74,6 +74,7 @@ public final class OrderedKeyCodec {
 
     private final DataType[] types;
     private final InternalRow.FieldGetter[] getters;
+    private final int[] positions;
     private final int[] decimalWidths;
     private final int rowArity;
     private final ByteArrayOutputStream buffer = new ByteArrayOutputStream();
@@ -88,11 +89,13 @@ public final class OrderedKeyCodec {
         rowArity = rowType.getFieldCount();
         types = new DataType[keyFields.size()];
         getters = new InternalRow.FieldGetter[keyFields.size()];
+        positions = new int[keyFields.size()];
         decimalWidths = new int[keyFields.size()];
         for (int i = 0; i < types.length; i++) {
             int position = rowType.getFieldIndex(keyFields.get(i));
             checkArgument(position >= 0, "Unknown key field: %s", keyFields.get(i));
             types[i] = rowType.getTypeAt(position);
+            positions[i] = position;
             validateType(types[i]);
             if (types[i].getTypeRoot() == DataTypeRoot.DECIMAL) {
                 decimalWidths[i] = decimalWidth(types[i]);
@@ -108,6 +111,7 @@ public final class OrderedKeyCodec {
         buffer.reset();
         try {
             for (int i = 0; i < types.length; i++) {
+                checkArgument(!row.isNullAt(positions[i]), "Null key field at position %s.", i);
                 Object value = getters[i].getFieldOrNull(row);
                 checkArgument(value != null, "Null key field at position %s.", i);
                 writeField(types[i], value, decimalWidths[i]);

@@ -30,6 +30,7 @@ import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.CompactedKeyEncoder;
 import org.apache.fluss.row.encode.KeyEncoder;
+import org.apache.fluss.row.encode.OrderedKeyEncoder;
 import org.apache.fluss.types.RowType;
 
 import javax.annotation.Nullable;
@@ -87,18 +88,20 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
         DataLakeFormat lakeFormat = tableInfo.getTableConfig().getDataLakeFormat().orElse(null);
 
         List<String> bucketKeys = tableInfo.getBucketKeys();
-        // only the compacted encoding encodes every primary key prefix as a byte prefix of the key;
+        // Compacted and ordered encodings preserve every complete-field primary key prefix;
         // otherwise (e.g. Paimon on legacy tables) the keys after the bucket key are
         // client-filtered
-        boolean compactedKey =
+        KeyEncoder primaryEncoder =
                 KeyEncoder.ofPrimaryKeyEncoder(
-                                lookupRowType,
-                                bucketKeys,
-                                tableInfo.getTableConfig(),
-                                tableInfo.isDefaultBucketKey())
-                        instanceof CompactedKeyEncoder;
+                        lookupRowType,
+                        bucketKeys,
+                        tableInfo.getTableConfig(),
+                        tableInfo.isDefaultBucketKey());
+        boolean prefixPreserving =
+                primaryEncoder instanceof CompactedKeyEncoder
+                        || primaryEncoder instanceof OrderedKeyEncoder;
         List<String> clientFilterKeys =
-                compactedKey
+                prefixPreserving
                         ? Collections.emptyList()
                         : prefixKeys.subList(bucketKeys.size(), prefixKeys.size());
         prefixKeys = prefixKeys.subList(0, prefixKeys.size() - clientFilterKeys.size());
@@ -116,7 +119,9 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
 
         // the prefix key bytes can be reused for bucketing only if they encode just the bucket key
         this.bucketKeyEncoder =
-                lakeFormat == null && prefixKeys.equals(bucketKeys)
+                lakeFormat == null
+                                && prefixKeys.equals(bucketKeys)
+                                && !(this.prefixKeyEncoder instanceof OrderedKeyEncoder)
                         ? this.prefixKeyEncoder
                         : KeyEncoder.ofBucketKeyEncoder(lookupRowType, bucketKeys, lakeFormat);
 

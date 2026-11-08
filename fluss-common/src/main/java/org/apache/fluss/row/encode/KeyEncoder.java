@@ -57,6 +57,10 @@ public interface KeyEncoder {
      * CompactedKeyEncoder} which ensures the bucket key bytes encoded is always a prefix of the
      * primary key bytes encoded.
      *
+     * <p><b>Ordered Tables (kvFormatVersion = 3):</b> Uses {@link OrderedKeyEncoder} for
+     * order-preserving primary keys, regardless of lake format or default bucket keys. Bucket
+     * encoding remains independent so selecting ordered storage keys does not change routing.
+     *
      * <p><b>Optimization for Default Bucket Key:</b> Prefix lookup is only needed when the bucket
      * key is a subset of the primary key. If {@code isDefaultBucketKey} is true (bucket key equals
      * primary key), prefix lookup is not supported, so we can directly use the lake's encoder. This
@@ -79,6 +83,9 @@ public interface KeyEncoder {
         Optional<Integer> optKvFormatVersion = tableConfig.getKvFormatVersion();
         DataLakeFormat dataLakeFormat = tableConfig.getDataLakeFormat().orElse(null);
         int kvFormatVersion = optKvFormatVersion.orElse(1);
+        if (kvFormatVersion == 3) {
+            return OrderedKeyEncoder.createKeyEncoder(rowType, keyFields);
+        }
 
         // Hudi's HudiKeyEncoder is lossy (4-byte hash); it must NOT be used for
         // primary key encoding because different keys with the same List#hashCode
@@ -137,7 +144,9 @@ public interface KeyEncoder {
             boolean isDefaultBucketKey,
             KeyEncoder primaryKeyEncoder) {
         DataLakeFormat dataLakeFormat = tableConfig.getDataLakeFormat().orElse(null);
-        if (isDefaultBucketKey && dataLakeFormat != DataLakeFormat.HUDI) {
+        if (isDefaultBucketKey
+                && tableConfig.getKvFormatVersion().orElse(1) != 3
+                && dataLakeFormat != DataLakeFormat.HUDI) {
             return checkNotNull(primaryKeyEncoder, "Primary key encoder must not be null.");
         }
         return ofBucketKeyEncoder(rowType, keyFields, dataLakeFormat);
