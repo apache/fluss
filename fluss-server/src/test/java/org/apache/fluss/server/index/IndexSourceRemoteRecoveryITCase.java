@@ -210,7 +210,7 @@ class IndexSourceRemoteRecoveryITCase {
 
     private static IndexedSourceTable createIndexedSourceTable() throws Exception {
         String tableName = "source_remote_recovery_" + System.nanoTime();
-        TablePath mainPath = TablePath.of("task7", tableName);
+        TablePath mainPath = TablePath.of("index_remote_recovery", tableName);
         Schema schema =
                 Schema.newBuilder()
                         .column("a", DataTypes.INT())
@@ -233,7 +233,7 @@ class IndexSourceRemoteRecoveryITCase {
                                 .build());
         TablePath indexPath =
                 TablePath.of(
-                        "task7",
+                        "index_remote_recovery",
                         IndexTableUtils.indexTableName(mainPath.getTableName(), INDEX_NAME));
         long indexTableId =
                 CLUSTER.getZooKeeperClient()
