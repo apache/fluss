@@ -58,6 +58,7 @@ public class ConfigOptions {
     public static final String DEFAULT_LISTENER_NAME = "FLUSS";
 
     public static final int KV_FORMAT_VERSION_2 = 2;
+    public static final int KV_FORMAT_VERSION_3 = 3;
     public static final int CURRENT_KV_FORMAT_VERSION = KV_FORMAT_VERSION_2;
 
     @Internal
@@ -2029,7 +2030,9 @@ public class ConfigOptions {
                                     + "when bucket key differs from primary key, which ensures proper prefix lookup support. "
                                     + "When bucket key equals primary key (default bucket key), it still uses datalake's encoder "
                                     + "for optimization (encoded bytes can be reused for bucket calculation). "
-                                    + "Bucket key encoding always uses datalake's encoder to align with datalake bucket calculation.");
+                                    + "Bucket key encoding always uses datalake's encoder to align with datalake bucket calculation. "
+                                    + "(3) Version 3: Opt-in ordered primary keys support prefix lookup and range seek. "
+                                    + "Bucket routing retains the version 2 encoding. All clients and servers must support version 3.");
 
     /** The version of the physical KV value layout. */
     public static final ConfigOption<Integer> TABLE_KV_VALUE_LAYOUT_VERSION =

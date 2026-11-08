@@ -301,6 +301,9 @@ class OrderedKeyCodecTest {
 
     @Test
     void testRejectInvalidInput() {
+        assertThatThrownBy(() -> encode(DataTypes.INT().copy(false), null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Null key");
         for (DataType unsupported :
                 Arrays.asList(
                         DataTypes.FLOAT(),

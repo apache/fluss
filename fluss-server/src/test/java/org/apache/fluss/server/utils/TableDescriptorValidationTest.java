@@ -47,7 +47,6 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.stream.Stream;
 
-import static org.apache.fluss.config.ConfigOptions.KV_FORMAT_VERSION_2;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -278,18 +277,19 @@ class TableDescriptorValidationTest {
     }
 
     @Test
-    void testKvFormatVersionStillRejectsValuesAboveVersionTwo() {
+    void testRejectUnsupportedKvFormatVersion() {
         TableDescriptor descriptor =
                 pkTableWithProperty(
                         ConfigOptions.TABLE_KV_FORMAT_VERSION.key(),
-                        String.valueOf(KV_FORMAT_VERSION_2 + 1));
+                        String.valueOf(ConfigOptions.KV_FORMAT_VERSION_3 + 1));
 
         assertThatThrownBy(
                         () ->
                                 TableDescriptorValidation.validateTableDescriptor(
                                         descriptor, 100, null))
                 .isInstanceOf(InvalidConfigException.class)
-                .hasMessageContaining("maximum supported version is " + KV_FORMAT_VERSION_2);
+                .hasMessageContaining(
+                        "maximum supported version is " + ConfigOptions.KV_FORMAT_VERSION_3);
     }
 
     @ParameterizedTest(name = "layoutVersion={0}, rowTtl={1}, valid={2}")
@@ -490,6 +490,64 @@ class TableDescriptorValidationTest {
 
     private static void validate(TableDescriptor tableDescriptor, DataLakeFormat dataLakeFormat) {
         TableDescriptorValidation.validateTableDescriptor(tableDescriptor, 100, dataLakeFormat);
+    }
+
+    @Test
+    void testOrderedKeyFormatValidationAndClientVersions() {
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.INT())
+                                        .primaryKey("id")
+                                        .build())
+                        .distributedBy(1)
+                        .property(ConfigOptions.TABLE_KV_FORMAT_VERSION, 3)
+                        .property(ConfigOptions.TABLE_REPLICATION_FACTOR, 1)
+                        .build();
+        validate(descriptor, null);
+        TableInfo info =
+                TableInfo.of(
+                        TablePath.of("db", "ordered"), 1L, 1, descriptor, "/tmp/remote", 0L, 0L);
+        for (org.apache.fluss.rpc.protocol.ApiKeys api :
+                java.util.Arrays.asList(
+                        org.apache.fluss.rpc.protocol.ApiKeys.PUT_KV,
+                        org.apache.fluss.rpc.protocol.ApiKeys.LOOKUP,
+                        org.apache.fluss.rpc.protocol.ApiKeys.PREFIX_LOOKUP)) {
+            int minimum = api == org.apache.fluss.rpc.protocol.ApiKeys.PUT_KV ? 4 : 2;
+            org.apache.fluss.server.replica.ReplicaManager.validateClientVersionForPkTable(
+                    api, minimum, info);
+            assertThatThrownBy(
+                            () ->
+                                    org.apache.fluss.server.replica.ReplicaManager
+                                            .validateClientVersionForPkTable(
+                                                    api, minimum - 1, info))
+                    .isInstanceOf(org.apache.fluss.exception.UnsupportedVersionException.class);
+        }
+        TableDescriptor floatKey =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.FLOAT())
+                                        .primaryKey("id")
+                                        .build())
+                        .distributedBy(1)
+                        .property(ConfigOptions.TABLE_KV_FORMAT_VERSION, 3)
+                        .property(ConfigOptions.TABLE_REPLICATION_FACTOR, 1)
+                        .build();
+        assertThatThrownBy(() -> validate(floatKey, null))
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining("Unsupported");
+        TableDescriptor log =
+                TableDescriptor.builder()
+                        .schema(Schema.newBuilder().column("id", DataTypes.INT()).build())
+                        .distributedBy(1)
+                        .property(ConfigOptions.TABLE_KV_FORMAT_VERSION, 3)
+                        .property(ConfigOptions.TABLE_REPLICATION_FACTOR, 1)
+                        .build();
+        assertThatThrownBy(() -> validate(log, null))
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining("primary key");
     }
 
     private static TableDescriptor tableDescriptorWithLakeName(

@@ -382,6 +382,78 @@ The per-RPC payload size is controlled by
 further via `kv.scanner.max-batch-size`. Note that `BatchScanner` is not
 thread-safe — do not share an instance across threads.
 
+### Batch Scan — Primary Key Range
+
+Create a new primary-key table with `table.kv.format-version=3` to enable ordered
+keys. Version 2 remains the default; existing tables cannot change their key
+format in place. Upgrade all servers and clients before using version 3.
+Ordered keys support scalar types except FLOAT and DOUBLE; null and constructed
+key fields are rejected.
+
+```java
+Schema schema = Schema.newBuilder()
+        .column("group_id", DataTypes.INT())
+        .column("event_time", DataTypes.BIGINT())
+        .column("id", DataTypes.INT())
+        .column("amount", DataTypes.BIGINT())
+        .primaryKey("group_id", "event_time", "id")
+        .build();
+TableDescriptor descriptor = TableDescriptor.builder()
+        .schema(schema)
+        .distributedBy(8, "group_id")
+        .property(ConfigOptions.TABLE_KV_FORMAT_VERSION, 3)
+        .build();
+admin.createTable(tablePath, descriptor, false).get();
+
+try (Table table = connection.getTable(tablePath);
+        BatchScanner scanner = table.newScan()
+                .equalBy("group_id")
+                .rangeBy("event_time")
+                .project(Arrays.asList("id", "amount"))
+                .createBatchScanner(
+                        GenericRow.of(groupId),
+                        ScanRange.closedOpen(GenericRow.of(startMillis), GenericRow.of(endMillis)))) {
+    while (true) {
+        CloseableIterator<InternalRow> batch = scanner.pollBatch(Duration.ofSeconds(5));
+        if (batch == null) {
+            break;
+        }
+        try (CloseableIterator<InternalRow> rows = batch) {
+            while (rows.hasNext()) {
+                InternalRow row = rows.next();
+                // Process the projected row.
+            }
+        }
+    }
+}
+```
+
+Equality columns must identify a complete physical primary-key prefix, including
+all bucket fields, and the range column must immediately follow that prefix.
+For partitioned tables, include every partition field in `equalBy` and supply its
+value. Equality values follow the declared `equalBy` order; each finite range
+endpoint is a one-field row. Endpoint rows must remain unchanged until scanner
+creation returns.
+
+`ScanRange` supports closed, open, closed-open and open-closed intervals, as well
+as `atLeast`, `greaterThan`, `atMost` and `lessThan` single-sided bounds. A reversed
+interval is invalid; equal endpoints produce either a singleton-value interval
+or an empty interval depending on inclusivity. An absent partition returns no
+rows.
+
+The scanner routes to one bucket, seeks to the physical lower bound and stops at
+the exclusive upper bound. It does not fall back to reading the whole prefix or
+table when no supported path exists. Projection and `limit` are supported;
+`limit` caps returned rows and does not mean earliest/latest rows. The existing
+`filter` option cannot be combined with range scans.
+
+The server fixes the KV view when opening the scan. Later writes are invisible
+to that scanner. Result ordering is not a SQL `ORDER BY` guarantee. A lost scan
+session fails rather than silently reopening a different view. Range
+configuration is not supported by log scanners or the other batch-scanner
+factory overloads. This Java interface uses the primary-key path; it does not
+automatically push Flink SQL conditions into range scans.
+
 ### Lookup
 You can also use the Fluss API to perform lookups on a table. This is useful for querying specific records based on their primary key or prefix key.
 ```java

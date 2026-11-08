@@ -77,7 +77,9 @@ import io.github.fluss_contrib.rocksdb.AbstractCompactionFilterFactory;
 import io.github.fluss_contrib.rocksdb.Cache;
 import io.github.fluss_contrib.rocksdb.RateLimiter;
 import io.github.fluss_contrib.rocksdb.ReadOptions;
+import io.github.fluss_contrib.rocksdb.RocksDBException;
 import io.github.fluss_contrib.rocksdb.RocksIterator;
+import io.github.fluss_contrib.rocksdb.Slice;
 import io.github.fluss_contrib.rocksdb.Snapshot;
 import io.github.fluss_contrib.rocksdb.WriteBufferManager;
 import org.slf4j.Logger;
@@ -1346,6 +1348,17 @@ public final class KvTablet {
      */
     public OpenScanResult openScan(String scannerId, long limit, long initialAccessTimeMs)
             throws IOException {
+        return openScan(scannerId, limit, initialAccessTimeMs, null, null);
+    }
+
+    /** Opens a fixed-view scan with an inclusive start and an exclusive end key. */
+    public OpenScanResult openScan(
+            String scannerId,
+            long limit,
+            long initialAccessTimeMs,
+            @Nullable byte[] startKey,
+            @Nullable byte[] endKey)
+            throws IOException {
         return inReadLock(
                 kvLock,
                 () -> {
@@ -1354,6 +1367,7 @@ public final class KvTablet {
                     Snapshot snapshot = null;
                     ReadOptions readOptions = null;
                     RocksIterator iterator = null;
+                    Slice upperBound = null;
                     boolean success = false;
                     try {
                         snapshot = rocksDBKv.getDb().getSnapshot();
@@ -1361,14 +1375,27 @@ public final class KvTablet {
                         // the snapshot.
                         long capturedLogOffset = flushedLogOffset;
                         readOptions = new ReadOptions().setSnapshot(snapshot);
+                        if (endKey != null) {
+                            upperBound = new Slice(endKey);
+                            readOptions.setIterateUpperBound(upperBound);
+                        }
                         iterator =
                                 rocksDBKv
                                         .getDb()
                                         .newIterator(
                                                 rocksDBKv.getDefaultColumnFamilyHandle(),
                                                 readOptions);
-                        iterator.seekToFirst();
+                        if (startKey == null) {
+                            iterator.seekToFirst();
+                        } else {
+                            iterator.seek(startKey);
+                        }
                         if (!iterator.isValid()) {
+                            try {
+                                iterator.status();
+                            } catch (RocksDBException e) {
+                                throw new IOException("Failed to open KV scan iterator.", e);
+                            }
                             return new OpenScanResult(null, capturedLogOffset);
                         }
                         ScannerContext context =
@@ -1383,13 +1410,15 @@ public final class KvTablet {
                                         limit,
                                         capturedLogOffset,
                                         initialAccessTimeMs,
-                                        kvValueLayout);
+                                        kvValueLayout,
+                                        upperBound);
                         success = true;
                         return new OpenScanResult(context, capturedLogOffset);
                     } finally {
                         if (!success) {
                             IOUtils.closeQuietly(iterator);
                             IOUtils.closeQuietly(readOptions);
+                            IOUtils.closeQuietly(upperBound);
                             if (snapshot != null) {
                                 try {
                                     rocksDBKv.getDb().releaseSnapshot(snapshot);

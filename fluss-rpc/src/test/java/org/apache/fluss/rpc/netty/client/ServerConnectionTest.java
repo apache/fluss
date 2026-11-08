@@ -324,6 +324,41 @@ public class ServerConnectionTest {
     }
 
     @Test
+    void testRejectRangeBoundsForOldServer() throws Exception {
+        ServerConnection connection =
+                new ServerConnection(
+                        bootstrap,
+                        serverNode,
+                        TestingClientMetricGroup.newInstance(),
+                        clientAuthenticator,
+                        (con, ignore) -> {});
+        try {
+            org.apache.fluss.rpc.messages.ScanKvRequest request =
+                    new org.apache.fluss.rpc.messages.ScanKvRequest();
+            request.setBucketScanReq().setTableId(1).setBucketId(0);
+            connection.validateVersionCompatibility(ApiKeys.SCAN_KV, (short) 0, request);
+            request.getBucketScanReq().setStartKey(new byte[] {1});
+            assertThatThrownBy(
+                            () ->
+                                    connection.validateVersionCompatibility(
+                                            ApiKeys.SCAN_KV, (short) 0, request))
+                    .isInstanceOf(UnsupportedVersionException.class)
+                    .hasMessageContaining("SCAN_KV version 1");
+            connection.validateVersionCompatibility(ApiKeys.SCAN_KV, (short) 1, request);
+            org.apache.fluss.rpc.messages.ScanKvRequest upperOnly =
+                    new org.apache.fluss.rpc.messages.ScanKvRequest();
+            upperOnly.setBucketScanReq().setTableId(1).setBucketId(0).setEndKey(new byte[] {2});
+            assertThatThrownBy(
+                            () ->
+                                    connection.validateVersionCompatibility(
+                                            ApiKeys.SCAN_KV, (short) 0, upperOnly))
+                    .isInstanceOf(UnsupportedVersionException.class);
+        } finally {
+            connection.close().get();
+        }
+    }
+
+    @Test
     void testRejectHistoricalWritesForOldServer() throws Exception {
         nettyServer.close();
         buildNettyServer(new OldWriteGatewayService());

@@ -27,8 +27,10 @@ import org.apache.fluss.utils.IOUtils;
 import io.github.fluss_contrib.rocksdb.ReadOptions;
 import io.github.fluss_contrib.rocksdb.RocksDBException;
 import io.github.fluss_contrib.rocksdb.RocksIterator;
+import io.github.fluss_contrib.rocksdb.Slice;
 import io.github.fluss_contrib.rocksdb.Snapshot;
 
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.NotThreadSafe;
 
 import java.io.Closeable;
@@ -55,6 +57,7 @@ public class ScannerContext implements Closeable {
     private final ReadOptions readOptions;
     private final Snapshot snapshot;
     private final ResourceGuard.Lease resourceLease;
+    @Nullable private final Slice upperBound;
 
     /** Log offset captured when the snapshot was opened. */
     private final long logOffset;
@@ -84,6 +87,35 @@ public class ScannerContext implements Closeable {
             long logOffset,
             long initialAccessTimeMs,
             KvValueLayout kvValueLayout) {
+        this(
+                scannerId,
+                tableBucket,
+                rocksDBKv,
+                iterator,
+                readOptions,
+                snapshot,
+                resourceLease,
+                limit,
+                logOffset,
+                initialAccessTimeMs,
+                kvValueLayout,
+                null);
+    }
+
+    /** Creates a scan session owning its optional iterator upper-bound slice. */
+    public ScannerContext(
+            String scannerId,
+            TableBucket tableBucket,
+            RocksDBKv rocksDBKv,
+            RocksIterator iterator,
+            ReadOptions readOptions,
+            Snapshot snapshot,
+            ResourceGuard.Lease resourceLease,
+            long limit,
+            long logOffset,
+            long initialAccessTimeMs,
+            KvValueLayout kvValueLayout,
+            @Nullable Slice upperBound) {
         this.scannerId = scannerId;
         this.scannerIdBytes = scannerId.getBytes(StandardCharsets.UTF_8);
         this.tableBucket = tableBucket;
@@ -93,6 +125,7 @@ public class ScannerContext implements Closeable {
         this.readOptions = readOptions;
         this.snapshot = snapshot;
         this.resourceLease = resourceLease;
+        this.upperBound = upperBound;
         this.remainingLimit = limit <= 0 ? -1L : limit;
         this.logOffset = logOffset;
         this.lastAccessTime = initialAccessTimeMs;
@@ -213,6 +246,7 @@ public class ScannerContext implements Closeable {
             inUse.set(false);
             IOUtils.closeQuietly(iterator);
             IOUtils.closeQuietly(readOptions);
+            IOUtils.closeQuietly(upperBound);
             IOUtils.closeQuietly(() -> rocksDBKv.getDb().releaseSnapshot(snapshot));
             IOUtils.closeQuietly(snapshot);
             IOUtils.closeQuietly(resourceLease);
