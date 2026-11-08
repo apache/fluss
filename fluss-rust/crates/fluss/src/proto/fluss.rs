@@ -455,7 +455,7 @@ pub struct LimitScanResponse {
 }
 /// Full KV scan request and response.
 /// A new scan is initiated with bucket_scan_req; subsequent batches use scanner_id.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PbScanReqForBucket {
     #[prost(int64, required, tag = "1")]
     pub table_id: i64,
@@ -468,6 +468,11 @@ pub struct PbScanReqForBucket {
     pub limit: ::core::option::Option<i64>,
     #[prost(int32, optional, tag = "5")]
     pub routing_bucket_count: ::core::option::Option<i32>,
+    /// SCAN_KV v1: inclusive start and exclusive end in the table's ordered key format.
+    #[prost(bytes = "vec", optional, tag = "6")]
+    pub start_key: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+    #[prost(bytes = "vec", optional, tag = "7")]
+    pub end_key: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ScanKvRequest {
