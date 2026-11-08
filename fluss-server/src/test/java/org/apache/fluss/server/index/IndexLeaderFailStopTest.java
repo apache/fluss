@@ -55,10 +55,7 @@ import static org.apache.fluss.server.coordinator.CoordinatorContext.INITIAL_COO
 import static org.apache.fluss.server.zk.data.LeaderAndIsr.INITIAL_LEADER_EPOCH;
 import static org.assertj.core.api.Assertions.assertThat;
 
-/**
- * Verifies FIP-38 §6.1: a bucket of a table with secondary indexes must permanently refuse to
- * become leader when its latest KV snapshot carries no usable {@code indexPushedOffset}.
- */
+/** Tests leader recovery from index progress and rejection of unusable snapshots. */
 class IndexLeaderFailStopTest extends ReplicaTestBase {
 
     private static final long INDEXED_TABLE_ID = 710001L;
@@ -86,7 +83,8 @@ class IndexLeaderFailStopTest extends ReplicaTestBase {
             throws Exception {
         registerMainTable(INDEXED_TABLE_PATH, INDEXED_TABLE_ID, indexedSchema());
         TableBucket tableBucket = new TableBucket(INDEXED_TABLE_ID, 0);
-        injectLatestSnapshot(tableBucket, progress, truncateLog ? TRUNCATED_LOG_START_OFFSET : 0L);
+        injectLatestSnapshot(
+                tableBucket, progress, progress, truncateLog ? TRUNCATED_LOG_START_OFFSET : 0L);
         if (truncateLog) {
             makeLogStartUnreachableFromZero(INDEXED_TABLE_PATH, tableBucket);
         }
@@ -133,12 +131,33 @@ class IndexLeaderFailStopTest extends ReplicaTestBase {
         assertThat(replica.getLogStartOffset()).isEqualTo(TRUNCATED_LOG_START_OFFSET);
     }
 
+    @Test
+    void testRestoresDistinctSyncAndAllIndexProgressBeforeReplay() throws Exception {
+        Schema schema =
+                Schema.newBuilder().fromSchema(indexedSchema()).index("idx_sync", "b").build();
+        // Only the source metadata is registered. Without index-table metadata the supervisor
+        // cannot start WAL replay, so progress here must come from the persisted snapshot.
+        registerMainTable(INDEXED_TABLE_PATH, INDEXED_TABLE_ID, schema);
+        TableBucket tableBucket = new TableBucket(INDEXED_TABLE_ID, 0);
+        injectLatestSnapshot(tableBucket, 80L, 90L, TRUNCATED_LOG_START_OFFSET);
+        makeLogStartUnreachableFromZero(INDEXED_TABLE_PATH, tableBucket);
+
+        NotifyLeaderAndIsrResultForBucket result =
+                tryBecomeLeader(tableBucket, INDEXED_TABLE_PATH, FOLLOWER_LEADER_EPOCH + 1);
+        assertThat(result.getErrorMessage()).isNull();
+        assertThat(result.succeeded()).isTrue();
+        Replica replica = replicaManager.getReplicaOrException(tableBucket);
+        assertThat(replica.getAllIndexPushedOffset()).isEqualTo(80L);
+        assertThat(replica.getSyncIndexPushedOffset()).isEqualTo(90L);
+        assertThat(replica.getClientLogHighWatermark()).isEqualTo(90L);
+    }
+
     /** Ordinary KV tables do not require index progress in their snapshots. */
     @Test
     void testMissingIndexPushedOffsetAllowsLeadershipWithoutSecondaryIndexes() throws Exception {
         registerMainTable(PLAIN_TABLE_PATH, PLAIN_TABLE_ID, plainSchema());
         TableBucket tableBucket = new TableBucket(PLAIN_TABLE_ID, 0);
-        injectLatestSnapshot(tableBucket, null, TRUNCATED_LOG_START_OFFSET);
+        injectLatestSnapshot(tableBucket, null, null, TRUNCATED_LOG_START_OFFSET);
 
         makeLogStartUnreachableFromZero(PLAIN_TABLE_PATH, tableBucket);
 
@@ -178,7 +197,10 @@ class IndexLeaderFailStopTest extends ReplicaTestBase {
      * ZooKeeper handle store that the server reads on leader promotion.
      */
     private void injectLatestSnapshot(
-            TableBucket tableBucket, Long indexPushedOffset, long snapshotLogOffset)
+            TableBucket tableBucket,
+            Long indexPushedOffset,
+            Long syncIndexPushedOffset,
+            long snapshotLogOffset)
             throws Exception {
         FsPath snapshotLocation =
                 new FsPath(
@@ -199,7 +221,7 @@ class IndexLeaderFailStopTest extends ReplicaTestBase {
                         snapshotLogOffset,
                         null,
                         indexPushedOffset,
-                        indexPushedOffset,
+                        syncIndexPushedOffset,
                         null);
 
         FsPath metadataPath = snapshot.getMetadataFilePath();

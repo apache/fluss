@@ -125,6 +125,24 @@ public class SchemaJsonSerdeTest extends JsonSerdeTestBase<Schema> {
     static final String SCHEMA_JSON_WITH_AGG =
             "{\"version\":1,\"columns\":[{\"name\":\"product_id\",\"data_type\":{\"type\":\"BIGINT\",\"nullable\":false},\"id\":0},{\"name\":\"total_sales\",\"data_type\":{\"type\":\"BIGINT\"},\"agg_function\":{\"type\":\"sum\"},\"id\":1},{\"name\":\"max_price\",\"data_type\":{\"type\":\"DECIMAL\",\"precision\":10,\"scale\":2},\"agg_function\":{\"type\":\"max\"},\"id\":2},{\"name\":\"last_update_time\",\"data_type\":{\"type\":\"TIMESTAMP_WITHOUT_TIME_ZONE\",\"precision\":6},\"agg_function\":{\"type\":\"last_value_ignore_nulls\"},\"id\":3},{\"name\":\"tags\",\"data_type\":{\"type\":\"STRING\"},\"agg_function\":{\"type\":\"listagg\",\"parameters\":{\"delimiter\":\";\"}},\"id\":4},{\"name\":\"categories\",\"data_type\":{\"type\":\"STRING\"},\"agg_function\":{\"type\":\"string_agg\",\"parameters\":{\"delimiter\":\"|\"}},\"id\":5},{\"name\":\"labels\",\"data_type\":{\"type\":\"STRING\"},\"agg_function\":{\"type\":\"listagg\"},\"id\":6}],\"primary_key\":[\"product_id\"],\"highest_field_id\":6}";
 
+    static final Schema SCHEMA_WITH_INDEXES =
+            Schema.newBuilder()
+                    .column("id", DataTypes.INT())
+                    .column("email", DataTypes.STRING())
+                    .column("region", DataTypes.INT())
+                    .primaryKey("id")
+                    .index("idx_region", "region")
+                    .index(
+                            "idx_email",
+                            IndexType.SECONDARY,
+                            Collections.singletonList("email"),
+                            IndexVisibility.ASYNC,
+                            7)
+                    .build();
+
+    static final String SCHEMA_JSON_WITH_INDEXES =
+            "{\"version\":1,\"columns\":[{\"name\":\"id\",\"data_type\":{\"type\":\"INTEGER\",\"nullable\":false},\"id\":0},{\"name\":\"email\",\"data_type\":{\"type\":\"STRING\"},\"id\":1},{\"name\":\"region\",\"data_type\":{\"type\":\"INTEGER\"},\"id\":2}],\"primary_key\":[\"id\"],\"indexes\":[{\"name\":\"idx_region\",\"type\":\"SECONDARY\",\"visibility\":\"SYNC\",\"columns\":[\"region\"]},{\"name\":\"idx_email\",\"type\":\"SECONDARY\",\"visibility\":\"ASYNC\",\"bucket_num\":7,\"columns\":[\"email\"]}],\"highest_field_id\":2}";
+
     SchemaJsonSerdeTest() {
         super(SchemaJsonSerde.INSTANCE);
     }
@@ -139,7 +157,14 @@ public class SchemaJsonSerdeTest extends JsonSerdeTestBase<Schema> {
     @Override
     protected Schema[] createObjects() {
         return new Schema[] {
-            SCHEMA_0, SCHEMA_1, SCHEMA_2, SCHEMA_3, SCHEMA_4, SCHEMA_5, SCHEMA_WITH_AGG
+            SCHEMA_0,
+            SCHEMA_1,
+            SCHEMA_2,
+            SCHEMA_3,
+            SCHEMA_4,
+            SCHEMA_5,
+            SCHEMA_WITH_AGG,
+            SCHEMA_WITH_INDEXES
         };
     }
 
@@ -152,7 +177,8 @@ public class SchemaJsonSerdeTest extends JsonSerdeTestBase<Schema> {
             SCHEMA_JSON_3,
             SCHEMA_JSON_4,
             SCHEMA_JSON_5,
-            SCHEMA_JSON_WITH_AGG
+            SCHEMA_JSON_WITH_AGG,
+            SCHEMA_JSON_WITH_INDEXES
         };
     }
 
@@ -183,50 +209,7 @@ public class SchemaJsonSerdeTest extends JsonSerdeTestBase<Schema> {
     }
 
     @Test
-    void testRoundTripWithIndexes() {
-        Schema original =
-                Schema.newBuilder()
-                        .column("order_id", DataTypes.BIGINT())
-                        .column("user_id", DataTypes.BIGINT())
-                        .column("region_id", DataTypes.INT())
-                        .primaryKey("order_id")
-                        .index("idx_user", "user_id")
-                        .index("idx_region", "region_id")
-                        .build();
-
-        byte[] bytes = JsonSerdeUtils.writeValueAsBytes(original, SchemaJsonSerde.INSTANCE);
-        Schema decoded = JsonSerdeUtils.readValue(bytes, SchemaJsonSerde.INSTANCE);
-
-        assertThat(decoded.getIndexes()).isEqualTo(original.getIndexes());
-    }
-
-    @Test
-    void testIndexJsonSerdePreservesVisibilityAndBucketCount() {
-        Schema schema =
-                Schema.newBuilder()
-                        .column("id", DataTypes.INT())
-                        .column("email", DataTypes.STRING())
-                        .primaryKey("id")
-                        .index(
-                                "idx_email",
-                                IndexType.SECONDARY,
-                                Collections.singletonList("email"),
-                                IndexVisibility.ASYNC,
-                                7)
-                        .build();
-
-        byte[] json = JsonSerdeUtils.writeValueAsBytes(schema, SchemaJsonSerde.INSTANCE);
-        Schema restored = JsonSerdeUtils.readValue(json, SchemaJsonSerde.INSTANCE);
-
-        Schema.Index index = restored.getIndexes().get(0);
-        assertThat(index.getIndexName()).isEqualTo("idx_email");
-        assertThat(index.getColumnNames()).containsExactly("email");
-        assertThat(index.getVisibility()).isEqualTo(IndexVisibility.ASYNC);
-        assertThat(index.getBucketCount()).hasValue(7);
-    }
-
-    @Test
-    void testLegacyIndexJsonDefaultsToSyncVisibilityAndNoBucketCount() {
+    void testIndexJsonDefaultsToSyncVisibilityAndNoBucketCount() {
         String json =
                 "{"
                         + "\"version\":1,"
@@ -245,20 +228,5 @@ public class SchemaJsonSerdeTest extends JsonSerdeTestBase<Schema> {
         Schema.Index index = restored.getIndexes().get(0);
         assertThat(index.getVisibility()).isEqualTo(IndexVisibility.SYNC);
         assertThat(index.getBucketCount()).isEmpty();
-    }
-
-    @Test
-    void testDeserializeLegacyPayloadWithoutIndexesFieldYieldsEmptyList() {
-        // Serialize a schema with NO indexes — the resulting JSON should not contain the
-        // "indexes" field. Deserialize and confirm decoded.getIndexes() is empty.
-        Schema legacy =
-                Schema.newBuilder().column("id", DataTypes.BIGINT()).primaryKey("id").build();
-
-        byte[] bytes = JsonSerdeUtils.writeValueAsBytes(legacy, SchemaJsonSerde.INSTANCE);
-        String json = new String(bytes, StandardCharsets.UTF_8);
-        assertThat(json).doesNotContain("indexes");
-
-        Schema decoded = JsonSerdeUtils.readValue(bytes, SchemaJsonSerde.INSTANCE);
-        assertThat(decoded.getIndexes()).isEmpty();
     }
 }

@@ -54,7 +54,7 @@ class LookupNormalizerTest {
     @MethodSource("lookupPaths")
     void testLookupPathPriority(
             int[] lookupKeys, int[] bucketKeys, LookupType expectedType, int[] expectedKeys) {
-        LookupNormalizer normalizer = create(lookupKeys, bucketKeys, null);
+        LookupNormalizer normalizer = create(lookupKeys, bucketKeys, null, new int[][] {{2}});
         assertThat(normalizer.getLookupType()).isEqualTo(expectedType);
         assertThat(normalizer.getLookupKeyIndexes()).containsExactly(expectedKeys);
     }
@@ -70,28 +70,17 @@ class LookupNormalizerTest {
                         new int[] {0, 2, 3},
                         new int[] {0},
                         LookupType.PREFIX_LOOKUP,
-                        new int[] {0, 3}),
-                Arguments.of(
-                        new int[] {2, 3},
-                        new int[] {0},
-                        LookupType.SECONDARY_INDEX_LOOKUP,
-                        new int[] {2}),
-                Arguments.of(
-                        new int[] {0, 2},
-                        new int[] {0},
-                        LookupType.SECONDARY_INDEX_LOOKUP,
-                        new int[] {2}),
-                Arguments.of(
-                        new int[] {1, 2, 3},
-                        new int[] {1},
-                        LookupType.SECONDARY_INDEX_LOOKUP,
-                        new int[] {2}));
+                        new int[] {0, 3}));
     }
 
     @Test
     void testPrefixLookupPreservesProjectedKeysAndRemainingFilter() {
         LookupNormalizer normalizer =
-                create(new int[] {0, 1, 2}, new int[] {0}, new int[] {2, 3, 0, 1});
+                create(
+                        new int[] {0, 1, 2},
+                        new int[] {0},
+                        new int[] {2, 3, 0, 1},
+                        new int[][] {{2}});
         assertThat(normalizer.getLookupType()).isEqualTo(LookupType.PREFIX_LOOKUP);
         assertThat(normalizer.getLookupKeyIndexes()).containsExactly(0, 3);
 
@@ -106,14 +95,89 @@ class LookupNormalizerTest {
         assertThat(filter.isMatch(GenericRowData.of(8, 2026, 42, 1))).isFalse();
     }
 
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("secondaryLookups")
+    void testSecondaryLookupNormalizesKeysAndFiltersRemainingConditions(
+            String name,
+            int[] lookupKeys,
+            int[] bucketKeys,
+            int[] projection,
+            int[][] indexes,
+            RowData lookup,
+            RowData expectedKey,
+            RowData matchingResult,
+            RowData nonMatchingResult) {
+        LookupNormalizer normalizer = create(lookupKeys, bucketKeys, projection, indexes);
+        assertThat(normalizer.getLookupType()).isEqualTo(LookupType.SECONDARY_INDEX_LOOKUP);
+        assertThat(normalizer.normalizeLookupKey(lookup)).isEqualTo(expectedKey);
+        LookupNormalizer.RemainingFilter filter = normalizer.createRemainingFilter(lookup);
+        assertThat(filter).isNotNull();
+        assertThat(filter.isMatch(matchingResult)).isTrue();
+        assertThat(filter.isMatch(nonMatchingResult)).isFalse();
+    }
+
+    private static Stream<Arguments> secondaryLookups() {
+        return Stream.of(
+                Arguments.of(
+                        "missing bucket key",
+                        new int[] {2, 3},
+                        new int[] {0},
+                        null,
+                        new int[][] {{2}},
+                        GenericRowData.of(7, 2026),
+                        GenericRowData.of(7),
+                        GenericRowData.of(42, 1, 7, 2026),
+                        GenericRowData.of(42, 1, 7, 2025)),
+                Arguments.of(
+                        "missing partition key",
+                        new int[] {0, 2},
+                        new int[] {0},
+                        null,
+                        new int[][] {{2}},
+                        GenericRowData.of(42, 7),
+                        GenericRowData.of(7),
+                        GenericRowData.of(42, 1, 7, 2026),
+                        GenericRowData.of(43, 1, 7, 2026)),
+                Arguments.of(
+                        "unsupported primary-key prefix",
+                        new int[] {1, 2, 3},
+                        new int[] {1},
+                        null,
+                        new int[][] {{2}},
+                        GenericRowData.of(1, 7, 2026),
+                        GenericRowData.of(7),
+                        GenericRowData.of(42, 1, 7, 2026),
+                        GenericRowData.of(42, 2, 7, 2026)),
+                Arguments.of(
+                        "longest match and column-order tie-break",
+                        new int[] {0, 1, 3},
+                        new int[] {0},
+                        new int[] {2, 3, 0, 1},
+                        new int[][] {{2}, {3, 2}, {2, 3}},
+                        GenericRowData.of(7, 2026, 1),
+                        GenericRowData.of(7, 2026),
+                        GenericRowData.of(7, 2026, 42, 1),
+                        GenericRowData.of(7, 2026, 42, 2)),
+                Arguments.of(
+                        "index declaration order does not change the match",
+                        new int[] {0, 1, 3},
+                        new int[] {0},
+                        new int[] {2, 3, 0, 1},
+                        new int[][] {{2, 3}, {3, 2}, {2}},
+                        GenericRowData.of(7, 2026, 1),
+                        GenericRowData.of(7, 2026),
+                        GenericRowData.of(7, 2026, 42, 1),
+                        GenericRowData.of(7, 2026, 42, 2)));
+    }
+
     @Test
     void testUnsupportedLookupIsRejected() {
-        assertThatThrownBy(() -> create(new int[] {1, 3}, new int[] {0}, null))
+        assertThatThrownBy(() -> create(new int[] {1, 3}, new int[] {0}, null, new int[][] {{2}}))
                 .isInstanceOf(TableException.class);
     }
 
     private static LookupNormalizer create(
-            int[] lookupKeys, int[] bucketKeys, int[] projectedFields) {
+            int[] lookupKeys, int[] bucketKeys, int[] projectedFields, int[][] secondaryIndexes) {
         int[][] keys = new int[lookupKeys.length][];
         for (int i = 0; i < lookupKeys.length; i++) {
             keys[i] = new int[] {lookupKeys[i]};
@@ -125,7 +189,7 @@ class LookupNormalizerTest {
                 new int[] {3},
                 SCHEMA,
                 projectedFields,
-                new int[][] {{2}});
+                secondaryIndexes);
     }
 
     private static final RowType MULTI_KEY_SCHEMA = multiKeySchema();

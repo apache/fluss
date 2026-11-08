@@ -158,9 +158,7 @@ class IndexPushFailoverITCase {
                 TIMEOUT,
                 "wait for first index entry");
 
-        // Capture the pushed offset after the first SYNC index entry is visible, then wait until a
-        // completed KV snapshot has persisted the same value via TabletState. A correct failover
-        // must restore *exactly* this value on the new leader.
+        // Persist the acknowledged prefix before failing over the source leader.
         long offsetBefore =
                 waitValue(
                         () -> {
@@ -197,15 +195,12 @@ class IndexPushFailoverITCase {
 
         Replica newMainReplica = FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(mainBucket);
 
-        // The new leader must restore the *exact* checkpointed offset. isEqualTo (not >= 0) is
-        // what makes a broken restore path fail: a reset-to-0 bug would replay from the WAL head,
-        // a skip-ahead bug would drop un-pushed records — both are caught by exact equality.
+        // Recovery may restore or replay this prefix before leadership becomes observable.
         assertThat(newMainReplica.getSyncIndexPushedOffset())
-                .as("new leader must restore the exact checkpointed indexPushedOffset")
+                .as("new leader must recover the acknowledged prefix")
                 .isEqualTo(offsetBefore);
 
-        // Safety: the first batch's index entry must survive the failover (no data loss on
-        // recovery). Verified before any new write so survival cannot be masked by WAL re-replay.
+        // The previously acknowledged entry remains available after source failover.
         Replica firstIndexReplicaAfterFailover =
                 FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(
                         new TableBucket(indexTableId, indexBucket));

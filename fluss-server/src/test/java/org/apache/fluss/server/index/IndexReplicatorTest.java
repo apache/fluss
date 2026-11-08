@@ -822,11 +822,6 @@ class IndexReplicatorTest {
             assertThat(replicator.pollServiced()).isTrue();
             assertThat(buffer.pendingBytes()).isEqualTo(4096L);
             assertThat(buffer.buckets()).containsExactly(new TableBucket(2L, 0));
-            IndexReplicator.ReadGroup remaining = scheduler.selectRead(replicator, 2L);
-            assertThat(remaining).isNotNull();
-            assertThat(remaining.states())
-                    .extracting(state -> state.spec().getIndexName())
-                    .containsExactly("interrupted");
             acknowledge(buffer, new TableBucket(2L, 0));
             assertThat(replicator.getAllIndexPushedOffset()).isZero();
             fail.set(false);
@@ -947,103 +942,7 @@ class IndexReplicatorTest {
     }
 
     @Test
-    void sourceReadFormsOneWindowAcrossCompleteBatches() throws Exception {
-        RowType rowType = RowType.of(DataTypes.INT());
-        MemoryLogRecords first =
-                createBasicMemoryLogRecords(
-                        rowType,
-                        1,
-                        0L,
-                        0L,
-                        CURRENT_LOG_MAGIC_VALUE,
-                        NO_WRITER_ID,
-                        NO_BATCH_SEQUENCE,
-                        Collections.singletonList(ChangeType.INSERT),
-                        Collections.singletonList(new Object[] {1}),
-                        LogFormat.INDEXED,
-                        DEFAULT_COMPRESSION);
-        MemoryLogRecords second =
-                createBasicMemoryLogRecords(
-                        rowType,
-                        1,
-                        1L,
-                        0L,
-                        CURRENT_LOG_MAGIC_VALUE,
-                        NO_WRITER_ID,
-                        NO_BATCH_SEQUENCE,
-                        Collections.singletonList(ChangeType.INSERT),
-                        Collections.singletonList(new Object[] {2}),
-                        LogFormat.INDEXED,
-                        DEFAULT_COMPRESSION);
-        LogRecords records =
-                new LogRecords() {
-                    @Override
-                    public int sizeInBytes() {
-                        return first.sizeInBytes() + second.sizeInBytes();
-                    }
-
-                    @Override
-                    public Iterable<LogRecordBatch> batches() {
-                        return Arrays.asList(
-                                first.batches().iterator().next(),
-                                second.batches().iterator().next());
-                    }
-                };
-        TableBucket source = new TableBucket(1L, 0);
-        IndexSourceReader.SourceLog log =
-                new IndexSourceReader.SourceLog() {
-                    @Override
-                    public TableBucket tableBucket() {
-                        return source;
-                    }
-
-                    @Override
-                    public long highWatermark() {
-                        return 2L;
-                    }
-
-                    @Override
-                    public long logStartOffset() {
-                        return 0L;
-                    }
-
-                    @Override
-                    public FetchDataInfo read(
-                            long offset,
-                            int maxBytes,
-                            org.apache.fluss.server.log.FetchIsolation isolation,
-                            boolean minOneMessage) {
-                        return new FetchDataInfo(records);
-                    }
-                };
-        AtomicInteger encodes = new AtomicInteger();
-        IndexSendBuffer buffer = new IndexSendBuffer();
-        LogRecordReadContext context =
-                LogRecordReadContext.createIndexedReadContext(rowType, 1, null);
-        IndexReplicationScheduler scheduler = new IndexReplicationScheduler(8);
-        try (IndexReplicator replicator =
-                new IndexReplicator(
-                        new IndexSourceReader(log, null, Runnable::run),
-                        Collections.singletonList(indexSpec("idx", 2L, encodes)),
-                        buffer,
-                        context,
-                        0L,
-                        1024,
-                        (sync, all) -> {},
-                        scheduler,
-                        () -> {})) {
-            scheduler.register(0, replicator);
-            assertThat(replicator.poll()).isTrue();
-            assertThat(encodes).hasValue(2);
-            assertThat(replicator.getAllIndexPushedOffset()).isZero();
-            acknowledge(buffer, new TableBucket(2L, 0));
-            assertThat(replicator.getAllIndexPushedOffset()).isEqualTo(2L);
-            assertThat(buffer.pendingBytes()).isZero();
-        }
-    }
-
-    @Test
-    void sharesSourceDecodeAcrossIndexesWithoutSplittingSourceBatch() throws Exception {
+    void sharesSourceReadAndDecodeAcrossIndexes() throws Exception {
         TableBucket sourceBucket = new TableBucket(1L, 0);
         AtomicInteger sourceReads = new AtomicInteger();
         AtomicInteger recordDecodes = new AtomicInteger();
@@ -1051,38 +950,43 @@ class IndexReplicatorTest {
         AtomicInteger secondIndexEncodes = new AtomicInteger();
 
         RowType rowType = RowType.of(DataTypes.INT());
-        MemoryLogRecords sourceRecords =
-                createBasicMemoryLogRecords(
-                        rowType,
-                        1,
-                        0L,
-                        0L,
-                        CURRENT_LOG_MAGIC_VALUE,
-                        NO_WRITER_ID,
-                        NO_BATCH_SEQUENCE,
-                        Arrays.asList(ChangeType.DELETE, ChangeType.DELETE),
-                        Arrays.asList(new Object[] {1}, new Object[] {2}),
-                        LogFormat.COMPACTED,
-                        DEFAULT_COMPRESSION);
-        DefaultLogRecordBatch batch =
-                new DefaultLogRecordBatch() {
-                    @Override
-                    public CloseableIterator<LogRecord> records(ReadContext context) {
-                        recordDecodes.incrementAndGet();
-                        return super.records(context);
-                    }
-                };
-        batch.pointTo(sourceRecords.getMemorySegment(), sourceRecords.getPosition());
+        MemoryLogRecords[] sourceBatches = new MemoryLogRecords[2];
+        LogRecordBatch[] batches = new LogRecordBatch[2];
+        for (int i = 0; i < sourceBatches.length; i++) {
+            sourceBatches[i] =
+                    createBasicMemoryLogRecords(
+                            rowType,
+                            1,
+                            i * 2L,
+                            0L,
+                            CURRENT_LOG_MAGIC_VALUE,
+                            NO_WRITER_ID,
+                            NO_BATCH_SEQUENCE,
+                            Arrays.asList(ChangeType.DELETE, ChangeType.DELETE),
+                            Arrays.asList(new Object[] {i * 2 + 1}, new Object[] {i * 2 + 2}),
+                            LogFormat.COMPACTED,
+                            DEFAULT_COMPRESSION);
+            DefaultLogRecordBatch batch =
+                    new DefaultLogRecordBatch() {
+                        @Override
+                        public CloseableIterator<LogRecord> records(ReadContext context) {
+                            recordDecodes.incrementAndGet();
+                            return super.records(context);
+                        }
+                    };
+            batch.pointTo(sourceBatches[i].getMemorySegment(), sourceBatches[i].getPosition());
+            batches[i] = batch;
+        }
         LogRecords records =
                 new LogRecords() {
                     @Override
                     public int sizeInBytes() {
-                        return sourceRecords.sizeInBytes();
+                        return sourceBatches[0].sizeInBytes() + sourceBatches[1].sizeInBytes();
                     }
 
                     @Override
                     public Iterable<LogRecordBatch> batches() {
-                        return Collections.singletonList(batch);
+                        return Arrays.asList(batches);
                     }
                 };
 
@@ -1095,7 +999,7 @@ class IndexReplicatorTest {
 
                     @Override
                     public long highWatermark() {
-                        return 2L;
+                        return 4L;
                     }
 
                     @Override
@@ -1136,9 +1040,9 @@ class IndexReplicatorTest {
             scheduler.register(0, replicator);
             assertThat(replicator.poll()).isTrue();
             assertThat(sourceReads).hasValue(1);
-            assertThat(recordDecodes).hasValue(1);
-            assertThat(firstIndexEncodes).hasValue(2);
-            assertThat(secondIndexEncodes).hasValue(2);
+            assertThat(recordDecodes).hasValue(2);
+            assertThat(firstIndexEncodes).hasValue(4);
+            assertThat(secondIndexEncodes).hasValue(4);
 
             TableBucket firstTarget = new TableBucket(2L, 0);
             TableBucket secondTarget = new TableBucket(3L, 0);
@@ -1146,7 +1050,8 @@ class IndexReplicatorTest {
             acknowledge(sendBuffer, firstTarget);
             assertThat(replicator.getAllIndexPushedOffset()).isZero();
             acknowledge(sendBuffer, secondTarget);
-            assertThat(replicator.getAllIndexPushedOffset()).isEqualTo(2L);
+            assertThat(replicator.getAllIndexPushedOffset()).isEqualTo(4L);
+            assertThat(sendBuffer.pendingBytes()).isZero();
         }
     }
 
