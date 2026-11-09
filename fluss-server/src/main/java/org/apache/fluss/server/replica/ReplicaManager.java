@@ -1247,18 +1247,19 @@ public class ReplicaManager implements ServerReconfigurable {
                 tableMetrics = replica.tableMetrics();
                 tableMetrics.totalPrefixLookupRequests().inc();
                 for (PbPrefixLookupKey key : entry.getValue()) {
-                    if (key.hasStartKey() || key.hasEndKey()) {
+                    if (key.hasStartKey() || key.hasEndKey() || key.hasReverse()) {
                         if (apiVersion < 2
                                 || !replica.getTableInfo().getTableConfig().isOrderedKeyEnabled()) {
                             throw new UnsupportedVersionException(
-                                    "Range prefix lookups require PREFIX_LOOKUP v2 and ordered keys.");
+                                    "Ordered or bounded prefix lookups require PREFIX_LOOKUP v2 and ordered keys.");
                         }
                     }
                     List<ByteArraySlice> resultForPerKey =
                             replica.prefixLookup(
                                     key.getPrefixKey(),
                                     key.hasStartKey() ? key.getStartKey() : null,
-                                    key.hasEndKey() ? key.getEndKey() : null);
+                                    key.hasEndKey() ? key.getEndKey() : null,
+                                    key.hasReverse() && key.isReverse());
                     resultForBucket.add(resultForPerKey);
                 }
                 result.put(tb, new PrefixLookupResultForBucket(tb, resultForBucket));

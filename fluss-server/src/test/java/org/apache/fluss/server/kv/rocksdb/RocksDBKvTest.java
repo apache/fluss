@@ -225,8 +225,10 @@ class RocksDBKvTest {
         }
     }
 
-    @Test
-    void testBoundedPrefixReadViewAndPrefixIntersection(@TempDir Path tempDir) throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testBoundedPrefixReadViewAndPrefixIntersection(boolean reverse, @TempDir Path tempDir)
+            throws Exception {
         try (RocksDBKv kv = buildRocksDBKv(tempDir.toFile())) {
             kv.put(new byte[] {1, 0}, new byte[] {10});
             kv.put(new byte[] {1, 1}, new byte[] {11});
@@ -234,7 +236,8 @@ class RocksDBKvTest {
             kv.put(new byte[] {1, 3}, new byte[] {13});
             kv.put(new byte[] {2}, new byte[] {20});
             try (RocksDBKv.PrefixLookup lookup =
-                    kv.openPrefixLookup(new byte[] {1}, new byte[] {1, 1}, new byte[] {1, 3})) {
+                    kv.openPrefixLookup(
+                            new byte[] {1}, new byte[] {1, 1}, new byte[] {1, 3}, reverse)) {
                 assertThat(kv.getResourceGuard().getLeaseCount()).isEqualTo(1);
                 assertThat(kv.db.getLongProperty("rocksdb.num-snapshots")).isZero();
                 kv.delete(new byte[] {1, 1});
@@ -243,15 +246,30 @@ class RocksDBKvTest {
                     kv.db.flush(options);
                 }
                 kv.db.compactRange();
-                assertThat(lookup.readAll()).containsExactly(new byte[] {11}, new byte[] {12});
+                assertThat(lookup.readAll())
+                        .containsExactly(
+                                new byte[] {(byte) (reverse ? 12 : 11)},
+                                new byte[] {(byte) (reverse ? 11 : 12)});
             }
             assertThat(kv.getResourceGuard().getLeaseCount()).isZero();
             try (RocksDBKv.PrefixLookup lookup =
-                    kv.openPrefixLookup(new byte[] {1}, new byte[] {0}, new byte[] {3})) {
+                    kv.openPrefixLookup(new byte[] {1}, new byte[] {0}, new byte[] {3}, reverse)) {
                 assertThat(lookup.readAll())
-                        .containsExactly(new byte[] {10}, new byte[] {22}, new byte[] {13});
+                        .containsExactly(
+                                new byte[] {(byte) (reverse ? 13 : 10)},
+                                new byte[] {22},
+                                new byte[] {(byte) (reverse ? 10 : 13)});
             }
             assertThat(kv.getResourceGuard().getLeaseCount()).isZero();
+            kv.put(new byte[] {(byte) 0xff, 0}, new byte[] {30});
+            kv.put(new byte[] {(byte) 0xff, 1}, new byte[] {31});
+            try (RocksDBKv.PrefixLookup lookup =
+                    kv.openPrefixLookup(new byte[] {(byte) 0xff}, null, null, reverse)) {
+                assertThat(lookup.readAll())
+                        .containsExactly(
+                                new byte[] {(byte) (reverse ? 31 : 30)},
+                                new byte[] {(byte) (reverse ? 30 : 31)});
+            }
             assertThat(kv.db.getLongProperty("rocksdb.num-snapshots")).isZero();
         }
     }

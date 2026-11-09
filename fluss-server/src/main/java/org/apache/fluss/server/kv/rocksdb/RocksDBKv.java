@@ -297,15 +297,15 @@ public class RocksDBKv implements AutoCloseable {
      * tablet mutations and close, and must close the returned lookup after use.
      */
     public PrefixLookup openPrefixLookup(byte[] prefixKey) throws IOException {
-        return openPrefixLookup(prefixKey, null, null);
+        return openPrefixLookup(prefixKey, null, null, false);
     }
 
-    /** Fixes a request-local view for the intersection of a prefix and physical bounds. */
+    /** Opens an ordered prefix read in the given direction with a fixed iterator view. */
     public PrefixLookup openPrefixLookup(
-            byte[] prefixKey, @Nullable byte[] startKey, @Nullable byte[] endKey)
+            byte[] prefixKey, @Nullable byte[] startKey, @Nullable byte[] endKey, boolean reverse)
             throws IOException {
         ResourceGuard.Lease lease = rocksDBResourceGuard.acquireResource();
-        Slice upperBoundSlice = null;
+        Slice iteratorBoundSlice = null;
         ReadOptions readOptions = null;
         RocksIterator iterator = null;
         try {
@@ -323,20 +323,31 @@ public class RocksDBKv implements AutoCloseable {
                                             > 0
                             ? startKey
                             : prefixKey;
-            if (upperBound != null) {
-                upperBoundSlice = new Slice(upperBound);
+            byte[] bound = reverse ? lowerBound : upperBound;
+            if (bound != null) {
+                iteratorBoundSlice = new Slice(bound);
             }
             readOptions = new ReadOptions().setTotalOrderSeek(true);
-            if (upperBoundSlice != null) {
-                readOptions.setIterateUpperBound(upperBoundSlice);
+            if (iteratorBoundSlice != null) {
+                if (reverse) {
+                    readOptions.setIterateLowerBound(iteratorBoundSlice);
+                } else {
+                    readOptions.setIterateUpperBound(iteratorBoundSlice);
+                }
             }
             iterator = db.newIterator(defaultColumnFamilyHandle, readOptions);
             return new PrefixLookup(
-                    lowerBound.clone(), iterator, readOptions, upperBoundSlice, lease);
+                    lowerBound.clone(),
+                    upperBound == null ? null : upperBound.clone(),
+                    reverse,
+                    iterator,
+                    readOptions,
+                    iteratorBoundSlice,
+                    lease);
         } catch (Throwable t) {
             IOUtils.closeQuietly(iterator);
             IOUtils.closeQuietly(readOptions);
-            IOUtils.closeQuietly(upperBoundSlice);
+            IOUtils.closeQuietly(iteratorBoundSlice);
             lease.close();
             throw t;
         }
@@ -347,23 +358,29 @@ public class RocksDBKv implements AutoCloseable {
      */
     public static class PrefixLookup implements AutoCloseable {
         private final byte[] startKey;
+        @Nullable private final byte[] endKey;
+        private final boolean reverse;
         private final RocksIteratorWrapper iterator;
         private final ReadOptions readOptions;
-        // The upper bound must outlive the iterator and read options that reference it.
-        @Nullable private final Slice upperBoundSlice;
+        // The iterator bound must outlive the iterator and read options that reference it.
+        @Nullable private final Slice iteratorBoundSlice;
         private final ResourceGuard.Lease lease;
         private boolean closed;
 
         private PrefixLookup(
                 byte[] startKey,
+                @Nullable byte[] endKey,
+                boolean reverse,
                 RocksIterator iterator,
                 ReadOptions readOptions,
-                @Nullable Slice upperBoundSlice,
+                @Nullable Slice iteratorBoundSlice,
                 ResourceGuard.Lease lease) {
             this.startKey = startKey;
+            this.endKey = endKey;
+            this.reverse = reverse;
             this.iterator = new RocksIteratorWrapper(iterator);
             this.readOptions = readOptions;
-            this.upperBoundSlice = upperBoundSlice;
+            this.iteratorBoundSlice = iteratorBoundSlice;
             this.lease = lease;
         }
 
@@ -374,10 +391,25 @@ public class RocksDBKv implements AutoCloseable {
             }
             List<byte[]> values = new ArrayList<>();
             try {
-                iterator.seek(startKey);
+                if (reverse) {
+                    if (endKey == null) {
+                        iterator.seekToLast();
+                    } else {
+                        iterator.seekForPrev(endKey);
+                        if (iterator.isValid() && Arrays.equals(iterator.key(), endKey)) {
+                            iterator.prev();
+                        }
+                    }
+                } else {
+                    iterator.seek(startKey);
+                }
                 while (iterator.isValid()) {
                     values.add(iterator.value());
-                    iterator.next();
+                    if (reverse) {
+                        iterator.prev();
+                    } else {
+                        iterator.next();
+                    }
                 }
             } catch (RuntimeException e) {
                 if (e.getCause() instanceof RocksDBException) {
@@ -394,7 +426,7 @@ public class RocksDBKv implements AutoCloseable {
                 closed = true;
                 IOUtils.closeQuietly(iterator);
                 IOUtils.closeQuietly(readOptions);
-                IOUtils.closeQuietly(upperBoundSlice);
+                IOUtils.closeQuietly(iteratorBoundSlice);
                 lease.close();
             }
         }

@@ -18,6 +18,7 @@
 package org.apache.fluss.client.lookup;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.client.table.ReadDirection;
 
 import java.util.Arrays;
 import java.util.List;
@@ -63,6 +64,21 @@ import java.util.List;
 public interface Lookup {
 
     /**
+     * Returns a new configuration with the given index traversal direction. Repeated calls replace
+     * the direction. Requires an ordered-key table; validation happens when the reader is created.
+     * Ordered reads default to {@link ReadDirection#FORWARD}.
+     *
+     * <p>Direction reverses the whole index key, including fields after the range column. Each
+     * invocation returns all matching rows in that order. Separate invocations and retries may
+     * observe different views. Point lookups return at most one row in either direction.
+     *
+     * @param direction the index traversal direction
+     */
+    default Lookup direction(ReadDirection direction) {
+        throw new UnsupportedOperationException("Read direction is not supported.");
+    }
+
+    /**
      * Returns a new Lookup instance with the given lookup columns. By default, the lookup columns
      * are the primary key columns of the table. The specified columns must be a prefix subset of
      * the physical primary key columns (i.e., the primary key columns exclude partition columns).
@@ -100,7 +116,7 @@ public interface Lookup {
      * immediately follow that prefix. Validation happens when creating the lookuper.
      *
      * <p>Cannot be combined with insert-if-not-exists. The configured lookuper rejects calls
-     * without bounds. Results contain all matching rows without an ordering guarantee.
+     * without bounds. Results contain all matching rows in the configured index direction.
      *
      * @param columnName the column to constrain by range
      */

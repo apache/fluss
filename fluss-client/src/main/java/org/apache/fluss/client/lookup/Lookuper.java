@@ -64,8 +64,8 @@ public interface Lookuper {
      *
      * <p>Requires a lookuper created with {@link Lookup#rangeBy(String)}. Key and endpoint values
      * are captured before this method returns, so callers may reuse their input rows. Each lookup
-     * reads a fixed iterator view within the request and returns the complete result. There is no
-     * ordering guarantee.
+     * reads a fixed iterator view within the request and returns the complete result in index key
+     * order in the direction configured on {@link Lookup}.
      *
      * @param lookupKey values for the configured lookup columns
      * @param bounds bounds for the configured range column, with one non-null field per endpoint

@@ -21,6 +21,7 @@ import org.apache.fluss.client.admin.ClientToServerITCaseBase;
 import org.apache.fluss.client.table.scanner.Scan;
 import org.apache.fluss.client.table.scanner.batch.BatchScanUtils;
 import org.apache.fluss.client.table.scanner.batch.BatchScanner;
+import org.apache.fluss.client.table.writer.UpsertResult;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.metadata.PartitionInfo;
@@ -37,12 +38,16 @@ import org.apache.fluss.utils.CloseableIterator;
 import org.apache.fluss.utils.Range;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.testutils.DataTestUtils.row;
@@ -60,6 +65,132 @@ class TableRangeScanITCase extends ClientToServerITCaseBase {
                     .column("v", DataTypes.STRING())
                     .primaryKey("g", "t", "id")
                     .build();
+
+    @ParameterizedTest
+    @EnumSource(ReadDirection.class)
+    void testDirectionAcrossBoundsAndFullBucketLimit(ReadDirection direction) throws Exception {
+        try (Table table = create("direction", SCHEMA, false)) {
+            UpsertWriter writer = table.newUpsert().createWriter();
+            CompletableFuture<UpsertResult> routing = writer.upsert(row(1, 0L, 0, "v"));
+            for (long t : new long[] {-1, 0, 127, 128, Long.MAX_VALUE}) {
+                for (int id : new int[] {0, 1}) {
+                    writer.upsert(row(1, t, id, "v"));
+                }
+            }
+            writer.flush();
+            Scan base =
+                    table.newScan()
+                            .direction(direction)
+                            .equalTo(Collections.singletonList("g"), row(1));
+            List<String> expected = Arrays.asList("127:0", "127:1", "128:0", "128:1");
+            List<String> ordered = new ArrayList<>(expected);
+            if (direction == ReadDirection.REVERSE) {
+                Collections.reverse(ordered);
+            }
+            try (BatchScanner scanner =
+                    base.range("t", Range.closed(key(127), key(128)))
+                            .project(Arrays.asList("t", "id"))
+                            .limit(3)
+                            .createBatchScanner()) {
+                assertThat(
+                                BatchScanUtils.collectRows(scanner).stream()
+                                        .map(r -> r.getLong(0) + ":" + r.getInt(1))
+                                        .collect(Collectors.toList()))
+                        .containsExactlyElementsOf(ordered.subList(0, 3));
+            }
+            try (BatchScanner scanner =
+                    base.range("t", Range.closedOpen(key(127), key(128))).createBatchScanner()) {
+                assertThat(
+                                BatchScanUtils.collectRows(scanner).stream()
+                                        .map(r -> r.getInt(2))
+                                        .collect(Collectors.toList()))
+                        .containsExactlyElementsOf(
+                                direction == ReadDirection.FORWARD
+                                        ? Arrays.asList(0, 1)
+                                        : Arrays.asList(1, 0));
+            }
+            try (BatchScanner scanner =
+                    base.range("t", Range.greaterThan(key(Long.MAX_VALUE))).createBatchScanner()) {
+                assertThat(BatchScanUtils.collectRows(scanner)).isEmpty();
+            }
+            try (BatchScanner scanner =
+                    base.range("t", Range.atLeast(key(Long.MAX_VALUE))).createBatchScanner()) {
+                assertThat(BatchScanUtils.collectRows(scanner)).hasSize(2);
+            }
+            int bucketId = routing.get(30, TimeUnit.SECONDS).getBucket().getBucket();
+            TableBucket bucket = new TableBucket(table.getTableInfo().getTableId(), bucketId);
+            // Full scans with limit must use the same directed, paginated KV path.
+            try (BatchScanner scanner =
+                    table.newScan().direction(direction).limit(1).createBatchScanner(bucket)) {
+                List<InternalRow> rows = BatchScanUtils.collectRows(scanner);
+                assertThat(rows).hasSize(1);
+                assertThat(rows.get(0).getLong(1))
+                        .isEqualTo(direction == ReadDirection.FORWARD ? -1L : Long.MAX_VALUE);
+                assertThat(rows.get(0).getInt(2))
+                        .isEqualTo(direction == ReadDirection.FORWARD ? 0 : 1);
+            }
+            try (BatchScanner scanner =
+                    table.newScan().direction(direction).limit(0).createBatchScanner(bucket)) {
+                assertThat(BatchScanUtils.collectRows(scanner)).isEmpty();
+            }
+            assertThatThrownBy(
+                            () ->
+                                    table.newScan()
+                                            .direction(direction)
+                                            .limit(-1)
+                                            .createBatchScanner(bucket))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> table.newScan().direction(direction).createBatchScanner())
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("single index bucket");
+            assertThatThrownBy(() -> table.newScan().direction(direction).createLogScanner())
+                    .isInstanceOf(UnsupportedOperationException.class);
+            assertThatThrownBy(
+                            () ->
+                                    table.newScan()
+                                            .direction(direction)
+                                            .createBatchScanner(bucket, 1L))
+                    .isInstanceOf(UnsupportedOperationException.class);
+        }
+    }
+
+    @Test
+    void testWholeTableDirectionWithSingleBucket() throws Exception {
+        TablePath path = TablePath.of("range_scan", "single_bucket_direction");
+        long tableId =
+                createTable(
+                        path,
+                        TableDescriptor.builder()
+                                .schema(SCHEMA)
+                                .distributedBy(1, "g")
+                                .property(ConfigOptions.TABLE_KV_ORDERED_KEY_ENABLED, true)
+                                .build(),
+                        true);
+        waitAllReplicasReady(tableId, 1);
+        try (Table table = conn.getTable(path)) {
+            UpsertWriter writer = table.newUpsert().createWriter();
+            writer.upsert(row(1, 100L, 0, "first"));
+            writer.upsert(row(2, 0L, 0, "last"));
+            writer.flush();
+            Scan base =
+                    table.newScan().direction(ReadDirection.REVERSE).project(Arrays.asList("v"));
+            try (BatchScanner scanner = base.limit(1).createBatchScanner()) {
+                assertThat(
+                                BatchScanUtils.collectRows(scanner).stream()
+                                        .map(r -> r.getString(0).toString())
+                                        .collect(Collectors.toList()))
+                        .containsExactly("last");
+            }
+            try (BatchScanner scanner =
+                    base.direction(ReadDirection.FORWARD).createBatchScanner()) {
+                assertThat(
+                                BatchScanUtils.collectRows(scanner).stream()
+                                        .map(r -> r.getString(0).toString())
+                                        .collect(Collectors.toList()))
+                        .containsExactly("first", "last");
+            }
+        }
+    }
 
     @Test
     void testRangeBoundsProjectionLimitAndInputReuse() throws Exception {
@@ -272,8 +403,9 @@ class TableRangeScanITCase extends ClientToServerITCaseBase {
         }
     }
 
-    @Test
-    void testMultipleBatchesKeepTheirOpenedView() throws Exception {
+    @ParameterizedTest
+    @EnumSource(ReadDirection.class)
+    void testMultipleBatchesKeepTheirOpenedView(ReadDirection direction) throws Exception {
         try (Table table = create("snapshot", SCHEMA, false)) {
             org.apache.fluss.config.Configuration config =
                     new org.apache.fluss.config.Configuration(clientConf);
@@ -292,6 +424,7 @@ class TableRangeScanITCase extends ClientToServerITCaseBase {
                 try (BatchScanner scanner =
                         smallTable
                                 .newScan()
+                                .direction(direction)
                                 .equalTo(Collections.singletonList("g"), GenericRow.of(1))
                                 .range("t", Range.closedOpen(key(0), key(100)))
                                 .createBatchScanner()) {
@@ -307,7 +440,15 @@ class TableRangeScanITCase extends ClientToServerITCaseBase {
                     writer.flush();
                     result.addAll(BatchScanUtils.collectRows(scanner));
                 }
-                assertThat(result).hasSize(30);
+                List<Long> expected =
+                        java.util.stream.LongStream.range(0, 30)
+                                .boxed()
+                                .collect(Collectors.toList());
+                if (direction == ReadDirection.REVERSE) {
+                    Collections.reverse(expected);
+                }
+                assertThat(result.stream().map(r -> r.getLong(1)).collect(Collectors.toList()))
+                        .containsExactlyElementsOf(expected);
                 assertThat(result.stream().map(r -> r.getLong(1))).doesNotContain(99L);
                 assertTimes(table, Range.closed(key(99), key(99)), 99);
             }
@@ -368,6 +509,11 @@ class TableRangeScanITCase extends ClientToServerITCaseBase {
                 TableDescriptor.builder().schema(SCHEMA).distributedBy(3, "g").build(),
                 true);
         try (Table table = conn.getTable(legacy)) {
+            for (ReadDirection direction : ReadDirection.values()) {
+                assertThatThrownBy(() -> table.newScan().direction(direction).createBatchScanner())
+                        .isInstanceOf(IllegalArgumentException.class)
+                        .hasMessageContaining("ordered-key.enabled=true");
+            }
             assertThatThrownBy(
                             () ->
                                     table.newScan()
@@ -411,7 +557,7 @@ class TableRangeScanITCase extends ClientToServerITCaseBase {
                         .createBatchScanner()) {
             List<InternalRow> rows = BatchScanUtils.collectRows(scanner);
             assertThat(rows.stream().map(r -> r.getLong(1)).collect(Collectors.toList()))
-                    .containsExactlyInAnyOrderElementsOf(
+                    .containsExactlyElementsOf(
                             Arrays.stream(expected).boxed().collect(Collectors.toList()));
             assertThat(rows).allSatisfy(r -> assertThat(r.getInt(0)).isEqualTo(1));
         }

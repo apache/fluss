@@ -434,8 +434,17 @@ The scanner routes to one bucket, seeks to the lower bound and stops at the
 exclusive physical upper bound. Open and closed logical endpoints use the same
 conversion as range-bounded lookups. The server holds a fixed KV snapshot across
 batches, so later writes are invisible to the scanner. A lost session fails.
-Close the scanner to release its resources. Result order carries no SQL
-`ORDER BY` guarantee, and `limit` only caps the returned row count.
+Close the scanner to release its resources. Rows follow ascending index key
+order across batches by default. Import `org.apache.fluss.client.table.ReadDirection`
+and set `.direction(ReadDirection.REVERSE)` to
+traverse the same interval in descending index key order. The limit selects the
+first rows in the chosen direction. All index fields reverse together, including
+the primary-key suffix for equal range values.
+
+Explicit direction requires an ordered-key table and a single index bucket.
+A full ordered-key bucket scan also supports direction and limit without range
+conditions. Multi-bucket scans without explicit direction have no global order.
+See [Ordered Index Reads](ordered-reads.md) for the complete contract.
 
 `createBatchScanner(tableBucket)` further restricts the query to that bucket.
 A disjoint bucket returns no rows, and a bucket from another table is invalid.
@@ -513,7 +522,12 @@ Each call returns all matching rows using a request-local fixed iterator view.
 The operation uses the prefix-lookup batching and retry machinery. It has no
 cross-request scanner session or pagination. Results are materialized in memory
 and intended for small result sets. Separate calls and retries can observe
-different views. Results have no ordering guarantee.
+different views. Results follow ascending index key order by default. Configure
+`.direction(ReadDirection.REVERSE)` before creating the lookuper for descending
+index key order. Each call returns every matching row; lookup has no limit.
+Direction also applies to ordinary prefix lookups on ordered-key tables.
+Explicit direction on a table without ordered keys is rejected when creating
+the lookuper.
 
 Repeated `rangeBy` calls replace the range column. Configuration methods return
 new immutable `Lookup` instances. The ranged lookuper requires the two-argument

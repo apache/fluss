@@ -94,6 +94,7 @@ import java.io.IOException;
 import java.time.Duration;
 import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -1307,12 +1308,12 @@ public final class KvTablet {
     }
 
     public List<ByteArraySlice> prefixLookup(byte[] prefixKey) throws IOException {
-        return prefixLookup(prefixKey, null, null);
+        return prefixLookup(prefixKey, null, null, false);
     }
 
     /** Reads a bounded prefix using a request-local iterator view. */
     public List<ByteArraySlice> prefixLookup(
-            byte[] prefixKey, @Nullable byte[] startKey, @Nullable byte[] endKey)
+            byte[] prefixKey, @Nullable byte[] startKey, @Nullable byte[] endKey, boolean reverse)
             throws IOException {
         try (RocksDBKv.PrefixLookup lookup =
                 inReadLock(
@@ -1321,7 +1322,7 @@ public final class KvTablet {
                             if (isClosed) {
                                 throw new IOException("KV tablet is closing: " + tableBucket);
                             }
-                            return rocksDBKv.openPrefixLookup(prefixKey, startKey, endKey);
+                            return rocksDBKv.openPrefixLookup(prefixKey, startKey, endKey, reverse);
                         })) {
             return toValueBodySlices(lookup.readAll());
         }
@@ -1355,7 +1356,7 @@ public final class KvTablet {
      */
     public OpenScanResult openScan(String scannerId, long limit, long initialAccessTimeMs)
             throws IOException {
-        return openScan(scannerId, limit, initialAccessTimeMs, null, null);
+        return openScan(scannerId, limit, initialAccessTimeMs, null, null, false);
     }
 
     /** Opens a fixed-view scan with an inclusive start and an exclusive end key. */
@@ -1364,7 +1365,8 @@ public final class KvTablet {
             long limit,
             long initialAccessTimeMs,
             @Nullable byte[] startKey,
-            @Nullable byte[] endKey)
+            @Nullable byte[] endKey,
+            boolean reverse)
             throws IOException {
         return inReadLock(
                 kvLock,
@@ -1374,7 +1376,7 @@ public final class KvTablet {
                     Snapshot snapshot = null;
                     ReadOptions readOptions = null;
                     RocksIterator iterator = null;
-                    Slice upperBound = null;
+                    Slice iteratorBound = null;
                     boolean success = false;
                     try {
                         snapshot = rocksDBKv.getDb().getSnapshot();
@@ -1383,9 +1385,14 @@ public final class KvTablet {
                         long capturedLogOffset = flushedLogOffset;
                         readOptions =
                                 new ReadOptions().setSnapshot(snapshot).setTotalOrderSeek(true);
-                        if (endKey != null) {
-                            upperBound = new Slice(endKey);
-                            readOptions.setIterateUpperBound(upperBound);
+                        byte[] bound = reverse ? startKey : endKey;
+                        if (bound != null) {
+                            iteratorBound = new Slice(bound);
+                            if (reverse) {
+                                readOptions.setIterateLowerBound(iteratorBound);
+                            } else {
+                                readOptions.setIterateUpperBound(iteratorBound);
+                            }
                         }
                         iterator =
                                 rocksDBKv
@@ -1393,7 +1400,16 @@ public final class KvTablet {
                                         .newIterator(
                                                 rocksDBKv.getDefaultColumnFamilyHandle(),
                                                 readOptions);
-                        if (startKey == null) {
+                        if (reverse) {
+                            if (endKey == null) {
+                                iterator.seekToLast();
+                            } else {
+                                iterator.seekForPrev(endKey);
+                                if (iterator.isValid() && Arrays.equals(iterator.key(), endKey)) {
+                                    iterator.prev();
+                                }
+                            }
+                        } else if (startKey == null) {
                             iterator.seekToFirst();
                         } else {
                             iterator.seek(startKey);
@@ -1419,14 +1435,15 @@ public final class KvTablet {
                                         capturedLogOffset,
                                         initialAccessTimeMs,
                                         kvValueLayout,
-                                        upperBound);
+                                        iteratorBound,
+                                        reverse);
                         success = true;
                         return new OpenScanResult(context, capturedLogOffset);
                     } finally {
                         if (!success) {
                             IOUtils.closeQuietly(iterator);
                             IOUtils.closeQuietly(readOptions);
-                            IOUtils.closeQuietly(upperBound);
+                            IOUtils.closeQuietly(iteratorBound);
                             if (snapshot != null) {
                                 try {
                                     rocksDBKv.getDb().releaseSnapshot(snapshot);

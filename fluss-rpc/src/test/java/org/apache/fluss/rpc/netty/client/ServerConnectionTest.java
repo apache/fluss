@@ -337,6 +337,18 @@ public class ServerConnectionTest {
                     new org.apache.fluss.rpc.messages.ScanKvRequest();
             request.setBucketScanReq().setTableId(1).setBucketId(0);
             connection.validateVersionCompatibility(ApiKeys.SCAN_KV, (short) 0, request);
+            for (boolean reverse : new boolean[] {false, true}) {
+                org.apache.fluss.rpc.messages.ScanKvRequest directed =
+                        new org.apache.fluss.rpc.messages.ScanKvRequest();
+                directed.setBucketScanReq().setTableId(1).setBucketId(0).setReverse(reverse);
+                assertThatThrownBy(
+                                () ->
+                                        connection.validateVersionCompatibility(
+                                                ApiKeys.SCAN_KV, (short) 0, directed))
+                        .isInstanceOf(UnsupportedVersionException.class);
+                connection.validateVersionCompatibility(ApiKeys.SCAN_KV, (short) 1, directed);
+            }
+
             request.getBucketScanReq().setStartKey(new byte[] {1});
             assertThatThrownBy(
                             () ->
@@ -374,6 +386,22 @@ public class ServerConnectionTest {
                     request.addBucketsReq().setBucketId(0);
             bucket.addKey(new byte[] {1});
             connection.validateVersionCompatibility(ApiKeys.PREFIX_LOOKUP, (short) 1, request);
+            for (boolean reverse : new boolean[] {false, true}) {
+                org.apache.fluss.rpc.messages.PrefixLookupRequest directed =
+                        new org.apache.fluss.rpc.messages.PrefixLookupRequest().setTableId(1);
+                directed.addBucketsReq()
+                        .setBucketId(0)
+                        .addLookup()
+                        .setPrefixKey(new byte[] {1})
+                        .setReverse(reverse);
+                assertThatThrownBy(
+                                () ->
+                                        connection.validateVersionCompatibility(
+                                                ApiKeys.PREFIX_LOOKUP, (short) 1, directed))
+                        .isInstanceOf(UnsupportedVersionException.class);
+                connection.validateVersionCompatibility(ApiKeys.PREFIX_LOOKUP, (short) 2, directed);
+            }
+
             bucket.clearKeys();
             bucket.addLookup().setPrefixKey(new byte[] {1}).setStartKey(new byte[] {1, 2});
             assertThatThrownBy(

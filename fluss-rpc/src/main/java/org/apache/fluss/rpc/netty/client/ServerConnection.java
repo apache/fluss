@@ -393,9 +393,10 @@ final class ServerConnection {
             ScanKvRequest scan = (ScanKvRequest) rawRequest;
             if (scan.hasBucketScanReq()
                     && (scan.getBucketScanReq().hasStartKey()
-                            || scan.getBucketScanReq().hasEndKey())) {
+                            || scan.getBucketScanReq().hasEndKey()
+                            || scan.getBucketScanReq().hasReverse())) {
                 throw new UnsupportedVersionException(
-                        "Range scans require SCAN_KV version 1 or newer.");
+                        "Ordered or bounded scans require SCAN_KV version 1 or newer.");
             }
         }
         if (apiKey == ApiKeys.PREFIX_LOOKUP && version < 2) {
@@ -403,7 +404,7 @@ final class ServerConnection {
             if (lookup.getBucketsReqsList().stream()
                     .anyMatch(bucket -> bucket.getLookupsCount() > 0)) {
                 throw new UnsupportedVersionException(
-                        "Range prefix lookups require PREFIX_LOOKUP version 2 or newer.");
+                        "Ordered or bounded prefix lookups require PREFIX_LOOKUP version 2 or newer.");
             }
         }
         if (apiKey == ApiKeys.PRODUCE_LOG && version < HISTORICAL_PRODUCE_LOG_MIN_VERSION) {

@@ -31,6 +31,7 @@ import org.apache.fluss.client.metadata.KvSnapshotMetadata;
 import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.client.metadata.LakeSnapshot;
 import org.apache.fluss.client.metadata.RemoteLogManifestInfo;
+import org.apache.fluss.client.table.ReadDirection;
 import org.apache.fluss.client.write.KvWriteBatch;
 import org.apache.fluss.client.write.ReadyWriteBatch;
 import org.apache.fluss.cluster.Cluster;
@@ -287,20 +288,26 @@ public class ClientRpcMessageUtils {
                     if (batch.getBucketCount() > 0) {
                         pbPrefixLookupReqForBucket.setRoutingBucketCount(batch.getBucketCount());
                     }
-                    boolean hasBounds =
+                    boolean useLookupEntries =
                             batch.lookups().stream()
                                     .anyMatch(
                                             lookup ->
                                                     lookup.startKey() != null
-                                                            || lookup.endKey() != null);
+                                                            || lookup.endKey() != null
+                                                            || lookup.direction() != null);
                     batch.lookups()
                             .forEach(
                                     lookup -> {
-                                        if (hasBounds) {
+                                        if (useLookupEntries) {
                                             PbPrefixLookupKey key =
                                                     pbPrefixLookupReqForBucket
                                                             .addLookup()
                                                             .setPrefixKey(lookup.key());
+                                            if (lookup.direction() != null) {
+                                                key.setReverse(
+                                                        lookup.direction()
+                                                                == ReadDirection.REVERSE);
+                                            }
                                             if (lookup.startKey() != null) {
                                                 key.setStartKey(lookup.startKey());
                                             }

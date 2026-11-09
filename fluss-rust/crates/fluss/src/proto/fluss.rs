@@ -473,6 +473,9 @@ pub struct PbScanReqForBucket {
     pub start_key: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
     #[prost(bytes = "vec", optional, tag = "7")]
     pub end_key: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+    /// Presence requests ordered reading, including explicit forward reads.
+    #[prost(bool, optional, tag = "8")]
+    pub reverse: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ScanKvRequest {
@@ -1600,7 +1603,7 @@ pub struct PbPrefixLookupReqForBucket {
     pub keys: ::prost::alloc::vec::Vec<::prost::bytes::Bytes>,
     #[prost(int32, optional, tag = "4")]
     pub routing_bucket_count: ::core::option::Option<i32>,
-    /// Used instead of keys when any lookup in this bucket has range bounds.
+    /// Used instead of keys when a lookup has bounds or direction.
     #[prost(message, repeated, tag = "5")]
     pub lookups: ::prost::alloc::vec::Vec<PbPrefixLookupKey>,
 }
@@ -1612,6 +1615,8 @@ pub struct PbPrefixLookupKey {
     pub start_key: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
     #[prost(bytes = "vec", optional, tag = "3")]
     pub end_key: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+    #[prost(bool, optional, tag = "4")]
+    pub reverse: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PbPrefixLookupRespForBucket {

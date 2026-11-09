@@ -127,7 +127,7 @@ public class ScannerManager implements AutoCloseableAsync {
      * @throws IOException if RocksDB is shutting down
      */
     public OpenScanResult createScanner(Replica replica, @Nullable Long limit) throws IOException {
-        return createScanner(replica, limit, null, null);
+        return createScanner(replica, limit, null, null, false);
     }
 
     /** Opens a scan whose physical bounds remain fixed throughout its session. */
@@ -135,7 +135,8 @@ public class ScannerManager implements AutoCloseableAsync {
             Replica replica,
             @Nullable Long limit,
             @Nullable byte[] startKey,
-            @Nullable byte[] endKey)
+            @Nullable byte[] endKey,
+            boolean reverse)
             throws IOException {
         checkLimits(replica.getTableBucket());
         String scannerId = generateScannerId();
@@ -145,7 +146,8 @@ public class ScannerManager implements AutoCloseableAsync {
                 limit != null ? limit : -1L,
                 clock.milliseconds(),
                 startKey,
-                endKey);
+                endKey,
+                reverse);
     }
 
     /**

@@ -1343,7 +1343,7 @@ public class ServerRpcMessageUtils {
             checkArgument(
                     lookupReqForBucket.getKeysCount() == 0
                             || lookupReqForBucket.getLookupsCount() == 0,
-                    "Prefix lookup must use either keys or bounded lookups.");
+                    "Prefix lookup must use either keys or lookups.");
             List<PbPrefixLookupKey> keys = new ArrayList<>();
             for (int i = 0; i < lookupReqForBucket.getKeysCount(); i++) {
                 keys.add(new PbPrefixLookupKey().setPrefixKey(lookupReqForBucket.getKeyAt(i)));

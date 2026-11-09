@@ -19,6 +19,7 @@ package org.apache.fluss.client.lookup;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.client.metadata.MetadataUpdater;
+import org.apache.fluss.client.table.ReadDirection;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.TableBucket;
@@ -148,20 +149,21 @@ public class LookupClient {
 
     public CompletableFuture<List<byte[]>> prefixLookup(
             TablePath tablePath, TableBucket tableBucket, byte[] keyBytes, int bucketCount) {
-        return prefixLookup(tablePath, tableBucket, keyBytes, bucketCount, null, null);
+        return prefixLookup(tablePath, tableBucket, keyBytes, bucketCount, null, null, null);
     }
 
-    /** Enqueues a prefix lookup with optional physical range bounds. */
+    /** Adds an index prefix read with optional bounds and direction. */
     public CompletableFuture<List<byte[]>> prefixLookup(
             TablePath tablePath,
             TableBucket tableBucket,
             byte[] keyBytes,
             int bucketCount,
             @Nullable byte[] startKey,
-            @Nullable byte[] endKey) {
+            @Nullable byte[] endKey,
+            @Nullable ReadDirection direction) {
         PrefixLookupQuery prefixLookup =
                 new PrefixLookupQuery(
-                        tablePath, tableBucket, keyBytes, bucketCount, startKey, endKey);
+                        tablePath, tableBucket, keyBytes, bucketCount, startKey, endKey, direction);
         lookupQueue.appendLookup(prefixLookup);
         return prefixLookup.future();
     }

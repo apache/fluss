@@ -371,6 +371,8 @@ message PbScanReqForBucket {
   // SCAN_KV v1: inclusive start and exclusive end in the table's ordered key format.
   optional bytes start_key = 6;
   optional bytes end_key = 7;
+  // Presence requests ordered reading, including explicit forward reads.
+  optional bool reverse = 8;
 }
 
 message ScanKvRequest {
@@ -1195,7 +1197,7 @@ message PbPrefixLookupReqForBucket {
   required int32 bucket_id = 2;
   repeated bytes keys = 3;
   optional int32 routing_bucket_count = 4;
-  // Used instead of keys when any lookup in this bucket has range bounds.
+  // Used instead of keys when a lookup has bounds or direction.
   repeated PbPrefixLookupKey lookups = 5;
 }
 
@@ -1203,6 +1205,7 @@ message PbPrefixLookupKey {
   required bytes prefix_key = 1;
   optional bytes start_key = 2;
   optional bytes end_key = 3;
+  optional bool reverse = 4;
 }
 
 message PbPrefixLookupRespForBucket {

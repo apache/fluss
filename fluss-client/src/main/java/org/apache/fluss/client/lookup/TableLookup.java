@@ -18,6 +18,7 @@
 package org.apache.fluss.client.lookup;
 
 import org.apache.fluss.client.metadata.MetadataUpdater;
+import org.apache.fluss.client.table.ReadDirection;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableInfo;
@@ -43,6 +44,7 @@ public class TableLookup implements Lookup {
 
     @Nullable private final List<String> lookupColumnNames;
     @Nullable private final String rangeColumn;
+    @Nullable private final ReadDirection direction;
 
     private final boolean insertIfNotExists;
 
@@ -51,7 +53,7 @@ public class TableLookup implements Lookup {
             SchemaGetter schemaGetter,
             MetadataUpdater metadataUpdater,
             LookupClient lookupClient) {
-        this(tableInfo, schemaGetter, metadataUpdater, lookupClient, null, false, null);
+        this(tableInfo, schemaGetter, metadataUpdater, lookupClient, null, false, null, null);
     }
 
     private TableLookup(
@@ -61,7 +63,8 @@ public class TableLookup implements Lookup {
             LookupClient lookupClient,
             @Nullable List<String> lookupColumnNames,
             boolean insertIfNotExists,
-            @Nullable String rangeColumn) {
+            @Nullable String rangeColumn,
+            @Nullable ReadDirection direction) {
         this.tableInfo = tableInfo;
         this.schemaGetter = schemaGetter;
         this.metadataUpdater = metadataUpdater;
@@ -72,6 +75,20 @@ public class TableLookup implements Lookup {
                         : Collections.unmodifiableList(new ArrayList<>(lookupColumnNames));
         this.insertIfNotExists = insertIfNotExists;
         this.rangeColumn = rangeColumn;
+        this.direction = direction;
+    }
+
+    @Override
+    public Lookup direction(ReadDirection direction) {
+        return new TableLookup(
+                tableInfo,
+                schemaGetter,
+                metadataUpdater,
+                lookupClient,
+                lookupColumnNames,
+                insertIfNotExists,
+                rangeColumn,
+                checkNotNull(direction, "direction"));
     }
 
     @Override
@@ -83,7 +100,8 @@ public class TableLookup implements Lookup {
                 lookupClient,
                 lookupColumnNames,
                 true,
-                rangeColumn);
+                rangeColumn,
+                direction);
     }
 
     @Override
@@ -95,7 +113,8 @@ public class TableLookup implements Lookup {
                 lookupClient,
                 lookupColumnNames,
                 insertIfNotExists,
-                rangeColumn);
+                rangeColumn,
+                direction);
     }
 
     @Override
@@ -107,11 +126,15 @@ public class TableLookup implements Lookup {
                 lookupClient,
                 lookupColumnNames,
                 insertIfNotExists,
-                checkNotNull(columnName, "columnName"));
+                checkNotNull(columnName, "columnName"),
+                direction);
     }
 
     @Override
     public Lookuper createLookuper() {
+        checkArgument(
+                direction == null || tableInfo.getTableConfig().isOrderedKeyEnabled(),
+                "Read direction requires table.kv.ordered-key.enabled=true.");
         checkArgument(
                 rangeColumn == null || lookupColumnNames != null,
                 "Range lookup requires explicit lookupBy columns.");
@@ -169,7 +192,8 @@ public class TableLookup implements Lookup {
                     metadataUpdater,
                     lookupClient,
                     lookupColumnNames,
-                    rangeColumn);
+                    rangeColumn,
+                    direction);
         }
     }
 
