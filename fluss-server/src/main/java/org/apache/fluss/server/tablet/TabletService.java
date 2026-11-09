@@ -136,6 +136,7 @@ import org.apache.fluss.server.tablet.consumer.group.ConsumerOffsetTableManager;
 import org.apache.fluss.server.tablet.consumer.group.GroupManager;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.shaded.guava32.com.google.common.primitives.UnsignedBytes;
 
 import javax.annotation.Nullable;
 
@@ -945,7 +946,23 @@ public final class TabletService extends RpcServiceBase
                 Long limit = bucketReq.hasLimit() ? bucketReq.getLimit() : null;
 
                 Replica replica = replicaManager.getReplicaOrException(tableBucket);
-                OpenScanResult openResult = scannerManager.createScanner(replica, limit);
+                byte[] startKey = bucketReq.hasStartKey() ? bucketReq.getStartKey() : null;
+                byte[] endKey = bucketReq.hasEndKey() ? bucketReq.getEndKey() : null;
+                if (startKey != null || endKey != null) {
+                    if (currentSession().getApiVersion() < 1
+                            || !replica.getTableInfo().getTableConfig().isOrderedKeyEnabled()) {
+                        throw new InvalidScanRequestException(
+                                "Key bounds require SCAN_KV v1 and table.kv.ordered-key.enabled=true.");
+                    }
+                    if (startKey != null
+                            && endKey != null
+                            && UnsignedBytes.lexicographicalComparator().compare(startKey, endKey)
+                                    > 0) {
+                        throw new InvalidScanRequestException("Scan start key exceeds end key.");
+                    }
+                }
+                OpenScanResult openResult =
+                        scannerManager.createScanner(replica, limit, startKey, endKey);
                 isNewScan = true;
                 initialLogOffset = openResult.getLogOffset();
 

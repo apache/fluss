@@ -382,6 +382,67 @@ The per-RPC payload size is controlled by
 further via `kv.scanner.max-batch-size`. Note that `BatchScanner` is not
 thread-safe — do not share an instance across threads.
 
+#### Index Range Scan
+
+For paginated reads within an equality prefix, configure `equalTo` and `range`
+on `Scan`. Both range scans and range-bounded lookups use
+`org.apache.fluss.utils.Range<T>` and require an ordered-key table created with
+`table.kv.ordered-key.enabled=true`.
+
+For a table with primary key `(group_id, event_time, id)` distributed by
+`group_id`, read a time interval as follows.
+
+```java
+try (BatchScanner scanner = table.newScan()
+        .equalTo(Collections.singletonList("group_id"), GenericRow.of(groupId))
+        .range("event_time",
+                Range.closedOpen(GenericRow.of(startMillis), GenericRow.of(endMillis)))
+        .project(Arrays.asList("event_time", "id"))
+        .limit(1000)
+        .createBatchScanner()) {
+    while (true) {
+        CloseableIterator<InternalRow> batch = scanner.pollBatch(Duration.ofSeconds(5));
+        if (batch == null) {
+            break;
+        }
+        try (CloseableIterator<InternalRow> rows = batch) {
+            while (rows.hasNext()) {
+                InternalRow row = rows.next();
+                // Process the projected row.
+            }
+        }
+    }
+}
+```
+
+Equality columns can contain multiple fields. Values follow the supplied column
+list, while index matching follows physical primary-key order. Excluding
+partition fields, they must identify the complete leading primary-key prefix,
+including all bucket fields. Supply every partition field as an equality
+condition. The range column must immediately follow the physical prefix. Each
+finite endpoint contains exactly one non-null field of the range column's
+internal type. Unsupported paths are rejected. A missing partition or empty
+interval returns no rows.
+
+Each refinement returns an immutable `Scan`. Repeated `equalTo` calls replace
+the equality conditions, and repeated `range` calls replace the range column
+and bounds. Values are captured before the configuration method returns.
+Projection, limit and conditions may be configured in any order. The existing
+record-batch `filter` cannot be combined with index range conditions.
+
+The scanner routes to one bucket, seeks to the lower bound and stops at the
+exclusive physical upper bound. Open and closed logical endpoints use the same
+conversion as range-bounded lookups. The server holds a fixed KV snapshot across
+batches, so later writes are invisible to the scanner. A lost session fails.
+Close the scanner to release its resources. Result order carries no SQL
+`ORDER BY` guarantee, and `limit` only caps the returned row count.
+
+`createBatchScanner(tableBucket)` further restricts the query to that bucket.
+A disjoint bucket returns no rows, and a bucket from another table is invalid.
+Log scanners and snapshot-ID scanners reject index range conditions. This Java
+capability currently executes through the primary-key index. Flink SQL predicate
+pushdown is a separate integration.
+
 ### Lookup
 You can also use the Fluss API to perform lookups on a table. This is useful for querying specific records based on their primary key or prefix key.
 ```java

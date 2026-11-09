@@ -1865,6 +1865,18 @@ public final class Replica {
     public OpenScanResult openScan(
             ScannerManager scannerManager, String scannerId, long limit, long initialAccessTimeMs)
             throws IOException {
+        return openScan(scannerManager, scannerId, limit, initialAccessTimeMs, null, null);
+    }
+
+    /** Opens and registers a fixed-view scan with optional physical key bounds. */
+    public OpenScanResult openScan(
+            ScannerManager scannerManager,
+            String scannerId,
+            long limit,
+            long initialAccessTimeMs,
+            @Nullable byte[] startKey,
+            @Nullable byte[] endKey)
+            throws IOException {
         if (!isKvTable()) {
             throw new NonPrimaryKeyTableException(
                     "the primary key table not exists for " + tableBucket);
@@ -1882,7 +1894,8 @@ public final class Replica {
                     checkNotNull(
                             kvTablet, "KvTablet for the replica to open scan shouldn't be null.");
                     OpenScanResult result =
-                            kvTablet.openScan(scannerId, limit, initialAccessTimeMs);
+                            kvTablet.openScan(
+                                    scannerId, limit, initialAccessTimeMs, startKey, endKey);
                     ScannerContext context = result.getContext();
                     if (context == null) {
                         return result;

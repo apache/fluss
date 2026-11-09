@@ -112,7 +112,8 @@ public enum ApiKeys {
     DROP_KV_SNAPSHOT_LEASE(1058, 0, 0, PUBLIC),
     GET_TABLE_STATS(1059, 0, 0, PUBLIC),
     ALTER_DATABASE(1060, 0, 0, PUBLIC),
-    SCAN_KV(1061, 0, 0, PUBLIC),
+    // Version 1: Supports inclusive start and exclusive end keys in new scan requests.
+    SCAN_KV(1061, 0, 1, PUBLIC),
     GET_CLUSTER_HEALTH(1062, 0, 0, PUBLIC),
     LIST_REMOTE_LOG_MANIFESTS(1063, 0, 0, PUBLIC),
     LIST_KV_SNAPSHOTS(1064, 0, 0, PUBLIC),
