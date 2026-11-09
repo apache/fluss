@@ -29,7 +29,6 @@ import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.AdjustIsrReceivedEvent;
 import org.apache.fluss.server.entity.AdjustIsrResultForBucket;
-import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.server.zk.CuratorFrameworkWithUnhandledErrorListener;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
@@ -37,8 +36,6 @@ import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.shaded.curator5.org.apache.curator.retry.ExponentialBackoffRetry;
 import org.apache.fluss.types.DataTypes;
-import org.apache.fluss.utils.clock.SystemClock;
-import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -53,7 +50,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
@@ -409,28 +405,6 @@ class CoordinatorEventProcessorAdjustIsrTest extends CoordinatorEventProcessorTe
         AccessContextEvent<T> event = new AccessContextEvent<>(retrieveFunction);
         eventProcessor.getCoordinatorEventManager().put(event);
         return event.getResultFuture().get(30, TimeUnit.SECONDS);
-    }
-
-    private CoordinatorEventProcessor buildCoordinatorEventProcessor(
-            ZooKeeperClient coordinatorZooKeeperClient) {
-        Configuration conf = new Configuration();
-        conf.set(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
-        conf.set(ConfigOptions.COORDINATOR_OFFLINE_LEADER_RETRY_DELAY, Duration.ofDays(1));
-        return new CoordinatorEventProcessor(
-                coordinatorZooKeeperClient,
-                serverMetadataCache,
-                testCoordinatorChannelManager,
-                new CoordinatorContext(zkEpoch),
-                replicaCapacityController,
-                autoPartitionManager,
-                lakeTableTieringManager,
-                TestingMetricGroups.COORDINATOR_METRICS,
-                conf,
-                Executors.newFixedThreadPool(1, new ExecutorThreadFactory("test-coordinator-io")),
-                metadataManager,
-                kvSnapshotLeaseManager,
-                scheduler,
-                SystemClock.getInstance());
     }
 
     private static final class TestingAdjustIsrZooKeeperClient extends ZooKeeperClient {

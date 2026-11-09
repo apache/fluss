@@ -78,6 +78,9 @@ public class FutureUtils {
      * Fakes asynchronous execution by immediately executing the operation and completing the
      * supplied future either normally or exceptionally.
      *
+     * <p>An {@link Error} also completes the future exceptionally, so a caller waiting on it does
+     * not block forever, and is then rethrown.
+     *
      * @param operation to executed
      * @param <T> type of the result
      */
@@ -87,6 +90,9 @@ public class FutureUtils {
             future.complete(operation.call());
         } catch (Exception e) {
             future.completeExceptionally(e);
+        } catch (Error e) {
+            future.completeExceptionally(e);
+            throw e;
         }
     }
 
