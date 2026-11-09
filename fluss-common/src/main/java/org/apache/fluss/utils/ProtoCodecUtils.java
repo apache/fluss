@@ -178,6 +178,20 @@ public final class ProtoCodecUtils {
         return result;
     }
 
+    // Reads a length-delimited field's length, rejecting a value that cannot fit in the remaining
+    // buffer (or is negative) before the caller allocates for it.
+    public static int readBytesLen(ByteBuf buf) {
+        int len = readVarInt(buf);
+        if (len < 0 || len > buf.readableBytes()) {
+            throw new IllegalArgumentException(
+                    "Protobuf field length "
+                            + len
+                            + " exceeds remaining readable bytes "
+                            + buf.readableBytes());
+        }
+        return len;
+    }
+
     public static long readVarInt64(ByteBuf buf) {
         int shift = 0;
         long result = 0;
@@ -288,6 +302,7 @@ public final class ProtoCodecUtils {
     /** Holder for a byte array and byte length. */
     public static final class BytesHolder {
         public byte[] b;
+        public int offset;
         public int len;
     }
 }

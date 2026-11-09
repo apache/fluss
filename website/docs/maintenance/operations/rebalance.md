@@ -62,7 +62,9 @@ System.out.println("Rebalance started with ID: " + rebalanceId);
 // Trigger rebalance with multiple goals in priority order
 List<GoalType> multipleGoals = Arrays.asList(
     GoalType.RACK_AWARE,
+    GoalType.TABLE_REPLICA_DISTRIBUTION,
     GoalType.REPLICA_DISTRIBUTION,
+    GoalType.TABLE_LEADER_DISTRIBUTION,
     GoalType.LEADER_DISTRIBUTION
 );
 String rebalanceId = admin.rebalance(multipleGoals).get();
@@ -70,12 +72,35 @@ String rebalanceId = admin.rebalance(multipleGoals).get();
 
 Available rebalance goals:
 - **RACK_AWARE**: Ensures replicas of the same bucket are distributed across different racks. This goal is essential for high availability in multi-rack deployments, as it prevents data loss when an entire rack fails.
+- **TABLE_REPLICA_DISTRIBUTION**: Ensures replicas of each table are near balanced across TabletServers. Use this before cluster-wide replica balancing for hot tables or after cluster expansion.
 - **REPLICA_DISTRIBUTION**: Ensures the number of replicas on each TabletServer is near balanced
+- **TABLE_LEADER_DISTRIBUTION**: Ensures leaders of each table are near balanced across TabletServers. It first transfers leadership between existing replicas and moves leader replicas only when necessary.
 - **LEADER_DISTRIBUTION**: Ensures the number of leader replicas on each TabletServer is near balanced
 
 :::tip Goal Priority
-Goals are processed in the order specified. When using `RACK_AWARE`, always place it first to ensure subsequent goals (like `REPLICA_DISTRIBUTION`) respect rack constraints. If `RACK_AWARE` is not the first goal, replica movements may violate rack awareness requirements.
+Goals are processed in the order specified. When using `RACK_AWARE`, always place it first to ensure subsequent goals respect rack constraints. For table-aware balancing, use `RACK_AWARE`, `TABLE_REPLICA_DISTRIBUTION`, `REPLICA_DISTRIBUTION`, `TABLE_LEADER_DISTRIBUTION`, then `LEADER_DISTRIBUTION`. If `RACK_AWARE` is not first, replica movements may violate rack awareness requirements.
 :::
+
+### Balance Guarantees
+
+The distribution goals aim for a per-server tolerance window rather than equal counts. Currently,
+the margin is calculated as `m = (1.10 - 1) * 0.9` (approximately 9%). For an average count `a` over
+alive TabletServers, the window is `[floor(a * (1 - m)), ceil(a * (1 + m))]`, using floating-point
+arithmetic. Table-level goals calculate this average separately for each
+table; cluster-level goals use the total count across all tables. Replica distribution counts both
+leaders and followers, while leader distribution counts only leaders. These are best-effort targets:
+replica placement, rack awareness, or higher-priority goals can prevent reaching the window.
+
+For example, a table with eight buckets has eight leaders. Across eight alive TabletServers, its
+leader window is `[0, 2]`. With two racks of four servers and a replication factor of two, each bucket
+can have one replica in each rack while the leader counts are `[2, 2, 2, 2]` in one rack and
+`[0, 0, 0, 0]` in the other. If each server holds two replicas, both table-level goals are already
+within their windows, and the combination produces no balancing actions. The existing cluster-level
+goals behave the same way when this is the only table.
+
+`RACK_AWARE` constrains replica placement for each bucket; it does not impose leader counts per rack.
+Combining it with table-level distribution goals therefore does not guarantee one leader per server
+or four leaders per rack in this example.
 
 ### 3. Monitor Progress
 
@@ -107,9 +132,30 @@ Optional<RebalanceProgress> latestProgress = admin.listRebalanceProgress(null).g
 Rebalance statuses:
 - **NOT_STARTED**: The rebalance has been created but not yet started
 - **REBALANCING**: The rebalance is currently in progress
-- **COMPLETED**: The rebalance has successfully completed
-- **FAILED**: The rebalance has failed
+- **COMPLETED**: The rebalance has successfully completed, or its table/partition was deleted while the task was pending or being reconciled
+- **FAILED**: The rebalance has failed, for example because a bucket migration was given up on after its target servers stayed unavailable for too long. The affected buckets may be left with an intermediate assignment. A subsequent rebalance uses the table's configured replication factor to plan the target assignment and removes excess intermediate replicas during execution. Unavailable servers are included as sources to evacuate, not as destinations for new replicas
 - **CANCELED**: The rebalance has been canceled
+- **TIMEOUT**: The normal execution slot was released after the timeout, but the task remains non-final. The coordinator retries the current migration phase idempotently, with a growing backoff, until the task reaches `COMPLETED` or `FAILED`. Only a bounded number of timed-out tasks is tracked at the same time, so a rebalance stops admitting new bucket migrations while too many tasks are still being reconciled
+
+When a bucket migration changes both its replicas and its leader, completion requires the planned leader to acknowledge the final state. This also applies after coordinator recovery. If the planned leader is temporarily offline or has not caught up, the migration waits for it and remains subject to the timeout and recovery limits below.
+
+#### Timeout and Recovery Settings
+
+Configure the following coordinator options in `server.yaml` to match your cluster's recovery objectives and resource capacity. The values below are the defaults. Restart the coordinator servers after changing these settings.
+
+```yaml
+coordinator.rebalance.target-unavailable-timeout: 30 min
+coordinator.rebalance.no-progress-timeout: 24 h
+coordinator.rebalance.max-tracked-timed-out-tasks: 8
+```
+
+- `target-unavailable-timeout`: A timed-out bucket migration is marked `FAILED` after its target tablet servers remain unavailable without observed bucket-state progress for this duration. Progress or all target servers becoming live resets the timer.
+- `no-progress-timeout`: A timed-out bucket migration is marked `FAILED` after this duration without observed bucket-state progress, even when its target servers are live. Progress resets the timer, so this is not a limit on the total migration duration. Either timeout can cause a migration to fail.
+- `max-tracked-timed-out-tasks`: New bucket migrations stop being admitted when this many timed-out migrations remain non-final. Admission resumes when a tracked migration reaches a final status. A higher limit allows more migrations to remain active and increases coordinator and ZooKeeper work.
+
+Only target-relevant assignment, leader, and ISR changes count as observed progress. Changes involving only replicas that are being removed do not reset either progress timer.
+
+Both durations must be at least `1 ms` and fit in a signed 64-bit millisecond value; the task limit must be at least `1`. Invalid values prevent coordinator initialization. Timeouts are evaluated during periodic reconciliation, so the transition to `FAILED` can occur after the configured duration has elapsed.
 
 ### 4. Cancel Rebalance (If Needed)
 
@@ -126,6 +172,7 @@ admin.cancelRebalance(null).get();
 **Important Notes:**
 - Only rebalance operations in `NOT_STARTED` or `REBALANCING` status can be canceled
 - Already completed bucket migrations will not be rolled back
+- Bucket migrations that have not changed anything yet are canceled right away, migrations that are already under way are drained first so that no bucket is left half-migrated
 - After cancellation, the rebalance status will change to `CANCELED`
 
 ### 5. Remove Server Tags (After Completion)
@@ -166,7 +213,9 @@ public class RebalanceExample {
             System.out.println("Triggering rebalance...");
             List<GoalType> goals = Arrays.asList(
                 GoalType.RACK_AWARE,
+                GoalType.TABLE_REPLICA_DISTRIBUTION,
                 GoalType.REPLICA_DISTRIBUTION,
+                GoalType.TABLE_LEADER_DISTRIBUTION,
                 GoalType.LEADER_DISTRIBUTION
             );
             String rebalanceId = admin.rebalance(goals).get();
@@ -225,7 +274,7 @@ Example using Flink SQL:
 CALL sys.add_server_tag('0', 'PERMANENT_OFFLINE');
 
 -- Trigger rebalance with rack-aware goal (recommended)
-CALL sys.rebalance('RACK_AWARE,REPLICA_DISTRIBUTION,LEADER_DISTRIBUTION');
+CALL sys.rebalance('RACK_AWARE,TABLE_REPLICA_DISTRIBUTION,REPLICA_DISTRIBUTION,TABLE_LEADER_DISTRIBUTION,LEADER_DISTRIBUTION');
 
 -- Monitor progress
 CALL sys.list_rebalance();
@@ -241,22 +290,24 @@ CALL sys.cancel_rebalance();
 When your cluster is deployed across multiple racks for high availability, always place `RACK_AWARE` as the **first** goal in your rebalance request. This ensures that:
 
 1. The rebalance algorithm first satisfies rack distribution constraints
-2. Subsequent goals (like `REPLICA_DISTRIBUTION` and `LEADER_DISTRIBUTION`) only consider movements that maintain rack awareness
+2. Subsequent goals (like `TABLE_REPLICA_DISTRIBUTION`, `REPLICA_DISTRIBUTION`, `TABLE_LEADER_DISTRIBUTION` and `LEADER_DISTRIBUTION`) only consider movements that maintain rack awareness
 3. You won't end up with multiple replicas of the same bucket on the same rack
 
 **Recommended goal order for multi-rack deployments:**
 ```java
 List<GoalType> goals = Arrays.asList(
-    GoalType.RACK_AWARE,           // First: ensure rack distribution
-    GoalType.REPLICA_DISTRIBUTION, // Second: balance replica count
-    GoalType.LEADER_DISTRIBUTION   // Third: balance leader count
+    GoalType.RACK_AWARE,                 // First: ensure rack distribution
+    GoalType.TABLE_REPLICA_DISTRIBUTION, // Second: balance replica count of each table
+    GoalType.REPLICA_DISTRIBUTION,       // Third: balance replica count of the cluster
+    GoalType.TABLE_LEADER_DISTRIBUTION,  // Fourth: balance leader count of each table
+    GoalType.LEADER_DISTRIBUTION         // Fifth: balance leader count of the cluster
 );
 ```
 
 **Example using Flink SQL:**
 ```sql
 -- Correct: RACK_AWARE first ensures rack-balanced assignments
-CALL sys.rebalance('RACK_AWARE,REPLICA_DISTRIBUTION,LEADER_DISTRIBUTION');
+CALL sys.rebalance('RACK_AWARE,TABLE_REPLICA_DISTRIBUTION,REPLICA_DISTRIBUTION,TABLE_LEADER_DISTRIBUTION,LEADER_DISTRIBUTION');
 
 -- Incorrect: May produce non-rack-balanced assignments
 -- CALL sys.rebalance('REPLICA_DISTRIBUTION,RACK_AWARE');  -- Don't do this!

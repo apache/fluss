@@ -21,6 +21,7 @@ import org.apache.fluss.exception.IllegalConfigurationException;
 
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Map;
@@ -137,6 +138,20 @@ class FlussConfigUtilsTest {
                 .hasMessageContaining(
                         "All weights in 'remote.data.dirs.weights' must be no less than 0");
 
+        // Test all zero weights
+        Configuration zeroWeightsConf = new Configuration();
+        zeroWeightsConf.set(
+                ConfigOptions.REMOTE_DATA_DIRS_STRATEGY,
+                ConfigOptions.RemoteDataDirStrategy.WEIGHTED_ROUND_ROBIN);
+        zeroWeightsConf.set(
+                ConfigOptions.REMOTE_DATA_DIRS, Arrays.asList("s3://bucket1", "s3://bucket2"));
+        zeroWeightsConf.set(ConfigOptions.REMOTE_DATA_DIRS_WEIGHTS, Arrays.asList(0, 0));
+        assertThatThrownBy(() -> validateCoordinatorConfigs(zeroWeightsConf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining("The sum of all weights")
+                .hasMessageContaining(ConfigOptions.REMOTE_DATA_DIRS_WEIGHTS.key())
+                .hasMessageContaining("must be greater than 0");
+
         // Test invalid DEFAULT_REPLICATION_FACTOR
         Configuration invalidReplicationConf = new Configuration();
         invalidReplicationConf.set(ConfigOptions.REMOTE_DATA_DIR, "s3://bucket/path");
@@ -174,5 +189,102 @@ class FlussConfigUtilsTest {
                 .isInstanceOf(IllegalConfigurationException.class)
                 .hasMessageContaining(ConfigOptions.TABLET_SERVER_ID.key())
                 .hasMessageContaining("it must be greater than or equal 0");
+    }
+
+    @Test
+    void testValidateLogRetentionCheckInterval() {
+        assertThat(ConfigOptions.LOG_RETENTION_CHECK_INTERVAL.key())
+                .isEqualTo("log.retention.check-interval");
+
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.REMOTE_DATA_DIR, "s3://bucket/path");
+
+        conf.set(ConfigOptions.LOG_RETENTION_CHECK_INTERVAL, Duration.ZERO);
+        assertThatThrownBy(() -> validateCoordinatorConfigs(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining(ConfigOptions.LOG_RETENTION_CHECK_INTERVAL.key())
+                .hasMessageContaining("must be greater than or equal 1 ms");
+
+        conf.set(ConfigOptions.LOG_RETENTION_CHECK_INTERVAL, Duration.ofMillis(-1));
+        assertThatThrownBy(() -> validateCoordinatorConfigs(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining(ConfigOptions.LOG_RETENTION_CHECK_INTERVAL.key())
+                .hasMessageContaining("must be greater than or equal 1 ms");
+
+        conf.set(ConfigOptions.LOG_RETENTION_CHECK_INTERVAL, Duration.ofMillis(1));
+        validateCoordinatorConfigs(conf);
+    }
+
+    @Test
+    void testValidateCoordinatorRequestDurations() {
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.REMOTE_DATA_DIR, "s3://bucket/path");
+
+        conf.set(ConfigOptions.COORDINATOR_CONTROL_REQUEST_RETRY_BACKOFF, Duration.ZERO);
+        assertThatThrownBy(() -> validateCoordinatorConfigs(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining(ConfigOptions.COORDINATOR_CONTROL_REQUEST_RETRY_BACKOFF.key())
+                .hasMessageContaining("must be greater than or equal 1 ms");
+
+        conf.set(ConfigOptions.COORDINATOR_CONTROL_REQUEST_RETRY_BACKOFF, Duration.ofMillis(1));
+        conf.set(ConfigOptions.COORDINATOR_CONTROL_REQUEST_TIMEOUT, Duration.ZERO);
+        assertThatThrownBy(() -> validateCoordinatorConfigs(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining(ConfigOptions.COORDINATOR_CONTROL_REQUEST_TIMEOUT.key())
+                .hasMessageContaining("must be greater than or equal 1 ms");
+
+        conf.set(ConfigOptions.COORDINATOR_CONTROL_REQUEST_TIMEOUT, Duration.ofMillis(1));
+        validateCoordinatorConfigs(conf);
+    }
+
+    @Test
+    void testValidateHistoricalLookupCacheConfigs() {
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.REMOTE_DATA_DIR, "s3://bucket/path");
+        conf.set(ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO, 0.0);
+
+        assertThatThrownBy(() -> validateCoordinatorConfigs(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining(
+                        ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO.key())
+                .hasMessageContaining("within (0.0, 1.0]");
+
+        conf.set(ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO, 1.01);
+        assertThatThrownBy(() -> validateCoordinatorConfigs(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining("within (0.0, 1.0]");
+
+        conf.set(ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO, 0.1);
+        conf.set(
+                ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUPER_CACHE_EXPIRE_AFTER_ACCESS,
+                Duration.ZERO);
+        assertThatThrownBy(() -> validateCoordinatorConfigs(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining(
+                        ConfigOptions.SERVER_HISTORICAL_PARTITION_LOOKUPER_CACHE_EXPIRE_AFTER_ACCESS
+                                .key());
+    }
+
+    @Test
+    void testValidateClientConfigs() {
+        // valid defaults should pass
+        Configuration validConf = new Configuration();
+        FlussConfigUtils.validateClientConfigs(validConf);
+
+        // max-poll-records = 0 should fail
+        Configuration zeroPollConf = new Configuration();
+        zeroPollConf.set(ConfigOptions.CLIENT_SCANNER_LOG_MAX_POLL_RECORDS, 0);
+        assertThatThrownBy(() -> FlussConfigUtils.validateClientConfigs(zeroPollConf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining(ConfigOptions.CLIENT_SCANNER_LOG_MAX_POLL_RECORDS.key())
+                .hasMessageContaining("must be greater than or equal 1");
+
+        // connect-timeout = 0 should fail
+        Configuration zeroTimeoutConf = new Configuration();
+        zeroTimeoutConf.set(ConfigOptions.CLIENT_CONNECT_TIMEOUT, Duration.ZERO);
+        assertThatThrownBy(() -> FlussConfigUtils.validateClientConfigs(zeroTimeoutConf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining(ConfigOptions.CLIENT_CONNECT_TIMEOUT.key())
+                .hasMessageContaining("must be greater than or equal 1 ms");
     }
 }

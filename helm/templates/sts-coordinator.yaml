@@ -19,12 +19,18 @@
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: coordinator-server
+  name: {{ include "fluss.coordinator.name" . }}
   labels:
   {{- include "fluss.labels" . | nindent 4 }}
+  {{- with .Values.coordinator.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
-  serviceName: coordinator-server-hs
+  serviceName: {{ include "fluss.coordinator.serviceName" . }}
   replicas: {{ .Values.coordinator.numberOfReplicas }}
+  updateStrategy:
+    type: RollingUpdate
   selector:
     matchLabels:
       {{- include "fluss.selectorLabels" . | nindent 6 }}
@@ -96,6 +102,9 @@ spec:
             - name: FLUSS_ENV_JAVA_OPTS
               value: "-Djava.security.auth.login.config=/etc/fluss/conf/jaas.conf"
             {{- end }}
+            {{- if (include "fluss.secrets.enabled" .) }}
+            {{- include "fluss.secrets.env" . | trim | nindent 12 }}
+            {{- end }}
             {{- with .Values.coordinator.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -108,6 +117,10 @@ spec:
               containerPort: {{ .Values.listeners.internal.port }}
             - name: client
               containerPort: {{ .Values.listeners.client.port }}
+            {{- if (include "fluss.listeners.external.enabled" .) }}
+            - name: external
+              containerPort: {{ include "fluss.listeners.external.port" . }}
+            {{- end }}
           command:
             - "/bin/sh"
             - "-c"
@@ -115,14 +128,14 @@ spec:
               export FLUSS_SERVER_ID=${POD_NAME##*-} && \
               cp /opt/conf/server.yaml $FLUSS_HOME/conf && \
 
-              BIND_LISTENERS="INTERNAL://${POD_IP}:{{ .Values.listeners.internal.port }}, CLIENT://${POD_IP}:{{ .Values.listeners.client.port }}" && \
-              ADVERTISED_LISTENERS="CLIENT://${POD_NAME}.coordinator-server-hs.${POD_NAMESPACE}.svc.cluster.local:{{ .Values.listeners.client.port }}" && \
+              BIND_LISTENERS="{{ include "fluss.listeners.bind" . }}" && \
+              ADVERTISED_LISTENERS="{{ include "fluss.listeners.advertised" (dict "ctx" . "component" "coordinator") }}" && \
 
               echo "" >> $FLUSS_HOME/conf/server.yaml && \
               echo "bind.listeners: ${BIND_LISTENERS}" >> $FLUSS_HOME/conf/server.yaml && \
               echo "advertised.listeners: ${ADVERTISED_LISTENERS}" >> $FLUSS_HOME/conf/server.yaml && \
 
-              bin/coordinator-server.sh start-foreground
+              exec bin/coordinator-server.sh start-foreground
           livenessProbe:
             failureThreshold: 100
             timeoutSeconds: 1
@@ -131,12 +144,37 @@ spec:
             tcpSocket:
               port: {{ .Values.listeners.client.port }}
           readinessProbe:
-            failureThreshold: 100
-            timeoutSeconds: 1
-            initialDelaySeconds: 10
-            periodSeconds: 3
-            tcpSocket:
-              port: {{ .Values.listeners.client.port }}
+            failureThreshold: {{ .Values.coordinator.readinessProbe.failureThreshold | default 360 }}
+            timeoutSeconds: {{ .Values.coordinator.readinessProbe.timeoutSeconds | default 10 }}
+            initialDelaySeconds: {{ .Values.coordinator.readinessProbe.initialDelaySeconds | default 15 }}
+            periodSeconds: {{ .Values.coordinator.readinessProbe.periodSeconds | default 5 }}
+            exec:
+              command:
+                - /bin/bash
+                - -c
+                - |
+                  export FLUSS_SERVER_ID=${POD_NAME##*-}
+                  # Probe the LOCAL coordinator. A leader passes with any cluster
+                  # health status. A standby passes once the leader lists it among
+                  # the standby coordinators, so a standby that binds its port but
+                  # never registers stays NotReady instead of looking healthy via TCP.
+                  export READINESS_ROLE=coordinator
+                  {{- $svcDomain := printf "%s.${POD_NAMESPACE}.svc.cluster.local:%v" (include "fluss.coordinator.serviceName" .) .Values.listeners.client.port }}
+                  # Client addresses of all coordinators, where a standby looks for
+                  # the leader, and the address this pod advertises (see
+                  # ADVERTISED_LISTENERS above), which the leader lists for it.
+                  export READINESS_COORDINATORS="{{ range $i, $_ := until (int .Values.coordinator.numberOfReplicas) }}{{ if $i }},{{ end }}{{ include "fluss.coordinator.name" $ }}-{{ $i }}.{{ $svcDomain }}{{ end }}"
+                  export READINESS_ADVERTISED_ADDRESS="${POD_NAME}.{{ $svcDomain }}"
+                  export READINESS_TIMEOUT_MS={{ .Values.coordinator.readinessProbe.rpcTimeoutMs | default 5000 }}
+                  export READINESS_TCP_PORT={{ .Values.listeners.client.port }}
+                  # bind.listeners binds the coordinator's CLIENT endpoint to ${POD_IP},
+                  # not 0.0.0.0, so we must probe the pod's own IP instead of 127.0.0.1.
+                  export READINESS_TCP_HOST=${POD_IP}
+                  export READINESS_HEALTH_CHECK_TIMEOUT_SECONDS={{ .Values.coordinator.readinessProbe.healthCheckTimeoutSeconds | default 1200 }}
+                  {{- with .Values.coordinator.readinessProbe.healthCheckAuth }}
+                  export READINESS_HEALTH_CHECK_AUTH={{ . | quote }}
+                  {{- end }}
+                  exec $FLUSS_HOME/bin/readiness-check.sh
           resources:
             {{- toYaml .Values.resources.coordinatorServer | nindent 12 }}
           volumeMounts:
@@ -149,19 +187,25 @@ spec:
               mountPath: /etc/fluss/conf
               readOnly: true
             {{- end }}
+            {{- if (include "fluss.secrets.enabled" .) }}
+            {{- include "fluss.secrets.volumeMounts" . | trim | nindent 12 }}
+            {{- end }}
             {{- with .Values.coordinator.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
       volumes:
         - name: fluss-conf
           configMap:
-            name: fluss-conf-file
+            name: {{ include "fluss.configMapName" . }}
         {{- if not .Values.coordinator.storage.enabled }}
         - name: data
           emptyDir: {}
         {{- end }}
         {{- if (include "fluss.security.jaas.required" .) }}
         {{- include "fluss.security.jaas.volumes" . | nindent 8 }}
+        {{- end }}
+        {{- if (include "fluss.secrets.enabled" .) }}
+        {{- include "fluss.secrets.volumes" . | trim | nindent 8 }}
         {{- end }}
         {{- with .Values.coordinator.extraVolumes }}
         {{- toYaml . | nindent 8 }}

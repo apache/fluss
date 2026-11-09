@@ -76,6 +76,23 @@ public final class AggFunctions {
     }
 
     /**
+     * Creates a COUNT aggregation function that counts non-null input values.
+     *
+     * <p>Supported data type: BIGINT. Each non-null input contributes one, regardless of its value.
+     * Null inputs contribute zero, including on the first write.
+     *
+     * <p>For partial updates, only updates targeting this column contribute to the count. An
+     * untargeted column retains its previous value, or remains null on the first write for a key.
+     * When targeted, a null input initializes a null count to zero and leaves an existing count
+     * unchanged.
+     *
+     * @return a COUNT aggregation function
+     */
+    public static AggFunction COUNT() {
+        return new AggFunction(AggFunctionType.COUNT, null);
+    }
+
+    /**
      * Creates a MAX aggregation function that selects the maximum value.
      *
      * <p>Supported data types: CHAR, STRING, TINYINT, SMALLINT, INT, BIGINT, FLOAT, DOUBLE,
@@ -134,11 +151,13 @@ public final class AggFunctions {
     }
 
     /**
-     * Creates a FIRST_VALUE aggregation function that retains the first value seen for a field.
+     * Creates a FIRST_VALUE aggregation function that retains the first non-null value seen for a
+     * field.
      *
      * <p>Supported data types: All data types
      *
-     * <p>Null handling: Null values are retained if received first
+     * <p>Null handling: Null values are treated as unset until a non-null value is received. This
+     * function has the same behavior as {@link #FIRST_VALUE_IGNORE_NULLS()}.
      *
      * @return a FIRST_VALUE aggregation function
      */
@@ -314,6 +333,79 @@ public final class AggFunctions {
      */
     public static AggFunction HLL_SKETCH() {
         return new AggFunction(AggFunctionType.HLL_SKETCH, null);
+    }
+
+    // ===================================================================================
+    // Array Aggregation Functions
+    // ===================================================================================
+
+    /** Parameter name for the number of elements LAST_N keeps. */
+    public static final String PARAM_SIZE = "size";
+
+    /**
+     * Creates a LAST_N aggregation function that appends input arrays and keeps the last {@code
+     * size} elements.
+     *
+     * <p>Supported data types: ARRAY
+     *
+     * @param size the number of elements to keep, must be positive
+     * @return a LAST_N aggregation function
+     */
+    public static AggFunction LAST_N(int size) {
+        Map<String, String> params = new HashMap<>();
+        params.put(PARAM_SIZE, String.valueOf(size));
+        return new AggFunction(AggFunctionType.LAST_N, params);
+    }
+
+    // ===================================================================================
+    // Collection Aggregation Functions
+    // ===================================================================================
+
+    /**
+     * Creates a COLLECT aggregation function that collects multiple elements into an array.
+     *
+     * <p>Supported data types: ARRAY&lt;T&gt;
+     *
+     * <p>Null handling: Null values are included in the collection
+     *
+     * @return a COLLECT aggregation function
+     */
+    public static AggFunction COLLECT() {
+        return new AggFunction(AggFunctionType.COLLECT, null);
+    }
+
+    /**
+     * Creates a COLLECT aggregation function with distinct behavior.
+     *
+     * <p>Collects multiple elements into an array, optionally removing duplicates. Elements retain
+     * their first occurrence order when duplicates are removed.
+     *
+     * <p>Supported data types: ARRAY&lt;T&gt;
+     *
+     * <p>Null handling: Null values are included in the collection
+     *
+     * @param distinct whether to remove duplicates
+     * @return a COLLECT aggregation function
+     */
+    public static AggFunction COLLECT(boolean distinct) {
+        Map<String, String> params = new HashMap<>();
+        params.put("distinct", String.valueOf(distinct));
+        return new AggFunction(AggFunctionType.COLLECT, params);
+    }
+
+    /**
+     * Creates a MERGE_MAP aggregation function that merges multiple maps.
+     *
+     * <p>Merges maps by combining their key-value pairs. For duplicate keys, the latest value wins.
+     *
+     * <p>Supported data types: MAP&lt;K, V&gt;
+     *
+     * <p>Null handling: Null keys are not allowed; null values are allowed
+     *
+     * @return a MERGE_MAP aggregation function
+     */
+    public static AggFunction MERGE_MAP() {
+        return new AggFunction(AggFunctionType.MERGE_MAP, null);
     }
 
     // ===================================================================================

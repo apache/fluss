@@ -148,6 +148,15 @@ final class ConverterCommons {
             }
             return;
         }
+        if (actual.isEnum()) {
+            if (typeRoot != DataTypeRoot.STRING) {
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Enum field '%s' must be a STRING column, got %s",
+                                prop.name, typeRoot));
+            }
+            return;
+        }
 
         Set<Class<?>> supported = SUPPORTED_TYPES.get(fieldType.getTypeRoot());
         if (supported == null) {
@@ -171,11 +180,15 @@ final class ConverterCommons {
     }
 
     static BinaryString toBinaryStringForText(Object v, String fieldName, DataTypeRoot root) {
-        final String s = String.valueOf(v);
+        final String s = objectToString(v);
         if (root == DataTypeRoot.CHAR && s.length() != 1) {
             throw new IllegalArgumentException(charLengthExceptionMessage(fieldName, s.length()));
         }
         return BinaryString.fromString(s);
+    }
+
+    private static String objectToString(Object v) {
+        return v instanceof Enum ? ((Enum<?>) v).name() : String.valueOf(v);
     }
 
     static Set<Class<?>> setOf(Class<?>... javaTypes) {

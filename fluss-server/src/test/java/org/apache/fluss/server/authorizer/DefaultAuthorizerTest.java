@@ -19,6 +19,7 @@ package org.apache.fluss.server.authorizer;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.AuthorizationException;
 import org.apache.fluss.rpc.netty.server.Session;
 import org.apache.fluss.security.acl.AccessControlEntry;
 import org.apache.fluss.security.acl.AccessControlEntryFilter;
@@ -52,6 +53,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -205,6 +207,56 @@ public class DefaultAuthorizerTest {
     }
 
     @Test
+    void testAclModificationRequiresAllPermission() throws Exception {
+        Resource resource = Resource.database("database1");
+        Session alterSession = createSession("alter-user", "192.168.1.1");
+        Session allSession = createSession("all-user", "192.168.1.1");
+        AclBinding targetAcl = createAclBinding(resource, "target-user", "*", READ);
+
+        authorizer.addAcls(
+                createRootUserSession(),
+                Arrays.asList(
+                        createAclBinding(resource, "alter-user", "*", ALTER),
+                        createAclBinding(resource, "all-user", "*", OperationType.ALL)));
+
+        assertThatThrownBy(
+                        () ->
+                                authorizer.addAcls(
+                                        alterSession, Collections.singletonList(targetAcl)))
+                .isInstanceOf(AuthorizationException.class)
+                .hasMessageContaining("operate ALL on resource");
+
+        List<AclCreateResult> createResults =
+                authorizer.addAcls(allSession, Collections.singletonList(targetAcl));
+        assertThat(createResults).hasSize(1);
+        assertThat(createResults.get(0).exception()).isNotPresent();
+        assertThat(listAcls(authorizer, resource)).contains(targetAcl.getAccessControlEntry());
+
+        AclBindingFilter targetAclFilter =
+                new AclBindingFilter(
+                        new ResourceFilter(DATABASE, "database1"),
+                        new AccessControlEntryFilter(
+                                targetAcl.getAccessControlEntry().getPrincipal(),
+                                "*",
+                                READ,
+                                PermissionType.ALLOW));
+        assertThatThrownBy(
+                        () ->
+                                authorizer.dropAcls(
+                                        alterSession, Collections.singletonList(targetAclFilter)))
+                .isInstanceOf(AuthorizationException.class)
+                .hasMessageContaining("operate ALL on resource");
+
+        List<AclDeleteResult> deleteResults =
+                authorizer.dropAcls(allSession, Collections.singletonList(targetAclFilter));
+        assertThat(deleteResults).hasSize(1);
+        assertThat(deleteResults.get(0).error()).isNotPresent();
+        assertThat(deleteResults.get(0).aclBindingDeleteResults())
+                .extracting(AclDeleteResult.AclBindingDeleteResult::aclBinding)
+                .containsExactly(targetAcl);
+    }
+
+    @Test
     void testAuthorizerNoZkConfig() {
         Configuration configuration =
                 new Configuration().set(ConfigOptions.AUTHORIZER_ENABLED, true);
@@ -221,6 +273,35 @@ public class DefaultAuthorizerTest {
                 .isFalse();
         assertThat(authorizer.isAuthorized(superUserSession, READ, Resource.database("database1")))
                 .isTrue();
+    }
+
+    @Test
+    void testPrincipalIgnoreCaseMatchesConfiguredUser() throws Exception {
+        // The setup configures USER:root as a super user with full access. USER:user1 has no
+        // matching ACLs and is not a super user, so READ on database1 should always be denied.
+        // The root session intentionally uses user:ROOT to verify case-sensitive matching first.
+        Session normalUserSession = createSession("USER", "user1", "192.168.1.1");
+        Session superUserSession = createSession("user", "ROOT", "192.168.1.1");
+        assertThat(authorizer.isAuthorized(normalUserSession, READ, Resource.database("database1")))
+                .isFalse();
+        assertThat(authorizer.isAuthorized(superUserSession, READ, Resource.database("database1")))
+                .isFalse();
+        Configuration ignoreCaseConfiguration = new Configuration(configuration);
+        ignoreCaseConfiguration.setBoolean(ConfigOptions.SECURITY_ACL_PRINCIPAL_IGNORE_CASE, true);
+        try (Authorizer ignoreCaseAuthorizer =
+                AuthorizerLoader.createAuthorizer(ignoreCaseConfiguration, zooKeeperClient, null)) {
+            assertThat(ignoreCaseAuthorizer).isNotNull();
+            // Enabling ignore-case lets user:ROOT match the configured USER:root super user, but it
+            // does not grant privileges to USER:user1.
+            assertThat(
+                            ignoreCaseAuthorizer.isAuthorized(
+                                    normalUserSession, READ, Resource.database("database1")))
+                    .isFalse();
+            assertThat(
+                            ignoreCaseAuthorizer.isAuthorized(
+                                    superUserSession, READ, Resource.database("database1")))
+                    .isTrue();
+        }
     }
 
     @Test
@@ -450,6 +531,85 @@ public class DefaultAuthorizerTest {
     }
 
     @Test
+    void testVersionedAclsAreImmutable() {
+        AccessControlEntry acl = createAclEntry("user1", "host-1", READ);
+        Set<AccessControlEntry> source = new HashSet<>(Collections.singleton(acl));
+        DefaultAuthorizer.VersionedAcls versionedAcls =
+                new DefaultAuthorizer.VersionedAcls(1, source);
+
+        source.clear();
+
+        assertThat(versionedAcls.acls).containsExactly(acl);
+        assertThatThrownBy(versionedAcls.acls::clear)
+                .isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    @Test
+    void testListAclsUsesImmutableSnapshotWithoutBlockingUpdatesOrAuthorization() throws Exception {
+        Resource existingResource = Resource.database("foo-" + UUID.randomUUID());
+        Resource addedResource = Resource.database("foo-" + UUID.randomUUID());
+        FlussPrincipal principal = new FlussPrincipal("user1", "User");
+        AccessControlEntry originalAcl =
+                new AccessControlEntry(principal, "host-1", READ, PermissionType.ALLOW);
+        AccessControlEntry addedAcl =
+                new AccessControlEntry(
+                        new FlussPrincipal("user2", "User"), "host-2", WRITE, PermissionType.ALLOW);
+        addAcls(authorizer, existingResource, Collections.singleton(originalAcl));
+
+        CountDownLatch filterEntered = new CountDownLatch(1);
+        CountDownLatch continueListing = new CountDownLatch(1);
+        AclBindingFilter blockingFilter =
+                new AclBindingFilter(ResourceFilter.ANY, AccessControlEntryFilter.ANY) {
+                    @Override
+                    public boolean matches(AclBinding binding) {
+                        filterEntered.countDown();
+                        try {
+                            if (!continueListing.await(10, TimeUnit.SECONDS)) {
+                                throw new AssertionError(
+                                        "Timed out waiting to continue ACL listing");
+                            }
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            throw new AssertionError("Interrupted while listing ACLs", e);
+                        }
+                        return true;
+                    }
+                };
+
+        ExecutorService executor = Executors.newFixedThreadPool(3);
+        try {
+            Future<Collection<AclBinding>> listFuture =
+                    executor.submit(
+                            () -> authorizer.listAcls(createRootUserSession(), blockingFilter));
+            assertThat(filterEntered.await(10, TimeUnit.SECONDS)).isTrue();
+
+            Future<?> updateFuture =
+                    executor.submit(
+                            () ->
+                                    addAcls(
+                                            authorizer,
+                                            addedResource,
+                                            Collections.singleton(addedAcl)));
+            Future<Boolean> authorizationFuture =
+                    executor.submit(
+                            () ->
+                                    authorizer.aclsAllowAccess(
+                                            existingResource, principal, READ, "host-1"));
+
+            updateFuture.get(10, TimeUnit.SECONDS);
+            assertThat(authorizationFuture.get(10, TimeUnit.SECONDS)).isTrue();
+            continueListing.countDown();
+            assertThat(listFuture.get(10, TimeUnit.SECONDS))
+                    .containsExactly(new AclBinding(existingResource, originalAcl));
+            assertThat(listAcls(authorizer, existingResource)).containsExactly(originalAcl);
+            assertThat(listAcls(authorizer, addedResource)).containsExactly(addedAcl);
+        } finally {
+            continueListing.countDown();
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
     void testDistributedConcurrentModificationOfResourceAcls() throws Exception {
         Resource commonResource = Resource.database("test");
         FlussPrincipal user1 = new FlussPrincipal("user1", "User");
@@ -664,12 +824,16 @@ public class DefaultAuthorizerTest {
     }
 
     private Session createSession(String username, String host) throws Exception {
+        return createSession("USER", username, host);
+    }
+
+    private Session createSession(String userType, String username, String host) throws Exception {
         return new Session(
                 (byte) 1,
                 "FLUSS",
                 false,
                 InetAddress.getByName(host),
-                new FlussPrincipal(username, "USER"));
+                new FlussPrincipal(username, userType));
     }
 
     private AclBinding createAclBinding(

@@ -17,8 +17,9 @@
 
 package org.apache.fluss.flink.tiering.source.state;
 
-import org.apache.fluss.flink.tiering.source.split.TieringLogSplit;
-import org.apache.fluss.flink.tiering.source.split.TieringSnapshotSplit;
+import org.apache.fluss.client.tiering.TieringLogSplit;
+import org.apache.fluss.client.tiering.TieringSnapshotSplit;
+import org.apache.fluss.flink.tiering.source.split.FlinkTieringSplit;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 
@@ -36,9 +37,17 @@ class TieringSplitStateTest {
 
         // verify conversion between TieringSnapshotSplitState and TieringSnapshotSplit
         TieringSnapshotSplit tieringSnapshotSplit =
-                new TieringSnapshotSplit(tablePath, tableBucket, "partition1", 0L, 200L, 10);
-        TieringSplitState tieringSnapshotSplitState = new TieringSplitState(tieringSnapshotSplit);
-        assertThat(tieringSnapshotSplitState.toSourceSplit()).isEqualTo(tieringSnapshotSplit);
+                new TieringSnapshotSplit(
+                        tablePath, tableBucket, "partition1", 0L, 200L, 10, 0, 1000L);
+        tieringSnapshotSplit.skipCurrentRound();
+        FlinkTieringSplit flinkSplit = new FlinkTieringSplit(tieringSnapshotSplit);
+        TieringSplitState tieringSnapshotSplitState = new TieringSplitState(flinkSplit.unwrap());
+        FlinkTieringSplit restoredFlinkSplit = tieringSnapshotSplitState.toSourceSplit();
+        TieringSnapshotSplit restoredSplit = restoredFlinkSplit.unwrap().asTieringSnapshotSplit();
+        assertThat(restoredSplit).isEqualTo(tieringSnapshotSplit).isNotSameAs(tieringSnapshotSplit);
+        assertThat(restoredSplit.shouldSkipCurrentRound()).isTrue();
+        assertThat(restoredSplit.getSplitIndex()).isZero();
+        assertThat(restoredSplit.getTieringRoundTimestamp()).isEqualTo(1000L);
     }
 
     @Test
@@ -48,8 +57,15 @@ class TieringSplitStateTest {
 
         // verify conversion between TieringLogSplitState and TieringLogSplit
         TieringLogSplit tieringLogSplit =
-                new TieringLogSplit(tablePath, tableBucket, "partition1", 100L, 200L, 20);
-        TieringSplitState tieringLogSplitState = new TieringSplitState(tieringLogSplit);
-        assertThat(tieringLogSplitState.toSourceSplit()).isEqualTo(tieringLogSplit);
+                new TieringLogSplit(tablePath, tableBucket, "partition1", 100L, 200L, 20, 1, 2000L);
+        tieringLogSplit.skipCurrentRound();
+        FlinkTieringSplit flinkSplit = new FlinkTieringSplit(tieringLogSplit);
+        TieringSplitState tieringLogSplitState = new TieringSplitState(flinkSplit.unwrap());
+        FlinkTieringSplit restoredFlinkSplit = tieringLogSplitState.toSourceSplit();
+        TieringLogSplit restoredSplit = restoredFlinkSplit.unwrap().asTieringLogSplit();
+        assertThat(restoredSplit).isEqualTo(tieringLogSplit).isNotSameAs(tieringLogSplit);
+        assertThat(restoredSplit.shouldSkipCurrentRound()).isTrue();
+        assertThat(restoredSplit.getSplitIndex()).isEqualTo(1);
+        assertThat(restoredSplit.getTieringRoundTimestamp()).isEqualTo(2000L);
     }
 }

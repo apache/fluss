@@ -17,30 +17,27 @@
 
 package org.apache.fluss.server.kv.rocksdb;
 
+import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.server.exception.KvBuildingException;
+import org.apache.fluss.server.kv.RowTtlCompactionFilterFactory;
+import org.apache.fluss.utils.clock.ManualClock;
 
+import io.github.fluss_contrib.rocksdb.FlussTtlCompactionFilter;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Path;
+import java.time.Duration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link org.apache.fluss.server.kv.rocksdb.RocksDBKvBuilder} . */
 class RocksDBKvBuilderTest {
-
-    /**
-     * This test checks that the RocksDB native code loader still responds to resetting the init
-     * flag.
-     */
-    @Test
-    void testResetInitFlag() throws Exception {
-        RocksDBKvBuilder.resetRocksDBLoadedFlag();
-    }
 
     @Test
     void testTempLibFolderDeletedOnFail(@TempDir Path tempDir) {
@@ -59,13 +56,47 @@ class RocksDBKvBuilderTest {
     }
 
     @Test
-    void testBuildFail() {
+    void testCompactionFilterFactoryClosedWithKv(@TempDir Path tempDir) throws Exception {
+        FlussTtlCompactionFilter.FlussTtlCompactionFilterFactory filterFactory =
+                RowTtlCompactionFilterFactory.create(
+                        KvValueLayout.TAGGED, Duration.ofHours(1L), new ManualClock(0L));
+        RocksDBResourceContainer rocksDBResourceContainer =
+                new RocksDBResourceContainer(new Configuration(), tempDir.toFile());
+        RocksDBKvBuilder rocksDBKvBuilder =
+                new RocksDBKvBuilder(
+                                tempDir.toFile(),
+                                rocksDBResourceContainer,
+                                rocksDBResourceContainer.getColumnOptions())
+                        .setCompactionFilterFactory(filterFactory);
+
+        try {
+            try (RocksDBKv ignored = rocksDBKvBuilder.build()) {
+                assertThat(filterFactory.isOwningHandle()).isTrue();
+            }
+            assertThat(filterFactory.isOwningHandle()).isFalse();
+        } finally {
+            filterFactory.close();
+        }
+    }
+
+    @Test
+    void testCompactionFilterFactoryClosedWhenBuildFails() {
+        FlussTtlCompactionFilter.FlussTtlCompactionFilterFactory filterFactory =
+                RowTtlCompactionFilterFactory.create(
+                        KvValueLayout.TAGGED, Duration.ofHours(1L), new ManualClock(0L));
         RocksDBResourceContainer rocksDBResourceContainer = new RocksDBResourceContainer();
         RocksDBKvBuilder rocksDBKvBuilder =
                 new RocksDBKvBuilder(
-                        null,
-                        rocksDBResourceContainer,
-                        rocksDBResourceContainer.getColumnOptions());
-        assertThatThrownBy(rocksDBKvBuilder::build).isInstanceOf(KvBuildingException.class);
+                                null,
+                                rocksDBResourceContainer,
+                                rocksDBResourceContainer.getColumnOptions())
+                        .setCompactionFilterFactory(filterFactory);
+
+        try {
+            assertThatThrownBy(rocksDBKvBuilder::build).isInstanceOf(KvBuildingException.class);
+            assertThat(filterFactory.isOwningHandle()).isFalse();
+        } finally {
+            filterFactory.close();
+        }
     }
 }

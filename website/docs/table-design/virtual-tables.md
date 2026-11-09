@@ -14,6 +14,81 @@ Fluss supports the following virtual table types:
 |---------------|--------|-----------------------------------------------------------|------------------|
 | [Changelog](#changelog-table) | `$changelog` | Provides access to the raw changelog stream with metadata | Primary Key Tables, Log Tables |
 | [Binlog](#binlog-table) | `$binlog` | Provides binlog format with before/after metadata         | Primary Key Tables only |
+| [Buckets](#buckets-table) | `$buckets` | Provides replica placement and leader/ISR metadata        | Primary Key Tables, Log Tables |
+
+## Flink Runtime Modes
+
+Both `$changelog` and `$binlog` can be queried in Flink streaming or batch runtime.
+The `$buckets` table always returns a bounded metadata snapshot, including when the Flink runtime
+mode is streaming.
+
+| Runtime Mode | Behavior |
+|--------------|----------|
+| Streaming | Reads from the configured starting position and continues waiting for new changes. |
+| Batch | Reads a bounded range and terminates after reaching the stopping offset of every bucket. |
+
+For a batch scan, Fluss resolves the starting offset from `scan.startup.mode` and captures the latest offset of each bucket as its stopping offset when the bounded splits are initialized. The scan reads the range `[starting offset, stopping offset)`. Records appended to a bucket after its stopping offset is captured are not included in that batch query.
+
+:::note
+A batch scan does not wait for future changes. Therefore, `scan.startup.mode = 'latest'` is generally useful for streaming queries, but is typically not useful for historical replay in batch runtime.
+
+Virtual tables currently read directly from the Fluss log and do not reconstruct historical changes from lake snapshots. The `full` and `earliest` modes start from the earliest log offset still available in Fluss. Batch scans always use the latest offset captured during split initialization as the stopping offset; a separate stopping offset cannot be configured.
+:::
+
+For example, the following query replays a historical part of a changelog and terminates as a bounded Flink job:
+
+```sql title="Flink SQL"
+SET 'execution.runtime-mode' = 'batch';
+
+SELECT _change_type, _log_offset, order_id, amount
+FROM orders$changelog
+/*+ OPTIONS(
+  'scan.startup.mode' = 'timestamp',
+  'scan.startup.timestamp' = '1705312200000'
+) */
+WHERE _commit_timestamp < TO_TIMESTAMP_LTZ(1705398600000, 3)
+ORDER BY _log_offset
+LIMIT 100;
+```
+
+:::warning
+On Flink 1.18, a predicate on `_commit_timestamp` (or on any other `TIMESTAMP_LTZ` column) returns wrong results when the session time zone is not UTC. Flink 1.18 rebuilds such a predicate using the session time zone instead of UTC after the filter is pushed into the source, which shifts the literal by the zone offset and typically makes the query return no rows. This is [FLINK-35318](https://issues.apache.org/jira/browse/FLINK-35318), fixed in Flink 1.19.2 and 1.20.0 and never backported to 1.18. On Flink 1.18, either avoid `TIMESTAMP_LTZ` predicates or set `table.local-time-zone` to `UTC`.
+:::
+
+## Buckets Table
+
+The `$buckets` virtual table provides read-only access to the current replica placement and
+leader/ISR state of every bucket belonging to a table. Append `$buckets` to the base table name:
+
+```sql title="Flink SQL"
+SELECT * FROM orders$buckets;
+```
+
+### Schema
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `table_path` | STRING NOT NULL | The base table path |
+| `table_id` | BIGINT NOT NULL | The unique table ID |
+| `partition_id` | BIGINT | The partition ID, or `NULL` for a non-partitioned table |
+| `partition_name` | STRING | The partition name, or `NULL` for a non-partitioned table |
+| `bucket_id` | INT NOT NULL | The bucket ID |
+| `leader_id` | INT | The leader TabletServer ID, or `NULL` if no leader is elected |
+| `leader_epoch` | INT | The leader epoch, or `NULL` if no leader is elected |
+| `bucket_epoch` | INT | The generation of the leader/ISR state; `NULL` indicates legacy metadata and `-1` indicates no leader/ISR state |
+| `replicas` | ARRAY&lt;INT NOT NULL&gt; NOT NULL | Replica TabletServer IDs |
+| `isr` | ARRAY&lt;INT NOT NULL&gt; NOT NULL | In-sync replica TabletServer IDs |
+
+For a partitioned table, use normal SQL predicates to select the required partitions or buckets:
+
+```sql title="Flink SQL"
+SELECT partition_name, bucket_id, leader_id, replicas, isr
+FROM orders$buckets
+WHERE partition_name = 'cn$2026-09-16';
+```
+
+The current implementation obtains the complete bucket metadata snapshot before Flink evaluates
+the predicate. Predicate pushdown for large partitioned tables is not supported yet.
 
 ## Changelog Table
 
@@ -107,18 +182,22 @@ Output:
 
 | Mode | Description |
 |------|-------------|
+| `full` | Start reading from the beginning of the log (default) |
 | `earliest` | Start reading from the beginning of the log |
-| `latest` | Start reading from the current end of the log (only new changes) |
+| `latest` | Use the current end of the log as the starting position |
 | `timestamp` | Start reading from a specific timestamp (milliseconds since epoch) |
 
 
 The changelog table supports different startup modes to control where reading begins:
 
 ```sql title="Flink SQL"
--- Read from the beginning (default)
+-- Read from the beginning (default full mode)
+SELECT * FROM orders$changelog;
+
+-- Explicitly read from the earliest offset
 SELECT * FROM orders$changelog /*+ OPTIONS('scan.startup.mode' = 'earliest') */;
 
--- Read only new changes from now
+-- Use the current log end as the starting position
 SELECT * FROM orders$changelog /*+ OPTIONS('scan.startup.mode' = 'latest') */;
 
 -- Read from a specific timestamp
@@ -224,18 +303,22 @@ WHERE _change_type = 'update';
 
 | Mode | Description |
 |------|-------------|
+| `full` | Start reading from the beginning of the log (default) |
 | `earliest` | Start reading from the beginning of the log |
-| `latest` | Start reading from the current end of the log (only new changes) |
+| `latest` | Use the current end of the log as the starting position |
 | `timestamp` | Start reading from a specific timestamp (milliseconds since epoch) |
 
 
 The binlog table supports different startup modes to control where reading begins:
 
 ```sql title="Flink SQL"
--- Read from the beginning (default)
+-- Read from the beginning (default full mode)
+SELECT * FROM orders$binlog;
+
+-- Explicitly read from the earliest offset
 SELECT * FROM orders$binlog /*+ OPTIONS('scan.startup.mode' = 'earliest') */;
 
--- Read only new changes from now
+-- Use the current log end as the starting position
 SELECT * FROM orders$binlog /*+ OPTIONS('scan.startup.mode' = 'latest') */;
 
 -- Read from a specific timestamp

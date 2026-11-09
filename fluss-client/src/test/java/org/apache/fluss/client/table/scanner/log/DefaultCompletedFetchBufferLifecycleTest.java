@@ -33,6 +33,7 @@ import java.util.Map;
 
 import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
 import static org.apache.fluss.record.TestData.TEST_SCHEMA_GETTER;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
@@ -155,7 +156,9 @@ class DefaultCompletedFetchBufferLifecycleTest {
             throws Exception {
         return new DefaultCompletedFetch(
                 tableBucket,
-                new FetchLogResultForBucket(tableBucket, genMemoryLogRecordsByObject(DATA1), 10L),
+                DATA1_TABLE_PATH,
+                FetchLogResultForBucket.records(
+                        tableBucket, genMemoryLogRecordsByObject(DATA1), 10L, -1L, -1L),
                 readContext,
                 logScannerStatus,
                 true,

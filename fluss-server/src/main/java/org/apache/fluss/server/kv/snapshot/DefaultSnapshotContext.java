@@ -21,11 +21,9 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.cluster.ServerReconfigurable;
 import org.apache.fluss.exception.ConfigException;
-import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.kv.KvSnapshotResource;
 import org.apache.fluss.server.zk.ZooKeeperClient;
-import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.function.FunctionWithException;
 
 import org.slf4j.Logger;
@@ -57,7 +55,9 @@ public class DefaultSnapshotContext implements SnapshotContext, ServerReconfigur
 
     private final int maxFetchLogSizeInRecoverKv;
 
-    private final FsPath remoteKvDir;
+    private final int remoteLogPrefetchNumInRecoverKv;
+
+    private final int remoteLogDownloadThreadsInRecoverKv;
 
     private DefaultSnapshotContext(
             ZooKeeperClient zooKeeperClient,
@@ -68,9 +68,10 @@ public class DefaultSnapshotContext implements SnapshotContext, ServerReconfigur
             KvSnapshotDataDownloader kvSnapshotDataDownloader,
             long kvSnapshotIntervalMs,
             int writeBufferSizeInBytes,
-            FsPath remoteKvDir,
             CompletedSnapshotHandleStore completedSnapshotHandleStore,
-            int maxFetchLogSizeInRecoverKv) {
+            int maxFetchLogSizeInRecoverKv,
+            int remoteLogPrefetchNumInRecoverKv,
+            int remoteLogDownloadThreadsInRecoverKv) {
         this.zooKeeperClient = zooKeeperClient;
         this.completedKvSnapshotCommitter = completedKvSnapshotCommitter;
         this.snapshotScheduler = snapshotScheduler;
@@ -79,10 +80,11 @@ public class DefaultSnapshotContext implements SnapshotContext, ServerReconfigur
         this.kvSnapshotDataDownloader = kvSnapshotDataDownloader;
         this.kvSnapshotIntervalMs = kvSnapshotIntervalMs;
         this.writeBufferSizeInBytes = writeBufferSizeInBytes;
-        this.remoteKvDir = remoteKvDir;
 
         this.completedSnapshotHandleStore = completedSnapshotHandleStore;
         this.maxFetchLogSizeInRecoverKv = maxFetchLogSizeInRecoverKv;
+        this.remoteLogPrefetchNumInRecoverKv = remoteLogPrefetchNumInRecoverKv;
+        this.remoteLogDownloadThreadsInRecoverKv = remoteLogDownloadThreadsInRecoverKv;
     }
 
     public static DefaultSnapshotContext create(
@@ -99,19 +101,23 @@ public class DefaultSnapshotContext implements SnapshotContext, ServerReconfigur
                 kvSnapshotResource.getKvSnapshotDataDownloader(),
                 conf.get(ConfigOptions.KV_SNAPSHOT_INTERVAL).toMillis(),
                 (int) conf.get(ConfigOptions.REMOTE_FS_WRITE_BUFFER_SIZE).getBytes(),
-                FlussPaths.remoteKvDir(conf),
                 new ZooKeeperCompletedSnapshotHandleStore(zkClient),
-                (int) conf.get(ConfigOptions.KV_RECOVER_LOG_RECORD_BATCH_MAX_SIZE).getBytes());
+                (int) conf.get(ConfigOptions.KV_RECOVER_LOG_RECORD_BATCH_MAX_SIZE).getBytes(),
+                conf.get(ConfigOptions.KV_RECOVERY_REMOTE_LOG_PREFETCH_NUM),
+                conf.get(ConfigOptions.KV_RECOVERY_REMOTE_LOG_DOWNLOAD_THREADS));
     }
 
+    @Override
     public ZooKeeperClient getZooKeeperClient() {
         return zooKeeperClient;
     }
 
+    @Override
     public ExecutorService getAsyncOperationsThreadPool() {
         return asyncOperationsThreadPool;
     }
 
+    @Override
     public KvSnapshotDataUploader getSnapshotDataUploader() {
         return kvSnapshotDataUploader;
     }
@@ -121,6 +127,7 @@ public class DefaultSnapshotContext implements SnapshotContext, ServerReconfigur
         return kvSnapshotDataDownloader;
     }
 
+    @Override
     public ScheduledExecutorService getSnapshotScheduler() {
         return snapshotScheduler;
     }
@@ -140,10 +147,6 @@ public class DefaultSnapshotContext implements SnapshotContext, ServerReconfigur
         return writeBufferSizeInBytes;
     }
 
-    public FsPath getRemoteKvDir() {
-        return remoteKvDir;
-    }
-
     @Override
     public FunctionWithException<TableBucket, CompletedSnapshot, Exception>
             getLatestCompletedSnapshotProvider() {
@@ -161,6 +164,16 @@ public class DefaultSnapshotContext implements SnapshotContext, ServerReconfigur
     @Override
     public int maxFetchLogSizeInRecoverKv() {
         return maxFetchLogSizeInRecoverKv;
+    }
+
+    @Override
+    public int remoteLogPrefetchNumInRecoverKv() {
+        return remoteLogPrefetchNumInRecoverKv;
+    }
+
+    @Override
+    public int remoteLogDownloadThreadsInRecoverKv() {
+        return remoteLogDownloadThreadsInRecoverKv;
     }
 
     @Override

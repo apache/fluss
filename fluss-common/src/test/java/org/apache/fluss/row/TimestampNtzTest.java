@@ -19,7 +19,9 @@ package org.apache.fluss.row;
 
 import org.junit.jupiter.api.Test;
 
+import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.TimeZone;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -44,6 +46,29 @@ public class TimestampNtzTest {
 
         LocalDateTime ldt3 = LocalDateTime.of(1989, 1, 2, 0, 0, 0, 123456789);
         assertThat(TimestampNtz.fromLocalDateTime(ldt3).toLocalDateTime()).isEqualTo(ldt3);
+    }
+
+    @Test
+    void testToLocalDateTimeAcrossMillisecondRange() {
+        long[] milliseconds = {
+            Long.MIN_VALUE,
+            (long) Integer.MIN_VALUE * 86_400_000 - 1,
+            -86_400_001,
+            -1,
+            0,
+            86_400_000,
+            ((long) Integer.MAX_VALUE + 1) * 86_400_000,
+            Long.MAX_VALUE
+        };
+        for (long millis : milliseconds) {
+            for (int nanos : new int[] {0, 999_999}) {
+                LocalDateTime expected =
+                        LocalDateTime.ofInstant(
+                                Instant.ofEpochMilli(millis).plusNanos(nanos), ZoneOffset.UTC);
+                assertThat(TimestampNtz.fromMillis(millis, nanos).toLocalDateTime())
+                        .isEqualTo(expected);
+            }
+        }
     }
 
     @Test

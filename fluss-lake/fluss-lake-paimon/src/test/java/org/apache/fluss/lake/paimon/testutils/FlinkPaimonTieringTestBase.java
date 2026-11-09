@@ -124,13 +124,18 @@ public abstract class FlinkPaimonTieringTestBase {
     }
 
     protected JobClient buildTieringJob(StreamExecutionEnvironment execEnv) throws Exception {
+        return buildTieringJob(execEnv, new Configuration());
+    }
+
+    protected JobClient buildTieringJob(
+            StreamExecutionEnvironment execEnv, Configuration lakeTieringConfig) throws Exception {
         Configuration flussConfig = new Configuration(clientConf);
         flussConfig.set(POLL_TIERING_TABLE_INTERVAL, Duration.ofMillis(500L));
         return LakeTieringJobBuilder.newBuilder(
                         execEnv,
                         flussConfig,
                         Configuration.fromMap(getPaimonCatalogConf()),
-                        new Configuration(),
+                        lakeTieringConfig,
                         DataLakeFormat.PAIMON.toString())
                 .build();
     }

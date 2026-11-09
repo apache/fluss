@@ -22,6 +22,7 @@ import org.apache.fluss.flink.utils.FlinkTestBase;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.shaded.guava32.com.google.common.collect.ImmutableMap;
+import org.apache.fluss.testutils.common.MultiVersionTest;
 
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.table.api.EnvironmentSettings;
@@ -53,6 +54,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** IT case for Delta Join optimization in Flink 2.2. */
+@MultiVersionTest
 public class Flink22DeltaJoinITCase extends FlinkTestBase {
 
     private static final String CATALOG_NAME = "test_catalog";

@@ -19,6 +19,7 @@ package org.apache.fluss.server.replica;
 
 import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.config.ConfigOption;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
@@ -27,7 +28,9 @@ import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.metrics.registry.NOPMetricRegistry;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
@@ -36,10 +39,12 @@ import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.coordinator.TestCoordinatorGateway;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
+import org.apache.fluss.server.kv.KvFlushScheduler;
 import org.apache.fluss.server.kv.KvManager;
 import org.apache.fluss.server.kv.scan.ScannerManager;
 import org.apache.fluss.server.kv.snapshot.CompletedKvSnapshotCommitter;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
+import org.apache.fluss.server.kv.snapshot.CompletedSnapshotJsonSerde;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotDataDownloader;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotDataUploader;
 import org.apache.fluss.server.kv.snapshot.SnapshotContext;
@@ -53,6 +58,7 @@ import org.apache.fluss.server.metadata.ClusterMetadata;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.metrics.group.BucketMetricGroup;
+import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.server.storage.LocalDiskManager;
 import org.apache.fluss.server.testutils.ServerTestTags;
@@ -60,6 +66,7 @@ import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
@@ -83,6 +90,7 @@ import java.io.IOException;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -114,7 +122,6 @@ import static org.apache.fluss.record.TestData.DATA3_SCHEMA_PK_AUTO_INC;
 import static org.apache.fluss.record.TestData.DATA3_TABLE_DESCRIPTOR_PK_AUTO_INC;
 import static org.apache.fluss.record.TestData.DATA3_TABLE_ID_PK_AUTO_INC;
 import static org.apache.fluss.record.TestData.DATA3_TABLE_PATH_PK_AUTO_INC;
-import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.server.coordinator.CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
 import static org.apache.fluss.server.replica.ReplicaManager.HIGH_WATERMARK_CHECKPOINT_FILE_NAME;
 import static org.apache.fluss.server.zk.data.LeaderAndIsr.INITIAL_BUCKET_EPOCH;
@@ -136,6 +143,7 @@ public class ReplicaTestBase {
     protected static final int TABLET_SERVER_ID = 1;
     private static final String TABLET_SERVER_RACK = "rack1";
     protected static ZooKeeperClient zkClient;
+    protected static String remoteDataDir;
 
     // to register all should be closed after each test
     private final CloseableRegistry closeableRegistry = new CloseableRegistry();
@@ -152,6 +160,7 @@ public class ReplicaTestBase {
     protected TabletServerMetadataCache serverMetadataCache;
     protected TestingCompletedKvSnapshotCommitter snapshotReporter;
     protected TestCoordinatorGateway testCoordinatorGateway;
+    private TabletServerMetricGroup tabletServerMetricGroup;
     private FlussScheduler scheduler;
     private ExecutorService ioExecutor;
 
@@ -166,18 +175,38 @@ public class ReplicaTestBase {
         return conf;
     }
 
+    /**
+     * Returns the KV flush scheduler to install into the {@link KvManager}, or {@code null} to let
+     * the manager create its own. Subclasses override this to gain deterministic control over when
+     * the asynchronous KV flush runs.
+     */
+    @Nullable
+    protected KvFlushScheduler createTestKvFlushScheduler(Configuration conf) {
+        return null;
+    }
+
     @BeforeAll
     static void baseBeforeAll() {
         zkClient =
                 ZOO_KEEPER_EXTENSION_WRAPPER
                         .getCustomExtension()
                         .getZooKeeperClient(NOPErrorHandler.INSTANCE);
+        remoteDataDir = zkClient.getDefaultRemoteDataDir();
     }
 
     @BeforeEach
     public void setup(TestInfo testInfo) throws Exception {
         conf = getServerConf();
+        tabletServerMetricGroup =
+                new TabletServerMetricGroup(
+                        NOPMetricRegistry.INSTANCE,
+                        "fluss",
+                        "host",
+                        TABLET_SERVER_RACK,
+                        TABLET_SERVER_ID);
         conf.set(ConfigOptions.TABLET_SERVER_ID, TABLET_SERVER_ID);
+        // Keep unrelated tests independent of the host machine's actual disk usage.
+        conf.set(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO, 1.0);
         if (testInfo != null && testInfo.getTags().contains(ServerTestTags.JBOD_MULTI_DIR_TAG)) {
             conf.set(
                     ConfigOptions.DATA_DIRS,
@@ -211,7 +240,7 @@ public class ReplicaTestBase {
                         zkClient,
                         scheduler,
                         manualClock,
-                        TestingMetricGroups.TABLET_SERVER_METRICS,
+                        tabletServerMetricGroup,
                         localDiskManager);
         logManager.startup();
 
@@ -220,8 +249,10 @@ public class ReplicaTestBase {
                         conf,
                         zkClient,
                         logManager,
-                        TestingMetricGroups.TABLET_SERVER_METRICS,
-                        localDiskManager);
+                        tabletServerMetricGroup,
+                        localDiskManager,
+                        createTestKvFlushScheduler(conf),
+                        manualClock);
         kvManager.startup();
 
         serverMetadataCache =
@@ -287,25 +318,31 @@ public class ReplicaTestBase {
         zkClient.registerTable(
                 DATA1_TABLE_PATH,
                 TableRegistration.newTable(
-                        DATA1_TABLE_ID, DEFAULT_REMOTE_DATA_DIR, data1NonPkTableDescriptor));
+                        DATA1_TABLE_ID,
+                        conf.get(ConfigOptions.REMOTE_DATA_DIR),
+                        data1NonPkTableDescriptor));
         zkClient.registerFirstSchema(DATA1_TABLE_PATH, DATA1_SCHEMA);
         zkClient.registerTable(
                 DATA1_TABLE_PATH_PK,
                 TableRegistration.newTable(
-                        DATA1_TABLE_ID_PK, DEFAULT_REMOTE_DATA_DIR, DATA1_TABLE_DESCRIPTOR_PK));
+                        DATA1_TABLE_ID_PK,
+                        conf.get(ConfigOptions.REMOTE_DATA_DIR),
+                        DATA1_TABLE_DESCRIPTOR_PK));
         zkClient.registerFirstSchema(DATA1_TABLE_PATH_PK, DATA1_SCHEMA_PK);
 
         zkClient.registerTable(
                 DATA2_TABLE_PATH,
                 TableRegistration.newTable(
-                        DATA2_TABLE_ID, DEFAULT_REMOTE_DATA_DIR, DATA2_TABLE_DESCRIPTOR));
+                        DATA2_TABLE_ID,
+                        conf.get(ConfigOptions.REMOTE_DATA_DIR),
+                        DATA2_TABLE_DESCRIPTOR));
         zkClient.registerFirstSchema(DATA2_TABLE_PATH, DATA2_SCHEMA);
 
         zkClient.registerTable(
                 DATA3_TABLE_PATH_PK_AUTO_INC,
                 TableRegistration.newTable(
                         DATA3_TABLE_ID_PK_AUTO_INC,
-                        DEFAULT_REMOTE_DATA_DIR,
+                        conf.get(ConfigOptions.REMOTE_DATA_DIR),
                         DATA3_TABLE_DESCRIPTOR_PK_AUTO_INC));
         zkClient.registerFirstSchema(DATA3_TABLE_PATH_PK_AUTO_INC, DATA3_SCHEMA_PK_AUTO_INC);
     }
@@ -327,7 +364,8 @@ public class ReplicaTestBase {
         }
         zkClient.registerTable(
                 tablePath,
-                TableRegistration.newTable(tableId, DEFAULT_REMOTE_DATA_DIR, tableDescriptor));
+                TableRegistration.newTable(
+                        tableId, conf.get(ConfigOptions.REMOTE_DATA_DIR), tableDescriptor));
         zkClient.registerFirstSchema(tablePath, schema);
         return tableId;
     }
@@ -349,13 +387,14 @@ public class ReplicaTestBase {
                 coordinatorGateway,
                 snapshotReporter,
                 NOPErrorHandler.INSTANCE,
-                TestingMetricGroups.TABLET_SERVER_METRICS,
+                tabletServerMetricGroup,
                 TestingMetricGroups.USER_METRICS,
                 remoteLogManager,
                 scannerManager,
                 manualClock,
                 ioExecutor,
-                localDiskManager);
+                localDiskManager,
+                null);
     }
 
     @AfterEach
@@ -402,6 +441,10 @@ public class ReplicaTestBase {
             ioExecutor.shutdown();
         }
 
+        if (tabletServerMetricGroup != null) {
+            tabletServerMetricGroup.close();
+        }
+
         // clear zk environment.
         ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupRoot();
     }
@@ -437,7 +480,10 @@ public class ReplicaTestBase {
                                         isr,
                                         Collections.emptyList(),
                                         INITIAL_COORDINATOR_EPOCH,
-                                        INITIAL_BUCKET_EPOCH))));
+                                        INITIAL_BUCKET_EPOCH),
+                                // all test tables are created distributedBy(3)
+                                TEST_ROUTING_BUCKET_COUNT,
+                                0L)));
     }
 
     // TODO this is only for single tablet server unit test.
@@ -480,11 +526,38 @@ public class ReplicaTestBase {
                                         Collections.emptyList(),
                                         INITIAL_COORDINATOR_EPOCH,
                                         // use leader epoch as bucket epoch
-                                        leaderEpoch))));
+                                        leaderEpoch),
+                                // all test tables are created distributedBy(3)
+                                TEST_ROUTING_BUCKET_COUNT,
+                                0L)));
     }
+
+    /** The routing bucket count carried by test notifications; test tables are distributedBy(3). */
+    protected static final Integer TEST_ROUTING_BUCKET_COUNT = 3;
 
     protected void makeLeaderAndFollower(List<NotifyLeaderAndIsrData> notifyLeaderAndIsrDataList) {
         replicaManager.becomeLeaderOrFollower(0, notifyLeaderAndIsrDataList, result -> {});
+    }
+
+    protected void updateTableConfig(
+            Replica replica, ConfigOption<?> configOption, String newConfigValue) {
+        updateTableConfig(replica, Collections.singletonMap(configOption.key(), newConfigValue));
+    }
+
+    protected void updateTableConfig(Replica replica, Map<String, String> configUpdates) {
+        TableInfo currentTableInfo = replica.getTableInfo();
+        Map<String, String> properties =
+                new HashMap<>(currentTableInfo.toTableDescriptor().getProperties());
+        properties.putAll(configUpdates);
+        replica.updateTableInfo(
+                TableInfo.of(
+                        currentTableInfo.getTablePath(),
+                        currentTableInfo.getTableId(),
+                        currentTableInfo.getSchemaId(),
+                        currentTableInfo.toTableDescriptor().withProperties(properties),
+                        currentTableInfo.getRemoteDataDir(),
+                        currentTableInfo.getCreatedTime(),
+                        currentTableInfo.getModifiedTime()));
     }
 
     protected Replica makeLogReplica(PhysicalTablePath physicalTablePath, TableBucket tableBucket)
@@ -541,6 +614,7 @@ public class ReplicaTestBase {
                 NOPErrorHandler.INSTANCE,
                 metricGroup,
                 DATA1_TABLE_INFO,
+                remoteDataDir,
                 manualClock,
                 remoteLogManager,
                 scannerManager);
@@ -620,13 +694,59 @@ public class ReplicaTestBase {
                 .collect(Collectors.toSet());
     }
 
+    protected TableBucket makeTableBucket(boolean partitionTable) throws Exception {
+        return makeTableBucket(DATA1_TABLE_ID, partitionTable);
+    }
+
+    protected TableBucket makeTableBucket(boolean partitionTable, boolean kvTable)
+            throws Exception {
+        long tableId = kvTable ? DATA1_TABLE_ID_PK : DATA1_TABLE_ID;
+        Long partitionId = partitionTable ? 0L : null;
+        return makeTableBucket(tableId, partitionId, kvTable);
+    }
+
+    protected TableBucket makeTableBucket(long tableId, boolean partitionTable) throws Exception {
+        Long partitionId = partitionTable ? 0L : null;
+        return makeTableBucket(tableId, partitionId, false);
+    }
+
+    protected TableBucket makeTableBucket(long tableId, Long partitionId, boolean kvTable)
+            throws Exception {
+        int bucketId = 0;
+        boolean partitionTable = partitionId != null;
+        if (partitionTable) {
+            if (kvTable) {
+                zkClient.registerPartitionAssignmentAndMetadata(
+                        partitionId,
+                        DATA1_PHYSICAL_TABLE_PATH_PK_PA_2024.getPartitionName(),
+                        new PartitionAssignment(tableId, Collections.emptyMap()),
+                        conf.get(ConfigOptions.REMOTE_DATA_DIR),
+                        DATA1_TABLE_PATH_PK,
+                        tableId,
+                        TEST_ROUTING_BUCKET_COUNT);
+            } else {
+                zkClient.registerPartitionAssignmentAndMetadata(
+                        partitionId,
+                        DATA1_PHYSICAL_TABLE_PATH_PA_2024.getPartitionName(),
+                        new PartitionAssignment(tableId, Collections.emptyMap()),
+                        conf.get(ConfigOptions.REMOTE_DATA_DIR),
+                        DATA1_TABLE_PATH,
+                        tableId,
+                        TEST_ROUTING_BUCKET_COUNT);
+            }
+            return new TableBucket(tableId, partitionId, bucketId);
+        } else {
+            return new TableBucket(tableId, bucketId);
+        }
+    }
+
     /** An implementation of {@link SnapshotContext} for test purpose. */
     protected class TestSnapshotContext implements SnapshotContext {
 
         private final FsPath remoteKvTabletDir;
         protected ManuallyTriggeredScheduledExecutorService scheduledExecutorService;
         protected final TestingCompletedKvSnapshotCommitter testKvSnapshotStore;
-        private final ExecutorService executorService;
+        protected final ExecutorService executorService;
 
         public TestSnapshotContext(
                 String remoteKvTabletDir, TestingCompletedKvSnapshotCommitter testKvSnapshotStore)
@@ -708,14 +828,16 @@ public class ReplicaTestBase {
         }
 
         @Override
-        public FsPath getRemoteKvDir() {
-            return remoteKvTabletDir;
-        }
-
-        @Override
         public FunctionWithException<TableBucket, CompletedSnapshot, Exception>
                 getLatestCompletedSnapshotProvider() {
-            return testKvSnapshotStore::getLatestCompletedSnapshot;
+            return tableBucket -> {
+                CompletedSnapshot snapshot =
+                        testKvSnapshotStore.getLatestCompletedSnapshot(tableBucket);
+                return snapshot == null
+                        ? null
+                        : CompletedSnapshotJsonSerde.fromJson(
+                                CompletedSnapshotJsonSerde.toJson(snapshot));
+            };
         }
 
         @Override

@@ -52,14 +52,25 @@ public class ArrowLogWriteBatch extends WriteBatch {
     private final AbstractPagedOutputView outputView;
 
     public ArrowLogWriteBatch(
+            long tableId,
             int bucketId,
+            int bucketCount,
             PhysicalTablePath physicalTablePath,
             int schemaId,
             ArrowWriter arrowWriter,
             AbstractPagedOutputView outputView,
+            boolean isHistoricalPartition,
             long createdMs,
             @Nullable LogRecordBatchStatisticsCollector statisticsCollector) {
-        super(bucketId, physicalTablePath, createdMs);
+        super(
+                tableId,
+                bucketId,
+                bucketCount,
+                physicalTablePath,
+                schemaId,
+                WriteFormat.ARROW_LOG,
+                isHistoricalPartition,
+                createdMs);
         this.outputView = outputView;
         this.recordsBuilder =
                 MemoryLogRecordsArrowBuilder.builder(
@@ -72,7 +83,7 @@ public class ArrowLogWriteBatch extends WriteBatch {
     }
 
     @Override
-    public boolean tryAppend(WriteRecord writeRecord, WriteCallback callback) throws Exception {
+    boolean tryAppendRecord(WriteRecord writeRecord, WriteCallback callback) throws Exception {
         InternalRow row = writeRecord.getRow();
         checkArgument(
                 writeRecord.getTargetColumns() == null,

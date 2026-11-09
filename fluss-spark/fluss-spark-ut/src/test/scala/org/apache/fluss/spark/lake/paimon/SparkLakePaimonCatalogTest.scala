@@ -21,10 +21,10 @@ import org.apache.fluss.config.{ConfigOptions, Configuration, FlussConfigUtils}
 import org.apache.fluss.exception.FlussRuntimeException
 import org.apache.fluss.lake.paimon.utils.PaimonConversions
 import org.apache.fluss.metadata._
-import org.apache.fluss.metadata.TableDescriptor.{BUCKET_COLUMN_NAME, OFFSET_COLUMN_NAME, TIMESTAMP_COLUMN_NAME}
 import org.apache.fluss.server.utils.LakeStorageUtils
 import org.apache.fluss.spark.SparkCatalogTest
 import org.apache.fluss.spark.SparkConnectorOptions.{BUCKET_KEY, BUCKET_NUMBER, PRIMARY_KEY}
+import org.apache.fluss.spark.lake.SparkLakeTest
 
 import org.scalatest.matchers.must.Matchers.contain
 import org.scalatest.matchers.should.Matchers.{a, convertToAnyShouldWrapper}
@@ -33,6 +33,7 @@ import java.nio.file.Files
 
 import scala.collection.JavaConverters._
 
+@SparkLakeTest
 class SparkLakePaimonCatalogTest extends SparkCatalogTest {
 
   private var paimonCatalog: org.apache.paimon.catalog.Catalog = _
@@ -152,12 +153,9 @@ class SparkLakePaimonCatalogTest extends SparkCatalogTest {
           .of(
             Array.apply(
               org.apache.paimon.types.DataTypes.INT,
-              org.apache.paimon.types.DataTypes.STRING,
-              org.apache.paimon.types.DataTypes.INT,
-              org.apache.paimon.types.DataTypes.BIGINT,
-              org.apache.paimon.types.DataTypes.TIMESTAMP_LTZ_MILLIS
+              org.apache.paimon.types.DataTypes.STRING
             ),
-            Array.apply("id", "name", BUCKET_COLUMN_NAME, OFFSET_COLUMN_NAME, TIMESTAMP_COLUMN_NAME)
+            Array.apply("id", "name")
           ),
         "id",
         2
@@ -185,12 +183,9 @@ class SparkLakePaimonCatalogTest extends SparkCatalogTest {
           .of(
             Array.apply(
               org.apache.paimon.types.DataTypes.INT,
-              org.apache.paimon.types.DataTypes.STRING,
-              org.apache.paimon.types.DataTypes.INT,
-              org.apache.paimon.types.DataTypes.BIGINT,
-              org.apache.paimon.types.DataTypes.TIMESTAMP_LTZ_MILLIS
+              org.apache.paimon.types.DataTypes.STRING
             ),
-            Array.apply("id", "name", BUCKET_COLUMN_NAME, OFFSET_COLUMN_NAME, TIMESTAMP_COLUMN_NAME)
+            Array.apply("id", "name")
           ),
         null,
         2
@@ -220,18 +215,9 @@ class SparkLakePaimonCatalogTest extends SparkCatalogTest {
             Array.apply(
               org.apache.paimon.types.DataTypes.INT.notNull(),
               org.apache.paimon.types.DataTypes.STRING,
-              org.apache.paimon.types.DataTypes.STRING.notNull(),
-              org.apache.paimon.types.DataTypes.INT,
-              org.apache.paimon.types.DataTypes.BIGINT,
-              org.apache.paimon.types.DataTypes.TIMESTAMP_LTZ_MILLIS
+              org.apache.paimon.types.DataTypes.STRING.notNull()
             ),
-            Array.apply(
-              "id",
-              "name",
-              "pk1",
-              BUCKET_COLUMN_NAME,
-              OFFSET_COLUMN_NAME,
-              TIMESTAMP_COLUMN_NAME)
+            Array.apply("id", "name", "pk1")
           ),
         "id",
         2
@@ -263,19 +249,9 @@ class SparkLakePaimonCatalogTest extends SparkCatalogTest {
               org.apache.paimon.types.DataTypes.INT.notNull(),
               org.apache.paimon.types.DataTypes.STRING,
               org.apache.paimon.types.DataTypes.STRING.notNull(),
-              org.apache.paimon.types.DataTypes.STRING.notNull(),
-              org.apache.paimon.types.DataTypes.INT,
-              org.apache.paimon.types.DataTypes.BIGINT,
-              org.apache.paimon.types.DataTypes.TIMESTAMP_LTZ_MILLIS
+              org.apache.paimon.types.DataTypes.STRING.notNull()
             ),
-            Array.apply(
-              "id",
-              "name",
-              "pk1",
-              "pt1",
-              BUCKET_COLUMN_NAME,
-              OFFSET_COLUMN_NAME,
-              TIMESTAMP_COLUMN_NAME)
+            Array.apply("id", "name", "pk1", "pt1")
           ),
         "id",
         2
@@ -326,10 +302,7 @@ class SparkLakePaimonCatalogTest extends SparkCatalogTest {
               ),
               org.apache.paimon.types.DataTypes.MAP(
                 org.apache.paimon.types.DataTypes.STRING.notNull(),
-                org.apache.paimon.types.DataTypes.INT),
-              org.apache.paimon.types.DataTypes.INT,
-              org.apache.paimon.types.DataTypes.BIGINT,
-              org.apache.paimon.types.DataTypes.TIMESTAMP_LTZ_MILLIS
+                org.apache.paimon.types.DataTypes.INT)
             ),
             Array.apply(
               "c1",
@@ -347,10 +320,7 @@ class SparkLakePaimonCatalogTest extends SparkCatalogTest {
               "c13",
               "c14",
               "c15",
-              "c16",
-              BUCKET_COLUMN_NAME,
-              OFFSET_COLUMN_NAME,
-              TIMESTAMP_COLUMN_NAME)
+              "c16")
           ),
         null,
         2
@@ -400,12 +370,9 @@ class SparkLakePaimonCatalogTest extends SparkCatalogTest {
           .of(
             Array.apply(
               org.apache.paimon.types.DataTypes.INT,
-              org.apache.paimon.types.DataTypes.STRING,
-              org.apache.paimon.types.DataTypes.INT,
-              org.apache.paimon.types.DataTypes.BIGINT,
-              org.apache.paimon.types.DataTypes.TIMESTAMP_LTZ_MILLIS
+              org.apache.paimon.types.DataTypes.STRING
             ),
-            Array.apply("id", "name", BUCKET_COLUMN_NAME, OFFSET_COLUMN_NAME, TIMESTAMP_COLUMN_NAME)
+            Array.apply("id", "name")
           ),
         null,
         2

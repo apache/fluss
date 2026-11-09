@@ -19,12 +19,18 @@
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: tablet-server
+  name: {{ include "fluss.tablet.name" . }}
   labels:
   {{- include "fluss.labels" . | nindent 4 }}
+  {{- with .Values.tablet.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
-  serviceName: tablet-server-hs
+  serviceName: {{ include "fluss.tablet.serviceName" . }}
   replicas: {{ .Values.tablet.numberOfReplicas }}
+  updateStrategy:
+    type: RollingUpdate
   selector:
     matchLabels:
       {{- include "fluss.selectorLabels" . | nindent 6 }}
@@ -88,9 +94,16 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+            - name: NODE_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
             {{- if (include "fluss.security.jaas.required" .) }}
             - name: FLUSS_ENV_JAVA_OPTS
               value: "-Djava.security.auth.login.config=/etc/fluss/conf/jaas.conf"
+            {{- end }}
+            {{- if (include "fluss.secrets.enabled" .) }}
+            {{- include "fluss.secrets.env" . | trim | nindent 12 }}
             {{- end }}
             {{- with .Values.tablet.extraEnv }}
             {{- toYaml . | nindent 12 }}
@@ -104,6 +117,10 @@ spec:
               containerPort: {{ .Values.listeners.internal.port }}
             - name: client
               containerPort: {{ .Values.listeners.client.port }}
+            {{- if (include "fluss.listeners.external.enabled" .) }}
+            - name: external
+              containerPort: {{ include "fluss.listeners.external.port" . }}
+            {{- end }}
           command:
             - "/bin/sh"
             - "-c"
@@ -111,15 +128,19 @@ spec:
               export FLUSS_SERVER_ID=${POD_NAME##*-} && \
               cp /opt/conf/server.yaml $FLUSS_HOME/conf && \
 
-              BIND_LISTENERS="INTERNAL://${POD_IP}:{{ .Values.listeners.internal.port }}, CLIENT://${POD_IP}:{{ .Values.listeners.client.port }}" && \
-              ADVERTISED_LISTENERS="CLIENT://${POD_NAME}.tablet-server-hs.${POD_NAMESPACE}.svc.cluster.local:{{ .Values.listeners.client.port }}" && \
+              BIND_LISTENERS="{{ include "fluss.listeners.bind" . }}" && \
+              {{- $tabletOrdinal := include "fluss.listeners.external.ordinalSetup" (dict "ctx" . "component" "tablet") | trim }}
+              {{- if $tabletOrdinal }}
+              {{ $tabletOrdinal }} && \
+              {{- end }}
+              ADVERTISED_LISTENERS="{{ include "fluss.listeners.advertised" (dict "ctx" . "component" "tablet") }}" && \
 
               echo "" >> $FLUSS_HOME/conf/server.yaml && \
               echo "tablet-server.id: ${FLUSS_SERVER_ID}" >> $FLUSS_HOME/conf/server.yaml && \
               echo "bind.listeners: ${BIND_LISTENERS}" >> $FLUSS_HOME/conf/server.yaml && \
               echo "advertised.listeners: ${ADVERTISED_LISTENERS}" >> $FLUSS_HOME/conf/server.yaml && \
 
-              bin/tablet-server.sh start-foreground
+              exec bin/tablet-server.sh start-foreground
           livenessProbe:
             failureThreshold: 100
             timeoutSeconds: 1
@@ -128,12 +149,28 @@ spec:
             tcpSocket:
               port: {{ .Values.listeners.client.port }}
           readinessProbe:
-            failureThreshold: 100
-            timeoutSeconds: 1
-            initialDelaySeconds: 10
-            periodSeconds: 3
-            tcpSocket:
-              port: {{ .Values.listeners.client.port }}
+            failureThreshold: {{ .Values.tablet.readinessProbe.failureThreshold | default 360 }}
+            timeoutSeconds: {{ .Values.tablet.readinessProbe.timeoutSeconds | default 10 }}
+            initialDelaySeconds: {{ .Values.tablet.readinessProbe.initialDelaySeconds | default 15 }}
+            periodSeconds: {{ .Values.tablet.readinessProbe.periodSeconds | default 5 }}
+            exec:
+              command:
+                - /bin/bash
+                - -c
+                - |
+                  export FLUSS_SERVER_ID=${POD_NAME##*-}
+                  export READINESS_TIMEOUT_MS={{ .Values.tablet.readinessProbe.rpcTimeoutMs | default 5000 }}
+                  export READINESS_TCP_PORT={{ .Values.listeners.client.port }}
+                  # bind.listeners binds the tablet's CLIENT endpoint to ${POD_IP},
+                  # not 0.0.0.0, so we must probe the pod's own IP instead of
+                  # 127.0.0.1. The local tablet then forwards getClusterHealth
+                  # to coordinator via the internal listener.
+                  export READINESS_TCP_HOST=${POD_IP}
+                  export READINESS_HEALTH_CHECK_TIMEOUT_SECONDS={{ .Values.tablet.readinessProbe.healthCheckTimeoutSeconds | default 1200 }}
+                  {{- with .Values.tablet.readinessProbe.healthCheckAuth }}
+                  export READINESS_HEALTH_CHECK_AUTH={{ . | quote }}
+                  {{- end }}
+                  exec $FLUSS_HOME/bin/readiness-check.sh
           resources:
             {{- toYaml .Values.resources.tabletServer | nindent 12 }}
           volumeMounts:
@@ -146,19 +183,25 @@ spec:
               mountPath: /etc/fluss/conf
               readOnly: true
             {{- end }}
+            {{- if (include "fluss.secrets.enabled" .) }}
+            {{- include "fluss.secrets.volumeMounts" . | trim | nindent 12 }}
+            {{- end }}
             {{- with .Values.tablet.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
       volumes:
         - name: fluss-conf
           configMap:
-            name: fluss-conf-file
+            name: {{ include "fluss.configMapName" . }}
         {{- if not .Values.tablet.storage.enabled }}
         - name: data
           emptyDir: {}
         {{- end }}
         {{- if (include "fluss.security.jaas.required" .) }}
         {{- include "fluss.security.jaas.volumes" . | nindent 8 }}
+        {{- end }}
+        {{- if (include "fluss.secrets.enabled" .) }}
+        {{- include "fluss.secrets.volumes" . | trim | nindent 8 }}
         {{- end }}
         {{- with .Values.tablet.extraVolumes }}
         {{- toYaml . | nindent 8 }}

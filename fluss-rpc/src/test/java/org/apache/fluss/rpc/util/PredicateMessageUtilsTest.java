@@ -56,7 +56,6 @@ import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Field;
 import java.math.BigDecimal;
-import java.time.LocalDate;
 import java.time.LocalTime;
 import java.util.Arrays;
 import java.util.Collections;
@@ -92,6 +91,20 @@ public class PredicateMessageUtilsTest {
 
     private static RowType buildRowType(LeafPredicate... predicates) {
         return buildRowType(Arrays.asList(predicates));
+    }
+
+    @Test
+    public void testLeafPredicateTimeIntegerLiteral() {
+        int timeMillis = 45_000_000;
+        DataType type = new TimeType(false, 3);
+        LeafPredicate predicate =
+                new LeafPredicate(
+                        Equal.INSTANCE, type, 0, "f_time", Collections.singletonList(timeMillis));
+        RowType rowType = buildRowType(predicate);
+        PbPredicate pb = PredicateMessageUtils.toPbPredicate(predicate, rowType);
+        Predicate result = PredicateMessageUtils.toPredicate(pb, rowType);
+        LeafPredicate lp = (LeafPredicate) result;
+        assertThat(lp.literals().get(0)).isEqualTo(timeMillis);
     }
 
     @Test
@@ -317,22 +330,17 @@ public class PredicateMessageUtilsTest {
         DataType dateType = new DateType(false);
         LeafPredicate datePredicate =
                 new LeafPredicate(
-                        Equal.INSTANCE,
-                        dateType,
-                        8,
-                        "f_date",
-                        Collections.singletonList(
-                                LocalDate.ofEpochDay(19000L))); // days since epoch
+                        Equal.INSTANCE, dateType, 8, "f_date", Collections.singletonList(19000));
         // time
         DataType timeType = new TimeType(false, 3);
-        LocalTime time = LocalTime.of(12, 30);
+        int timeMillis = (int) (LocalTime.of(12, 30).toNanoOfDay() / 1_000_000L);
         LeafPredicate timePredicate =
                 new LeafPredicate(
                         Equal.INSTANCE,
                         timeType,
                         9,
                         "f_time",
-                        Collections.singletonList(time)); // millis of day
+                        Collections.singletonList(timeMillis));
         // timestamp
         DataType tsType = new TimestampType(false, 3);
         TimestampNtz ts = TimestampNtz.fromMillis(1680000000000L, 3);

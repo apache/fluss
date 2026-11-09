@@ -17,6 +17,7 @@
 #
 
 org.apache.fluss.server.kv.rowmerger.aggregate.factory.FieldSumAggFactory
+org.apache.fluss.server.kv.rowmerger.aggregate.factory.FieldCountAggFactory
 org.apache.fluss.server.kv.rowmerger.aggregate.factory.FieldMaxAggFactory
 org.apache.fluss.server.kv.rowmerger.aggregate.factory.FieldMinAggFactory
 org.apache.fluss.server.kv.rowmerger.aggregate.factory.FieldLastValueAggFactory
@@ -31,3 +32,6 @@ org.apache.fluss.server.kv.rowmerger.aggregate.factory.FieldStringAggFactory
 org.apache.fluss.server.kv.rowmerger.aggregate.factory.FieldRoaringBitmap32AggFactory
 org.apache.fluss.server.kv.rowmerger.aggregate.factory.FieldRoaringBitmap64AggFactory
 org.apache.fluss.server.kv.rowmerger.aggregate.factory.FieldHllSketchAggFactory
+org.apache.fluss.server.kv.rowmerger.aggregate.factory.FieldLastNAggFactory
+org.apache.fluss.server.kv.rowmerger.aggregate.factory.FieldCollectAggFactory
+org.apache.fluss.server.kv.rowmerger.aggregate.factory.FieldMergeMapAggFactory

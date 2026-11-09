@@ -22,6 +22,7 @@ import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.metadata.KvSnapshotMetadata;
 import org.apache.fluss.client.table.scanner.batch.BatchScanner;
 import org.apache.fluss.client.table.scanner.batch.CompositeBatchScanner;
+import org.apache.fluss.client.table.scanner.batch.KvBatchScanner;
 import org.apache.fluss.client.table.scanner.batch.KvSnapshotBatchScanner;
 import org.apache.fluss.client.table.scanner.batch.LimitBatchScanner;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
@@ -36,6 +37,7 @@ import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.predicate.Predicate;
+import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.types.RowType;
 
 import javax.annotation.Nullable;
@@ -47,6 +49,7 @@ import java.util.stream.IntStream;
 
 /** API for configuring and creating {@link LogScanner} and {@link BatchScanner}. */
 public class TableScan implements Scan {
+
     private final FlussConnection conn;
     private final TableInfo tableInfo;
     private final SchemaGetter schemaGetter;
@@ -159,10 +162,19 @@ public class TableScan implements Scan {
                             "BatchScanner doesn't support filter pushdown. Table: %s, bucket: %s",
                             tableInfo.getTablePath(), tableBucket));
         }
+        if (tableInfo.hasPrimaryKey() && limit == null) {
+            return new KvBatchScanner(
+                    tableInfo,
+                    tableBucket,
+                    schemaGetter,
+                    conn.getMetadataUpdater(),
+                    kvBatchSizeBytes(),
+                    projectedColumns);
+        }
         if (limit == null) {
             throw new UnsupportedOperationException(
                     String.format(
-                            "Currently, BatchScanner is only available when limit is set. Table: %s, bucket: %s",
+                            "BatchScanner over a Log Table requires limit to be set. Table: %s, bucket: %s",
                             tableInfo.getTablePath(), tableBucket));
         }
         return new LimitBatchScanner(
@@ -172,6 +184,13 @@ public class TableScan implements Scan {
                 conn.getMetadataUpdater(),
                 projectedColumns,
                 limit);
+    }
+
+    private int kvBatchSizeBytes() {
+        return (int)
+                conn.getConfiguration()
+                        .get(ConfigOptions.CLIENT_SCANNER_KV_FETCH_MAX_BYTES)
+                        .getBytes();
     }
 
     @Override
@@ -190,6 +209,7 @@ public class TableScan implements Scan {
         }
         String scannerTmpDir =
                 conn.getConfiguration().getString(ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR);
+        KvValueLayout kvValueLayout = KvValueLayout.fromTableConfig(tableInfo.getTableConfig());
         Admin admin = conn.getAdmin();
         final KvSnapshotMetadata snapshotMeta;
         try {
@@ -210,6 +230,7 @@ public class TableScan implements Scan {
                 snapshotMeta.getSnapshotFiles(),
                 projectedColumns,
                 scannerTmpDir,
+                kvValueLayout,
                 tableInfo.getTableConfig().getKvFormat(),
                 conn.getOrCreateRemoteFileDownloader());
     }
@@ -236,7 +257,7 @@ public class TableScan implements Scan {
                     partitionInfos.stream()
                             .flatMap(
                                     partitionInfo ->
-                                            IntStream.range(0, bucketCount)
+                                            IntStream.range(0, partitionInfo.getBucketCount())
                                                     .mapToObj(
                                                             bucketId ->
                                                                     new TableBucket(

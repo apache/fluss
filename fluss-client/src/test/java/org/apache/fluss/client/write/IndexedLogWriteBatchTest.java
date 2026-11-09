@@ -70,7 +70,6 @@ public class IndexedLogWriteBatchTest {
         IndexedLogWriteBatch logProducerBatch =
                 createLogWriteBatch(
                         new TableBucket(DATA1_TABLE_ID, bucketId),
-                        0L,
                         writeLimit,
                         MemorySegment.allocateHeapMemory(writeLimit));
 
@@ -92,7 +91,7 @@ public class IndexedLogWriteBatchTest {
     void testToBytes() throws Exception {
         int bucketId = 0;
         IndexedLogWriteBatch logProducerBatch =
-                createLogWriteBatch(new TableBucket(DATA1_TABLE_ID, bucketId), 0L);
+                createLogWriteBatch(new TableBucket(DATA1_TABLE_ID, bucketId));
         boolean appendResult = logProducerBatch.tryAppend(createWriteRecord(), newWriteCallback());
         assertThat(appendResult).isTrue();
 
@@ -109,7 +108,7 @@ public class IndexedLogWriteBatchTest {
     void testCompleteTwice() throws Exception {
         int bucketId = 0;
         IndexedLogWriteBatch logWriteBatch =
-                createLogWriteBatch(new TableBucket(DATA1_TABLE_ID, bucketId), 0L);
+                createLogWriteBatch(new TableBucket(DATA1_TABLE_ID, bucketId));
         boolean appendResult = logWriteBatch.tryAppend(createWriteRecord(), newWriteCallback());
         assertThat(appendResult).isTrue();
 
@@ -124,7 +123,7 @@ public class IndexedLogWriteBatchTest {
     void testFailedTwice() throws Exception {
         int bucketId = 0;
         IndexedLogWriteBatch logWriteBatch =
-                createLogWriteBatch(new TableBucket(DATA1_TABLE_ID, bucketId), 0L);
+                createLogWriteBatch(new TableBucket(DATA1_TABLE_ID, bucketId));
         boolean appendResult = logWriteBatch.tryAppend(createWriteRecord(), newWriteCallback());
         assertThat(appendResult).isTrue();
 
@@ -139,7 +138,7 @@ public class IndexedLogWriteBatchTest {
     void testClose() throws Exception {
         int bucketId = 0;
         IndexedLogWriteBatch logProducerBatch =
-                createLogWriteBatch(new TableBucket(DATA1_TABLE_ID, bucketId), 0L);
+                createLogWriteBatch(new TableBucket(DATA1_TABLE_ID, bucketId));
         boolean appendResult = logProducerBatch.tryAppend(createWriteRecord(), newWriteCallback());
         assertThat(appendResult).isTrue();
 
@@ -157,7 +156,6 @@ public class IndexedLogWriteBatchTest {
         IndexedLogWriteBatch logProducerBatch =
                 createLogWriteBatch(
                         new TableBucket(DATA1_TABLE_ID, bucketId),
-                        0L,
                         writeLimit,
                         MemorySegment.allocateHeapMemory(writeLimit));
 
@@ -201,24 +199,51 @@ public class IndexedLogWriteBatchTest {
         }
     }
 
+    @Test
+    void testInCallbackIsRestoredAfterNestedCallback() throws Exception {
+        IndexedLogWriteBatch outer = createLogWriteBatch(new TableBucket(DATA1_TABLE_ID, 0));
+        IndexedLogWriteBatch inner = createLogWriteBatch(new TableBucket(DATA1_TABLE_ID, 1));
+        List<Boolean> inCallback = new ArrayList<>();
+        assertThat(
+                        inner.tryAppend(
+                                createWriteRecord(),
+                                (bucket, offset, exception) ->
+                                        inCallback.add(WriteBatch.isInCallback())))
+                .isTrue();
+        assertThat(
+                        outer.tryAppend(
+                                createWriteRecord(),
+                                (bucket, offset, exception) -> {
+                                    inner.complete();
+                                    inCallback.add(WriteBatch.isInCallback());
+                                }))
+                .isTrue();
+
+        assertThat(outer.complete()).isTrue();
+
+        assertThat(inCallback).containsExactly(true, true);
+        assertThat(WriteBatch.isInCallback()).isFalse();
+    }
+
     private WriteRecord createWriteRecord() {
         return WriteRecord.forIndexedAppend(DATA1_TABLE_INFO, DATA1_PHYSICAL_TABLE_PATH, row, null);
     }
 
-    private IndexedLogWriteBatch createLogWriteBatch(TableBucket tb, long baseLogOffset)
-            throws Exception {
-        return createLogWriteBatch(
-                tb, baseLogOffset, Integer.MAX_VALUE, MemorySegment.allocateHeapMemory(1000));
+    private IndexedLogWriteBatch createLogWriteBatch(TableBucket tb) throws Exception {
+        return createLogWriteBatch(tb, Integer.MAX_VALUE, MemorySegment.allocateHeapMemory(1000));
     }
 
     private IndexedLogWriteBatch createLogWriteBatch(
-            TableBucket tb, long baseLogOffset, int writeLimit, MemorySegment memorySegment) {
+            TableBucket tb, int writeLimit, MemorySegment memorySegment) {
         return new IndexedLogWriteBatch(
+                tb.getTableId(),
                 tb.getBucket(),
+                DATA1_TABLE_INFO.getNumBuckets(),
                 DATA1_PHYSICAL_TABLE_PATH,
                 DATA1_TABLE_INFO.getSchemaId(),
                 writeLimit,
                 new PreAllocatedPagedOutputView(Collections.singletonList(memorySegment)),
+                false,
                 System.currentTimeMillis());
     }
 

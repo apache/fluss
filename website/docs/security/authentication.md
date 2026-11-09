@@ -32,6 +32,7 @@ This mechanism is based on SASL (Simple Authentication and Security Layer) authe
 | security.sasl.enabled.mechanisms                               | List   | PLAIN         | Comma-separated list of enabled SASL mechanisms. Only support PLAIN(which involves authentication using a username and password) now. |
 | `security.sasl.listener.name.{listenerName}.plain.jaas.config` | String | (none)        | JAAS configuration for a specific listener and PLAIN mechanism.                                                                       |
 | `security.sasl.plain.jaas.config`                              | String | (none)        | Global JAAS configuration for all listeners using the PLAIN mechanism.                                                                |
+| `security.sasl.plain.credentials`                              | Map    | (none)        | Map of users in `username:password` format, e.g. `admin:admin-secret,bob:bob-secret`. Syntactic sugar that generates the PLAIN JAAS config, and can be updated without a restart. |
 
 
 ⚠️ The system tries to load JAAS configurations in the following order:
@@ -50,6 +51,38 @@ internal.listener.name: INTERNAL
 security.sasl.enabled.mechanisms: PLAIN
 security.sasl.plain.jaas.config: org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required user_admin="admin-pass" user_fluss="fluss-pass";
 ```
+
+
+### Managing Multiple Users
+Instead of writing a JAAS config string by hand, you can declare users with the map option `security.sasl.plain.credentials`.
+Fluss generates the equivalent `security.sasl.plain.jaas.config` from it, so the example above can be written as:
+
+```yaml title="conf/server.yaml"
+security.sasl.enabled.mechanisms: PLAIN
+security.sasl.plain.credentials: admin:admin-pass,fluss:fluss-pass
+```
+
+Usernames may only contain letters, digits, and underscores, because they become part of the JAAS option key `user_<username>`.
+Passwords may not contain commas, colons, double quotes, semicolons, backslashes, or control characters, since these would break the map format or the generated JAAS config string.
+
+Unlike `security.sasl.plain.jaas.config`, this option is a [dynamic cluster config](maintenance/operations/updating-configs.md#updating-cluster-configs): users can be added, changed, and removed on a running cluster, and the change takes effect for new connections on all servers.
+
+```sql title="Flink SQL"
+-- Add user "bob"
+CALL sys.append_cluster_configs(
+  config_pairs => 'security.sasl.plain.credentials', 'bob:bob-secret'
+);
+
+-- Remove user "bob" (the supplied secret is ignored, removal matches on the username)
+CALL sys.subtract_cluster_configs(
+  config_pairs => 'security.sasl.plain.credentials', 'bob:any-secret'
+);
+```
+
+Note the following when using both options together:
+* Users defined in the `security.sasl.plain.jaas.config` of `conf/server.yaml` stay valid; the credentials map is merged on top of them and wins on a username conflict. Removing a user from the map therefore only revokes it if the user is not also defined in `conf/server.yaml`.
+* The map applies to the mechanism-wide JAAS config only. A listener that sets `security.sasl.listener.name.{listenerName}.plain.jaas.config` keeps using that config and ignores the map.
+* Passwords are redacted when configs are read back, for example via `sys.get_cluster_configs`.
 
 
 ### SASL Client-Side Configuration

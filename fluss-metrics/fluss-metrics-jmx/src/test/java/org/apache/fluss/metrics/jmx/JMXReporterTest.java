@@ -223,9 +223,10 @@ class JMXReporterTest {
 
         MBeanAttributeInfo[] attributeInfos = info.getAttributes();
 
-        assertThat(attributeInfos).hasSize(11);
+        assertThat(attributeInfos).hasSize(12);
 
         assertThat(mBeanServer.getAttribute(objectName, "Count")).isEqualTo(histogram.getCount());
+        assertThat(mBeanServer.getAttribute(objectName, "WindowCount")).isEqualTo(3);
         HistogramStatistics statistics = histogram.getStatistics();
         assertThat(mBeanServer.getAttribute(objectName, "Mean")).isEqualTo(statistics.getMean());
         assertThat(mBeanServer.getAttribute(objectName, "StdDev"))
@@ -244,6 +245,10 @@ class JMXReporterTest {
                 .isEqualTo(statistics.getQuantile(0.99));
         assertThat(mBeanServer.getAttribute(objectName, "999thPercentile"))
                 .isEqualTo(statistics.getQuantile(0.999));
+
+        histogram.setSize(0);
+        assertThat(mBeanServer.getAttribute(objectName, "Count")).isEqualTo(histogram.getCount());
+        assertThat(mBeanServer.getAttribute(objectName, "WindowCount")).isEqualTo(0);
     }
 
     /** Tests that meters are properly reported via the JMXReporter. */

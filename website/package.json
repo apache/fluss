@@ -20,8 +20,9 @@
     "@docusaurus/plugin-client-redirects": "^3.9.2",
     "@docusaurus/plugin-pwa": "^3.9.2",
     "@docusaurus/preset-classic": "^3.9.2",
-    "@fontsource/inter": "^5.2.8",
-    "@fontsource/roboto": "^5.2.10",
+    "@docusaurus/theme-mermaid": "^3.10.1",
+    "@fontsource-variable/geist": "^5.2.8",
+    "@fontsource-variable/geist-mono": "^5.2.7",
     "@mdx-js/react": "^3.0.0",
     "algoliasearch": "^5.10.2",
     "clsx": "^2.0.0",
@@ -35,6 +36,8 @@
     "@docusaurus/module-type-aliases": "^3.9.2",
     "@docusaurus/tsconfig": "^3.9.2",
     "@docusaurus/types": "^3.9.2",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
     "typescript": "~5.5.2"
   },
   "browserslist": {

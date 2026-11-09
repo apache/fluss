@@ -26,9 +26,20 @@ import org.apache.fluss.types.RowType;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for {@link org.apache.fluss.utils.Projection}. */
 class ProjectionTest {
+
+    @Test
+    void testEmptyProjectionIsRejected() {
+        assertThatThrownBy(() -> Projection.of(new int[0]))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Projection must select at least one column");
+        assertThatThrownBy(() -> Projection.of(null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Projection must select at least one column");
+    }
 
     @Test
     void testProjection() {

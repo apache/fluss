@@ -19,12 +19,14 @@ package org.apache.fluss.rpc;
 
 import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.cluster.ServerReconfigurable;
 import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.rpc.netty.server.NettyServer;
 import org.apache.fluss.rpc.netty.server.RequestsMetrics;
 import org.apache.fluss.utils.AutoCloseableAsync;
 
 import java.io.IOException;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ScheduledExecutorService;
@@ -79,4 +81,9 @@ public interface RpcServer extends AutoCloseableAsync {
      * @return The RPC server provided scheduled executor
      */
     ScheduledExecutorService getScheduledExecutor();
+
+    /** Returns server components that should receive dynamic config updates. */
+    default List<ServerReconfigurable> getServerReconfigurables() {
+        return Collections.emptyList();
+    }
 }

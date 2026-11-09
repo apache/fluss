@@ -87,9 +87,10 @@ public interface Scan {
     <T> TypedLogScanner<T> createTypedLogScanner(Class<T> pojoClass);
 
     /**
-     * Creates a {@link BatchScanner} to read current data in the given table bucket for this scan.
+     * Creates a {@link BatchScanner} to read current data in the given table bucket.
      *
-     * <p>Note: this API doesn't support pre-configured with {@link #project}.
+     * <p>For Primary Key Tables, this performs a full RocksDB-backed KV scan of the bucket and does
+     * not require {@link #limit(int)}. For Log Tables, {@link #limit(int)} must be set.
      */
     BatchScanner createBatchScanner(TableBucket tableBucket);
 
@@ -102,6 +103,9 @@ public interface Scan {
      */
     BatchScanner createBatchScanner(TableBucket tableBucket, long snapshotId);
 
-    /** Creates a {@link BatchScanner} to read current data in the given table for this scan. */
+    /**
+     * Creates a {@link BatchScanner} that scans across all buckets of the table, expanding all
+     * partitions for partitioned tables. For Log Tables, {@link #limit(int)} must be set.
+     */
     BatchScanner createBatchScanner() throws IOException;
 }

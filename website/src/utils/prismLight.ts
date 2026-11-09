@@ -17,51 +17,59 @@
 
 import type {PrismTheme} from 'prism-react-renderer';
 
+/**
+ * Light Prism theme tuned to the Apache Fluss blue palette.
+ * Pairs with --fluss-* tokens defined in src/css/custom.css.
+ */
 const lightTheme: PrismTheme = {
   plain: {
-    color: '#36464e',
-    backgroundColor: '#f5f5f5',
+    color: '#0A0F1C',           // --fluss-ink-950
+    backgroundColor: '#F8FAFC',
   },
   styles: [
     {
       types: ['comment', 'prolog', 'doctype', 'cdata'],
-      style: { color: '#8e908c', fontStyle: 'italic' },
+      style: {color: '#64748B', fontStyle: 'italic'},
     },
     {
       types: ['namespace'],
-      style: { opacity: 0.7 },
+      style: {opacity: 0.7},
     },
     {
       types: ['string', 'attr-value', 'char', 'inserted'],
-      style: { color: '#1c7d4d' },
+      style: {color: '#0E7C66'},
     },
     {
       types: ['number', 'boolean'],
-      style: { color: '#d52a2a' },
+      style: {color: '#B45309'},
     },
     {
       types: ['keyword', 'atrule', 'selector'],
-      style: { color: '#3f6ec6' },
+      style: {color: '#194670'}, // --fluss-blue-700
     },
     {
       types: ['function', 'class-name', 'tag'],
-      style: { color: '#a846b9' },
+      style: {color: '#7C3AED'}, // --fluss-violet
     },
     {
       types: ['builtin', 'constant', 'variable', 'property'],
-      style: { color: '#6e59d9' },
+      style: {color: '#12325C'}, // --fluss-blue-800
     },
     {
       types: ['operator', 'punctuation'],
-      style: { color: 'rgba(0, 0, 0, 0.54)' },
+      style: {color: '#475569'},
     },
     {
       types: ['regex', 'important', 'deleted'],
-      style: { color: '#db1457' },
+      style: {color: '#BE123C'},
     },
     {
       types: ['attr-name'],
-      style: { color: '#3f6ec6' },
+      style: {color: '#1C5078'}, // --fluss-blue-600
+    },
+    {
+      types: ['symbol', 'url'],
+      style: {color: '#0E7490'},
     },
   ],
 };

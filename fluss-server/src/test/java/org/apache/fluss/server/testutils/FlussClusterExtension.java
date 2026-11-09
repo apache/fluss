@@ -68,6 +68,7 @@ import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
+import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.clock.SystemClock;
 
@@ -138,6 +139,8 @@ public final class FlussClusterExtension
     private final Configuration clusterConf;
     private final Clock clock;
     private final String[] racks;
+    private final List<String> remoteDirNames;
+    private final boolean useRemoteDataDir;
 
     /** Creates a new {@link Builder} for {@link FlussClusterExtension}. */
     public static Builder builder() {
@@ -150,7 +153,9 @@ public final class FlussClusterExtension
             String tabletServerListeners,
             Configuration clusterConf,
             Clock clock,
-            String[] racks) {
+            String[] racks,
+            List<String> remoteDirNames,
+            boolean useRemoteDataDir) {
         this.initialNumOfTabletServers = numOfTabletServers;
         this.tabletServers = new HashMap<>(numOfTabletServers);
         this.coordinatorServerListeners = coordinatorServerListeners;
@@ -162,6 +167,8 @@ public final class FlussClusterExtension
                 racks != null && racks.length == numOfTabletServers,
                 "racks must be not null and have the same length as numOfTabletServers");
         this.racks = racks;
+        this.remoteDirNames = remoteDirNames;
+        this.useRemoteDataDir = useRemoteDataDir;
     }
 
     @Override
@@ -206,6 +213,7 @@ public final class FlussClusterExtension
         tempDir = Files.createTempDirectory("fluss-testing-cluster").toFile();
         Configuration conf = new Configuration();
         setRemoteDataDir(conf);
+        setRemoteDataDirs(conf);
         zooKeeperServer = ZooKeeperTestUtils.createAndStartZookeeperTestingServer();
         zooKeeperClient =
                 createZooKeeperClient(
@@ -215,6 +223,7 @@ public final class FlussClusterExtension
                         zooKeeperClient,
                         clusterConf,
                         new LakeCatalogDynamicLoader(clusterConf, null, true));
+
         rpcClient =
                 RpcClient.create(
                         conf,
@@ -231,10 +240,6 @@ public final class FlussClusterExtension
         if (rpcClient != null) {
             rpcClient.close();
             rpcClient = null;
-        }
-        if (tempDir != null) {
-            tempDir.delete();
-            tempDir = null;
         }
         for (TabletServer tabletServer : tabletServers.values()) {
             tabletServer.close();
@@ -253,16 +258,26 @@ public final class FlussClusterExtension
             zooKeeperServer.close();
             zooKeeperServer = null;
         }
+        if (tempDir != null) {
+            FileUtils.deleteDirectoryQuietly(tempDir);
+            tempDir = null;
+        }
     }
 
     /** Start a coordinator server. start a new one if no coordinator server exists. */
     public void startCoordinatorServer() throws Exception {
+        startCoordinatorServer(coordinatorServerListeners);
+    }
+
+    /** Start a coordinator server with the given listeners. */
+    public void startCoordinatorServer(String bindListeners) throws Exception {
         if (coordinatorServer == null) {
             // if no coordinator server exists, create a new coordinator server and start
             Configuration conf = new Configuration(clusterConf);
             conf.setString(ConfigOptions.ZOOKEEPER_ADDRESS, zooKeeperServer.getConnectString());
-            conf.setString(ConfigOptions.BIND_LISTENERS, coordinatorServerListeners);
+            conf.setString(ConfigOptions.BIND_LISTENERS, bindListeners);
             setRemoteDataDir(conf);
+            setRemoteDataDirs(conf);
             coordinatorServer = new CoordinatorServer(conf, clock);
             coordinatorServer.start();
             waitUntilCoordinatorServerElected();
@@ -288,6 +303,7 @@ public final class FlussClusterExtension
 
     public void stopCoordinatorServer() throws Exception {
         coordinatorServer.close();
+        coordinatorServer = null;
     }
 
     private void startTabletServers() throws Exception {
@@ -302,6 +318,16 @@ public final class FlussClusterExtension
         startTabletServer(serverId, false);
     }
 
+    /** Start a new tablet server with the given listeners. */
+    public void startTabletServer(int serverId, String bindListeners) throws Exception {
+        if (tabletServers.containsKey(serverId)) {
+            throw new IllegalArgumentException("Tablet server " + serverId + " already exists.");
+        }
+        Configuration overwriteConfig = new Configuration();
+        overwriteConfig.setString(ConfigOptions.BIND_LISTENERS, bindListeners);
+        startTabletServer(serverId, overwriteConfig);
+    }
+
     public void startTabletServer(int serverId, boolean forceStartIfExists) throws Exception {
         if (tabletServers.containsKey(serverId)) {
             if (!forceStartIfExists) {
@@ -309,7 +335,7 @@ public final class FlussClusterExtension
                         "Tablet server " + serverId + " already exists.");
             }
         }
-        startTabletServer(serverId, null);
+        startTabletServer(serverId, (Configuration) null);
     }
 
     private void startTabletServer(int serverId, @Nullable Configuration overwriteConfig)
@@ -329,11 +355,13 @@ public final class FlussClusterExtension
         tabletServerConf.setString(
                 ConfigOptions.ZOOKEEPER_ADDRESS, zooKeeperServer.getConnectString());
         tabletServerConf.setString(ConfigOptions.BIND_LISTENERS, tabletServerListeners);
+        tabletServerConf.setDouble(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO, 1.0);
         if (overwriteConfig != null) {
             tabletServerConf.addAll(overwriteConfig);
         }
 
         setRemoteDataDir(tabletServerConf);
+        setRemoteDataDirs(tabletServerConf);
 
         TabletServer tabletServer = new TabletServer(tabletServerConf, clock);
         tabletServer.start();
@@ -372,15 +400,33 @@ public final class FlussClusterExtension
     }
 
     private void setRemoteDataDir(Configuration conf) {
-        conf.set(ConfigOptions.REMOTE_DATA_DIR, getRemoteDataDir());
+        if (useRemoteDataDir) {
+            conf.set(ConfigOptions.REMOTE_DATA_DIR, getRemoteDataDir());
+        } else {
+            conf.removeConfig(ConfigOptions.REMOTE_DATA_DIR);
+        }
+    }
+
+    private void setRemoteDataDirs(Configuration conf) {
+        if (!remoteDirNames.isEmpty()) {
+            List<String> remoteDataDirs =
+                    remoteDirNames.stream()
+                            .map(this::getRemoteDataDir)
+                            .collect(Collectors.toList());
+            conf.set(ConfigOptions.REMOTE_DATA_DIRS, remoteDataDirs);
+        }
     }
 
     public String getRemoteDataDir() {
+        return getRemoteDataDir("remote-data-dir");
+    }
+
+    public String getRemoteDataDir(String dirName) {
         return LocalFileSystem.getLocalFsURI().getScheme()
                 + "://"
                 + tempDir.getAbsolutePath()
                 + File.separator
-                + "remote-data-dir";
+                + dirName;
     }
 
     /** Stop a tablet server. */
@@ -661,6 +707,9 @@ public final class FlussClusterExtension
                     List<Integer> isr = leaderAndIsr.isr();
                     for (int replicaId : isr) {
                         TabletServer tabletServer = getTabletServerById(replicaId);
+                        assertThat(tabletServer)
+                                .as("Tablet server %s should be available.", replicaId)
+                                .isNotNull();
                         ReplicaManager replicaManager = tabletServer.getReplicaManager();
                         assertThat(replicaManager.getReplica(tableBucket))
                                 .isInstanceOf(ReplicaManager.OnlineReplica.class);
@@ -673,7 +722,11 @@ public final class FlussClusterExtension
                     }
 
                     int leader = leaderAndIsr.leader();
-                    ReplicaManager replicaManager = getTabletServerById(leader).getReplicaManager();
+                    TabletServer leaderServer = getTabletServerById(leader);
+                    assertThat(leaderServer)
+                            .as("Leader tablet server %s should be available.", leader)
+                            .isNotNull();
+                    ReplicaManager replicaManager = leaderServer.getReplicaManager();
                     assertThat(replicaManager.getReplicaOrException(tableBucket).isLeader())
                             .isTrue();
                 });
@@ -715,7 +768,11 @@ public final class FlussClusterExtension
             Map<String, PartitionRegistration> partitions =
                     zooKeeperClient.getPartitionRegistrations(tablePath);
             for (PartitionRegistration partition : partitions.values()) {
-                for (int bucketId = 0; bucketId < bucketCount; bucketId++) {
+                // partitions diverge from the table-level count after ALTER bucket.num
+                int partitionBucketCount =
+                        partition.getBucketCountOrDefault(
+                                bucketCount, tableRegistration.bucketCountEpoch);
+                for (int bucketId = 0; bucketId < partitionBucketCount; bucketId++) {
                     tableBuckets.add(
                             new TableBucket(tableId, partition.getPartitionId(), bucketId));
                 }
@@ -751,36 +808,31 @@ public final class FlussClusterExtension
     }
 
     private Long triggerSnapshot(TableBucket tableBucket) {
-        Long snapshotId = null;
-        Long nextSnapshotId = null;
         for (TabletServer ts : tabletServers.values()) {
             ReplicaManager.HostedReplica replica = ts.getReplicaManager().getReplica(tableBucket);
             if (replica instanceof ReplicaManager.OnlineReplica) {
                 Replica r = ((ReplicaManager.OnlineReplica) replica).getReplica();
                 PeriodicSnapshotManager kvSnapshotManager = r.getKvSnapshotManager();
                 if (r.isLeader() && kvSnapshotManager != null) {
-                    snapshotId = kvSnapshotManager.currentSnapshotId();
+                    long snapshotId = kvSnapshotManager.currentSnapshotId();
+                    // KvTablet#getGuardedExecutor runs the submitted task synchronously
+                    // on the calling thread inside the kv write lock, so initSnapshot()
+                    // has already completed by the time triggerSnapshot() returns. The
+                    // counter is either bumped (a new snapshot was scheduled) or left
+                    // unchanged (no new data since the last snapshot — legitimate no-op).
                     kvSnapshotManager.triggerSnapshot();
-                    nextSnapshotId = kvSnapshotManager.currentSnapshotId();
-                    break;
+                    if (kvSnapshotManager.currentSnapshotId() > snapshotId) {
+                        return snapshotId;
+                    }
+                    return null;
                 }
             }
         }
-
-        if (snapshotId != null) {
-            if (nextSnapshotId > snapshotId) {
-                // only there is a new snapshot triggered, we return the snapshot id
-                return snapshotId;
-            } else {
-                return null;
-            }
-        } else {
-            fail("No KV snapshot manager found for table bucket " + tableBucket);
-            return null;
-        }
+        fail("No KV snapshot manager found for table bucket " + tableBucket);
+        return null;
     }
 
-    private CompletedSnapshot waitUntilSnapshotFinished(TableBucket tableBucket, long snapshotId) {
+    public CompletedSnapshot waitUntilSnapshotFinished(TableBucket tableBucket, long snapshotId) {
         ZooKeeperClient zkClient = getZooKeeperClient();
         return waitValue(
                 () -> {
@@ -848,7 +900,9 @@ public final class FlussClusterExtension
                                 PhysicalTablePath.of(tablePath),
                                 tableBucket,
                                 replicas,
-                                leaderAndIsr));
+                                leaderAndIsr,
+                                3,
+                                0L));
         NotifyLeaderAndIsrRequest notifyLeaderAndIsrRequest =
                 ServerRpcMessageUtils.makeNotifyLeaderAndIsrRequest(
                         0, Collections.singletonList(reqForBucket));
@@ -856,7 +910,15 @@ public final class FlussClusterExtension
     }
 
     private Optional<Replica> getReplica(TableBucket tableBucket, int replica, boolean isLeader) {
-        ReplicaManager replicaManager = getTabletServerById(replica).getReplicaManager();
+        TabletServer tabletServer = getTabletServerById(replica);
+        if (tabletServer == null) {
+            // The leader may temporarily be NO_LEADER, or the corresponding server may have been
+            // removed locally while a failover is still in progress. Let waitValue retry instead
+            // of failing with a NullPointerException.
+            return Optional.empty();
+        }
+
+        ReplicaManager replicaManager = tabletServer.getReplicaManager();
         if (replicaManager.getReplica(tableBucket) instanceof ReplicaManager.OnlineReplica) {
             ReplicaManager.OnlineReplica onlineReplica =
                     (ReplicaManager.OnlineReplica) replicaManager.getReplica(tableBucket);
@@ -917,8 +979,21 @@ public final class FlussClusterExtension
                 "Fail to wait partitions dropped");
     }
 
+    /** Wait until the assigned replica is ready as the local leader and return its server id. */
     public int waitAndGetLeader(TableBucket tb) {
-        return waitLeaderAndIsrReady(tb).leader();
+        ZooKeeperClient zkClient = getZooKeeperClient();
+        return waitValue(
+                () -> {
+                    Optional<LeaderAndIsr> leaderAndIsrOpt = zkClient.getLeaderAndIsr(tb);
+                    if (!leaderAndIsrOpt.isPresent()) {
+                        return Optional.empty();
+                    }
+
+                    int leader = leaderAndIsrOpt.get().leader();
+                    return getReplica(tb, leader, true).map(ignored -> leader);
+                },
+                Duration.ofMinutes(1),
+                "Fail to wait leader replica ready for " + tb);
     }
 
     public int waitAndGetStandby(TableBucket tb) {
@@ -969,6 +1044,8 @@ public final class FlussClusterExtension
         private String coordinatorServerListeners = DEFAULT_LISTENERS;
         private Clock clock = SystemClock.getInstance();
         private String[] racks = new String[] {"rack-0"};
+        private List<String> remoteDirNames = Collections.emptyList();
+        private boolean useRemoteDataDir = true;
 
         private final Configuration clusterConf = new Configuration();
 
@@ -976,6 +1053,16 @@ public final class FlussClusterExtension
             // reduce testing resources
             clusterConf.set(ConfigOptions.NETTY_SERVER_NUM_NETWORK_THREADS, 1);
             clusterConf.set(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS, 3);
+            // Use short cleanup timeouts so that a slow in-flight drop does not block
+            // subsequent drops beyond the test's retry window.
+            clusterConf.set(
+                    ConfigOptions.COORDINATOR_LIFECYCLE_THROTTLER_INFLIGHT_TIMEOUT,
+                    Duration.ofSeconds(2));
+            clusterConf.set(
+                    ConfigOptions.COORDINATOR_LIFECYCLE_THROTTLER_TIMEOUT_CHECK_INTERVAL,
+                    Duration.ofSeconds(1));
+            // Set a high data disk write limit ratio to avoid disk write limit when testing
+            clusterConf.set(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO, 0.99);
         }
 
         /** Sets the number of tablet servers. */
@@ -1014,6 +1101,17 @@ public final class FlussClusterExtension
             return this;
         }
 
+        public Builder setRemoteDirNames(List<String> remoteDirNames) {
+            this.remoteDirNames = remoteDirNames;
+            return this;
+        }
+
+        /** Controls whether the cluster supplies the remote.data.dir configuration. */
+        public Builder setUseRemoteDataDir(boolean useRemoteDataDir) {
+            this.useRemoteDataDir = useRemoteDataDir;
+            return this;
+        }
+
         public FlussClusterExtension build() {
             if (numOfTabletServers > 1 && racks.length == 1) {
                 String[] racks = new String[numOfTabletServers];
@@ -1029,7 +1127,9 @@ public final class FlussClusterExtension
                     tabletServerListeners,
                     clusterConf,
                     clock,
-                    racks);
+                    racks,
+                    remoteDirNames,
+                    useRemoteDataDir);
         }
     }
 }

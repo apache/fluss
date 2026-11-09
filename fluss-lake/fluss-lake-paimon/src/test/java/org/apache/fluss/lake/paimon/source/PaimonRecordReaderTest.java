@@ -125,10 +125,15 @@ class PaimonRecordReaderTest extends PaimonSourceTestBase {
         prepareLogTable(tablePath, false, DEFAULT_BUCKET_NUM, writtenRows);
 
         LakeSource<PaimonSplit> lakeSource = lakeStorage.createLakeSource(tablePath);
-        lakeSource.withProject(new int[][] {new int[] {5}, new int[] {1}, new int[] {3}});
+        int[][] project = new int[][] {new int[] {5}, new int[] {1}, new int[] {3}};
+        lakeSource.withProject(project);
+        project[0][0] = 0;
+        LakeSource<PaimonSplit> copiedLakeSource = lakeSource.copy();
+        lakeSource.withProject(new int[][] {new int[] {0}});
+        assertThat(copiedLakeSource).isNotSameAs(lakeSource);
         Table table = getTable(tablePath);
         Snapshot snapshot = table.latestSnapshot().get();
-        List<PaimonSplit> paimonSplits = lakeSource.createPlanner(snapshot::id).plan();
+        List<PaimonSplit> paimonSplits = copiedLakeSource.createPlanner(snapshot::id).plan();
 
         List<Row> actual = new ArrayList<>();
 
@@ -136,7 +141,7 @@ class PaimonRecordReaderTest extends PaimonSourceTestBase {
                 InternalRow.createFieldGetters(
                         RowType.of(new FloatType(), new TinyIntType(), new IntType()));
         for (PaimonSplit paimonSplit : paimonSplits) {
-            RecordReader recordReader = lakeSource.createRecordReader(() -> paimonSplit);
+            RecordReader recordReader = copiedLakeSource.createRecordReader(() -> paimonSplit);
             CloseableIterator<LogRecord> iterator = recordReader.read();
             actual.addAll(
                     convertToFlinkRow(

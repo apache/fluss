@@ -234,6 +234,95 @@ The server evaluates these predicates against per-batch column statistics and sk
 
 ## Batch Read
 
+### Virtual Table Batch Read
+
+The `$changelog` and `$binlog` virtual tables support bounded batch scans. A batch query starts from the position configured by `scan.startup.mode`, captures the latest offset of each bucket as its stopping offset, and terminates after consuming all bounded splits. Unlike a streaming query, it does not wait for changes written after the stopping offsets are captured.
+
+```sql title="Flink SQL"
+SET 'execution.runtime-mode' = 'batch';
+
+-- Replay changes from a timestamp up to the bounded stopping offsets.
+SELECT _change_type, _log_offset, order_id, amount
+FROM orders$changelog
+/*+ OPTIONS(
+  'scan.startup.mode' = 'timestamp',
+  'scan.startup.timestamp' = '1705312200000'
+) */
+ORDER BY _log_offset;
+
+-- Query before/after images from a primary-key table.
+SELECT _change_type, `before`, `after`
+FROM orders$binlog
+WHERE `after`.order_id = 1001
+LIMIT 100;
+```
+
+`$changelog` is available for Primary Key Tables and Log Tables, while `$binlog` is available only for Primary Key Tables. See [Virtual Tables](/table-design/virtual-tables.md#flink-runtime-modes) for schemas, startup modes, and detailed bounded-read semantics.
+
+### Server-Side Scan of Primary Key Tables
+
+A bounded read of a primary-key table merges the latest kv snapshot with the changelog range that
+follows it. Setting `client.scanner.kv.batch-strategy` to `server-scan` reads the live kv state on
+the tablet server instead, which avoids downloading snapshot files and replaying the changelog.
+
+This is intended for interactive queries over small primary-key tables — the kind of full scan that
+backs a dashboard of a few thousand rows. It is not a general replacement for the default strategy.
+
+The option applies only to primary-key tables that have no lake snapshot to read from. On a
+lake-enabled primary-key table with a lake snapshot, a bounded read performs the lake + Fluss-log
+union read and this option is not consulted.
+
+#### Example
+
+**1. Create a primary-key table:**
+```sql title="Flink SQL"
+CREATE TABLE pk_table (
+    id     INT NOT NULL,
+    name   STRING,
+    region STRING,
+    PRIMARY KEY (id) NOT ENFORCED
+) WITH (
+    'bucket.num' = '4'
+);
+```
+
+**2. Write some data:**
+```sql title="Flink SQL"
+INSERT INTO pk_table VALUES
+    (1, 'Alice', 'us-east'),
+    (2, 'Bob',   'eu-west'),
+    (3, 'Carol', 'ap-south');
+```
+
+**3. Run a full scan in batch mode:**
+```sql title="Flink SQL"
+SET 'execution.runtime-mode' = 'batch';
+SELECT * FROM pk_table /*+ OPTIONS('client.scanner.kv.batch-strategy' = 'server-scan') */;
+```
+
+The option can also be set in `CREATE TABLE`, but prefer the hint: as a table property it applies to
+every bounded reader of that table, including jobs written later by other users.
+
+#### Trade-offs
+
+Both strategies return the current state of the table. They differ in guarantees and cost:
+
+| | `snapshot-merge` (default) | `server-scan` |
+|---|---|---|
+| Resumable | Yes — the scan resumes from its checkpointed position | No — the bucket is re-read from the start, so rows already emitted are emitted again |
+| Point in time | Fixed when splits are planned: every bucket is cut at its latest offset at that moment | Per bucket, fixed when that bucket's scanner opens — buckets open as readers reach them |
+| Client cost | Downloads snapshot files and replays the changelog | None |
+| Server cost | None beyond serving the changelog | Holds a scan session on the tablet server serving the bucket |
+
+Because `server-scan` is not resumable, a bounded source that is checkpointed (a `setBounded()`
+DataStream source in streaming runtime mode) will emit duplicates after a restore. Batch runtime
+mode does not checkpoint and is unaffected.
+
+Each `server-scan` session lives on the tablet server that leads the bucket and is subject to
+`kv.scanner.ttl` (10 minutes of idleness) and `kv.scanner.max-per-bucket` (8 concurrent sessions per
+bucket). A source that is back-pressured for longer than the TTL fails its split; a bucket read
+concurrently by more queries than the limit fails to open.
+
 ### Limit Read
 The Fluss source supports limiting reads for both primary-key tables and log tables, making it convenient to preview the latest `N` records in a table.
 
@@ -369,6 +458,40 @@ SELECT * FROM log_table
 SELECT * FROM log_table
 /*+ OPTIONS('scan.startup.mode' = 'timestamp',
 'scan.startup.timestamp' = '2023-12-09 23:09:12') */;
+```
+
+### Stop Reading Position
+
+The config option `scan.bounded.mode` enables you to specify where the source stops reading. A bounded mode other than `unbounded` makes the source bounded even in streaming execution mode: the job finishes once the source reaches the stopping position (a bounded streaming read). Typical usages are replaying a bounded time range of the log, backfilling and archiving.
+
+It is supported for Log Tables, the changelog of Primary Key Tables (`earliest`, `latest` or `timestamp` startup mode) and the `$changelog`/`$binlog` virtual tables, but not for the `full` startup mode of Primary Key Tables (the snapshot reading phase has no bounded end) or the datalake union read.
+
+Fluss supports the following `scan.bounded.mode` options:
+- `unbounded` (default): In streaming execution mode, the source never stops. In batch execution mode, the source reads up to the latest log offsets captured when the source starts.
+- `latest-offset`: The source stops at the latest log offsets captured when the source starts. In batch execution mode, this behaves the same as `unbounded`.
+- `timestamp`: The source stops before the first record batch whose commit timestamp is greater than or equal to the specified time (defined by the configuration item `scan.bounded.timestamp`), i.e. only records with a commit timestamp smaller than the specified time are read. The specified time must not be in the future.
+
+The following SQL statement reads the `log_table` table up to a specified time.
+```sql title="Flink SQL"
+SELECT * FROM log_table
+/*+ OPTIONS('scan.bounded.mode' = 'timestamp',
+'scan.bounded.timestamp' = '2023-12-09 23:09:12') */;
+```
+
+The start and stop reading positions can be combined to replay a time range of the log, even in streaming execution mode.
+```sql title="Flink SQL"
+SELECT * FROM log_table
+/*+ OPTIONS('scan.startup.mode' = 'timestamp',
+'scan.startup.timestamp' = '2023-12-09 00:00:00',
+'scan.bounded.mode' = 'timestamp',
+'scan.bounded.timestamp' = '2023-12-10 00:00:00') */;
+```
+
+The following SQL statement reads the changelog of a primary key table up to the latest log offsets captured when the source starts, and then finishes.
+```sql title="Flink SQL"
+SELECT * FROM pk_table
+/*+ OPTIONS('scan.startup.mode' = 'earliest',
+'scan.bounded.mode' = 'latest-offset') */;
 ```
 
 

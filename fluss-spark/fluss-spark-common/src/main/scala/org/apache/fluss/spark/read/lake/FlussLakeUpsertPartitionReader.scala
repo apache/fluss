@@ -24,6 +24,7 @@ import org.apache.fluss.metadata.TablePath
 import org.apache.fluss.row.InternalRow
 import org.apache.fluss.spark.read.FlussPartitionReader
 import org.apache.fluss.types.RowType
+import org.apache.fluss.utils.IOUtils
 
 import org.apache.spark.internal.Logging
 
@@ -39,24 +40,27 @@ class FlussLakeUpsertPartitionReader(
     tablePath: TablePath,
     lakeSource: LakeSource[LakeSplit],
     projection: Array[Int],
+    limit: Option[Int],
     flussPartition: FlussLakeUpsertInputPartition,
     flussConfig: Configuration)
-  extends FlussPartitionReader(tablePath, flussConfig)
+  extends FlussPartitionReader(tablePath, flussConfig, limit)
   with Logging {
 
   private val lakeSplits = flussPartition.lakeSplits
-  private val flussLakeSnapshotAndLogSplitScanner = new LakeSnapshotAndLogSplitScanner(
-    table,
-    lakeSource,
-    lakeSplits,
-    flussPartition.tableBucket,
-    flussPartition.logStartingOffset,
-    flussPartition.logStoppingOffset,
-    projection)
+  private val flussLakeSnapshotAndLogSplitScanner = initializeResources {
+    new LakeSnapshotAndLogSplitScanner(
+      table,
+      lakeSource,
+      lakeSplits,
+      flussPartition.tableBucket,
+      flussPartition.logStartingOffset,
+      flussPartition.logStoppingOffset,
+      projection)
+  }
   private var mergedIterator: Iterator[InternalRow] = Iterator.empty
   private var scanFinished = false
 
-  initialize()
+  initializeResources(initialize())
 
   override lazy val projectedRowType: RowType = rowType.project(projection)
 
@@ -102,14 +106,10 @@ class FlussLakeUpsertPartitionReader(
   }
 
   override def close0(): Unit = {
-    if (mergedIterator != null) {
-      mergedIterator match {
-        case closeable: AutoCloseable => closeable.close()
-        case _ => // Do nothing
-      }
+    val closeableIterator = mergedIterator match {
+      case closeable: AutoCloseable => closeable
+      case _ => null
     }
-    if (flussLakeSnapshotAndLogSplitScanner != null) {
-      flussLakeSnapshotAndLogSplitScanner.close()
-    }
+    IOUtils.closeAll(closeableIterator, flussLakeSnapshotAndLogSplitScanner)
   }
 }

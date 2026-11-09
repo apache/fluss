@@ -1,0 +1,43 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# The pinned Gateway binary builder uses the repository root because
+# fluss-gateway has a path dependency on fluss-rust. The release image itself
+# uses docker/fluss-gateway as its build context.
+*
+!LICENSE
+!NOTICE
+!fluss-gateway/
+!fluss-gateway/**
+!fluss-rust/
+!fluss-rust/**
+!docker/
+!docker/fluss-gateway/
+!docker/fluss-gateway/**
+
+# Generated and local-only files inside the included Rust workspaces.
+fluss-gateway/target/
+fluss-gateway/.idea/
+fluss-gateway/.vscode/
+fluss-rust/target/
+fluss-rust/**/target/
+fluss-rust/.idea/
+fluss-rust/.vscode/
+
+# Prepared image inputs belong to the release image build context, not to the
+# binary builder that runs from the repository root.
+docker/fluss-gateway/build-target/

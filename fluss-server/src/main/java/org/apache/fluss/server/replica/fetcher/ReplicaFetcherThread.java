@@ -24,6 +24,7 @@ import org.apache.fluss.exception.InvalidRecordException;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
 import org.apache.fluss.exception.RemoteStorageException;
 import org.apache.fluss.exception.StorageException;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.MemoryLogRecords;
@@ -54,6 +55,7 @@ import javax.annotation.concurrent.GuardedBy;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 import java.util.Collections;
@@ -66,6 +68,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.stream.Collectors;
 
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
@@ -241,7 +244,13 @@ final class ReplicaFetcherThread extends ShutdownableThread {
             responseData = fetchFuture.get(timeoutSeconds, TimeUnit.SECONDS);
         } catch (Throwable t) {
             if (isRunning()) {
-                LOG.warn("Error in response for fetch log request {}", fetchLogRequest, t);
+                LOG.warn(
+                        "Error in response from leader server {} for fetch log request from table ids: {}",
+                        leader.leaderServerId(),
+                        fetchLogRequest.getTablesReqsList().stream()
+                                .map(x -> x.getTableId())
+                                .collect(Collectors.toSet()),
+                        t);
                 inLock(
                         bucketStatusMapLock,
                         () -> bucketsWithError.addAll(fairBucketStatusMap.bucketSet()));
@@ -335,6 +344,14 @@ final class ReplicaFetcherThread extends ShutdownableThread {
                 if (logAppendInfo.validBytes() > 0) {
                     nextFetchOffset = logAppendInfo.lastOffset() + 1;
                 }
+            }
+
+            // Propagate the leader's KV snapshot retention boundary to the follower even when the
+            // successful response contains no records, so obsolete local log segments can be
+            // cleaned up.
+            Replica replica = replicaManager.getReplicaOrException(tableBucket);
+            if (replica.isKvTable() && replicaData.hasMinRetainOffset()) {
+                replica.getLogTablet().updateMinRetainOffset(replicaData.getMinRetainOffset());
             }
 
             if (nextFetchOffset != -1L && fairBucketStatusMap.contains(tableBucket)) {
@@ -625,7 +642,12 @@ final class ReplicaFetcherThread extends ShutdownableThread {
 
             // 2. download writer id snapshots from remote storage.
             File snapshotFile = FlussPaths.writerSnapshotFile(log.getLogDir(), nextFetchOffset);
-            buildWriterIdSnapshotFile(snapshotFile, remoteLogSegmentWithMaxStartOffset, rlm);
+            buildWriterIdSnapshotFile(
+                    snapshotFile,
+                    FlussPaths.remoteLogDirFromTabletDir(
+                            new FsPath(rlFetchInfo.remoteLogTabletDir()), tb),
+                    remoteLogSegmentWithMaxStartOffset,
+                    rlm);
 
             // 3. Perform a reloadSnapshots after buildWriterIdSnapshotFile() to load the latest
             // downloaded writerId snapshot file into the writerStateManager.
@@ -650,15 +672,18 @@ final class ReplicaFetcherThread extends ShutdownableThread {
     }
 
     private void buildWriterIdSnapshotFile(
-            File snapshotFile, RemoteLogSegment remoteLogSegment, RemoteLogManager rlm)
+            File snapshotFile,
+            FsPath remoteLogDir,
+            RemoteLogSegment remoteLogSegment,
+            RemoteLogManager rlm)
             throws RemoteStorageException, IOException {
         File tmpSnapshotFile = new File(snapshotFile.getAbsolutePath() + ".tmp");
         // Copy it to snapshot file in atomic manner.
-        Files.copy(
+        try (InputStream input =
                 rlm.getRemoteLogStorage()
-                        .fetchIndex(remoteLogSegment, IndexType.WRITER_ID_SNAPSHOT),
-                tmpSnapshotFile.toPath(),
-                StandardCopyOption.REPLACE_EXISTING);
+                        .fetchIndex(remoteLogDir, remoteLogSegment, IndexType.WRITER_ID_SNAPSHOT)) {
+            Files.copy(input, tmpSnapshotFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
+        }
         FileUtils.atomicMoveWithFallback(tmpSnapshotFile.toPath(), snapshotFile.toPath(), false);
     }
 

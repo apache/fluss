@@ -151,11 +151,15 @@ docker compose up -d
 ```
 This command automatically starts all the containers defined in the Docker Compose configuration in detached mode.
 
-Run
+Count the long-running containers:
+
 ```shell
-docker container ls -a
+docker compose ps --status running --quiet \
+  coordinator-server tablet-server zookeeper jobmanager taskmanager | wc -l
 ```
-to check whether all containers are running properly.
+
+The expected output is `5`. A lower number means that one or more containers failed
+to start. Run `docker compose ps -a` to identify them.
 
 You can also visit http://localhost:8083/ to see if Flink is running normally.
 
@@ -478,35 +482,35 @@ docker compose exec jobmanager bin/sql-client.sh
 Create separate catalogs for the `admin`, `marketing`, and `finance` users:
 ```sql title="Flink SQL"
 CREATE CATALOG admin_catalog WITH (
-'type' = 'fluss',
-'bootstrap.servers' = 'coordinator-server:9123',
-'client.security.protocol' = 'SASL',
-'client.security.sasl.mechanism' = 'PLAIN',
-'client.security.sasl.username' = 'admin',
-'client.security.sasl.password' = 'admin-pass'
+    'type' = 'fluss',
+    'bootstrap.servers' = 'coordinator-server:9123',
+    'client.security.protocol' = 'SASL',
+    'client.security.sasl.mechanism' = 'PLAIN',
+    'client.security.sasl.username' = 'admin',
+    'client.security.sasl.password' = 'admin-pass'
 );
 ```
 
 ```sql title="Flink SQL"
 CREATE CATALOG marketing_catalog WITH (
-'type' = 'fluss',
-'bootstrap.servers' = 'coordinator-server:9123',
-'client.security.protocol' = 'SASL',
-'client.security.sasl.mechanism' = 'PLAIN',
-'client.security.sasl.username' = 'marketing',
-'client.security.sasl.password' = 'marketing-pass'
+    'type' = 'fluss',
+    'bootstrap.servers' = 'coordinator-server:9123',
+    'client.security.protocol' = 'SASL',
+    'client.security.sasl.mechanism' = 'PLAIN',
+    'client.security.sasl.username' = 'marketing',
+    'client.security.sasl.password' = 'marketing-pass'
 );
 
 ```
 
 ```sql title="Flink SQL"
 CREATE CATALOG finance_catalog WITH (
-'type' = 'fluss',
-'bootstrap.servers' = 'coordinator-server:9123',
-'client.security.protocol' = 'SASL',
-'client.security.sasl.mechanism' = 'PLAIN',
-'client.security.sasl.username' = 'finance',
-'client.security.sasl.password' = 'finance-pass'
+    'type' = 'fluss',
+    'bootstrap.servers' = 'coordinator-server:9123',
+    'client.security.protocol' = 'SASL',
+    'client.security.sasl.mechanism' = 'PLAIN',
+    'client.security.sasl.username' = 'finance',
+    'client.security.sasl.password' = 'finance-pass'
 );
 ```
 

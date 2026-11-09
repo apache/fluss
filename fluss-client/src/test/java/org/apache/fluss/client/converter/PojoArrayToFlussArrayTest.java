@@ -70,6 +70,7 @@ public class PojoArrayToFlussArrayTest {
                         .field(
                                 "mapArray",
                                 DataTypes.ARRAY(DataTypes.MAP(DataTypes.STRING(), DataTypes.INT())))
+                        .field("enumArray", DataTypes.ARRAY(DataTypes.STRING()))
                         .build();
 
         PojoToRowConverter<ArrayPojo> writer = PojoToRowConverter.of(ArrayPojo.class, table, table);
@@ -242,6 +243,12 @@ public class PojoArrayToFlussArrayTest {
 
         assertThat(resultMap2).containsEntry("test_3", 3);
         assertThat(resultMap2).containsEntry("test_4", 4);
+        // Verify enum array
+        InternalArray enumArray = row.getArray(22);
+        assertThat(enumArray.size()).isEqualTo(3);
+        assertThat(enumArray.getString(0).toString()).isEqualTo("PENDING");
+        assertThat(enumArray.getString(1).toString()).isEqualTo("ACTIVE");
+        assertThat(enumArray.getString(2).toString()).isEqualTo("finished");
     }
 
     @Test
@@ -314,6 +321,7 @@ public class PojoArrayToFlussArrayTest {
         public Instant[] timestampLtzArray;
         public Integer[][] nestedIntArray;
         public Map<String, Integer>[] mapArray;
+        public StatusEnum[] enumArray;
 
         public ArrayPojo() {}
 
@@ -368,6 +376,8 @@ public class PojoArrayToFlussArrayTest {
                             }
                         }
                     };
+            pojo.enumArray =
+                    new StatusEnum[] {StatusEnum.PENDING, StatusEnum.ACTIVE, StatusEnum.finished};
             return pojo;
         }
     }
@@ -433,5 +443,13 @@ public class PojoArrayToFlussArrayTest {
         public Integer[] intArray;
 
         public SimpleArrayPojo() {}
+    }
+
+    /** Test enum for String-to-Enum conversion tests. */
+    public enum StatusEnum {
+        ACTIVE,
+        INACTIVE,
+        PENDING,
+        finished,
     }
 }

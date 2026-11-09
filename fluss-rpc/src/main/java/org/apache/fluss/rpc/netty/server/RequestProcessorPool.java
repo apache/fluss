@@ -34,33 +34,47 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+import static org.apache.fluss.utils.Preconditions.checkState;
+
 /** A worker thread pool that contains a fixed number of threads to process incoming requests. */
 final class RequestProcessorPool {
     private static final Logger LOG = LoggerFactory.getLogger(RequestProcessorPool.class);
 
+    private static final String PROCESSOR_INDEX = "processor_index";
+
     private final RequestChannel[] requestChannels;
     private final RequestProcessor[] processors;
+    private final String threadName;
 
     private ExecutorService workerPool;
+    private CompletableFuture<Void> closeFuture;
 
     public RequestProcessorPool(
             int numProcessors,
             int totalQueueCapacity,
             RpcGatewayService service,
-            List<NetworkProtocolPlugin> protocols,
-            RequestsMetrics requestsMetrics) {
+            RequestHandler<?>[] requestHandlers,
+            RequestsMetrics requestsMetrics,
+            int processorIndexOffset,
+            String threadName) {
         this.processors = new RequestProcessor[numProcessors];
         this.requestChannels = new RequestChannel[numProcessors];
+        this.threadName = threadName;
 
-        RequestHandler<?>[] requestHandlers = initializeRequestHandlers(protocols, service);
         for (int i = 0; i < numProcessors; i++) {
-            requestChannels[i] = new RequestChannel(totalQueueCapacity / numProcessors);
+            RequestChannel requestChannel = new RequestChannel(totalQueueCapacity / numProcessors);
+            requestChannels[i] = requestChannel;
             // bind processor to a single channel to make requests from the
             // same channel processed serializable
-            processors[i] = new RequestProcessor(i, requestChannels[i], service, requestHandlers);
+            int processorIndex = processorIndexOffset + i;
+            processors[i] =
+                    new RequestProcessor(processorIndex, requestChannel, service, requestHandlers);
+            requestsMetrics.gauge(
+                    PROCESSOR_INDEX,
+                    String.valueOf(processorIndex),
+                    MetricNames.REQUEST_QUEUE_SIZE,
+                    requestChannel::requestsCount);
         }
-        // register requestQueueSize metrics
-        requestsMetrics.gauge(MetricNames.REQUEST_QUEUE_SIZE, this::getRequestQueueSize);
     }
 
     public int getRequestQueueSize() {
@@ -76,38 +90,40 @@ final class RequestProcessorPool {
     }
 
     public synchronized void start() {
+        checkState(closeFuture == null, "Request processor pool has already been closed.");
         this.workerPool =
                 Executors.newFixedThreadPool(
-                        processors.length, new ExecutorThreadFactory("fluss-netty-server-worker"));
+                        processors.length, new ExecutorThreadFactory(threadName));
         for (RequestProcessor processor : processors) {
             workerPool.execute(processor);
         }
     }
 
     public synchronized CompletableFuture<Void> closeAsync() {
-        if (workerPool == null) {
-            // the processor poll is not started yet.
-            return CompletableFuture.completedFuture(null);
+        if (closeFuture != null) {
+            return closeFuture;
         }
         LOG.info("Shutting down Fluss request processor pool.");
         List<CompletableFuture<Void>> shutdownFutures = new ArrayList<>();
-        for (RequestProcessor processor : processors) {
-            if (processor != null) {
+        if (workerPool != null) {
+            for (RequestProcessor processor : processors) {
                 processor.initiateShutdown();
                 shutdownFutures.add(processor.getShutdownFuture());
             }
         }
-        return FutureUtils.runAfterwards(
-                FutureUtils.completeAll(shutdownFutures),
-                () -> {
-                    if (workerPool != null) {
-                        workerPool.shutdown();
-                    }
-                });
+        closeFuture =
+                FutureUtils.runAfterwards(
+                        FutureUtils.completeAll(shutdownFutures),
+                        () -> {
+                            if (workerPool != null) {
+                                workerPool.shutdown();
+                            }
+                        });
+        return closeFuture;
         // service and requestChannel shutdown is handled outside.
     }
 
-    private RequestHandler<?>[] initializeRequestHandlers(
+    static RequestHandler<?>[] createRequestHandlers(
             List<NetworkProtocolPlugin> protocolPlugins, RpcGatewayService service) {
         int maxRequestTypeId =
                 Arrays.stream(RequestType.values())

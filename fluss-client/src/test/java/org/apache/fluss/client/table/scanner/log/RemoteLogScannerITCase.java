@@ -28,10 +28,12 @@ import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
+import org.apache.fluss.exception.FetchException;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.ChangeType;
@@ -39,6 +41,7 @@ import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.utils.clock.ManualClock;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -49,6 +52,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -58,15 +62,21 @@ import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DATA2_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DATA2_TABLE_PATH;
 import static org.apache.fluss.testutils.DataTestUtils.row;
+import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
+import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** ITCase for {@link LogScannerImpl} as scan log from remote. */
 public class RemoteLogScannerITCase {
+    private static final ManualClock MANUAL_CLOCK = new ManualClock(System.currentTimeMillis());
+
     @RegisterExtension
     public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
             FlussClusterExtension.builder()
                     .setNumOfTabletServers(3)
                     .setClusterConf(initConfig())
+                    .setClock(MANUAL_CLOCK)
                     .build();
 
     private Connection conn;
@@ -113,6 +123,69 @@ public class RemoteLogScannerITCase {
         assertThat(rowList).hasSize(recordSize);
         assertThat(rowList).containsExactlyInAnyOrderElementsOf(expectedRows);
         logScanner.close();
+    }
+
+    @Test
+    void testAlterTableLogTtlAffectsFetch() throws Exception {
+        TablePath tablePath = TablePath.of("test_db_1", "test_alter_table_log_ttl_affects_fetch");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(DATA1_SCHEMA)
+                        .distributedBy(1)
+                        .property(ConfigOptions.TABLE_LOG_TTL, Duration.ofDays(30))
+                        .build();
+        long tableId = createTable(tablePath, tableDescriptor);
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+
+        try (Table table = conn.getTable(tablePath)) {
+            AppendWriter appendWriter = table.newAppend().createWriter();
+            int oldRecordSize = 20;
+            List<GenericRow> expectedOldRows = new ArrayList<>();
+            for (int i = 0; i < oldRecordSize; i++) {
+                GenericRow oldRow = row(i, "old_" + i);
+                expectedOldRows.add(oldRow);
+                appendWriter.append(oldRow).get();
+            }
+            FLUSS_CLUSTER_EXTENSION.waitUntilSomeLogSegmentsCopyToRemote(tableBucket);
+
+            // assert all the records can be fetched before altering the TTL.
+            List<GenericRow> actualOldRows = new ArrayList<>();
+            try (LogScanner logScanner = table.newScan().createLogScanner()) {
+                logScanner.subscribeFromBeginning(0);
+                waitUntil(
+                        () -> {
+                            for (ScanRecord scanRecord : logScanner.poll(Duration.ofSeconds(1))) {
+                                InternalRow actualRow = scanRecord.getRow();
+                                actualOldRows.add(row(actualRow.getInt(0), actualRow.getString(1)));
+                            }
+                            return actualOldRows.size() >= oldRecordSize;
+                        },
+                        Duration.ofMinutes(1),
+                        "Timed out waiting for records appended before altering the TTL.");
+            }
+            assertThat(actualOldRows).containsExactlyElementsOf(expectedOldRows);
+
+            admin.alterTable(
+                            tablePath,
+                            Collections.singletonList(
+                                    TableChange.set(ConfigOptions.TABLE_LOG_TTL.key(), "1h")),
+                            false)
+                    .get();
+            MANUAL_CLOCK.advanceTime(Duration.ofHours(1).plusMinutes(30));
+
+            // Retry with a fresh scanner until the last record written before the TTL change is
+            // unavailable from both local and remote logs.
+            retry(
+                    Duration.ofMinutes(2),
+                    () -> {
+                        try (LogScanner expiredLogScanner = table.newScan().createLogScanner()) {
+                            expiredLogScanner.subscribe(0, oldRecordSize - 1L);
+                            assertThatThrownBy(() -> expiredLogScanner.poll(Duration.ofSeconds(1)))
+                                    .isInstanceOf(FetchException.class)
+                                    .hasMessageContaining("is out of range");
+                        }
+                    });
+        }
     }
 
     @ParameterizedTest
@@ -270,6 +343,8 @@ public class RemoteLogScannerITCase {
         conf.setInt(ConfigOptions.DEFAULT_REPLICATION_FACTOR, 3);
         // set a shorter interval for testing purpose
         conf.set(ConfigOptions.REMOTE_LOG_TASK_INTERVAL_DURATION, Duration.ofSeconds(1));
+        conf.set(ConfigOptions.LOG_RETENTION_CHECK_INTERVAL, Duration.ofSeconds(1));
+        conf.set(ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED, true);
         conf.set(ConfigOptions.LOG_SEGMENT_FILE_SIZE, MemorySize.parse("1kb"));
         return conf;
     }

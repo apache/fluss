@@ -24,16 +24,17 @@ import org.apache.fluss.server.utils.ResourceGuard;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.IOUtils;
 
-import org.rocksdb.ColumnFamilyHandle;
-import org.rocksdb.ColumnFamilyOptions;
-import org.rocksdb.NativeLibraryLoader;
-import org.rocksdb.RocksDB;
+import io.github.fluss_contrib.rocksdb.AbstractCompactionFilter;
+import io.github.fluss_contrib.rocksdb.AbstractCompactionFilterFactory;
+import io.github.fluss_contrib.rocksdb.ColumnFamilyHandle;
+import io.github.fluss_contrib.rocksdb.ColumnFamilyOptions;
+import io.github.fluss_contrib.rocksdb.NativeLibraryLoader;
+import io.github.fluss_contrib.rocksdb.RocksDB;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.File;
 import java.io.IOException;
-import java.lang.reflect.Field;
 import java.util.UUID;
 import java.util.function.Supplier;
 
@@ -60,6 +61,14 @@ public class RocksDBKvBuilder {
     /** Path where this configured instance stores its RocksDB database. */
     private final File instanceRocksDBPath;
 
+    /**
+     * L0 file count at which Fluss starts emitting proactive piggyback backpressure. Default {@link
+     * Integer#MAX_VALUE} effectively disables the proactive throttle signal; the storage engine's
+     * own L0 slowdown trigger still produces a hard rejection ({@link
+     * org.apache.fluss.exception.StorageBackpressureException}) at the upper bound.
+     */
+    private int flussL0SlowdownTrigger = Integer.MAX_VALUE;
+
     /** The number of (re)tries for loading the RocksDB JNI library. */
     private static final int ROCKSDB_LIB_LOADING_ATTEMPTS = 3;
 
@@ -74,6 +83,37 @@ public class RocksDBKvBuilder {
         this.optionsContainer = rocksDBResourceContainer;
         this.instanceBasePath = instanceBasePath;
         this.instanceRocksDBPath = getInstanceRocksDBPath(instanceBasePath);
+    }
+
+    /**
+     * Sets the L0 file count at which Fluss starts emitting proactive backpressure signals
+     * (piggybacked on PutKv responses) so clients can throttle before the storage engine blocks
+     * writes. Should be strictly less than the column family's {@code
+     * level0_slowdown_writes_trigger}. Defaults to {@link Integer#MAX_VALUE} which disables
+     * proactive backpressure entirely.
+     */
+    public RocksDBKvBuilder setFlussL0SlowdownTrigger(int flussL0SlowdownTrigger) {
+        this.flussL0SlowdownTrigger = flussL0SlowdownTrigger;
+        return this;
+    }
+
+    /**
+     * Sets the compaction filter factory and transfers its ownership to this builder.
+     *
+     * <p>The factory is closed with the built {@link RocksDBKv}, or when setup or building fails.
+     */
+    @SuppressWarnings("rawtypes")
+    public RocksDBKvBuilder setCompactionFilterFactory(
+            AbstractCompactionFilterFactory<? extends AbstractCompactionFilter<?>> factory) {
+        try {
+            columnFamilyOptions.setCompactionFilterFactory(
+                    (AbstractCompactionFilterFactory) factory);
+            optionsContainer.registerCloseableResource(factory);
+        } catch (RuntimeException | Error e) {
+            IOUtils.closeQuietly(factory);
+            throw e;
+        }
+        return this;
     }
 
     public RocksDBKv build() throws KvBuildingException {
@@ -112,7 +152,12 @@ public class RocksDBKvBuilder {
                 db,
                 rocksDBResourceGuard,
                 defaultColumnFamilyHandle,
-                optionsContainer.getStatistics());
+                optionsContainer.getStatistics(),
+                columnFamilyOptions.level0SlowdownWritesTrigger(),
+                columnFamilyOptions.level0StopWritesTrigger(),
+                columnFamilyOptions.maxWriteBufferNumber(),
+                columnFamilyOptions.writeBufferSize(),
+                flussL0SlowdownTrigger);
     }
 
     void prepareDirectories() throws IOException {
@@ -198,15 +243,6 @@ public class RocksDBKvBuilder {
                         lastException = t;
                         LOG.debug("RocksDB JNI library loading attempt {} failed", attempt, t);
 
-                        // try to force RocksDB to attempt reloading the library
-                        try {
-                            resetRocksDBLoadedFlag();
-                        } catch (Throwable tt) {
-                            LOG.debug(
-                                    "Failed to reset 'initialized' flag in RocksDB native code loader",
-                                    tt);
-                        }
-
                         FileUtils.deleteDirectoryQuietly(rocksLibFolder);
                     }
                 }
@@ -214,14 +250,6 @@ public class RocksDBKvBuilder {
                 throw new IOException("Could not load the native RocksDB library", lastException);
             }
         }
-    }
-
-    @VisibleForTesting
-    static void resetRocksDBLoadedFlag() throws Exception {
-        final Field initField =
-                org.rocksdb.NativeLibraryLoader.class.getDeclaredField("initialized");
-        initField.setAccessible(true);
-        initField.setBoolean(null, false);
     }
 
     @VisibleForTesting

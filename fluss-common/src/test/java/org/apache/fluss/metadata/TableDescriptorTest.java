@@ -328,6 +328,24 @@ class TableDescriptorTest {
     }
 
     @Test
+    void testCountDataType() {
+        AggFunctions.COUNT().validateDataType(DataTypes.BIGINT());
+        assertThat(AggFunctionType.fromString("count")).isEqualTo(AggFunctionType.COUNT);
+        assertThatThrownBy(() -> AggFunctions.COUNT().validateDataType(DataTypes.INT()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("BIGINT");
+    }
+
+    @Test
+    void testLastNRequiresSizeParameter() {
+        AggFunctions.LAST_N(5).validateParameters();
+
+        assertThatThrownBy(() -> AggFunctions.of(AggFunctionType.LAST_N).validateParameters())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("'size' is required");
+    }
+
+    @Test
     void testInvalidListaggParameterUnknownParameter() {
         // LISTAGG with unknown parameter - should fail
         Map<String, String> params = new HashMap<>();

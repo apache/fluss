@@ -89,7 +89,7 @@ public class S3DelegationTokenReceiver implements SecurityTokenReceiver {
 
         LOG.info(
                 "Session credentials updated successfully with access key: {}.",
-                credentials.getAccessKeyId());
+                S3TokenLogUtils.maskAccessKey(credentials.getAccessKeyId()));
     }
 
     public static Credentials getCredentials() {

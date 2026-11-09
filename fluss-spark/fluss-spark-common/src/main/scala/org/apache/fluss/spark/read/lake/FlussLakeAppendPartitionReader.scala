@@ -33,13 +33,14 @@ class FlussLakeAppendPartitionReader(
     partition: FlussLakeInputPartition,
     lakeSource: LakeSource[LakeSplit],
     projection: Array[Int],
+    limit: Option[Int],
     flussConfig: Configuration)
-  extends FlussPartitionReader(tablePath, flussConfig)
+  extends FlussPartitionReader(tablePath, flussConfig, limit)
   with Logging {
 
   private var recordIterator: CloseableIterator[LogRecord] = _
 
-  initialize()
+  initializeResources(initialize())
 
   private def initialize(): Unit = {
     logInfo(s"Reading lake split for table $tablePath $partition")

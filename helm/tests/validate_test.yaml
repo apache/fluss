@@ -1,0 +1,117 @@
+#
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+suite: validate-aggregation
+templates:
+  - templates/NOTES.txt
+tests:
+  - it: renders warning for auto-generated internal SASL credentials
+    set:
+      security.internal.sasl.mechanism: plain
+    asserts:
+      - matchRegexRaw:
+          pattern: 'VALUES WARNING:'
+      - matchRegexRaw:
+          pattern: 'AUTO-GENERATED SASL credentials'
+
+  - it: fails with error for invalid mechanism through aggregator
+    set:
+      coordinator.readinessProbe.healthCheckAuth: "client.security.protocol:SASL"
+      tablet.readinessProbe.healthCheckAuth: "client.security.protocol:SASL"
+      security.client.sasl.mechanism: bogus
+    asserts:
+      - failedTemplate:
+          errorMessage: "VALUES VALIDATION:\nsecurity.client.sasl.mechanism must be empty or: plain"
+
+  - it: fails when client SASL is enabled without readiness healthCheckAuth
+    set:
+      security.client.sasl.mechanism: plain
+      security.client.sasl.plain.users:
+        - username: admin
+          password: admin-pass
+    asserts:
+      - failedTemplate:
+          errorMessage: "VALUES VALIDATION:\nsecurity.client.sasl.mechanism is set, so coordinator.readinessProbe.healthCheckAuth and tablet.readinessProbe.healthCheckAuth must be set for the readiness probe to authenticate against the client listener. To keep the credential in a Secret, add a READINESS_HEALTH_CHECK_AUTH entry to secrets.env instead"
+
+  - it: names only the probe that lacks healthCheckAuth
+    set:
+      security.client.sasl.mechanism: plain
+      security.client.sasl.plain.users:
+        - username: admin
+          password: admin-pass
+      coordinator.readinessProbe.healthCheckAuth: "client.security.protocol:SASL;client.sasl.mechanism:PLAIN"
+    asserts:
+      - failedTemplate:
+          errorMessage: "VALUES VALIDATION:\nsecurity.client.sasl.mechanism is set, so tablet.readinessProbe.healthCheckAuth must be set for the readiness probe to authenticate against the client listener. To keep the credential in a Secret, add a READINESS_HEALTH_CHECK_AUTH entry to secrets.env instead"
+
+  - it: passes when client SASL is enabled with readiness healthCheckAuth on both probes
+    set:
+      security.client.sasl.mechanism: plain
+      security.client.sasl.plain.users:
+        - username: admin
+          password: admin-pass
+      coordinator.readinessProbe.healthCheckAuth: "client.security.protocol:SASL;client.sasl.mechanism:PLAIN"
+      tablet.readinessProbe.healthCheckAuth: "client.security.protocol:SASL;client.sasl.mechanism:PLAIN"
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: passes when the probe credential comes from secrets.env
+    set:
+      security.client.sasl.mechanism: plain
+      security.client.sasl.plain.users:
+        - username: admin
+          password: admin-pass
+      secrets.env:
+        - name: READINESS_HEALTH_CHECK_AUTH
+          secretName: probe-auth
+          key: auth
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: passes when each probe credential comes from extraEnv or healthCheckAuth
+    set:
+      security.client.sasl.mechanism: plain
+      security.client.sasl.plain.users:
+        - username: admin
+          password: admin-pass
+      coordinator.extraEnv:
+        - name: READINESS_HEALTH_CHECK_AUTH
+          valueFrom:
+            secretKeyRef:
+              name: probe-auth
+              key: auth
+      tablet.readinessProbe.healthCheckAuth: "client.security.protocol:SASL"
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: still names a probe whose credential is missing when the other uses extraEnv
+    set:
+      security.client.sasl.mechanism: plain
+      security.client.sasl.plain.users:
+        - username: admin
+          password: admin-pass
+      tablet.extraEnv:
+        - name: READINESS_HEALTH_CHECK_AUTH
+          value: "client.security.protocol:SASL"
+    asserts:
+      - failedTemplate:
+          errorMessage: "VALUES VALIDATION:\nsecurity.client.sasl.mechanism is set, so coordinator.readinessProbe.healthCheckAuth must be set for the readiness probe to authenticate against the client listener. To keep the credential in a Secret, add a READINESS_HEALTH_CHECK_AUTH entry to secrets.env instead"
+
+  - it: passes cleanly with default values
+    asserts:
+      - notFailedTemplate: {}

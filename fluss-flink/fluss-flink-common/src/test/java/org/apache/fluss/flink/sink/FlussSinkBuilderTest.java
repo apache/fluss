@@ -17,15 +17,22 @@
 
 package org.apache.fluss.flink.sink;
 
+import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.sink.serializer.OrderSerializationSchema;
 import org.apache.fluss.flink.sink.shuffle.DistributionMode;
 import org.apache.fluss.flink.source.testutils.Order;
+import org.apache.fluss.metadata.TablePath;
 
+import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.table.types.logical.IntType;
+import org.apache.flink.table.types.logical.RowType;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Field;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -153,6 +160,10 @@ class FlussSinkBuilderTest {
         builder.setDistributionMode(DistributionMode.PARTITION_DYNAMIC);
         shuffleMode = getFieldValue(builder, "distributionMode");
         assertThat(shuffleMode).isEqualTo(DistributionMode.PARTITION_DYNAMIC);
+
+        builder.setDistributionMode(DistributionMode.BUCKET_BALANCE);
+        shuffleMode = getFieldValue(builder, "distributionMode");
+        assertThat(shuffleMode).isEqualTo(DistributionMode.BUCKET_BALANCE);
     }
 
     @Test
@@ -182,6 +193,66 @@ class FlussSinkBuilderTest {
 
         // Verify the builder instance is returned
         assertThat(chainedBuilder).isInstanceOf(FlussSinkBuilder.class);
+    }
+
+    @Test
+    void testUndoRecoverySinkCannotBeAddedToMultipleTopologies() {
+        StreamExecutionEnvironment environment =
+                StreamExecutionEnvironment.getExecutionEnvironment();
+        DataStream<Order> input = environment.fromElements(new Order());
+        FlinkSink.UpsertSinkWriterBuilder<Order> writerBuilder =
+                new FlinkSink.UpsertSinkWriterBuilder<>(
+                        TablePath.of(databaseName, tableName),
+                        new Configuration(),
+                        RowType.of(new IntType()),
+                        null,
+                        1,
+                        Collections.emptyList(),
+                        Collections.emptyList(),
+                        null,
+                        DistributionMode.BUCKET,
+                        new OrderSerializationSchema(),
+                        true,
+                        null);
+
+        writerBuilder.addPreWriteTopology(input);
+
+        assertThatThrownBy(() -> writerBuilder.addPreWriteTopology(input))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("multiple topologies");
+    }
+
+    @Test
+    void testUndoRecoveryRejectsUnsafeDistributionModes() {
+        StreamExecutionEnvironment environment =
+                StreamExecutionEnvironment.getExecutionEnvironment();
+        DataStream<Order> input = environment.fromElements(new Order());
+        // Undo Recovery assumes each bucket is written by exactly one subtask; modes that may fan
+        // one bucket out to several subtasks must be rejected even when the builder is
+        // constructed directly, bypassing the entry-point validation.
+        for (DistributionMode mode :
+                new DistributionMode[] {DistributionMode.NONE, DistributionMode.BUCKET_BALANCE}) {
+            FlinkSink.UpsertSinkWriterBuilder<Order> writerBuilder =
+                    new FlinkSink.UpsertSinkWriterBuilder<>(
+                            TablePath.of(databaseName, tableName),
+                            new Configuration(),
+                            RowType.of(new IntType()),
+                            null,
+                            1,
+                            Collections.emptyList(),
+                            Collections.emptyList(),
+                            null,
+                            mode,
+                            new OrderSerializationSchema(),
+                            true,
+                            null);
+
+            assertThatThrownBy(() -> writerBuilder.addPreWriteTopology(input))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("is not supported when Undo Recovery is enabled")
+                    .hasMessageContaining("'" + mode.name() + "'")
+                    .hasMessageContaining("Please use 'bucket' or 'auto'");
+        }
     }
 
     @Test

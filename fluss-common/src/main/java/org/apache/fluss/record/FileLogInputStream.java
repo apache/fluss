@@ -19,6 +19,8 @@ package org.apache.fluss.record;
 
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.memory.MemorySegment;
+import org.apache.fluss.metadata.LogFormat;
+import org.apache.fluss.row.arrow.ArrowReader;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableIterator;
 import org.apache.fluss.utils.FileUtils;
@@ -39,6 +41,7 @@ import static org.apache.fluss.record.LogRecordBatchFormat.LENGTH_OFFSET;
 import static org.apache.fluss.record.LogRecordBatchFormat.LOG_OVERHEAD;
 import static org.apache.fluss.record.LogRecordBatchFormat.MAGIC_OFFSET;
 import static org.apache.fluss.record.LogRecordBatchFormat.recordBatchHeaderSize;
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -176,7 +179,61 @@ public class FileLogInputStream
 
         @Override
         public CloseableIterator<LogRecord> records(ReadContext context) {
+            // CRC validation is the caller's responsibility and loads fullBatch before iteration.
+            // Reuse that data when available; otherwise avoid reading unselected Arrow buffers.
+            if (fullBatch == null && context.getLogFormat() == LogFormat.ARROW) {
+                checkArgument(
+                        sizeInBytes() >= headerSize(), "Log batch is smaller than its header.");
+                DefaultLogRecordBatch header = loadBatchHeader();
+                if (header.getRecordCount() == 0) {
+                    return CloseableIterator.emptyIterator();
+                }
+                ArrowReadPlan plan = context.getArrowReadPlan(header.schemaId());
+                if (plan.isProjected()) {
+                    return projectedRecords(header, plan);
+                }
+            }
             return loadFullBatch().records(context);
+        }
+
+        private CloseableIterator<LogRecord> projectedRecords(
+                DefaultLogRecordBatch header, ArrowReadPlan plan) {
+            int statisticsLength = header.getStatisticsLength();
+            checkArgument(
+                    statisticsLength >= 0 && statisticsLength <= sizeInBytes() - headerSize(),
+                    "Invalid statistics length: %s.",
+                    statisticsLength);
+            int recordsOffset = headerSize() + statisticsLength;
+            int recordCount = header.getRecordCount();
+            checkArgument(recordCount >= 0, "Invalid record count: %s.", recordCount);
+            ChangeTypeVector changeTypes = null;
+            if (!header.isAppendOnly()) {
+                checkArgument(
+                        recordCount <= sizeInBytes() - recordsOffset,
+                        "Change type vector exceeds batch size.");
+                ByteBuffer buffer =
+                        loadByteBufferWithSize(
+                                recordCount, position + recordsOffset, "change type vector");
+                changeTypes =
+                        new ChangeTypeVector(MemorySegment.wrap(buffer.array()), 0, recordCount);
+                recordsOffset += recordCount;
+            }
+            ArrowReader reader =
+                    plan.load(
+                            fileRecords.channel(),
+                            (long) position + recordsOffset,
+                            sizeInBytes() - recordsOffset);
+            if (reader.getRowCount() != recordCount) {
+                plan.clear();
+                throw new IllegalArgumentException(
+                        "Arrow row count does not match log batch record count.");
+            }
+            return header.columnRecordIterator(plan, reader, changeTypes);
+        }
+
+        @Override
+        public ArrowBatchData loadArrowBatch(ReadContext context) {
+            return loadFullBatch().loadArrowBatch(context);
         }
 
         @Override

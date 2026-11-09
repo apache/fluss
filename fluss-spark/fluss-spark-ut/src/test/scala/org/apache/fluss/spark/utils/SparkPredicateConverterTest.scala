@@ -195,7 +195,7 @@ class SparkPredicateConverterTest extends AnyFunSuite {
   test("Date literal from epoch days") {
     val days = Integer.valueOf(LocalDate.of(2025, 1, 15).toEpochDay.toInt)
     val predicate = convert(pred("=", ref("dt"), lit(days, DateType)))
-    val expected = new PredicateBuilder(rowType).equal(6, LocalDate.of(2025, 1, 15))
+    val expected = new PredicateBuilder(rowType).equal(6, days)
     assertThat(predicate).isEqualTo(expected)
   }
 

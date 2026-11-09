@@ -1,0 +1,230 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.apache.fluss.lake.iceberg.source;
+
+import org.apache.fluss.row.BinaryString;
+import org.apache.fluss.row.Decimal;
+import org.apache.fluss.row.InternalArray;
+import org.apache.fluss.row.InternalMap;
+import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.TimestampLtz;
+import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.utils.BytesUtils;
+
+import org.apache.iceberg.data.Record;
+import org.apache.iceberg.types.Types;
+
+import java.math.BigDecimal;
+import java.nio.ByteBuffer;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.OffsetDateTime;
+import java.util.List;
+import java.util.Map;
+
+import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
+import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
+import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
+
+/** Adapter for Iceberg Record as fluss row. */
+public class IcebergRecordAsFlussRow implements InternalRow {
+
+    private Record icebergRecord;
+    // cached business field count, recomputed when the record changes
+    private int businessFieldCount;
+
+    public IcebergRecordAsFlussRow() {}
+
+    public IcebergRecordAsFlussRow(Record icebergRecord) {
+        this.icebergRecord = icebergRecord;
+        this.businessFieldCount = computeBusinessFieldCount(icebergRecord);
+    }
+
+    public IcebergRecordAsFlussRow replaceIcebergRecord(Record icebergRecord) {
+        this.icebergRecord = icebergRecord;
+        this.businessFieldCount = computeBusinessFieldCount(icebergRecord);
+        return this;
+    }
+
+    private static int computeBusinessFieldCount(Record record) {
+        // Subtract the system columns that are actually present in this record's struct rather than
+        // a fixed count: a projected legacy record may carry only a subset (e.g. __offset and
+        // __timestamp but not __bucket), and a clean record carries none.
+        Types.StructType struct = record.struct();
+        int systemColumns = 0;
+        if (struct.field(BUCKET_COLUMN_NAME) != null) {
+            systemColumns++;
+        }
+        if (struct.field(OFFSET_COLUMN_NAME) != null) {
+            systemColumns++;
+        }
+        if (struct.field(TIMESTAMP_COLUMN_NAME) != null) {
+            systemColumns++;
+        }
+        return struct.fields().size() - systemColumns;
+    }
+
+    @Override
+    public int getFieldCount() {
+        return businessFieldCount;
+    }
+
+    @Override
+    public boolean isNullAt(int pos) {
+        return icebergRecord.get(pos) == null;
+    }
+
+    @Override
+    public boolean getBoolean(int pos) {
+        return (boolean) icebergRecord.get(pos);
+    }
+
+    @Override
+    public byte getByte(int pos) {
+        Object value = icebergRecord.get(pos);
+        // Iceberg stores TINYINT as Integer, need to cast to byte
+        return ((Integer) value).byteValue();
+    }
+
+    @Override
+    public short getShort(int pos) {
+        Object value = icebergRecord.get(pos);
+        // Iceberg stores SMALLINT as Integer, need to cast to short
+        return ((Integer) value).shortValue();
+    }
+
+    @Override
+    public int getInt(int pos) {
+        Object value = icebergRecord.get(pos);
+        // Iceberg returns LocalDate for DATE columns and LocalTime for TIME columns,
+        // but Fluss InternalRow uses getInt() for both (epoch days and millis-of-day).
+        if (value instanceof LocalDate) {
+            return (int) ((LocalDate) value).toEpochDay();
+        }
+        if (value instanceof LocalTime) {
+            return (int) (((LocalTime) value).toNanoOfDay() / 1_000_000);
+        }
+        return (Integer) value;
+    }
+
+    @Override
+    public long getLong(int pos) {
+        Object value = icebergRecord.get(pos);
+        return (Long) value;
+    }
+
+    @Override
+    public float getFloat(int pos) {
+        Object value = icebergRecord.get(pos);
+        return (float) value;
+    }
+
+    @Override
+    public double getDouble(int pos) {
+        Object value = icebergRecord.get(pos);
+        return (double) value;
+    }
+
+    @Override
+    public BinaryString getChar(int pos, int length) {
+        String value = (String) icebergRecord.get(pos);
+        return BinaryString.fromBytes(value.getBytes());
+    }
+
+    @Override
+    public BinaryString getString(int pos) {
+        String value = (String) icebergRecord.get(pos);
+        return BinaryString.fromBytes(value.getBytes());
+    }
+
+    @Override
+    public Decimal getDecimal(int pos, int precision, int scale) {
+        BigDecimal bigDecimal = (BigDecimal) icebergRecord.get(pos);
+        return Decimal.fromBigDecimal(bigDecimal, precision, scale);
+    }
+
+    @Override
+    public TimestampNtz getTimestampNtz(int pos, int precision) {
+        Object value = icebergRecord.get(pos);
+        if (value == null) {
+            throw new IllegalStateException("Value at position " + pos + " is null");
+        }
+        LocalDateTime localDateTime = (LocalDateTime) value;
+        return TimestampNtz.fromLocalDateTime(localDateTime);
+    }
+
+    @Override
+    public TimestampLtz getTimestampLtz(int pos, int precision) {
+        Object value = icebergRecord.get(pos);
+        OffsetDateTime offsetDateTime = (OffsetDateTime) value;
+        return TimestampLtz.fromInstant(offsetDateTime.toInstant());
+    }
+
+    @Override
+    public byte[] getBinary(int pos, int length) {
+        Object value = icebergRecord.get(pos);
+        ByteBuffer byteBuffer = (ByteBuffer) value;
+        return BytesUtils.toArray(byteBuffer);
+    }
+
+    @Override
+    public byte[] getBytes(int pos) {
+        Object value = icebergRecord.get(pos);
+        ByteBuffer byteBuffer = (ByteBuffer) value;
+        return BytesUtils.toArray(byteBuffer);
+    }
+
+    @Override
+    public InternalArray getArray(int pos) {
+        Object value = icebergRecord.get(pos);
+        if (value == null) {
+            return null;
+        }
+        List<?> icebergList = (List<?>) value;
+        return new IcebergArrayAsFlussArray(icebergList);
+    }
+
+    @Override
+    public InternalMap getMap(int pos) {
+        Object value = icebergRecord.get(pos);
+        if (value == null) {
+            return null;
+        }
+        Map<?, ?> icebergMap = (Map<?, ?>) value;
+        return new IcebergMapAsFlussMap(icebergMap);
+    }
+
+    @Override
+    public InternalRow getRow(int pos, int numFields) {
+        Object value = icebergRecord.get(pos);
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Record) {
+            return new IcebergRecordAsFlussRow((Record) value);
+        } else {
+            throw new IllegalArgumentException(
+                    "Expected Iceberg Record for nested row at position "
+                            + pos
+                            + " but found: "
+                            + value.getClass().getName());
+        }
+    }
+}
