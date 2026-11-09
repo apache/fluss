@@ -206,8 +206,7 @@ class ConsumerOffsetCommitITCase {
                         context -> {
                             FLUSS_CLUSTER_EXTENSION
                                     .getRebalanceManager()
-                                    .registerRebalance(
-                                            rebalanceId, plan, RebalanceStatus.NOT_STARTED);
+                                    .registerRebalance(rebalanceId, plan);
                             return null;
                         });
         FLUSS_CLUSTER_EXTENSION
