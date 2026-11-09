@@ -41,6 +41,7 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.encode.KvValueLayout;
+import org.apache.fluss.row.encode.OrderedKeyEncoder;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypeRoot;
 import org.apache.fluss.types.RowType;
@@ -60,7 +61,6 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-import static org.apache.fluss.config.ConfigOptions.CURRENT_KV_FORMAT_VERSION;
 import static org.apache.fluss.config.FlussConfigUtils.TABLE_OPTIONS;
 import static org.apache.fluss.config.FlussConfigUtils.isAlterableTableOption;
 import static org.apache.fluss.config.FlussConfigUtils.isTableStorageConfig;
@@ -139,6 +139,17 @@ public class TableDescriptorValidation {
         checkHistoricalPartition(tableDescriptor, tableConf);
         checkKvTTL(tableConf, schema, hasPrimaryKey);
         checkKvFormatVersion(tableConf);
+        if (tableConf.get(ConfigOptions.TABLE_KV_ORDERED_KEY_ENABLED)) {
+            if (!hasPrimaryKey) {
+                throw new InvalidConfigException("Ordered keys require a primary key table.");
+            }
+            try {
+                OrderedKeyEncoder.createKeyEncoder(
+                        schema.getRowType(), schema.getPrimaryKeyColumnNames());
+            } catch (IllegalArgumentException e) {
+                throw new InvalidConfigException("Invalid ordered primary key: " + e.getMessage());
+            }
+        }
         checkKvValueLayout(tableConf, hasPrimaryKey);
         checkPartition(tableConf, tableDescriptor.getPartitionKeys(), schema.getRowType());
         checkSystemColumns(schema.getRowType());
@@ -405,11 +416,12 @@ public class TableDescriptorValidation {
     private static void checkKvFormatVersion(Configuration tableConf) {
         Optional<Integer> kvFormatVersion =
                 tableConf.getOptional(ConfigOptions.TABLE_KV_FORMAT_VERSION);
-        if (kvFormatVersion.isPresent() && kvFormatVersion.get() > CURRENT_KV_FORMAT_VERSION) {
+        if (kvFormatVersion.isPresent()
+                && (kvFormatVersion.get() < 1 || kvFormatVersion.get() > 2)) {
             throw new InvalidConfigException(
                     String.format(
                             "Unsupported kv format version %d. The maximum supported version is %d.",
-                            kvFormatVersion.get(), CURRENT_KV_FORMAT_VERSION));
+                            kvFormatVersion.get(), 2));
         }
     }
 

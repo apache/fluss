@@ -1305,6 +1305,13 @@ public final class KvTablet {
     }
 
     public List<ByteArraySlice> prefixLookup(byte[] prefixKey) throws IOException {
+        return prefixLookup(prefixKey, null, null);
+    }
+
+    /** Reads a bounded prefix using a request-local iterator view. */
+    public List<ByteArraySlice> prefixLookup(
+            byte[] prefixKey, @Nullable byte[] startKey, @Nullable byte[] endKey)
+            throws IOException {
         try (RocksDBKv.PrefixLookup lookup =
                 inReadLock(
                         kvLock,
@@ -1312,7 +1319,7 @@ public final class KvTablet {
                             if (isClosed) {
                                 throw new IOException("KV tablet is closing: " + tableBucket);
                             }
-                            return rocksDBKv.openPrefixLookup(prefixKey);
+                            return rocksDBKv.openPrefixLookup(prefixKey, startKey, endKey);
                         })) {
             return toValueBodySlices(lookup.readAll());
         }

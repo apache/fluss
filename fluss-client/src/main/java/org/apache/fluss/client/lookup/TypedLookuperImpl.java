@@ -21,6 +21,7 @@ import org.apache.fluss.client.converter.PojoToRowConverter;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.types.RowType;
+import org.apache.fluss.utils.Range;
 
 import javax.annotation.Nullable;
 
@@ -53,16 +54,24 @@ final class TypedLookuperImpl<K> implements TypedLookuper<K> {
 
     @Override
     public CompletableFuture<LookupResult> lookup(K key) {
+        return delegate.lookup(toKeyRow(key));
+    }
+
+    @Override
+    public CompletableFuture<LookupResult> lookup(K key, Range<? extends InternalRow> bounds) {
+        return delegate.lookup(toKeyRow(key), bounds);
+    }
+
+    private InternalRow toKeyRow(K key) {
         if (key == null) {
             throw new IllegalArgumentException("key must not be null");
         }
         // Fast-path: already an InternalRow
         if (key instanceof InternalRow) {
-            return delegate.lookup((InternalRow) key);
+            return (InternalRow) key;
         }
 
-        InternalRow keyRow = keyConv.toRow(key);
-        return delegate.lookup(keyRow);
+        return keyConv.toRow(key);
     }
 
     private PojoToRowConverter<K> createPojoToRowConverter(Class<K> keyClass) {

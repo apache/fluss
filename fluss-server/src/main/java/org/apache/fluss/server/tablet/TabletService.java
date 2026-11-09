@@ -81,6 +81,7 @@ import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsRequest;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsResponse;
 import org.apache.fluss.rpc.messages.PbFetchLogReqForTable;
+import org.apache.fluss.rpc.messages.PbPrefixLookupKey;
 import org.apache.fluss.rpc.messages.PbScanReqForBucket;
 import org.apache.fluss.rpc.messages.PbServerNode;
 import org.apache.fluss.rpc.messages.PrefixLookupRequest;
@@ -97,6 +98,7 @@ import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.rpc.messages.UpdateMetadataResponse;
 import org.apache.fluss.rpc.netty.server.Session;
 import org.apache.fluss.rpc.protocol.ApiError;
+import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.protocol.FetchLogReadPreference;
 import org.apache.fluss.rpc.protocol.MergeMode;
@@ -472,6 +474,7 @@ public final class TabletService extends RpcServiceBase
                     recordsByBucket,
                     getTargetColumns(request),
                     mergeMode,
+                    ApiKeys.PUT_KV,
                     currentSession().getApiVersion(),
                     responseCallback);
         }
@@ -525,6 +528,7 @@ public final class TabletService extends RpcServiceBase
                 }
                 replicaManager.historicalLookups(
                         historicalLookupData,
+                        currentSession().getApiVersion(),
                         value ->
                                 response.complete(
                                         makeLookupResponse(
@@ -553,7 +557,7 @@ public final class TabletService extends RpcServiceBase
     @Override
     public CompletableFuture<PrefixLookupResponse> prefixLookup(PrefixLookupRequest request) {
         long tableId = request.getTableId();
-        Map<TableBucket, List<byte[]>> prefixLookupData = toPrefixLookupData(request);
+        Map<TableBucket, List<PbPrefixLookupKey>> prefixLookupData = toPrefixLookupData(request);
         Map<TableBucket, PrefixLookupResultForBucket> errorResponseMap = new HashMap<>();
         collectRoutingErrors(
                 request.getBucketsReqsList(),
@@ -566,7 +570,7 @@ public final class TabletService extends RpcServiceBase
                 PrefixLookupResultForBucket::new,
                 errorResponseMap);
         prefixLookupData.keySet().removeAll(errorResponseMap.keySet());
-        Map<TableBucket, List<byte[]>> interesting =
+        Map<TableBucket, List<PbPrefixLookupKey>> interesting =
                 authorizeRequestData(
                         READ, prefixLookupData, errorResponseMap, PrefixLookupResultForBucket::new);
         if (interesting.isEmpty()) {

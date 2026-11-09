@@ -324,6 +324,36 @@ public class ServerConnectionTest {
     }
 
     @Test
+    void testRejectBoundedPrefixLookupForOldServer() throws Exception {
+        ServerConnection connection =
+                new ServerConnection(
+                        bootstrap,
+                        serverNode,
+                        TestingClientMetricGroup.newInstance(),
+                        clientAuthenticator,
+                        (con, ignore) -> {});
+        try {
+            org.apache.fluss.rpc.messages.PrefixLookupRequest request =
+                    new org.apache.fluss.rpc.messages.PrefixLookupRequest().setTableId(1);
+            org.apache.fluss.rpc.messages.PbPrefixLookupReqForBucket bucket =
+                    request.addBucketsReq().setBucketId(0);
+            bucket.addKey(new byte[] {1});
+            connection.validateVersionCompatibility(ApiKeys.PREFIX_LOOKUP, (short) 1, request);
+            bucket.clearKeys();
+            bucket.addLookup().setPrefixKey(new byte[] {1}).setStartKey(new byte[] {1, 2});
+            assertThatThrownBy(
+                            () ->
+                                    connection.validateVersionCompatibility(
+                                            ApiKeys.PREFIX_LOOKUP, (short) 1, request))
+                    .isInstanceOf(UnsupportedVersionException.class)
+                    .hasMessageContaining("PREFIX_LOOKUP version 2");
+            connection.validateVersionCompatibility(ApiKeys.PREFIX_LOOKUP, (short) 2, request);
+        } finally {
+            connection.close().get();
+        }
+    }
+
+    @Test
     void testRejectHistoricalWritesForOldServer() throws Exception {
         nettyServer.close();
         buildNettyServer(new OldWriteGatewayService());

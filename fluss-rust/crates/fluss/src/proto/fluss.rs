@@ -1585,7 +1585,7 @@ pub struct PbValueList {
     #[prost(bytes = "vec", repeated, tag = "1")]
     pub values: ::prost::alloc::vec::Vec<::prost::alloc::vec::Vec<u8>>,
 }
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PbPrefixLookupReqForBucket {
     #[prost(int64, optional, tag = "1")]
     pub partition_id: ::core::option::Option<i64>,
@@ -1595,6 +1595,18 @@ pub struct PbPrefixLookupReqForBucket {
     pub keys: ::prost::alloc::vec::Vec<::prost::bytes::Bytes>,
     #[prost(int32, optional, tag = "4")]
     pub routing_bucket_count: ::core::option::Option<i32>,
+    /// Used instead of keys when any lookup in this bucket has range bounds.
+    #[prost(message, repeated, tag = "5")]
+    pub lookups: ::prost::alloc::vec::Vec<PbPrefixLookupKey>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PbPrefixLookupKey {
+    #[prost(bytes = "vec", required, tag = "1")]
+    pub prefix_key: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", optional, tag = "2")]
+    pub start_key: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+    #[prost(bytes = "vec", optional, tag = "3")]
+    pub end_key: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PbPrefixLookupRespForBucket {

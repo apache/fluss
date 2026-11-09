@@ -61,7 +61,9 @@ import org.apache.fluss.rpc.entity.LookupResultForBucket;
 import org.apache.fluss.rpc.entity.PrefixLookupResultForBucket;
 import org.apache.fluss.rpc.entity.ProduceLogResultForBucket;
 import org.apache.fluss.rpc.entity.PutKvResultForBucket;
+import org.apache.fluss.rpc.messages.PbPrefixLookupKey;
 import org.apache.fluss.rpc.protocol.ApiError;
+import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.server.entity.FetchReqInfo;
@@ -589,6 +591,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                                 tb, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)),
                                         null,
                                         MergeMode.DEFAULT,
+                                        ApiKeys.PUT_KV,
                                         PUT_KV_VERSION,
                                         (result) -> {}))
                 .isInstanceOf(DiskWriteLockedException.class);
@@ -675,6 +678,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 Collections.singletonMap(tb, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)),
                 null,
                 MergeMode.DEFAULT,
+                ApiKeys.PUT_KV,
                 PUT_KV_VERSION,
                 future::complete);
         assertThat(future.get()).containsOnly(new PutKvResultForBucket(tb, 8));
@@ -689,6 +693,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                                 tb, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)),
                                         null,
                                         MergeMode.DEFAULT,
+                                        ApiKeys.PUT_KV,
                                         PUT_KV_VERSION,
                                         (result) -> {
                                             // do nothing.
@@ -705,6 +710,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 Collections.singletonMap(unknownTb, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)),
                 null,
                 MergeMode.DEFAULT,
+                ApiKeys.PUT_KV,
                 PUT_KV_VERSION,
                 future::complete);
         assertThat(future.get())
@@ -734,6 +740,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 Collections.singletonMap(tb, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)),
                 null,
                 MergeMode.DEFAULT,
+                ApiKeys.PUT_KV,
                 PUT_KV_VERSION,
                 future::complete);
 
@@ -785,6 +792,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 Collections.singletonMap(tb, oversizedBatch),
                 null,
                 MergeMode.DEFAULT,
+                ApiKeys.PUT_KV,
                 apiVersion,
                 future::complete);
         List<PutKvResultForBucket> results = future.get();
@@ -817,6 +825,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                 data1, DATA1_KEY_TYPE, DATA1_ROW_TYPE, 100L, 0)),
                 null,
                 MergeMode.DEFAULT,
+                ApiKeys.PUT_KV,
                 PUT_KV_VERSION,
                 future::complete);
         assertThat(future.get()).containsOnly(new PutKvResultForBucket(tb, 5));
@@ -866,6 +875,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                 data2, DATA1_KEY_TYPE, DATA1_ROW_TYPE, 100L, 3)),
                 null,
                 MergeMode.DEFAULT,
+                ApiKeys.PUT_KV,
                 PUT_KV_VERSION,
                 future::complete);
         PutKvResultForBucket putKvResultForBucket = future.get().get(0);
@@ -908,6 +918,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                 data3, DATA1_KEY_TYPE, DATA1_ROW_TYPE, 100L, 1)),
                 null,
                 MergeMode.DEFAULT,
+                ApiKeys.PUT_KV,
                 PUT_KV_VERSION,
                 future::complete);
         assertThat(future.get()).containsOnly(new PutKvResultForBucket(tb, 8));
@@ -959,6 +970,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                     Collections.singletonMap(tb, genKvRecordBatch(deleteList)),
                     null,
                     MergeMode.DEFAULT,
+                    ApiKeys.PUT_KV,
                     PUT_KV_VERSION,
                     future::complete);
             assertThat(future.get()).containsOnly(new PutKvResultForBucket(tb, i + 1));
@@ -972,6 +984,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 Collections.singletonMap(tb, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)),
                 null,
                 MergeMode.DEFAULT,
+                ApiKeys.PUT_KV,
                 PUT_KV_VERSION,
                 future::complete);
         assertThat(future.get()).containsOnly(new PutKvResultForBucket(tb, 18));
@@ -1037,6 +1050,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 Collections.singletonMap(tb, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)),
                 null,
                 MergeMode.DEFAULT,
+                ApiKeys.PUT_KV,
                 PUT_KV_VERSION,
                 future1::complete);
         assertThat(future1.get()).containsOnly(new PutKvResultForBucket(tb, 8));
@@ -1393,6 +1407,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 Collections.singletonMap(tb, genKvRecordBatch(keyType, rowType, data1)),
                 null,
                 MergeMode.DEFAULT,
+                ApiKeys.PUT_KV,
                 PUT_KV_VERSION,
                 future::complete);
         assertThat(future.get()).containsOnly(new PutKvResultForBucket(tb, 4));
@@ -1441,7 +1456,10 @@ class ReplicaManagerTest extends ReplicaTestBase {
         TableBucket tb3 = new TableBucket(tableId, 0);
         makeLogTableAsLeader(tb3, false);
         replicaManager.prefixLookups(
-                Collections.singletonMap(tb3, Collections.singletonList(prefixKey2Bytes)),
+                Collections.singletonMap(
+                        tb3,
+                        Collections.singletonList(
+                                new PbPrefixLookupKey().setPrefixKey(prefixKey2Bytes))),
                 PREFIX_LOOKUP_KV_VERSION,
                 (prefixLookupResultForBuckets) -> {
                     PrefixLookupResultForBucket lookupResultForBucket =
@@ -1476,6 +1494,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 Collections.singletonMap(tb, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)),
                 null,
                 MergeMode.DEFAULT,
+                ApiKeys.PUT_KV,
                 PUT_KV_VERSION,
                 future1::complete);
         assertThat(future1.get()).containsOnly(new PutKvResultForBucket(tb, 8));
@@ -1510,6 +1529,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 Collections.singletonMap(tableBucket, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)),
                 null,
                 MergeMode.DEFAULT,
+                ApiKeys.PUT_KV,
                 PUT_KV_VERSION,
                 putFuture::complete);
         PutKvResultForBucket putResult = putFuture.get().get(0);
@@ -1538,7 +1558,9 @@ class ReplicaManagerTest extends ReplicaTestBase {
         CompletableFuture<Map<TableBucket, PrefixLookupResultForBucket>> prefixFuture =
                 new CompletableFuture<>();
         replicaManager.prefixLookups(
-                Collections.singletonMap(tableBucket, Collections.singletonList(keyBytes)),
+                Collections.singletonMap(
+                        tableBucket,
+                        Collections.singletonList(new PbPrefixLookupKey().setPrefixKey(keyBytes))),
                 PREFIX_LOOKUP_KV_VERSION,
                 prefixFuture::complete);
         PrefixLookupResultForBucket prefixResult = prefixFuture.get().get(tableBucket);
@@ -1772,6 +1794,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 Collections.singletonMap(tb, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)),
                 null,
                 MergeMode.DEFAULT,
+                ApiKeys.PUT_KV,
                 PUT_KV_VERSION,
                 future::complete);
         assertThat(future.get()).containsOnly(new PutKvResultForBucket(tb, 8));
@@ -1997,6 +2020,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                                                     Tuple2.of(key, value)))),
                                             null,
                                             MergeMode.DEFAULT,
+                                            ApiKeys.PUT_KV,
                                             PUT_KV_VERSION,
                                             future::complete);
                                 } catch (Exception e) {
@@ -2079,6 +2103,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 entriesPerBucket,
                 null,
                 MergeMode.DEFAULT,
+                ApiKeys.PUT_KV,
                 PUT_KV_VERSION,
                 writeResultForBuckets -> {
                     // do nothing
@@ -2119,6 +2144,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 entriesPerBucket,
                 null,
                 MergeMode.DEFAULT,
+                ApiKeys.PUT_KV,
                 PUT_KV_VERSION,
                 writeResultForBuckets -> {
                     // do nothing
@@ -2567,6 +2593,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 kvRecordBatchPerBucket,
                 null,
                 MergeMode.DEFAULT,
+                ApiKeys.PUT_KV,
                 PUT_KV_VERSION,
                 writeFuture::complete);
         // wait the write ack
@@ -2619,12 +2646,13 @@ class ReplicaManagerTest extends ReplicaTestBase {
     private void verifyPrefixLookup(
             TableBucket tb, List<byte[]> prefixKeyBytes, List<List<byte[]>> expectedValues)
             throws Exception {
-        Map<TableBucket, List<byte[]>> entriesPerBucket = new HashMap<>();
-        entriesPerBucket.put(tb, prefixKeyBytes);
+        List<PbPrefixLookupKey> keys = new ArrayList<>();
+        prefixKeyBytes.forEach(key -> keys.add(new PbPrefixLookupKey().setPrefixKey(key)));
 
         CompletableFuture<Map<TableBucket, PrefixLookupResultForBucket>> future =
                 new CompletableFuture<>();
-        replicaManager.prefixLookups(entriesPerBucket, PREFIX_LOOKUP_KV_VERSION, future::complete);
+        replicaManager.prefixLookups(
+                Collections.singletonMap(tb, keys), PREFIX_LOOKUP_KV_VERSION, future::complete);
         Map<TableBucket, PrefixLookupResultForBucket> prefixResult = future.get();
         assertThat(prefixResult.size()).isEqualTo(1);
         PrefixLookupResultForBucket resultForBucket = prefixResult.get(tb);
@@ -2717,6 +2745,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 Collections.singletonMap(tb, genKvRecordBatch(keyType, rowType, data)),
                 null,
                 MergeMode.DEFAULT,
+                ApiKeys.PUT_KV,
                 oldClientVersion,
                 putFuture::complete);
         PutKvResultForBucket putResult = putFuture.get().get(0);
@@ -2745,7 +2774,10 @@ class ReplicaManagerTest extends ReplicaTestBase {
         CompletableFuture<Map<TableBucket, PrefixLookupResultForBucket>> prefixFuture =
                 new CompletableFuture<>();
         replicaManager.prefixLookups(
-                Collections.singletonMap(tb, Collections.singletonList(prefixKeyBytes)),
+                Collections.singletonMap(
+                        tb,
+                        Collections.singletonList(
+                                new PbPrefixLookupKey().setPrefixKey(prefixKeyBytes))),
                 oldClientVersion,
                 prefixFuture::complete);
         PrefixLookupResultForBucket prefixResult = prefixFuture.get().get(tb);

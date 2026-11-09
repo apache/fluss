@@ -26,6 +26,7 @@ These data operations are available under TableAppend, TableScan, TableUpsert an
 | Primary Key  | Delete                     | ✔️                                  | ✔️          | ✔️            | ✔️         |
 | Primary Key  | Lookup                     | ✔️                                  | ✔️          | ✔️            | ✔️         |
 | Primary Key  | Prefix Lookup              | ✔️                                  | ✔️          | ✔️            | ✔️         |
+| Primary Key  | Prefix Lookup with Range Bounds | ✔️                             |             |               |            |
 | Primary Key  | Typed Lookup               | ✔️                                  |             |               |            |
 | Primary Key  | Batch Scan with Limit      | ✔️                                  | ✔️          | ✔️            | ✔️         |
 | Primary Key  | Batch Scan (Snapshot)      | ✔️                                  |             |               |            |

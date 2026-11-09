@@ -45,6 +45,8 @@ public interface KeyEncoder {
     /**
      * Creates a primary key encoder for the given table configuration.
      *
+     * <p>Ordered keys override the legacy version-based selection described below.
+     *
      * <p><b>Backward Compatibility for legacy table (kvFormatVersion = 1):</b> For tables created
      * before the introduction of kv format version (legacy tables without kvFormatVersion), we
      * continue to use the original encoding method (lake's encoder for lake tables) to ensure data
@@ -56,6 +58,10 @@ public interface KeyEncoder {
      * Paimon's encoding format does not guarantee. To solve this, new tables use Fluss's own {@link
      * CompactedKeyEncoder} which ensures the bucket key bytes encoded is always a prefix of the
      * primary key bytes encoded.
+     *
+     * <p><b>Ordered Keys:</b> When enabled, uses {@link OrderedKeyEncoder} for order-preserving
+     * primary keys, regardless of lake format or default bucket keys. Bucket encoding remains
+     * independent so selecting ordered storage keys does not change routing.
      *
      * <p><b>Optimization for Default Bucket Key:</b> Prefix lookup is only needed when the bucket
      * key is a subset of the primary key. If {@code isDefaultBucketKey} is true (bucket key equals
@@ -79,6 +85,9 @@ public interface KeyEncoder {
         Optional<Integer> optKvFormatVersion = tableConfig.getKvFormatVersion();
         DataLakeFormat dataLakeFormat = tableConfig.getDataLakeFormat().orElse(null);
         int kvFormatVersion = optKvFormatVersion.orElse(1);
+        if (tableConfig.isOrderedKeyEnabled()) {
+            return OrderedKeyEncoder.createKeyEncoder(rowType, keyFields);
+        }
 
         // Hudi's HudiKeyEncoder is lossy (4-byte hash); it must NOT be used for
         // primary key encoding because different keys with the same List#hashCode
@@ -137,7 +146,9 @@ public interface KeyEncoder {
             boolean isDefaultBucketKey,
             KeyEncoder primaryKeyEncoder) {
         DataLakeFormat dataLakeFormat = tableConfig.getDataLakeFormat().orElse(null);
-        if (isDefaultBucketKey && dataLakeFormat != DataLakeFormat.HUDI) {
+        if (isDefaultBucketKey
+                && !tableConfig.isOrderedKeyEnabled()
+                && dataLakeFormat != DataLakeFormat.HUDI) {
             return checkNotNull(primaryKeyEncoder, "Primary key encoder must not be null.");
         }
         return ofBucketKeyEncoder(rowType, keyFields, dataLakeFormat);
