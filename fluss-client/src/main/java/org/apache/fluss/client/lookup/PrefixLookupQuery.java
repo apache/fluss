@@ -18,6 +18,7 @@
 package org.apache.fluss.client.lookup;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.client.table.ReadDirection;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 
@@ -35,10 +36,11 @@ public class PrefixLookupQuery extends AbstractLookupQuery<List<byte[]>> {
     private final CompletableFuture<List<byte[]>> future;
     @Nullable private final byte[] startKey;
     @Nullable private final byte[] endKey;
+    @Nullable private final ReadDirection direction;
 
     PrefixLookupQuery(
             TablePath tablePath, TableBucket tableBucket, byte[] prefixKey, int bucketCount) {
-        this(tablePath, tableBucket, prefixKey, bucketCount, null, null);
+        this(tablePath, tableBucket, prefixKey, bucketCount, null, null, null);
     }
 
     PrefixLookupQuery(
@@ -47,11 +49,13 @@ public class PrefixLookupQuery extends AbstractLookupQuery<List<byte[]>> {
             byte[] prefixKey,
             int bucketCount,
             @Nullable byte[] startKey,
-            @Nullable byte[] endKey) {
+            @Nullable byte[] endKey,
+            @Nullable ReadDirection direction) {
         super(tablePath, tableBucket, prefixKey, null, bucketCount);
         this.future = new CompletableFuture<>();
         this.startKey = startKey;
         this.endKey = endKey;
+        this.direction = direction;
     }
 
     PrefixLookupQuery(TablePath tablePath, TableBucket tableBucket, byte[] prefixKey) {
@@ -78,5 +82,11 @@ public class PrefixLookupQuery extends AbstractLookupQuery<List<byte[]>> {
     @Nullable
     public byte[] endKey() {
         return endKey;
+    }
+
+    /** Returns the requested direction, or null for a legacy unordered read. */
+    @Nullable
+    public ReadDirection direction() {
+        return direction;
     }
 }

@@ -1047,11 +1047,11 @@ public final class TabletService extends RpcServiceBase
                 Replica replica = replicaManager.getReplicaOrException(tableBucket);
                 byte[] startKey = bucketReq.hasStartKey() ? bucketReq.getStartKey() : null;
                 byte[] endKey = bucketReq.hasEndKey() ? bucketReq.getEndKey() : null;
-                if (startKey != null || endKey != null) {
+                if (startKey != null || endKey != null || bucketReq.hasReverse()) {
                     if (currentSession().getApiVersion() < 1
                             || !replica.getTableInfo().getTableConfig().isOrderedKeyEnabled()) {
                         throw new InvalidScanRequestException(
-                                "Key bounds require SCAN_KV v1 and table.kv.ordered-key.enabled=true.");
+                                "Ordered or bounded reads require SCAN_KV v1 and table.kv.ordered-key.enabled=true.");
                     }
                     if (startKey != null
                             && endKey != null
@@ -1061,7 +1061,12 @@ public final class TabletService extends RpcServiceBase
                     }
                 }
                 OpenScanResult openResult =
-                        scannerManager.createScanner(replica, limit, startKey, endKey);
+                        scannerManager.createScanner(
+                                replica,
+                                limit,
+                                startKey,
+                                endKey,
+                                bucketReq.hasReverse() && bucketReq.isReverse());
                 isNewScan = true;
                 initialLogOffset = openResult.getLogOffset();
 
@@ -1165,7 +1170,7 @@ public final class TabletService extends RpcServiceBase
 
             boolean hasMore = context.isValid();
             if (!hasMore) {
-                // RocksIterator.next() does not throw on internal errors; an unchecked status
+                // Iterator advancement does not throw on internal errors; an unchecked status
                 // would silently truncate the scan and report has_more=false to the client.
                 context.checkIteratorStatus();
             }

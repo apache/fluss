@@ -19,6 +19,7 @@ package org.apache.fluss.client.lookup;
 
 import org.apache.fluss.bucketing.BucketingFunction;
 import org.apache.fluss.client.metadata.MetadataUpdater;
+import org.apache.fluss.client.table.ReadDirection;
 import org.apache.fluss.client.table.getter.PartitionGetter;
 import org.apache.fluss.client.utils.IndexKeyRange;
 import org.apache.fluss.exception.InvalidBucketRoutingException;
@@ -66,6 +67,7 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
     private final int numBuckets;
     private final RowType lookupRowType;
     @Nullable private final RowType rangeType;
+    @Nullable private final ReadDirection direction;
 
     /**
      * a getter to extract partition from prefix lookup key row, null when it's not a partitioned.
@@ -86,8 +88,13 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
             MetadataUpdater metadataUpdater,
             LookupClient lookupClient,
             List<String> lookupColumnNames,
-            @Nullable String rangeColumn) {
+            @Nullable String rangeColumn,
+            @Nullable ReadDirection direction) {
         super(tableInfo, metadataUpdater, lookupClient, schemaGetter);
+        this.direction =
+                tableInfo.getTableConfig().isOrderedKeyEnabled()
+                        ? (direction == null ? ReadDirection.FORWARD : direction)
+                        : null;
         // sanity check
         List<String> prefixKeys = validateAndGetPrefixKeys(tableInfo, lookupColumnNames);
         this.numBuckets = tableInfo.getNumBuckets();
@@ -324,7 +331,8 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
                         prefixKeyBytes,
                         bucketCount,
                         keyRange == null ? null : keyRange.getStartKey(),
-                        keyRange == null ? null : keyRange.getEndKey())
+                        keyRange == null ? null : keyRange.getEndKey(),
+                        direction)
                 .whenComplete(
                         (result, error) -> {
                             if (error != null) {

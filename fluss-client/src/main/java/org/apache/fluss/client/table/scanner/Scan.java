@@ -18,6 +18,7 @@
 package org.apache.fluss.client.table.scanner;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.client.table.ReadDirection;
 import org.apache.fluss.client.table.scanner.batch.BatchScanner;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
 import org.apache.fluss.client.table.scanner.log.TypedLogScanner;
@@ -43,6 +44,21 @@ import java.util.List;
 public interface Scan {
 
     /**
+     * Returns a new configuration with the given index traversal direction. Repeated calls replace
+     * the direction. Requires an ordered-key table; validation happens when the reader is created.
+     * Ordered reads default to {@link ReadDirection#FORWARD}.
+     *
+     * <p>Direction reverses the whole index key, including fields after the range column. The
+     * scanner must read at most one index bucket. The order covers all returned batches. Log and
+     * snapshot-ID scanners do not support explicit direction.
+     *
+     * @param direction the index traversal direction
+     */
+    default Scan direction(ReadDirection direction) {
+        throw new UnsupportedOperationException("Read direction is not supported.");
+    }
+
+    /**
      * Returns a new scan with the given equality conditions for an index range scan. Values follow
      * the order of the column names. Repeated calls replace the entire equality condition set. The
      * column names and values are copied before this method returns.
@@ -66,7 +82,8 @@ public interface Scan {
      *
      * <p>Each finite endpoint must contain exactly one non-null field of the range column's
      * internal type. Reversed bounds are invalid. The scanner holds a fixed KV view across batches.
-     * Results have no ordering guarantee, and a configured limit only caps the returned row count.
+     * Results follow index key order across batches. A configured limit selects the first rows in
+     * the chosen direction.
      */
     default Scan range(String columnName, Range<? extends InternalRow> bounds) {
         throw new UnsupportedOperationException("Range configuration is not supported.");

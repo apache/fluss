@@ -20,6 +20,7 @@ package org.apache.fluss.client.table.scanner.batch;
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.metadata.MetadataUpdater;
+import org.apache.fluss.client.table.ReadDirection;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.metadata.SchemaGetter;
@@ -89,6 +90,7 @@ public final class KvBatchScanner implements BatchScanner {
     @Nullable private final byte[] endKey;
     @Nullable private final Integer limit;
     @Nullable private final Integer routingBucketCount;
+    @Nullable private final ReadDirection direction;
     private final Map<Short, int[]> schemaMappingCache = new HashMap<>();
     private final ValueRecordReadContext readContext;
 
@@ -119,6 +121,7 @@ public final class KvBatchScanner implements BatchScanner {
                 null,
                 null,
                 null,
+                null,
                 null);
     }
 
@@ -133,7 +136,8 @@ public final class KvBatchScanner implements BatchScanner {
             @Nullable byte[] startKey,
             @Nullable byte[] endKey,
             @Nullable Integer limit,
-            @Nullable Integer routingBucketCount) {
+            @Nullable Integer routingBucketCount,
+            @Nullable ReadDirection direction) {
         this.tablePath = tableInfo.getTablePath();
         this.bucket = tableBucket;
         this.schemaGetter = schemaGetter;
@@ -145,6 +149,7 @@ public final class KvBatchScanner implements BatchScanner {
         this.endKey = endKey == null ? null : endKey.clone();
         this.limit = limit;
         this.routingBucketCount = routingBucketCount;
+        this.direction = direction;
         this.readContext =
                 ValueRecordReadContext.createReadContext(
                         schemaGetter, tableInfo.getTableConfig().getKvFormat());
@@ -251,6 +256,9 @@ public final class KvBatchScanner implements BatchScanner {
                 .ifPresent(bucketReq::setRoutingBucketCount);
         if (routingBucketCount != null) {
             bucketReq.setRoutingBucketCount(routingBucketCount);
+        }
+        if (direction != null) {
+            bucketReq.setReverse(direction == ReadDirection.REVERSE);
         }
         if (startKey != null) {
             bucketReq.setStartKey(startKey);

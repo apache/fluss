@@ -21,6 +21,7 @@ import org.apache.fluss.client.FlussConnection;
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.metadata.KvSnapshotMetadata;
 import org.apache.fluss.client.table.BucketCalculator;
+import org.apache.fluss.client.table.ReadDirection;
 import org.apache.fluss.client.table.getter.PartitionGetter;
 import org.apache.fluss.client.table.scanner.batch.BatchScanner;
 import org.apache.fluss.client.table.scanner.batch.CompositeBatchScanner;
@@ -87,9 +88,10 @@ public class TableScan implements Scan {
     @Nullable private final InternalRow equalityKey;
     @Nullable private final String rangeColumn;
     @Nullable private final IndexKeyRange rangeBounds;
+    @Nullable private final ReadDirection direction;
 
     public TableScan(FlussConnection conn, TableInfo tableInfo, SchemaGetter schemaGetter) {
-        this(conn, tableInfo, schemaGetter, null, null, null, null, null, null, null);
+        this(conn, tableInfo, schemaGetter, null, null, null, null, null, null, null, null);
     }
 
     private TableScan(
@@ -102,7 +104,8 @@ public class TableScan implements Scan {
             @Nullable List<String> equalityColumns,
             @Nullable InternalRow equalityKey,
             @Nullable String rangeColumn,
-            @Nullable IndexKeyRange rangeBounds) {
+            @Nullable IndexKeyRange rangeBounds,
+            @Nullable ReadDirection direction) {
         this.conn = conn;
         this.tableInfo = tableInfo;
         this.projectedColumns = projectedColumns == null ? null : projectedColumns.clone();
@@ -116,6 +119,39 @@ public class TableScan implements Scan {
         this.equalityKey = equalityKey;
         this.rangeColumn = rangeColumn;
         this.rangeBounds = rangeBounds;
+        this.direction = direction;
+    }
+
+    @Override
+    public Scan direction(ReadDirection direction) {
+        return new TableScan(
+                conn,
+                tableInfo,
+                schemaGetter,
+                projectedColumns,
+                limit,
+                recordBatchFilter,
+                equalityColumns,
+                equalityKey,
+                rangeColumn,
+                rangeBounds,
+                checkNotNull(direction, "direction"));
+    }
+
+    private void validateReadConfiguration() {
+        checkArgument(
+                direction == null || tableInfo.getTableConfig().isOrderedKeyEnabled(),
+                "Read direction requires table.kv.ordered-key.enabled=true.");
+        checkArgument(
+                !tableInfo.getTableConfig().isOrderedKeyEnabled() || limit == null || limit >= 0,
+                "Ordered scan limit must be nonnegative.");
+    }
+
+    @Nullable
+    private ReadDirection effectiveDirection() {
+        return tableInfo.getTableConfig().isOrderedKeyEnabled()
+                ? (direction == null ? ReadDirection.FORWARD : direction)
+                : null;
     }
 
     @Override
@@ -130,7 +166,8 @@ public class TableScan implements Scan {
                 equalityColumns,
                 equalityKey,
                 rangeColumn,
-                rangeBounds);
+                rangeBounds,
+                direction);
     }
 
     @Override
@@ -159,7 +196,8 @@ public class TableScan implements Scan {
                 equalityColumns,
                 equalityKey,
                 rangeColumn,
-                rangeBounds);
+                rangeBounds,
+                direction);
     }
 
     @Override
@@ -174,7 +212,8 @@ public class TableScan implements Scan {
                 equalityColumns,
                 equalityKey,
                 rangeColumn,
-                rangeBounds);
+                rangeBounds,
+                direction);
     }
 
     @Override
@@ -189,7 +228,8 @@ public class TableScan implements Scan {
                 equalityColumns,
                 equalityKey,
                 rangeColumn,
-                rangeBounds);
+                rangeBounds,
+                direction);
     }
 
     @Override
@@ -218,7 +258,8 @@ public class TableScan implements Scan {
                 columnNames,
                 copiedValues,
                 rangeColumn,
-                rangeBounds);
+                rangeBounds,
+                direction);
     }
 
     @Override
@@ -238,10 +279,12 @@ public class TableScan implements Scan {
                 equalityColumns,
                 equalityKey,
                 columnName,
-                copiedBounds);
+                copiedBounds,
+                direction);
     }
 
     private BatchScanner createRangeScanner(@Nullable TableBucket scope) {
+        validateReadConfiguration();
         if (scope != null) {
             checkArgument(
                     scope.getTableId() == tableInfo.getTableId(),
@@ -260,7 +303,6 @@ public class TableScan implements Scan {
                 tableInfo.getTableConfig().isOrderedKeyEnabled(),
                 "Range scans require table.kv.ordered-key.enabled=true.");
         checkArgument(recordBatchFilter == null, "Range scans cannot be combined with filter.");
-        checkArgument(limit == null || limit >= 0, "Range scan limit must be nonnegative.");
         checkArgument(!equalityColumns.contains(rangeColumn), "Duplicate condition fields.");
         RowType equalityType = tableInfo.getRowType().project(equalityColumns);
         checkArgument(
@@ -337,7 +379,8 @@ public class TableScan implements Scan {
                 start,
                 end,
                 limit,
-                bucketCount);
+                bucketCount,
+                effectiveDirection());
     }
 
     private static BatchScanner emptyScanner() {
@@ -357,9 +400,9 @@ public class TableScan implements Scan {
     }
 
     private void rejectRangeConditions(String scannerName) {
-        if (hasRangeConditions()) {
+        if (hasRangeConditions() || direction != null) {
             throw new UnsupportedOperationException(
-                    scannerName + " does not support index range conditions.");
+                    scannerName + " does not support index range conditions or read direction.");
         }
     }
 
@@ -402,6 +445,7 @@ public class TableScan implements Scan {
     @Override
     public BatchScanner createBatchScanner(TableBucket tableBucket) {
         checkNotNull(tableBucket, "tableBucket");
+        validateReadConfiguration();
         if (hasRangeConditions()) {
             return createRangeScanner(tableBucket);
         }
@@ -410,6 +454,23 @@ public class TableScan implements Scan {
                     String.format(
                             "BatchScanner doesn't support filter pushdown. Table: %s, bucket: %s",
                             tableInfo.getTablePath(), tableBucket));
+        }
+        if (effectiveDirection() != null) {
+            if (limit != null && limit == 0) {
+                return emptyScanner();
+            }
+            return new KvBatchScanner(
+                    tableInfo,
+                    tableBucket,
+                    schemaGetter,
+                    conn.getMetadataUpdater(),
+                    kvBatchSizeBytes(),
+                    projectedColumns,
+                    null,
+                    null,
+                    limit,
+                    null,
+                    effectiveDirection());
         }
         if (tableInfo.hasPrimaryKey() && limit == null) {
             return new KvBatchScanner(
@@ -487,6 +548,7 @@ public class TableScan implements Scan {
 
     @Override
     public BatchScanner createBatchScanner() throws IOException {
+        validateReadConfiguration();
         if (hasRangeConditions()) {
             return createRangeScanner(null);
         }
@@ -525,6 +587,10 @@ public class TableScan implements Scan {
                             .mapToObj(bucketId -> new TableBucket(tableInfo.getTableId(), bucketId))
                             .collect(Collectors.toList());
         }
+
+        checkArgument(
+                direction == null || tableBuckets.size() <= 1,
+                "Ordered reads require a single index bucket.");
 
         List<BatchScanner> scanners =
                 tableBuckets.stream().map(this::createBatchScanner).collect(Collectors.toList());

@@ -102,6 +102,7 @@ class PrefixKeyLookuperTest {
                             metadataUpdater,
                             lookupClient,
                             Arrays.asList("a", "b"),
+                            null,
                             null);
             byte[] buffer = FIRST.clone();
             CompletableFuture<LookupResult> result =

@@ -65,20 +65,26 @@ class OrderedKeyProtocolTest extends ReplicaTestBase {
                         .setPrefixKey(new byte[] {1})
                         .setStartKey(new byte[] {1, 2})
                         .setEndKey(new byte[] {1, 3});
-        for (short version : new short[] {1, 2}) {
-            CompletableFuture<Map<TableBucket, PrefixLookupResultForBucket>> response =
-                    new CompletableFuture<>();
-            replicaManager.prefixLookups(
-                    Collections.singletonMap(bucket, Collections.singletonList(key)),
-                    version,
-                    response::complete);
-            PrefixLookupResultForBucket result = response.get(10, TimeUnit.SECONDS).get(bucket);
-            if (ordered && version == 2) {
-                assertThat(result.failed()).isFalse();
-                assertThat(result.prefixLookupValues()).hasSize(1);
-                assertThat(result.prefixLookupValues().get(0)).isEmpty();
-            } else {
-                assertThat(result.getError().error()).isEqualTo(Errors.UNSUPPORTED_VERSION);
+        for (PbPrefixLookupKey query :
+                java.util.Arrays.asList(
+                        key,
+                        new PbPrefixLookupKey().setPrefixKey(new byte[] {1}).setReverse(false),
+                        new PbPrefixLookupKey().setPrefixKey(new byte[] {1}).setReverse(true))) {
+            for (short version : new short[] {1, 2}) {
+                CompletableFuture<Map<TableBucket, PrefixLookupResultForBucket>> response =
+                        new CompletableFuture<>();
+                replicaManager.prefixLookups(
+                        Collections.singletonMap(bucket, Collections.singletonList(query)),
+                        version,
+                        response::complete);
+                PrefixLookupResultForBucket result = response.get(10, TimeUnit.SECONDS).get(bucket);
+                if (ordered && version == 2) {
+                    assertThat(result.failed()).isFalse();
+                    assertThat(result.prefixLookupValues()).hasSize(1);
+                    assertThat(result.prefixLookupValues().get(0)).isEmpty();
+                } else {
+                    assertThat(result.getError().error()).isEqualTo(Errors.UNSUPPORTED_VERSION);
+                }
             }
         }
     }

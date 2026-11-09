@@ -18,6 +18,7 @@
 package org.apache.fluss.client.lookup;
 
 import org.apache.fluss.client.admin.ClientToServerITCaseBase;
+import org.apache.fluss.client.table.ReadDirection;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.ConfigOptions;
@@ -31,6 +32,8 @@ import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.Range;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -54,8 +57,9 @@ class PrefixRangeLookupITCase extends ClientToServerITCaseBase {
                     .primaryKey("g", "t", "id")
                     .build();
 
-    @Test
-    void testBoundariesAndCompleteResults() throws Exception {
+    @ParameterizedTest
+    @EnumSource(ReadDirection.class)
+    void testBoundariesAndCompleteResults(ReadDirection direction) throws Exception {
         try (Table table = create("bounds", SCHEMA, true, false)) {
             UpsertWriter writer = table.newUpsert().createWriter();
             for (int g : new int[] {1, 2}) {
@@ -65,13 +69,36 @@ class PrefixRangeLookupITCase extends ClientToServerITCaseBase {
                 }
             }
             writer.flush();
-            Lookuper lookuper = table.newLookup().lookupBy("g").rangeBy("t").createLookuper();
-            assertTimes(
-                    lookuper, Range.closedOpen(key(127), key(256)), 127, 127, 128, 128, 255, 255);
-            assertTimes(
-                    lookuper, Range.openClosed(key(127), key(256)), 128, 128, 255, 255, 256, 256);
-            assertTimes(lookuper, Range.open(key(127), key(256)), 128, 128, 255, 255);
-            assertTimes(
+            Lookuper lookuper =
+                    table.newLookup()
+                            .lookupBy("g")
+                            .rangeBy("t")
+                            .direction(direction)
+                            .createLookuper();
+            assertDirectedTimes(
+                    direction,
+                    lookuper,
+                    Range.closedOpen(key(127), key(256)),
+                    127,
+                    127,
+                    128,
+                    128,
+                    255,
+                    255);
+            assertDirectedTimes(
+                    direction,
+                    lookuper,
+                    Range.openClosed(key(127), key(256)),
+                    128,
+                    128,
+                    255,
+                    255,
+                    256,
+                    256);
+            assertDirectedTimes(
+                    direction, lookuper, Range.open(key(127), key(256)), 128, 128, 255, 255);
+            assertDirectedTimes(
+                    direction,
                     lookuper,
                     Range.closed(key(127), key(256)),
                     127,
@@ -82,14 +109,18 @@ class PrefixRangeLookupITCase extends ClientToServerITCaseBase {
                     255,
                     256,
                     256);
-            assertTimes(lookuper, Range.lessThan(key(0)), -1, -1);
-            assertTimes(lookuper, Range.atMost(key(0)), -1, -1, 0, 0);
-            assertTimes(
-                    lookuper, Range.atLeast(key(Long.MAX_VALUE)), Long.MAX_VALUE, Long.MAX_VALUE);
-            assertTimes(lookuper, Range.greaterThan(key(Long.MAX_VALUE)));
-            assertTimes(lookuper, Range.closedOpen(key(128), key(128)));
-            assertTimes(lookuper, Range.open(key(128), key(128)));
-            assertTimes(lookuper, Range.closed(key(128), key(128)), 128, 128);
+            assertDirectedTimes(direction, lookuper, Range.lessThan(key(0)), -1, -1);
+            assertDirectedTimes(direction, lookuper, Range.atMost(key(0)), -1, -1, 0, 0);
+            assertDirectedTimes(
+                    direction,
+                    lookuper,
+                    Range.atLeast(key(Long.MAX_VALUE)),
+                    Long.MAX_VALUE,
+                    Long.MAX_VALUE);
+            assertDirectedTimes(direction, lookuper, Range.greaterThan(key(Long.MAX_VALUE)));
+            assertDirectedTimes(direction, lookuper, Range.closedOpen(key(128), key(128)));
+            assertDirectedTimes(direction, lookuper, Range.open(key(128), key(128)));
+            assertDirectedTimes(direction, lookuper, Range.closed(key(128), key(128)), 128, 128);
             assertThatThrownBy(() -> lookuper.lookup(row(1), Range.closed(key(2), key(1))))
                     .isInstanceOf(IllegalArgumentException.class);
             assertThat(
@@ -97,6 +128,55 @@ class PrefixRangeLookupITCase extends ClientToServerITCaseBase {
                                     .get(30, TimeUnit.SECONDS)
                                     .getRowList())
                     .isEmpty();
+        }
+    }
+
+    @Test
+    void testMixedPrefixDirectionsAndPointLookup() throws Exception {
+        try (Table table = create("directions", SCHEMA, true, false)) {
+            UpsertWriter writer = table.newUpsert().createWriter();
+            for (long t = 0; t < 4; t++) {
+                writer.upsert(row(1, t, 0));
+                writer.upsert(row(1, t, 1));
+            }
+            writer.flush();
+            Lookup base = table.newLookup().lookupBy("g");
+            Lookuper forward = base.createLookuper();
+            Lookuper reverse = base.direction(ReadDirection.REVERSE).createLookuper();
+            CompletableFuture<LookupResult> ascending = forward.lookup(row(1));
+            CompletableFuture<LookupResult> descending = reverse.lookup(row(1));
+            List<InternalRow> rows = ascending.get(30, TimeUnit.SECONDS).getRowList();
+            List<String> expected =
+                    rows.stream()
+                            .map(r -> r.getLong(1) + ":" + r.getInt(2))
+                            .collect(Collectors.toList());
+            Collections.reverse(expected);
+            assertThat(
+                            descending.get(30, TimeUnit.SECONDS).getRowList().stream()
+                                    .map(r -> r.getLong(1) + ":" + r.getInt(2))
+                                    .collect(Collectors.toList()))
+                    .containsExactlyElementsOf(expected);
+            assertThat(
+                            table.newLookup()
+                                    .direction(ReadDirection.REVERSE)
+                                    .createLookuper()
+                                    .lookup(row(1, 2L, 1))
+                                    .get(30, TimeUnit.SECONDS)
+                                    .getRowList())
+                    .hasSize(1);
+            Lookuper replaced =
+                    base.direction(ReadDirection.REVERSE)
+                            .rangeBy("t")
+                            .direction(ReadDirection.FORWARD)
+                            .createLookuper();
+            assertTimes(replaced, Range.atLeast(key(2)), 2, 2, 3, 3);
+        }
+        try (Table legacy = create("legacy_direction", SCHEMA, false, false)) {
+            for (ReadDirection direction : ReadDirection.values()) {
+                assertThatThrownBy(() -> legacy.newLookup().direction(direction).createLookuper())
+                        .isInstanceOf(IllegalArgumentException.class)
+                        .hasMessageContaining("ordered-key.enabled=true");
+            }
         }
     }
 
@@ -159,6 +239,22 @@ class PrefixRangeLookupITCase extends ClientToServerITCaseBase {
             assertThat(rows).hasSize(1);
             assertThat(rows.get(0).getLong(1)).isEqualTo(100L);
             assertThat(rows.get(0).getInt(2)).isEqualTo(2);
+            TypedLookuper<PrefixKey> reverse =
+                    table.newLookup()
+                            .direction(ReadDirection.REVERSE)
+                            .lookupBy("g", "t")
+                            .rangeBy("id")
+                            .createTypedLookuper(PrefixKey.class);
+            prefix.t = 100L;
+            assertThat(
+                            reverse
+                                    .lookup(prefix, Range.atLeast(row(1)))
+                                    .get(30, TimeUnit.SECONDS)
+                                    .getRowList()
+                                    .stream()
+                                    .map(r -> r.getInt(2))
+                                    .collect(Collectors.toList()))
+                    .containsExactly(2, 1);
             assertThatThrownBy(() -> lookuper.lookup(prefix))
                     .isInstanceOf(UnsupportedOperationException.class);
         }
@@ -261,13 +357,30 @@ class PrefixRangeLookupITCase extends ClientToServerITCaseBase {
         return row(value);
     }
 
+    private static void assertDirectedTimes(
+            ReadDirection direction,
+            Lookuper lookuper,
+            Range<? extends InternalRow> bounds,
+            long... expected)
+            throws Exception {
+        long[] ordered = expected.clone();
+        if (direction == ReadDirection.REVERSE) {
+            for (int i = 0; i < ordered.length / 2; i++) {
+                long value = ordered[i];
+                ordered[i] = ordered[ordered.length - 1 - i];
+                ordered[ordered.length - 1 - i] = value;
+            }
+        }
+        assertTimes(lookuper, bounds, ordered);
+    }
+
     private static void assertTimes(
             Lookuper lookuper, Range<? extends InternalRow> bounds, long... expected)
             throws Exception {
         List<InternalRow> rows =
                 lookuper.lookup(row(1), bounds).get(30, TimeUnit.SECONDS).getRowList();
         assertThat(rows.stream().map(row -> row.getLong(1)).collect(Collectors.toList()))
-                .containsExactlyInAnyOrderElementsOf(
+                .containsExactlyElementsOf(
                         Arrays.stream(expected).boxed().collect(Collectors.toList()));
         assertThat(rows).allSatisfy(row -> assertThat(row.getInt(0)).isEqualTo(1));
     }
