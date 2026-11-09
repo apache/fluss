@@ -153,6 +153,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -1814,7 +1815,8 @@ public class ReplicaManager implements ServerReconfigurable {
             FetchParams fetchParams,
             Map<TableBucket, FetchReqInfo> bucketFetchInfo,
             @Nullable UserContext userContext) {
-        Map<TableBucket, LogReadResult> logReadResult = new HashMap<>();
+        // Delayed fetches must retry in the same order as the original request.
+        Map<TableBucket, LogReadResult> logReadResult = new LinkedHashMap<>();
         boolean isFromFollower = fetchParams.isFromFollower();
         int limitBytes = fetchParams.maxFetchBytes();
         for (Map.Entry<TableBucket, FetchReqInfo> entry : bucketFetchInfo.entrySet()) {
@@ -2149,7 +2151,7 @@ public class ReplicaManager implements ServerReconfigurable {
         long bytesReadable = 0;
         boolean errorReadingData = false;
         boolean hasFetchFromLocal = false;
-        Map<TableBucket, FetchBucketStatus> fetchBucketStatusMap = new HashMap<>();
+        Map<TableBucket, FetchBucketStatus> fetchBucketStatusMap = new LinkedHashMap<>();
         Map<TableBucket, FetchLogResultForBucket> expectedErrorBuckets = new HashMap<>();
         for (Map.Entry<TableBucket, LogReadResult> logReadResultEntry : logReadResults.entrySet()) {
             TableBucket tb = logReadResultEntry.getKey();
