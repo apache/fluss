@@ -809,10 +809,10 @@ public class ConfigOptions {
     public static final ConfigOption<Duration> WRITER_ID_EXPIRATION_TIME =
             key("server.writer-id.expiration-time")
                     .durationType()
-                    .defaultValue(Duration.ofDays(7))
+                    .defaultValue(Duration.ofDays(1))
                     .withDescription(
                             "The time that the tablet server will wait without receiving any write request from "
-                                    + "a client before expiring the related status. The default value is 7 days.");
+                                    + "a client before expiring the related status. The default value is 1 day.");
 
     public static final ConfigOption<Duration> WRITER_ID_EXPIRATION_CHECK_INTERVAL =
             key("server.writer-id.expiration-check-interval")
