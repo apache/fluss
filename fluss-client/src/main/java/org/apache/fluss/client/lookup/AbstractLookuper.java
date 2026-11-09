@@ -19,6 +19,9 @@ package org.apache.fluss.client.lookup;
 
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.cluster.Cluster;
+import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.InvalidBucketRoutingException;
+import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -34,12 +37,14 @@ import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Function;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 
@@ -79,11 +84,48 @@ abstract class AbstractLookuper implements Lookuper {
                         tableInfo.getTableConfig().getKvFormat(), tableInfo.getSchema()));
     }
 
-    protected PartitionRoutingInfo resolvePartitionRouting(String partitionName) {
+    /** Looks up a partition using the ID and bucket count from the same metadata snapshot. */
+    protected CompletableFuture<LookupResult> lookupPartition(
+            String partitionName,
+            Function<PartitionRoutingInfo, CompletableFuture<LookupResult>> lookup,
+            Function<PartitionNotExistException, CompletableFuture<LookupResult>>
+                    onPartitionMissing) {
         PhysicalTablePath partitionPath =
                 PhysicalTablePath.of(tableInfo.getTablePath(), partitionName);
-        metadataUpdater.checkAndUpdatePartitionMetadata(partitionPath);
+        PartitionRoutingInfo routing;
+        try {
+            metadataUpdater.checkAndUpdatePartitionMetadata(partitionPath);
+            routing = getCachedPartitionRouting(partitionPath);
+        } catch (InvalidBucketRoutingException e) {
+            // A lookup may run on a network completion thread; refresh off that thread.
+            return lookupClient.resolvePartitionLookup(
+                    () -> {
+                        PartitionRoutingInfo refreshed;
+                        try {
+                            refreshed = getOrRefreshPartitionRouting(partitionPath);
+                        } catch (PartitionNotExistException missing) {
+                            return onPartitionMissing.apply(missing);
+                        }
+                        return lookup.apply(refreshed);
+                    });
+        } catch (PartitionNotExistException e) {
+            return onPartitionMissing.apply(e);
+        } catch (FlussRuntimeException e) {
+            return FutureUtils.completedExceptionally(e);
+        }
+        return lookup.apply(routing);
+    }
 
+    private PartitionRoutingInfo getOrRefreshPartitionRouting(PhysicalTablePath partitionPath) {
+        try {
+            return getCachedPartitionRouting(partitionPath);
+        } catch (StaleMetadataException | InvalidBucketRoutingException e) {
+            metadataUpdater.updatePhysicalTableMetadata(Collections.singleton(partitionPath));
+            return getCachedPartitionRouting(partitionPath);
+        }
+    }
+
+    private PartitionRoutingInfo getCachedPartitionRouting(PhysicalTablePath partitionPath) {
         Cluster cluster = metadataUpdater.getCluster();
         long partitionId =
                 cluster.getPartitionId(partitionPath)

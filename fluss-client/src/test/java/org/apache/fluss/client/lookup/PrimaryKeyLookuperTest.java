@@ -17,7 +17,9 @@
 
 package org.apache.fluss.client.lookup;
 
+import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.metadata.TestingMetadataUpdater;
+import org.apache.fluss.client.utils.TestingRpcClient;
 import org.apache.fluss.cluster.BucketLocation;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
@@ -37,15 +39,21 @@ import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.ProjectedRow;
+import org.apache.fluss.rpc.messages.ApiMessage;
 import org.apache.fluss.rpc.messages.LookupRequest;
 import org.apache.fluss.rpc.messages.LookupResponse;
+import org.apache.fluss.rpc.messages.MetadataResponse;
 import org.apache.fluss.rpc.messages.PbLookupReqForBucket;
 import org.apache.fluss.rpc.messages.PbLookupRespForBucket;
 import org.apache.fluss.rpc.protocol.ApiError;
+import org.apache.fluss.rpc.protocol.ApiKeys;
+import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.tablet.TestTabletServerGateway;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 import java.time.Duration;
 import java.util.Arrays;
@@ -57,11 +65,13 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.apache.fluss.client.metadata.TestingMetadataUpdater.COORDINATOR;
 import static org.apache.fluss.client.metadata.TestingMetadataUpdater.NODE1;
 import static org.apache.fluss.client.metadata.TestingMetadataUpdater.NODE2;
 import static org.apache.fluss.client.metadata.TestingMetadataUpdater.NODE3;
+import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -144,19 +154,19 @@ class PrimaryKeyLookuperTest {
         }
     }
 
-    @Test
-    void testRescaledPartitionMissingBucketCountFailsWithIllegalStateException() throws Exception {
-        // A rescaled table cannot safely route a partition whose actual bucket count is missing.
-        // Preserve the async API while exposing a diagnostic IllegalStateException as the cause.
+    @ParameterizedTest
+    @EnumSource(
+            value = Errors.class,
+            names = {"NETWORK_EXCEPTION", "UNKNOWN_SERVER_ERROR"})
+    void testMissingRescaledPartitionCountFailsLookupIfRefreshFails(Errors refreshError) {
         TableInfo rescaledTableInfo = createTableInfo(1L);
-        ControllableLookupGateway gateway = new ControllableLookupGateway();
-        TestingMetadataUpdater metadataUpdater =
-                TestingMetadataUpdater.builder(
-                                Collections.singletonMap(TABLE_PATH, rescaledTableInfo))
-                        .withTabletServerGateway(NODE1.id(), gateway)
-                        .build();
-        // The cluster carries no per-partition bucket count for the active partition.
-        metadataUpdater.updateCluster(createCluster());
+        RuntimeException refreshFailure = refreshError.exception();
+        CompletableFuture<ApiMessage> metadataResponse = new CompletableFuture<>();
+        MetadataUpdater metadataUpdater =
+                new MetadataUpdater(
+                        new TestingRpcClient((node, api) -> metadataResponse),
+                        new Configuration(),
+                        createCluster());
 
         LookupClient lookupClient = new LookupClient(new Configuration(), metadataUpdater);
         try {
@@ -174,13 +184,88 @@ class PrimaryKeyLookuperTest {
 
             CompletableFuture<LookupResult> resultFuture = lookuper.lookup(lookupKey);
 
-            assertThat(resultFuture).isCompletedExceptionally();
-            assertThatThrownBy(() -> resultFuture.get(5, TimeUnit.SECONDS))
-                    .hasCauseInstanceOf(InvalidBucketRoutingException.class)
-                    .hasMessageContaining("Routing bucket count is unavailable")
-                    .hasMessageContaining("bucketCountEpoch 1");
+            assertThat(resultFuture).isNotDone();
+            metadataResponse.completeExceptionally(refreshFailure);
+            if (refreshError == Errors.NETWORK_EXCEPTION) {
+                assertThatThrownBy(() -> resultFuture.get(5, TimeUnit.SECONDS))
+                        .hasCauseInstanceOf(InvalidBucketRoutingException.class)
+                        .hasMessageContaining("bucketCountEpoch 1");
+            } else {
+                assertThatThrownBy(() -> resultFuture.get(5, TimeUnit.SECONDS))
+                        .hasRootCause(refreshFailure);
+            }
         } finally {
             lookupClient.close(Duration.ofSeconds(5));
+        }
+    }
+
+    @Test
+    void testCloseDrainsLookupsSharingAMissingCount() throws Exception {
+        TableInfo info = createTableInfo(1L);
+        AtomicInteger refreshes = new AtomicInteger();
+        CompletableFuture<ApiMessage> metadata = new CompletableFuture<>();
+        TestingRpcClient rpcClient =
+                new TestingRpcClient(
+                        (node, api) -> {
+                            assertThat(api).isEqualTo(ApiKeys.GET_METADATA);
+                            refreshes.incrementAndGet();
+                            return metadata;
+                        }) {
+                    @Override
+                    public CompletableFuture<ApiMessage> sendRequest(
+                            ServerNode node, ApiKeys api, ApiMessage request) {
+                        if (api == ApiKeys.LOOKUP) {
+                            return CompletableFuture.completedFuture(
+                                    createEmptyResponse((LookupRequest) request));
+                        }
+                        return super.sendRequest(node, api, request);
+                    }
+                };
+        MetadataUpdater updater =
+                new MetadataUpdater(rpcClient, new Configuration(), createCluster());
+        LookupClient client = new LookupClient(new Configuration(), updater);
+        try {
+            PrimaryKeyLookuper lookuper =
+                    new PrimaryKeyLookuper(
+                            info,
+                            new TestingSchemaGetter(info.getSchemaId(), info.getSchema()),
+                            updater,
+                            client,
+                            false);
+            GenericRow key = GenericRow.of(1, BinaryString.fromString(PARTITION_A));
+            CompletableFuture<LookupResult> first = lookuper.lookup(key);
+            CompletableFuture<LookupResult> second = lookuper.lookup(key);
+            assertThat(first).isNotDone();
+            assertThat(second).isNotDone();
+            CompletableFuture<Void> close =
+                    CompletableFuture.runAsync(() -> client.close(Duration.ofSeconds(10)));
+            waitUntil(
+                    () -> lookuper.lookup(key).isCompletedExceptionally(),
+                    Duration.ofSeconds(5),
+                    "New lookups should be rejected during close");
+            assertThat(close).isNotDone();
+
+            MetadataResponse response = new MetadataResponse();
+            response.addTabletServer()
+                    .setNodeId(NODE1.id())
+                    .setHost(NODE1.host())
+                    .setPort(NODE1.port());
+            response.addPartitionMetadata()
+                    .setTableId(TABLE_ID)
+                    .setPartitionId(ACTIVE_PARTITION_ID)
+                    .setPartitionName(PARTITION_A)
+                    .setBucketCount(1)
+                    .addBucketMetadata()
+                    .setBucketId(0)
+                    .setLeaderId(NODE1.id());
+            metadata.complete(response);
+            close.get(10, TimeUnit.SECONDS);
+            assertThat(first.get(5, TimeUnit.SECONDS).getRowList()).isEmpty();
+            assertThat(second.get(5, TimeUnit.SECONDS).getRowList()).isEmpty();
+            assertThat(refreshes.get()).isEqualTo(1);
+        } finally {
+            metadata.cancel(false);
+            client.close(Duration.ZERO);
         }
     }
 
