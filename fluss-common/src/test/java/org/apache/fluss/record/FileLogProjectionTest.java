@@ -24,11 +24,15 @@ import org.apache.fluss.exception.SchemaNotExistException;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaInfo;
+import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.bytesview.BytesView;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableIterator;
+import org.apache.fluss.utils.Projection;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -308,9 +312,23 @@ class FileLogProjectionTest {
             }
             file.flush();
             FileLogProjection projection = new FileLogProjection(new ProjectionPushdownCache());
-            for (int[] fields : new int[][] {new int[] {0, 2, 3}, new int[] {2, 3}}) {
-                projection.setCurrentProjection(1L, testingSchemaGetter, compression, fields);
-                RowType outputType = latestSchema.getRowType().project(fields);
+            for (int[] fields : new int[][] {{0, 2, 3}, {2, 3}, {3, 2, 0}, {3}, {1, 3}}) {
+                Projection requested = Projection.of(fields);
+                projection.setCurrentProjection(
+                        1L, testingSchemaGetter, compression, requested.getProjectionInOrder());
+                TableInfo tableInfo =
+                        TableInfo.of(
+                                TablePath.of("db", "evolution"),
+                                1L,
+                                3,
+                                TableDescriptor.builder()
+                                        .schema(latestSchema)
+                                        .distributedBy(1)
+                                        .logFormat(LogFormat.ARROW)
+                                        .build(),
+                                "file:///unused",
+                                0L,
+                                0L);
                 // Both fetch paths must preserve offsets, change types and batch schema IDs.
                 for (boolean singleBatch : new boolean[] {false, true}) {
                     List<LogRecordBatch> batches = new ArrayList<>();
@@ -331,7 +349,13 @@ class FileLogProjectionTest {
                     }
                     assertThat(batches).hasSize(3);
                     try (LogRecordReadContext context =
-                            createArrowReadContext(outputType, 3, testingSchemaGetter, true)) {
+                            LogRecordReadContext.createReadContext(
+                                    tableInfo,
+                                    false,
+                                    LogRecordReadContext.SchemaResolution.TARGET,
+                                    requested,
+                                    testingSchemaGetter,
+                                    null)) {
                         int schemaId = 1;
                         for (LogRecordBatch batch : batches) {
                             assertThat(batch.schemaId()).isEqualTo((short) schemaId);
@@ -346,19 +370,70 @@ class FileLogProjectionTest {
                                     InternalRow row = record.getRow();
                                     assertThat(row.getFieldCount()).isEqualTo(fields.length);
                                     for (int i = 0; i < fields.length; i++) {
-                                        if (fields[i] >= schemaId + 1) {
-                                            assertThat(row.isNullAt(i)).isTrue();
-                                        } else if (fields[i] == 2) {
-                                            assertThat(row.getString(i).toString()).isEqualTo("c");
-                                        } else {
-                                            assertThat(row.getInt(i))
-                                                    .isEqualTo(fields[i] == 0 ? count : count + 10);
-                                        }
+                                        Object actual =
+                                                context.getSelectedFieldGetters(schemaId)[i]
+                                                        .getFieldOrNull(row);
+                                        String expected =
+                                                fields[i] >= schemaId + 1
+                                                        ? null
+                                                        : fields[i] == 1
+                                                                ? "b"
+                                                                : fields[i] == 2
+                                                                        ? "c"
+                                                                        : Integer.toString(
+                                                                                fields[i] == 0
+                                                                                        ? count
+                                                                                        : count
+                                                                                                + 10);
+                                        assertThat(actual == null ? null : actual.toString())
+                                                .isEqualTo(expected);
                                     }
                                     count++;
                                 }
                             }
                             assertThat(count).isEqualTo(4);
+                            // The wire layout only contains columns present in this schema.
+                            final int storedFieldCount = schemaId + 1;
+                            assertThat(context.getRowType(schemaId).getFieldCount())
+                                    .isEqualTo(
+                                            (int)
+                                                    Arrays.stream(fields)
+                                                            .filter(
+                                                                    field ->
+                                                                            field
+                                                                                    < storedFieldCount)
+                                                            .count());
+                            if (appendOnly) {
+                                try (ArrowBatchData arrow = batch.loadArrowBatch(context)) {
+                                    assertThat(arrow.getRecordCount()).isEqualTo(4);
+                                    assertThat(arrow.getBaseLogOffset())
+                                            .isEqualTo((schemaId - 1) * 4L);
+                                    assertThat(arrow.getVectorSchemaRoot().getFieldVectors())
+                                            .hasSize(fields.length);
+                                    for (int r = 0; r < 4; r++) {
+                                        for (int c = 0; c < fields.length; c++) {
+                                            Object actual =
+                                                    arrow.getVectorSchemaRoot()
+                                                            .getVector(c)
+                                                            .getObject(r);
+                                            Object expected =
+                                                    fields[c] >= storedFieldCount
+                                                            ? null
+                                                            : fields[c] == 1
+                                                                    ? "b"
+                                                                    : fields[c] == 2
+                                                                            ? "c"
+                                                                            : Integer.toString(
+                                                                                    fields[c] == 0
+                                                                                            ? r
+                                                                                            : r
+                                                                                                    + 10);
+                                            assertThat(actual == null ? null : actual.toString())
+                                                    .isEqualTo(expected);
+                                        }
+                                    }
+                                }
+                            }
                             schemaId++;
                         }
                     }
