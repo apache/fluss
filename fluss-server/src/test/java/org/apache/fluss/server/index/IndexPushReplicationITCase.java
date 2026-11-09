@@ -1,0 +1,626 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.apache.fluss.server.index;
+
+import org.apache.fluss.bucketing.FlussBucketingFunction;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.memory.MemorySegment;
+import org.apache.fluss.metadata.IndexType;
+import org.apache.fluss.metadata.IndexVisibility;
+import org.apache.fluss.metadata.PartitionSpec;
+import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.record.KvRecordBatch;
+import org.apache.fluss.record.bytesview.BytesView;
+import org.apache.fluss.row.BinaryRow;
+import org.apache.fluss.row.GenericRow;
+import org.apache.fluss.row.encode.CompactedKeyEncoder;
+import org.apache.fluss.row.encode.KvValueLayout;
+import org.apache.fluss.rpc.gateway.CoordinatorGateway;
+import org.apache.fluss.rpc.gateway.TabletServerGateway;
+import org.apache.fluss.rpc.messages.GetTableInfoResponse;
+import org.apache.fluss.rpc.messages.PbAddColumn;
+import org.apache.fluss.rpc.messages.PutIndexRequest;
+import org.apache.fluss.rpc.messages.PutIndexResponse;
+import org.apache.fluss.rpc.messages.PutKvRequest;
+import org.apache.fluss.rpc.messages.PutKvResponse;
+import org.apache.fluss.server.kv.KvTablet;
+import org.apache.fluss.server.kv.rocksdb.RocksDBKv;
+import org.apache.fluss.server.metadata.TabletServerMetadataCache;
+import org.apache.fluss.server.replica.Replica;
+import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.types.DataField;
+import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.types.RowType;
+import org.apache.fluss.utils.json.DataTypeJsonSerde;
+import org.apache.fluss.utils.json.JsonSerdeUtils;
+import org.apache.fluss.utils.types.Tuple2;
+
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.RegisterExtension;
+
+import javax.annotation.Nullable;
+
+import java.time.Duration;
+import java.util.Collections;
+import java.util.concurrent.TimeUnit;
+
+import static org.apache.fluss.row.BinaryString.fromString;
+import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createPartition;
+import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newAlterTableRequest;
+import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newDropPartitionRequest;
+import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newGetTableInfoRequest;
+import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newPutKvRequest;
+import static org.apache.fluss.testutils.DataTestUtils.genKvRecordBatch;
+import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
+import static org.assertj.core.api.Assertions.assertThat;
+
+/** Tests physical index mutations, SYNC progress, partition cleanup, and schema evolution. */
+class IndexPushReplicationITCase {
+
+    private static final String DB = "test_db";
+    private static final String INDEX_NAME = "idx_b";
+    private static final String PARTITION_NAME = "p1";
+    private static final int PRIMARY_KEY = 7;
+    private static final String INDEXED_VALUE = "collision";
+
+    /**
+     * Single tablet server keeps replication trivial — both the main table's data leader and the
+     * index table's leader are this one process so the index push is effectively a self-RPC. The
+     * test still exercises the full {@code TabletServerGateway} → {@code KvManager.putAsLeader}
+     * round-trip; we just don't need to coordinate ISR shrink/grow.
+     */
+    @RegisterExtension
+    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
+            FlussClusterExtension.builder()
+                    .setNumOfTabletServers(1)
+                    .setClusterConf(initConfig())
+                    .build();
+
+    private static Configuration initConfig() {
+        Configuration conf = new Configuration();
+        conf.setInt(ConfigOptions.DEFAULT_REPLICATION_FACTOR, 1);
+        return conf;
+    }
+
+    private static final RowType PARTITIONED_MAIN_ROW_TYPE =
+            DataTypes.ROW(
+                    new DataField("a", DataTypes.INT()),
+                    new DataField("b", DataTypes.STRING()),
+                    new DataField("p", DataTypes.STRING()));
+    private static final RowType MAIN_BUCKET_KEY_TYPE =
+            DataTypes.ROW(new DataField("a", DataTypes.INT().copy(false)));
+
+    /** Bounded poll deadline for asynchronous index visibility checks. */
+    private static final Duration INDEX_VISIBILITY_TIMEOUT = Duration.ofSeconds(30);
+
+    /** SYNC acknowledgement covers physical index mutations, including empty WAL batches. */
+    @Test
+    void testIndexMutationLifecycle() throws Exception {
+        String mainName = "main_t_mutations";
+        TestingIndexTable f = setupTables(mainName);
+        TableBucket source = new TableBucket(f.mainTableId, 0);
+        Replica mainLeader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(source);
+        TabletServerGateway mainGateway =
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(
+                        FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(source));
+        IndexReplicationEncoder indexEncoder = f.indexEncoder(source);
+
+        // (1) Insert (a=1, b="hello"); wait for the index entry to land.
+        mainGateway
+                .putKv(
+                        newPutKvRequest(
+                                f.mainTableId, 0, 1, genKvRecordBatch(new Object[] {1, "hello"})))
+                .get();
+        byte[] oldIndexKey = encodeIndexKey(indexEncoder, "hello", 1);
+        assertIndexEntry(f.indexTableId, oldIndexKey, targetBucket(indexEncoder, "hello", 1), true);
+        assertThat(mainLeader.getSyncIndexPushedOffset()).isEqualTo(1L);
+
+        // (2) Update the same PK row with a different idx column value.
+        mainGateway
+                .putKv(
+                        newPutKvRequest(
+                                f.mainTableId, 0, 1, genKvRecordBatch(new Object[] {1, "world"})))
+                .get();
+
+        // (3) The old composite key disappears, the new one appears.
+        byte[] newIndexKey = encodeIndexKey(indexEncoder, "world", 1);
+        assertIndexEntry(f.indexTableId, newIndexKey, targetBucket(indexEncoder, "world", 1), true);
+        assertIndexEntry(
+                f.indexTableId, oldIndexKey, targetBucket(indexEncoder, "hello", 1), false);
+
+        mainGateway
+                .putKv(
+                        newPutKvRequest(
+                                f.mainTableId, 0, 1, genKvRecordBatch(new Object[] {1, null})))
+                .get();
+        assertIndexEntry(
+                f.indexTableId, newIndexKey, targetBucket(indexEncoder, "world", 1), false);
+
+        mainGateway
+                .putKv(
+                        newPutKvRequest(
+                                f.mainTableId, 0, 1, genKvRecordBatch(new Object[] {1, "hello"})))
+                .get();
+        assertIndexEntry(f.indexTableId, oldIndexKey, targetBucket(indexEncoder, "hello", 1), true);
+        mainGateway
+                .putKv(
+                        newPutKvRequest(
+                                f.mainTableId,
+                                0,
+                                1,
+                                genKvRecordBatch(
+                                        Collections.singletonList(
+                                                Tuple2.of(new Object[] {1}, null)))))
+                .get();
+        assertIndexEntry(
+                f.indexTableId, oldIndexKey, targetBucket(indexEncoder, "hello", 1), false);
+
+        long beforeEmptyBatch = mainLeader.getLocalLogEndOffset();
+        mainGateway
+                .putKv(
+                        newPutKvRequest(
+                                f.mainTableId,
+                                0,
+                                1,
+                                genKvRecordBatch(
+                                        Collections.singletonList(
+                                                Tuple2.of(new Object[] {404}, null)))))
+                .get(30, TimeUnit.SECONDS);
+        assertThat(mainLeader.getSyncIndexPushedOffset())
+                .as("empty WAL batches must advance index progress")
+                .isEqualTo(beforeEmptyBatch + 1);
+    }
+
+    /** A recreated partition must be isolated from delayed writes of its previous incarnation. */
+    @Test
+    void testDropRecreatePartitionRejectsLateOldIndexWrites() throws Exception {
+        String mainName = "main_t_partition_recreate";
+        TablePath mainPath = TablePath.of(DB, mainName);
+        TestingIndexTable fixture = setupPartitionedTables(mainName);
+        createPartition(FLUSS_CLUSTER_EXTENSION, mainPath, partitionSpec(), false);
+        long oldPartitionId =
+                FLUSS_CLUSTER_EXTENSION.waitUntilPartitionsCreated(mainPath, 1).get(PARTITION_NAME);
+
+        int mainBucket = mainBucket(PRIMARY_KEY);
+        TableBucket oldSource = new TableBucket(fixture.mainTableId, oldPartitionId, mainBucket);
+        Replica oldMainReplica = FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(oldSource);
+        int oldMainLeader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(oldSource);
+        IndexReplicationEncoder oldEncoder =
+                IndexReplicationEncoder.createAll(
+                                oldMainReplica.getTableInfo(),
+                                oldSource,
+                                FLUSS_CLUSTER_EXTENSION
+                                        .getTabletServerById(oldMainLeader)
+                                        .getMetadataCache())
+                        .get(0);
+        IndexReplicationEncoder.IndexEntry oldEntry =
+                oldEncoder.encodeDataEntry(partitionedMainRow());
+        byte[] oldKey = oldEntry.key();
+        BinaryRow oldValue = oldEntry.value().copy();
+        int indexBucket = oldEntry.targetBucket();
+        Replica target =
+                FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(
+                        new TableBucket(fixture.indexTableId, indexBucket));
+        PutIndexRequest delayedUpsert =
+                newPutIndexRequest(
+                        fixture.indexTableId,
+                        oldEncoder,
+                        oldSource,
+                        indexBucket,
+                        2L,
+                        oldKey,
+                        oldValue);
+        PutIndexRequest delayedDelete =
+                newPutIndexRequest(
+                        fixture.indexTableId, oldEncoder, oldSource, indexBucket, 3L, oldKey, null);
+        byte[] oldProgressKey = oldEncoder.encodeProgress(indexBucket, 1L).key();
+
+        putPartitionedMainRow(fixture.mainTableId, oldPartitionId, mainBucket);
+        assertVisible(target, oldKey, true, "old partition incarnation is indexed");
+        assertVisible(target, oldProgressKey, true, "old partition progress is durable");
+        KvTablet targetKv = target.getKvTablet();
+        org.apache.fluss.server.kv.KvTabletTestUtils.flushAndWait(targetKv, Long.MAX_VALUE);
+        assertTaggedValue(targetKv.getRocksDBKv().get(oldKey), oldPartitionId, "old value tag");
+
+        FLUSS_CLUSTER_EXTENSION
+                .newCoordinatorClient()
+                .dropPartition(newDropPartitionRequest(mainPath, partitionSpec(), false))
+                .get();
+        TabletServerMetadataCache metadataCache =
+                FLUSS_CLUSTER_EXTENSION
+                        .getTabletServerById(
+                                FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(
+                                        new TableBucket(fixture.indexTableId, indexBucket)))
+                        .getMetadataCache();
+        waitUntil(
+                () ->
+                        metadataCache
+                                .getPartitionTombstoneOrEmpty(fixture.mainTableId)
+                                .isTombstoned(oldPartitionId),
+                INDEX_VISIBILITY_TIMEOUT,
+                "old partition tombstone publication");
+        assertVisible(target, oldKey, false, "old incarnation is filtered immediately");
+        assertVisible(target, oldProgressKey, false, "old progress is filtered immediately");
+        assertThat(targetKv.getRocksDBKv().get(oldKey)).isNotNull();
+
+        createPartition(FLUSS_CLUSTER_EXTENSION, mainPath, partitionSpec(), false);
+        long newPartitionId = waitForRecreatedPartition(mainPath, oldPartitionId);
+        TableBucket newSource = new TableBucket(fixture.mainTableId, newPartitionId, mainBucket);
+        Replica newMainReplica = FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(newSource);
+        int newMainLeader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(newSource);
+        IndexReplicationEncoder newEncoder =
+                IndexReplicationEncoder.createAll(
+                                newMainReplica.getTableInfo(),
+                                newSource,
+                                FLUSS_CLUSTER_EXTENSION
+                                        .getTabletServerById(newMainLeader)
+                                        .getMetadataCache())
+                        .get(0);
+        IndexReplicationEncoder.IndexEntry newEntry =
+                newEncoder.encodeDataEntry(partitionedMainRow());
+        byte[] newKey = newEntry.key();
+        assertThat(newKey).isNotEqualTo(oldKey);
+        assertThat(newEntry.targetBucket()).isEqualTo(indexBucket);
+        byte[] newProgressKey = newEncoder.encodeProgress(indexBucket, 1L).key();
+
+        putPartitionedMainRow(fixture.mainTableId, newPartitionId, mainBucket);
+        assertVisible(target, newKey, true, "new partition incarnation is indexed");
+        assertVisible(target, newProgressKey, true, "new partition progress is durable");
+        org.apache.fluss.server.kv.KvTabletTestUtils.flushAndWait(targetKv, Long.MAX_VALUE);
+        assertTaggedValue(targetKv.getRocksDBKv().get(newKey), newPartitionId, "new value tag");
+
+        long walBeforeDelayed = target.getLogTablet().localLogEndOffset();
+        putIndexMutation(delayedUpsert);
+        putIndexMutation(delayedDelete);
+        assertThat(target.getLogTablet().localLogEndOffset()).isEqualTo(walBeforeDelayed);
+        assertVisible(target, newKey, true, "late old writes cannot affect the new incarnation");
+
+        RocksDBKv rocks = targetKv.getRocksDBKv();
+        rocks.getDb().compactRange();
+        assertThat(rocks.get(oldKey)).isNull();
+        assertThat(rocks.get(oldProgressKey)).isNull();
+        assertTaggedValue(rocks.get(newKey), newPartitionId, "new row survives compaction");
+        assertVisible(target, newKey, true, "new incarnation survives compaction");
+    }
+
+    /**
+     * An index-safe {@code ALTER TABLE ADD COLUMN} on a table with secondary indexes must be
+     * accepted, and the WAL-driven index replication must stay healthy across the schema evolution:
+     * re-deriving the index encoders on the leader still succeeds, and records written under the
+     * old schema id keep replicating (WAL decoding keys off the record's schema id).
+     */
+    @Test
+    void testSchemaEvolutionKeepsIndexReplicationHealthy() throws Exception {
+        String mainName = "main_t_schema_evolution";
+        TablePath mainPath = TablePath.of(DB, mainName);
+        TestingIndexTable f = setupTables(mainName);
+        TableBucket source = new TableBucket(f.mainTableId, 0);
+        TabletServerGateway mainGateway =
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(
+                        FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(source));
+        IndexReplicationEncoder indexEncoder = f.indexEncoder(source);
+
+        // (1) Write one batch under the original schema (id 1) and wait for the index entry.
+        mainGateway
+                .putKv(
+                        newPutKvRequest(
+                                f.mainTableId,
+                                /* bucketId */ 0,
+                                /* acks */ 1,
+                                genKvRecordBatch(new Object[] {1, "before"})))
+                .get(30, TimeUnit.SECONDS);
+        assertIndexEntry(
+                f.indexTableId,
+                encodeIndexKey(indexEncoder, "before", 1),
+                targetBucket(indexEncoder, "before", 1),
+                true);
+
+        // (2) ALTER TABLE ADD COLUMN at the last position — must be accepted for indexed tables.
+        CoordinatorGateway adminGateway = FLUSS_CLUSTER_EXTENSION.newCoordinatorClient();
+        PbAddColumn addColumn = new PbAddColumn();
+        addColumn
+                .setColumnName("extra")
+                .setDataTypeJson(
+                        JsonSerdeUtils.writeValueAsBytes(
+                                DataTypes.STRING(), DataTypeJsonSerde.INSTANCE))
+                // LAST is the only supported position for ADD COLUMN.
+                .setColumnPositionType(0);
+        adminGateway
+                .alterTable(
+                        newAlterTableRequest(
+                                mainPath,
+                                Collections.emptyMap(),
+                                Collections.emptyList(),
+                                Collections.singletonList(addColumn),
+                                false))
+                .get(30, TimeUnit.SECONDS);
+
+        // (3) The evolved schema (id 2) is committed and propagates to the tablet servers.
+        GetTableInfoResponse tableInfoResponse =
+                adminGateway.getTableInfo(newGetTableInfoRequest(mainPath)).get();
+        assertThat(tableInfoResponse.getSchemaId()).isEqualTo(2);
+        assertThat(
+                        TableDescriptor.fromJsonBytes(tableInfoResponse.getTableJson())
+                                .getSchema()
+                                .getColumnNames())
+                .containsExactly("a", "b", "extra");
+        for (int bucket = 0; bucket < 3; bucket++) {
+            Replica mainReplica =
+                    FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(
+                            new TableBucket(f.mainTableId, bucket));
+            waitUntil(
+                    () -> mainReplica.getSchemaGetter().getLatestSchemaInfo().getSchemaId() >= 2,
+                    Duration.ofMinutes(1),
+                    "schema id 2 not propagated to main-table replica " + bucket);
+        }
+
+        // (4) Writes under the old schema id still replicate to the Index Table (mixed-schema WAL
+        // decoding by record schema id).
+        mainGateway
+                .putKv(
+                        newPutKvRequest(
+                                f.mainTableId,
+                                /* bucketId */ 0,
+                                /* acks */ 1,
+                                genKvRecordBatch(new Object[] {2, "after"})))
+                .get(30, TimeUnit.SECONDS);
+        waitForIndexEntry(
+                f.indexTableId,
+                encodeIndexKey(indexEncoder, "after", 2),
+                targetBucket(indexEncoder, "after", 2),
+                true);
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Helpers
+    // ---------------------------------------------------------------------------------------------
+
+    private static TestingIndexTable setupTables(String mainName) throws Exception {
+        return new TestingIndexTable(
+                FLUSS_CLUSTER_EXTENSION,
+                TablePath.of(DB, mainName),
+                TableDescriptor.builder().schema(buildMainSchema()).distributedBy(3, "a").build(),
+                INDEX_NAME);
+    }
+
+    /**
+     * Sets up a partitioned main table so its auto-derived Index Table includes the {@code
+     * __partition_id} system column and uses {@code KvFormat.COMPACTED}. Required for testing the
+     * partition tombstone value filter which only installs on partitioned Index Tables.
+     */
+    private static TestingIndexTable setupPartitionedTables(String mainName) throws Exception {
+        TablePath mainPath = TablePath.of(DB, mainName);
+
+        Schema partitionedSchema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.STRING())
+                        .column("p", DataTypes.STRING())
+                        .primaryKey("a", "p")
+                        .index(
+                                INDEX_NAME,
+                                IndexType.SECONDARY,
+                                Collections.singletonList("b"),
+                                IndexVisibility.SYNC,
+                                3)
+                        .build();
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(partitionedSchema)
+                        .distributedBy(3, "a")
+                        .partitionedBy("p")
+                        .build();
+
+        return new TestingIndexTable(FLUSS_CLUSTER_EXTENSION, mainPath, descriptor, INDEX_NAME);
+    }
+
+    private static final int INDEX_BUCKET_COUNT = 3;
+
+    private static void assertIndexEntry(
+            long indexTableId, byte[] key, int indexBucket, boolean expectPresent)
+            throws Exception {
+        boolean present = indexEntryPresent(indexTableId, key, indexBucket);
+        assertThat(present)
+                .as(
+                        expectPresent
+                                ? "index entry must be visible when the write is acknowledged"
+                                : "index entry must be absent when the write is acknowledged")
+                .isEqualTo(expectPresent);
+    }
+
+    /** Waits until an asynchronous Index Table update reaches the expected state. */
+    private static void waitForIndexEntry(
+            long indexTableId, byte[] key, int indexBucket, boolean expectPresent) {
+        String desc =
+                expectPresent
+                        ? "wait for index entry to be visible on the Index Table"
+                        : "wait for index entry to disappear from the Index Table";
+        waitUntil(
+                () -> {
+                    try {
+                        return indexEntryPresent(indexTableId, key, indexBucket) == expectPresent;
+                    } catch (Exception e) {
+                        return false;
+                    }
+                },
+                INDEX_VISIBILITY_TIMEOUT,
+                desc);
+    }
+
+    private static boolean indexEntryPresent(long indexTableId, byte[] key, int indexBucket)
+            throws Exception {
+        Replica replica =
+                FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(
+                        new TableBucket(indexTableId, indexBucket));
+        return replica.lookups(Collections.singletonList(key)).get(0) != null;
+    }
+
+    private static Schema buildMainSchema() {
+        return Schema.newBuilder()
+                .column("a", DataTypes.INT())
+                .column("b", DataTypes.STRING())
+                .primaryKey("a")
+                .index(
+                        INDEX_NAME,
+                        IndexType.SECONDARY,
+                        Collections.singletonList("b"),
+                        IndexVisibility.SYNC,
+                        3)
+                .build();
+    }
+
+    private static byte[] encodeIndexKey(IndexReplicationEncoder encoder, String b, int a) {
+        return encoder.encodeDataEntry(GenericRow.of(a, fromString(b))).key();
+    }
+
+    private static int targetBucket(IndexReplicationEncoder encoder, String b, int a) {
+        return encoder.encodeDataEntry(GenericRow.of(a, fromString(b))).targetBucket();
+    }
+
+    private static PartitionSpec partitionSpec() {
+        return new PartitionSpec(Collections.singletonMap("p", PARTITION_NAME));
+    }
+
+    private static GenericRow partitionedMainRow() {
+        return GenericRow.of(PRIMARY_KEY, fromString(INDEXED_VALUE), fromString(PARTITION_NAME));
+    }
+
+    private static int mainBucket(int primaryKey) {
+        GenericRow key = new GenericRow(1);
+        key.setField(0, primaryKey);
+        byte[] encoded = new CompactedKeyEncoder(MAIN_BUCKET_KEY_TYPE).encodeKey(key);
+        return new FlussBucketingFunction().bucketing(encoded, 3);
+    }
+
+    private static void putPartitionedMainRow(long tableId, long partitionId, int bucket)
+            throws Exception {
+        KvRecordBatch records =
+                genKvRecordBatch(
+                        MAIN_BUCKET_KEY_TYPE,
+                        PARTITIONED_MAIN_ROW_TYPE,
+                        Collections.singletonList(
+                                Tuple2.of(
+                                        new Object[] {PRIMARY_KEY},
+                                        new Object[] {
+                                            PRIMARY_KEY, INDEXED_VALUE, PARTITION_NAME
+                                        })));
+        PutKvRequest request = newPutKvRequest(tableId, bucket, 1, records);
+        request.getBucketsReqsList().get(0).setPartitionId(partitionId);
+        int leader =
+                FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(
+                        new TableBucket(tableId, partitionId, bucket));
+        assertSuccess(
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader).putKv(request).get());
+    }
+
+    private static PutIndexRequest newPutIndexRequest(
+            long indexTableId,
+            IndexReplicationEncoder encoder,
+            TableBucket sourceBucket,
+            int targetBucket,
+            long sourceEndOffset,
+            byte[] key,
+            @Nullable BinaryRow value)
+            throws Exception {
+        IndexReplicationEncoder.IndexEntry progress =
+                encoder.encodeProgress(targetBucket, sourceEndOffset);
+        IndexReplicator.BucketBatchBuilder builder =
+                new IndexReplicator.BucketBatchBuilder(
+                        (short) encoder.getIndexSchemaId(), encoder.getIndexKvFormat());
+        if (value == null) {
+            builder.appendDelete(key);
+        } else {
+            builder.appendUpsert(key, value);
+        }
+        BytesView records = builder.finish(progress.key(), progress.value());
+        PutIndexRequest request =
+                new PutIndexRequest()
+                        .setTableId(indexTableId)
+                        .setSourceTableId(sourceBucket.getTableId())
+                        .setAcks(-1)
+                        .setTimeoutMs(10_000);
+        request.addBucketsReq()
+                .setBucketId(targetBucket)
+                .setSourcePartitionId(sourceBucket.getPartitionId())
+                .setSourceBucketId(sourceBucket.getBucket())
+                .setSourceEndOffset(sourceEndOffset)
+                .setProgressKey(progress.key())
+                .setRecordsBytesView(records);
+        return request;
+    }
+
+    private static void putIndexMutation(PutIndexRequest request) throws Exception {
+        int bucket = request.getBucketsReqsList().get(0).getBucketId();
+        int leader =
+                FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(
+                        new TableBucket(request.getTableId(), bucket));
+        PutIndexResponse response =
+                FLUSS_CLUSTER_EXTENSION
+                        .newTabletServerClientForNode(leader)
+                        .putIndex(request)
+                        .get();
+        assertThat(response.getBucketsRespsList())
+                .singleElement()
+                .satisfies(result -> assertThat(result.hasErrorCode()).isFalse());
+    }
+
+    private static void assertVisible(
+            Replica replica, byte[] key, boolean expected, String description) {
+        waitUntil(
+                () -> {
+                    try {
+                        return !replica.prefixLookup(key).isEmpty() == expected;
+                    } catch (Exception e) {
+                        return false;
+                    }
+                },
+                INDEX_VISIBILITY_TIMEOUT,
+                description);
+    }
+
+    private static void assertTaggedValue(byte[] value, long partitionId, String description) {
+        assertThat(value).as(description).isNotNull();
+        assertThat(KvValueLayout.TAGGED.readValueTag(MemorySegment.wrap(value)))
+                .as(description)
+                .isEqualTo(partitionId);
+    }
+
+    private static long waitForRecreatedPartition(TablePath mainPath, long oldPartitionId) {
+        waitUntil(
+                () ->
+                        FLUSS_CLUSTER_EXTENSION
+                                        .getZooKeeperClient()
+                                        .getPartition(mainPath, PARTITION_NAME)
+                                        .map(partition -> partition.getPartitionId())
+                                        .orElse(oldPartitionId)
+                                != oldPartitionId,
+                INDEX_VISIBILITY_TIMEOUT,
+                "new immutable partition incarnation");
+        return FLUSS_CLUSTER_EXTENSION.waitUntilPartitionsCreated(mainPath, 1).get(PARTITION_NAME);
+    }
+
+    private static void assertSuccess(PutKvResponse response) {
+        assertThat(response.getBucketsRespsList())
+                .singleElement()
+                .satisfies(result -> assertThat(result.hasErrorCode()).isFalse());
+    }
+}

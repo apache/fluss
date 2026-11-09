@@ -18,6 +18,7 @@
 package org.apache.fluss.server.metadata;
 
 import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.metadata.PartitionTombstone;
 import org.apache.fluss.rpc.messages.MetadataResponse;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 
@@ -25,6 +26,7 @@ import javax.annotation.Nullable;
 
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -38,6 +40,7 @@ public class ClusterMetadata {
     private final Set<ServerInfo> aliveTabletServers;
     private final List<TableMetadata> tableMetadataList;
     private final List<PartitionMetadata> partitionMetadataList;
+    private final Map<Long, PartitionTombstone> partitionTombstones;
 
     @VisibleForTesting
     public ClusterMetadata(
@@ -46,7 +49,8 @@ public class ClusterMetadata {
                 coordinatorServer,
                 aliveTabletServers,
                 Collections.emptyList(),
-                Collections.emptyList());
+                Collections.emptyList(),
+                Collections.emptyMap());
     }
 
     public ClusterMetadata(
@@ -54,10 +58,25 @@ public class ClusterMetadata {
             Set<ServerInfo> aliveTabletServers,
             List<TableMetadata> tableMetadataList,
             List<PartitionMetadata> partitionMetadataList) {
+        this(
+                coordinatorServer,
+                aliveTabletServers,
+                tableMetadataList,
+                partitionMetadataList,
+                Collections.emptyMap());
+    }
+
+    public ClusterMetadata(
+            @Nullable ServerInfo coordinatorServer,
+            Set<ServerInfo> aliveTabletServers,
+            List<TableMetadata> tableMetadataList,
+            List<PartitionMetadata> partitionMetadataList,
+            Map<Long, PartitionTombstone> partitionTombstones) {
         this.coordinatorServer = coordinatorServer;
         this.aliveTabletServers = aliveTabletServers;
         this.tableMetadataList = tableMetadataList;
         this.partitionMetadataList = partitionMetadataList;
+        this.partitionTombstones = partitionTombstones;
     }
 
     public @Nullable ServerInfo getCoordinatorServer() {
@@ -74,5 +93,9 @@ public class ClusterMetadata {
 
     public List<PartitionMetadata> getPartitionMetadataList() {
         return partitionMetadataList;
+    }
+
+    public Map<Long, PartitionTombstone> getPartitionTombstones() {
+        return partitionTombstones;
     }
 }

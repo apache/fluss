@@ -41,6 +41,8 @@ public final class KvSnapshotFileMetadata {
     private final long incrementalSize;
     private final long logOffset;
     private final @Nullable Long rowCount;
+    private final @Nullable Long allIndexPushedOffset;
+    private final @Nullable Long syncIndexPushedOffset;
     private final @Nullable List<AutoIncrementRange> autoIncrementRanges;
 
     /** Creates immutable standard KV snapshot file metadata. */
@@ -54,6 +56,33 @@ public final class KvSnapshotFileMetadata {
             long logOffset,
             @Nullable Long rowCount,
             @Nullable List<AutoIncrementRange> autoIncrementRanges) {
+        this(
+                tableBucket,
+                snapshotId,
+                snapshotLocation,
+                sharedFiles,
+                privateFiles,
+                incrementalSize,
+                logOffset,
+                rowCount,
+                null,
+                null,
+                autoIncrementRanges);
+    }
+
+    /** Creates immutable standard KV snapshot file metadata with index replication progress. */
+    public KvSnapshotFileMetadata(
+            TableBucket tableBucket,
+            long snapshotId,
+            String snapshotLocation,
+            List<FileHandle> sharedFiles,
+            List<FileHandle> privateFiles,
+            long incrementalSize,
+            long logOffset,
+            @Nullable Long rowCount,
+            @Nullable Long allIndexPushedOffset,
+            @Nullable Long syncIndexPushedOffset,
+            @Nullable List<AutoIncrementRange> autoIncrementRanges) {
         this.tableBucket = checkNotNull(tableBucket, "Table bucket must not be null.");
         this.snapshotId = snapshotId;
         this.snapshotLocation =
@@ -63,6 +92,8 @@ public final class KvSnapshotFileMetadata {
         this.incrementalSize = incrementalSize;
         this.logOffset = logOffset;
         this.rowCount = rowCount;
+        this.allIndexPushedOffset = allIndexPushedOffset;
+        this.syncIndexPushedOffset = syncIndexPushedOffset;
         this.autoIncrementRanges =
                 autoIncrementRanges == null
                         ? null
@@ -112,6 +143,21 @@ public final class KvSnapshotFileMetadata {
         return rowCount;
     }
 
+    /**
+     * Returns the minimum exclusive next WAL offset across all indexes, including ASYNC indexes,
+     * captured for replay and WAL retention. Null when index progress is not applicable.
+     */
+    @Nullable
+    public Long getIndexPushedOffset() {
+        return allIndexPushedOffset;
+    }
+
+    /** Returns the confirmed SYNC index prefix recorded before snapshot commit. */
+    @Nullable
+    public Long getSyncIndexPushedOffset() {
+        return syncIndexPushedOffset;
+    }
+
     /** Returns the auto-increment ranges when present. */
     @Nullable
     public List<AutoIncrementRange> getAutoIncrementRanges() {
@@ -135,6 +181,8 @@ public final class KvSnapshotFileMetadata {
                 && Objects.equals(sharedFiles, that.sharedFiles)
                 && Objects.equals(privateFiles, that.privateFiles)
                 && Objects.equals(rowCount, that.rowCount)
+                && Objects.equals(allIndexPushedOffset, that.allIndexPushedOffset)
+                && Objects.equals(syncIndexPushedOffset, that.syncIndexPushedOffset)
                 && Objects.equals(autoIncrementRanges, that.autoIncrementRanges);
     }
 
@@ -149,6 +197,8 @@ public final class KvSnapshotFileMetadata {
                 incrementalSize,
                 logOffset,
                 rowCount,
+                allIndexPushedOffset,
+                syncIndexPushedOffset,
                 autoIncrementRanges);
     }
 

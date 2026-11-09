@@ -1195,6 +1195,10 @@ public class FlinkSourceEnumerator
                                 logOffset.getAsLong(),
                                 LogSplit.NO_STOPPING_OFFSET,
                                 false));
+            } else if (snapshots.getLogOffset(bucketId).isPresent()) {
+                splits.add(
+                        new LogSplit(
+                                tb, partitionName, snapshots.getLogOffset(bucketId).getAsLong()));
             } else {
                 bucketsNeedInitOffset.add(bucketId);
             }

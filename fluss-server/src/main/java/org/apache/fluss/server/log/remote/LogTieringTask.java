@@ -138,15 +138,19 @@ public class LogTieringTask implements Runnable {
             // clean up.
             List<EnrichedLogSegment> candidateToCopySegments =
                     candidateToCopyLogSegments(logTablet);
-            // Only delete segments that have been tiered to lake to ensure data safety
             TableConfig tableConfig = replica.getTableInfo().getTableConfig();
+            long maxDeleteOffset =
+                    tableConfig.isDataLakeEnabled()
+                            ? logTablet.getLakeLogEndOffset()
+                            : Long.MAX_VALUE;
+            if (!replica.getTableInfo().getSchema().getIndexes().isEmpty()) {
+                // Index recovery can replay from an older offset than main-table recovery.
+                // Only a committed snapshot may advance this retention boundary.
+                maxDeleteOffset = Math.min(maxDeleteOffset, logTablet.getMinRetainOffset());
+            }
             List<RemoteLogSegment> expiredRemoteLogSegments =
                     remoteLog.expiredRemoteLogSegments(
-                            clock.milliseconds(),
-                            tableConfig.isDataLakeEnabled()
-                                    ? logTablet.getLakeLogEndOffset()
-                                    : null,
-                            tableConfig.getLogTTLMs());
+                            clock.milliseconds(), maxDeleteOffset, tableConfig.getLogTTLMs());
 
             // 1. For these candidateToCopySegments, we will first copy segment files to
             // remote before commit the remote log manifest.

@@ -18,6 +18,7 @@
 package org.apache.fluss.flink.source;
 
 import org.apache.fluss.client.initializer.OffsetsInitializer;
+import org.apache.fluss.client.lookup.LookupType;
 import org.apache.fluss.client.table.getter.PartitionGetter;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
@@ -40,6 +41,7 @@ import org.apache.fluss.flink.utils.FlinkUtils;
 import org.apache.fluss.flink.utils.PredicateConverter;
 import org.apache.fluss.flink.utils.PushdownUtils;
 import org.apache.fluss.flink.utils.PushdownUtils.FieldEqual;
+import org.apache.fluss.flink.utils.SecondaryIndexColumnNames;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.LakeSplit;
 import org.apache.fluss.metadata.ChangelogImage;
@@ -106,6 +108,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import static org.apache.fluss.flink.utils.LakeSourceUtils.createLakeSource;
 import static org.apache.fluss.flink.utils.PredicateConverter.convertToFlussPredicate;
@@ -176,6 +180,8 @@ public class FlinkTableSource
     @Nullable private Predicate partitionFilters;
 
     private final Map<String, String> tableOptions;
+
+    @Nullable private final int[][] secondaryIndexes;
 
     @Nullable private LakeSource<LakeSplit> lakeSource;
     @Nullable private List<ResolvedExpression> deferredLakeFilters;
@@ -362,6 +368,7 @@ public class FlinkTableSource
         this.leaseContext = leaseContext;
         this.mergeEngineType = mergeEngineType;
         this.tableOptions = tableOptions;
+        this.secondaryIndexes = parseSecondaryIndexes(tableOptions, tableOutputType);
         // A FULL lookup reads Fluss snapshots and logs, without requiring a lake reader plugin.
         // Defer creating the lake source until this instance is actually used for a full scan.
         if (isDataLakeEnabled && lookupCacheType != LookupOptions.LookupCacheType.FULL) {
@@ -376,6 +383,31 @@ public class FlinkTableSource
         RowType flussRowType = FlinkConversions.toFlussRowType(tableOutputType);
         this.availableStatsColumns =
                 PushdownUtils.computeAvailableStatsColumns(flussRowType, tableConfig);
+    }
+
+    @Nullable
+    private static int[][] parseSecondaryIndexes(
+            Map<String, String> tableOptions,
+            org.apache.flink.table.types.logical.RowType tableOutputType) {
+        Pattern pattern = Pattern.compile("secondary-index\\.([A-Za-z0-9_]+)\\.columns");
+        List<int[]> indexList = new ArrayList<>();
+        for (Map.Entry<String, String> entry : tableOptions.entrySet()) {
+            Matcher matcher = pattern.matcher(entry.getKey());
+            if (matcher.matches()) {
+                List<String> columnList = SecondaryIndexColumnNames.decode(entry.getValue());
+                int[] columnIndexes = new int[columnList.size()];
+                for (int i = 0; i < columnList.size(); i++) {
+                    int fieldIndex = tableOutputType.getFieldIndex(columnList.get(i));
+                    if (fieldIndex < 0) {
+                        throw new IllegalArgumentException(
+                                "Column '" + columnList.get(i) + "' not found in table schema");
+                    }
+                    columnIndexes[i] = fieldIndex;
+                }
+                indexList.add(columnIndexes);
+            }
+        }
+        return indexList.isEmpty() ? null : indexList.toArray(new int[0][]);
     }
 
     private FlinkTableSource(FlinkTableSource source) {
@@ -408,6 +440,7 @@ public class FlinkTableSource
         this.limit = source.limit;
         this.partitionFilters = source.partitionFilters;
         this.tableOptions = new HashMap<>(source.tableOptions);
+        this.secondaryIndexes = source.secondaryIndexes;
         this.lakeSource = source.lakeSource == null ? null : source.lakeSource.copy();
         this.deferredLakeFilters =
                 source.deferredLakeFilters == null
@@ -690,8 +723,13 @@ public class FlinkTableSource
                         bucketKeyIndexes,
                         partitionKeyIndexes,
                         tableOutputType,
-                        projectedFields);
+                        projectedFields,
+                        secondaryIndexes);
         if (lookupCacheType == LookupOptions.LookupCacheType.FULL) {
+            if (lookupNormalizer.getLookupType() == LookupType.SECONDARY_INDEX_LOOKUP) {
+                throw new UnsupportedOperationException(
+                        "Full lookup cache supports only primary-key and prefix lookups.");
+            }
             int numBuckets = getResolvedNumBuckets();
             FlussLookupInputPartitioner bucketPartitioner =
                     createLookupInputPartitioner(lookupNormalizer);
@@ -772,7 +810,8 @@ public class FlinkTableSource
     @Nullable
     private FlussLookupInputPartitioner createLookupInputPartitioner(
             LookupNormalizer lookupNormalizer) {
-        if (bucketKeyIndexes.length == 0) {
+        if (lookupNormalizer.getLookupType() == LookupType.SECONDARY_INDEX_LOOKUP
+                || bucketKeyIndexes.length == 0) {
             return null;
         }
 

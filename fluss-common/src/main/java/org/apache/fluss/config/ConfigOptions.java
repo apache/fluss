@@ -1158,6 +1158,63 @@ public class ConfigOptions {
                     .withDescription("The amount of time to sleep when fetch bucket error occurs.")
                     .withFallbackKeys("log.replica.fetch-backoff-interval");
 
+    public static final ConfigOption<Integer> INDEX_REPLICATION_READER_THREADS =
+            key("index.replication.reader.threads")
+                    .intType()
+                    .defaultValue(8)
+                    .withDescription(
+                            "Number of reader worker threads in the server-global index replicator pool. "
+                                    + "Also bounds concurrently admitted source read/construction cycles. "
+                                    + "The value must be positive.");
+
+    public static final ConfigOption<MemorySize> INDEX_REPLICATION_SOURCE_MAX_BYTES =
+            key("index.replication.source.max-bytes")
+                    .memoryType()
+                    .defaultValue(MemorySize.parse("8mb"))
+                    .withDescription(
+                            "Preferred maximum source WAL bytes read per index replication window. "
+                                    + "The first complete log record batch may exceed this limit to ensure progress. "
+                                    + "This is independent of the encoded index request target size. "
+                                    + "The value must be positive and at most 2147483647 bytes.");
+
+    public static final ConfigOption<Integer> INDEX_REPLICATION_SENDER_THREADS =
+            key("index.replication.sender.threads")
+                    .intType()
+                    .defaultValue(1)
+                    .withDescription(
+                            "Number of sender worker threads that dispatch derived index batches. "
+                                    + "The value must be positive.");
+
+    public static final ConfigOption<Duration> INDEX_REPLICATION_RETRY_BACKOFF_MAX =
+            key("index.replication.retry-backoff-max")
+                    .durationType()
+                    .defaultValue(Duration.ofSeconds(10))
+                    .withDescription(
+                            "The maximum delay before retrying index source reads, window construction or batch sends. "
+                                    + "Retries start at 100ms, double after consecutive failures and use 20% jitter, "
+                                    + "without exceeding this maximum. Setting this to 100ms uses a fixed delay without jitter. "
+                                    + "Replication progress resets the backoff; yielding payload memory does not. "
+                                    + "This does not change the 10-second soft payload-retention target. "
+                                    + "Must be between 100ms and 2147483647ms.");
+
+    public static final ConfigOption<MemorySize> INDEX_REPLICATION_BUFFER_MAX_BYTES =
+            key("index.replication.buffer.max-bytes")
+                    .memoryType()
+                    .defaultValue(MemorySize.parse("512mb"))
+                    .withDescription(
+                            "Maximum retained index payload page bytes across one TabletServer, "
+                                    + "including construction, queued and in-flight batches. "
+                                    + "The value must be positive.");
+
+    public static final ConfigOption<MemorySize> INDEX_REPLICATION_REQUEST_TARGET_BYTES =
+            key("index.replication.request.target-bytes")
+                    .memoryType()
+                    .defaultValue(MemorySize.parse("1mb"))
+                    .withDescription(
+                            "Preferred encoded payload size when aggregating index replication RPC requests. "
+                                    + "A complete target batch may exceed this target. "
+                                    + "The value must be positive.");
+
     public static final ConfigOption<MemorySize> LOG_REPLICA_FETCH_MAX_BYTES =
             key("log.replica.fetch.max-bytes")
                     .memoryType()
@@ -1812,6 +1869,23 @@ public class ConfigOptions {
                                     + "Adding a lookup blocks while this queue is full. Lookups waiting "
                                     + "for a bucket's leader or for a retry are outside this limit, so the "
                                     + "total number of pending lookups can grow beyond it.");
+
+    public static final ConfigOption<Integer> CLIENT_LOOKUP_SECONDARY_INDEX_MAX_CANDIDATES =
+            key("client.lookup.secondary-index.max-candidates")
+                    .intType()
+                    .defaultValue(1024)
+                    .withDescription(
+                            "Maximum candidates read by one secondary-index lookup before deduplication and main-table validation. "
+                                    + "Exceeding this limit fails the lookup without returning partial results. "
+                                    + "Only secondary-index lookups are affected. The value must be positive.");
+
+    public static final ConfigOption<Integer> CLIENT_LOOKUP_CONTINUATION_THREADS =
+            key("client.lookup.continuation-threads")
+                    .intType()
+                    .defaultValue(4)
+                    .withDescription(
+                            "The number of threads used to continue secondary-index lookups after "
+                                    + "the index-table lookup completes. The value must be positive.");
 
     public static final ConfigOption<Integer> CLIENT_LOOKUP_MAX_BATCH_SIZE =
             key("client.lookup.max-batch-size")

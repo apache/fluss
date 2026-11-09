@@ -34,6 +34,8 @@ import org.apache.fluss.server.kv.rocksdb.RocksDBStatistics;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.DoubleSupplier;
 import java.util.function.LongSupplier;
 
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -82,13 +84,17 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
     private volatile LongSupplier sharedBlockCacheUsageSupplier = () -> 0L;
 
     private volatile LongSupplier sharedBlockCachePinnedUsageSupplier = () -> 0L;
-
     private volatile long sharedBlockCacheCapacity;
-
     /** Supplier for shared write buffer usage, set by KvManager. */
     private volatile LongSupplier sharedWriteBufferUsageSupplier = () -> 0L;
 
     private volatile long sharedWriteBufferCapacity;
+    // aggregated index replication metrics
+    private final Counter indexReplicationCompletedBytes;
+    private final Counter indexReplicationRetries;
+    private final Histogram indexReplicationRequestLatencyHistogram;
+    private final AtomicReference<IndexReplicationGaugeSource> indexReplicationGaugeSource =
+            new AtomicReference<>(IndexReplicationGaugeSource.EMPTY);
 
     public TabletServerMetricGroup(
             MetricRegistry registry, String clusterId, String rack, String hostname, int serverId) {
@@ -152,6 +158,30 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
         meter(MetricNames.ISR_SHRINKS_RATE, new MeterView(isrShrinks));
         failedIsrUpdates = new SimpleCounter();
         meter(MetricNames.FAILED_ISR_UPDATES_RATE, new MeterView(failedIsrUpdates));
+
+        // index replication metrics
+        indexReplicationCompletedBytes = new ThreadSafeSimpleCounter();
+        meter(
+                MetricNames.INDEX_REPLICATION_COMPLETED_BYTES_RATE,
+                new MeterView(indexReplicationCompletedBytes));
+        indexReplicationRetries =
+                counter(MetricNames.INDEX_REPLICATION_RETRIES_TOTAL, new ThreadSafeSimpleCounter());
+        indexReplicationRequestLatencyHistogram = new DescriptiveStatisticsHistogram(WINDOW_SIZE);
+        histogram(
+                MetricNames.INDEX_REPLICATION_REQUEST_LATENCY_MS,
+                indexReplicationRequestLatencyHistogram);
+        gauge(
+                MetricNames.INDEX_REPLICATION_BUFFER_USAGE_RATIO,
+                () -> indexReplicationGaugeSource.get().bufferUsageRatioSupplier.getAsDouble());
+        gauge(
+                MetricNames.INDEX_REPLICATION_MAX_LAG_OFFSETS,
+                () -> indexReplicationGaugeSource.get().maxLagOffsetsSupplier.getAsLong());
+        gauge(
+                MetricNames.INDEX_REPLICATION_MAX_SYNC_LAG_OFFSETS,
+                () -> indexReplicationGaugeSource.get().maxSyncLagOffsetsSupplier.getAsLong());
+        gauge(
+                MetricNames.INDEX_REPLICATION_MAX_NO_PROGRESS_TIME_MS,
+                () -> indexReplicationGaugeSource.get().maxNoProgressTimeMsSupplier.getAsLong());
 
         // Register server-level RocksDB aggregated metrics
         registerServerRocksDBMetrics();
@@ -315,6 +345,63 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
 
     public Counter failedIsrUpdates() {
         return failedIsrUpdates;
+    }
+
+    public Counter indexReplicationCompletedBytes() {
+        return indexReplicationCompletedBytes;
+    }
+
+    public Counter indexReplicationRetries() {
+        return indexReplicationRetries;
+    }
+
+    public Histogram indexReplicationRequestLatencyHistogram() {
+        return indexReplicationRequestLatencyHistogram;
+    }
+
+    public GaugeRegistration registerIndexReplicationGauges(
+            DoubleSupplier bufferUsageRatioSupplier,
+            LongSupplier maxLagOffsetsSupplier,
+            LongSupplier maxSyncLagOffsetsSupplier,
+            LongSupplier maxNoProgressTimeMsSupplier) {
+        IndexReplicationGaugeSource source =
+                new IndexReplicationGaugeSource(
+                        bufferUsageRatioSupplier,
+                        maxLagOffsetsSupplier,
+                        maxSyncLagOffsetsSupplier,
+                        maxNoProgressTimeMsSupplier);
+        indexReplicationGaugeSource.set(source);
+        return () ->
+                indexReplicationGaugeSource.compareAndSet(
+                        source, IndexReplicationGaugeSource.EMPTY);
+    }
+
+    /** Scoped ownership of replaceable server-level gauge suppliers. */
+    @FunctionalInterface
+    public interface GaugeRegistration extends AutoCloseable {
+        @Override
+        void close();
+    }
+
+    private static final class IndexReplicationGaugeSource {
+        private static final IndexReplicationGaugeSource EMPTY =
+                new IndexReplicationGaugeSource(() -> 0.0, () -> 0L, () -> 0L, () -> 0L);
+
+        private final DoubleSupplier bufferUsageRatioSupplier;
+        private final LongSupplier maxLagOffsetsSupplier;
+        private final LongSupplier maxSyncLagOffsetsSupplier;
+        private final LongSupplier maxNoProgressTimeMsSupplier;
+
+        private IndexReplicationGaugeSource(
+                DoubleSupplier bufferUsageRatioSupplier,
+                LongSupplier maxLagOffsetsSupplier,
+                LongSupplier maxSyncLagOffsetsSupplier,
+                LongSupplier maxNoProgressTimeMsSupplier) {
+            this.bufferUsageRatioSupplier = bufferUsageRatioSupplier;
+            this.maxLagOffsetsSupplier = maxLagOffsetsSupplier;
+            this.maxSyncLagOffsetsSupplier = maxSyncLagOffsetsSupplier;
+            this.maxNoProgressTimeMsSupplier = maxNoProgressTimeMsSupplier;
+        }
     }
 
     // ------------------------------------------------------------------------

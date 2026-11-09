@@ -19,6 +19,7 @@ package org.apache.fluss.server.coordinator;
 
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.UnknownServerException;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.messages.ApiVersionsResponse;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
@@ -36,6 +37,7 @@ import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeUpdateMetadataRequest;
@@ -92,6 +94,35 @@ class CoordinatorChannelManagerTest {
         coordinatorChannelManager.close();
     }
 
+    @Test
+    void testMissingGatewayCompletesCallbackWithFailure() throws Exception {
+        Configuration configuration = new Configuration();
+        CoordinatorChannelManager coordinatorChannelManager =
+                new CoordinatorChannelManager(
+                        RpcClient.create(configuration, TestingClientMetricGroup.newInstance()),
+                        () -> 0,
+                        configuration,
+                        TestingMetricGroups.COORDINATOR_METRICS);
+        CompletableFuture<Throwable> callbackFailure = new CompletableFuture<>();
+        try {
+            coordinatorChannelManager.sendUpdateMetadataRequest(
+                    404,
+                    makeUpdateMetadataRequest(
+                            null,
+                            null,
+                            Collections.emptySet(),
+                            Collections.emptyList(),
+                            Collections.emptyList()),
+                    (response, throwable) -> callbackFailure.complete(throwable));
+
+            assertThat(callbackFailure.get(5, TimeUnit.SECONDS))
+                    .isInstanceOf(UnknownServerException.class)
+                    .hasMessageContaining("404");
+        } finally {
+            coordinatorChannelManager.close();
+        }
+    }
+
     private void checkEnqueueRequest(
             CoordinatorChannelManager coordinatorChannelManager,
             int targetServerId,
@@ -117,9 +148,8 @@ class CoordinatorChannelManagerTest {
             CoordinatorChannelManager coordinatorChannelManager,
             int targetServerId,
             boolean expectCanSend) {
-        // 0 represents not send, 1 represents prepare to send, 2 represents success(received the
-        // success response)
-        AtomicInteger sendFlag = new AtomicInteger(0);
+        AtomicInteger sendInvocations = new AtomicInteger();
+        AtomicInteger callbackInvocations = new AtomicInteger();
         // we use update metadata request to test for simplicity
         UpdateMetadataRequest updateMetadataRequest =
                 makeUpdateMetadataRequest(
@@ -133,18 +163,16 @@ class CoordinatorChannelManagerTest {
                 updateMetadataRequest,
                 // when
                 (gateway, request) -> {
-                    // sending... set to 1
-                    sendFlag.set(1);
+                    sendInvocations.incrementAndGet();
                     return gateway.updateMetadata(request);
                 },
-                (response, throwable) -> {
-                    // receive response, set to 2
-                    sendFlag.set(2);
-                });
+                (response, throwable) -> callbackInvocations.incrementAndGet());
 
-        // if expect can send, flag is 2;
-        // otherwise, flag is 0
-        int expectedFlag = expectCanSend ? 2 : 0;
-        retry(Duration.ofMinutes(1), () -> assertThat(sendFlag.get()).isEqualTo(expectedFlag));
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    assertThat(sendInvocations.get()).isEqualTo(expectCanSend ? 1 : 0);
+                    assertThat(callbackInvocations.get()).isEqualTo(1);
+                });
     }
 }

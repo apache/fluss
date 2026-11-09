@@ -22,6 +22,7 @@ import org.apache.fluss.annotation.PublicStable;
 import org.apache.fluss.config.ConfigOption;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.ConfigurationUtils;
+import org.apache.fluss.utils.IndexTableUtils;
 import org.apache.fluss.utils.json.JsonSerdeUtils;
 import org.apache.fluss.utils.json.TableDescriptorJsonSerde;
 
@@ -150,6 +151,11 @@ public final class TableDescriptor implements Serializable {
     /** Returns the {@link Schema} of the table. */
     public Schema getSchema() {
         return schema;
+    }
+
+    /** Returns {@code true} when this descriptor carries the main-table link of an Index Table. */
+    public boolean isIndexTable() {
+        return properties.containsKey(IndexTableUtils.TABLE_INDEX_META_MAIN_TABLE_ID.key());
     }
 
     /** Returns the bucket key of the table, empty if no bucket key is set. */

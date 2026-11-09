@@ -28,12 +28,14 @@ import org.apache.fluss.exception.DatabaseAlreadyExistException;
 import org.apache.fluss.exception.DatabaseNotEmptyException;
 import org.apache.fluss.exception.DatabaseNotExistException;
 import org.apache.fluss.exception.InsufficientKvLeaderReplicaCapacityException;
+import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidDatabaseException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.SchemaNotExistException;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
+import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.Schema;
@@ -62,6 +64,8 @@ import org.apache.fluss.rpc.messages.PbServerNode;
 import org.apache.fluss.rpc.messages.PbTableMetadata;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
+import org.apache.fluss.server.coordinator.event.DeadTabletServerEvent;
+import org.apache.fluss.server.coordinator.event.NewTabletServerEvent;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.ZooKeeperClient;
@@ -73,6 +77,7 @@ import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.ZooDefs;
 import org.apache.fluss.types.DataTypeChecks;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
+import org.apache.fluss.utils.IndexTableUtils;
 import org.apache.fluss.utils.json.DataTypeJsonSerde;
 import org.apache.fluss.utils.json.JsonSerdeUtils;
 
@@ -98,6 +103,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.config.ConfigOptions.CURRENT_KV_FORMAT_VERSION;
@@ -122,6 +128,7 @@ import static org.apache.fluss.testutils.common.CommonTestUtils.waitValue;
 import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.apache.fluss.utils.PartitionUtils.generateAutoPartition;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** ITCase for {@link TableManager}. */
@@ -156,6 +163,104 @@ class TableManagerITCase {
     void setup() {
         zkClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
         clientConf = FLUSS_CLUSTER_EXTENSION.getClientConfig();
+    }
+
+    @Test
+    void testUnknownServerBlocksOnlyNewIndexedTables() throws Exception {
+        CoordinatorGateway gateway = FLUSS_CLUSTER_EXTENSION.newCoordinatorClient();
+        CoordinatorEventProcessor processor =
+                FLUSS_CLUSTER_EXTENSION.getCoordinatorServer().getCoordinatorEventProcessor();
+        gateway.createDatabase(newCreateDatabaseRequest("fluss", true)).get();
+        TableDescriptor ordinary =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.INT())
+                                        .column("val", DataTypes.STRING())
+                                        .primaryKey("id")
+                                        .build())
+                        .distributedBy(1)
+                        .property(ConfigOptions.TABLE_REPLICATION_FACTOR, 1)
+                        .build();
+        TableDescriptor indexed =
+                TableDescriptor.builder(ordinary)
+                        .schema(
+                                Schema.newBuilder()
+                                        .fromSchema(ordinary.getSchema())
+                                        .index("idx_val", "val")
+                                        .build())
+                        .build();
+        TablePath existing = TablePath.of("fluss", "existing_indexed");
+        retry(
+                Duration.ofSeconds(10),
+                () ->
+                        assertThatCode(
+                                        () ->
+                                                gateway.createTable(
+                                                                newCreateTableRequest(
+                                                                        existing, indexed, false))
+                                                        .get())
+                                .doesNotThrowAnyException());
+
+        ServerInfo unknown =
+                new ServerInfo(
+                        99,
+                        null,
+                        Collections.singletonList(new Endpoint("localhost", 1, "FLUSS")),
+                        ServerType.TABLET_SERVER);
+        int liveServers =
+                FLUSS_CLUSTER_EXTENSION
+                        .getCoordinatorServer()
+                        .getMetadataCache()
+                        .getLiveServers()
+                        .length;
+        processor.getCoordinatorEventManager().put(new NewTabletServerEvent(unknown));
+        try {
+            retry(
+                    Duration.ofSeconds(10),
+                    () ->
+                            assertThat(
+                                            FLUSS_CLUSTER_EXTENSION
+                                                    .getCoordinatorServer()
+                                                    .getMetadataCache()
+                                                    .getLiveServers())
+                                    .hasSize(liveServers + 1));
+            TablePath rejected = TablePath.of("fluss", "rejected_indexed");
+            assertThatThrownBy(
+                            () ->
+                                    gateway.createTable(
+                                                    newCreateTableRequest(rejected, indexed, false))
+                                            .get(10, TimeUnit.SECONDS))
+                    .hasRootCauseMessage(
+                            "Cannot create a table with secondary indexes: "
+                                    + "TabletServers [99] have not confirmed support for PUT_INDEX v0.");
+            assertThat(FLUSS_CLUSTER_EXTENSION.getZooKeeperClient().getTable(rejected)).isEmpty();
+            gateway.createTable(newCreateTableRequest(existing, indexed, true)).get();
+            gateway.createTable(
+                            newCreateTableRequest(
+                                    TablePath.of("fluss", "ordinary_during_upgrade"),
+                                    ordinary,
+                                    false))
+                    .get();
+        } finally {
+            processor.getCoordinatorEventManager().put(new DeadTabletServerEvent(99));
+            retry(
+                    Duration.ofSeconds(10),
+                    () ->
+                            assertThat(
+                                            FLUSS_CLUSTER_EXTENSION
+                                                    .getCoordinatorServer()
+                                                    .getMetadataCache()
+                                                    .getLiveServers())
+                                    .extracting(server -> server.getId())
+                                    .doesNotContain(99));
+            gateway.dropTable(
+                            newDropTableRequest(
+                                    existing.getDatabaseName(), existing.getTableName(), true))
+                    .get();
+            gateway.dropTable(newDropTableRequest("fluss", "rejected_indexed", true)).get();
+            gateway.dropTable(newDropTableRequest("fluss", "ordinary_during_upgrade", true)).get();
+        }
     }
 
     @Test
@@ -286,7 +391,8 @@ class TableManagerITCase {
         assertThatThrownBy(() -> adminGateway.dropTable(newDropTableRequest(db1, tb1, false)).get())
                 .cause()
                 .isInstanceOf(TableNotExistException.class)
-                .hasMessageContaining(String.format("Table %s does not exist.", tablePath));
+                .hasMessageContaining(tablePath.toString())
+                .hasMessageContaining("does not exist");
 
         // drop a not exist table with ignore if not exists shouldn't throw exception
         adminGateway.dropTable(newDropTableRequest(db1, tb1, true)).get();
@@ -1145,6 +1251,98 @@ class TableManagerITCase {
         }
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"unset", "FULL", "WAL"})
+    void testIndexedTableChangelogImage(String image) throws Exception {
+        TablePath path = TablePath.of("fluss", "indexed_changelog_" + image);
+        Schema schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.STRING())
+                        .primaryKey("a")
+                        .index("idx_b", "b")
+                        .build();
+        TableDescriptor.Builder builder =
+                TableDescriptor.builder().schema(schema).distributedBy(1, "a");
+        if (!"unset".equals(image)) {
+            builder.property(ConfigOptions.TABLE_CHANGELOG_IMAGE.key(), image);
+        }
+        CreateTableRequest request = newCreateTableRequest(path, builder.build(), false);
+        AdminGateway gateway = FLUSS_CLUSTER_EXTENSION.newCoordinatorClient();
+        try {
+            if ("WAL".equals(image)) {
+                assertThatThrownBy(() -> gateway.createTable(request).get())
+                        .cause()
+                        .isInstanceOf(InvalidTableException.class)
+                        .hasMessageContaining("Tables with secondary indexes require")
+                        .hasMessageContaining(ConfigOptions.TABLE_CHANGELOG_IMAGE.key());
+            } else {
+                gateway.createTable(request).get();
+                TableDescriptor descriptor =
+                        TableDescriptor.fromJsonBytes(
+                                gateway.getTableInfo(newGetTableInfoRequest(path))
+                                        .get()
+                                        .getTableJson());
+                assertThat(
+                                Configuration.fromMap(descriptor.getProperties())
+                                        .get(ConfigOptions.TABLE_CHANGELOG_IMAGE))
+                        .isEqualTo(ChangelogImage.FULL);
+            }
+        } finally {
+            gateway.dropTable(newDropTableRequest("fluss", path.getTableName(), true)).get();
+        }
+    }
+
+    @Test
+    void testIndexBucketsIncludedInKvLeaderReplicaCapacity() throws Exception {
+        Configuration conf = initConf();
+        conf.set(ConfigOptions.KV_LEADER_REPLICA_MEMORY_RESERVED, new MemorySize(1));
+        conf.set(ConfigOptions.TABLET_SERVER_ADVERTISED_RESOURCE_MEMORY_SIZE, new MemorySize(3));
+        FlussClusterExtension limitedCluster =
+                FlussClusterExtension.builder()
+                        .setNumOfTabletServers(1)
+                        .setClusterConf(conf)
+                        .build();
+
+        try {
+            limitedCluster.start();
+
+            AdminGateway gateway = limitedCluster.newCoordinatorClient();
+            TablePath mainPath = TablePath.of("fluss", "index_capacity");
+            TablePath indexPath =
+                    TablePath.of(
+                            "fluss",
+                            IndexTableUtils.indexTableName(mainPath.getTableName(), "idx_b"));
+            Schema schema =
+                    Schema.newBuilder()
+                            .column("a", DataTypes.INT())
+                            .column("b", DataTypes.STRING())
+                            .primaryKey("a")
+                            .index("idx_b", "b")
+                            .build();
+            TableDescriptor descriptor =
+                    TableDescriptor.builder().schema(schema).distributedBy(3, "a").build();
+
+            assertThatThrownBy(
+                            () ->
+                                    gateway.createTable(
+                                                    newCreateTableRequest(
+                                                            mainPath, descriptor, false))
+                                            .get())
+                    .cause()
+                    .isInstanceOf(InsufficientKvLeaderReplicaCapacityException.class)
+                    .hasMessageContaining("requestedKvLeaderReplicaCount=6")
+                    .hasMessageContaining("kvLeaderReplicaCapacity=3");
+
+            assertThat(gateway.tableExists(newTableExistsRequest(mainPath)).get().isExists())
+                    .isFalse();
+            assertThat(gateway.tableExists(newTableExistsRequest(indexPath)).get().isExists())
+                    .isFalse();
+        } finally {
+            limitedCluster.close();
+        }
+    }
+
     @Test
     void testKvLeaderReplicaCapacityRestrictionForPartitionedTable() throws Exception {
         Configuration conf = initConf();
@@ -1190,6 +1388,56 @@ class TableManagerITCase {
                     .isPresent();
         } finally {
             limitedCluster.close();
+        }
+    }
+
+    @Test
+    void testHistoricalPartitionRejectsSecondaryIndexes() throws Exception {
+        FlussClusterExtension cluster =
+                historicalPartitionCluster(ConfigOptions.MAX_PARTITION_NUM.defaultValue());
+        try {
+            cluster.start();
+            AdminGateway gateway = cluster.newCoordinatorClient();
+            TablePath tablePath = TablePath.of("fluss", "historical_secondary_indexes");
+            TableDescriptor baseDescriptor = historicalPartitionTable(false);
+            TableDescriptor indexedDescriptor =
+                    TableDescriptor.builder(baseDescriptor)
+                            .schema(
+                                    Schema.newBuilder()
+                                            .fromSchema(baseDescriptor.getSchema())
+                                            .index("idx_a", "a")
+                                            .build())
+                            .property(ConfigOptions.TABLE_REPLICATION_FACTOR, 1)
+                            .property(ConfigOptions.TABLE_CHANGELOG_IMAGE, ChangelogImage.FULL)
+                            .build();
+            TableDescriptor historicalIndexedDescriptor =
+                    TableDescriptor.builder(indexedDescriptor)
+                            .property(
+                                    ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED, true)
+                            .build();
+
+            assertThatThrownBy(
+                            () ->
+                                    gateway.createTable(
+                                                    newCreateTableRequest(
+                                                            tablePath,
+                                                            historicalIndexedDescriptor,
+                                                            false))
+                                            .get())
+                    .cause()
+                    .isInstanceOf(InvalidConfigException.class)
+                    .hasMessageContaining(
+                            "Secondary indexes with historical partition access are not supported yet");
+
+            gateway.createTable(newCreateTableRequest(tablePath, indexedDescriptor, false)).get();
+            assertThatThrownBy(() -> setHistoricalPartitionEnabled(gateway, tablePath, true))
+                    .cause()
+                    .isInstanceOf(InvalidConfigException.class)
+                    .hasMessageContaining(
+                            "Secondary indexes with historical partition access are not supported yet");
+            assertThat(isHistoricalPartitionEnabled(gateway, tablePath)).isFalse();
+        } finally {
+            cluster.close();
         }
     }
 

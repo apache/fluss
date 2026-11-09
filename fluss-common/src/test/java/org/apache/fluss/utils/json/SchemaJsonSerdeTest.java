@@ -18,6 +18,8 @@
 package org.apache.fluss.utils.json;
 
 import org.apache.fluss.metadata.AggFunctions;
+import org.apache.fluss.metadata.IndexType;
+import org.apache.fluss.metadata.IndexVisibility;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.types.DataTypes;
 
@@ -123,6 +125,24 @@ public class SchemaJsonSerdeTest extends JsonSerdeTestBase<Schema> {
     static final String SCHEMA_JSON_WITH_AGG =
             "{\"version\":1,\"columns\":[{\"name\":\"product_id\",\"data_type\":{\"type\":\"BIGINT\",\"nullable\":false},\"id\":0},{\"name\":\"total_sales\",\"data_type\":{\"type\":\"BIGINT\"},\"agg_function\":{\"type\":\"sum\"},\"id\":1},{\"name\":\"max_price\",\"data_type\":{\"type\":\"DECIMAL\",\"precision\":10,\"scale\":2},\"agg_function\":{\"type\":\"max\"},\"id\":2},{\"name\":\"last_update_time\",\"data_type\":{\"type\":\"TIMESTAMP_WITHOUT_TIME_ZONE\",\"precision\":6},\"agg_function\":{\"type\":\"last_value_ignore_nulls\"},\"id\":3},{\"name\":\"tags\",\"data_type\":{\"type\":\"STRING\"},\"agg_function\":{\"type\":\"listagg\",\"parameters\":{\"delimiter\":\";\"}},\"id\":4},{\"name\":\"categories\",\"data_type\":{\"type\":\"STRING\"},\"agg_function\":{\"type\":\"string_agg\",\"parameters\":{\"delimiter\":\"|\"}},\"id\":5},{\"name\":\"labels\",\"data_type\":{\"type\":\"STRING\"},\"agg_function\":{\"type\":\"listagg\"},\"id\":6}],\"primary_key\":[\"product_id\"],\"highest_field_id\":6}";
 
+    static final Schema SCHEMA_WITH_INDEXES =
+            Schema.newBuilder()
+                    .column("id", DataTypes.INT())
+                    .column("email", DataTypes.STRING())
+                    .column("region", DataTypes.INT())
+                    .primaryKey("id")
+                    .index("idx_region", "region")
+                    .index(
+                            "idx_email",
+                            IndexType.SECONDARY,
+                            Collections.singletonList("email"),
+                            IndexVisibility.ASYNC,
+                            7)
+                    .build();
+
+    static final String SCHEMA_JSON_WITH_INDEXES =
+            "{\"version\":1,\"columns\":[{\"name\":\"id\",\"data_type\":{\"type\":\"INTEGER\",\"nullable\":false},\"id\":0},{\"name\":\"email\",\"data_type\":{\"type\":\"STRING\"},\"id\":1},{\"name\":\"region\",\"data_type\":{\"type\":\"INTEGER\"},\"id\":2}],\"primary_key\":[\"id\"],\"indexes\":[{\"name\":\"idx_region\",\"type\":\"SECONDARY\",\"visibility\":\"SYNC\",\"columns\":[\"region\"]},{\"name\":\"idx_email\",\"type\":\"SECONDARY\",\"visibility\":\"ASYNC\",\"bucket_num\":7,\"columns\":[\"email\"]}],\"highest_field_id\":2}";
+
     SchemaJsonSerdeTest() {
         super(SchemaJsonSerde.INSTANCE);
     }
@@ -137,7 +157,14 @@ public class SchemaJsonSerdeTest extends JsonSerdeTestBase<Schema> {
     @Override
     protected Schema[] createObjects() {
         return new Schema[] {
-            SCHEMA_0, SCHEMA_1, SCHEMA_2, SCHEMA_3, SCHEMA_4, SCHEMA_5, SCHEMA_WITH_AGG
+            SCHEMA_0,
+            SCHEMA_1,
+            SCHEMA_2,
+            SCHEMA_3,
+            SCHEMA_4,
+            SCHEMA_5,
+            SCHEMA_WITH_AGG,
+            SCHEMA_WITH_INDEXES
         };
     }
 
@@ -150,7 +177,8 @@ public class SchemaJsonSerdeTest extends JsonSerdeTestBase<Schema> {
             SCHEMA_JSON_3,
             SCHEMA_JSON_4,
             SCHEMA_JSON_5,
-            SCHEMA_JSON_WITH_AGG
+            SCHEMA_JSON_WITH_AGG,
+            SCHEMA_JSON_WITH_INDEXES
         };
     }
 
@@ -178,5 +206,27 @@ public class SchemaJsonSerdeTest extends JsonSerdeTestBase<Schema> {
                 "{\"version\":1,\"columns\":[{\"name\":\"a\",\"data_type\":{\"type\":\"BIGINT\"},\"comment\":\"a is first column\"},{\"name\":\"b\",\"data_type\":{\"type\":\"STRING\"},\"comment\":\"b is second column\"},{\"name\":\"c\",\"data_type\":{\"type\":\"TIMESTAMP_WITHOUT_TIME_ZONE\",\"precision\":6},\"comment\":\"c is third column\"}]}";
 
         return new String[] {oldSchemaJson1, oldSchemaJson2, oldSchemaJson2, oldSchemaJson3};
+    }
+
+    @Test
+    void testIndexJsonDefaultsToSyncVisibilityAndNoBucketCount() {
+        String json =
+                "{"
+                        + "\"version\":1,"
+                        + "\"columns\":[{\"name\":\"id\",\"data_type\":{\"type\":\"INTEGER\"},\"id\":0},"
+                        + "{\"name\":\"email\",\"data_type\":{\"type\":\"STRING\"},\"id\":1}],"
+                        + "\"primary_key\":[\"id\"],"
+                        + "\"indexes\":[{\"name\":\"idx_email\",\"type\":\"SECONDARY\","
+                        + "\"columns\":[\"email\"]}],"
+                        + "\"highest_field_id\":1"
+                        + "}";
+
+        Schema restored =
+                JsonSerdeUtils.readValue(
+                        json.getBytes(StandardCharsets.UTF_8), SchemaJsonSerde.INSTANCE);
+
+        Schema.Index index = restored.getIndexes().get(0);
+        assertThat(index.getVisibility()).isEqualTo(IndexVisibility.SYNC);
+        assertThat(index.getBucketCount()).isEmpty();
     }
 }

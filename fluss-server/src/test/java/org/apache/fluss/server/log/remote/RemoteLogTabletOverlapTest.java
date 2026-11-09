@@ -59,7 +59,8 @@ class RemoteLogTabletOverlapTest {
                 .containsOnlyKeys(longer.remoteLogSegmentId());
         assertThat(tablet.getRemoteSizeInBytes()).isEqualTo(longer.segmentSizeInBytes());
         assertThat(tablet.findSegmentsByTimestamp(1L)).containsExactly(longer);
-        assertThat(tablet.expiredRemoteLogSegments(100L, null, 1L)).containsExactly(longer);
+        assertThat(tablet.expiredRemoteLogSegments(100L, Long.MAX_VALUE, 1L))
+                .containsExactly(longer);
         assertThat(RemoteLogManifest.fromJsonBytes(manifest.toJsonBytes())).isEqualTo(manifest);
         assertThat(manifest.getRemoteLogSegmentList()).hasSize(2);
     }

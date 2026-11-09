@@ -327,7 +327,10 @@ public class CompletedSnapshotStore {
                     fs.create(filePath, FileSystem.WriteMode.OVERWRITE)) {
                 outStream.write(jsonBytes);
                 return new CompletedSnapshotHandle(
-                        snapshot.getSnapshotID(), filePath, snapshot.getLogOffset());
+                        snapshot.getSnapshotID(),
+                        filePath,
+                        snapshot.getLogOffset(),
+                        snapshot.getSyncIndexPushedOffset());
             } catch (Exception e) {
                 latestException = e;
             }

@@ -87,6 +87,8 @@ import org.apache.fluss.rpc.messages.PrefixLookupRequest;
 import org.apache.fluss.rpc.messages.PrefixLookupResponse;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.ProduceLogResponse;
+import org.apache.fluss.rpc.messages.PutIndexRequest;
+import org.apache.fluss.rpc.messages.PutIndexResponse;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.messages.PutKvResponse;
 import org.apache.fluss.rpc.messages.ScanKvRequest;
@@ -166,6 +168,7 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getNotifyLakeT
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getNotifyLeaderAndIsrRequestData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getNotifyRemoteLogOffsetsData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getNotifySnapshotOffsetData;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getPutIndexData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getStopReplicaData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getTableFilterInfoMap;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getTableStatsRequestData;
@@ -180,6 +183,7 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeLookupResp
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeNotifyLeaderAndIsrResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makePrefixLookupResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeProduceLogResponse;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makePutIndexResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makePutKvResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeStopReplicaResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toHistoricalLookupData;
@@ -187,6 +191,7 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toLookupData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toPrefixLookupData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toProduceLogDataForBuckets;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toPutKvDataForBuckets;
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /** An RPC Gateway service for tablet server. */
 public final class TabletService extends RpcServiceBase
@@ -479,6 +484,22 @@ public final class TabletService extends RpcServiceBase
     }
 
     @Override
+    public CompletableFuture<PutIndexResponse> putIndex(PutIndexRequest request) {
+        if (!currentSession().isInternal()) {
+            throw new AuthorizationException(
+                    "PutIndex requests are only allowed on the internal listener.");
+        }
+        authorizeTable(WRITE, request.getTableId());
+        CompletableFuture<PutIndexResponse> response = new CompletableFuture<>();
+        replicaManager.putIndexRecords(
+                request.getTimeoutMs(),
+                request.getAcks(),
+                getPutIndexData(request),
+                bucketResponse -> response.complete(makePutIndexResponse(bucketResponse)));
+        return response;
+    }
+
+    @Override
     public CompletableFuture<LookupResponse> lookup(LookupRequest request) {
         long tableId = request.getTableId();
         Map<TableBucket, LookupResultForBucket> errorResponseMap = new HashMap<>();
@@ -552,6 +573,9 @@ public final class TabletService extends RpcServiceBase
 
     @Override
     public CompletableFuture<PrefixLookupResponse> prefixLookup(PrefixLookupRequest request) {
+        if (request.hasLimit()) {
+            checkArgument(request.getLimit() > 0, "Prefix lookup limit must be positive.");
+        }
         long tableId = request.getTableId();
         Map<TableBucket, List<byte[]>> prefixLookupData = toPrefixLookupData(request);
         Map<TableBucket, PrefixLookupResultForBucket> errorResponseMap = new HashMap<>();
@@ -577,6 +601,8 @@ public final class TabletService extends RpcServiceBase
         replicaManager.prefixLookups(
                 prefixLookupData,
                 currentSession().getApiVersion(),
+                request.hasLimit() ? request.getLimit() : 0,
+                request.hasFailOnLimitExceeded() && request.isFailOnLimitExceeded(),
                 value -> response.complete(makePrefixLookupResponse(value, errorResponseMap)));
         return response;
     }
@@ -669,7 +695,8 @@ public final class TabletService extends RpcServiceBase
                         currentSession(),
                         authorizer,
                         metadataCache,
-                        metadataFunctionProvider);
+                        metadataFunctionProvider,
+                        this::getReadAuthorizationTablePath);
         return CompletableFuture.completedFuture(metadataResponse);
     }
 
@@ -1111,15 +1138,15 @@ public final class TabletService extends RpcServiceBase
     @Override
     public void authorizeTable(OperationType operationType, long tableId) {
         if (authorizer != null) {
-            TablePath tablePath = metadataCache.getTablePath(tableId).orElse(null);
-            if (tablePath == null) {
-                throw new UnknownTableOrBucketException(
-                        String.format(
-                                "This server %s does not know this table ID %s. This may happen when the table "
-                                        + "metadata cache in the server is not updated yet.",
-                                serviceName, tableId));
-            }
-            authorizeTable(operationType, tablePath);
+            TablePath tablePath =
+                    getAuthorizationTablePath(operationType, tableId)
+                            .orElseThrow(
+                                    () ->
+                                            new UnknownTableOrBucketException(
+                                                    String.format(
+                                                            "This server %s does not know this table ID %s.",
+                                                            serviceName, tableId)));
+            authorizer.authorize(currentSession(), operationType, Resource.table(tablePath));
         }
     }
 
@@ -1134,6 +1161,18 @@ public final class TabletService extends RpcServiceBase
                             serviceName, tableId));
         }
         return metadataManager.getTable(tablePath);
+    }
+
+    @Override
+    protected TablePath getReadAuthorizationTablePath(TablePath tablePath) {
+        return metadataCache.getReadAuthorizationTablePath(tablePath);
+    }
+
+    private Optional<TablePath> getAuthorizationTablePath(
+            OperationType operationType, long tableId) {
+        return operationType == OperationType.READ || operationType == OperationType.DESCRIBE
+                ? metadataCache.getReadAuthorizationTablePath(tableId)
+                : metadataCache.getTablePath(tableId);
     }
 
     private void authorizeAnyTable(OperationType operationType, List<TablePath> tablePaths) {
@@ -1259,13 +1298,15 @@ public final class TabletService extends RpcServiceBase
                 .distinct()
                 .filter(
                         tableId -> {
-                            Optional<TablePath> tablePathOpt = metadataCache.getTablePath(tableId);
-                            return tablePathOpt.isPresent()
-                                    && authorizer != null
-                                    && authorizer.isAuthorized(
-                                            currentSession(),
-                                            operationType,
-                                            Resource.table(tablePathOpt.get()));
+                            Optional<TablePath> tablePathOpt =
+                                    getAuthorizationTablePath(operationType, tableId);
+                            if (!tablePathOpt.isPresent() || authorizer == null) {
+                                return false;
+                            }
+                            return authorizer.isAuthorized(
+                                    currentSession(),
+                                    operationType,
+                                    Resource.table(tablePathOpt.get()));
                         })
                 .collect(Collectors.toSet());
     }

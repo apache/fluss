@@ -34,12 +34,14 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.NotThreadSafe;
 
 import java.io.IOException;
 import java.util.Optional;
 import java.util.concurrent.Executor;
 import java.util.function.Consumer;
+import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
 /**
@@ -82,6 +84,10 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
 
     private volatile long logOffsetOfLatestSnapshot;
 
+    @Nullable private volatile Long indexPushedOffsetOfLatestSnapshot;
+    @Nullable private volatile Long syncIndexPushedOffsetOfLatestSnapshot;
+    @Nullable private final LongSupplier syncIndexPushedOffsetSupplier;
+
     private volatile long snapshotSize;
 
     @VisibleForTesting
@@ -112,10 +118,13 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
                 cancelStreamRegistry,
                 snapshotIdCounter,
                 tabletStateSupplier,
+                null,
                 updateMinRetainOffset,
                 bucketLeaderEpochSupplier,
                 coordinatorEpochSupplier,
                 logOffsetOfLatestSnapshot,
+                null,
+                null,
                 snapshotSize);
     }
 
@@ -130,10 +139,13 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
             CloseableRegistry cancelStreamRegistry,
             SequenceIDCounter snapshotIdCounter,
             Supplier<TabletState> tabletStateSupplier,
+            @Nullable LongSupplier syncIndexPushedOffsetSupplier,
             Consumer<Long> updateMinRetainOffset,
             Supplier<Integer> bucketLeaderEpochSupplier,
             Supplier<Integer> coordinatorEpochSupplier,
             long logOffsetOfLatestSnapshot,
+            @Nullable Long indexPushedOffsetOfLatestSnapshot,
+            @Nullable Long syncIndexPushedOffsetOfLatestSnapshot,
             long snapshotSize)
             throws IOException {
         this.tableBucket = tableBucket;
@@ -146,10 +158,13 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
         this.remoteFileSystem = remoteKvTabletDir.getFileSystem();
         this.snapshotIdCounter = snapshotIdCounter;
         this.tabletStateSupplier = tabletStateSupplier;
+        this.syncIndexPushedOffsetSupplier = syncIndexPushedOffsetSupplier;
+        this.syncIndexPushedOffsetOfLatestSnapshot = syncIndexPushedOffsetOfLatestSnapshot;
         this.updateMinRetainOffset = updateMinRetainOffset;
         this.bucketLeaderEpochSupplier = bucketLeaderEpochSupplier;
         this.coordinatorEpochSupplier = coordinatorEpochSupplier;
         this.logOffsetOfLatestSnapshot = logOffsetOfLatestSnapshot;
+        this.indexPushedOffsetOfLatestSnapshot = indexPushedOffsetOfLatestSnapshot;
         this.snapshotSize = snapshotSize;
         this.ioExecutor = ioExecutor;
         this.snapshotRunner = createSnapshotRunner(cancelStreamRegistry);
@@ -170,13 +185,17 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
     public Optional<PeriodicSnapshotManager.SnapshotRunnable> initSnapshot() throws Exception {
         TabletState tabletState = tabletStateSupplier.get();
         long logOffset = tabletState.getFlushedLogOffset();
-        if (logOffset <= logOffsetOfLatestSnapshot) {
+        if (!shouldCreateSnapshot(
+                        tabletState, logOffsetOfLatestSnapshot, indexPushedOffsetOfLatestSnapshot)
+                && !syncSnapshotBecameReadable(logOffset)) {
             LOG.debug(
-                    "The current offset for the log whose kv data is flushed is {}, "
-                            + "which is not greater than the log offset in the latest snapshot {}, "
+                    "The current flushed log offset is {} and index-pushed-offset is {}, "
+                            + "which do not advance beyond the latest snapshot offsets ({}, {}), "
                             + "so skip one snapshot for it.",
                     logOffset,
-                    logOffsetOfLatestSnapshot);
+                    tabletState.getIndexPushedOffset(),
+                    logOffsetOfLatestSnapshot,
+                    indexPushedOffsetOfLatestSnapshot);
             return Optional.empty();
         }
         // init snapshot stream factory for this snapshot
@@ -192,6 +211,15 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
                         coordinatorEpoch,
                         bucketLeaderEpoch,
                         snapshotLocation));
+    }
+
+    private boolean syncSnapshotBecameReadable(long logOffset) {
+        // A SYNC-only update is useful once it certifies the complete snapshot. Publishing
+        // intermediate progress could evict an older readable snapshot without replacing it.
+        return syncIndexPushedOffsetSupplier != null
+                && syncIndexPushedOffsetOfLatestSnapshot != null
+                && syncIndexPushedOffsetOfLatestSnapshot < logOffset
+                && syncIndexPushedOffsetSupplier.getAsLong() >= logOffset;
     }
 
     private SnapshotLocation initSnapshotLocation(long snapshotId) {
@@ -213,6 +241,14 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
             SnapshotResult snapshotResult)
             throws Throwable {
         TabletState tabletState = snapshotResult.getTabletState();
+        // Sample after upload, without changing the snapshot's data or recovery offset.
+        // The captured all-index prefix is also confirmed for every SYNC index.
+        Long syncIndexPushedOffset =
+                syncIndexPushedOffsetSupplier == null
+                        ? null
+                        : Math.max(
+                                tabletState.getIndexPushedOffset(),
+                                syncIndexPushedOffsetSupplier.getAsLong());
         CompletedSnapshot completedSnapshot =
                 new CompletedSnapshot(
                         tableBucket,
@@ -221,13 +257,15 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
                         snapshotResult.getKvSnapshotHandle(),
                         tabletState.getFlushedLogOffset(),
                         tabletState.getRowCount(),
+                        tabletState.getIndexPushedOffset(),
+                        syncIndexPushedOffset,
                         tabletState.getAutoIncIDRanges());
         try {
             // commit the completed snapshot
             completedKvSnapshotCommitter.commitKvSnapshot(
                     completedSnapshot, coordinatorEpoch, bucketLeaderEpoch);
             // update local state after successful commit
-            updateStateOnCommitSuccess(snapshotId, snapshotResult);
+            updateStateOnCommitSuccess(snapshotId, snapshotResult, completedSnapshot);
         } catch (Exception e) {
             Throwable t = ExceptionUtils.stripExecutionException(e);
             // handle the exception with idempotent check
@@ -255,6 +293,24 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
     }
 
     @VisibleForTesting
+    static boolean shouldCreateSnapshot(
+            TabletState tabletState,
+            long logOffsetOfLatestSnapshot,
+            @Nullable Long indexPushedOffsetOfLatestSnapshot) {
+        long logOffset = tabletState.getFlushedLogOffset();
+        if (logOffset > logOffsetOfLatestSnapshot) {
+            return true;
+        }
+        if (logOffset < logOffsetOfLatestSnapshot) {
+            return false;
+        }
+        Long indexPushedOffset = tabletState.getIndexPushedOffset();
+        return indexPushedOffset != null
+                && (indexPushedOffsetOfLatestSnapshot == null
+                        || indexPushedOffset > indexPushedOffsetOfLatestSnapshot);
+    }
+
+    @VisibleForTesting
     protected RocksIncrementalSnapshot getRocksIncrementalSnapshot() {
         return rocksIncrementalSnapshot;
     }
@@ -270,13 +326,17 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
      * before the outward state catches up — see FLUSS-2624. The {@code finally} block also
      * guarantees the internal SST bookkeeping cleanup runs even if any outward update throws.
      */
-    private void updateStateOnCommitSuccess(long snapshotId, SnapshotResult snapshotResult) {
+    private void updateStateOnCommitSuccess(
+            long snapshotId, SnapshotResult snapshotResult, CompletedSnapshot completedSnapshot) {
         long flushedLogOffset = snapshotResult.getTabletState().getFlushedLogOffset();
         try {
             logOffsetOfLatestSnapshot = flushedLogOffset;
+            indexPushedOffsetOfLatestSnapshot =
+                    snapshotResult.getTabletState().getIndexPushedOffset();
+            syncIndexPushedOffsetOfLatestSnapshot = completedSnapshot.getSyncIndexPushedOffset();
             snapshotSize = snapshotResult.getSnapshotSize();
             // update LogTablet to notify the lowest offset that should be retained
-            updateMinRetainOffset.accept(flushedLogOffset);
+            updateMinRetainOffset.accept(completedSnapshot.getMinRetainLogOffset());
         } finally {
             // notify the snapshot complete (must run last to preserve the ordering contract above,
             // and run in finally to guarantee internal SST bookkeeping is always cleaned up).
@@ -320,7 +380,7 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
                         tableBucket);
 
                 // Update local state as if the commit was successful
-                updateStateOnCommitSuccess(snapshotId, snapshotResult);
+                updateStateOnCommitSuccess(snapshotId, snapshotResult, completedSnapshot);
                 return; // Snapshot commit succeeded, return directly
             } else {
                 // Snapshot does not exist in ZK, indicating the commit truly failed

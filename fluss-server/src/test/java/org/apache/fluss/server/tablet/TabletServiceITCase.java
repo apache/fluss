@@ -20,6 +20,7 @@ package org.apache.fluss.server.tablet;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.AuthorizationException;
 import org.apache.fluss.exception.ConsumerGroupOwnerLoadingException;
 import org.apache.fluss.exception.ConsumerGroupOwnerNotAvailableException;
 import org.apache.fluss.exception.FlussRuntimeException;
@@ -41,6 +42,7 @@ import org.apache.fluss.row.encode.CompactedKeyEncoder;
 import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.row.encode.ValueDecoder;
 import org.apache.fluss.row.encode.ValueEncoder;
+import org.apache.fluss.rpc.GatewayClientProxy;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
 import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerRequest;
@@ -62,6 +64,7 @@ import org.apache.fluss.rpc.messages.PbPrefixLookupRespForBucket;
 import org.apache.fluss.rpc.messages.PbPutKvRespForBucket;
 import org.apache.fluss.rpc.messages.PbTableStatsRespForBucket;
 import org.apache.fluss.rpc.messages.ProduceLogResponse;
+import org.apache.fluss.rpc.messages.PutIndexRequest;
 import org.apache.fluss.rpc.messages.PutKvResponse;
 import org.apache.fluss.rpc.messages.ScanKvRequest;
 import org.apache.fluss.rpc.messages.ScanKvResponse;
@@ -149,7 +152,29 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 public class TabletServiceITCase {
     @RegisterExtension
     public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
-            FlussClusterExtension.builder().setNumOfTabletServers(3).build();
+            FlussClusterExtension.builder()
+                    .setNumOfTabletServers(3)
+                    .setTabletServerListeners("FLUSS://localhost:0, CLIENT://localhost:0")
+                    .build();
+
+    @Test
+    void testPutIndexRejectsExternalRequests() {
+        ServerNode externalNode = FLUSS_CLUSTER_EXTENSION.getTabletServerNodes("CLIENT").get(0);
+        TabletServerGateway gateway =
+                GatewayClientProxy.createGatewayProxy(
+                        () -> externalNode,
+                        FLUSS_CLUSTER_EXTENSION.getRpcClient(),
+                        TabletServerGateway.class);
+        PutIndexRequest request =
+                new PutIndexRequest()
+                        .setTableId(1L)
+                        .setSourceTableId(2L)
+                        .setAcks(-1)
+                        .setTimeoutMs(10000);
+
+        assertThatThrownBy(() -> gateway.putIndex(request).get())
+                .hasRootCauseInstanceOf(AuthorizationException.class);
+    }
 
     @Test
     void testFindConsumerGroupOwner() throws Exception {

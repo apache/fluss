@@ -272,7 +272,19 @@ public class ClientRpcMessageUtils {
 
     public static PrefixLookupRequest makePrefixLookupRequest(
             long tableId, Collection<PrefixLookupBatch> lookupBatches) {
+        return makePrefixLookupRequest(tableId, lookupBatches, 0, false);
+    }
+
+    /** Builds a request whose limit applies independently to every prefix. */
+    public static PrefixLookupRequest makePrefixLookupRequest(
+            long tableId,
+            Collection<PrefixLookupBatch> lookupBatches,
+            int limit,
+            boolean failOnLimitExceeded) {
         PrefixLookupRequest request = new PrefixLookupRequest().setTableId(tableId);
+        if (limit > 0) {
+            request.setLimit(limit).setFailOnLimitExceeded(failOnLimitExceeded);
+        }
         lookupBatches.forEach(
                 (batch) -> {
                     TableBucket tb = batch.tableBucket();
@@ -302,11 +314,8 @@ public class ClientRpcMessageUtils {
             snapshotIds.put(bucketId, snapshotId);
             Long logOffset = pbKvSnapshot.hasLogOffset() ? pbKvSnapshot.getLogOffset() : null;
             logOffsets.put(bucketId, logOffset);
-            boolean bothNull = snapshotId == null && logOffset == null;
-            boolean bothNotNull = snapshotId != null && logOffset != null;
             checkState(
-                    bothNull || bothNotNull,
-                    "snapshotId and logOffset should be both null or not null");
+                    snapshotId == null || logOffset != null, "A snapshot must have a log offset");
         }
         return new KvSnapshots(tableId, partitionId, snapshotIds, logOffsets);
     }

@@ -35,14 +35,24 @@ public class TabletState {
 
     private final long flushedLogOffset;
     @Nullable private final Long rowCount;
+    @Nullable private final Long allIndexPushedOffset;
     @Nullable private final List<AutoIncIDRange> autoIncIDRanges;
 
     public TabletState(
             long flushedLogOffset,
             @Nullable Long rowCount,
             @Nullable List<AutoIncIDRange> autoIncIDRanges) {
+        this(flushedLogOffset, rowCount, null, autoIncIDRanges);
+    }
+
+    public TabletState(
+            long flushedLogOffset,
+            @Nullable Long rowCount,
+            @Nullable Long allIndexPushedOffset,
+            @Nullable List<AutoIncIDRange> autoIncIDRanges) {
         this.flushedLogOffset = flushedLogOffset;
         this.rowCount = rowCount;
+        this.allIndexPushedOffset = allIndexPushedOffset;
         this.autoIncIDRanges = autoIncIDRanges;
     }
 
@@ -50,9 +60,29 @@ public class TabletState {
         return flushedLogOffset;
     }
 
+    /**
+     * Returns the lowest WAL offset that must be retained to recover all state represented by this
+     * tablet snapshot. Data recovery starts from {@link #getFlushedLogOffset()}, but secondary
+     * index recovery may need to replay from an earlier index-pushed watermark.
+     */
+    public long getMinRetainLogOffset() {
+        return allIndexPushedOffset == null
+                ? flushedLogOffset
+                : Math.min(flushedLogOffset, allIndexPushedOffset);
+    }
+
     @Nullable
     public Long getRowCount() {
         return rowCount;
+    }
+
+    /**
+     * Returns the minimum exclusive next WAL offset across all indexes, including ASYNC indexes,
+     * captured for replay and WAL retention. Null when index progress is not applicable.
+     */
+    @Nullable
+    public Long getIndexPushedOffset() {
+        return allIndexPushedOffset;
     }
 
     @Nullable
@@ -67,6 +97,8 @@ public class TabletState {
                 + flushedLogOffset
                 + ", rowCount="
                 + rowCount
+                + ", indexPushedOffset="
+                + allIndexPushedOffset
                 + ", autoIncIDRanges="
                 + autoIncIDRanges
                 + '}';

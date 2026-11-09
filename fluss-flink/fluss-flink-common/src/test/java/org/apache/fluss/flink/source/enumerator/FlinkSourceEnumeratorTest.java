@@ -212,6 +212,64 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
         }
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testSyncTableWithoutSnapshotStartsAtZero(boolean streamingRead) throws Throwable {
+        TablePath path = TablePath.of(DEFAULT_DB, "sync-full-read-" + streamingRead);
+        long tableId =
+                createTable(
+                        path,
+                        TableDescriptor.builder()
+                                .schema(
+                                        Schema.newBuilder()
+                                                .column("id", DataTypes.INT())
+                                                .column("name", DataTypes.STRING())
+                                                .primaryKey("id")
+                                                .index("idx_name", "name")
+                                                .build())
+                                .distributedBy(1, "id")
+                                .build());
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(new TableBucket(tableId, 0));
+        try (MockSplitEnumeratorContext<SourceSplitBase> context =
+                new MockSplitEnumeratorContext<>(1)) {
+            FlinkSourceEnumerator enumerator =
+                    new FlinkSourceEnumerator(
+                            path,
+                            flussConf,
+                            true,
+                            false,
+                            context,
+                            OffsetsInitializer.full(),
+                            DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
+                            streamingRead,
+                            null,
+                            null,
+                            LeaseContext.DEFAULT,
+                            false);
+            enumerator.start();
+            registerReader(context, enumerator, 0);
+            context.runNextOneTimeCallable();
+            List<SourceSplitBase> splits =
+                    context.getSplitsAssignmentSequence().stream()
+                            .flatMap(assignment -> assignment.assignment().values().stream())
+                            .flatMap(List::stream)
+                            .collect(Collectors.toList());
+            assertThat(splits)
+                    .singleElement()
+                    .satisfies(
+                            split -> {
+                                if (streamingRead) {
+                                    assertThat(split.asLogSplit().getStartingOffset()).isZero();
+                                } else {
+                                    assertThat(
+                                                    split.asHybridSnapshotLogSplit()
+                                                            .getLogStartingOffset())
+                                            .isZero();
+                                }
+                            });
+        }
+    }
+
     @Test
     void testBoundedPkTableEmitsSnapshotSplitsByDefault() throws Throwable {
         TablePath tablePath = TablePath.of(DEFAULT_DB, "bounded-pk-snapshot-default");

@@ -21,10 +21,15 @@ import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.MethodSource;
 
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -425,5 +430,67 @@ class TableSchemaTest {
                 .isEqualTo(AggFunctions.STRING_AGG(", "));
         assertThat(schemaStringAgg.getAggFunction("items").get().getParameter("delimiter"))
                 .isEqualTo(", ");
+    }
+
+    @ParameterizedTest
+    @CsvSource(
+            value = {
+                "idx__bad|__",
+                "_idx_bad|cannot start with underscore",
+                "idx-bad|letters, digits, and underscores"
+            },
+            delimiter = '|')
+    void testRejectInvalidIndexName(String name, String message) {
+        assertThatThrownBy(() -> Schema.newBuilder().index(name, "u"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(message);
+        assertThatThrownBy(() -> new Schema.Index(name, Collections.singletonList("u")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(message);
+    }
+
+    @ParameterizedTest
+    @MethodSource("invalidIndexColumns")
+    void testRejectInvalidIndexColumns(String[] columns, String message) {
+        assertThatThrownBy(() -> Schema.newBuilder().index("idx_user", columns))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(message);
+        assertThatThrownBy(() -> new Schema.Index("idx_user", Arrays.asList(columns)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(message);
+    }
+
+    private static Stream<Arguments> invalidIndexColumns() {
+        return Stream.of(
+                Arguments.of(new String[0], "at least one column"),
+                Arguments.of(new String[] {"u", "u"}, "duplicate columns"));
+    }
+
+    @Test
+    void testRejectDuplicateIndexName() {
+        Schema.Builder b =
+                Schema.newBuilder()
+                        .column("id", DataTypes.BIGINT())
+                        .column("u", DataTypes.BIGINT())
+                        .column("v", DataTypes.BIGINT())
+                        .primaryKey("id")
+                        .index("idx_user", "u");
+
+        assertThatThrownBy(() -> b.index("idx_user", "v"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Duplicate index name 'idx_user'");
+    }
+
+    @Test
+    void testUserCannotDefineReservedSystemColumnInMainSchema() {
+        assertThatThrownBy(
+                        () ->
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.BIGINT())
+                                        .column("__partition_id", DataTypes.BIGINT())
+                                        .primaryKey("id")
+                                        .build())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("__partition_id");
     }
 }

@@ -145,7 +145,8 @@ final class FlussOnlyBatchSplitGenerator {
                         "Log offset should be present if snapshot id is present.");
                 logStartingOffset = logOffset.getAsLong();
             } else {
-                logStartingOffset = LogScanner.EARLIEST_OFFSET;
+                logStartingOffset =
+                        snapshots.getLogOffset(bucketId).orElse(LogScanner.EARLIEST_OFFSET);
             }
 
             Long logStoppingOffset = stoppingOffsets.get(bucketId);

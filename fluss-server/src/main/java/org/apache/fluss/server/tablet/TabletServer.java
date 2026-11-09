@@ -45,6 +45,7 @@ import org.apache.fluss.server.kv.snapshot.DefaultCompletedKvSnapshotCommitter;
 import org.apache.fluss.server.log.LogManager;
 import org.apache.fluss.server.log.remote.RemoteLogManager;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
+import org.apache.fluss.server.metadata.TabletServerMetadataProvider;
 import org.apache.fluss.server.metadata.TabletServerResource;
 import org.apache.fluss.server.metrics.ServerMetricUtils;
 import org.apache.fluss.server.metrics.UserMetrics;
@@ -244,6 +245,8 @@ public class TabletServer extends ServerBase {
             this.dynamicConfigManager = new DynamicConfigManager(zkClient, conf);
 
             this.metadataCache = new TabletServerMetadataCache(metadataManager);
+            TabletServerMetadataProvider metadataProvider =
+                    new TabletServerMetadataProvider(zkClient, metadataManager, metadataCache);
 
             this.localDiskManager = LocalDiskManager.create(conf);
             this.logManager =
@@ -301,6 +304,7 @@ public class TabletServer extends ServerBase {
                             zkClient,
                             serverId,
                             metadataCache,
+                            metadataProvider,
                             rpcClient,
                             coordinatorGateway,
                             DefaultCompletedKvSnapshotCommitter.create(

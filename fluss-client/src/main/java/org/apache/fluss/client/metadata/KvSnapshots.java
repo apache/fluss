@@ -45,7 +45,7 @@ public class KvSnapshots {
     private final Map<Integer, Long> snapshotIds;
 
     // map from bucket id to the log offset to read after the snapshot,
-    // null or empty if there is no snapshot for this bucket,
+    // null or empty if no explicit log start is provided for this bucket,
     // then read from EARLIEST offset
     private final Map<Integer, Long> logOffsets;
 
@@ -88,8 +88,8 @@ public class KvSnapshots {
     }
 
     /**
-     * Get the log offset to read after the snapshot for this kv tablet (bucket), or empty if there
-     * are no snapshots.
+     * Get the log offset to read after the snapshot, or the full-read start when no snapshot is
+     * available. Empty means the caller uses its default starting offset.
      */
     public OptionalLong getLogOffset(int bucketId) {
         Long logOffset = logOffsets.get(bucketId);
