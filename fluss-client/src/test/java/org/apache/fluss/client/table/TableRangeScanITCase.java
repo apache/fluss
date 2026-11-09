@@ -24,10 +24,13 @@ import org.apache.fluss.client.table.scanner.batch.BatchScanUtils;
 import org.apache.fluss.client.table.scanner.batch.BatchScanner;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.types.DataTypes;
@@ -96,17 +99,21 @@ class TableRangeScanITCase extends ClientToServerITCaseBase {
             assertTimes(table, ScanRange.closed(key(255), key(255)), 255, 255);
             assertThatThrownBy(
                             () ->
-                                    range(table)
-                                            .createBatchScanner(
-                                                    GenericRow.of(1),
-                                                    ScanRange.closedOpen(key(301), key(255))))
+                                    table.newScan()
+                                            .equalTo(
+                                                    Collections.singletonList("g"),
+                                                    GenericRow.of(1))
+                                            .range("t", ScanRange.closedOpen(key(301), key(255)))
+                                            .createBatchScanner())
                     .isInstanceOf(IllegalArgumentException.class);
 
             try (BatchScanner scanner =
-                    range(table)
+                    table.newScan()
                             .project(Arrays.asList("v", "t"))
                             .limit(3)
-                            .createBatchScanner(GenericRow.of(1), ScanRange.atLeast(key(255)))) {
+                            .equalTo(Collections.singletonList("g"), GenericRow.of(1))
+                            .range("t", ScanRange.atLeast(key(255)))
+                            .createBatchScanner()) {
                 List<InternalRow> result = BatchScanUtils.collectRows(scanner);
                 assertThat(result).hasSize(3);
                 assertThat(result.get(0).getFieldCount()).isEqualTo(2);
@@ -115,17 +122,109 @@ class TableRangeScanITCase extends ClientToServerITCaseBase {
             GenericRow group = GenericRow.of(1);
             GenericRow lower = key(255);
             try (BatchScanner scanner =
-                    range(table).createBatchScanner(group, ScanRange.closedOpen(lower, key(301)))) {
+                    table.newScan()
+                            .equalTo(Collections.singletonList("g"), group)
+                            .range("t", ScanRange.closedOpen(lower, key(301)))
+                            .createBatchScanner()) {
                 group.setField(0, 2);
                 lower.setField(0, Long.MAX_VALUE);
                 assertThat(BatchScanUtils.collectRows(scanner)).hasSize(6);
             }
             try (BatchScanner scanner =
-                    range(table)
+                    table.newScan()
                             .limit(0)
-                            .createBatchScanner(GenericRow.of(1), ScanRange.atLeast(key(0)))) {
+                            .equalTo(Collections.singletonList("g"), GenericRow.of(1))
+                            .range("t", ScanRange.atLeast(key(0)))
+                            .createBatchScanner()) {
                 assertThat(BatchScanUtils.collectRows(scanner)).isEmpty();
             }
+        }
+    }
+
+    @Test
+    void testMultipleEqualityColumnsAndImmutableRefinements() throws Exception {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("g", DataTypes.BYTES())
+                        .column("h", DataTypes.STRING())
+                        .column("t", DataTypes.BIGINT())
+                        .column("id", DataTypes.INT())
+                        .column("v", DataTypes.STRING())
+                        .primaryKey("g", "h", "t", "id")
+                        .build();
+        try (Table table = create("refinements", schema, false)) {
+            UpsertWriter writer = table.newUpsert().createWriter();
+            writer.upsert(row(new byte[] {1}, "a", 255L, 0, "first"));
+            writer.upsert(row(new byte[] {1}, "b", 256L, 0, "second"));
+            writer.upsert(row(new byte[] {2}, "a", 255L, 0, "other"));
+            writer.flush();
+            Scan base = table.newScan().project(Collections.singletonList("v")).limit(10);
+            List<String> columns = new ArrayList<>(Arrays.asList("g", "h"));
+            byte[] group = new byte[] {1};
+            byte[] text = new byte[] {'a'};
+            GenericRow values = GenericRow.of(group, BinaryString.fromBytes(text));
+            GenericRow lower = key(255);
+            GenericRow upper = key(256);
+            Scan first =
+                    base.equalTo(columns, values).range("t", ScanRange.closedOpen(lower, upper));
+            columns.set(0, "id");
+            group[0] = 2;
+            text[0] = 'b';
+            values.setField(1, BinaryString.fromString("reused"));
+            lower.setField(0, 999L);
+            upper.setField(0, 999L);
+            Scan second =
+                    first.equalTo(Arrays.asList("h", "g"), row("b", new byte[] {1}))
+                            .range("id", ScanRange.atLeast(GenericRow.of(0)))
+                            .range("t", ScanRange.closed(key(256), key(256)));
+            try (BatchScanner scanner = first.createBatchScanner()) {
+                assertThat(BatchScanUtils.collectRows(scanner))
+                        .extracting(r -> r.getString(0).toString())
+                        .containsExactly("first");
+            }
+            try (BatchScanner scanner = second.createBatchScanner()) {
+                assertThat(BatchScanUtils.collectRows(scanner))
+                        .extracting(r -> r.getString(0).toString())
+                        .containsExactly("second");
+            }
+            try (BatchScanner scanner =
+                    base.range("t", ScanRange.atMost(key(255)))
+                            .equalTo(Arrays.asList("g", "h"), row(new byte[] {1}, "a"))
+                            .createBatchScanner()) {
+                assertThat(BatchScanUtils.collectRows(scanner))
+                        .extracting(r -> r.getString(0).toString())
+                        .containsExactly("first");
+            }
+            try (BatchScanner scanner = base.createBatchScanner()) {
+                assertThat(BatchScanUtils.collectRows(scanner)).hasSize(3);
+            }
+        }
+    }
+
+    @Test
+    void testExplicitBucketRestrictsRangeResults() throws Exception {
+        try (Table table = create("bucket_scope", SCHEMA, false)) {
+            UpsertWriter writer = table.newUpsert().createWriter();
+            writer.upsert(row(1, 255L, 0, "match"));
+            writer.flush();
+            Scan scan =
+                    table.newScan()
+                            .equalTo(Collections.singletonList("g"), GenericRow.of(1))
+                            .range("t", ScanRange.closed(key(255), key(255)));
+            BucketCalculator calculator = BucketCalculator.forBucketKeyRow(table.getTableInfo());
+            int bucket = calculator.getBucketId(calculator.encodeKey(GenericRow.of(1)), 3);
+            long tableId = table.getTableInfo().getTableId();
+            try (BatchScanner scanner = scan.createBatchScanner(new TableBucket(tableId, bucket))) {
+                assertThat(BatchScanUtils.collectRows(scanner)).hasSize(1);
+            }
+            try (BatchScanner scanner =
+                    scan.createBatchScanner(new TableBucket(tableId, (bucket + 1) % 3))) {
+                assertThat(BatchScanUtils.collectRows(scanner)).isEmpty();
+            }
+            assertThatThrownBy(() -> scan.createBatchScanner(new TableBucket(tableId + 1, bucket)))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> scan.createBatchScanner(new TableBucket(tableId, 3)))
+                    .isInstanceOf(IllegalArgumentException.class);
         }
     }
 
@@ -202,16 +301,33 @@ class TableRangeScanITCase extends ClientToServerITCaseBase {
             admin.createPartition(
                             path, new PartitionSpec(Collections.singletonMap("p", "p1")), false)
                     .get();
+            admin.createPartition(
+                            path, new PartitionSpec(Collections.singletonMap("p", "p2")), false)
+                    .get();
             UpsertWriter writer = table.newUpsert().createWriter();
             writer.upsert(row(1, 255L, 0, "v", "p1"));
             writer.flush();
-            Scan scan = table.newScan().equalBy("p", "g").rangeBy("t");
+            Scan scan = table.newScan().range("t", ScanRange.atLeast(key(255)));
+            BucketCalculator calculator = BucketCalculator.forBucketKeyRow(table.getTableInfo());
+            int bucket = calculator.getBucketId(calculator.encodeKey(GenericRow.of(1)), 3);
+            for (PartitionInfo partition : admin.listPartitionInfos(path).get()) {
+                try (BatchScanner scanner =
+                        scan.equalTo(Arrays.asList("p", "g"), row("p1", 1))
+                                .createBatchScanner(
+                                        new TableBucket(
+                                                table.getTableInfo().getTableId(),
+                                                partition.getPartitionId(),
+                                                bucket))) {
+                    assertThat(BatchScanUtils.collectRows(scanner))
+                            .hasSize(partition.getPartitionName().equals("p1") ? 1 : 0);
+                }
+            }
             try (BatchScanner scanner =
-                    scan.createBatchScanner(row("p1", 1), ScanRange.atLeast(key(255)))) {
+                    scan.equalTo(Arrays.asList("p", "g"), row("p1", 1)).createBatchScanner()) {
                 assertThat(BatchScanUtils.collectRows(scanner)).hasSize(1);
             }
             try (BatchScanner scanner =
-                    scan.createBatchScanner(row("missing", 1), ScanRange.atLeast(key(255)))) {
+                    scan.equalTo(Arrays.asList("p", "g"), row("missing", 1)).createBatchScanner()) {
                 assertThat(BatchScanUtils.collectRows(scanner)).isEmpty();
             }
         }
@@ -235,9 +351,11 @@ class TableRangeScanITCase extends ClientToServerITCaseBase {
                 writer.flush();
                 List<InternalRow> result = new ArrayList<>();
                 try (BatchScanner scanner =
-                        range(smallTable)
-                                .createBatchScanner(
-                                        GenericRow.of(1), ScanRange.closedOpen(key(0), key(100)))) {
+                        smallTable
+                                .newScan()
+                                .equalTo(Collections.singletonList("g"), GenericRow.of(1))
+                                .range("t", ScanRange.closedOpen(key(0), key(100)))
+                                .createBatchScanner()) {
                     while (result.isEmpty()) {
                         try (CloseableIterator<InternalRow> first =
                                 scanner.pollBatch(Duration.ofSeconds(10))) {
@@ -260,26 +378,49 @@ class TableRangeScanITCase extends ClientToServerITCaseBase {
     @Test
     void testRejectIncompatibleConfigurations() throws Exception {
         try (Table table = create("invalid", SCHEMA, false)) {
-            assertThatThrownBy(() -> range(table).createLogScanner())
-                    .isInstanceOf(IllegalArgumentException.class);
-            assertThatThrownBy(() -> range(table).createBatchScanner())
+            Scan configured =
+                    table.newScan()
+                            .equalTo(Collections.singletonList("g"), GenericRow.of(1))
+                            .range("t", ScanRange.atLeast(key(0)));
+            assertThatThrownBy(configured::createLogScanner)
+                    .isInstanceOf(UnsupportedOperationException.class);
+            assertThatThrownBy(
+                            () ->
+                                    configured.createBatchScanner(
+                                            new TableBucket(table.getTableInfo().getTableId(), 0),
+                                            1L))
+                    .isInstanceOf(UnsupportedOperationException.class);
+            assertThatThrownBy(
+                            () ->
+                                    table.newScan()
+                                            .equalTo(
+                                                    Collections.singletonList("g"),
+                                                    GenericRow.of(1))
+                                            .createBatchScanner())
                     .isInstanceOf(IllegalArgumentException.class);
             assertThatThrownBy(
                             () ->
                                     table.newScan()
-                                            .equalBy("g")
-                                            .rangeBy("id")
-                                            .createBatchScanner(
-                                                    GenericRow.of(1),
-                                                    ScanRange.atLeast(GenericRow.of(1))))
+                                            .range("t", ScanRange.atLeast(key(0)))
+                                            .createBatchScanner())
                     .isInstanceOf(IllegalArgumentException.class);
             assertThatThrownBy(
                             () ->
-                                    range(table)
-                                            .createBatchScanner(
-                                                    GenericRow.of(1),
-                                                    ScanRange.atLeast(
-                                                            GenericRow.of((Object) null))))
+                                    table.newScan()
+                                            .equalTo(
+                                                    Collections.singletonList("g"),
+                                                    GenericRow.of(1))
+                                            .range("id", ScanRange.atLeast(GenericRow.of(1)))
+                                            .createBatchScanner())
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(
+                            () ->
+                                    configured.range(
+                                            "t", ScanRange.atLeast(GenericRow.of((Object) null))))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> configured.equalTo(Arrays.asList("g", "g"), row(1, 1)))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> configured.equalTo(Collections.singletonList("g"), row(1, 2)))
                     .isInstanceOf(IllegalArgumentException.class);
         }
         TablePath legacy = TablePath.of("range_scan", "legacy");
@@ -290,9 +431,12 @@ class TableRangeScanITCase extends ClientToServerITCaseBase {
         try (Table table = conn.getTable(legacy)) {
             assertThatThrownBy(
                             () ->
-                                    range(table)
-                                            .createBatchScanner(
-                                                    GenericRow.of(1), ScanRange.atLeast(key(0))))
+                                    table.newScan()
+                                            .equalTo(
+                                                    Collections.singletonList("g"),
+                                                    GenericRow.of(1))
+                                            .range("t", ScanRange.atLeast(key(0)))
+                                            .createBatchScanner())
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("ordered-key.enabled=true");
         }
@@ -351,17 +495,17 @@ class TableRangeScanITCase extends ClientToServerITCaseBase {
         return conn.getTable(path);
     }
 
-    private static Scan range(Table table) {
-        return table.newScan().equalBy("g").rangeBy("t");
-    }
-
     private static GenericRow key(long time) {
         return GenericRow.of(time);
     }
 
     private static void assertTimes(Table table, ScanRange range, long... expected)
             throws Exception {
-        try (BatchScanner scanner = range(table).createBatchScanner(GenericRow.of(1), range)) {
+        try (BatchScanner scanner =
+                table.newScan()
+                        .equalTo(Collections.singletonList("g"), GenericRow.of(1))
+                        .range("t", range)
+                        .createBatchScanner()) {
             List<InternalRow> rows = BatchScanUtils.collectRows(scanner);
             assertThat(rows.stream().map(r -> r.getLong(1)).collect(Collectors.toList()))
                     .containsExactlyInAnyOrderElementsOf(

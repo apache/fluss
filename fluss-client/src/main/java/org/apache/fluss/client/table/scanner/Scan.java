@@ -28,7 +28,6 @@ import org.apache.fluss.row.InternalRow;
 import javax.annotation.Nullable;
 
 import java.io.IOException;
-import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -43,32 +42,29 @@ import java.util.List;
 public interface Scan {
 
     /**
-     * Returns a scan with named equality fields. Values supplied to the range scanner follow this
-     * order. Excluding partition columns, these fields must form a complete primary-key prefix
-     * containing all bucket fields. Range scans require {@code table.kv.ordered-key.enabled=true}.
+     * Returns a new scan with the given equality conditions for an index range scan. Values follow
+     * the order of the column names. Repeated calls replace the entire equality condition set. The
+     * column names and values are copied before this method returns.
+     *
+     * <p>Currently, batch range scans require both this configuration and {@link #range}, an
+     * order-preserving key format and a routable primary-key index path.
      */
-    default Scan equalBy(List<String> columnNames) {
+    default Scan equalTo(List<String> columnNames, InternalRow values) {
         throw new UnsupportedOperationException("Equality range configuration is not supported.");
     }
 
-    /** Configures equality fields; see {@link #equalBy(List)}. */
-    default Scan equalBy(String... columnNames) {
-        return equalBy(Arrays.asList(columnNames));
-    }
-
-    /** Returns a scan whose range field immediately follows the equality primary-key prefix. */
-    default Scan rangeBy(String columnName) {
-        throw new UnsupportedOperationException("Range configuration is not supported.");
-    }
-
     /**
-     * Creates a bounded scan of one routed bucket using equality values and a single-field range.
-     * Reads a fixed KV view opened on the server, without promising SQL output ordering. Input rows
-     * may be reused after this method returns. Missing partitions produce an empty scanner.
-     * Non-null filter configuration, log tables and unordered key formats are rejected.
+     * Returns a new scan with a range on the given table column. Repeated calls replace the range
+     * column and bounds. Endpoint values are copied before this method returns.
+     *
+     * <p>Currently, excluding partition columns, equality conditions must identify a physical
+     * primary-key prefix containing all bucket fields. All partition fields require equality
+     * values, and the range column must immediately follow the physical prefix. Batch range scans
+     * require {@code table.kv.ordered-key.enabled=true}. Log and snapshot scanners do not support
+     * index range conditions.
      */
-    default BatchScanner createBatchScanner(InternalRow equalityKey, ScanRange range) {
-        throw new UnsupportedOperationException("Range scans are not supported.");
+    default Scan range(String columnName, ScanRange bounds) {
+        throw new UnsupportedOperationException("Range configuration is not supported.");
     }
 
     /**
@@ -120,8 +116,9 @@ public interface Scan {
     /**
      * Creates a {@link BatchScanner} to read current data in the given table bucket.
      *
-     * <p>For Primary Key Tables, this performs a full RocksDB-backed KV scan of the bucket and does
-     * not require {@link #limit(int)}. For Log Tables, {@link #limit(int)} must be set.
+     * <p>For Primary Key Tables, this reads the RocksDB-backed KV data in the bucket, applying any
+     * configured index range conditions, and does not require {@link #limit(int)}. For Log Tables,
+     * {@link #limit(int)} must be set.
      */
     BatchScanner createBatchScanner(TableBucket tableBucket);
 
@@ -136,7 +133,8 @@ public interface Scan {
 
     /**
      * Creates a {@link BatchScanner} that scans across all buckets of the table, expanding all
-     * partitions for partitioned tables. For Log Tables, {@link #limit(int)} must be set.
+     * partitions for partitioned tables. Configured index range conditions prune the buckets
+     * accessed and constrain the returned rows. For Log Tables, {@link #limit(int)} must be set.
      */
     BatchScanner createBatchScanner() throws IOException;
 }

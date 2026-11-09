@@ -19,15 +19,18 @@ package org.apache.fluss.client.table.scanner;
 
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.types.RowType;
+import org.apache.fluss.utils.InternalRowUtils;
 
 import javax.annotation.Nullable;
 
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /**
  * Logical bounds for one range column. Finite endpoints contain exactly one non-null field of the
- * column's Fluss internal type. The endpoint rows are borrowed until scanner creation; callers must
- * not mutate them before or during that call. Created scanners retain only encoded copies.
+ * column's Fluss internal type. Endpoint rows are borrowed until {@link Scan#range} returns. The
+ * configured scan retains independent copies, allowing callers to reuse the input rows.
  */
 @PublicEvolving
 public final class ScanRange {
@@ -45,6 +48,25 @@ public final class ScanRange {
         this.upper = upper;
         this.lowerInclusive = lowerInclusive;
         this.upperInclusive = upperInclusive;
+    }
+
+    ScanRange copy(RowType endpointType) {
+        return new ScanRange(
+                copyEndpoint(lower, endpointType),
+                lowerInclusive,
+                copyEndpoint(upper, endpointType),
+                upperInclusive);
+    }
+
+    @Nullable
+    private static InternalRow copyEndpoint(@Nullable InternalRow endpoint, RowType endpointType) {
+        if (endpoint == null) {
+            return null;
+        }
+        checkArgument(
+                endpoint.getFieldCount() == 1 && !endpoint.isNullAt(0),
+                "Range endpoints must contain exactly one non-null field.");
+        return InternalRowUtils.copyRow(endpoint, endpointType);
     }
 
     /** Creates [lower, upper). */

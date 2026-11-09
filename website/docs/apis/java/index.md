@@ -409,12 +409,11 @@ admin.createTable(tablePath, descriptor, false).get();
 
 try (Table table = connection.getTable(tablePath);
         BatchScanner scanner = table.newScan()
-                .equalBy("group_id")
-                .rangeBy("event_time")
+                .equalTo(Collections.singletonList("group_id"), GenericRow.of(groupId))
+                .range("event_time",
+                        ScanRange.closedOpen(GenericRow.of(startMillis), GenericRow.of(endMillis)))
                 .project(Arrays.asList("id", "amount"))
-                .createBatchScanner(
-                        GenericRow.of(groupId),
-                        ScanRange.closedOpen(GenericRow.of(startMillis), GenericRow.of(endMillis)))) {
+                .createBatchScanner()) {
     while (true) {
         CloseableIterator<InternalRow> batch = scanner.pollBatch(Duration.ofSeconds(5));
         if (batch == null) {
@@ -432,10 +431,16 @@ try (Table table = connection.getTable(tablePath);
 
 Equality columns must identify a complete physical primary-key prefix, including
 all bucket fields, and the range column must immediately follow that prefix.
-For partitioned tables, include every partition field in `equalBy` and supply its
-value. Equality values follow the declared `equalBy` order; each finite range
-endpoint is a one-field row. Endpoint rows must remain unchanged until scanner
-creation returns.
+For partitioned tables, include every partition field in `equalTo` and supply its
+value. Multiple equality fields are supported; values follow the column list
+order. Each finite range endpoint is a one-field row. `equalTo` copies the column
+list and values before returning; `range` copies its endpoint values before
+returning. Callers may then reuse their input rows and buffers.
+
+Each refinement returns a new immutable `Scan`. Repeated `equalTo` calls replace
+the entire equality condition set, and repeated `range` calls replace the range
+column and bounds. Configure both before creating a range scanner. Projection,
+limit and condition configuration may be applied in any order.
 
 `ScanRange` supports closed, open, closed-open and open-closed intervals, as well
 as `atLeast`, `greaterThan`, `atMost` and `lessThan` single-sided bounds. A reversed
@@ -451,10 +456,12 @@ table when no supported path exists. Projection and `limit` are supported;
 
 The server fixes the KV view when opening the scan. Later writes are invisible
 to that scanner. Result ordering is not a SQL `ORDER BY` guarantee. A lost scan
-session fails rather than silently reopening a different view. Range
-configuration is not supported by log scanners or the other batch-scanner
-factory overloads. This Java interface uses the primary-key path; it does not
-automatically push Flink SQL conditions into range scans.
+session fails rather than silently reopening a different view. Each scanner
+opens its own view. `createBatchScanner(tableBucket)` restricts the same conditions
+to the specified base-table bucket; a disjoint bucket returns no rows. A bucket
+from another table is invalid. Log scanners and the snapshot-ID batch scanner
+reject index range conditions. This Java interface currently uses the primary-key
+path. Automatic Flink SQL predicate pushdown is outside its scope.
 
 ### Lookup
 You can also use the Fluss API to perform lookups on a table. This is useful for querying specific records based on their primary key or prefix key.
