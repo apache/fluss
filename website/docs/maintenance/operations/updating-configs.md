@@ -27,6 +27,7 @@ Currently, the supported dynamically updatable server configurations include:
 - `security.sasl.plain.credentials`: Add, change, or remove the users that can authenticate with SASL/PLAIN, see [Authentication](security/authentication.md#managing-multiple-users).
 - `server.historical-partition.thread-pool.max-size`: Change the maximum number of threads used for historical partition operations.
 - `netty.server.max-queued-historical-requests`: Change the maximum number of in-flight historical partition operations, including lookups and writes, before throttling new operations.
+- `coordinator.rebalance.max-inflight-tasks`: Control the maximum number of bucket-level rebalance tasks that can run concurrently. Set it to `0` to pause scheduling new rebalance tasks; already in-flight tasks continue until they complete or time out.
 
 
 You can update the configuration of a cluster with [Java client](#using-java-client) or [Flink SQL](#using-flink-sql).

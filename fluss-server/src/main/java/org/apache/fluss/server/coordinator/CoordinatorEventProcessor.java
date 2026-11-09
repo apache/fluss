@@ -68,6 +68,7 @@ import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.AddServerTagByRackEvent;
 import org.apache.fluss.server.coordinator.event.AddServerTagEvent;
 import org.apache.fluss.server.coordinator.event.AdjustIsrReceivedEvent;
+import org.apache.fluss.server.coordinator.event.AdmitRebalanceTasksEvent;
 import org.apache.fluss.server.coordinator.event.CancelRebalanceEvent;
 import org.apache.fluss.server.coordinator.event.CommitKvSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitLakeTableSnapshotEvent;
@@ -93,6 +94,7 @@ import org.apache.fluss.server.coordinator.event.NotifyLakeTableOffsetEvent;
 import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrRequestContext;
 import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrResponseReceivedEvent;
 import org.apache.fluss.server.coordinator.event.RebalanceEvent;
+import org.apache.fluss.server.coordinator.event.RebalanceMaxInflightTasksChangedEvent;
 import org.apache.fluss.server.coordinator.event.RebalanceTaskTimeoutEvent;
 import org.apache.fluss.server.coordinator.event.ReconcileRebalanceTaskEvent;
 import org.apache.fluss.server.coordinator.event.RecoverRebalanceEvent;
@@ -823,6 +825,11 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                             new ArrayList<>(coordinatorContext.getAssignment(tableBucket)));
                 }
             }
+        } else if (event instanceof RebalanceMaxInflightTasksChangedEvent) {
+            rebalanceManager.updateMaxInflightRebalanceTasks(
+                    ((RebalanceMaxInflightTasksChangedEvent) event).getMaxInflightTasks());
+        } else if (event instanceof AdmitRebalanceTasksEvent) {
+            rebalanceManager.continueRebalanceTaskAdmission();
         } else if (event instanceof CancelRebalanceEvent) {
             CancelRebalanceEvent cancelRebalanceEvent = (CancelRebalanceEvent) event;
             completeFromCallable(
