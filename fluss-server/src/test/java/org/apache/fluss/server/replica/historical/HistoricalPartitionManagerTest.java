@@ -45,6 +45,7 @@ import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.CompactedKeyEncoder;
+import org.apache.fluss.row.encode.KeyEncoder;
 import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.row.encode.ValueDecoder;
 import org.apache.fluss.row.encode.ValueEncoder;
@@ -413,6 +414,7 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
                                     TABLE_BUCKET,
                                     Collections.singletonList(primaryKey),
                                     ORIGINAL_PARTITION)),
+                    ApiKeys.LOOKUP.highestSupportedVersion,
                     lookupResponse::complete);
             LookupResultForBucket lookupResult = lookupResponse.get(10, TimeUnit.SECONDS).get(0);
             assertThat(lookupResult.failed()).isFalse();
@@ -446,6 +448,7 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
                                     TABLE_BUCKET,
                                     Collections.singletonList(primaryKey),
                                     ORIGINAL_PARTITION)),
+                    ApiKeys.LOOKUP.highestSupportedVersion,
                     deletedLookupResponse::complete);
             LookupResultForBucket deletedLookup =
                     deletedLookupResponse.get(10, TimeUnit.SECONDS).get(0);
@@ -1119,6 +1122,73 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
         }
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testHistoricalLookupClientVersion(boolean orderedKeys) throws Exception {
+        TableInfo tableInfo =
+                registerHistoricalTableAndBecomeLeader(ChangelogImage.FULL, false, orderedKeys);
+        Replica replica = replicaManager.getReplicaOrException(TABLE_BUCKET);
+        KvTablet kvTablet = replica.getKvTablet();
+        assertThat(kvTablet).isNotNull();
+        RowType rowType = tableInfo.getRowType();
+        byte[] primaryKey =
+                KeyEncoder.ofPrimaryKeyEncoder(
+                                rowType,
+                                tableInfo.getPhysicalPrimaryKeys(),
+                                tableInfo.getTableConfig(),
+                                false)
+                        .encodeKey(row(1, "us", ORIGINAL_PARTITION, "local"));
+        kvTablet.getRocksDBKv()
+                .put(
+                        HistoricalKvKeyEncoder.encode(ORIGINAL_PARTITION, primaryKey),
+                        ValueEncoder.forLayout(KvValueLayout.TAGGED)
+                                .encodeValue(
+                                        new BinaryValue(
+                                                (short) tableInfo.getSchemaId(),
+                                                compactedRow(
+                                                        rowType,
+                                                        new Object[] {
+                                                            1, "us", ORIGINAL_PARTITION, "local"
+                                                        })),
+                                        0L));
+        LookupDataForBucket data =
+                new LookupDataForBucket(
+                        TABLE_BUCKET, Collections.singletonList(primaryKey), ORIGINAL_PARTITION);
+        CompletableFuture<List<LookupResultForBucket>> oldResponse = new CompletableFuture<>();
+        replicaManager.historicalLookups(
+                Collections.singletonList(data), (short) 1, oldResponse::complete);
+        LookupResultForBucket oldResult = oldResponse.get(10, TimeUnit.SECONDS).get(0);
+        if (orderedKeys) {
+            assertThat(oldResult.getError().error()).isEqualTo(Errors.UNSUPPORTED_VERSION);
+            CompletableFuture<List<LookupResultForBucket>> missResponse = new CompletableFuture<>();
+            replicaManager.historicalLookups(
+                    Collections.singletonList(
+                            new LookupDataForBucket(
+                                    TABLE_BUCKET,
+                                    Collections.singletonList(key(2, "us")),
+                                    ORIGINAL_PARTITION)),
+                    (short) 1,
+                    missResponse::complete);
+            assertThat(missResponse.get(10, TimeUnit.SECONDS).get(0).getError().error())
+                    .isEqualTo(Errors.UNSUPPORTED_VERSION);
+        } else {
+            assertThat(oldResult.failed()).isFalse();
+            assertThat(oldResult.lookupValues().get(0)).isNotNull();
+        }
+        CompletableFuture<List<LookupResultForBucket>> currentResponse = new CompletableFuture<>();
+        replicaManager.historicalLookups(
+                Collections.singletonList(data), (short) 2, currentResponse::complete);
+        LookupResultForBucket currentResult = currentResponse.get(10, TimeUnit.SECONDS).get(0);
+        assertThat(currentResult.failed()).isFalse();
+        BinaryValue value =
+                new ValueDecoder(
+                                schemaGetter(tableInfo),
+                                tableInfo.getTableConfig().getKvFormat(),
+                                KvValueLayout.PLAIN)
+                        .decodeValue(currentResult.lookupValues().get(0).toByteArray());
+        assertThat(value.row.getString(3)).isEqualTo(BinaryString.fromString("local"));
+    }
+
     private HistoricalPartitionManager createHistoricalPartitionManager(
             TestingHistoricalLakeLookupManager lakeLookupManager) {
         return new HistoricalPartitionManager(
@@ -1182,6 +1252,12 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
 
     private TableInfo registerHistoricalTableAndBecomeLeader(
             ChangelogImage changelogImage, boolean rowTtlEnabled) throws Exception {
+        return registerHistoricalTableAndBecomeLeader(changelogImage, rowTtlEnabled, false);
+    }
+
+    private TableInfo registerHistoricalTableAndBecomeLeader(
+            ChangelogImage changelogImage, boolean rowTtlEnabled, boolean orderedKeys)
+            throws Exception {
         replicaManager.getDiskUsageMonitor().update(0.10);
         Schema schema =
                 Schema.newBuilder()
@@ -1207,6 +1283,7 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
                         .property(ConfigOptions.TABLE_DATALAKE_FORMAT, DataLakeFormat.PAIMON)
                         .property(ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED, true)
                         .property(ConfigOptions.TABLE_CHANGELOG_IMAGE, changelogImage)
+                        .property(ConfigOptions.TABLE_KV_ORDERED_KEY_ENABLED, orderedKeys)
                         .property(
                                 ConfigOptions.TABLE_KV_FORMAT_VERSION,
                                 ConfigOptions.KV_FORMAT_VERSION_2);

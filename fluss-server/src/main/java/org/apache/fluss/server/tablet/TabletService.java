@@ -97,6 +97,7 @@ import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.rpc.messages.UpdateMetadataResponse;
 import org.apache.fluss.rpc.netty.server.Session;
 import org.apache.fluss.rpc.protocol.ApiError;
+import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.protocol.FetchLogReadPreference;
 import org.apache.fluss.rpc.protocol.MergeMode;
@@ -473,6 +474,7 @@ public final class TabletService extends RpcServiceBase
                     recordsByBucket,
                     getTargetColumns(request),
                     mergeMode,
+                    ApiKeys.PUT_KV,
                     currentSession().getApiVersion(),
                     responseCallback);
         }
@@ -526,6 +528,7 @@ public final class TabletService extends RpcServiceBase
                 }
                 replicaManager.historicalLookups(
                         historicalLookupData,
+                        currentSession().getApiVersion(),
                         value ->
                                 response.complete(
                                         makeLookupResponse(
