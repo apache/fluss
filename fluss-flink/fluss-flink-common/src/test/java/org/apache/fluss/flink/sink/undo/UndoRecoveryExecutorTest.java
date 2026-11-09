@@ -35,12 +35,14 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiPredicate;
 
 import static org.apache.fluss.testutils.DataTestUtils.row;
@@ -89,6 +91,13 @@ class UndoRecoveryExecutorTest {
     @Test
     void testFilteredRecoveryIsolatesBucketKeysAndCompletesFromEmptyPollProgress()
             throws Exception {
+        AtomicInteger encodedKeys = new AtomicInteger();
+        KeyEncoder countingEncoder =
+                record -> {
+                    encodedKeys.incrementAndGet();
+                    return keyEncoder.encodeKey(record);
+                };
+        undoComputer = new UndoComputer(countingEncoder, mockWriter);
         TableBucket bucket0 = new TableBucket(TABLE_ID, 0);
         TableBucket bucket1 = new TableBucket(TABLE_ID, 1);
         BucketRecoveryContext ctx0 = new BucketRecoveryContext(bucket0, 0L, 3L);
@@ -116,7 +125,14 @@ class UndoRecoveryExecutorTest {
                             assertThat(ctx0.getProcessedKeys()).isEmpty();
                             assertThat(ctx1.getProcessedKeys()).isEmpty();
                             Map<TableBucket, List<ScanRecord>> selected = new HashMap<>();
-                            selected.put(bucket0, Collections.singletonList(first0));
+                            selected.put(
+                                    bucket0,
+                                    Collections.singletonList(
+                                            new ScanRecord(
+                                                    0L,
+                                                    0L,
+                                                    ChangeType.UPDATE_BEFORE,
+                                                    row(1, "bucket0", 100))));
                             selected.put(bucket1, Collections.singletonList(first1));
                             Map<TableBucket, Long> progress = new HashMap<>();
                             progress.put(bucket0, 2L);
@@ -145,11 +161,141 @@ class UndoRecoveryExecutorTest {
         assertThat(mockWriter.isFlushCalled()).isTrue();
         assertThat(ctx0.isComplete()).isTrue();
         assertThat(ctx1.isComplete()).isTrue();
-        assertThat(ctx0.getProcessedKeys()).hasSize(1);
-        assertThat(ctx1.getProcessedKeys()).hasSize(1);
+        assertThat(ctx0.getProcessedKeys()).isEmpty();
+        assertThat(ctx1.getProcessedKeys()).isEmpty();
+        assertThat(ctx0.getTotalUndoOperations()).isEqualTo(1);
+        assertThat(ctx1.getTotalUndoOperations()).isEqualTo(1);
+        assertThat(encodedKeys.get()).isEqualTo(4);
         verify(scanner, times(2)).pollFiltered(any(Duration.class), any());
         verify(scanner).unsubscribe(0);
         verify(scanner).unsubscribe(1);
+    }
+
+    @Test
+    void testCompletedBucketReleasesKeysWhileOtherBucketsAreStillRecovering() throws Exception {
+        TableBucket firstBucket = new TableBucket(TABLE_ID, 0);
+        TableBucket secondBucket = new TableBucket(TABLE_ID, 1);
+        BucketRecoveryContext first = new BucketRecoveryContext(firstBucket, 0L, 1L);
+        BucketRecoveryContext second = new BucketRecoveryContext(secondBucket, 0L, 2L);
+        TestLogScanner scanner =
+                new TestLogScanner() {
+                    private int polls;
+
+                    @Override
+                    public ScanRecords poll(Duration timeout) {
+                        if (++polls == 2) {
+                            assertThat(first.isComplete()).isTrue();
+                            assertThat(first.getProcessedKeys()).isEmpty();
+                            assertThat(first.getTotalUndoOperations()).isEqualTo(1);
+                            assertThat(second.getProcessedKeys()).hasSize(1);
+                        }
+                        return super.poll(timeout);
+                    }
+                };
+        scanner.setBatchSize(1);
+        scanner.setRecordsForBucket(
+                firstBucket,
+                Collections.singletonList(
+                        new ScanRecord(0L, 0L, ChangeType.DELETE, row(1, "first", 1))));
+        scanner.setRecordsForBucket(
+                secondBucket,
+                Arrays.asList(
+                        new ScanRecord(0L, 0L, ChangeType.DELETE, row(2, "second", 2)),
+                        new ScanRecord(1L, 0L, ChangeType.DELETE, row(3, "third", 3))));
+
+        new UndoRecoveryExecutor(scanner, mockWriter, undoComputer)
+                .execute(Arrays.asList(first, second));
+
+        assertThat(second.getTotalUndoOperations()).isEqualTo(2);
+        assertThat(second.getProcessedKeys()).isEmpty();
+    }
+
+    @Test
+    void testLargeRecoveryFlushesBoundedWindowsAndWaitsForOffsetCallbacks() throws Exception {
+        int recordCount = 10000;
+        BufferedUpsertWriter writer = new BufferedUpsertWriter(false);
+        TableBucket bucket = new TableBucket(TABLE_ID, 0);
+        setLargeRecoveryRecords(bucket, recordCount);
+        BucketRecoveryContext context = new BucketRecoveryContext(bucket, 0L, recordCount);
+
+        Map<TableBucket, Long> offsets =
+                new UndoRecoveryExecutor(mockScanner, writer, new UndoComputer(keyEncoder, writer))
+                        .execute(Collections.singletonList(context));
+
+        assertThat(writer.flushCount).isGreaterThan(1);
+        assertThat(writer.maxBuffered).isLessThan(recordCount);
+        assertThat(writer.pending).isEmpty();
+        assertThat(offsets).containsEntry(bucket, recordCount + 1000L);
+        assertThat(context.getTotalUndoOperations()).isEqualTo(recordCount);
+    }
+
+    @Test
+    void testFailedAcknowledgementStopsBeforeSubmittingTheRemainingWindows() {
+        int recordCount = 10000;
+        BufferedUpsertWriter writer = new BufferedUpsertWriter(true);
+        TableBucket bucket = new TableBucket(TABLE_ID, 0);
+        setLargeRecoveryRecords(bucket, recordCount);
+
+        assertThatThrownBy(
+                        () ->
+                                new UndoRecoveryExecutor(
+                                                mockScanner,
+                                                writer,
+                                                new UndoComputer(keyEncoder, writer))
+                                        .execute(
+                                                Collections.singletonList(
+                                                        new BucketRecoveryContext(
+                                                                bucket, 0L, recordCount))))
+                .hasRootCauseMessage("injected acknowledgement failure");
+        assertThat(writer.submitted).isLessThan(recordCount);
+    }
+
+    private void setLargeRecoveryRecords(TableBucket bucket, int count) {
+        List<ScanRecord> records = new ArrayList<>();
+        for (int i = 0; i < count; i++) {
+            records.add(new ScanRecord(i, 0L, ChangeType.DELETE, row(i, "value", i)));
+        }
+        mockScanner.setRecordsForBucket(bucket, records);
+    }
+
+    private static class BufferedUpsertWriter extends TestUpsertWriter {
+        private final List<CompletableFuture<UpsertResult>> pending = new ArrayList<>();
+        private final boolean failFirst;
+        private int submitted;
+        private int maxBuffered;
+        private int flushCount;
+
+        private BufferedUpsertWriter(boolean failFirst) {
+            this.failFirst = failFirst;
+        }
+
+        @Override
+        public CompletableFuture<UpsertResult> upsert(InternalRow row) {
+            CompletableFuture<UpsertResult> future = new CompletableFuture<>();
+            pending.add(future);
+            submitted++;
+            maxBuffered = Math.max(maxBuffered, pending.size());
+            return future;
+        }
+
+        @Override
+        public void flush() {
+            flushCount++;
+            int first = submitted - pending.size();
+            for (int i = pending.size() - 1; i >= 0; i--) {
+                if (failFirst && first + i == 0) {
+                    pending.get(i)
+                            .completeExceptionally(
+                                    new IllegalStateException("injected acknowledgement failure"));
+                } else {
+                    pending.get(i)
+                            .complete(
+                                    new UpsertResult(
+                                            new TableBucket(TABLE_ID, 0), first + i + 1001L));
+                }
+            }
+            pending.clear();
+        }
     }
 
     @Test
@@ -222,12 +368,14 @@ class UndoRecoveryExecutorTest {
         // - key=1: INSERT → delete
         // - key=2: INSERT → delete
         // - key=3: DELETE → upsert
-        assertThat(ctx0.getProcessedKeys()).hasSize(3);
+        assertThat(ctx0.getProcessedKeys()).isEmpty();
+        assertThat(ctx0.getTotalUndoOperations()).isEqualTo(3);
 
         // Bucket1: 2 unique keys (UPDATE_AFTER skipped)
         // - key=10: DELETE → upsert
         // - key=12: INSERT → delete
-        assertThat(ctx1.getProcessedKeys()).hasSize(2);
+        assertThat(ctx1.getProcessedKeys()).isEmpty();
+        assertThat(ctx1.getTotalUndoOperations()).isEqualTo(2);
 
         // Total: 3 deletes (key=1,2,12), 2 upserts (key=3,10)
         assertThat(mockWriter.getDeleteCount()).isEqualTo(3);
@@ -354,7 +502,8 @@ class UndoRecoveryExecutorTest {
         // key=3: DELETE → upsert
         // key=4: UPDATE_BEFORE → upsert (UPDATE_AFTER skipped)
         // key=5: INSERT → delete
-        assertThat(ctx.getProcessedKeys()).hasSize(5);
+        assertThat(ctx.getProcessedKeys()).isEmpty();
+        assertThat(ctx.getTotalUndoOperations()).isEqualTo(5);
         assertThat(ctx.getTotalRecordsProcessed()).isEqualTo(6);
         assertThat(mockWriter.getDeleteCount()).isEqualTo(3); // keys 1, 2, 5
         assertThat(mockWriter.getUpsertCount()).isEqualTo(2); // keys 3, 4

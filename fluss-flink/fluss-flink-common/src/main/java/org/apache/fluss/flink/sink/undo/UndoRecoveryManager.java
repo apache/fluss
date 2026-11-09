@@ -155,9 +155,9 @@ public class UndoRecoveryManager {
         }
 
         // Calculate total undo operations for summary
-        int totalUndoOps = 0;
+        long totalUndoOps = 0;
         for (BucketRecoveryContext ctx : contexts) {
-            totalUndoOps += ctx.getProcessedKeys().size();
+            totalUndoOps += ctx.getTotalUndoOperations();
         }
 
         LOG.info(
