@@ -117,20 +117,16 @@ public class CoordinatorRequestBatch {
     private final CoordinatorChannelManager coordinatorChannelManager;
     private final EventManager eventManager;
     private final CoordinatorContext coordinatorContext;
-    private Function<TableBucket, RebalanceExecutionKey> rebalanceExecutionKeyResolver =
-            ignored -> null;
+    private final Function<TableBucket, RebalanceExecutionKey> rebalanceExecutionKeyResolver;
 
     public CoordinatorRequestBatch(
             CoordinatorChannelManager coordinatorChannelManager,
             EventManager eventManager,
-            CoordinatorContext coordinatorContext) {
+            CoordinatorContext coordinatorContext,
+            Function<TableBucket, RebalanceExecutionKey> rebalanceExecutionKeyResolver) {
         this.coordinatorChannelManager = coordinatorChannelManager;
         this.eventManager = eventManager;
         this.coordinatorContext = coordinatorContext;
-    }
-
-    void setRebalanceExecutionKeyResolver(
-            Function<TableBucket, RebalanceExecutionKey> rebalanceExecutionKeyResolver) {
         this.rebalanceExecutionKeyResolver = rebalanceExecutionKeyResolver;
     }
 

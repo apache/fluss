@@ -135,7 +135,8 @@ class TableBucketStateMachineTest {
                         event -> {
                             // do nothing
                         },
-                        coordinatorContext);
+                        coordinatorContext,
+                        ignored -> null);
         serverMetadataCache = new CoordinatorMetadataCache();
         replicaCapacityController =
                 new ReplicaCapacityController(
@@ -355,7 +356,10 @@ class TableBucketStateMachineTest {
                         coordinatorEventProcessor, TestingMetricGroups.COORDINATOR_METRICS);
         coordinatorRequestBatch =
                 new CoordinatorRequestBatch(
-                        testCoordinatorChannelManager, eventManager, coordinatorContext);
+                        testCoordinatorChannelManager,
+                        eventManager,
+                        coordinatorContext,
+                        ignored -> null);
         tableBucketStateMachine =
                 new TableBucketStateMachine(
                         coordinatorContext, coordinatorRequestBatch, zookeeperClient);

@@ -279,6 +279,30 @@ public class RebalanceManagerTest {
     }
 
     @Test
+    void testCancelAcceptsCommittedWriteWhenClientReportsFailure() throws Exception {
+        rebalanceManager.close();
+        try (TestingZooKeeperClient testingClient = new TestingZooKeeperClient()) {
+            rebalanceManager = createManager(new Configuration(), testingClient);
+            TableBucket running = new TableBucket(1L, 0);
+            TableBucket pending = new TableBucket(1L, 1);
+            Map<TableBucket, RebalancePlanForBucket> plan = plans(running, pending);
+            String rebalanceId = "ambiguous-cancellation-write";
+            testingClient.registerRebalanceTask(new RebalanceTask(rebalanceId, NOT_STARTED, plan));
+            rebalanceManager.registerRebalance(rebalanceId, plan);
+            testingClient.failNextCancellationAfterCommit();
+
+            rebalanceManager.cancelRebalance(rebalanceId);
+
+            assertThat(testingClient.getRebalanceTask().get().isCancelRequested()).isTrue();
+            assertThat(rebalanceManager.isCancelRequested()).isTrue();
+            assertThat(statuses(rebalanceManager).get(pending)).isEqualTo(CANCELED);
+            assertThat(rebalanceExecutor.executedPlans)
+                    .extracting(RebalancePlanForBucket::getTableBucket)
+                    .containsExactly(running);
+        }
+    }
+
+    @Test
     void testRecoverCancellationKeepsIntermediateBucketTracked() throws Exception {
         TableBucket originBucket = new TableBucket(1L, 0);
         TableBucket intermediateBucket = new TableBucket(1L, 1);
@@ -318,10 +342,12 @@ public class RebalanceManagerTest {
     }
 
     @Test
-    void testRecoverPreservesExplicitlyCanceledBucket() throws Exception {
-        TableBucket canceledBucket = new TableBucket(1L, 0);
-        TableBucket intermediateBucket = new TableBucket(1L, 1);
-        Map<TableBucket, RebalancePlanForBucket> plans = plans(canceledBucket, intermediateBucket);
+    void testRecoverTracksExplicitlyCanceledReplicaMigrationThatAlreadyStarted() throws Exception {
+        TableBucket canceledAtOrigin = new TableBucket(1L, 0);
+        TableBucket canceledIntermediate = new TableBucket(1L, 1);
+        Map<TableBucket, RebalancePlanForBucket> plans =
+                plans(canceledAtOrigin, canceledIntermediate);
+        rebalanceExecutor.originBuckets.add(canceledAtOrigin);
 
         rebalanceManager.recoverRebalance(
                 new RebalanceTask(
@@ -329,11 +355,11 @@ public class RebalanceManagerTest {
                         REBALANCING,
                         plans,
                         true,
-                        Collections.singleton(canceledBucket)));
+                        new HashSet<>(Arrays.asList(canceledAtOrigin, canceledIntermediate))));
 
         Map<TableBucket, RebalanceStatus> statuses = statuses(rebalanceManager);
-        assertThat(statuses.get(canceledBucket)).isEqualTo(CANCELED);
-        assertThat(statuses.get(intermediateBucket)).isEqualTo(TIMEOUT);
+        assertThat(statuses.get(canceledAtOrigin)).isEqualTo(CANCELED);
+        assertThat(statuses.get(canceledIntermediate)).isEqualTo(TIMEOUT);
     }
 
     @Test
@@ -772,8 +798,7 @@ public class RebalanceManagerTest {
     @Test
     void testScheduledRetryPersistsFinalStatusAfterTransientFailure() throws Exception {
         rebalanceManager.close();
-        try (TestingFinalizationZooKeeperClient testingClient =
-                new TestingFinalizationZooKeeperClient()) {
+        try (TestingZooKeeperClient testingClient = new TestingZooKeeperClient()) {
             rebalanceManager = createManager(new Configuration(), testingClient);
             TableBucket tableBucket = new TableBucket(1L, 0);
             Map<TableBucket, RebalancePlanForBucket> plan = plans(tableBucket);
@@ -917,16 +942,21 @@ public class RebalanceManagerTest {
         }
     }
 
-    private static final class TestingFinalizationZooKeeperClient extends ZooKeeperClient {
+    private static final class TestingZooKeeperClient extends ZooKeeperClient {
 
         private boolean failNextFinalWrite;
+        private boolean failNextCancellationAfterCommit;
 
-        private TestingFinalizationZooKeeperClient() {
+        private TestingZooKeeperClient() {
             super(createCuratorFrameworkWrapper(), createConfiguration());
         }
 
         private void failNextFinalWrite() {
             failNextFinalWrite = true;
+        }
+
+        private void failNextCancellationAfterCommit() {
+            failNextCancellationAfterCommit = true;
         }
 
         @Override
@@ -936,6 +966,13 @@ public class RebalanceManagerTest {
                             rebalanceTask.getRebalanceStatus())) {
                 failNextFinalWrite = false;
                 throw new RuntimeException("Expected finalization failure");
+            }
+            if (failNextCancellationAfterCommit
+                    && rebalanceTask.getRebalanceStatus() == REBALANCING
+                    && rebalanceTask.isCancelRequested()) {
+                failNextCancellationAfterCommit = false;
+                super.registerRebalanceTask(rebalanceTask);
+                throw new RuntimeException("Expected ambiguous cancellation write");
             }
             super.registerRebalanceTask(rebalanceTask);
         }

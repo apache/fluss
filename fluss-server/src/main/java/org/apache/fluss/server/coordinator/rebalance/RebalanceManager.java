@@ -302,13 +302,22 @@ public class RebalanceManager {
 
         for (Map.Entry<TableBucket, RebalancePlanForBucket> entry :
                 rebalanceTask.getExecutePlan().entrySet()) {
-            if (rebalanceTask.getCanceledBuckets().contains(entry.getKey())) {
+            RebalancePlanForBucket plan = entry.getValue();
+            boolean atOrigin = rebalanceExecutor.isRebalanceTaskAtOrigin(plan);
+            boolean explicitlyCanceled =
+                    rebalanceTask.getCanceledBuckets().contains(entry.getKey());
+            boolean replicaMigration =
+                    !new HashSet<>(plan.getOriginReplicas())
+                            .equals(new HashSet<>(plan.getNewReplicas()));
+            if (explicitlyCanceled && (!replicaMigration || atOrigin)) {
                 finishedRebalanceTasks.put(
-                        entry.getKey(), RebalanceResultForBucket.of(entry.getValue(), CANCELED));
-            } else if (rebalanceExecutor.isRebalanceTaskAtOrigin(entry.getValue())) {
-                addPendingTask(entry.getKey(), entry.getValue());
+                        entry.getKey(), RebalanceResultForBucket.of(plan, CANCELED));
+            } else if (atOrigin) {
+                addPendingTask(entry.getKey(), plan);
             } else {
-                addRecoveredIntermediateTask(entry.getKey(), entry.getValue());
+                // A replica migration recorded as canceled may still have started after an
+                // ambiguous cancellation write. Keep any intermediate assignment tracked.
+                addRecoveredIntermediateTask(entry.getKey(), plan);
             }
         }
         if (cancelRequested) {
@@ -428,17 +437,33 @@ public class RebalanceManager {
         Set<TableBucket> tasksToCancel = findTasksToCancel();
         Set<TableBucket> canceledBuckets = canceledBuckets();
         canceledBuckets.addAll(tasksToCancel);
+        RebalanceTask cancellationTask =
+                new RebalanceTask(
+                        currentRebalanceId,
+                        REBALANCING,
+                        allRebalancePlans(),
+                        true,
+                        canceledBuckets);
         try {
-            zkClient.registerRebalanceTask(
-                    new RebalanceTask(
-                            currentRebalanceId,
-                            REBALANCING,
-                            allRebalancePlans(),
-                            true,
-                            canceledBuckets));
+            zkClient.registerRebalanceTask(cancellationTask);
         } catch (Exception e) {
-            throw new RebalanceFailureException(
-                    "Failed to persist rebalance cancellation request.", e);
+            boolean persisted;
+            try {
+                persisted = isCancellationPersisted(cancellationTask);
+            } catch (Exception verificationFailure) {
+                e.addSuppressed(verificationFailure);
+                throw new RebalanceFailureException(
+                        "Failed to persist rebalance cancellation request.", e);
+            }
+            if (!persisted) {
+                throw new RebalanceFailureException(
+                        "Failed to persist rebalance cancellation request.", e);
+            }
+            LOG.warn(
+                    "Cancellation for rebalance {} was persisted despite the write error. "
+                            + "Continue applying it locally.",
+                    currentRebalanceId,
+                    e);
         }
 
         cancelRequested = true;
@@ -459,6 +484,17 @@ public class RebalanceManager {
                 "Accepted cancellation for rebalance {}. Running and timed-out tasks will be "
                         + "drained before the rebalance becomes canceled.",
                 currentRebalanceId);
+    }
+
+    private boolean isCancellationPersisted(RebalanceTask expected) throws Exception {
+        Optional<RebalanceTask> persisted = zkClient.getRebalanceTask();
+        if (!persisted.isPresent()) {
+            return false;
+        }
+        RebalanceTask persistedTask = persisted.get();
+        return persistedTask.getRebalanceId().equals(expected.getRebalanceId())
+                && persistedTask.isCancelRequested()
+                && persistedTask.getCanceledBuckets().containsAll(expected.getCanceledBuckets());
     }
 
     private Set<TableBucket> findTasksToCancel() {

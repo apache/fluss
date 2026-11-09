@@ -198,6 +198,48 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
     }
 
     @Test
+    void testPhaseAPersistenceIsNotReusedForTargetAssignment() throws Exception {
+        registerTabletServer(3);
+        initCoordinatorChannel();
+
+        List<Integer> origin = Arrays.asList(0, 1, 3);
+        List<Integer> target = Arrays.asList(0, 1, 2);
+        List<Integer> union = Arrays.asList(0, 1, 2, 3);
+        long tableId = createTableWithReplicas(origin, 1);
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+        RebalancePlanForBucket plan = new RebalancePlanForBucket(tableBucket, 0, 0, origin, target);
+
+        registerRebalance("phase-a-persistence", Collections.singletonMap(tableBucket, plan));
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        assertThat(
+                                        zookeeperClient
+                                                .getTableAssignment(tableId)
+                                                .get()
+                                                .getBucketAssignment(0))
+                                .isEqualTo(new BucketAssignment(union)));
+
+        // Reproduce the state left when phase B updated the in-memory assignment but failed before
+        // persisting it: the target replicas have caught up, memory contains TRS, and ZooKeeper
+        // still contains the Phase-A ORS+TRS assignment.
+        LeaderAndIsr leaderAndIsr = zookeeperClient.getLeaderAndIsr(tableBucket).get();
+        LeaderAndIsr caughtUp = leaderAndIsr.newLeaderAndIsr(union);
+        zookeeperClient.updateLeaderAndIsr(
+                tableBucket, caughtUp, fromCtx(CoordinatorContext::getCoordinatorZkVersion));
+        fromCtx(
+                ctx -> {
+                    ctx.putBucketLeaderAndIsr(tableBucket, caughtUp);
+                    ctx.updateBucketReplicaAssignment(tableBucket, target);
+                    eventProcessor.tryToExecuteRebalanceTask(plan);
+                    return null;
+                });
+
+        assertThat(zookeeperClient.getTableAssignment(tableId).get().getBucketAssignment(0))
+                .isEqualTo(new BucketAssignment(target));
+    }
+
+    @Test
     void testTimedOutRebalanceCompletesWhenTableIsBeingDeleted() throws Exception {
         registerTabletServer(3);
         initCoordinatorChannel();
@@ -757,9 +799,8 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
                             new CoordinatorRequestBatch(
                                     testCoordinatorChannelManager,
                                     eventProcessor.getCoordinatorEventManager(),
-                                    ctx);
-                    requestBatch.setRebalanceExecutionKeyResolver(
-                            eventProcessor.getRebalanceManager()::getExecutionKey);
+                                    ctx,
+                                    eventProcessor.getRebalanceManager()::getExecutionKey);
                     TableBucketStateMachine stateMachine =
                             new TableBucketStateMachine(ctx, requestBatch, zookeeperClient);
                     stateMachine.handleStateChange(
