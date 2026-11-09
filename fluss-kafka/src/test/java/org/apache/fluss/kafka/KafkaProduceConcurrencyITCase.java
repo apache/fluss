@@ -30,6 +30,7 @@ import org.apache.fluss.config.KafkaValueConversionType;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
@@ -284,7 +285,9 @@ class KafkaProduceConcurrencyITCase {
                                     .find(path.getTableName())
                                     .partitionResponses()
                                     .get(0);
-                    assertThat(response.errorCode()).isEqualTo(Errors.NONE.code());
+                    assertThat(response.errorCode())
+                            .as("Produce error: %s", response.errorMessage())
+                            .isEqualTo(Errors.NONE.code());
                     assertThat(response.baseOffset()).isNotNegative();
                     // The disconnected client's writes have no delivery guarantee. Check the
                     // new producer's acknowledged record at its authoritative native offset.
@@ -319,7 +322,10 @@ class KafkaProduceConcurrencyITCase {
                                 .build(),
                         false)
                 .get();
-        CLUSTER.waitUntilTableReady(admin.getTableInfo(path).get().getTableId());
+        long tableId = admin.getTableInfo(path).get().getTableId();
+        for (int bucket = 0; bucket < buckets; bucket++) {
+            CLUSTER.waitUntilAllReplicaReady(new TableBucket(tableId, bucket));
+        }
     }
 
     private static PartitionProduceData partition(int id, SimpleRecord... records) {

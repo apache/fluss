@@ -218,6 +218,7 @@ class StickyStaticBucketAssignerTest {
                 bucketsByPath,
                 tableIdByPath,
                 Collections.emptyMap(),
+                Collections.emptyMap(),
                 Collections.emptyMap());
     }
 }

@@ -27,6 +27,10 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
+import org.apache.fluss.rpc.gateway.TabletServerGateway;
+import org.apache.fluss.rpc.messages.MetadataRequest;
+import org.apache.fluss.rpc.messages.MetadataResponse;
+import org.apache.fluss.rpc.messages.PbBucketMetadata;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.tablet.TabletServer;
@@ -38,6 +42,8 @@ import org.apache.fluss.server.zk.data.TableAssignment;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.annotation.Nullable;
 
@@ -59,6 +65,7 @@ import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createPartit
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createTable;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newDropPartitionRequest;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newDropTableRequest;
+import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newMetadataRequest;
 import static org.apache.fluss.server.testutils.TableMetadataAssert.assertTableMetadata;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -85,6 +92,94 @@ class MetadataUpdateITCase {
                         FLUSS_CLUSTER_EXTENSION.getZooKeeperClient(),
                         new Configuration(),
                         new LakeCatalogDynamicLoader(new Configuration(), null, true));
+    }
+
+    @Test
+    void testMetadataRequestReloadsIncompleteTableCache() throws Exception {
+        TablePath tablePath = TablePath.of("test_db_1", "incomplete_table_metadata");
+        long tableId = createTable(FLUSS_CLUSTER_EXTENSION, tablePath, DATA1_TABLE_DESCRIPTOR);
+        FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId);
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllGatewayHasSameMetadata();
+
+        TabletServer tabletServer = FLUSS_CLUSTER_EXTENSION.getTabletServers().iterator().next();
+        TabletServerMetadataCache cache = tabletServer.getMetadataCache();
+        TableMetadata complete = getTableMetadataFromZk(tablePath, tableId);
+        cache.updateTableMetadata(
+                new TableMetadata(
+                        complete.getTableInfo(),
+                        Collections.singletonList(complete.getBucketMetadataList().get(0))));
+
+        TabletServerGateway gateway =
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(tabletServer.getServerId());
+        MetadataResponse response =
+                gateway.metadata(newMetadataRequest(Collections.singletonList(tablePath))).get();
+        assertThat(response.getTableMetadatasList()).hasSize(1);
+        assertThat(response.getTableMetadatasList().get(0).getBucketCount()).isEqualTo(3);
+        assertThat(response.getTableMetadatasList().get(0).getBucketMetadatasList())
+                .extracting(PbBucketMetadata::getBucketId)
+                .containsExactlyInAnyOrder(0, 1, 2);
+        assertThat(cache.getTableMetadata(tablePath).get().getBucketMetadataList())
+                .extracting(BucketMetadata::getBucketId)
+                .containsExactlyInAnyOrder(0, 1, 2);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testMetadataRequestReloadsIncompletePartitionCache(boolean explicitCount)
+            throws Exception {
+        TablePath tablePath =
+                TablePath.of("test_db_1", "incomplete_partition_metadata_" + explicitCount);
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(DATA1_SCHEMA)
+                        .distributedBy(3)
+                        .partitionedBy("b")
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, false)
+                        .build();
+        long tableId = createTable(FLUSS_CLUSTER_EXTENSION, tablePath, descriptor);
+        String partitionName = "p1";
+        long partitionId =
+                createPartition(
+                        FLUSS_CLUSTER_EXTENSION,
+                        tablePath,
+                        new PartitionSpec(Collections.singletonMap("b", partitionName)),
+                        false);
+        FLUSS_CLUSTER_EXTENSION.waitUntilTablePartitionReady(tableId, partitionId);
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllGatewayHasSameMetadata();
+
+        TabletServer tabletServer = FLUSS_CLUSTER_EXTENSION.getTabletServers().iterator().next();
+        TabletServerMetadataCache cache = tabletServer.getMetadataCache();
+        PartitionMetadata complete =
+                getPartitionMetadataFromZk(tableId, partitionName, partitionId);
+        cache.clearTableMetadata();
+        cache.updateTableMetadata(
+                new TableMetadata(metadataManager.getTable(tablePath), Collections.emptyList()));
+        cache.updatePartitionMetadata(
+                new PartitionMetadata(
+                        tableId,
+                        partitionName,
+                        partitionId,
+                        Collections.singletonList(complete.getBucketMetadataList().get(0)),
+                        explicitCount ? 3 : null));
+
+        TabletServerGateway gateway =
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(tabletServer.getServerId());
+        MetadataRequest request = newMetadataRequest(Collections.singletonList(tablePath));
+        request.addPartitionsId(partitionId);
+        MetadataResponse response = gateway.metadata(request).get();
+        assertThat(response.getTableMetadatasList()).hasSize(1);
+        assertThat(response.getTableMetadatasList().get(0).getBucketMetadatasList()).isEmpty();
+        assertThat(response.getPartitionMetadatasList()).hasSize(1);
+        assertThat(response.getPartitionMetadatasList().get(0).getBucketCount()).isEqualTo(3);
+        assertThat(response.getPartitionMetadatasList().get(0).getBucketMetadatasList())
+                .extracting(PbBucketMetadata::getBucketId)
+                .containsExactlyInAnyOrder(0, 1, 2);
+        PartitionMetadata restored =
+                cache.getPartitionMetadata(PhysicalTablePath.of(tablePath, partitionName)).get();
+        assertThat(restored.getBucketCount()).isEqualTo(3);
+        assertThat(restored.getBucketMetadataList())
+                .extracting(BucketMetadata::getBucketId)
+                .containsExactlyInAnyOrder(0, 1, 2);
     }
 
     @Test
@@ -482,7 +577,8 @@ class MetadataUpdateITCase {
                                     throw new RuntimeException(e);
                                 }
                             });
-            return new PartitionMetadata(tableId, partitionName, partitionId, bucketMetadataList);
+            return new PartitionMetadata(
+                    tableId, partitionName, partitionId, bucketMetadataList, null);
         } catch (Exception e) {
             throw new RuntimeException(e);
         }

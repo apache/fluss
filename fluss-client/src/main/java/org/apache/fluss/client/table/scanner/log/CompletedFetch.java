@@ -38,15 +38,16 @@ import org.apache.fluss.utils.CloseableIterator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
+
 import java.io.Closeable;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
+import java.util.function.Predicate;
 
-import static org.apache.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFSET;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
-import static org.apache.fluss.utils.Preconditions.checkState;
 
 /**
  * {@link CompletedFetch} represents the result that was returned from the tablet server via a fetch
@@ -63,8 +64,7 @@ public abstract class CompletedFetch {
     final ApiError error;
     final int sizeInBytes;
     final long highWatermark;
-    private final long requestedFetchOffset;
-    private final long resolvedEarliestOffset;
+    private final long fetchOffset;
     private final long filteredEndOffset;
 
     private final boolean isCheckCrcs;
@@ -82,6 +82,7 @@ public abstract class CompletedFetch {
     private long nextFetchOffset;
     private boolean isConsumed = false;
     private boolean initialized = false;
+    private int lastFetchRecordCount;
 
     public CompletedFetch(
             TableBucket tableBucket,
@@ -93,8 +94,7 @@ public abstract class CompletedFetch {
             LogRecordReadContext readContext,
             LogScannerStatus logScannerStatus,
             boolean isCheckCrcs,
-            long requestedFetchOffset,
-            long resolvedEarliestOffset,
+            long fetchOffset,
             long filteredEndOffset) {
         this.tableBucket = tableBucket;
         this.tablePath = tablePath;
@@ -105,33 +105,16 @@ public abstract class CompletedFetch {
         this.readContext = readContext;
         this.isCheckCrcs = isCheckCrcs;
         this.logScannerStatus = logScannerStatus;
+        this.fetchOffset = fetchOffset;
         checkArgument(
-                resolvedEarliestOffset >= -1L,
-                "resolvedEarliestOffset (%s) must be -1 or non-negative for bucket %s.",
-                resolvedEarliestOffset,
-                tableBucket);
-        checkArgument(
-                resolvedEarliestOffset < 0 || requestedFetchOffset == EARLIEST_OFFSET,
-                "resolvedEarliestOffset (%s) can only be set for an EARLIEST request, "
-                        + "but requestedFetchOffset was %s for bucket %s.",
-                resolvedEarliestOffset,
-                requestedFetchOffset,
-                tableBucket);
-        this.requestedFetchOffset = requestedFetchOffset;
-        this.resolvedEarliestOffset = resolvedEarliestOffset;
-        long effectiveStartOffset =
-                resolvedEarliestOffset >= 0 ? resolvedEarliestOffset : requestedFetchOffset;
-        checkArgument(
-                filteredEndOffset == NO_FILTERED_END_OFFSET
-                        || effectiveStartOffset < 0
-                        || filteredEndOffset >= effectiveStartOffset,
-                "filteredEndOffset (%s) must be %s or >= effective start offset (%s) for bucket %s.",
+                filteredEndOffset == NO_FILTERED_END_OFFSET || filteredEndOffset >= fetchOffset,
+                "filteredEndOffset (%s) must be %s (NO_FILTERED_END_OFFSET) or >= fetchOffset (%s) for bucket %s.",
                 filteredEndOffset,
                 NO_FILTERED_END_OFFSET,
-                effectiveStartOffset,
+                fetchOffset,
                 tableBucket);
         this.filteredEndOffset = filteredEndOffset;
-        this.nextFetchOffset = requestedFetchOffset;
+        this.nextFetchOffset = fetchOffset;
     }
 
     // TODO: optimize this to avoid deep copying the record.
@@ -190,25 +173,8 @@ public abstract class CompletedFetch {
         return initialized;
     }
 
-    long requestedFetchOffset() {
-        return requestedFetchOffset;
-    }
-
-    long resolvedEarliestOffset() {
-        return resolvedEarliestOffset;
-    }
-
-    void applyResolvedEarliestOffset() {
-        checkState(
-                requestedFetchOffset == LogScanner.EARLIEST_OFFSET,
-                "Resolved EARLIEST offset can only be applied to EARLIEST fetches.");
-
-        checkState(
-                resolvedEarliestOffset >= 0,
-                "Resolved EARLIEST offset is not available for bucket %s.",
-                tableBucket);
-
-        nextFetchOffset = resolvedEarliestOffset;
+    long fetchOffset() {
+        return fetchOffset;
     }
 
     long nextFetchOffset() {
@@ -247,6 +213,15 @@ public abstract class CompletedFetch {
      * @return {@link ScanRecord scan records}
      */
     public List<ScanRecord> fetchRecords(int maxRecords) {
+        return fetchRecords(maxRecords, null);
+    }
+
+    int lastFetchRecordCount() {
+        return lastFetchRecordCount;
+    }
+
+    List<ScanRecord> fetchRecords(int maxRecords, @Nullable Predicate<LogRecord> recordFilter) {
+        lastFetchRecordCount = 0;
         if (corruptLastRecord) {
             throw new FetchException(
                     "Received exception when fetching the next record from "
@@ -262,7 +237,7 @@ public abstract class CompletedFetch {
         List<ScanRecord> scanRecords = new ArrayList<>();
         try {
             for (int i = 0; i < maxRecords; i++) {
-                fetchRecord(scanRecords);
+                fetchRecord(scanRecords, recordFilter);
                 if (lastRecord == null) {
                     break;
                 }
@@ -275,7 +250,7 @@ public abstract class CompletedFetch {
             // BinlogRowConverter) from seeing an orphaned -U when records from multiple
             // buckets are interleaved across polls.
             if (lastRecord != null && lastRecord.getChangeType() == ChangeType.UPDATE_BEFORE) {
-                fetchRecord(scanRecords);
+                fetchRecord(scanRecords, recordFilter);
             }
         } catch (Exception e) {
             cachedRecordException = e;
@@ -291,7 +266,9 @@ public abstract class CompletedFetch {
         return scanRecords;
     }
 
-    private void fetchRecord(List<ScanRecord> scanRecords) throws Exception {
+    private void fetchRecord(
+            List<ScanRecord> scanRecords, @Nullable Predicate<LogRecord> recordFilter)
+            throws Exception {
         // Only move to next record if there was no exception in the last fetch.
         if (cachedRecordException == null) {
             corruptLastRecord = true;
@@ -303,8 +280,11 @@ public abstract class CompletedFetch {
             return;
         }
 
-        ScanRecord record = toScanRecord(lastRecord);
-        scanRecords.add(record);
+        if (recordFilter == null || recordFilter.test(lastRecord)) {
+            ScanRecord record = toScanRecord(lastRecord);
+            scanRecords.add(record);
+        }
+        lastFetchRecordCount++;
         recordsRead++;
         // Per-record offset is a best-effort value; the authoritative offset
         // comes from the batch's nextLogOffset once the batch is fully consumed.

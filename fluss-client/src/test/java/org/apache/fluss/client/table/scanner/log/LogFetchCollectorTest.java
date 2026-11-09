@@ -20,38 +20,30 @@ package org.apache.fluss.client.table.scanner.log;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.metadata.TestingMetadataUpdater;
 import org.apache.fluss.client.table.scanner.ScanRecord;
+import org.apache.fluss.compression.ArrowCompressionInfo;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.exception.UnsupportedBoundedEarliestException;
+import org.apache.fluss.exception.FetchException;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.record.ArrowBatchData;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
+import org.apache.fluss.rpc.protocol.ApiError;
+import org.apache.fluss.rpc.protocol.Errors;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.CsvSource;
-import org.junit.jupiter.params.provider.ValueSource;
 
-import java.nio.ByteBuffer;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.function.LongSupplier;
 
-import static org.apache.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFSET;
-import static org.apache.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
-import static org.apache.fluss.record.LogRecordBatchFormat.NO_BATCH_SEQUENCE;
-import static org.apache.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
 import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
@@ -98,308 +90,36 @@ public class LogFetchCollectorTest {
         }
     }
 
-    @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void testBoundedEarliestRequiresResolvedOffset(boolean arrow) {
-        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
-        logScannerStatus.assignScanBucket(tb, EARLIEST_OFFSET, 50L);
-        logFetchBuffer.add(
-                makeCompletedFetch(
-                        tb, FetchLogResultForBucket.empty(tb, 100L, -1L), EARLIEST_OFFSET));
-        AbstractLogFetchCollector<?, ?> collector =
-                arrow
-                        ? new ArrowLogFetchCollector(
-                                logScannerStatus,
-                                new Configuration(),
-                                new TestingMetadataUpdater(
-                                        Collections.singletonMap(
-                                                DATA1_TABLE_PATH, DATA1_TABLE_INFO)))
-                        : logFetchCollector;
-
-        assertThatThrownBy(() -> collector.collectFetch(logFetchBuffer))
-                .isInstanceOf(UnsupportedBoundedEarliestException.class)
-                .hasMessageContaining("resolved_earliest_offset");
-        assertThat(logFetchBuffer.peek()).isNull();
-        assertThat(logScannerStatus.getBucketOffset(tb)).isEqualTo(EARLIEST_OFFSET);
-    }
-
-    @ParameterizedTest
-    @CsvSource({
-        // arrow, startingOffset, stoppingOffset, resolvedOffset, expectedOffset, finished
-        "false, -2,  50, 100,  50, true",
-        "true,  -2,  50, 100,  50, true",
-        "false, -2, 100, 100, 100, true",
-        "true,  -2, 100, 100, 100, true",
-        "false, -2, 150, 100, 100, false",
-        "true,  -2, 150, 100, 100, false",
-        "false, -2,  50,   0,   0, false",
-        "true,  -2,  50,   0,   0, false",
-        "false, 10,  50,  -1,  10, false",
-        "true,   10,  50,  -1,  10, false"
-    })
-    void testResolvedBoundedStartingOffset(
-            boolean arrow,
-            long startingOffset,
-            long stoppingOffset,
-            long resolvedOffset,
-            long expectedOffset,
-            boolean finished) {
-        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
-        logScannerStatus.assignScanBucket(tb, startingOffset, stoppingOffset);
+    @Test
+    void testFilteredRecordsRespectPollLimitAndAdvanceOffsets() throws Exception {
+        TableBucket bucket = new TableBucket(DATA1_TABLE_ID, 0);
+        logFetchCollector =
+                new LogFetchCollector(
+                        logScannerStatus,
+                        new Configuration()
+                                .set(ConfigOptions.CLIENT_SCANNER_LOG_MAX_POLL_RECORDS, 3),
+                        new TestingMetadataUpdater(
+                                Collections.singletonMap(DATA1_TABLE_PATH, DATA1_TABLE_INFO)));
         CompletedFetch fetch =
                 makeCompletedFetch(
-                        tb,
+                        bucket,
                         FetchLogResultForBucket.records(
-                                tb, MemoryLogRecords.EMPTY, 100L, -1L, -1L, resolvedOffset),
-                        startingOffset);
-
+                                bucket, genMemoryLogRecordsByObject(DATA1), 10L, -1L, -1L),
+                        0L);
         logFetchBuffer.add(fetch);
-        boolean expectedProgress = startingOffset != expectedOffset;
+        logFetchCollector.setRecordFilter((ignored, record) -> false);
+        ScanRecords first = logFetchCollector.collectFetch(logFetchBuffer);
+        assertThat(first.records(bucket)).isEmpty();
+        assertThat(first.consumedUpToOffset(bucket)).isEqualTo(3L);
+        assertThat(first.hasProgress()).isTrue();
+        assertThat(logScannerStatus.getBucketOffset(bucket)).isEqualTo(3L);
 
-        if (arrow) {
-            ArrowLogFetchCollector collector =
-                    new ArrowLogFetchCollector(
-                            logScannerStatus,
-                            new Configuration(),
-                            new TestingMetadataUpdater(
-                                    Collections.singletonMap(DATA1_TABLE_PATH, DATA1_TABLE_INFO)));
-
-            try (ArrowScanRecords result = collector.collectFetch(logFetchBuffer)) {
-                assertThat(result.count()).isZero();
-                assertThat(result.records(tb)).isEmpty();
-                assertThat(result.hasProgress()).isEqualTo(expectedProgress);
-                if (finished) {
-                    assertThat(result.finishedBuckets().contains(tb)).isTrue();
-                } else {
-                    assertThat(result.finishedBuckets().isEmpty()).isTrue();
-                }
-                if (expectedProgress) {
-                    assertThat(result.consumedUpToOffset(tb)).isEqualTo(expectedOffset);
-                } else {
-                    assertThat(result.consumedUpToOffset(tb)).isNull();
-                }
-            }
-
-            // Completion/progress from this response must be one-shot.
-            try (ArrowScanRecords result = collector.collectFetch(logFetchBuffer)) {
-                assertThat(result.hasProgress()).isFalse();
-            }
-        } else {
-            ScanRecords result = logFetchCollector.collectFetch(logFetchBuffer);
-            assertThat(result.isEmpty()).isTrue();
-            assertThat(result.records(tb)).isEmpty();
-            assertThat(result.hasProgress()).isEqualTo(expectedProgress);
-            if (finished) {
-                assertThat(result.finishedBuckets().contains(tb)).isTrue();
-            } else {
-                assertThat(result.finishedBuckets().isEmpty()).isTrue();
-            }
-            if (expectedProgress) {
-                assertThat(result.consumedUpToOffset(tb)).isEqualTo(expectedOffset);
-            } else {
-                assertThat(result.consumedUpToOffset(tb)).isNull();
-            }
-
-            // Completion/progress from this response must be one-shot.
-            assertThat(logFetchCollector.collectFetch(logFetchBuffer).hasProgress()).isFalse();
-        }
-
-        assertThat(logScannerStatus.getBucketOffset(tb)).isEqualTo(expectedOffset);
-        assertThat(logScannerStatus.hasReachedStoppingOffset(tb)).isEqualTo(finished);
-        assertThat(fetch.isConsumed()).isTrue();
-    }
-
-    @ParameterizedTest
-    @ValueSource(longs = {-1L, 100L})
-    void testUnboundedEarliestKeepsEmptyFetchBehavior(long resolvedOffset) {
-        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
-        logScannerStatus.assignScanBuckets(Collections.singletonMap(tb, EARLIEST_OFFSET));
-        logFetchBuffer.add(
-                makeCompletedFetch(
-                        tb,
-                        FetchLogResultForBucket.records(
-                                tb, MemoryLogRecords.EMPTY, 100L, -1L, -1L, resolvedOffset),
-                        EARLIEST_OFFSET));
-
-        assertThat(logFetchCollector.collectFetch(logFetchBuffer).hasProgress()).isTrue();
-        assertThat(logScannerStatus.getBucketOffset(tb)).isEqualTo(EARLIEST_OFFSET);
-    }
-
-    @Test
-    void testDiscardStaleResolvedStartingOffset() {
-        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
-        logScannerStatus.assignScanBucket(tb, 10L, 50L);
-        CompletedFetch fetch =
-                makeCompletedFetch(
-                        tb,
-                        FetchLogResultForBucket.records(
-                                tb, MemoryLogRecords.EMPTY, 100L, -1L, -1L, 100L),
-                        EARLIEST_OFFSET);
-        logFetchBuffer.add(fetch);
-
-        assertThat(logFetchCollector.collectFetch(logFetchBuffer).hasProgress()).isFalse();
-        assertThat(logScannerStatus.getBucketOffset(tb)).isEqualTo(10L);
-        assertThat(fetch.isConsumed()).isTrue();
-    }
-
-    @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void testResolvedStartingOffsetInsideBatch(boolean arrow) throws Exception {
-        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
-
-        // The logical starting offset is EARLIEST_OFFSET, while the server resolves it to 100.
-        // The bounded subscription should stop before offset 103.
-        logScannerStatus.assignScanBucket(tb, EARLIEST_OFFSET, 103L);
-
-        // The physical batch starts from offset 95, which means records before the resolved
-        // starting offset 100 must be skipped by the collector.
-        MemoryLogRecords records =
-                createBasicMemoryLogRecords(
-                        DATA1_ROW_TYPE,
-                        DEFAULT_SCHEMA_ID,
-                        95L,
-                        0L,
-                        LogRecordBatch.CURRENT_LOG_MAGIC_VALUE,
-                        NO_WRITER_ID,
-                        NO_BATCH_SEQUENCE,
-                        Collections.nCopies(DATA1.size(), ChangeType.APPEND_ONLY),
-                        DATA1,
-                        LogFormat.ARROW,
-                        DEFAULT_COMPRESSION,
-                        true);
-
-        FetchLogResultForBucket result =
-                FetchLogResultForBucket.records(tb, records, 105L, -1L, -1L, 100L);
-
-        CompletedFetch fetch = makeCompletedFetch(tb, result, EARLIEST_OFFSET);
-
-        logFetchBuffer.add(fetch);
-
-        MetadataUpdater metadata =
-                new TestingMetadataUpdater(
-                        Collections.singletonMap(DATA1_TABLE_PATH, DATA1_TABLE_INFO));
-
-        if (arrow) {
-            ArrowLogFetchCollector collector =
-                    new ArrowLogFetchCollector(logScannerStatus, new Configuration(), metadata);
-
-            try (ArrowScanRecords scanRecords = collector.collectFetch(logFetchBuffer)) {
-
-                assertThat(scanRecords.count()).isEqualTo(3);
-                assertThat(scanRecords.records(tb)).hasSize(1);
-
-                ArrowBatchData batch = scanRecords.records(tb).get(0);
-                assertThat(batch.getBaseLogOffset()).isEqualTo(100L);
-                assertThat(batch.getRecordCount()).isEqualTo(3);
-                assertThat(batch.getVectorSchemaRoot().getRowCount()).isEqualTo(3);
-
-                assertThat(scanRecords.consumedUpToOffset(tb)).isEqualTo(103L);
-                assertThat(scanRecords.finishedBuckets()).containsExactly(tb);
-            }
-        } else {
-            LogFetchCollector collector =
-                    new LogFetchCollector(logScannerStatus, new Configuration(), metadata);
-
-            ScanRecords scanRecords = collector.collectFetch(logFetchBuffer);
-
-            assertThat(scanRecords.records(tb))
-                    .extracting(ScanRecord::logOffset)
-                    .containsExactly(100L, 101L, 102L);
-
-            assertThat(scanRecords.consumedUpToOffset(tb)).isEqualTo(103L);
-            assertThat(scanRecords.finishedBuckets()).containsExactly(tb);
-        }
-
-        assertThat(logScannerStatus.getBucketOffset(tb)).isEqualTo(103L);
-        assertThat(fetch.isConsumed()).isTrue();
-    }
-
-    @Test
-    void testResolvedStartingOffsetInsideBatchWithMaxPollRecords() throws Exception {
-        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
-
-        logScannerStatus.assignScanBucket(tb, EARLIEST_OFFSET, 103L);
-
-        MemoryLogRecords records =
-                createBasicMemoryLogRecords(
-                        DATA1_ROW_TYPE,
-                        DEFAULT_SCHEMA_ID,
-                        95L,
-                        0L,
-                        LogRecordBatch.CURRENT_LOG_MAGIC_VALUE,
-                        NO_WRITER_ID,
-                        NO_BATCH_SEQUENCE,
-                        Collections.nCopies(DATA1.size(), ChangeType.APPEND_ONLY),
-                        DATA1,
-                        LogFormat.ARROW,
-                        DEFAULT_COMPRESSION,
-                        true);
-
-        FetchLogResultForBucket result =
-                FetchLogResultForBucket.records(tb, records, 105L, -1L, -1L, 100L);
-
-        CompletedFetch fetch = makeCompletedFetch(tb, result, EARLIEST_OFFSET);
-
-        logFetchBuffer.add(fetch);
-
-        Configuration conf = new Configuration();
-        conf.setInt(ConfigOptions.CLIENT_SCANNER_LOG_MAX_POLL_RECORDS, 2);
-
-        MetadataUpdater metadata =
-                new TestingMetadataUpdater(
-                        Collections.singletonMap(DATA1_TABLE_PATH, DATA1_TABLE_INFO));
-
-        LogFetchCollector collector = new LogFetchCollector(logScannerStatus, conf, metadata);
-
-        // Only two records can be returned in the first poll. Although the physical batch
-        // starts at 95, records before the resolved starting offset 100 must not count
-        // towards max.poll.records.
-        ScanRecords first = collector.collectFetch(logFetchBuffer);
-
-        assertThat(first.records(tb)).extracting(ScanRecord::logOffset).containsExactly(100L, 101L);
-        assertThat(first.consumedUpToOffset(tb)).isEqualTo(102L);
-        assertThat(first.finishedBuckets()).isEmpty();
-
-        assertThat(logScannerStatus.getBucketOffset(tb)).isEqualTo(102L);
-        assertThat(fetch.isConsumed()).isFalse();
-
-        // The remaining record before the bounded end offset is returned by the next poll.
-        ScanRecords second = collector.collectFetch(logFetchBuffer);
-
-        assertThat(second.records(tb)).extracting(ScanRecord::logOffset).containsExactly(102L);
-        assertThat(second.consumedUpToOffset(tb)).isEqualTo(103L);
-        assertThat(second.finishedBuckets()).containsExactly(tb);
-
-        assertThat(logScannerStatus.getBucketOffset(tb)).isEqualTo(103L);
-        assertThat(fetch.isConsumed()).isTrue();
-    }
-
-    @Test
-    void testBoundedEarliestWithoutResolutionDrainsNonEmptyFetch() throws Exception {
-        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
-
-        logScannerStatus.assignScanBucket(tb, LogScanner.EARLIEST_OFFSET, 200L);
-
-        // Intentionally use the old overload to simulate a response from an old server:
-        // records are present, but resolved_earliest_offset is absent.
-        FetchLogResultForBucket result =
-                FetchLogResultForBucket.records(
-                        tb, genMemoryLogRecordsByObject(DATA1), 200L, -1L, -1L);
-
-        CompletedFetch fetch = makeCompletedFetch(tb, result, LogScanner.EARLIEST_OFFSET);
-
-        logFetchBuffer.add(fetch);
-
-        assertThatThrownBy(() -> logFetchCollector.collectFetch(logFetchBuffer))
-                .isInstanceOf(UnsupportedBoundedEarliestException.class)
-                .hasMessageContaining("resolved_earliest_offset");
-
-        assertThat(fetch.isConsumed()).isTrue();
-        assertThat(logFetchBuffer.peek()).isNull();
-        assertThat(logFetchBuffer.isEmpty()).isTrue();
-
-        // Failed resolution must not mutate the scanner position.
-        assertThat(logScannerStatus.getBucketOffset(tb)).isEqualTo(LogScanner.EARLIEST_OFFSET);
+        logFetchCollector.setRecordFilter(null);
+        ScanRecords second = logFetchCollector.collectFetch(logFetchBuffer);
+        assertThat(second.records(bucket))
+                .extracting(ScanRecord::logOffset)
+                .containsExactly(3L, 4L, 5L);
+        assertThat(second.consumedUpToOffset(bucket)).isEqualTo(6L);
     }
 
     @Test
@@ -586,6 +306,52 @@ public class LogFetchCollectorTest {
         assertThat(scanRecords.consumedUpToOffset(tb)).isEqualTo(20L);
     }
 
+    @Test
+    void testCollectFetchSkipsLeaderNotAvailable() throws Exception {
+        TableBucket failedBucket = new TableBucket(DATA1_TABLE_ID, 0);
+        TableBucket healthyBucket = new TableBucket(DATA1_TABLE_ID, 1);
+        CompletedFetch failedFetch =
+                makeCompletedFetch(
+                        failedBucket,
+                        FetchLogResultForBucket.error(
+                                failedBucket,
+                                new ApiError(
+                                        Errors.LEADER_NOT_AVAILABLE_EXCEPTION, "mock fetch error")),
+                        0L);
+        CompletedFetch healthyFetch =
+                makeCompletedFetch(
+                        healthyBucket,
+                        FetchLogResultForBucket.records(
+                                healthyBucket, genMemoryLogRecordsByObject(DATA1), 10L, -1L, -1L),
+                        0L);
+        logFetchBuffer.add(failedFetch);
+        logFetchBuffer.add(healthyFetch);
+
+        ScanRecords scanRecords = logFetchCollector.collectFetch(logFetchBuffer);
+
+        assertThat(scanRecords.buckets()).containsExactly(healthyBucket);
+        assertThat(scanRecords.records(healthyBucket)).hasSize(10);
+        assertThat(logFetchBuffer.isEmpty()).isTrue();
+    }
+
+    @Test
+    void testCollectFetchFailsOnInvalidBucketRouting() {
+        // The bucket count of a table or partition never changes, so a routing mismatch is a
+        // contract violation rather than stale metadata, and must not be retried silently.
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
+        logFetchBuffer.add(
+                makeCompletedFetch(
+                        tb,
+                        FetchLogResultForBucket.error(
+                                tb,
+                                new ApiError(Errors.INVALID_BUCKET_ROUTING, "mock fetch error")),
+                        0L));
+
+        assertThatThrownBy(() -> logFetchCollector.collectFetch(logFetchBuffer))
+                .isInstanceOf(FetchException.class)
+                .hasMessageContaining("INVALID_BUCKET_ROUTING");
+    }
+
     private DefaultCompletedFetch makeCompletedFetch(
             TableBucket tableBucket, FetchLogResultForBucket resultForBucket, long offset) {
         return new DefaultCompletedFetch(
@@ -635,12 +401,12 @@ public class LogFetchCollectorTest {
                         0L,
                         System.currentTimeMillis(),
                         LogRecordBatch.CURRENT_LOG_MAGIC_VALUE,
-                        NO_WRITER_ID,
-                        NO_BATCH_SEQUENCE,
+                        org.apache.fluss.record.LogRecordBatchFormat.NO_WRITER_ID,
+                        org.apache.fluss.record.LogRecordBatchFormat.NO_BATCH_SEQUENCE,
                         changeTypes,
                         objects,
                         LogFormat.ARROW,
-                        DEFAULT_COMPRESSION);
+                        ArrowCompressionInfo.DEFAULT_COMPRESSION);
 
         Configuration conf = new Configuration();
         conf.setInt(ConfigOptions.CLIENT_SCANNER_LOG_MAX_POLL_RECORDS, 1);
@@ -674,407 +440,5 @@ public class LogFetchCollectorTest {
         List<ScanRecord> records3 = poll3.records(tb);
         assertThat(records3).hasSize(1);
         assertThat(records3.get(0).getChangeType()).isEqualTo(ChangeType.INSERT);
-    }
-
-    @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void testEmptyRangeFromBeginningReportsCompletion(boolean arrow) {
-        TableBucket bucket = new TableBucket(DATA1_TABLE_ID, 0);
-        logScannerStatus.assignScanBucket(bucket, EARLIEST_OFFSET, 0L);
-
-        MetadataUpdater metadata =
-                new TestingMetadataUpdater(
-                        Collections.singletonMap(DATA1_TABLE_PATH, DATA1_TABLE_INFO));
-
-        if (arrow) {
-            ArrowLogFetchCollector collector =
-                    new ArrowLogFetchCollector(logScannerStatus, new Configuration(), metadata);
-            try (ArrowScanRecords records = collector.collectFetch(logFetchBuffer)) {
-                assertThat(records.count()).isZero();
-                assertThat(records.hasProgress()).isTrue();
-                assertThat(records.finishedBuckets()).containsExactly(bucket);
-            }
-            try (ArrowScanRecords records = collector.collectFetch(logFetchBuffer)) {
-                assertThat(records.hasProgress()).isFalse();
-            }
-        } else {
-            ScanRecords records = logFetchCollector.collectFetch(logFetchBuffer);
-            assertThat(records.isEmpty()).isTrue();
-            assertThat(records.hasProgress()).isTrue();
-            assertThat(records.finishedBuckets()).containsExactly(bucket);
-            assertThat(logFetchCollector.collectFetch(logFetchBuffer).hasProgress()).isFalse();
-        }
-    }
-
-    @ParameterizedTest
-    @CsvSource({
-        // arrow, stoppingOffset, filteredEndOffset, expectedOffset, finished
-        "false, 5, 20, 5, true",
-        "true,  5, 20, 5, true",
-        "false, 10, 5, 5, false",
-        "true,  10, 5, 5, false"
-    })
-    void testBoundedFilteredEmptyResponse(
-            boolean arrow,
-            long stoppingOffset,
-            long filteredEndOffset,
-            long expectedOffset,
-            boolean finished) {
-
-        MetadataUpdater metadataUpdater =
-                new TestingMetadataUpdater(
-                        Collections.singletonMap(DATA1_TABLE_PATH, DATA1_TABLE_INFO));
-
-        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
-        logScannerStatus.assignScanBucket(tb, 0L, stoppingOffset);
-
-        FetchLogResultForBucket filteredEmpty =
-                FetchLogResultForBucket.empty(tb, 10L, filteredEndOffset);
-        CompletedFetch completedFetch = makeCompletedFetch(tb, filteredEmpty, 0L);
-        logFetchBuffer.add(completedFetch);
-
-        if (arrow) {
-            ArrowLogFetchCollector collector =
-                    new ArrowLogFetchCollector(
-                            logScannerStatus, new Configuration(), metadataUpdater);
-
-            try (ArrowScanRecords records = collector.collectFetch(logFetchBuffer)) {
-                assertThat(records.count()).isZero();
-                assertThat(records.hasProgress()).isTrue();
-                assertThat(records.records(tb)).isEmpty();
-                assertThat(records.buckets()).containsExactly(tb);
-                assertThat(records.consumedUpToOffset(tb)).isEqualTo(expectedOffset);
-
-                if (finished) {
-                    assertThat(records.finishedBuckets()).containsExactly(tb);
-                } else {
-                    assertThat(records.finishedBuckets()).isEmpty();
-                }
-            }
-        } else {
-            LogFetchCollector collector =
-                    new LogFetchCollector(logScannerStatus, new Configuration(), metadataUpdater);
-
-            ScanRecords records = collector.collectFetch(logFetchBuffer);
-
-            assertThat(records.isEmpty()).isTrue();
-            assertThat(records.hasProgress()).isTrue();
-            assertThat(records.records(tb)).isEmpty();
-            assertThat(records.consumedUpToOffset(tb)).isEqualTo(expectedOffset);
-
-            if (finished) {
-                assertThat(records.finishedBuckets()).containsExactly(tb);
-            } else {
-                assertThat(records.finishedBuckets()).isEmpty();
-            }
-        }
-
-        assertThat(logScannerStatus.getBucketOffset(tb)).isEqualTo(expectedOffset);
-        assertThat(logScannerStatus.hasReachedStoppingOffset(tb)).isEqualTo(finished);
-        assertThat(completedFetch.isConsumed()).isTrue();
-    }
-
-    @Test
-    void testBoundedFetchStopsAtStoppingOffset() throws Exception {
-        Configuration conf = new Configuration();
-        conf.setInt(ConfigOptions.CLIENT_SCANNER_LOG_MAX_POLL_RECORDS, 2);
-
-        MetadataUpdater metadataUpdater =
-                new TestingMetadataUpdater(
-                        Collections.singletonMap(DATA1_TABLE_PATH, DATA1_TABLE_INFO));
-        LogFetchCollector collector =
-                new LogFetchCollector(logScannerStatus, conf, metadataUpdater);
-
-        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
-        logScannerStatus.assignScanBucket(tb, 0L, 5L);
-
-        FetchLogResultForBucket result =
-                FetchLogResultForBucket.records(
-                        tb, genMemoryLogRecordsByObject(DATA1), 10L, -1L, -1L);
-        CompletedFetch completedFetch = makeCompletedFetch(tb, result, 0L);
-        logFetchBuffer.add(completedFetch);
-
-        ScanRecords firstPoll = collector.collectFetch(logFetchBuffer);
-        assertThat(firstPoll.records(tb)).extracting(ScanRecord::logOffset).containsExactly(0L, 1L);
-        assertThat(firstPoll.consumedUpToOffset(tb)).isEqualTo(2L);
-        assertThat(firstPoll.finishedBuckets()).isEmpty();
-        assertThat(logScannerStatus.getBucketOffset(tb)).isEqualTo(2L);
-        assertThat(completedFetch.isConsumed()).isFalse();
-
-        ScanRecords secondPoll = collector.collectFetch(logFetchBuffer);
-        assertThat(secondPoll.records(tb))
-                .extracting(ScanRecord::logOffset)
-                .containsExactly(2L, 3L);
-        assertThat(secondPoll.consumedUpToOffset(tb)).isEqualTo(4L);
-        assertThat(secondPoll.finishedBuckets()).isEmpty();
-        assertThat(logScannerStatus.getBucketOffset(tb)).isEqualTo(4L);
-        assertThat(completedFetch.isConsumed()).isFalse();
-
-        ScanRecords thirdPoll = collector.collectFetch(logFetchBuffer);
-        assertThat(thirdPoll.records(tb)).extracting(ScanRecord::logOffset).containsExactly(4L);
-        assertThat(thirdPoll.consumedUpToOffset(tb)).isEqualTo(5L);
-        assertThat(thirdPoll.finishedBuckets()).containsExactly(tb);
-        assertThat(logScannerStatus.getBucketOffset(tb)).isEqualTo(5L);
-        assertThat(completedFetch.isConsumed()).isTrue();
-    }
-
-    @Test
-    void testStoppingOffsetTakesPrecedenceOverUpdatePairGrouping() throws Exception {
-        List<ChangeType> changeTypes =
-                Arrays.asList(
-                        ChangeType.INSERT,
-                        ChangeType.UPDATE_BEFORE,
-                        ChangeType.UPDATE_AFTER,
-                        ChangeType.INSERT);
-
-        List<Object[]> objects = DATA1.subList(0, 4);
-
-        MemoryLogRecords records =
-                createBasicMemoryLogRecords(
-                        DATA1_ROW_TYPE,
-                        DEFAULT_SCHEMA_ID,
-                        0L,
-                        System.currentTimeMillis(),
-                        LogRecordBatch.CURRENT_LOG_MAGIC_VALUE,
-                        NO_WRITER_ID,
-                        NO_BATCH_SEQUENCE,
-                        changeTypes,
-                        objects,
-                        LogFormat.ARROW,
-                        DEFAULT_COMPRESSION);
-
-        Configuration conf = new Configuration();
-        conf.setInt(ConfigOptions.CLIENT_SCANNER_LOG_MAX_POLL_RECORDS, 1);
-
-        MetadataUpdater metadataUpdater =
-                new TestingMetadataUpdater(
-                        Collections.singletonMap(DATA1_TABLE_PATH, DATA1_TABLE_INFO));
-        LogFetchCollector collector =
-                new LogFetchCollector(logScannerStatus, conf, metadataUpdater);
-
-        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
-        logScannerStatus.assignScanBucket(tb, 0L, 2L);
-
-        FetchLogResultForBucket result = FetchLogResultForBucket.records(tb, records, 4L, -1L, -1L);
-        CompletedFetch completedFetch = makeCompletedFetch(tb, result, 0L);
-        logFetchBuffer.add(completedFetch);
-
-        ScanRecords firstPoll = collector.collectFetch(logFetchBuffer);
-        assertThat(firstPoll.records(tb)).hasSize(1);
-        assertThat(firstPoll.records(tb).get(0).getChangeType()).isEqualTo(ChangeType.INSERT);
-        assertThat(firstPoll.finishedBuckets()).isEmpty();
-
-        ScanRecords secondPoll = collector.collectFetch(logFetchBuffer);
-
-        assertThat(secondPoll.records(tb)).hasSize(1);
-        assertThat(secondPoll.records(tb).get(0).getChangeType())
-                .isEqualTo(ChangeType.UPDATE_BEFORE);
-        assertThat(secondPoll.records(tb).get(0).logOffset()).isEqualTo(1L);
-
-        assertThat(secondPoll.consumedUpToOffset(tb)).isEqualTo(2L);
-        assertThat(secondPoll.finishedBuckets()).containsExactly(tb);
-        assertThat(logScannerStatus.getBucketOffset(tb)).isEqualTo(2L);
-        assertThat(completedFetch.isConsumed()).isTrue();
-    }
-
-    @Test
-    void testDiscardBufferedFetchForFinishedBucket() throws Exception {
-        Configuration conf = new Configuration();
-        MetadataUpdater metadataUpdater =
-                new TestingMetadataUpdater(
-                        Collections.singletonMap(DATA1_TABLE_PATH, DATA1_TABLE_INFO));
-        LogFetchCollector collector =
-                new LogFetchCollector(logScannerStatus, conf, metadataUpdater);
-
-        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
-        logScannerStatus.assignScanBucket(tb, 0L, 5L);
-
-        FetchLogResultForBucket firstResult =
-                FetchLogResultForBucket.records(
-                        tb, genMemoryLogRecordsByObject(DATA1), 10L, -1L, -1L);
-        CompletedFetch firstFetch = makeCompletedFetch(tb, firstResult, 0L);
-
-        FetchLogResultForBucket staleResult =
-                FetchLogResultForBucket.records(
-                        tb, genMemoryLogRecordsByObject(DATA1), 20L, -1L, -1L);
-        CompletedFetch staleFetch = makeCompletedFetch(tb, staleResult, 10L);
-
-        logFetchBuffer.add(firstFetch);
-        logFetchBuffer.add(staleFetch);
-
-        ScanRecords firstPoll = collector.collectFetch(logFetchBuffer);
-
-        assertThat(firstPoll.finishedBuckets()).containsExactly(tb);
-        assertThat(logScannerStatus.getBucketOffset(tb)).isEqualTo(5L);
-        assertThat(firstFetch.isConsumed()).isTrue();
-
-        ScanRecords secondPoll = collector.collectFetch(logFetchBuffer);
-
-        assertThat(secondPoll.hasProgress()).isFalse();
-        assertThat(staleFetch.isConsumed()).isTrue();
-    }
-
-    @Test
-    void testUnboundedArrowProgressOnlyPreservesLegacyResultShape() {
-        MetadataUpdater metadataUpdater =
-                new TestingMetadataUpdater(
-                        Collections.singletonMap(DATA1_TABLE_PATH, DATA1_TABLE_INFO));
-
-        ArrowLogFetchCollector collector =
-                new ArrowLogFetchCollector(logScannerStatus, new Configuration(), metadataUpdater);
-
-        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
-        logScannerStatus.assignScanBucket(tb, 0L, LogScanner.NO_STOPPING_OFFSET);
-
-        FetchLogResultForBucket filteredEmpty = FetchLogResultForBucket.empty(tb, 10L, 5L);
-        CompletedFetch completedFetch = makeCompletedFetch(tb, filteredEmpty, 0L);
-        logFetchBuffer.add(completedFetch);
-
-        try (ArrowScanRecords records = collector.collectFetch(logFetchBuffer)) {
-            assertThat(records.count()).isZero();
-
-            // Preserve the legacy Arrow collector result shape for an unbounded
-            // progress-only fetch.
-            assertThat(records.isEmpty()).isFalse();
-            assertThat(records.buckets()).containsExactly(tb);
-            assertThat(records.records(tb)).isEmpty();
-
-            assertThat(records.hasProgress()).isTrue();
-            assertThat(records.consumedUpToOffset(tb)).isEqualTo(5L);
-            assertThat(records.finishedBuckets()).isEmpty();
-        }
-
-        assertThat(logScannerStatus.getBucketOffset(tb)).isEqualTo(5L);
-        assertThat(completedFetch.isConsumed()).isTrue();
-    }
-
-    @ParameterizedTest
-    @ValueSource(longs = {5L, 10L})
-    void testBoundedArrowFetchRespectsStoppingOffset(long stoppingOffset) throws Exception {
-        MetadataUpdater metadataUpdater =
-                new TestingMetadataUpdater(
-                        Collections.singletonMap(DATA1_TABLE_PATH, DATA1_TABLE_INFO));
-
-        ArrowLogFetchCollector collector =
-                new ArrowLogFetchCollector(logScannerStatus, new Configuration(), metadataUpdater);
-
-        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
-        logScannerStatus.assignScanBucket(tb, 0L, stoppingOffset);
-
-        MemoryLogRecords records =
-                createBasicMemoryLogRecords(
-                        DATA1_ROW_TYPE,
-                        DEFAULT_SCHEMA_ID,
-                        0L,
-                        0L,
-                        LogRecordBatch.CURRENT_LOG_MAGIC_VALUE,
-                        NO_WRITER_ID,
-                        NO_BATCH_SEQUENCE,
-                        Collections.nCopies(DATA1.size(), ChangeType.APPEND_ONLY),
-                        DATA1,
-                        LogFormat.ARROW,
-                        DEFAULT_COMPRESSION,
-                        true);
-
-        FetchLogResultForBucket result =
-                FetchLogResultForBucket.records(tb, records, DATA1.size(), -1L, -1L);
-
-        CompletedFetch completedFetch = makeCompletedFetch(tb, result, 0L);
-        logFetchBuffer.add(completedFetch);
-
-        try (ArrowScanRecords scanRecords = collector.collectFetch(logFetchBuffer)) {
-            int expectedRecordCount = (int) stoppingOffset;
-
-            assertThat(scanRecords.count()).isEqualTo(expectedRecordCount);
-            assertThat(scanRecords.records(tb)).hasSize(1);
-
-            ArrowBatchData batch = scanRecords.records(tb).get(0);
-            assertThat(batch.getBaseLogOffset()).isZero();
-            assertThat(batch.getRecordCount()).isEqualTo(expectedRecordCount);
-            assertThat(batch.getVectorSchemaRoot().getRowCount()).isEqualTo(expectedRecordCount);
-
-            assertThat(scanRecords.consumedUpToOffset(tb)).isEqualTo(stoppingOffset);
-            assertThat(scanRecords.finishedBuckets()).containsExactly(tb);
-            assertThat(scanRecords.hasProgress()).isTrue();
-        }
-
-        assertThat(logScannerStatus.getBucketOffset(tb)).isEqualTo(stoppingOffset);
-        assertThat(completedFetch.isConsumed()).isTrue();
-    }
-
-    @Test
-    void testBoundedArrowTruncationReleasesAllBatchMemory() throws Exception {
-        TableBucket bucket = new TableBucket(DATA1_TABLE_ID, 0);
-        int batchSize = DATA1.size();
-        long stoppingOffset = batchSize + batchSize / 2;
-        logScannerStatus.assignScanBucket(bucket, 0L, stoppingOffset);
-        ArrowLogFetchCollector collector =
-                new ArrowLogFetchCollector(
-                        logScannerStatus,
-                        new Configuration(),
-                        new TestingMetadataUpdater(
-                                Collections.singletonMap(DATA1_TABLE_PATH, DATA1_TABLE_INFO)));
-
-        List<MemoryLogRecords> batches = new ArrayList<>();
-        int totalBytes = 0;
-        for (int i = 0; i < 3; i++) {
-            MemoryLogRecords records =
-                    createBasicMemoryLogRecords(
-                            DATA1_ROW_TYPE,
-                            DEFAULT_SCHEMA_ID,
-                            (long) i * batchSize,
-                            System.currentTimeMillis(),
-                            LogRecordBatch.CURRENT_LOG_MAGIC_VALUE,
-                            NO_WRITER_ID,
-                            NO_BATCH_SEQUENCE,
-                            Collections.nCopies(batchSize, ChangeType.APPEND_ONLY),
-                            DATA1,
-                            LogFormat.ARROW,
-                            DEFAULT_COMPRESSION,
-                            true);
-            batches.add(records);
-            totalBytes += records.sizeInBytes();
-        }
-        ByteBuffer buffer = ByteBuffer.allocate(totalBytes);
-        for (MemoryLogRecords batch : batches) {
-            buffer.put(batch.getMemorySegment().wrap(0, batch.sizeInBytes()));
-        }
-        buffer.flip();
-        CompletedFetch fetch =
-                makeCompletedFetch(
-                        bucket,
-                        FetchLogResultForBucket.records(
-                                bucket,
-                                MemoryLogRecords.pointToByteBuffer(buffer),
-                                3L * batchSize,
-                                -1L,
-                                -1L),
-                        0L);
-        logFetchBuffer.add(fetch);
-
-        LongSupplier allocatedBytes;
-        try (ArrowScanRecords records = collector.collectFetch(logFetchBuffer)) {
-            assertThat(records.records(bucket)).hasSize(2);
-            assertThat(records.count()).isEqualTo((int) stoppingOffset);
-            assertThat(records.finishedBuckets()).containsExactly(bucket);
-            assertThat(fetch.isConsumed()).isTrue();
-            ArrowBatchData first = records.records(bucket).get(0);
-            ArrowBatchData truncated = records.records(bucket).get(1);
-            assertThat(first.getRecordCount()).isEqualTo(batchSize);
-            assertThat(truncated.getBaseLogOffset()).isEqualTo(batchSize);
-            assertThat(truncated.getRecordCount()).isEqualTo(batchSize / 2);
-            // Both batches remain readable after draining the fetch and transferring ownership.
-            assertThat(first.getVectorSchemaRoot().getVector(0).getObject(0))
-                    .isEqualTo(DATA1.get(0)[0]);
-            assertThat(truncated.getVectorSchemaRoot().getVector(0).getObject(batchSize / 2 - 1))
-                    .isEqualTo(DATA1.get(batchSize / 2 - 1)[0]);
-            allocatedBytes =
-                    first.getVectorSchemaRoot().getVector(0).getAllocator()::getAllocatedMemory;
-            assertThat(allocatedBytes.getAsLong()).isPositive();
-        }
-        // Check the read-side allocator before closing readContext: closing the result must
-        // release retained slices as well as the discarded third batch and the original second
-        // batch.
-        assertThat(allocatedBytes.getAsLong()).isZero();
     }
 }

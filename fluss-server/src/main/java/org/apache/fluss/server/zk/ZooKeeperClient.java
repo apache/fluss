@@ -336,6 +336,20 @@ public class ZooKeeperClient implements AutoCloseable {
         return getChildren(ZkData.CoordinatorIdsZNode.path());
     }
 
+    /** Gets the registered addresses of the given coordinator servers, keyed by coordinator id. */
+    public Map<String, CoordinatorAddress> getCoordinatorServers(Collection<String> coordinatorIds)
+            throws Exception {
+        Map<String, String> path2IdMap =
+                coordinatorIds.stream().collect(toMap(ZkData.CoordinatorIdZNode::path, id -> id));
+
+        List<ZkGetDataResponse> responses = getDataInBackground(path2IdMap.keySet());
+        return processGetDataResponses(
+                responses,
+                response -> path2IdMap.get(response.getPath()),
+                ZkData.CoordinatorIdZNode::decode,
+                "coordinator server registration");
+    }
+
     /** Ensure epoch znode exists. */
     public void ensureEpochZnodeExists() throws Exception {
         String path = ZkData.CoordinatorEpochZNode.path();
@@ -850,6 +864,21 @@ public class ZooKeeperClient implements AutoCloseable {
                 "tables registration");
     }
 
+    /**
+     * Gets raw table registrations in a batch without filling default fields such as the remote
+     * data directory. Missing or empty nodes are absent from the result. Other ZooKeeper read
+     * failures are propagated to the caller.
+     */
+    public Map<TablePath, TableRegistration> getRawTableRegistrations(
+            Collection<TablePath> tablePaths) throws Exception {
+        Map<String, TablePath> paths =
+                tablePaths.stream().collect(Collectors.toMap(TableZNode::path, path -> path));
+        return processGetDataResponsesOrThrow(
+                getDataInBackground(paths.keySet()),
+                response -> paths.get(response.getPath()),
+                data -> data == null || data.length == 0 ? null : TableZNode.decode(data));
+    }
+
     /** Get the latest schema for given tables in ZK. */
     public Map<TablePath, SchemaInfo> getLatestSchemas(Collection<TablePath> tablePaths)
             throws Exception {
@@ -944,10 +973,10 @@ public class ZooKeeperClient implements AutoCloseable {
         return getPartitionRegistrations(tablePath, getPartitions(tablePath));
     }
 
-    /** Get the partition and the id for the partitions of tables in ZK. */
-    public Map<TablePath, Map<String, Long>> getPartitionNameAndIdsForTables(
-            List<TablePath> tablePaths) throws Exception {
-        Map<TablePath, Map<String, Long>> result = new HashMap<>();
+    /** Get the partition name and registrations for the partitions of tables in ZK. */
+    public Map<TablePath, Map<String, PartitionRegistration>>
+            getPartitionNameAndRegistrationsForTables(List<TablePath> tablePaths) throws Exception {
+        Map<TablePath, Map<String, PartitionRegistration>> result = new HashMap<>();
 
         Map<TablePath, List<String>> tablePath2Partitions = getPartitionsForTables(tablePaths);
 
@@ -970,9 +999,14 @@ public class ZooKeeperClient implements AutoCloseable {
                 String zkPath = response.getPath();
                 TablePath tablePath = zkPath2TablePath.get(zkPath);
                 String partitionName = zkPath2PartitionName.get(zkPath);
-                long partitionId = PartitionZNode.decode(response.getData()).getPartitionId();
+                PartitionRegistration partitionRegistration =
+                        PartitionZNode.decode(response.getData());
+                if (partitionRegistration.getRemoteDataDir() == null) {
+                    partitionRegistration =
+                            partitionRegistration.newRemoteDataDir(defaultRemoteDataDir);
+                }
                 result.computeIfAbsent(tablePath, k -> new HashMap<>())
-                        .put(partitionName, partitionId);
+                        .put(partitionName, partitionRegistration);
             } else {
                 LOG.warn(
                         "Failed to get data for path {}: {}",
@@ -999,7 +1033,11 @@ public class ZooKeeperClient implements AutoCloseable {
         return getPartitionRegistrations(tablePath, matchedPartitionNames);
     }
 
-    private Map<String, PartitionRegistration> getPartitionRegistrations(
+    /**
+     * Get the registrations of the given partitions of a table in ZK, in one batched read.
+     * Partitions that are not registered are absent from the result.
+     */
+    public Map<String, PartitionRegistration> getPartitionRegistrations(
             TablePath tablePath, Collection<String> partitionNames) throws Exception {
         Map<String, String> path2PartitionName =
                 partitionNames.stream()
@@ -1209,6 +1247,21 @@ public class ZooKeeperClient implements AutoCloseable {
 
         return getPartitionZNodeData(
                 path2PartitionPathMap, PartitionRegistration::toTablePartition);
+    }
+
+    /** Gets registrations for the requested physical partitions in one batch. */
+    public Map<PhysicalTablePath, PartitionRegistration> getPartitionRegistrations(
+            Collection<PhysicalTablePath> partitionPaths) throws Exception {
+        Map<String, PhysicalTablePath> paths =
+                partitionPaths.stream()
+                        .collect(
+                                toMap(
+                                        p ->
+                                                PartitionZNode.path(
+                                                        p.getTablePath(),
+                                                        checkNotNull(p.getPartitionName())),
+                                        p -> p));
+        return getPartitionZNodeData(paths, registration -> registration);
     }
 
     private <K, V> Map<K, V> getPartitionZNodeData(

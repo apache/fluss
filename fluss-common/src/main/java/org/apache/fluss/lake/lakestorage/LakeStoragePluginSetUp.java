@@ -17,11 +17,13 @@
 
 package org.apache.fluss.lake.lakestorage;
 
+import org.apache.fluss.exception.IllegalConfigurationException;
 import org.apache.fluss.plugin.PluginManager;
 import org.apache.fluss.shaded.guava32.com.google.common.collect.Iterators;
 
 import javax.annotation.Nullable;
 
+import java.security.CodeSource;
 import java.util.Iterator;
 import java.util.Objects;
 import java.util.ServiceLoader;
@@ -38,17 +40,47 @@ public class LakeStoragePluginSetUp {
         Iterator<LakeStoragePlugin> lakeStoragePluginIterator =
                 getAllLakeStoragePlugins(pluginManager);
 
+        LakeStoragePlugin matchingPlugin = null;
         while (lakeStoragePluginIterator.hasNext()) {
             LakeStoragePlugin lakeStoragePlugin = lakeStoragePluginIterator.next();
             if (Objects.equals(lakeStoragePlugin.identifier(), dataLakeFormat)) {
-                return PluginLakeStorageWrapper.of(lakeStoragePlugin);
+                if (matchingPlugin != null) {
+                    throw new IllegalConfigurationException(
+                            "Multiple LakeStoragePlugins for datalake format '"
+                                    + dataLakeFormat
+                                    + "' found: "
+                                    + describe(matchingPlugin)
+                                    + ", "
+                                    + describe(lakeStoragePlugin)
+                                    + ". Remove one of them from the plugins directory"
+                                    + " or the classpath.");
+                }
+                matchingPlugin = lakeStoragePlugin;
             }
+        }
+
+        if (matchingPlugin != null) {
+            return PluginLakeStorageWrapper.of(matchingPlugin);
         }
 
         // if come here, means we haven't found LakeStoragePlugin match the configured
         // datalake, throw exception
         throw new UnsupportedOperationException(
                 "No LakeStoragePlugin can be found for datalake format: " + dataLakeFormat);
+    }
+
+    /**
+     * The same class can be found twice, e.g. when its jar is both in the plugins directory and on
+     * the classpath, so the location is needed to tell the duplicates apart.
+     */
+    private static String describe(LakeStoragePlugin plugin) {
+        Class<?> pluginClass = plugin.getClass();
+        CodeSource codeSource = pluginClass.getProtectionDomain().getCodeSource();
+        String location =
+                codeSource == null || codeSource.getLocation() == null
+                        ? "unknown location"
+                        : codeSource.getLocation().toString();
+        return pluginClass.getName() + " (" + location + ")";
     }
 
     private static Iterator<LakeStoragePlugin> getAllLakeStoragePlugins(

@@ -303,7 +303,9 @@ public class ServerRpcMessageUtils {
     }
 
     public static DescribeClusterResponse buildDescribeClusterResponse(
-            @Nullable ServerNode coordinatorServer, Collection<ServerNode> aliveTabletServers) {
+            @Nullable ServerNode coordinatorServer,
+            List<ServerNode> coordinatorStandbys,
+            Collection<ServerNode> aliveTabletServers) {
         DescribeClusterResponse describeClusterResponse = new DescribeClusterResponse();
 
         if (coordinatorServer != null) {
@@ -333,6 +335,14 @@ public class ServerRpcMessageUtils {
         }
 
         describeClusterResponse.addAllTabletServers(pbServerNodeList);
+
+        for (ServerNode standby : coordinatorStandbys) {
+            describeClusterResponse
+                    .addCoordinatorStandby()
+                    .setNodeId(standby.id())
+                    .setHost(standby.host())
+                    .setPort(standby.port());
+        }
         return describeClusterResponse;
     }
 
@@ -655,7 +665,8 @@ public class ServerRpcMessageUtils {
                         .setRemoteDataDir(tableInfo.getRemoteDataDir())
                         .setCreatedTime(tableInfo.getCreatedTime())
                         .setModifiedTime(tableInfo.getModifiedTime())
-                        .setBucketCountEpoch(tableInfo.getBucketCountEpoch());
+                        .setBucketCountEpoch(tableInfo.getBucketCountEpoch())
+                        .setBucketCount(tableInfo.getNumBuckets());
         TablePath tablePath = tableInfo.getTablePath();
         pbTableMetadata
                 .setTablePath()
@@ -675,14 +686,8 @@ public class ServerRpcMessageUtils {
         pbPartitionMetadata.addAllBucketMetadatas(
                 toPbBucketMetadata(partitionMetadata.getBucketMetadataList()));
         Integer bucketCount = partitionMetadata.getBucketCount();
-        int effectiveBucketCount =
-                bucketCount != null
-                        ? bucketCount
-                        : partitionMetadata.getBucketMetadataList().size();
-        // 0 means the partition assignment is not known yet, not a zero-bucket layout;
-        // omitting the field keeps the client on its table-level fallback instead of 0.
-        if (effectiveBucketCount > 0) {
-            pbPartitionMetadata.setBucketCount(effectiveBucketCount);
+        if (bucketCount != null && bucketCount > 0) {
+            pbPartitionMetadata.setBucketCount(bucketCount);
         }
         return pbPartitionMetadata;
     }
@@ -1136,11 +1141,6 @@ public class ServerRpcMessageUtils {
                         .setHighWatermark(bucketResult.getHighWatermark())
                         // TODO: set log start offset here if we support log clean.
                         .setLogStartOffset(0L);
-
-                if (bucketResult.hasResolvedEarliestOffset()) {
-                    fetchLogRespForBucket.setResolvedEarliestOffset(
-                            bucketResult.getResolvedEarliestOffset());
-                }
 
                 if (bucketResult.fetchFromRemote()) {
                     // set remote log fetch info.

@@ -87,6 +87,7 @@ mod batch_scanner_test {
         // A limit scan concatenates every log batch the server returned into one
         // Arrow batch, so there is no single commit timestamp to report.
         assert_eq!(first.commit_timestamp(), NO_COMMIT_TIMESTAMP);
+        assert_eq!(first.schema_id(), fluss::record::NO_SCHEMA_ID);
         // The server may return fewer rows than the limit on the first call,
         // but must never exceed it.
         assert!(

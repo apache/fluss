@@ -80,6 +80,16 @@ public class CoordinatorMetricGroup extends AbstractMetricGroup {
                 eventClass, e -> new CoordinatorEventMetricGroup(registry, eventClass, this));
     }
 
+    /** Creates an independently owned event manager group without changing the metric scope. */
+    public MetricGroup createEventManagerMetricGroup() {
+        return new AbstractMetricGroup(registry, getScopeComponents(), this) {
+            @Override
+            protected String getGroupName(CharacterFilter filter) {
+                return "";
+            }
+        };
+    }
+
     // ------------------------------------------------------------------------
     //  table buckets groups
     // ------------------------------------------------------------------------

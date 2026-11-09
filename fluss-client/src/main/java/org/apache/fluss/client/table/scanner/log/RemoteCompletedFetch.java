@@ -47,7 +47,6 @@ class RemoteCompletedFetch extends CompletedFetch {
             LogScannerStatus logScannerStatus,
             boolean isCheckCrc,
             long fetchOffset,
-            long resolvedEarliestOffset,
             Runnable recycleCallback) {
         super(
                 tableBucket,
@@ -60,7 +59,6 @@ class RemoteCompletedFetch extends CompletedFetch {
                 logScannerStatus,
                 isCheckCrc,
                 fetchOffset,
-                resolvedEarliestOffset,
                 CompletedFetch.NO_FILTERED_END_OFFSET);
         this.fileLogRecords = fileLogRecords;
         this.recycleCallback = recycleCallback;
@@ -68,9 +66,6 @@ class RemoteCompletedFetch extends CompletedFetch {
 
     @Override
     void drain() {
-        if (isConsumed()) {
-            return;
-        }
         super.drain();
         // close file channel only, don't need to flush the file which is very heavy
         try {

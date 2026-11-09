@@ -91,8 +91,11 @@ public class InfluxdbPointProducer {
 
     private Point createPointForHistogram(Histogram histogram, Point point) {
         HistogramStatistics stats = histogram.getStatistics();
-        return point.setField("count", histogram.getCount())
-                .setField("mean", stats.getMean())
+        point.setField("count", histogram.getCount()).setField("windowCount", stats.size());
+        if (stats.size() == 0) {
+            return point;
+        }
+        return point.setField("mean", stats.getMean())
                 .setField("stddev", stats.getStdDev())
                 .setField("min", stats.getMin())
                 .setField("max", stats.getMax())

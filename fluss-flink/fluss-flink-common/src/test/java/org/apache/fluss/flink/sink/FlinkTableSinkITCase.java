@@ -1693,6 +1693,40 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
     }
 
     @Test
+    void testCollectionAggregation() throws Exception {
+        tEnv.executeSql(
+                "create table collection_agg ("
+                        + "id int not null primary key not enforced, "
+                        + "tags array<string>, "
+                        + "events array<string>, "
+                        + "attributes map<string, int>"
+                        + ") with ("
+                        + "'table.merge-engine' = 'aggregation', "
+                        + "'fields.tags.agg' = 'collect', "
+                        + "'fields.tags.collect.distinct' = 'true', "
+                        + "'fields.events.agg' = 'collect', "
+                        + "'fields.attributes.agg' = 'merge_map')");
+
+        tEnv.executeSql(
+                        "INSERT INTO collection_agg VALUES "
+                                + "(1, ARRAY['b', 'a', 'b'], ARRAY['x', 'x'], MAP['a', 1])")
+                .await();
+        tEnv.executeSql(
+                        "INSERT INTO collection_agg VALUES "
+                                + "(1, ARRAY['a', 'c'], ARRAY['y'], MAP['a', 2])")
+                .await();
+
+        CloseableIterator<Row> rowIter = tEnv.executeSql("SELECT * FROM collection_agg").collect();
+        assertResultsIgnoreOrder(
+                rowIter,
+                Arrays.asList(
+                        "+I[1, [b, a], [x, x], {a=1}]",
+                        "-U[1, [b, a], [x, x], {a=1}]",
+                        "+U[1, [b, a, c], [x, x, y], {a=2}]"),
+                true);
+    }
+
+    @Test
     void testPartialUpdateOnAggregationMergeEngine() throws Exception {
         tEnv.executeSql(
                 "create table agg_partial_update ("

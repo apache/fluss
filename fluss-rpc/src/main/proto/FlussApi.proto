@@ -259,7 +259,12 @@ message DescribeClusterRequest {
 
 message DescribeClusterResponse {
   optional PbServerNode coordinator_server = 1;
+  // Live tablet servers with addresses, racks and server tags.
   repeated PbServerNode tablet_servers = 2;
+  // Also includes offline servers with assigned replicas. Missing loads are not zero counts.
+  repeated PbTabletServerLoad tablet_server_loads = 3;
+  // Live standby coordinators, excluding the active coordinator_server. Fluss versions >= 1.1.
+  repeated PbServerNode coordinator_standbys = 4;
 }
 
 // produce log request and response
@@ -963,13 +968,6 @@ message GetClusterHealthResponse {
   required int32 status = 5; // PbClusterHealthStatus: GREEN=0, YELLOW=1, RED=2, UNKNOWN=3
 }
 
-message DescribeTabletServersRequest {
-}
-
-message DescribeTabletServersResponse {
-  repeated PbTabletServerLoad tablet_servers = 1;
-}
-
 
 // --------------- Inner classes ----------------
 message PbTabletServerLoad {
@@ -1027,6 +1025,10 @@ message PbTableMetadata {
   optional string remote_data_dir = 8;
   // A table-level, monotonically increasing version for bucket.num changes.
   optional int64 bucket_count_epoch = 9;
+
+  // The table's default bucket count, independent of bucket location availability.
+  // When present, bucket_count_epoch is also present, including epoch zero.
+  optional int32 bucket_count = 10;
 
   // TODO add a new filed 'deleted_table' to indicate this table is deleted in UpdateMetadataRequest.
   // trace by: https://github.com/apache/fluss/issues/981
@@ -1128,11 +1130,6 @@ message PbFetchLogRespForBucket {
   // The safe local log retention boundary confirmed by a committed KV snapshot. This is only
   // returned for KV follower fetches and is distinct from the physical log_start_offset.
   optional int64 min_retain_offset = 10;
-  // The log start offset to which an EARLIEST_OFFSET request was resolved.
-  // This field is present only when the request used EARLIEST_OFFSET.
-  // Its presence also allows a client to distinguish a server that reports the
-  // resolved offset from an older server that does not.
-  optional int64 resolved_earliest_offset = 11;
 }
 
 message PbPutKvReqForBucket {

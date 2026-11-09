@@ -233,6 +233,7 @@ class PrimaryKeyLookuperTest {
                 bucketLocationsByPath,
                 Collections.singletonMap(TABLE_PATH, TABLE_ID),
                 partitionIdsByPath,
+                Collections.emptyMap(),
                 Collections.emptyMap());
     }
 

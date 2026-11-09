@@ -35,7 +35,8 @@ binary.
 | Writes, DDL, lookup and Union Read | Not supported |
 | Predicate capture and transport | Supported for Trino column domains; filters remain evaluated by Trino |
 | Partition pruning | Supported for single-value equality constraints on STRING, BOOLEAN, TINYINT, SMALLINT, INTEGER, BIGINT and DATE partition columns |
-| Row filtering, aggregation, limit, range/IN partition pruning, bucket pruning and PK lookup pushdown | Not implemented |
+| Bucket pruning | Supported for non-Hudi tables when every bucket-key column has a single non-null equality constraint of a supported type |
+| Row filtering, aggregation, limit, range/IN pruning and PK lookup pushdown | Not implemented |
 | Task retries / fault-tolerant execution | Not supported |
 | SASL authentication on JDK 25 | Not supported; configuration properties are retained |
 
@@ -55,6 +56,24 @@ all relevant buckets. The connector does not enforce row-level predicates, so
 all remaining filters continue to be evaluated by Trino.
 Contradictory constraints produce no splits without additional Fluss metadata
 requests during split planning.
+
+Bucket pruning applies to both Log and Primary Key tables with explicit or
+default bucket keys. Supported bucket-key types are STRING, BYTES, BOOLEAN,
+TINYINT, SMALLINT, INTEGER, BIGINT and DATE. All bucket-key columns must be
+constrained; ranges, multiple values and nullable domains fall back to scanning
+all candidate buckets. Fluss's own key encoders and bucketing functions determine
+the selected bucket, using each physical partition's bucket count. Partition
+pruning and bucket pruning can be combined. Default primary-key bucketing does
+not require equality predicates on partition columns.
+
+A lake format configured before lake storage is enabled still determines the
+encoding and bucketing strategy. Bucket pruning is disabled for all tables
+configured with the Hudi lake format, even when lake storage is not enabled.
+These tables scan all candidate buckets after any applicable partition pruning.
+
+Partitions explicitly reported as missing during offset discovery are skipped.
+Other metadata and offset errors fail the query. Concurrent deletion may also
+cause readers to fail.
 
 Trino-visible database and table names are normalized to lowercase. When multiple
 Fluss names differ only by case, resolving the ambiguous name fails rather than

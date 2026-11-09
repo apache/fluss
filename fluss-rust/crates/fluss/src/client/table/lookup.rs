@@ -694,7 +694,7 @@ async fn partition_bucket_count(
     partition_id: PartitionId,
 ) -> Result<i32> {
     if let Some(count) = metadata
-        .get_cluster()
+        .load_cluster()
         .bucket_count(TableOrPartition::Partition(partition_id))
     {
         return Ok(count);

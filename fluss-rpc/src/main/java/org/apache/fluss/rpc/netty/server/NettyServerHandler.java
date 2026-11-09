@@ -293,19 +293,14 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
             return;
         }
 
-        // now, we need to update metrics
-        RequestsMetrics.Metrics metrics = optMetrics.get();
-
-        metrics.getRequestsCount().inc();
-        metrics.getRequestBytes().update(request.getMessage().totalSize());
-
-        // update metrics related to time
-        long requestDequeTimeMs = request.getRequestDequeTimeMs();
-        long requestCompletedTimeMs = request.getRequestCompletedTimeMs();
-        metrics.getRequestQueueTimeMs().update(requestDequeTimeMs - request.getStartTimeMs());
-        metrics.getRequestProcessTimeMs().update(requestCompletedTimeMs - requestDequeTimeMs);
-        metrics.getResponseSendTimeMs().update(requestEndTimeMs - requestCompletedTimeMs);
-        metrics.getTotalTimeMs().update(requestEndTimeMs - request.getStartTimeMs());
+        optMetrics
+                .get()
+                .recordRequest(
+                        request.getMessage().totalSize(),
+                        request.getStartTimeMs(),
+                        request.getRequestDequeTimeMs(),
+                        request.getRequestCompletedTimeMs(),
+                        requestEndTimeMs);
     }
 
     private Optional<RequestsMetrics.Metrics> getMetrics(FlussRequest request) {

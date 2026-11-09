@@ -62,9 +62,32 @@ public class TestingPaimonStoragePlugin implements LakeStoragePlugin {
 
     public static final String IDENTIFIER = DataLakeFormat.PAIMON.toString();
 
+    /**
+     * This plugin is registered through SPI in the server test jar, which modules that test against
+     * the real Paimon plugin also put on their classpath. Registering both under {@link
+     * #IDENTIFIER} is rejected as a duplicate, so this plugin uses another identifier whenever the
+     * real plugin is present.
+     */
+    private static final String REAL_PLUGIN_CLASS =
+            "org.apache.fluss.lake.paimon.PaimonLakeStoragePlugin";
+
+    private static final String SHADOWED_IDENTIFIER = "testing-paimon-shadowed";
+
+    private static final boolean REAL_PLUGIN_PRESENT = isRealPluginPresent();
+
     @Override
     public String identifier() {
-        return IDENTIFIER;
+        return REAL_PLUGIN_PRESENT ? SHADOWED_IDENTIFIER : IDENTIFIER;
+    }
+
+    private static boolean isRealPluginPresent() {
+        try {
+            Class.forName(
+                    REAL_PLUGIN_CLASS, false, TestingPaimonStoragePlugin.class.getClassLoader());
+            return true;
+        } catch (ClassNotFoundException e) {
+            return false;
+        }
     }
 
     @Override

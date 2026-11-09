@@ -20,6 +20,7 @@ package org.apache.fluss.server.kv.rocksdb;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
+import org.apache.fluss.server.exception.KvBuildingException;
 import org.apache.fluss.server.kv.KvManager;
 
 import io.github.fluss_contrib.rocksdb.BlockBasedTableConfig;
@@ -40,6 +41,7 @@ import io.github.fluss_contrib.rocksdb.RateLimiter;
 import io.github.fluss_contrib.rocksdb.ReadOptions;
 import io.github.fluss_contrib.rocksdb.RocksDB;
 import io.github.fluss_contrib.rocksdb.RocksIterator;
+import io.github.fluss_contrib.rocksdb.Statistics;
 import io.github.fluss_contrib.rocksdb.WriteBufferManager;
 import io.github.fluss_contrib.rocksdb.WriteOptions;
 import io.github.fluss_contrib.rocksdb.util.SizeUnit;
@@ -50,6 +52,7 @@ import org.junit.jupiter.params.provider.CsvSource;
 
 import java.io.File;
 import java.nio.ByteBuffer;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -61,6 +64,26 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests to guard {@link org.apache.fluss.server.kv.rocksdb.RocksDBResourceContainer}. */
 class RocksDBResourceContainerTest {
+
+    @Test
+    void testFailedOpenReleasesSharedStatistics(@TempDir Path directory) throws Exception {
+        File blocker = Files.createFile(directory.resolve("file")).toFile();
+        File dbDirectory = new File(blocker, "db");
+        RocksDBStatisticsRegistry registry = new RocksDBStatisticsRegistry();
+        RocksDBStatisticsRegistry.Lease lease = registry.acquire(1);
+        Statistics statistics = lease.getStatistics();
+        try (RocksDBResourceContainer container =
+                new RocksDBResourceContainer(new Configuration(), dbDirectory, true)) {
+            container.useSharedStatistics(lease);
+            RocksDBKvBuilder builder =
+                    new RocksDBKvBuilder(dbDirectory, container, container.getColumnOptions());
+            assertThatThrownBy(builder::build).isInstanceOf(KvBuildingException.class);
+            assertThat(statistics.isOwningHandle()).isFalse();
+        }
+        try (RocksDBStatisticsRegistry.Lease reopened = registry.acquire(1)) {
+            assertThat(reopened.getStatistics()).isNotSameAs(statistics);
+        }
+    }
 
     @Test
     void testPartitioningDefaultsAndOverrides() throws Exception {

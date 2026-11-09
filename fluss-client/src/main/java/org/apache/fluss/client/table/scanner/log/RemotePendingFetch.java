@@ -35,7 +35,6 @@ class RemotePendingFetch implements PendingFetch {
 
     private final int posInLogSegment;
     private final long fetchOffset;
-    private final long resolvedEarliestOffset;
     private final long highWatermark;
     private final LogRecordReadContext readContext;
     private final LogScannerStatus logScannerStatus;
@@ -47,7 +46,6 @@ class RemotePendingFetch implements PendingFetch {
             TablePath tablePath,
             int posInLogSegment,
             long fetchOffset,
-            long resolvedEarliestOffset,
             long highWatermark,
             LogRecordReadContext readContext,
             LogScannerStatus logScannerStatus,
@@ -57,7 +55,6 @@ class RemotePendingFetch implements PendingFetch {
         this.tablePath = tablePath;
         this.posInLogSegment = posInLogSegment;
         this.fetchOffset = fetchOffset;
-        this.resolvedEarliestOffset = resolvedEarliestOffset;
         this.highWatermark = highWatermark;
         this.readContext = readContext;
         this.logScannerStatus = logScannerStatus;
@@ -86,7 +83,6 @@ class RemotePendingFetch implements PendingFetch {
                 logScannerStatus,
                 isCheckCrc,
                 fetchOffset,
-                resolvedEarliestOffset,
                 downloadFuture.getRecycleCallback());
     }
 

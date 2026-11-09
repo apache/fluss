@@ -25,6 +25,7 @@ use crate::rpc::message::{
     BucketLookupKeys, LookupRequest, PrefixLookupRequest, ReadType, RequestBody, WriteType,
 };
 use crate::rpc::{ApiError, ServerConnection};
+use crate::util::retry_backoff_ms;
 use crate::{BucketId, PartitionId, TableId};
 use bytes::Bytes;
 use log::{debug, error, warn};
@@ -35,6 +36,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, watch};
 use tokio::task::JoinSet;
+use tokio::time::Instant;
 
 type ServerId = i32;
 
@@ -159,6 +161,8 @@ struct LookupDispatcher {
     re_enqueue_tx: mpsc::UnboundedSender<QueuedLookup>,
     inflight_semaphore: Arc<Semaphore>,
     max_retries: i32,
+    retry_backoff_ms: u64,
+    retry_max_backoff_ms: u64,
 }
 
 struct LookupBatch<T> {
@@ -228,12 +232,15 @@ impl<T> LookupBatch<T> {
 }
 
 impl LookupSender {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         metadata: Arc<Metadata>,
         queue: LookupQueue,
         re_enqueue_tx: mpsc::UnboundedSender<QueuedLookup>,
         max_inflight_requests: usize,
         max_retries: i32,
+        retry_backoff_ms: u64,
+        retry_max_backoff_ms: u64,
         shutdown_rx: watch::Receiver<bool>,
     ) -> Self {
         Self {
@@ -243,6 +250,8 @@ impl LookupSender {
                 re_enqueue_tx,
                 inflight_semaphore: Arc::new(Semaphore::new(max_inflight_requests)),
                 max_retries,
+                retry_backoff_ms,
+                retry_max_backoff_ms,
             }),
             requests: JoinSet::new(),
             running: AtomicBool::new(true),
@@ -658,11 +667,21 @@ impl LookupDispatcher {
     {
         let mut retried = 0usize;
         let mut failed = 0usize;
+        let mut max_retry_delay_ms = 0u64;
         let table_bucket = batch.table_bucket.clone();
+        let now = Instant::now();
 
         for mut lookup in batch.lookups.drain(..) {
             if is_retriable && lookup.retries() < self.max_retries && !lookup.is_done() {
-                lookup.increment_retries();
+                // Resending right away does not help while the lookup keeps failing, e.g. during a
+                // leader restart; it only floods the server and the log.
+                let retry_delay_ms = retry_backoff_ms(
+                    self.retry_backoff_ms,
+                    self.retry_max_backoff_ms,
+                    lookup.retries(),
+                );
+                max_retry_delay_ms = max_retry_delay_ms.max(retry_delay_ms);
+                lookup.prepare_retry(now + Duration::from_millis(retry_delay_ms));
                 self.re_enqueue_lookup(lookup.into());
                 retried += 1;
             } else {
@@ -673,8 +692,8 @@ impl LookupDispatcher {
 
         if retried > 0 {
             warn!(
-                "Lookup error for bucket {}, retrying {} lookups: {}",
-                table_bucket, retried, error
+                "Lookup error for bucket {}, retrying {} lookups with retry backoff up to {} ms: {}",
+                table_bucket, retried, max_retry_delay_ms, error
             );
         }
         if failed > 0 {
@@ -755,10 +774,16 @@ fn copy_error(error: &Error) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::client::lookup::{LookupQueue, PrimaryLookupQuery};
-    use crate::proto::PbLookupRespForBucket;
+    use crate::client::lookup::{LookupQueue, PrefixLookupQuery, PrimaryLookupQuery};
+    use crate::cluster::ServerType;
+    use crate::proto::{
+        ApiVersionsResponse, PbApiVersion, PbLookupRespForBucket, PbPrefixLookupRespForBucket,
+        PbValue, PbValueList,
+    };
+    use crate::rpc::ApiKey;
     use crate::test_utils::build_cluster_arc_with_port;
-    use tokio::io::AsyncReadExt;
+    use prost::Message;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
     use tokio::sync::oneshot;
 
@@ -780,12 +805,35 @@ mod tests {
         mpsc::Sender<QueuedLookup>,
         watch::Sender<bool>,
     ) {
+        sender_with_backoff(port, max_retries, 100, 0, 0)
+    }
+
+    fn sender_with_backoff(
+        port: u16,
+        max_retries: i32,
+        batch_timeout_ms: u64,
+        retry_backoff_ms: u64,
+        retry_max_backoff_ms: u64,
+    ) -> (
+        LookupSender,
+        mpsc::Sender<QueuedLookup>,
+        watch::Sender<bool>,
+    ) {
         let cluster = build_cluster_arc_with_port(&table_path(), TABLE_ID, 1, u32::from(port));
         let metadata = Arc::new(Metadata::new_for_test(cluster));
         let (queue, lookup_tx, re_enqueue_tx) =
-            LookupQueue::new(8, 8, 100, metadata.subscribe_cluster_changes());
+            LookupQueue::new(8, 8, batch_timeout_ms, metadata.subscribe_cluster_changes());
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
-        let sender = LookupSender::new(metadata, queue, re_enqueue_tx, 1, max_retries, shutdown_rx);
+        let sender = LookupSender::new(
+            metadata,
+            queue,
+            re_enqueue_tx,
+            1,
+            max_retries,
+            retry_backoff_ms,
+            retry_max_backoff_ms,
+            shutdown_rx,
+        );
         (sender, lookup_tx, shutdown_tx)
     }
 
@@ -806,8 +854,18 @@ mod tests {
     }
 
     fn fail_with_bucket_error(sender: &LookupSender, error_code: i32) -> Error {
+        respond_with_bucket_error(sender, error_code)
+            .try_recv()
+            .expect("lookup completed")
+            .expect_err("lookup failed")
+    }
+
+    fn respond_with_bucket_error(
+        sender: &LookupSender,
+        error_code: i32,
+    ) -> oneshot::Receiver<PrimaryResult> {
         let table_bucket = TableBucket::new(TABLE_ID, 0);
-        let (result_tx, mut result_rx) = oneshot::channel();
+        let (result_tx, result_rx) = oneshot::channel();
         let mut batch = LookupBatch::new(table_bucket.clone());
         batch.add_lookup(LookupQuery::new(
             table_path(),
@@ -831,9 +889,6 @@ mod tests {
             std::slice::from_mut(&mut batch),
         );
         result_rx
-            .try_recv()
-            .expect("lookup completed")
-            .expect_err("lookup failed")
     }
 
     #[test]
@@ -874,6 +929,37 @@ mod tests {
         );
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn a_not_leader_error_drops_the_cached_leaders_and_retries_after_the_backoff() {
+        let (mut sender, _lookup_tx, _shutdown_tx) = sender_with_backoff(9092, 3, 100, 100, 1000);
+        let table_bucket = TableBucket::new(TABLE_ID, 0);
+
+        let mut result_rx =
+            respond_with_bucket_error(&sender, FlussError::NotLeaderOrFollower.code());
+
+        assert!(
+            sender
+                .dispatcher
+                .metadata
+                .get_cluster()
+                .leader_for(&table_bucket)
+                .is_none()
+        );
+        assert!(matches!(
+            result_rx.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
+        let Some(QueuedLookup::Primary(retried)) = sender.queue.drain_all().pop() else {
+            panic!("the lookup was not retried");
+        };
+        assert_eq!(retried.retries(), 1);
+        let backoff = retried.retry_at().expect("retry deadline") - Instant::now();
+        assert!(
+            (Duration::from_millis(80)..=Duration::from_millis(120)).contains(&backoff),
+            "should back off 80..=120ms, got {backoff:?}"
+        );
+    }
+
     #[test]
     fn a_lookup_whose_caller_stopped_waiting_is_not_retried() {
         let mut sender = sender(3);
@@ -891,6 +977,169 @@ mod tests {
             .handle_batch_error(&error, true, &mut batch);
 
         assert!(sender.queue.drain_all().is_empty());
+    }
+
+    fn retry_backoffs(
+        retry_backoff_ms: u64,
+        retry_max_backoff_ms: u64,
+        retries: usize,
+    ) -> Vec<Duration> {
+        let (mut sender, _lookup_tx, _shutdown_tx) =
+            sender_with_backoff(9092, i32::MAX, 100, retry_backoff_ms, retry_max_backoff_ms);
+        let (mut query, _result_rx) = lookup(0);
+        let error = Error::UnexpectedError {
+            message: "connection reset".to_string(),
+            source: None,
+        };
+        let mut backoffs = Vec::with_capacity(retries);
+        for _ in 0..retries {
+            let mut batch = LookupBatch::new(query.table_bucket().clone());
+            batch.add_lookup(query);
+            sender
+                .dispatcher
+                .handle_batch_error(&error, true, &mut batch);
+
+            let Some(QueuedLookup::Primary(retried)) = sender.queue.drain_all().pop() else {
+                panic!("the lookup was not retried");
+            };
+            backoffs.push(retried.retry_at().expect("retry deadline") - Instant::now());
+            query = retried;
+        }
+        backoffs
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_retried_lookup_backs_off_exponentially() {
+        let expected_ms = [(80, 120), (160, 240), (320, 480), (640, 960), (800, 1200)];
+        let backoffs = retry_backoffs(100, 1000, expected_ms.len());
+        for (retry, (min_ms, max_ms)) in expected_ms.into_iter().enumerate() {
+            let backoff = backoffs[retry];
+            assert!(
+                (Duration::from_millis(min_ms)..=Duration::from_millis(max_ms)).contains(&backoff),
+                "retry {retry} should back off {min_ms}..={max_ms}ms, got {backoff:?}"
+            );
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_zero_retry_backoff_resends_immediately() {
+        assert_eq!(retry_backoffs(0, 1000, 3), [Duration::ZERO; 3]);
+    }
+
+    async fn fail_then_answer_lookups(listener: TcpListener) -> Duration {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut failed_at: Option<Instant> = None;
+        loop {
+            let len = stream.read_i32().await.unwrap();
+            let mut frame = vec![0u8; len as usize];
+            stream.read_exact(&mut frame).await.unwrap();
+            let api_key = ApiKey::from(i16::from_be_bytes([frame[0], frame[1]]));
+            let error_code = failed_at
+                .is_none()
+                .then(|| FlussError::KvStorageException.code());
+            let body = match api_key {
+                ApiKey::ApiVersion => ApiVersionsResponse {
+                    api_versions: [ApiKey::ApiVersion, ApiKey::Lookup, ApiKey::PrefixLookup]
+                        .into_iter()
+                        .map(|api_key| PbApiVersion {
+                            api_key: i32::from(i16::from(api_key)),
+                            min_version: 0,
+                            max_version: 0,
+                        })
+                        .collect(),
+                    server_type: Some(ServerType::TabletServer.to_type_id()),
+                }
+                .encode_to_vec(),
+                ApiKey::Lookup => LookupResponse {
+                    buckets_resp: vec![PbLookupRespForBucket {
+                        bucket_id: 0,
+                        error_code,
+                        values: vec![PbValue {
+                            values: Some(b"value".to_vec()),
+                        }],
+                        ..Default::default()
+                    }],
+                }
+                .encode_to_vec(),
+                ApiKey::PrefixLookup => PrefixLookupResponse {
+                    buckets_resp: vec![PbPrefixLookupRespForBucket {
+                        bucket_id: 0,
+                        error_code,
+                        value_lists: vec![PbValueList {
+                            values: vec![b"value".to_vec()],
+                        }],
+                        ..Default::default()
+                    }],
+                }
+                .encode_to_vec(),
+                other => panic!("unexpected api key {other:?}"),
+            };
+            stream.write_i32(5 + body.len() as i32).await.unwrap();
+            stream.write_u8(0).await.unwrap();
+            stream.write_all(&frame[4..8]).await.unwrap();
+            stream.write_all(&body).await.unwrap();
+
+            if api_key != ApiKey::ApiVersion {
+                match failed_at {
+                    None => failed_at = Some(Instant::now()),
+                    Some(failed_at) => return failed_at.elapsed(),
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_failed_lookup_succeeds_once_resent_after_the_backoff() {
+        let timeout = Duration::from_secs(10);
+        for prefix in [false, true] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let (mut sender, lookup_tx, shutdown_tx) =
+                sender_with_backoff(port, i32::MAX, 0, 100, 1000);
+            let server = tokio::spawn(fail_then_answer_lookups(listener));
+            let run = tokio::spawn(async move { sender.run().await });
+
+            if prefix {
+                let (result_tx, result_rx) = oneshot::channel();
+                let query = PrefixLookupQuery::new(
+                    table_path(),
+                    TableBucket::new(TABLE_ID, 0),
+                    1,
+                    Bytes::from_static(b"key"),
+                    result_tx,
+                );
+                lookup_tx.send(query.into()).await.unwrap();
+                let rows = tokio::time::timeout(timeout, result_rx)
+                    .await
+                    .expect("the prefix lookup completed")
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(rows, [b"value".to_vec()]);
+            } else {
+                let (query, result_rx) = lookup(0);
+                lookup_tx.send(query.into()).await.unwrap();
+                let value = tokio::time::timeout(timeout, result_rx)
+                    .await
+                    .expect("the lookup completed")
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(value.as_deref(), Some(b"value".as_slice()));
+            }
+
+            let resent_after = tokio::time::timeout(timeout, server)
+                .await
+                .expect("the lookup was resent")
+                .unwrap();
+            assert!(
+                resent_after >= Duration::from_millis(80),
+                "resent after {resent_after:?}"
+            );
+            shutdown_tx.send(true).unwrap();
+            tokio::time::timeout(timeout, run)
+                .await
+                .expect("the sender stopped")
+                .unwrap();
+        }
     }
 
     #[tokio::test]

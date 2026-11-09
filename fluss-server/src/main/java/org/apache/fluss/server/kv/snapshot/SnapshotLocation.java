@@ -41,10 +41,11 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  *
  * <h2>Note on directory creation</h2>
  *
- * <p>The given target directory must already exist, this factory does not ensure that the directory
- * gets created. That is important, because if this factory checked for directory existence, there
- * would be many checks per snapshot and such floods of directory existence checks can be
- * prohibitive on larger scale setups for some file systems.
+ * <p>The exclusive snapshot directory is created once by {@link #initialize()} in the asynchronous
+ * snapshot phase, before uploading files. Shared directory creation remains the responsibility of
+ * the filesystem when writing shared files. This factory does not check directories for each output
+ * stream, since repeated directory existence checks can be prohibitive on larger scale setups for
+ * some file systems.
  *
  * <p>For example many S3 file systems (like Hadoop's s3a) use HTTP HEAD requests to check for the
  * existence of a directory. S3 sometimes limits the number of HTTP HEAD requests to a few hundred
@@ -85,6 +86,11 @@ public class SnapshotLocation {
 
     public FsPath getSnapshotDirectory() {
         return snapshotDirectory;
+    }
+
+    /** Creates the exclusive snapshot directory before asynchronous uploads begin. */
+    public void initialize() throws IOException {
+        filesystem.mkdirs(snapshotDirectory);
     }
 
     // ------------------------------------------------------------------------

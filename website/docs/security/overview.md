@@ -30,6 +30,8 @@ In Fluss, a listener refers to a network endpoint that the server listens on for
 Listeners allow Fluss server (TabletServer and CoordinatorServer) to support multiple connection endpoints with different purposes and security requirements: one listener may be used for internal communication between servers while others may be exposed to external clients and require different authentication protocols.
 This flexibility enables operators to apply different security protocols per listener, ensuring appropriate protection levels based on who or what is connecting.
 
+When `internal.listener.name` selects a listener separate from the external listeners, internal traffic uses independent network threads, request processors, queues, and queue backpressure. All external listeners share one resource group. Each group uses the capacity configured by `netty.server.num-network-threads`, `netty.server.num-worker-threads`, and `netty.server.max-queued-requests`, so separate internal and external listeners allocate two groups. When internal and external traffic share a single listener, only one shared resource group is allocated.
+
 Server side listener configurations:
 
 | Option | Type | Default Value | Description |

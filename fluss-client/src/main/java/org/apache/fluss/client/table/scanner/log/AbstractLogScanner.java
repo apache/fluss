@@ -94,9 +94,6 @@ abstract class AbstractLogScanner<R> implements AutoCloseable {
             do {
                 ScanRecords scanRecords = pollForFetches();
                 if (!scanRecords.hasProgress()) {
-                    if (!logScannerStatus.hasActiveSubscriptions()) {
-                        return emptyResult();
-                    }
                     try {
                         if (!logFetcher.awaitNotEmpty(startNanos + timeoutNanos)) {
                             // no data in buffer within the timeout

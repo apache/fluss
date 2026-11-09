@@ -31,8 +31,6 @@ import org.apache.fluss.rpc.messages.DescribeBucketsRequest;
 import org.apache.fluss.rpc.messages.DescribeBucketsResponse;
 import org.apache.fluss.rpc.messages.DescribeClusterConfigsRequest;
 import org.apache.fluss.rpc.messages.DescribeClusterConfigsResponse;
-import org.apache.fluss.rpc.messages.DescribeTabletServersRequest;
-import org.apache.fluss.rpc.messages.DescribeTabletServersResponse;
 import org.apache.fluss.rpc.messages.FetchLogRequest;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
 import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerRequest;
@@ -336,12 +334,6 @@ public class TestingTabletGatewayService extends TestingGatewayService
     @Override
     public CompletableFuture<GetClusterHealthResponse> getClusterHealth(
             GetClusterHealthRequest request) {
-        return null;
-    }
-
-    @Override
-    public CompletableFuture<DescribeTabletServersResponse> describeTabletServers(
-            DescribeTabletServersRequest request) {
         return null;
     }
 }

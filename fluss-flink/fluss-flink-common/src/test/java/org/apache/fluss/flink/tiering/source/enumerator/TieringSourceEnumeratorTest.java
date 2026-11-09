@@ -17,13 +17,20 @@
 
 package org.apache.fluss.flink.tiering.source.enumerator;
 
+import org.apache.fluss.client.admin.Admin;
+import org.apache.fluss.client.admin.ListOffsetsResult;
+import org.apache.fluss.client.admin.OffsetSpec;
+import org.apache.fluss.client.metadata.KvSnapshots;
+import org.apache.fluss.client.metadata.LakeSnapshot;
 import org.apache.fluss.client.tiering.TieringLogSplit;
 import org.apache.fluss.client.tiering.TieringSnapshotSplit;
 import org.apache.fluss.client.tiering.TieringSplit;
 import org.apache.fluss.client.tiering.TieringSplitGenerator;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
 import org.apache.fluss.exception.NetworkException;
+import org.apache.fluss.flink.sink.testutils.TestAdminAdapter;
 import org.apache.fluss.flink.tiering.TestingLakeTieringFactory;
 import org.apache.fluss.flink.tiering.event.FailedTieringEvent;
 import org.apache.fluss.flink.tiering.event.FinishedTieringEvent;
@@ -31,6 +38,8 @@ import org.apache.fluss.flink.tiering.event.TieringReachMaxDurationEvent;
 import org.apache.fluss.flink.tiering.source.TieringTestBase;
 import org.apache.fluss.flink.tiering.source.split.FlinkTieringSplit;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
+import org.apache.fluss.metadata.PartitionInfo;
+import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -39,6 +48,7 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
 import org.apache.fluss.rpc.messages.PbLakeTableOffsetForBucket;
 import org.apache.fluss.rpc.messages.PbLakeTableSnapshotInfo;
+import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import org.apache.flink.api.connector.source.SourceEvent;
 import org.apache.flink.api.connector.source.SplitsAssignment;
@@ -49,6 +59,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.annotation.Nullable;
@@ -56,10 +67,13 @@ import javax.annotation.Nullable;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -67,6 +81,7 @@ import java.util.stream.IntStream;
 import static org.apache.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFSET;
 import static org.apache.fluss.config.ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
+import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
@@ -88,6 +103,149 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
     @BeforeEach
     protected void beforeEach() throws Exception {
         super.beforeEach();
+    }
+
+    @ParameterizedTest
+    @NullSource
+    @ValueSource(strings = {"2026", HISTORICAL_PARTITION_VALUE})
+    void testKvSnapshotsOnlyRequestedForUntieredBuckets(@Nullable String partitionName)
+            throws Exception {
+        boolean partitioned = partitionName != null;
+        boolean historicalPartition = HISTORICAL_PARTITION_VALUE.equals(partitionName);
+        long tableId = 1L;
+        Long partitionId = partitioned ? 2L : null;
+        TableInfo tableInfo =
+                TableInfo.of(
+                        DEFAULT_TABLE_PATH,
+                        tableId,
+                        1,
+                        partitioned
+                                ? DEFAULT_AUTO_PARTITIONED_PK_TABLE_DESCRIPTOR
+                                : DEFAULT_PK_TABLE_DESCRIPTOR,
+                        null,
+                        0,
+                        0);
+        List<PartitionInfo> partitions =
+                partitioned
+                        ? Collections.singletonList(
+                                new PartitionInfo(
+                                        partitionId,
+                                        ResolvedPartitionSpec.fromPartitionValue(
+                                                "date", partitionName),
+                                        null,
+                                        DEFAULT_BUCKET_NUM))
+                        : Collections.emptyList();
+        Map<Integer, CompletableFuture<Long>> offsets = new HashMap<>();
+        for (int bucket = 0; bucket < DEFAULT_BUCKET_NUM; bucket++) {
+            offsets.put(bucket, CompletableFuture.completedFuture(0L));
+        }
+        ListOffsetsResult latestOffsets = new ListOffsetsResult(offsets);
+        AtomicReference<LakeSnapshot> lakeSnapshot = new AtomicReference<>();
+        AtomicReference<KvSnapshots> kvSnapshots =
+                new AtomicReference<>(
+                        new KvSnapshots(
+                                tableId,
+                                partitionId,
+                                Collections.singletonMap(2, 1L),
+                                Collections.singletonMap(2, 6L)));
+        AtomicInteger kvSnapshotRequests = new AtomicInteger();
+        Admin tieringAdmin =
+                new TestAdminAdapter() {
+                    @Override
+                    public CompletableFuture<LakeSnapshot> getLatestLakeSnapshot(TablePath path) {
+                        return lakeSnapshot.get() == null
+                                ? FutureUtils.completedExceptionally(
+                                        new LakeTableSnapshotNotExistException("No lake snapshot"))
+                                : CompletableFuture.completedFuture(lakeSnapshot.get());
+                    }
+
+                    @Override
+                    public ListOffsetsResult listOffsets(
+                            TablePath path, Collection<Integer> buckets, OffsetSpec spec) {
+                        return latestOffsets;
+                    }
+
+                    @Override
+                    public ListOffsetsResult listOffsets(
+                            TablePath path,
+                            String partition,
+                            Collection<Integer> buckets,
+                            OffsetSpec spec) {
+                        return latestOffsets;
+                    }
+
+                    @Override
+                    public CompletableFuture<KvSnapshots> getLatestKvSnapshots(TablePath path) {
+                        return getLatestKvSnapshots(path, null);
+                    }
+
+                    @Override
+                    public CompletableFuture<KvSnapshots> getLatestKvSnapshots(
+                            TablePath path, @Nullable String partition) {
+                        assertThat(partition).isEqualTo(partitionName);
+                        kvSnapshotRequests.incrementAndGet();
+                        return CompletableFuture.completedFuture(kvSnapshots.get());
+                    }
+                };
+        TieringSplitGenerator generator = new TieringSplitGenerator(tieringAdmin);
+
+        assertThat(generator.generateTableSplits(tableInfo, partitions)).isEmpty();
+        assertThat(kvSnapshotRequests).hasValue(0);
+
+        TableBucket bucket0 = new TableBucket(tableId, partitionId, 0);
+        TableBucket bucket1 = new TableBucket(tableId, partitionId, 1);
+        TableBucket bucket2 = new TableBucket(tableId, partitionId, 2);
+        Map<TableBucket, Long> committedOffsets = new HashMap<>();
+        committedOffsets.put(bucket0, 0L);
+        committedOffsets.put(bucket1, 10L);
+        committedOffsets.put(bucket2, 12L);
+        lakeSnapshot.set(new LakeSnapshot(1, committedOffsets));
+        offsets.replaceAll((bucket, offset) -> CompletableFuture.completedFuture(10L));
+        TieringLogSplit logSplit =
+                new TieringLogSplit(DEFAULT_TABLE_PATH, bucket0, partitionName, 0, 10, 0);
+
+        assertThat(generator.generateTableSplits(tableInfo, partitions)).containsExactly(logSplit);
+        assertThat(kvSnapshotRequests).hasValue(0);
+
+        committedOffsets.remove(bucket1);
+        committedOffsets.remove(bucket2);
+        lakeSnapshot.set(new LakeSnapshot(2, committedOffsets));
+        TieringLogSplit bucket1LogSplit =
+                new TieringLogSplit(
+                        DEFAULT_TABLE_PATH, bucket1, partitionName, EARLIEST_OFFSET, 10, 0);
+        TieringLogSplit bucket2LogSplit =
+                new TieringLogSplit(
+                        DEFAULT_TABLE_PATH, bucket2, partitionName, EARLIEST_OFFSET, 10, 0);
+        TieringSplit untieredBucketSplit =
+                historicalPartition
+                        ? bucket2LogSplit
+                        : new TieringSnapshotSplit(
+                                DEFAULT_TABLE_PATH, bucket2, partitionName, 1, 6, 0);
+
+        assertThat(generator.generateTableSplits(tableInfo, partitions))
+                .containsExactly(logSplit, bucket1LogSplit, untieredBucketSplit);
+        assertThat(kvSnapshotRequests).hasValue(historicalPartition ? 0 : 1);
+        if (!historicalPartition) {
+            kvSnapshots.set(
+                    new KvSnapshots(
+                            tableId, partitionId, Collections.emptyMap(), Collections.emptyMap()));
+            assertThat(generator.generateTableSplits(tableInfo, partitions))
+                    .containsExactly(logSplit, bucket1LogSplit, bucket2LogSplit);
+            assertThat(kvSnapshotRequests).hasValue(2);
+
+            kvSnapshots.set(null);
+            assertThatThrownBy(() -> generator.generateTableSplits(tableInfo, partitions))
+                    .isInstanceOf(IllegalStateException.class);
+
+            kvSnapshots.set(
+                    new KvSnapshots(
+                            tableId,
+                            partitionId,
+                            Collections.singletonMap(2, 1L),
+                            Collections.emptyMap()));
+            assertThatThrownBy(() -> generator.generateTableSplits(tableInfo, partitions))
+                    .isInstanceOf(IllegalStateException.class);
+        }
     }
 
     @ParameterizedTest

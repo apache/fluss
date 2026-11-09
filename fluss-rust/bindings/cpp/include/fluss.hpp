@@ -1401,6 +1401,8 @@ class ArrowRecordBatch {
     // timestamp, which is the case for a limit scan because it merges several
     // log batches into one Arrow batch.
     static constexpr int64_t NO_COMMIT_TIMESTAMP = -1;
+    // No single source schema ID, including results of a limit scan.
+    static constexpr int32_t NO_SCHEMA_ID = -1;
 
     std::shared_ptr<arrow::RecordBatch> GetArrowRecordBatch() const { return batch_; }
 
@@ -1417,13 +1419,16 @@ class ArrowRecordBatch {
     int64_t GetLastOffset() const;
     // Epoch milliseconds, or NO_COMMIT_TIMESTAMP when unavailable.
     int64_t GetCommitTimestamp() const;
+    // Source log batch schema ID, or NO_SCHEMA_ID when unavailable.
+    int32_t GetSchemaId() const;
 
    private:
     friend class LogScanner;
     friend struct detail::ArrowBatchImporter;
     explicit ArrowRecordBatch(std::shared_ptr<arrow::RecordBatch> batch, int64_t table_id,
                               int64_t partition_id, int32_t bucket_id,
-                              int64_t base_offset, int64_t commit_timestamp) noexcept;
+                              int64_t base_offset, int64_t commit_timestamp,
+                              int32_t schema_id) noexcept;
 
     std::shared_ptr<arrow::RecordBatch> batch_{nullptr};
 
@@ -1434,6 +1439,7 @@ class ArrowRecordBatch {
     // Defaults to the sentinel so any future construction path that forgets to
     // set it reports "unknown" rather than an arbitrary value.
     int64_t commit_timestamp_{NO_COMMIT_TIMESTAMP};
+    int32_t schema_id_{NO_SCHEMA_ID};
 };
 
 struct ArrowRecordBatches {
@@ -1639,6 +1645,8 @@ struct Configuration {
     int32_t writer_dynamic_batch_size_min{256 * 1024};
     // Bucket assigner for tables without bucket keys: "sticky" or "round_robin"
     std::string writer_bucket_no_key_assigner{"sticky"};
+    // Create a missing partition on write; if false, such writes fail with PARTITION_NOT_EXISTS
+    bool writer_dynamic_create_partition_enabled{true};
     // Number of remote log batches to prefetch during scanning
     size_t scanner_remote_log_prefetch_num{4};
     // Number of threads for downloading remote log data
@@ -1677,6 +1685,9 @@ struct Configuration {
     uint64_t writer_retry_max_backoff_ms{1000};
     // Connect timeout in milliseconds for TCP transport connect
     uint64_t connect_timeout_ms{15000};
+    // Close cached connections without reads or writes for this long (ms), failing the requests
+    // still waiting on them with a retriable error. 0 disables closing idle connections
+    uint64_t connection_max_idle_time_ms{600000};
     // Security protocol: "PLAINTEXT" (default, no auth) or "sasl" (SASL auth)
     std::string security_protocol{"PLAINTEXT"};
     // SASL mechanism (only "PLAIN" is supported)
@@ -1695,6 +1706,11 @@ struct Configuration {
     size_t lookup_max_inflight_requests{128};
     // Maximum number of lookup retries
     int32_t lookup_max_retries{std::numeric_limits<int32_t>::max()};
+    // Base delay (ms) before resending a lookup that failed with a retriable error
+    uint64_t lookup_retry_backoff_ms{100};
+    // Maximum lookup retry backoff (ms) after exponential growth, before +/-20% jitter;
+    // must be >= lookup_retry_backoff_ms
+    uint64_t lookup_retry_max_backoff_ms{1000};
 };
 
 class Connection {

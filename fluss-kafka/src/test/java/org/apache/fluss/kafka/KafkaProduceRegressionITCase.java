@@ -229,9 +229,10 @@ class KafkaProduceRegressionITCase {
                     assertThat(send(producer, alias, "enabled").offset()).isEqualTo(2L);
                     assertValues(connection, path, "full", "alias", "enabled");
                     admin.dropTable(path, false).get();
-                    // Metadata propagates the native lookup failure without rediscovery.
                     assertRejectedNames(
-                            path, Errors.UNKNOWN_SERVER_ERROR, Errors.UNKNOWN_TOPIC_OR_PARTITION);
+                            path,
+                            Errors.UNKNOWN_TOPIC_OR_PARTITION,
+                            Errors.UNKNOWN_TOPIC_OR_PARTITION);
                     createTable(admin, path, 3);
                     assertThat(send(producer, full, "recreated_full").offset()).isZero();
                     assertThat(send(producer, alias, "recreated_alias").offset()).isEqualTo(1L);

@@ -18,6 +18,7 @@
 package org.apache.fluss.server.coordinator;
 
 import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.cluster.TabletServerInfo;
 import org.apache.fluss.cluster.rebalance.GoalType;
@@ -102,8 +103,6 @@ import org.apache.fluss.rpc.messages.DeleteProducerOffsetsRequest;
 import org.apache.fluss.rpc.messages.DeleteProducerOffsetsResponse;
 import org.apache.fluss.rpc.messages.DescribeClusterRequest;
 import org.apache.fluss.rpc.messages.DescribeClusterResponse;
-import org.apache.fluss.rpc.messages.DescribeTabletServersRequest;
-import org.apache.fluss.rpc.messages.DescribeTabletServersResponse;
 import org.apache.fluss.rpc.messages.DropAclsRequest;
 import org.apache.fluss.rpc.messages.DropAclsResponse;
 import org.apache.fluss.rpc.messages.DropDatabaseRequest;
@@ -192,11 +191,13 @@ import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotJsonSerde;
 import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
 import org.apache.fluss.server.metadata.CoordinatorMetadataProvider;
+import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.metadata.SystemTables;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperClient.TableBucketAndManifest;
 import org.apache.fluss.server.zk.data.BucketAssignment;
+import org.apache.fluss.server.zk.data.CoordinatorAddress;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.TableAssignment;
@@ -216,6 +217,7 @@ import javax.annotation.Nullable;
 import java.io.UncheckedIOException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -1851,11 +1853,43 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     @Override
     public CompletableFuture<DescribeClusterResponse> describeCluster(
             DescribeClusterRequest request) {
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), OperationType.DESCRIBE, Resource.cluster());
+        }
         String listenerName = currentListenerName();
-        return CompletableFuture.completedFuture(
-                buildDescribeClusterResponse(
-                        metadataCache.getCoordinatorServer(listenerName),
-                        metadataCache.getAllAliveTabletServersWithTags(listenerName).values()));
+        AccessContextEvent<DescribeClusterResponse> event =
+                new AccessContextEvent<>(
+                        ctx -> {
+                            DescribeClusterResponse response =
+                                    buildDescribeClusterResponse(
+                                            metadataCache.getCoordinatorServer(listenerName),
+                                            getCoordinatorStandbys(ctx, listenerName),
+                                            metadataCache
+                                                    .getAllAliveTabletServersWithTags(listenerName)
+                                                    .values());
+                            response.addAllTabletServerLoads(computeTabletServerLoads(ctx));
+                            return response;
+                        });
+        eventManagerSupplier.get().put(event);
+        return event.getResultFuture();
+    }
+
+    /**
+     * Returns the standby coordinators reachable on the given listener, in coordinator id order.
+     * Coordinator ids are not numeric, so like the active coordinator, standbys use node id 0.
+     */
+    private static List<ServerNode> getCoordinatorStandbys(
+            CoordinatorContext ctx, String listenerName) {
+        List<ServerNode> standbys = new ArrayList<>();
+        for (CoordinatorAddress standby : ctx.getCoordinatorStandbys()) {
+            ServerNode node =
+                    new ServerInfo(0, null, standby.getEndpoints(), ServerType.COORDINATOR)
+                            .node(listenerName);
+            if (node != null) {
+                standbys.add(node);
+            }
+        }
+        return standbys;
     }
 
     @Override
@@ -1961,21 +1995,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         return response;
     }
 
-    @Override
-    public CompletableFuture<DescribeTabletServersResponse> describeTabletServers(
-            DescribeTabletServersRequest request) {
-        if (authorizer != null) {
-            authorizer.authorize(currentSession(), OperationType.DESCRIBE, Resource.cluster());
-        }
-
-        AccessContextEvent<DescribeTabletServersResponse> event =
-                new AccessContextEvent<>(CoordinatorService::computeTabletServerLoads);
-        eventManagerSupplier.get().put(event);
-        return event.getResultFuture();
-    }
-
     @VisibleForTesting
-    static DescribeTabletServersResponse computeTabletServerLoads(CoordinatorContext ctx) {
+    static Collection<PbTabletServerLoad> computeTabletServerLoads(CoordinatorContext ctx) {
         // sorted by server id for a deterministic response order
         Map<Integer, PbTabletServerLoad> loads = new TreeMap<>();
         // report live and shutting-down servers even if they host no replicas, so that
@@ -1988,9 +2009,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             countBucketReplicas(ctx, tb, loads);
         }
 
-        DescribeTabletServersResponse response = new DescribeTabletServersResponse();
-        response.addAllTabletServers(loads.values());
-        return response;
+        return loads.values();
     }
 
     private static void countBucketReplicas(

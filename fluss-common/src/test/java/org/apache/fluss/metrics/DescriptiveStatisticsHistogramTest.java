@@ -17,10 +17,15 @@
 
 package org.apache.fluss.metrics;
 
+import org.apache.fluss.utils.clock.ManualClock;
+
 import org.assertj.core.data.Offset;
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
+
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.offset;
 
 /**
@@ -48,6 +53,48 @@ class DescriptiveStatisticsHistogramTest {
 
         final DescriptiveStatisticsHistogramStatistics.CommonMetricsSnapshot copy = original.copy();
         assertOperations(copy);
+    }
+
+    @Test
+    void testSamplesExpireOnReadAndCountRemainsCumulative() {
+        ManualClock clock = new ManualClock();
+        DescriptiveStatisticsHistogram histogram =
+                new DescriptiveStatisticsHistogram(3, Duration.ofMinutes(5), clock);
+
+        histogram.update(100);
+        clock.advanceTime(Duration.ofMinutes(3));
+        histogram.update(200);
+        assertThat(histogram.getStatistics().getValues()).containsExactly(100, 200);
+
+        clock.advanceTime(Duration.ofMinutes(2));
+        assertThat(histogram.getStatistics().getValues()).containsExactly(200);
+        assertThat(histogram.getCount()).isEqualTo(2);
+
+        clock.advanceTime(Duration.ofMinutes(3));
+        assertThat(histogram.getStatistics().size()).isZero();
+        assertThat(histogram.getCount()).isEqualTo(2);
+
+        histogram.update(10);
+        assertThat(histogram.getStatistics().getValues()).containsExactly(10);
+        assertThat(histogram.getCount()).isEqualTo(3);
+    }
+
+    @Test
+    void testWrappedSampleWindowAndInvalidAge() {
+        ManualClock clock = new ManualClock();
+        DescriptiveStatisticsHistogram histogram =
+                new DescriptiveStatisticsHistogram(2, Duration.ofMinutes(5), clock);
+        histogram.update(1);
+        clock.advanceTime(Duration.ofMinutes(1));
+        histogram.update(2);
+        histogram.update(3);
+
+        assertThat(histogram.getStatistics().getValues()).containsExactlyInAnyOrder(2, 3);
+        clock.advanceTime(Duration.ofMinutes(5));
+        assertThat(histogram.getStatistics().size()).isZero();
+
+        assertThatThrownBy(() -> new DescriptiveStatisticsHistogram(2, Duration.ZERO))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     private static void assertOperations(

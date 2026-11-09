@@ -50,8 +50,6 @@ import org.apache.fluss.rpc.messages.DeleteConsumerGroupsRequest;
 import org.apache.fluss.rpc.messages.DeleteConsumerGroupsResponse;
 import org.apache.fluss.rpc.messages.DeleteConsumerOffsetsRequest;
 import org.apache.fluss.rpc.messages.DeleteConsumerOffsetsResponse;
-import org.apache.fluss.rpc.messages.DescribeTabletServersRequest;
-import org.apache.fluss.rpc.messages.DescribeTabletServersResponse;
 import org.apache.fluss.rpc.messages.FetchLogRequest;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
 import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerRequest;
@@ -97,6 +95,7 @@ import org.apache.fluss.rpc.messages.StopReplicaRequest;
 import org.apache.fluss.rpc.messages.StopReplicaResponse;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.rpc.messages.UpdateMetadataResponse;
+import org.apache.fluss.rpc.netty.server.Session;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.protocol.FetchLogReadPreference;
@@ -125,6 +124,8 @@ import org.apache.fluss.server.log.FetchParamsBuilder;
 import org.apache.fluss.server.log.FilterInfo;
 import org.apache.fluss.server.log.ListOffsetsParam;
 import org.apache.fluss.server.metadata.ClusterMetadata;
+import org.apache.fluss.server.metadata.MetadataView;
+import org.apache.fluss.server.metadata.MetadataViewProvider;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.metadata.TabletServerMetadataProvider;
 import org.apache.fluss.server.replica.Replica;
@@ -188,7 +189,8 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toProduceLogDa
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toPutKvDataForBuckets;
 
 /** An RPC Gateway service for tablet server. */
-public final class TabletService extends RpcServiceBase implements TabletServerGateway {
+public final class TabletService extends RpcServiceBase
+        implements TabletServerGateway, MetadataViewProvider {
 
     private final String serviceName;
     private final ReplicaManager replicaManager;
@@ -652,6 +654,13 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     }
 
     @Override
+    public MetadataView getMetadataView(Session session) {
+        return metadataCache.getMetadataView(
+                session.getListenerName(),
+                path -> isTableMetadataAuthorized(session, authorizer, path));
+    }
+
+    @Override
     public CompletableFuture<MetadataResponse> metadata(MetadataRequest request) {
         MetadataResponse metadataResponse =
                 processMetadataRequest(
@@ -869,29 +878,6 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         response.completeExceptionally(
                 new UnsupportedOperationException("deleteConsumerGroups is not supported yet"));
         return response;
-    }
-
-    @Override
-    public CompletableFuture<DescribeTabletServersResponse> describeTabletServers(
-            DescribeTabletServersRequest request) {
-        // Tablet servers don't own the cluster-wide replica view; we forward the call to the
-        // coordinator over the internal listener.
-        if (authorizer != null) {
-            authorizer.authorize(currentSession(), OperationType.DESCRIBE, Resource.cluster());
-        }
-
-        if (metadataCache.getCoordinatorServer(interListenerName) == null) {
-            // Fail fast during the startup window before the tablet has received its first
-            // UpdateMetadataRequest from the coordinator. The supplier inside coordinatorGateway
-            // would otherwise block-and-retry, which is not what callers want.
-            CompletableFuture<DescribeTabletServersResponse> failed = new CompletableFuture<>();
-            failed.completeExceptionally(
-                    new StaleMetadataException(
-                            "Tablet server has not yet received coordinator metadata; tablet"
-                                    + " server loads are unavailable."));
-            return failed;
-        }
-        return coordinatorGateway.describeTabletServers(request);
     }
 
     @Override

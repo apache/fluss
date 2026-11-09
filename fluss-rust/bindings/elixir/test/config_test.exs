@@ -31,6 +31,14 @@ defmodule Fluss.ConfigTest do
     assert config.connect_timeout_ms == 30_000
   end
 
+  test "set_connection_max_idle_time_ms/2 sets the connection max idle time" do
+    config =
+      Fluss.Config.new("localhost:9123")
+      |> Fluss.Config.set_connection_max_idle_time_ms(0)
+
+    assert config.connection_max_idle_time_ms == 0
+  end
+
   test "set_lookup_batch_timeout_ms/2 sets the lookup batch timeout" do
     config =
       Fluss.Config.new("localhost:9123")
@@ -61,6 +69,16 @@ defmodule Fluss.ConfigTest do
       |> Fluss.Config.set_lookup_max_retries(5)
 
     assert config.lookup_max_retries == 5
+  end
+
+  test "set_lookup_retry_backoff_ms/2 sets the lookup retry backoff" do
+    config =
+      Fluss.Config.new("localhost:9123")
+      |> Fluss.Config.set_lookup_retry_backoff_ms(250)
+      |> Fluss.Config.set_lookup_retry_max_backoff_ms(5_000)
+
+    assert config.lookup_retry_backoff_ms == 250
+    assert config.lookup_retry_max_backoff_ms == 5_000
   end
 
   test "set_lookup_queue_size/2 sets the lookup queue size" do
@@ -252,6 +270,14 @@ defmodule Fluss.ConfigTest do
       |> Fluss.Config.set_writer_kv_backpressure_max_throttle_ms(1_500)
 
     assert config.writer_kv_backpressure_max_throttle_ms == 1_500
+  end
+
+  test "set_writer_dynamic_create_partition_enabled/2 sets whether writes create partitions" do
+    config =
+      Fluss.Config.new("localhost:9123")
+      |> Fluss.Config.set_writer_dynamic_create_partition_enabled(false)
+
+    assert config.writer_dynamic_create_partition_enabled == false
   end
 
   test "set_writer_enable_idempotence/2 sets the idempotence flag" do

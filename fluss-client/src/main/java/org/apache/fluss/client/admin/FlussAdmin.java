@@ -34,8 +34,11 @@ import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.ConfigEntry;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.InvalidServerTypeException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
+import org.apache.fluss.exception.NotCoordinatorLeaderException;
 import org.apache.fluss.exception.PartitionNotExistException;
+import org.apache.fluss.exception.RetriableException;
 import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.metadata.BucketInfo;
 import org.apache.fluss.metadata.DatabaseChange;
@@ -76,7 +79,7 @@ import org.apache.fluss.rpc.messages.DatabaseExistsResponse;
 import org.apache.fluss.rpc.messages.DeleteProducerOffsetsRequest;
 import org.apache.fluss.rpc.messages.DescribeBucketsRequest;
 import org.apache.fluss.rpc.messages.DescribeClusterConfigsRequest;
-import org.apache.fluss.rpc.messages.DescribeTabletServersRequest;
+import org.apache.fluss.rpc.messages.DescribeClusterRequest;
 import org.apache.fluss.rpc.messages.DropAclsRequest;
 import org.apache.fluss.rpc.messages.DropDatabaseRequest;
 import org.apache.fluss.rpc.messages.DropTableRequest;
@@ -146,9 +149,7 @@ import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeListOffset
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makePbPartitionSpec;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeRegisterProducerOffsetsRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.toConfigEntries;
-import static org.apache.fluss.client.utils.MetadataUtils.fallbackIfUnsupported;
 import static org.apache.fluss.client.utils.MetadataUtils.getOneAvailableTabletServerNode;
-import static org.apache.fluss.client.utils.MetadataUtils.sendDescribeClusterRequest;
 import static org.apache.fluss.client.utils.MetadataUtils.sendMetadataRequestAndRebuildCluster;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindings;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toPbAclBindingFilters;
@@ -171,7 +172,9 @@ public class FlussAdmin implements Admin {
 
     /**
      * Retries on the coordinator after a metadata refresh, so that a stale coordinator address is
-     * recovered. Only use it for idempotent read requests, see the TODO in the constructor.
+     * recovered. Only use it for idempotent read requests, because it retries on any {@link
+     * RetriableException}. Non-idempotent writes go through {@link #gateway}, which only retries
+     * errors that are guaranteed to be raised before the request is executed.
      */
     private final AdminGateway retryableCoordinatorGateway;
 
@@ -186,15 +189,25 @@ public class FlussAdmin implements Admin {
                     1, new ExecutorThreadFactory("fluss-admin-metadata-refresh"));
 
     public FlussAdmin(RpcClient client, MetadataUpdater metadataUpdater) {
-        // TODO: AdminGateway includes non-idempotent write operations (createTable, dropTable,
-        //  createDatabase, etc.). Wrapping it with RetryableGatewayClientProxy is unsafe because
-        //  a request may succeed on the server while the response is lost (surfacing as a
-        //  RetriableException), causing a duplicate mutation on retry. A future phase should
-        //  introduce idempotent retry semantics (e.g., request-id deduplication) before enabling
-        //  retry on the write gateway.
-        this.gateway =
+        AdminGateway rawGateway =
                 GatewayClientProxy.createGatewayProxy(
                         metadataUpdater::getCoordinatorServer, client, AdminGateway.class);
+        // Refresh metadata for recoverable failures, but don't retry generic network errors because
+        // a non-idempotent write may already have succeeded. NotCoordinatorLeaderException is safe
+        // to retry because the standby rejects the request before invoking the coordinator API,
+        // and InvalidServerTypeException is raised during the handshake before sending the request.
+        this.gateway =
+                RetryableGatewayClientProxy.createRetryableGatewayProxy(
+                        rawGateway,
+                        metadataUpdater::refreshClusterUntilAvailable,
+                        refreshExecutor,
+                        cause ->
+                                cause instanceof NotCoordinatorLeaderException
+                                        || cause instanceof RetriableException,
+                        cause ->
+                                cause instanceof NotCoordinatorLeaderException
+                                        || cause instanceof InvalidServerTypeException,
+                        AdminGateway.class);
         Supplier<AdminGateway> readOnlyGatewayFactory = () -> newReadOnlyGateway(client);
         this.readOnlyGateway =
                 RetryableGatewayClientProxy.createRetryableGatewayProxy(
@@ -204,7 +217,7 @@ public class FlussAdmin implements Admin {
                         AdminGateway.class);
         this.retryableCoordinatorGateway =
                 RetryableGatewayClientProxy.createRetryableGatewayProxy(
-                        gateway,
+                        rawGateway,
                         metadataUpdater::refreshClusterUntilAvailable,
                         refreshExecutor,
                         AdminGateway.class);
@@ -249,15 +262,6 @@ public class FlussAdmin implements Admin {
 
     @Override
     public CompletableFuture<List<ServerNode>> getServerNodes() {
-        // Only the coordinator knows the server tags. A coordinator older than Fluss 1.1 does not
-        // support the describe cluster request, so fall back to the metadata request, which returns
-        // the same server nodes without tags.
-        return fallbackIfUnsupported(
-                () -> sendDescribeClusterRequest(retryableCoordinatorGateway),
-                this::getServerNodesFromMetadata);
-    }
-
-    private CompletableFuture<List<ServerNode>> getServerNodesFromMetadata() {
         CompletableFuture<List<ServerNode>> future = new CompletableFuture<>();
         CompletableFuture.runAsync(
                 () -> {
@@ -1248,9 +1252,10 @@ public class FlussAdmin implements Admin {
     }
 
     @Override
-    public CompletableFuture<List<TabletServerDescription>> describeTabletServers() {
-        return gateway.describeTabletServers(new DescribeTabletServersRequest())
-                .thenApply(ClientRpcMessageUtils::toTabletServerDescriptions);
+    public CompletableFuture<ClusterDescription> describeCluster() {
+        return retryableCoordinatorGateway
+                .describeCluster(new DescribeClusterRequest())
+                .thenApply(ClientRpcMessageUtils::toClusterDescription);
     }
 
     @VisibleForTesting

@@ -22,7 +22,7 @@ import org.apache.fluss.annotation.PublicEvolving;
 import java.util.Objects;
 
 /**
- * Per tablet server replica load returned by {@link Admin#describeTabletServers()}.
+ * Per tablet server replica load returned by {@link Admin#describeCluster()}.
  *
  * <p>It reports the replica counters of a single tablet server: how many replicas it hosts, how
  * many of those are in sync, how many buckets it leads, and how many of those leaders are active.

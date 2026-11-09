@@ -17,6 +17,7 @@
 
 package org.apache.fluss.client.utils;
 
+import org.apache.fluss.client.admin.ClusterDescription;
 import org.apache.fluss.client.admin.ClusterHealth;
 import org.apache.fluss.client.admin.ClusterHealthStatus;
 import org.apache.fluss.client.admin.OffsetSpec;
@@ -33,10 +34,13 @@ import org.apache.fluss.client.metadata.RemoteLogManifestInfo;
 import org.apache.fluss.client.write.KvWriteBatch;
 import org.apache.fluss.client.write.ReadyWriteBatch;
 import org.apache.fluss.cluster.Cluster;
+import org.apache.fluss.cluster.ServerNode;
+import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
 import org.apache.fluss.cluster.rebalance.RebalanceProgress;
 import org.apache.fluss.cluster.rebalance.RebalanceResultForBucket;
 import org.apache.fluss.cluster.rebalance.RebalanceStatus;
+import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.config.cluster.ColumnPositionType;
 import org.apache.fluss.config.cluster.ConfigEntry;
@@ -60,7 +64,7 @@ import org.apache.fluss.rpc.messages.AlterDatabaseRequest;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.CreatePartitionRequest;
 import org.apache.fluss.rpc.messages.DescribeBucketsResponse;
-import org.apache.fluss.rpc.messages.DescribeTabletServersResponse;
+import org.apache.fluss.rpc.messages.DescribeClusterResponse;
 import org.apache.fluss.rpc.messages.DropPartitionRequest;
 import org.apache.fluss.rpc.messages.GetClusterHealthResponse;
 import org.apache.fluss.rpc.messages.GetFileSystemSecurityTokenResponse;
@@ -103,8 +107,10 @@ import org.apache.fluss.rpc.messages.PbRebalanceProgressForTable;
 import org.apache.fluss.rpc.messages.PbRemoteLogManifestEntry;
 import org.apache.fluss.rpc.messages.PbRemotePathAndLocalFile;
 import org.apache.fluss.rpc.messages.PbRenameColumn;
+import org.apache.fluss.rpc.messages.PbServerNode;
 import org.apache.fluss.rpc.messages.PbTableBucket;
 import org.apache.fluss.rpc.messages.PbTableStatsReqForBucket;
+import org.apache.fluss.rpc.messages.PbTabletServerLoad;
 import org.apache.fluss.rpc.messages.PrefixLookupRequest;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.PutKvRequest;
@@ -113,6 +119,9 @@ import org.apache.fluss.rpc.messages.ReleaseKvSnapshotLeaseRequest;
 import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.utils.json.DataTypeJsonSerde;
 import org.apache.fluss.utils.json.JsonSerdeUtils;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
@@ -137,6 +146,8 @@ import static org.apache.fluss.utils.Preconditions.checkState;
  * request/response for client.
  */
 public class ClientRpcMessageUtils {
+
+    private static final Logger LOG = LoggerFactory.getLogger(ClientRpcMessageUtils.class);
 
     public static ProduceLogRequest makeProduceLogRequest(
             long tableId, int acks, int maxRequestTimeoutMs, List<ReadyWriteBatch> readyBatches) {
@@ -987,18 +998,54 @@ public class ClientRpcMessageUtils {
         }
     }
 
-    public static List<TabletServerDescription> toTabletServerDescriptions(
-            DescribeTabletServersResponse resp) {
-        return resp.getTabletServersList().stream()
-                .map(
-                        load ->
-                                new TabletServerDescription(
-                                        load.getServerId(),
-                                        load.getNumReplicas(),
-                                        load.getInSyncReplicas(),
-                                        load.getNumLeaderReplicas(),
-                                        load.getActiveLeaderReplicas(),
-                                        load.getLeaderlessReplicas()))
-                .collect(Collectors.toList());
+    /** Converts cluster information without inferring zero loads for missing entries. */
+    public static ClusterDescription toClusterDescription(DescribeClusterResponse response) {
+        ServerNode coordinator =
+                response.hasCoordinatorServer()
+                        ? toServerNode(response.getCoordinatorServer(), ServerType.COORDINATOR)
+                        : null;
+        List<ServerNode> coordinatorStandbys = new ArrayList<>();
+        for (PbServerNode node : response.getCoordinatorStandbysList()) {
+            coordinatorStandbys.add(toServerNode(node, ServerType.COORDINATOR));
+        }
+        Map<Integer, ServerNode> tabletServers = new HashMap<>();
+        for (PbServerNode node : response.getTabletServersList()) {
+            tabletServers.put(node.getNodeId(), toServerNode(node, ServerType.TABLET_SERVER));
+        }
+        Map<Integer, TabletServerDescription> loads = new HashMap<>();
+        for (PbTabletServerLoad load : response.getTabletServerLoadsList()) {
+            loads.put(
+                    load.getServerId(),
+                    new TabletServerDescription(
+                            load.getServerId(),
+                            load.getNumReplicas(),
+                            load.getInSyncReplicas(),
+                            load.getNumLeaderReplicas(),
+                            load.getActiveLeaderReplicas(),
+                            load.getLeaderlessReplicas()));
+        }
+        return new ClusterDescription(coordinator, coordinatorStandbys, tabletServers, loads);
+    }
+
+    private static ServerNode toServerNode(PbServerNode node, ServerType type) {
+        return new ServerNode(
+                node.getNodeId(),
+                node.getHost(),
+                node.getPort(),
+                type,
+                node.hasRack() ? node.getRack() : null,
+                node.hasServerTag() ? toServerTag(node.getServerTag()) : null);
+    }
+
+    @Nullable
+    private static ServerTag toServerTag(int value) {
+        try {
+            return ServerTag.valueOf(value);
+        } catch (IllegalArgumentException e) {
+            LOG.warn(
+                    "Ignoring unknown server tag {}, it was probably added by a newer Fluss version.",
+                    value);
+            return null;
+        }
     }
 }

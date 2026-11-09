@@ -22,8 +22,6 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.AuthorizationException;
 import org.apache.fluss.exception.IllegalConfigurationException;
-import org.apache.fluss.metrics.groups.MetricGroup;
-import org.apache.fluss.metrics.util.NOPMetricsGroup;
 import org.apache.fluss.rpc.netty.ssl.TestSslUtils;
 import org.apache.fluss.security.acl.FlussPrincipal;
 import org.apache.fluss.shaded.netty4.io.netty.handler.ssl.util.SelfSignedCertificate;
@@ -119,11 +117,8 @@ class FlussProtocolPluginTest {
     }
 
     private static FlussProtocolPlugin tlsPlugin() {
-        MetricGroup metricGroup = NOPMetricsGroup.newInstance();
         return new FlussProtocolPlugin(
-                ServerType.COORDINATOR,
-                Arrays.asList(TestSslUtils.TLS_LISTENER, "INTERNAL"),
-                RequestsMetrics.createCoordinatorServerRequestMetrics(metricGroup));
+                ServerType.COORDINATOR, Arrays.asList(TestSslUtils.TLS_LISTENER, "INTERNAL"));
     }
 
     private static FlussProtocolPlugin createPlugin(boolean principalIgnoreCase) {
@@ -131,12 +126,8 @@ class FlussProtocolPluginTest {
         configuration.set(ConfigOptions.SUPER_USERS, "User:root");
         configuration.set(ConfigOptions.SECURITY_ACL_PRINCIPAL_IGNORE_CASE, principalIgnoreCase);
 
-        MetricGroup metricGroup = NOPMetricsGroup.newInstance();
         FlussProtocolPlugin plugin =
-                new FlussProtocolPlugin(
-                        ServerType.COORDINATOR,
-                        Collections.emptyList(),
-                        RequestsMetrics.createCoordinatorServerRequestMetrics(metricGroup));
+                new FlussProtocolPlugin(ServerType.COORDINATOR, Collections.emptyList());
         plugin.setup(configuration);
         return plugin;
     }

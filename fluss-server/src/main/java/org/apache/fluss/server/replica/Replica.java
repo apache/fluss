@@ -148,8 +148,6 @@ import java.util.function.IntSupplier;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
-import static org.apache.fluss.server.log.FetchParams.FETCH_FROM_EARLIEST_OFFSET;
-import static org.apache.fluss.server.log.LogReadInfo.NO_RESOLVED_EARLIEST_OFFSET;
 import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.Preconditions.checkState;
@@ -2085,11 +2083,10 @@ public final class Replica {
         long initialLogEndOffset = logTablet.localLogEndOffset();
         long initialMinRetainOffset =
                 fetchParams.isFromFollower() && isKvTable() ? logTablet.getMinRetainOffset() : -1L;
-        long requestedFetchOffset = fetchParams.fetchOffset();
-        boolean resolvingEarliest = requestedFetchOffset == FETCH_FROM_EARLIEST_OFFSET;
-        long readOffset = resolvingEarliest ? logTablet.logStartOffset() : requestedFetchOffset;
-
-        long resolvedEarliestOffset = resolvingEarliest ? readOffset : NO_RESOLVED_EARLIEST_OFFSET;
+        long readOffset =
+                fetchParams.fetchOffset() == FetchParams.FETCH_FROM_EARLIEST_OFFSET
+                        ? logTablet.logStartOffset()
+                        : fetchParams.fetchOffset();
 
         // todo validate fetched epoch.
 
@@ -2113,11 +2110,7 @@ public final class Replica {
             }
         }
         return new LogReadInfo(
-                fetchDataInfo,
-                initialHighWatermark,
-                initialLogEndOffset,
-                initialMinRetainOffset,
-                resolvedEarliestOffset);
+                fetchDataInfo, initialHighWatermark, initialLogEndOffset, initialMinRetainOffset);
     }
 
     /**

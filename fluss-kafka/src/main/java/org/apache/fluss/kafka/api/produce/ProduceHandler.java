@@ -34,6 +34,7 @@ import org.apache.fluss.utils.ExceptionUtils;
 
 import org.apache.kafka.common.InvalidRecordException;
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.errors.ApiException;
 import org.apache.kafka.common.errors.InvalidRequestException;
 import org.apache.kafka.common.errors.InvalidRequiredAcksException;
 import org.apache.kafka.common.errors.InvalidTopicException;
@@ -53,9 +54,11 @@ import org.apache.kafka.common.requests.ProduceResponse;
 import org.apache.kafka.common.utils.BufferSupplier;
 import org.apache.kafka.common.utils.CloseableIterator;
 
+import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
+import java.nio.BufferUnderflowException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -261,6 +264,8 @@ public final class ProduceHandler implements KafkaApiHandler<ProduceRequest> {
                                     record.hasValue() ? record.value() : null,
                                     readHeaders(record.headers())));
                 }
+            } catch (RuntimeException failure) {
+                throw normalizeRecordCopyFailure(failure);
             }
         }
         if (parsedRecords.isEmpty() || validBytes != records.sizeInBytes()) {
@@ -280,6 +285,28 @@ public final class ProduceHandler implements KafkaApiHandler<ProduceRequest> {
             default:
                 throw new InvalidRecordException("Unknown batch timestamp type.");
         }
+    }
+
+    static RuntimeException normalizeRecordCopyFailure(RuntimeException failure) {
+        Throwable cause = failure;
+        Throwable streamFailure = null;
+        while (cause != null && cause != cause.getCause()) {
+            // Codec wrappers must preserve specific protocol errors, including admission limits.
+            if (cause instanceof ApiException) {
+                return (ApiException) cause;
+            }
+            // The LZ4 header reader can expose buffer underflow for a truncated descriptor.
+            if (cause instanceof IOException || cause instanceof BufferUnderflowException) {
+                streamFailure = cause;
+            }
+            cause = cause.getCause();
+        }
+        // The protocol sends only the message, so include codec diagnostics and retain the full
+        // exception chain as the cause for server-side debugging.
+        return streamFailure != null
+                ? new InvalidRecordException(
+                        "Failed to decompress Kafka record batch: " + streamFailure, failure)
+                : failure;
     }
 
     private static ProduceResponse toResponse(KafkaProduceResult result) {

@@ -51,7 +51,8 @@ public class CoordinatorEventMetricGroup extends AbstractMetricGroup {
         this.eventProcessingTime =
                 histogram(
                         MetricNames.EVENT_PROCESSING_TIME_MS,
-                        new DescriptiveStatisticsHistogram(100));
+                        new DescriptiveStatisticsHistogram(
+                                100, DescriptiveStatisticsHistogram.DEFAULT_MAX_AGE));
         this.queuedEventCount =
                 counter(MetricNames.EVENT_QUEUE_SIZE, new ThreadSafeSimpleCounter());
     }

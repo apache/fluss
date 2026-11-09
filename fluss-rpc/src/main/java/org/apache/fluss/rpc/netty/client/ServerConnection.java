@@ -142,7 +142,9 @@ final class ServerConnection {
         this.readyCallback = readyCallback;
         this.node = node;
         this.state = ConnectionState.CONNECTING;
-        this.connectionMetrics = clientMetricGroup.createConnectionMetricGroup(node.uid());
+        this.connectionMetrics =
+                clientMetricGroup.createConnectionMetricGroup(
+                        node.uid() + "@" + node.host() + ":" + node.port());
         this.authenticator = authenticator;
         this.backoff = new ExponentialBackoff(100L, 2, 5000L, 0.2);
     }

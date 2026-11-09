@@ -17,9 +17,9 @@
 
 package org.apache.fluss.client.table.scanner.log;
 
-import org.apache.fluss.client.metadata.TestingMetadataUpdater;
 import org.apache.fluss.client.table.scanner.ScanRecord;
-import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.CorruptMessageException;
+import org.apache.fluss.exception.FetchException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -49,15 +49,14 @@ import org.junit.jupiter.params.provider.ValueSource;
 import javax.annotation.Nullable;
 
 import java.io.File;
+import java.io.RandomAccessFile;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.apache.fluss.record.TestData.DATA2;
 import static org.apache.fluss.record.TestData.DATA2_PHYSICAL_TABLE_PATH;
@@ -71,6 +70,7 @@ import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
 import static org.apache.fluss.testutils.DataTestUtils.genLogFile;
 import static org.apache.fluss.utils.FlussPaths.remoteLogSegmentDir;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link org.apache.fluss.client.table.scanner.log.RemoteCompletedFetch}. */
 class RemoteCompletedFetchTest {
@@ -135,6 +135,62 @@ class RemoteCompletedFetchTest {
         // no more records can be read
         scanRecords = completedFetch.fetchRecords(8);
         assertThat(scanRecords.size()).isEqualTo(0);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testProjectedFileReadRespectsCrcSetting(boolean checkCrc) throws Exception {
+        TableBucket tableBucket = new TableBucket(DATA2_TABLE_ID, 0);
+        FileLogRecords file =
+                createFileLogRecords(
+                        tableBucket, DATA2_PHYSICAL_TABLE_PATH, DATA2, LogFormat.ARROW);
+        // Corrupt the last (unselected) column's body. Projection must not suppress validation
+        // when CRC is enabled, and must not read/decompress this buffer when CRC is disabled.
+        try (RandomAccessFile writable = new RandomAccessFile(file.file(), "rw")) {
+            long position = writable.length() - 8;
+            writable.seek(position);
+            int value = writable.read();
+            writable.seek(position);
+            writable.write(value ^ 0xff);
+        }
+        try (LogRecordReadContext context =
+                LogRecordReadContext.createReadContext(
+                        tableInfo,
+                        true,
+                        LogRecordReadContext.SchemaResolution.TARGET,
+                        Projection.of(new int[] {0, 0}),
+                        schemaGetter,
+                        null)) {
+            RemoteCompletedFetch fetch =
+                    new RemoteCompletedFetch(
+                            tableBucket,
+                            DATA2_TABLE_PATH,
+                            file,
+                            10L,
+                            context,
+                            logScannerStatus,
+                            checkCrc,
+                            0L,
+                            () -> {});
+            try {
+                if (checkCrc) {
+                    assertThatThrownBy(() -> fetch.fetchRecords(10))
+                            .isInstanceOf(FetchException.class)
+                            .hasRootCauseInstanceOf(CorruptMessageException.class);
+                } else {
+                    List<ScanRecord> records = fetch.fetchRecords(10);
+                    assertThat(records).hasSize(DATA2.size());
+                    for (int i = 0; i < records.size(); i++) {
+                        assertThat(records.get(i).logOffset()).isEqualTo(i);
+                        assertThat(records.get(i).getRow().getInt(0)).isEqualTo(DATA2.get(i)[0]);
+                        assertThat(records.get(i).getRow().getInt(1)).isEqualTo(DATA2.get(i)[0]);
+                    }
+                }
+            } finally {
+                fetch.drain();
+            }
+            assertThat(context.getBufferAllocator().getAllocatedMemory()).isZero();
+        }
     }
 
     @Test
@@ -273,93 +329,6 @@ class RemoteCompletedFetchTest {
         }
     }
 
-    @Test
-    void testBoundedEarliestResolutionPreservedThroughRemotePendingFetch() throws Exception {
-        TableBucket tableBucket = new TableBucket(DATA2_TABLE_ID, 0);
-
-        long resolvedEarliestOffset = 20L;
-        long stoppingOffset = 25L;
-
-        logScannerStatus.assignScanBucket(tableBucket, LogScanner.EARLIEST_OFFSET, stoppingOffset);
-
-        RemoteLogSegment remoteLogSegment =
-                RemoteLogSegment.Builder.builder()
-                        .tableBucket(tableBucket)
-                        .physicalTablePath(DATA2_PHYSICAL_TABLE_PATH)
-                        .remoteLogSegmentId(UUID.randomUUID())
-                        .remoteLogStartOffset(resolvedEarliestOffset)
-                        .remoteLogEndOffset(resolvedEarliestOffset + DATA2.size())
-                        .segmentSizeInBytes(Integer.MAX_VALUE)
-                        .build();
-
-        File logFile =
-                genRemoteLogSegmentFile(
-                        DATA2_ROW_TYPE,
-                        tempDir,
-                        remoteLogSegment,
-                        DATA2,
-                        resolvedEarliestOffset,
-                        LogFormat.ARROW);
-
-        AtomicInteger recycleCount = new AtomicInteger();
-
-        RemoteLogDownloadFuture downloadFuture =
-                new RemoteLogDownloadFuture(
-                        CompletableFuture.completedFuture(logFile), recycleCount::incrementAndGet);
-
-        RemotePendingFetch pendingFetch =
-                new RemotePendingFetch(
-                        remoteLogSegment,
-                        downloadFuture,
-                        DATA2_TABLE_PATH,
-                        0,
-                        LogScanner.EARLIEST_OFFSET,
-                        resolvedEarliestOffset,
-                        resolvedEarliestOffset + DATA2.size(),
-                        remoteReadContext,
-                        logScannerStatus,
-                        true);
-
-        assertThat(pendingFetch.isCompleted()).isTrue();
-
-        CompletedFetch completedFetch = pendingFetch.toCompletedFetch();
-
-        // Request identity and physical resolution must remain separate.
-        assertThat(completedFetch.requestedFetchOffset()).isEqualTo(LogScanner.EARLIEST_OFFSET);
-        assertThat(completedFetch.resolvedEarliestOffset()).isEqualTo(resolvedEarliestOffset);
-
-        // Resolution is not applied until collector initialization.
-        assertThat(completedFetch.nextFetchOffset()).isEqualTo(LogScanner.EARLIEST_OFFSET);
-
-        try (LogFetchBuffer fetchBuffer = new LogFetchBuffer()) {
-            fetchBuffer.add(completedFetch);
-
-            LogFetchCollector collector =
-                    new LogFetchCollector(
-                            logScannerStatus,
-                            new Configuration(),
-                            new TestingMetadataUpdater(
-                                    Collections.singletonMap(DATA2_TABLE_PATH, DATA2_TABLE_INFO)));
-
-            ScanRecords records = collector.collectFetch(fetchBuffer);
-
-            assertThat(records.records(tableBucket))
-                    .extracting(ScanRecord::logOffset)
-                    .containsExactly(20L, 21L, 22L, 23L, 24L);
-
-            assertThat(records.count()).isEqualTo(5);
-            assertThat(records.consumedUpToOffset(tableBucket)).isEqualTo(stoppingOffset);
-            assertThat(records.finishedBuckets()).containsExactly(tableBucket);
-
-            assertThat(logScannerStatus.getBucketOffset(tableBucket)).isEqualTo(stoppingOffset);
-            assertThat(logScannerStatus.hasReachedStoppingOffset(tableBucket)).isTrue();
-
-            assertThat(completedFetch.isConsumed()).isTrue();
-            assertThat(recycleCount.get()).isEqualTo(1);
-        }
-        assertThat(recycleCount.get()).isEqualTo(1);
-    }
-
     private FileLogRecords createFileLogRecords(
             TableBucket tableBucket,
             PhysicalTablePath physicalTablePath,
@@ -403,7 +372,6 @@ class RemoteCompletedFetchTest {
                 logScannerStatus,
                 true,
                 fetchOffset,
-                -1L,
                 recycle);
     }
 

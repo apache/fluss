@@ -19,16 +19,14 @@
 package org.apache.fluss.lake.paimon.source;
 
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.lake.paimon.source.PaimonTableLoader.CatalogTableLoader;
+import org.apache.fluss.lake.paimon.source.PaimonTableLoader.PaimonTableHandle;
 import org.apache.fluss.lake.source.Planner;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.types.RowType;
 
 import org.apache.paimon.CoreOptions;
-import org.apache.paimon.catalog.Catalog;
-import org.apache.paimon.catalog.CatalogContext;
-import org.apache.paimon.catalog.CatalogFactory;
 import org.apache.paimon.data.BinaryRow;
-import org.apache.paimon.options.Options;
 import org.apache.paimon.predicate.Predicate;
 import org.apache.paimon.table.BucketMode;
 import org.apache.paimon.table.FileStoreTable;
@@ -44,13 +42,11 @@ import java.util.List;
 
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toFlussPartitionValues;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toFlussRowType;
-import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
 
 /** Split panner for paimon table. */
 public class PaimonSplitPlanner implements Planner<PaimonSplit> {
 
-    private final Configuration paimonConfig;
-    private final TablePath tablePath;
+    private final PaimonTableLoader tableLoader;
     private final @Nullable Predicate predicate;
     private final long snapshotId;
 
@@ -59,8 +55,12 @@ public class PaimonSplitPlanner implements Planner<PaimonSplit> {
             TablePath tablePath,
             @Nullable Predicate predicate,
             long snapshotId) {
-        this.paimonConfig = paimonConfig;
-        this.tablePath = tablePath;
+        this(new CatalogTableLoader(paimonConfig, tablePath), predicate, snapshotId);
+    }
+
+    PaimonSplitPlanner(
+            PaimonTableLoader tableLoader, @Nullable Predicate predicate, long snapshotId) {
+        this.tableLoader = tableLoader;
         this.predicate = predicate;
         this.snapshotId = snapshotId;
     }
@@ -69,8 +69,8 @@ public class PaimonSplitPlanner implements Planner<PaimonSplit> {
     public List<PaimonSplit> plan() {
         try {
             List<PaimonSplit> splits = new ArrayList<>();
-            try (Catalog catalog = getCatalog()) {
-                FileStoreTable fileStoreTable = getTable(catalog, tablePath, snapshotId);
+            try (PaimonTableHandle handle = tableLoader.load()) {
+                FileStoreTable fileStoreTable = getTable(handle, snapshotId);
                 InnerTableScan tableScan = fileStoreTable.newScan();
                 boolean isBucketUnAware = fileStoreTable.bucketMode() == BucketMode.BUCKET_UNAWARE;
                 RowType flussPartitionType =
@@ -95,18 +95,12 @@ public class PaimonSplitPlanner implements Planner<PaimonSplit> {
         }
     }
 
-    private Catalog getCatalog() {
-        return CatalogFactory.createCatalog(
-                CatalogContext.create(Options.fromMap(paimonConfig.toMap())));
-    }
-
-    private FileStoreTable getTable(Catalog catalog, TablePath tablePath, long snapshotId)
-            throws Exception {
-        FileStoreTable table = (FileStoreTable) catalog.getTable(toPaimon(tablePath));
+    private FileStoreTable getTable(PaimonTableHandle handle, long snapshotId) {
         // Filters are built with the current schema. Keep it when selecting an older snapshot so
         // Paimon can evolve the file statistics to match the predicates.
-        return table.copyWithoutTimeTravel(
-                Collections.singletonMap(
-                        CoreOptions.SCAN_SNAPSHOT_ID.key(), String.valueOf(snapshotId)));
+        return handle.table()
+                .copyWithoutTimeTravel(
+                        Collections.singletonMap(
+                                CoreOptions.SCAN_SNAPSHOT_ID.key(), String.valueOf(snapshotId)));
     }
 }

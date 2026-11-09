@@ -31,6 +31,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.predicate.Predicate;
+import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
 import org.apache.fluss.types.RowType;
@@ -41,8 +42,7 @@ import javax.annotation.Nullable;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.ConcurrentModificationException;
-
-import static org.apache.fluss.utils.Preconditions.checkArgument;
+import java.util.function.BiPredicate;
 
 /**
  * The default impl of {@link LogScanner}.
@@ -167,6 +167,29 @@ public class LogScannerImpl extends AbstractLogScanner<ScanRecords> implements L
     }
 
     /**
+     * Polls records after filtering their borrowed rows, before copying selected rows. The filter
+     * must not retain a record or its row. Returned records own their row values as in normal
+     * polls. Consumed offsets include filtered records. Only unprojected scanners support this
+     * operation.
+     */
+    @Internal
+    public ScanRecords pollFiltered(
+            Duration timeout, BiPredicate<TableBucket, LogRecord> recordFilter) {
+        if (hasProjection) {
+            throw new UnsupportedOperationException(
+                    "Filtered polling requires an unprojected scanner.");
+        }
+        acquireAndEnsureOpen();
+        try {
+            logFetcher.setRecordFilter(recordFilter);
+            return poll(timeout);
+        } finally {
+            logFetcher.setRecordFilter(null);
+            release();
+        }
+    }
+
+    /**
      * Polls Arrow record batches for internal callers.
      *
      * <p>This method is intentionally kept off the public {@link Scan} API surface for now.
@@ -197,10 +220,7 @@ public class LogScannerImpl extends AbstractLogScanner<ScanRecords> implements L
             long startNanos = System.nanoTime();
             do {
                 ArrowScanRecords scanRecords = pollForRecordBatches();
-                if (!scanRecords.hasProgress()) {
-                    if (!logScannerStatus.hasActiveSubscriptions()) {
-                        return scanRecords;
-                    }
+                if (scanRecords.isEmpty()) {
                     try {
                         if (!logFetcher.awaitNotEmpty(startNanos + timeoutNanos)) {
                             return scanRecords;
@@ -223,7 +243,7 @@ public class LogScannerImpl extends AbstractLogScanner<ScanRecords> implements L
 
     private ArrowScanRecords pollForRecordBatches() {
         ArrowScanRecords scanRecords = logFetcher.collectArrowFetch();
-        if (scanRecords.hasProgress()) {
+        if (!scanRecords.isEmpty()) {
             return scanRecords;
         }
 
@@ -240,8 +260,16 @@ public class LogScannerImpl extends AbstractLogScanner<ScanRecords> implements L
                             + "\"subscribe(long partitionId, int bucket, long offset)\" to "
                             + "subscribe a partitioned bucket instead.");
         }
-
-        subscribeRange(new TableBucket(tableId, bucket), offset, NO_STOPPING_OFFSET);
+        acquireAndEnsureOpen();
+        try {
+            TableBucket tableBucket = new TableBucket(tableId, bucket);
+            this.logFetcher.registerTable(
+                    new TableScanSpec(tableInfo, projection, recordBatchFilter), schemaGetter);
+            this.metadataUpdater.checkAndUpdateTableMetadata(Collections.singleton(tablePath));
+            this.logScannerStatus.assignScanBuckets(Collections.singletonMap(tableBucket, offset));
+        } finally {
+            release();
+        }
     }
 
     @Override
@@ -252,36 +280,20 @@ public class LogScannerImpl extends AbstractLogScanner<ScanRecords> implements L
                             + "\"subscribe(int bucket, long offset)\" to "
                             + "subscribe a non-partitioned bucket instead.");
         }
-
-        subscribeRange(new TableBucket(tableId, partitionId, bucket), offset, NO_STOPPING_OFFSET);
-    }
-
-    @Override
-    public void subscribeBounded(int bucket, long startingOffset, long stoppingOffset) {
-        if (isPartitionedTable) {
-            throw new IllegalStateException(
-                    "The table is a partitioned table, please use "
-                            + "\"subscribeBounded(long partitionId, int bucket, long startingOffset, long stoppingOffset)\" to "
-                            + "subscribe a partitioned bucket instead.");
+        acquireAndEnsureOpen();
+        try {
+            TableBucket tableBucket = new TableBucket(tableId, partitionId, bucket);
+            this.logFetcher.registerTable(
+                    new TableScanSpec(tableInfo, projection, recordBatchFilter), schemaGetter);
+            // we make assumption that the partition id must belong to the current table
+            // if we can't find the partition id from the table path, we'll consider the table
+            // is not exist
+            metadataUpdater.checkAndUpdatePartitionMetadata(
+                    tablePath, Collections.singleton(partitionId));
+            logScannerStatus.assignScanBuckets(Collections.singletonMap(tableBucket, offset));
+        } finally {
+            release();
         }
-
-        validateOffsets(startingOffset, stoppingOffset);
-        subscribeRange(new TableBucket(tableId, bucket), startingOffset, stoppingOffset);
-    }
-
-    @Override
-    public void subscribeBounded(
-            long partitionId, int bucket, long startingOffset, long stoppingOffset) {
-        if (!isPartitionedTable) {
-            throw new IllegalStateException(
-                    "The table is not a partitioned table, please use "
-                            + "\"subscribeBounded(int bucket, long startingOffset, long stoppingOffset)\" to "
-                            + "subscribe a non-partitioned bucket instead.");
-        }
-
-        validateOffsets(startingOffset, stoppingOffset);
-        subscribeRange(
-                new TableBucket(tableId, partitionId, bucket), startingOffset, stoppingOffset);
     }
 
     @Override
@@ -314,34 +326,5 @@ public class LogScannerImpl extends AbstractLogScanner<ScanRecords> implements L
         } finally {
             release();
         }
-    }
-
-    private void subscribeRange(TableBucket tableBucket, long startingOffset, long stoppingOffset) {
-        Long partitionId = tableBucket.getPartitionId();
-        acquireAndEnsureOpen();
-        try {
-            logFetcher.registerTable(
-                    new TableScanSpec(tableInfo, projection, recordBatchFilter), schemaGetter);
-            if (partitionId == null) {
-                metadataUpdater.checkAndUpdateTableMetadata(Collections.singleton(tablePath));
-            } else {
-                metadataUpdater.checkAndUpdatePartitionMetadata(
-                        tablePath, Collections.singleton(partitionId));
-            }
-            logScannerStatus.assignScanBucket(tableBucket, startingOffset, stoppingOffset);
-        } finally {
-            release();
-        }
-    }
-
-    private static void validateOffsets(long startingOffset, long stoppingOffset) {
-        checkArgument(
-                startingOffset >= 0 || startingOffset == EARLIEST_OFFSET,
-                "The starting offset must be non-negative or EARLIEST_OFFSET, but was %s.",
-                startingOffset);
-        checkArgument(
-                stoppingOffset >= 0,
-                "The stopping offset must be non-negative, but was %s.",
-                stoppingOffset);
     }
 }

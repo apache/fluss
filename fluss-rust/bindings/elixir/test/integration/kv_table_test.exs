@@ -448,7 +448,7 @@ defmodule Fluss.Integration.KvTableTest do
 
       schema = Fluss.Schema.new() |> Fluss.Schema.column("id", :int)
       descriptor = Fluss.TableDescriptor.new!(schema)
-      :ok = Fluss.Admin.create_table(admin, @database, table_name, descriptor, false)
+      :ok = Fluss.Admin.create_table(admin, @database, table_name, descriptor)
 
       table = Fluss.Table.get!(conn, @database, table_name)
 
@@ -522,7 +522,7 @@ defmodule Fluss.Integration.KvTableTest do
     on_exit(fn -> cleanup_table(admin, table_name) end)
 
     descriptor = Fluss.TableDescriptor.new!(schema, bucket_count: 1, bucket_keys: bucket_keys)
-    :ok = Fluss.Admin.create_table(admin, @database, table_name, descriptor, false)
+    :ok = Fluss.Admin.create_table(admin, @database, table_name, descriptor)
 
     Fluss.Table.get!(conn, @database, table_name)
   end
@@ -549,7 +549,7 @@ defmodule Fluss.Integration.KvTableTest do
   defp unique(label), do: "ex_test_kv_#{label}_#{:rand.uniform(100_000)}"
 
   defp cleanup_table(admin, table_name) do
-    Fluss.Admin.drop_table(admin, @database, table_name, true)
+    Fluss.Admin.drop_table(admin, @database, table_name, ignore_if_not_exists: true)
   end
 
   defp poll_records(scanner, expected_count, timeout_ms \\ 10_000) do
