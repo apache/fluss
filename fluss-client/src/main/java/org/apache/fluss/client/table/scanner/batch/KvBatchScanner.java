@@ -85,10 +85,6 @@ public final class KvBatchScanner implements BatchScanner {
     private final int targetSchemaId;
     private final int batchSizeBytes;
     @Nullable private final int[] projectedColumns;
-    @Nullable private final byte[] startKey;
-    @Nullable private final byte[] endKey;
-    @Nullable private final Integer limit;
-    @Nullable private final Integer routingBucketCount;
     private final Map<Short, int[]> schemaMappingCache = new HashMap<>();
     private final ValueRecordReadContext readContext;
 
@@ -109,31 +105,6 @@ public final class KvBatchScanner implements BatchScanner {
             MetadataUpdater metadataUpdater,
             int batchSizeBytes,
             @Nullable int[] projectedColumns) {
-        this(
-                tableInfo,
-                tableBucket,
-                schemaGetter,
-                metadataUpdater,
-                batchSizeBytes,
-                projectedColumns,
-                null,
-                null,
-                null,
-                null);
-    }
-
-    /** Creates a scanner with fixed physical bounds and the bucket count used for routing. */
-    public KvBatchScanner(
-            TableInfo tableInfo,
-            TableBucket tableBucket,
-            SchemaGetter schemaGetter,
-            MetadataUpdater metadataUpdater,
-            int batchSizeBytes,
-            @Nullable int[] projectedColumns,
-            @Nullable byte[] startKey,
-            @Nullable byte[] endKey,
-            @Nullable Integer limit,
-            @Nullable Integer routingBucketCount) {
         this.tablePath = tableInfo.getTablePath();
         this.bucket = tableBucket;
         this.schemaGetter = schemaGetter;
@@ -141,10 +112,6 @@ public final class KvBatchScanner implements BatchScanner {
         this.targetSchemaId = tableInfo.getSchemaId();
         this.batchSizeBytes = Math.max(1, batchSizeBytes);
         this.projectedColumns = projectedColumns;
-        this.startKey = startKey == null ? null : startKey.clone();
-        this.endKey = endKey == null ? null : endKey.clone();
-        this.limit = limit;
-        this.routingBucketCount = routingBucketCount;
         this.readContext =
                 ValueRecordReadContext.createReadContext(
                         schemaGetter, tableInfo.getTableConfig().getKvFormat());
@@ -249,18 +216,6 @@ public final class KvBatchScanner implements BatchScanner {
         }
         cluster.getBucketCount(TableOrPartition.of(bucket.getTableId(), bucket.getPartitionId()))
                 .ifPresent(bucketReq::setRoutingBucketCount);
-        if (routingBucketCount != null) {
-            bucketReq.setRoutingBucketCount(routingBucketCount);
-        }
-        if (startKey != null) {
-            bucketReq.setStartKey(startKey);
-        }
-        if (endKey != null) {
-            bucketReq.setEndKey(endKey);
-        }
-        if (limit != null) {
-            bucketReq.setLimit(limit);
-        }
 
         ScanKvRequest request =
                 new ScanKvRequest()

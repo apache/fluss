@@ -226,6 +226,37 @@ class RocksDBKvTest {
     }
 
     @Test
+    void testBoundedPrefixReadViewAndPrefixIntersection(@TempDir Path tempDir) throws Exception {
+        try (RocksDBKv kv = buildRocksDBKv(tempDir.toFile())) {
+            kv.put(new byte[] {1, 0}, new byte[] {10});
+            kv.put(new byte[] {1, 1}, new byte[] {11});
+            kv.put(new byte[] {1, 2}, new byte[] {12});
+            kv.put(new byte[] {1, 3}, new byte[] {13});
+            kv.put(new byte[] {2}, new byte[] {20});
+            try (RocksDBKv.PrefixLookup lookup =
+                    kv.openPrefixLookup(new byte[] {1}, new byte[] {1, 1}, new byte[] {1, 3})) {
+                assertThat(kv.getResourceGuard().getLeaseCount()).isEqualTo(1);
+                assertThat(kv.db.getLongProperty("rocksdb.num-snapshots")).isZero();
+                kv.delete(new byte[] {1, 1});
+                kv.put(new byte[] {1, 2}, new byte[] {22});
+                try (FlushOptions options = new FlushOptions().setWaitForFlush(true)) {
+                    kv.db.flush(options);
+                }
+                kv.db.compactRange();
+                assertThat(lookup.readAll()).containsExactly(new byte[] {11}, new byte[] {12});
+            }
+            assertThat(kv.getResourceGuard().getLeaseCount()).isZero();
+            try (RocksDBKv.PrefixLookup lookup =
+                    kv.openPrefixLookup(new byte[] {1}, new byte[] {0}, new byte[] {3})) {
+                assertThat(lookup.readAll())
+                        .containsExactly(new byte[] {10}, new byte[] {22}, new byte[] {13});
+            }
+            assertThat(kv.getResourceGuard().getLeaseCount()).isZero();
+            assertThat(kv.db.getLongProperty("rocksdb.num-snapshots")).isZero();
+        }
+    }
+
+    @Test
     void testMultiGetSnapshotSurvivesFlushCompactionAndDelete(@TempDir Path tempDir)
             throws Exception {
         try (RocksDBKv kv = buildRocksDBKv(tempDir.toFile())) {

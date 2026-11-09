@@ -148,8 +148,20 @@ public class LookupClient {
 
     public CompletableFuture<List<byte[]>> prefixLookup(
             TablePath tablePath, TableBucket tableBucket, byte[] keyBytes, int bucketCount) {
+        return prefixLookup(tablePath, tableBucket, keyBytes, bucketCount, null, null);
+    }
+
+    /** Enqueues a prefix lookup with optional physical range bounds. */
+    public CompletableFuture<List<byte[]>> prefixLookup(
+            TablePath tablePath,
+            TableBucket tableBucket,
+            byte[] keyBytes,
+            int bucketCount,
+            @Nullable byte[] startKey,
+            @Nullable byte[] endKey) {
         PrefixLookupQuery prefixLookup =
-                new PrefixLookupQuery(tablePath, tableBucket, keyBytes, bucketCount);
+                new PrefixLookupQuery(
+                        tablePath, tableBucket, keyBytes, bucketCount, startKey, endKey);
         lookupQueue.appendLookup(prefixLookup);
         return prefixLookup.future();
     }

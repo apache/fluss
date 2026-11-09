@@ -97,6 +97,7 @@ import org.apache.fluss.rpc.messages.PbLookupReqForBucket;
 import org.apache.fluss.rpc.messages.PbModifyBucketCount;
 import org.apache.fluss.rpc.messages.PbModifyColumn;
 import org.apache.fluss.rpc.messages.PbPartitionSpec;
+import org.apache.fluss.rpc.messages.PbPrefixLookupKey;
 import org.apache.fluss.rpc.messages.PbPrefixLookupReqForBucket;
 import org.apache.fluss.rpc.messages.PbProduceLogReqForBucket;
 import org.apache.fluss.rpc.messages.PbProducerTableOffsets;
@@ -286,7 +287,30 @@ public class ClientRpcMessageUtils {
                     if (batch.getBucketCount() > 0) {
                         pbPrefixLookupReqForBucket.setRoutingBucketCount(batch.getBucketCount());
                     }
-                    batch.lookups().forEach(get -> pbPrefixLookupReqForBucket.addKey(get.key()));
+                    boolean hasBounds =
+                            batch.lookups().stream()
+                                    .anyMatch(
+                                            lookup ->
+                                                    lookup.startKey() != null
+                                                            || lookup.endKey() != null);
+                    batch.lookups()
+                            .forEach(
+                                    lookup -> {
+                                        if (hasBounds) {
+                                            PbPrefixLookupKey key =
+                                                    pbPrefixLookupReqForBucket
+                                                            .addLookup()
+                                                            .setPrefixKey(lookup.key());
+                                            if (lookup.startKey() != null) {
+                                                key.setStartKey(lookup.startKey());
+                                            }
+                                            if (lookup.endKey() != null) {
+                                                key.setEndKey(lookup.endKey());
+                                            }
+                                        } else {
+                                            pbPrefixLookupReqForBucket.addKey(lookup.key());
+                                        }
+                                    });
                 });
         return request;
     }

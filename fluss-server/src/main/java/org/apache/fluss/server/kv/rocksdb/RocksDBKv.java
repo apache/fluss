@@ -25,6 +25,7 @@ import org.apache.fluss.rocksdb.RocksDBOperationUtils;
 import org.apache.fluss.rocksdb.RocksIteratorWrapper;
 import org.apache.fluss.server.kv.KvCloseMode;
 import org.apache.fluss.server.utils.ResourceGuard;
+import org.apache.fluss.shaded.guava32.com.google.common.primitives.UnsignedBytes;
 import org.apache.fluss.utils.IOUtils;
 
 import io.github.fluss_contrib.rocksdb.Cache;
@@ -296,12 +297,32 @@ public class RocksDBKv implements AutoCloseable {
      * tablet mutations and close, and must close the returned lookup after use.
      */
     public PrefixLookup openPrefixLookup(byte[] prefixKey) throws IOException {
+        return openPrefixLookup(prefixKey, null, null);
+    }
+
+    /** Fixes a request-local view for the intersection of a prefix and physical bounds. */
+    public PrefixLookup openPrefixLookup(
+            byte[] prefixKey, @Nullable byte[] startKey, @Nullable byte[] endKey)
+            throws IOException {
         ResourceGuard.Lease lease = rocksDBResourceGuard.acquireResource();
         Slice upperBoundSlice = null;
         ReadOptions readOptions = null;
         RocksIterator iterator = null;
         try {
             byte[] upperBound = prefixUpperBound(prefixKey);
+            if (endKey != null
+                    && (upperBound == null
+                            || UnsignedBytes.lexicographicalComparator().compare(endKey, upperBound)
+                                    < 0)) {
+                upperBound = endKey;
+            }
+            byte[] lowerBound =
+                    startKey != null
+                                    && UnsignedBytes.lexicographicalComparator()
+                                                    .compare(startKey, prefixKey)
+                                            > 0
+                            ? startKey
+                            : prefixKey;
             if (upperBound != null) {
                 upperBoundSlice = new Slice(upperBound);
             }
@@ -311,7 +332,7 @@ public class RocksDBKv implements AutoCloseable {
             }
             iterator = db.newIterator(defaultColumnFamilyHandle, readOptions);
             return new PrefixLookup(
-                    prefixKey.clone(), iterator, readOptions, upperBoundSlice, lease);
+                    lowerBound.clone(), iterator, readOptions, upperBoundSlice, lease);
         } catch (Throwable t) {
             IOUtils.closeQuietly(iterator);
             IOUtils.closeQuietly(readOptions);
@@ -325,7 +346,7 @@ public class RocksDBKv implements AutoCloseable {
      * A single-owner prefix read with a fixed iterator view and a lease on its RocksDB instance.
      */
     public static class PrefixLookup implements AutoCloseable {
-        private final byte[] prefixKey;
+        private final byte[] startKey;
         private final RocksIteratorWrapper iterator;
         private final ReadOptions readOptions;
         // The upper bound must outlive the iterator and read options that reference it.
@@ -334,12 +355,12 @@ public class RocksDBKv implements AutoCloseable {
         private boolean closed;
 
         private PrefixLookup(
-                byte[] prefixKey,
+                byte[] startKey,
                 RocksIterator iterator,
                 ReadOptions readOptions,
                 @Nullable Slice upperBoundSlice,
                 ResourceGuard.Lease lease) {
-            this.prefixKey = prefixKey;
+            this.startKey = startKey;
             this.iterator = new RocksIteratorWrapper(iterator);
             this.readOptions = readOptions;
             this.upperBoundSlice = upperBoundSlice;
@@ -353,7 +374,7 @@ public class RocksDBKv implements AutoCloseable {
             }
             List<byte[]> values = new ArrayList<>();
             try {
-                iterator.seek(prefixKey);
+                iterator.seek(startKey);
                 while (iterator.isValid()) {
                     values.add(iterator.value());
                     iterator.next();

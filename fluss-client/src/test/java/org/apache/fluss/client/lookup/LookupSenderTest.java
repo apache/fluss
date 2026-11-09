@@ -1449,6 +1449,41 @@ public class LookupSenderTest {
         return CompletableFuture.completedFuture(response);
     }
 
+    @Test
+    void testPrefixLookupBatchPreservesIndependentBounds() throws Exception {
+        List<PrefixLookupRequest> requests = new ArrayList<>();
+        gateway.setPrefixLookupHandler(
+                request -> {
+                    requests.add(request);
+                    return createSuccessPrefixLookupResponse(request);
+                });
+        PrefixLookupQuery first =
+                new PrefixLookupQuery(
+                        DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("p"), 4, bytes("p1"), bytes("p2"));
+        PrefixLookupQuery second =
+                new PrefixLookupQuery(
+                        DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("p"), 4, bytes("p3"), bytes("p4"));
+        PrefixLookupQuery ordinary =
+                new PrefixLookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("p"), 4);
+        lookupSender.sendLookups(
+                1, LookupType.PREFIX_LOOKUP, Arrays.asList(first, second, ordinary));
+        assertThat(requests).hasSize(1);
+        org.apache.fluss.rpc.messages.PbPrefixLookupReqForBucket bucket =
+                requests.get(0).getBucketsReqAt(0);
+        assertThat(bucket.getKeysCount()).isZero();
+        assertThat(bucket.getLookupsCount()).isEqualTo(3);
+        assertThat(bucket.getLookupAt(0).getPrefixKey()).isEqualTo(bytes("p"));
+        assertThat(bucket.getLookupAt(0).getStartKey()).isEqualTo(bytes("p1"));
+        assertThat(bucket.getLookupAt(0).getEndKey()).isEqualTo(bytes("p2"));
+        assertThat(bucket.getLookupAt(1).getStartKey()).isEqualTo(bytes("p3"));
+        assertThat(bucket.getLookupAt(1).getEndKey()).isEqualTo(bytes("p4"));
+        assertThat(bucket.getLookupAt(2).hasStartKey()).isFalse();
+        assertThat(bucket.getLookupAt(2).hasEndKey()).isFalse();
+        assertThat(first.future().get()).isEmpty();
+        assertThat(second.future().get()).isEmpty();
+        assertThat(ordinary.future().get()).isEmpty();
+    }
+
     private CompletableFuture<PrefixLookupResponse> createSuccessPrefixLookupResponse(
             PrefixLookupRequest request) {
         PrefixLookupResponse response = new PrefixLookupResponse();
@@ -1459,7 +1494,9 @@ public class LookupSenderTest {
             bucketResp.setPartitionId(TABLE_BUCKET.getPartitionId());
         }
         // Add empty value list for each prefix key
-        int keyCount = request.getBucketsReqAt(0).getKeysCount();
+        int keyCount =
+                request.getBucketsReqAt(0).getKeysCount()
+                        + request.getBucketsReqAt(0).getLookupsCount();
         for (int i = 0; i < keyCount; i++) {
             bucketResp.addValueList(); // empty list is valid for prefix lookup
         }

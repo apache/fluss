@@ -1769,6 +1769,12 @@ public final class Replica {
     }
 
     public List<ByteArraySlice> prefixLookup(byte[] prefixKey) {
+        return prefixLookup(prefixKey, null, null);
+    }
+
+    /** Looks up a prefix intersected with inclusive start and exclusive end keys. */
+    public List<ByteArraySlice> prefixLookup(
+            byte[] prefixKey, @Nullable byte[] startKey, @Nullable byte[] endKey) {
         if (!isKvTable()) {
             throw new NonPrimaryKeyTableException(
                     "Try to do prefix lookup on a non primary key table: " + getTablePath());
@@ -1786,7 +1792,7 @@ public final class Replica {
                         }
                         checkNotNull(
                                 kvTablet, "KvTablet for the replica to get key shouldn't be null.");
-                        return kvTablet.prefixLookup(prefixKey);
+                        return kvTablet.prefixLookup(prefixKey, startKey, endKey);
                     } catch (IOException e) {
                         String errorMsg =
                                 String.format(
@@ -1848,18 +1854,6 @@ public final class Replica {
     public OpenScanResult openScan(
             ScannerManager scannerManager, String scannerId, long limit, long initialAccessTimeMs)
             throws IOException {
-        return openScan(scannerManager, scannerId, limit, initialAccessTimeMs, null, null);
-    }
-
-    /** Opens and registers a fixed-view scan with optional physical key bounds. */
-    public OpenScanResult openScan(
-            ScannerManager scannerManager,
-            String scannerId,
-            long limit,
-            long initialAccessTimeMs,
-            @Nullable byte[] startKey,
-            @Nullable byte[] endKey)
-            throws IOException {
         if (!isKvTable()) {
             throw new NonPrimaryKeyTableException(
                     "the primary key table not exists for " + tableBucket);
@@ -1877,8 +1871,7 @@ public final class Replica {
                     checkNotNull(
                             kvTablet, "KvTablet for the replica to open scan shouldn't be null.");
                     OpenScanResult result =
-                            kvTablet.openScan(
-                                    scannerId, limit, initialAccessTimeMs, startKey, endKey);
+                            kvTablet.openScan(scannerId, limit, initialAccessTimeMs);
                     ScannerContext context = result.getContext();
                     if (context == null) {
                         return result;
