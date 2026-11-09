@@ -32,6 +32,7 @@ import org.apache.fluss.rpc.messages.ControlledShutdownRequest;
 import org.apache.fluss.rpc.messages.ControlledShutdownResponse;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
 import org.apache.fluss.rpc.netty.server.RequestsMetrics;
+import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.server.DynamicConfigManager;
 import org.apache.fluss.server.ServerBase;
 import org.apache.fluss.server.authorizer.Authorizer;
@@ -404,7 +405,8 @@ public class TabletServer extends ServerBase {
                         rack,
                         Endpoint.loadAdvertisedEndpoints(bindEndpoints, conf),
                         startTime,
-                        tabletServerResource);
+                        tabletServerResource,
+                        ApiKeys.PUT_KV.highestSupportedVersion);
 
         while (true) {
             try {

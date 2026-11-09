@@ -40,6 +40,7 @@ import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.record.ProjectionPushdownCache;
+import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.kv.KvFlushScheduler;
@@ -131,6 +132,20 @@ final class ReplicaTest extends ReplicaTestBase {
         // deterministic control over the asynchronous KV flush.
         holdableKvFlushScheduler = new TestingHoldableKvFlushScheduler(conf);
         return holdableKvFlushScheduler;
+    }
+
+    @Test
+    void testWriteBarrierIsFencedAcrossLeadershipChanges() throws Exception {
+        Replica replica =
+                makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, new TableBucket(DATA1_TABLE_ID_PK, 1));
+        makeKvReplicaAsLeader(replica);
+        int epoch = replica.getLeaderEpoch();
+        makeKvReplicaAsFollower(replica, epoch + 1);
+        makeKvReplicaAsLeader(replica, epoch + 2);
+        assertThat(replica.checkEnoughReplicasReachOffset(0, epoch).f1)
+                .isEqualTo(Errors.NOT_LEADER_OR_FOLLOWER);
+        assertThat(replica.checkEnoughReplicasReachOffset(0, replica.getLeaderEpoch()).f1)
+                .isNotEqualTo(Errors.NOT_LEADER_OR_FOLLOWER);
     }
 
     @Test

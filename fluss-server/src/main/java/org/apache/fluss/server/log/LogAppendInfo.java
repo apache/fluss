@@ -40,6 +40,9 @@ public final class LogAppendInfo {
     /** Whether the appended log data is duplicated. */
     private boolean duplicated;
 
+    private long existingLogEndOffset = -1L;
+    private int leaderEpoch = -1;
+
     /** Creates an instance with the given params. */
     public LogAppendInfo(
             long firstOffset,
@@ -79,6 +82,33 @@ public final class LogAppendInfo {
         this.offsetsMonotonic = offsetsMonotonic;
         this.errorMessage = errorMessage;
         this.duplicated = false;
+    }
+
+    /** A successful write that waits for an existing WAL prefix without appending records. */
+    public static LogAppendInfo noAppend(long requiredOffset) {
+        LogAppendInfo result = new LogAppendInfo(-1L, -1L, -1L, -1L, 0, 0, true);
+        result.existingLogEndOffset = requiredOffset;
+        return result;
+    }
+
+    /** Returns the exclusive WAL position required for this write to commit. */
+    public long requiredOffset() {
+        return existingLogEndOffset >= 0 ? existingLogEndOffset : lastOffset + 1;
+    }
+
+    /** Whether this result describes a new physical append. */
+    public boolean appended() {
+        return existingLogEndOffset < 0 && !duplicated;
+    }
+
+    /** Returns the leadership epoch in which the write was processed. */
+    public int leaderEpoch() {
+        return leaderEpoch;
+    }
+
+    /** Binds the write result to the leadership that processed it. */
+    public void setLeaderEpoch(int leaderEpoch) {
+        this.leaderEpoch = leaderEpoch;
     }
 
     public long firstOffset() {

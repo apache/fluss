@@ -201,6 +201,7 @@ import org.apache.fluss.server.metadata.ClusterMetadata;
 import org.apache.fluss.server.metadata.PartitionMetadata;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.metadata.TableMetadata;
+import org.apache.fluss.server.metadata.TabletServerResource;
 import org.apache.fluss.server.zk.ZooKeeperClient.TableBucketAndManifest;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
@@ -565,6 +566,9 @@ public class ServerRpcMessageUtils {
                             // for backward compatibility for versions <= 0.6
                             .setHost(endpoints.get(0).getHost())
                             .setPort(endpoints.get(0).getPort());
+            if (serverInfo.maxPutKvVersion() > 0) {
+                pbTabletServerNode.setMaxPutKvVersion(serverInfo.maxPutKvVersion());
+            }
             if (serverInfo.rack() != null) {
                 pbTabletServerNode.setRack(serverInfo.rack());
             }
@@ -638,7 +642,11 @@ public class ServerRpcMessageUtils {
                             tabletServer.getNodeId(),
                             tabletServer.hasRack() ? tabletServer.getRack() : null,
                             endpoints,
-                            ServerType.TABLET_SERVER));
+                            ServerType.TABLET_SERVER,
+                            TabletServerResource.unknown(),
+                            tabletServer.hasMaxPutKvVersion()
+                                    ? tabletServer.getMaxPutKvVersion()
+                                    : 0));
         }
 
         List<TableMetadata> tableMetadataList = new ArrayList<>();

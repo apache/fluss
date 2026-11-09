@@ -27,6 +27,7 @@ import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidTimestampException;
 import org.apache.fluss.exception.LogOffsetOutOfRangeException;
 import org.apache.fluss.exception.LogStorageException;
+import org.apache.fluss.exception.StorageBackpressureException;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
@@ -104,6 +105,8 @@ public final class LogTablet {
 
     @GuardedBy("lock")
     private final WriterStateManager writerStateManager;
+
+    private volatile boolean firstRowSequenceGaps;
 
     private final Scheduler scheduler;
     private final ScheduledFuture<?> writerExpireCheck;
@@ -350,6 +353,13 @@ public final class LogTablet {
         this.tieredLogLocalSegments = tieredLogLocalSegments;
         this.effectiveLocalLogTtlMs = effectiveLocalLogTtlMs;
         this.isDataLakeEnabled = isDataLakeEnabled;
+        this.firstRowSequenceGaps = supportsFirstRowSequences(newTableConfig);
+    }
+
+    private static boolean supportsFirstRowSequences(TableConfig config) {
+        return config.getMergeEngineType().orElse(null)
+                        == org.apache.fluss.metadata.MergeEngineType.FIRST_ROW
+                && !config.getKvTTL().isPresent();
     }
 
     public long getLeaderEndOffsetSnapshot() {
@@ -389,7 +399,8 @@ public final class LogTablet {
                 new WriterStateManager(
                         tableBucket,
                         tabletDir,
-                        (int) conf.get(ConfigOptions.WRITER_ID_EXPIRATION_TIME).toMillis());
+                        (int) conf.get(ConfigOptions.WRITER_ID_EXPIRATION_TIME).toMillis(),
+                        supportsFirstRowSequences(tableConfig));
 
         LoadedLogOffsets offsets =
                 new LogLoader(
@@ -498,12 +509,18 @@ public final class LogTablet {
      * Leader Epochs.
      */
     public LogAppendInfo appendAsLeader(MemoryLogRecords records) throws Exception {
-        return append(records, true);
+        return append(records, true, false, false);
+    }
+
+    /** Appends a first-row batch after logical sequence admission under the KV write lock. */
+    public LogAppendInfo appendFirstRowAsLeader(
+            MemoryLogRecords records, boolean requireWriterMetadata) throws Exception {
+        return append(records, true, true, requireWriterMetadata);
     }
 
     /** Append this message set to the active segment of the local log without assigning offsets. */
     public LogAppendInfo appendAsFollower(MemoryLogRecords records) throws Exception {
-        return append(records, false);
+        return append(records, false, firstRowSequenceGaps, false);
     }
 
     /** Read messages from the local log without projection or filter. */
@@ -920,7 +937,11 @@ public final class LogTablet {
      * if the appendAsLeader=false flag is passed we will only check that the existing offsets are
      * valid.
      */
-    private LogAppendInfo append(MemoryLogRecords records, boolean appendAsLeader)
+    private LogAppendInfo append(
+            MemoryLogRecords records,
+            boolean appendAsLeader,
+            boolean sequenceValidated,
+            boolean requireWriterMetadata)
             throws Exception {
         LogAppendInfo appendInfo = analyzeAndValidateRecords(records);
 
@@ -934,6 +955,22 @@ public final class LogTablet {
 
         synchronized (lock) {
             localLog.checkIfMemoryMappedBufferClosed();
+            if (requireWriterMetadata) {
+                // A follower may retain a sequence after the leader expires its writer state.
+                // Until every replica supports omission, replay must not append that sequence
+                // again at a different offset. Check under the log lock to exclude expiration.
+                for (LogRecordBatch batch : validRecords.batches()) {
+                    if (batch.hasWriterId()
+                            && batch.batchSequence() != 0
+                            && !writerStateManager
+                                    .lastEntry(batch.writerId())
+                                    .map(entry -> !entry.isEmpty())
+                                    .orElse(false)) {
+                        throw new StorageBackpressureException(
+                                "Waiting for first-row WAL omission support to recover writer progress.");
+                    }
+                }
+            }
             if (appendAsLeader) {
                 long offset = localLog.getLocalLogEndOffset();
                 // assign offsets to the message set.
@@ -959,7 +996,7 @@ public final class LogTablet {
             // now that we have valid records, offsets assigned, we need to validate the idempotent
             // state of the writers and collect some metadata.
             Either<WriterStateEntry.BatchMetadata, Collection<WriterAppendInfo>> validateResult =
-                    analyzeAndValidateWriterState(validRecords, appendAsLeader);
+                    analyzeAndValidateWriterState(validRecords, appendAsLeader, sequenceValidated);
 
             if (validateResult.isLeft()) {
                 // have duplicated batch metadata, skip the append and update append info.
@@ -1347,7 +1384,8 @@ public final class LogTablet {
 
     /** Returns either the duplicated batch metadata (left) or the updated writers (right). */
     private Either<WriterStateEntry.BatchMetadata, Collection<WriterAppendInfo>>
-            analyzeAndValidateWriterState(MemoryLogRecords records, boolean isAppendAsLeader) {
+            analyzeAndValidateWriterState(
+                    MemoryLogRecords records, boolean isAppendAsLeader, boolean sequenceValidated) {
         Map<Long, WriterAppendInfo> updatedWriters = new HashMap<>();
 
         for (LogRecordBatch batch : records.batches()) {
@@ -1369,7 +1407,9 @@ public final class LogTablet {
                         batch,
                         updatedWriters,
                         isAppendAsLeader,
-                        WriterAppendInfo.SequenceValidation.ENFORCE);
+                        sequenceValidated
+                                ? WriterAppendInfo.SequenceValidation.ACCEPT
+                                : WriterAppendInfo.SequenceValidation.ENFORCE);
             }
         }
 
@@ -1642,7 +1682,7 @@ public final class LogTablet {
                         batch,
                         loadedWriters,
                         false,
-                        WriterAppendInfo.SequenceValidation.WARN_AND_ACCEPT);
+                        writerStateManager.recoverySequenceValidation());
             }
         }
         loadedWriters.values().forEach(writerStateManager::update);

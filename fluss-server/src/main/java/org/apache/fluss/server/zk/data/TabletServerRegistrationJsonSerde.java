@@ -49,6 +49,7 @@ public class TabletServerRegistrationJsonSerde
     private static final String LISTENERS = "listeners";
     private static final String RACK = "rack";
     private static final String CPU_CORES = "cpu_cores";
+    private static final String MAX_PUT_KV_VERSION = "max_put_kv_version";
     private static final String MEMORY_BYTES = "memory_bytes";
 
     @Override
@@ -70,6 +71,10 @@ public class TabletServerRegistrationJsonSerde
         }
         if (resource.getMemoryBytes() != null) {
             generator.writeNumberField(MEMORY_BYTES, resource.getMemoryBytes());
+        }
+        if (tabletServerRegistration.getMaxPutKvVersion() > 0) {
+            generator.writeNumberField(
+                    MAX_PUT_KV_VERSION, tabletServerRegistration.getMaxPutKvVersion());
         }
         generator.writeEndObject();
     }
@@ -99,6 +104,11 @@ public class TabletServerRegistrationJsonSerde
         }
 
         long registerTimestamp = node.get(REGISTER_TIMESTAMP).asLong();
-        return new TabletServerRegistration(rack, endpoints, registerTimestamp, resource);
+        return new TabletServerRegistration(
+                rack,
+                endpoints,
+                registerTimestamp,
+                resource,
+                node.has(MAX_PUT_KV_VERSION) ? node.get(MAX_PUT_KV_VERSION).asInt() : 0);
     }
 }

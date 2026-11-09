@@ -765,12 +765,17 @@ public class CoordinatorRequestBatch {
 
         // TODO Todo Distinguish which tablet servers need to be updated instead of sending all live
         // tablet servers.
-        return makeUpdateMetadataRequest(
-                coordinatorContext.getCoordinatorServerInfo(),
-                coordinatorContext.getCoordinatorEpoch(),
-                new HashSet<>(coordinatorContext.getLiveTabletServers().values()),
-                tableMetadataList,
-                partitionMetadataList);
+        UpdateMetadataRequest request =
+                makeUpdateMetadataRequest(
+                        coordinatorContext.getCoordinatorServerInfo(),
+                        coordinatorContext.getCoordinatorEpoch(),
+                        new HashSet<>(coordinatorContext.getLiveTabletServers().values()),
+                        tableMetadataList,
+                        partitionMetadataList);
+        if (!coordinatorContext.supportsFirstRowProgress()) {
+            request.getTabletServersList().forEach(server -> server.clearMaxPutKvVersion());
+        }
+        return request;
     }
 
     @Nullable

@@ -1052,6 +1052,38 @@ final class SenderTest {
     }
 
     @Test
+    void testSequenceExhaustionDrainsBeforeRotatingWriter() throws Exception {
+        IdempotenceManager manager = createIdempotenceManager(true);
+        Sender localSender = setupWithIdempotenceState(manager);
+        localSender.runOnce();
+        manager.maybeUpdateWriterId(tb1);
+        manager.setNextSequence(tb1, Integer.MAX_VALUE - 1);
+        long previousWriter = manager.writerId();
+        CompletableFuture<Exception> first = new CompletableFuture<>();
+        appendToAccumulator(tb1, row(1, "a"), (tb, leo, error) -> first.complete(error));
+        localSender.runOnce();
+        assertThat(manager.isSequenceRolloverPending()).isTrue();
+        assertThat(manager.writerId()).isEqualTo(previousWriter);
+        CompletableFuture<Exception> next = new CompletableFuture<>();
+        appendToAccumulator(tb1, row(2, "b"), (tb, leo, error) -> next.complete(error));
+        localSender.runOnce();
+        assertThat(manager.nextSequence(tb1)).isEqualTo(Integer.MAX_VALUE);
+        finishRequest(tb1, 0, createProduceLogResponse(tb1, Errors.REQUEST_TIME_OUT));
+        localSender.runOnce();
+        assertBatchSequenceEquals(
+                tb1, (ProduceLogRequest) getRequest(tb1, 0), Integer.MAX_VALUE - 1);
+        finishRequest(tb1, 0, createProduceLogResponse(tb1, 0L, 1L));
+        localSender.runOnce();
+        assertThat(first.get()).isNull();
+        assertThat(manager.isSequenceRolloverPending()).isFalse();
+        assertThat(manager.writerId()).isNotEqualTo(previousWriter);
+        assertThat(manager.nextSequence(tb1)).isEqualTo(1);
+        finishRequest(tb1, 0, createProduceLogResponse(tb1, 1L, 2L));
+        localSender.runOnce();
+        assertThat(next.get()).isNull();
+    }
+
+    @Test
     void testIdempotenceWithMultipleInflightBatch() throws Exception {
         IdempotenceManager idempotenceManager = createIdempotenceManager(true);
         Sender sender1 = setupWithIdempotenceState(idempotenceManager);

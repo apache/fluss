@@ -1354,6 +1354,9 @@ public final class RecordAccumulator {
             return true;
         }
         if (idempotenceManager.idempotenceEnabled()) {
+            if (!first.hasBatchSequence() && idempotenceManager.isSequenceRolloverPending()) {
+                return true;
+            }
             if (!idempotenceManager.isWriterIdValid()) {
                 // we cannot send the batch until we have refreshed writer id.
                 return true;

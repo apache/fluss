@@ -68,6 +68,8 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
     @GuardedBy("metadataLock")
     private volatile ServerMetadataSnapshot serverMetadataSnapshot;
 
+    private volatile boolean firstRowProgressEnabled;
+
     private final MetadataManager metadataManager;
 
     private final ServerSchemaCache serverSchemaCache;
@@ -85,6 +87,11 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
     /** Returns the routing snapshot, also used to fence in-flight cache-aside loads. */
     public ServerMetadataSnapshot getSnapshot() {
         return serverMetadataSnapshot;
+    }
+
+    /** Whether first-row WAL omission has been enabled during this server process. */
+    public boolean supportsFirstRowProgress() {
+        return firstRowProgressEnabled;
     }
 
     /** Captures routing and table properties under the update lock for this request. */
@@ -442,6 +449,11 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                                     bucketMetadataMapForPartitions,
                                     partitionBucketCounts,
                                     bucketCountEpochByTableId);
+                    // Rolling upgrades forbid older nodes after activation. Keep activation
+                    // monotonic so a delayed pre-upgrade metadata request cannot disable it.
+                    if (newSnapshot.supportsFirstRowProgress()) {
+                        firstRowProgressEnabled = true;
+                    }
                     tablePropertyCache = tableProperties.build();
                     serverMetadataSnapshot = newSnapshot;
                     return deletedTableIds;

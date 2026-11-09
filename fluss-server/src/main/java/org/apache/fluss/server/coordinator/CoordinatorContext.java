@@ -157,6 +157,13 @@ public class CoordinatorContext {
         return Collections.unmodifiableSet(liveCoordinatorServers.keySet());
     }
 
+    /** Whether every registered coordinator can preserve logical writer protocol metadata. */
+    public boolean supportsFirstRowProgress() {
+        return !liveCoordinatorServers.isEmpty()
+                && liveCoordinatorServers.values().stream()
+                        .allMatch(server -> server.getMaxPutKvVersion() >= 4);
+    }
+
     public void setLiveCoordinators(Collection<CoordinatorAddress> servers) {
         liveCoordinatorServers.clear();
         servers.forEach(this::addLiveCoordinator);

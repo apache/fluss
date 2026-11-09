@@ -29,6 +29,7 @@ import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.RpcServer;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
 import org.apache.fluss.rpc.netty.server.RequestsMetrics;
+import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.server.DynamicConfigManager;
 import org.apache.fluss.server.ServerBase;
 import org.apache.fluss.server.authorizer.Authorizer;
@@ -497,7 +498,9 @@ public class CoordinatorServer extends ServerBase {
     private CoordinatorAddress buildCoordinatorAddress() {
         List<Endpoint> bindEndpoints = rpcServer.getBindEndpoints();
         return new CoordinatorAddress(
-                this.serverId, Endpoint.loadAdvertisedEndpoints(bindEndpoints, conf));
+                this.serverId,
+                Endpoint.loadAdvertisedEndpoints(bindEndpoints, conf),
+                ApiKeys.PUT_KV.highestSupportedVersion);
     }
 
     /**

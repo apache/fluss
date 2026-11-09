@@ -37,6 +37,7 @@ public class CoordinatorAddressJsonSerde
     private static final String VERSION_KEY = "version";
     private static final int VERSION = 2;
 
+    private static final String MAX_PUT_KV_VERSION = "max_put_kv_version";
     private static final String ID = "id";
     private static final String HOST = "host";
     private static final String PORT = "port";
@@ -54,6 +55,9 @@ public class CoordinatorAddressJsonSerde
         generator.writeStringField(ID, coordinatorAddress.getId());
         generator.writeStringField(
                 LISTENERS, Endpoint.toListenersString(coordinatorAddress.getEndpoints()));
+        if (coordinatorAddress.getMaxPutKvVersion() > 0) {
+            generator.writeNumberField(MAX_PUT_KV_VERSION, coordinatorAddress.getMaxPutKvVersion());
+        }
         generator.writeEndObject();
     }
 
@@ -69,6 +73,9 @@ public class CoordinatorAddressJsonSerde
         } else {
             endpoints = Endpoint.fromListenersString(node.get(LISTENERS).asText());
         }
-        return new CoordinatorAddress(id, endpoints);
+        return new CoordinatorAddress(
+                id,
+                endpoints,
+                node.has(MAX_PUT_KV_VERSION) ? node.get(MAX_PUT_KV_VERSION).asInt() : 0);
     }
 }

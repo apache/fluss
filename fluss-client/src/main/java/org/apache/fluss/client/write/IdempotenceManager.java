@@ -69,6 +69,8 @@ public class IdempotenceManager {
 
     private volatile long writerId;
 
+    private boolean sequenceRolloverPending;
+
     public IdempotenceManager(
             boolean idempotenceEnabled,
             int maxInflightRequestsPerBucket,
@@ -80,6 +82,21 @@ public class IdempotenceManager {
         this.tabletServerGateway = tabletServerGateway;
         this.writerId = NO_WRITER_ID;
         this.metadataUpdater = metadataUpdater;
+    }
+
+    synchronized boolean isSequenceRolloverPending() {
+        return sequenceRolloverPending;
+    }
+
+    @VisibleForTesting
+    synchronized void setNextSequence(TableBucket tableBucket, int sequence) {
+        idempotenceBucketMap.getOrCreate(tableBucket).setNextSequence(sequence);
+    }
+
+    private synchronized void maybeRotateWriterId() {
+        if (sequenceRolloverPending && !idempotenceBucketMap.hasInflightBatches()) {
+            resetWriterId();
+        }
     }
 
     boolean idempotenceEnabled() {
@@ -132,6 +149,7 @@ public class IdempotenceManager {
     synchronized void resetWriterId() {
         setWriterId(NO_WRITER_ID);
         this.idempotenceBucketMap.reset();
+        sequenceRolloverPending = false;
     }
 
     synchronized boolean hasStaleWriterId(TableBucket tableBucket) {
@@ -144,6 +162,9 @@ public class IdempotenceManager {
 
     synchronized void incrementBatchSequence(TableBucket tableBucket) {
         idempotenceBucketMap.get(tableBucket).incrementSequence();
+        if (idempotenceBucketMap.get(tableBucket).nextSequence() == Integer.MAX_VALUE) {
+            sequenceRolloverPending = true;
+        }
     }
 
     synchronized WriteBatch nextBatchBySequence(TableBucket tableBucket) {
@@ -322,6 +343,7 @@ public class IdempotenceManager {
     }
 
     void maybeWaitForWriterId(Set<PhysicalTablePath> tablePaths) throws Throwable {
+        maybeRotateWriterId();
         if (isWriterIdValid()) {
             return;
         }

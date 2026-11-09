@@ -37,6 +37,7 @@ import org.apache.fluss.exception.TooManyScannersException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.LogFormat;
+import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
@@ -1338,6 +1339,18 @@ public final class Replica {
             MergeMode mergeMode,
             int requiredAcks)
             throws Exception {
+        return putRecordsToLeader(kvRecords, targetColumns, mergeMode, requiredAcks, null, false);
+    }
+
+    /** Writes with an optional acknowledged logical first-row prefix. */
+    public LogAppendInfo putRecordsToLeader(
+            KvRecordBatch kvRecords,
+            @Nullable int[] targetColumns,
+            MergeMode mergeMode,
+            int requiredAcks,
+            @Nullable Integer acknowledgedSequence,
+            boolean omitEmptyWal)
+            throws Exception {
         return inReadLock(
                 leaderIsrUpdateLock,
                 () -> {
@@ -1358,7 +1371,16 @@ public final class Replica {
                             kv, "KvTablet for the replica to put kv records shouldn't be null.");
                     LogAppendInfo logAppendInfo;
                     try {
-                        logAppendInfo = kv.putAsLeader(kvRecords, targetColumns, mergeMode);
+                        logAppendInfo =
+                                acknowledgedSequence == null
+                                        ? kv.putAsLeader(kvRecords, targetColumns, mergeMode)
+                                        : kv.putAsLeader(
+                                                kvRecords,
+                                                targetColumns,
+                                                mergeMode,
+                                                acknowledgedSequence,
+                                                omitEmptyWal);
+                        logAppendInfo.setLeaderEpoch(leaderEpoch);
                     } catch (IOException e) {
                         LOG.error("Error while putting records to {}", tableBucket, e);
                         fatalErrorHandler.onFatalError(e);
@@ -1959,6 +1981,27 @@ public final class Replica {
         } else {
             return Tuple2.of(false, Errors.NOT_LEADER_OR_FOLLOWER);
         }
+    }
+
+    /** Whether this table retains first-row keys permanently within the bucket instance. */
+    public boolean supportsFirstRowProgress() {
+        return !historicalPartition
+                && tableInfo.getTableConfig().getMergeEngineType().orElse(null)
+                        == MergeEngineType.FIRST_ROW
+                && !tableInfo.getTableConfig().getKvTTL().isPresent();
+    }
+
+    /** Checks a fixed WAL position within the leadership that accepted the write. */
+    public Tuple2<Boolean, Errors> checkEnoughReplicasReachOffset(
+            long requiredOffset, int expectedEpoch) {
+        if (expectedEpoch >= 0 && expectedEpoch != leaderEpoch) {
+            return Tuple2.of(false, Errors.NOT_LEADER_OR_FOLLOWER);
+        }
+        Tuple2<Boolean, Errors> result = checkEnoughReplicasReachOffset(requiredOffset);
+        if (expectedEpoch >= 0 && expectedEpoch != leaderEpoch) {
+            return Tuple2.of(false, Errors.NOT_LEADER_OR_FOLLOWER);
+        }
+        return result;
     }
 
     public long getRowCount() {

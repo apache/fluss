@@ -413,7 +413,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
                             registration.getRack(),
                             registration.getEndpoints(),
                             ServerType.TABLET_SERVER,
-                            registration.getResource());
+                            registration.getResource(),
+                            registration.getMaxPutKvVersion());
             // Get internal listener endpoint to send request to tablet server.
             Endpoint internalEndpoint = serverInfo.endpoint(internalListenerName);
             if (internalEndpoint == null) {
@@ -1365,6 +1366,12 @@ public class CoordinatorEventProcessor implements EventProcessor {
         LOG.info("New coordinator server callback for coordinator server {}", coordinatorServerId);
 
         coordinatorContext.addLiveCoordinator(coordinatorAddress);
+        updateTabletServerMetadataCache(
+                coordinatorContext.getLiveTabletServers().values().stream()
+                        .collect(Collectors.toSet()),
+                null,
+                null,
+                Collections.emptySet());
     }
 
     private void processDeadCoordinator(DeadCoordinatorEvent deadCoordinatorEvent) {
@@ -1375,6 +1382,12 @@ public class CoordinatorEventProcessor implements EventProcessor {
         // process dead coordinator server
         LOG.info("Coordinator server failure callback for {}.", coordinatorServerId);
         coordinatorContext.removeLiveCoordinator(coordinatorServerId);
+        updateTabletServerMetadataCache(
+                coordinatorContext.getLiveTabletServers().values().stream()
+                        .collect(Collectors.toSet()),
+                null,
+                null,
+                Collections.emptySet());
     }
 
     private void processNewTabletServer(NewTabletServerEvent newTabletServerEvent) {

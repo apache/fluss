@@ -161,6 +161,31 @@ public class TabletServerMetadataCacheTest {
     }
 
     @Test
+    void testActivationSurvivesDelayedLegacyMetadata() {
+        TabletServerMetadataCache cache =
+                new TabletServerMetadataCache(new TestingMetadataManager(Collections.emptyList()));
+        ClusterMetadata legacy = new ClusterMetadata(null, aliveTableServers);
+        cache.updateClusterMetadata(legacy);
+        assertThat(cache.supportsFirstRowProgress()).isFalse();
+        cache.updateClusterMetadata(
+                new ClusterMetadata(
+                        null,
+                        Collections.singleton(
+                                new ServerInfo(
+                                        0,
+                                        null,
+                                        Collections.singletonList(
+                                                new Endpoint("localhost", 1234, "INTERNAL")),
+                                        ServerType.TABLET_SERVER,
+                                        TabletServerResource.unknown(),
+                                        4))));
+        assertThat(cache.supportsFirstRowProgress()).isTrue();
+        cache.updateClusterMetadata(legacy);
+        assertThat(cache.getSnapshot().supportsFirstRowProgress()).isFalse();
+        assertThat(cache.supportsFirstRowProgress()).isTrue();
+    }
+
+    @Test
     void testUpdateClusterMetadataRequest() {
         serverMetadataCache.updateClusterMetadata(
                 new ClusterMetadata(

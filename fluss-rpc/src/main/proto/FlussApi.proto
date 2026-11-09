@@ -1009,6 +1009,7 @@ message PbServerNode {
   optional string listeners = 4;
   optional string rack = 5;
   optional int32 server_tag = 6;
+  optional int32 max_put_kv_version = 7;
 }
 
 message PbTableMetadata {
@@ -1141,6 +1142,8 @@ message PbPutKvReqForBucket {
   // the bucket count the sender used to form bucket_id; the server compares it against the
   // actual count to detect stale routing. Not authoritative metadata.
   optional int32 routing_bucket_count = 5;
+  // Acknowledged logical prefix of this writer and bucket; -1 before its first success.
+  optional int32 last_acked_sequence = 6;
 }
 
 message PbPutKvRespForBucket {

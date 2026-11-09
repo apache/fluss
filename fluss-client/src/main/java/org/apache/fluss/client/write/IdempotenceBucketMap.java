@@ -37,6 +37,10 @@ public class IdempotenceBucketMap {
 
     private final Map<TableBucket, IdempotenceBucketEntry> tableBuckets = new HashMap<>();
 
+    boolean hasInflightBatches() {
+        return tableBuckets.values().stream().anyMatch(IdempotenceBucketEntry::hasInflightBatches);
+    }
+
     IdempotenceBucketEntry get(TableBucket tableBucket) {
         IdempotenceBucketEntry entry = tableBuckets.get(tableBucket);
         if (entry == null) {

@@ -84,6 +84,10 @@ public class IdempotenceBucketEntry {
         return nextSequence;
     }
 
+    void setNextSequence(int sequence) {
+        nextSequence = sequence;
+    }
+
     Optional<Integer> lastAckedBatchSequence() {
         return lastAckedSequence == NO_LAST_ACKED_BATCH_SEQUENCE
                 ? Optional.empty()

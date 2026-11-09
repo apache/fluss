@@ -28,6 +28,8 @@ import org.junit.jupiter.api.Test;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
 /** Test for {@link TabletServerRegistrationJsonSerde}. */
 public class TabletServerRegistrationJsonSerdeTest
         extends JsonSerdeTestBase<TabletServerRegistration> {
@@ -69,6 +71,29 @@ public class TabletServerRegistrationJsonSerdeTest
             "{\"version\":4,\"listeners\":\"CLIENT://localhost:2345,FLUSS://127.0.0.1:2346\",\"register_timestamp\":10000,\"rack\":\"cn-hangzhou-server10\"}",
             "{\"version\":4,\"listeners\":\"CLIENT://localhost:2345,FLUSS://127.0.0.1:2346\",\"register_timestamp\":10000,\"rack\":\"cn-hangzhou-server10\",\"cpu_cores\":8.0,\"memory_bytes\":1024}"
         };
+    }
+
+    @Test
+    void testWriteProtocolCapabilityIsOptional() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        JsonNode modern =
+                mapper.readTree(
+                        "{\"version\":4,\"listeners\":\"CLIENT://localhost:2345\","
+                                + "\"register_timestamp\":1,\"max_put_kv_version\":4}");
+        assertThat(
+                        TabletServerRegistrationJsonSerde.INSTANCE
+                                .deserialize(modern)
+                                .getMaxPutKvVersion())
+                .isEqualTo(4);
+        JsonNode legacy =
+                mapper.readTree(
+                        "{\"version\":4,\"listeners\":\"CLIENT://localhost:2345\","
+                                + "\"register_timestamp\":1}");
+        assertThat(
+                        TabletServerRegistrationJsonSerde.INSTANCE
+                                .deserialize(legacy)
+                                .getMaxPutKvVersion())
+                .isZero();
     }
 
     @Test

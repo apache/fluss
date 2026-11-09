@@ -1197,6 +1197,35 @@ class KvTabletTest {
         assertThat(kvTablet.getKvPreWriteBuffer().getMaxLSN()).isEqualTo(3);
     }
 
+    @Test
+    void testFirstRowLogicalProgressDoesNotAppendEmptyWal() throws Exception {
+        initLogTabletAndKvTablet(
+                DATA1_SCHEMA_PK, Collections.singletonMap("table.merge-engine", "first_row"));
+        List<KvRecord> rows =
+                Collections.singletonList(
+                        kvRecordFactory.ofRecord("k1".getBytes(), new Object[] {1, "first"}));
+        KvRecordBatch first = kvRecordBatchFactory.ofRecords(rows, 100L, 0);
+        kvTablet.putAsLeader(first, null, MergeMode.DEFAULT, -1, true);
+        long end = logTablet.localLogEndOffset();
+        KvRecordBatch duplicate = kvRecordBatchFactory.ofRecords(rows, 100L, 1);
+        LogAppendInfo result = kvTablet.putAsLeader(duplicate, null, MergeMode.DEFAULT, -1, true);
+        assertThat(logTablet.localLogEndOffset()).isEqualTo(end);
+        assertThat(result.appended()).isFalse();
+        assertThat(result.requiredOffset()).isEqualTo(end);
+        assertThat(result.requiredOffset()).isGreaterThan(logTablet.getHighWatermark());
+        logTablet.updateHighWatermark(end);
+        assertThat(result.validBytes()).isZero();
+        KvRecordBatch next =
+                kvRecordBatchFactory.ofRecords(
+                        Collections.singletonList(
+                                kvRecordFactory.ofRecord(
+                                        "k2".getBytes(), new Object[] {2, "second"})),
+                        100L,
+                        2);
+        kvTablet.putAsLeader(next, null, MergeMode.DEFAULT, 1, false);
+        assertThat(logTablet.localLogEndOffset()).isEqualTo(end + 1);
+    }
+
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testFirstRowMergeEngine(boolean doProjection) throws Exception {

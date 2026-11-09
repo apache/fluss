@@ -43,13 +43,16 @@ public class CoordinatorAddressJsonSerdeTest extends JsonSerdeTestBase<Coordinat
                         Arrays.asList(
                                 new Endpoint("localhost", 1001, "CLIENT"),
                                 new Endpoint("127.0.0.1", 9124, "FLUSS")));
-        return new CoordinatorAddress[] {coordinatorAddress};
+        return new CoordinatorAddress[] {
+            coordinatorAddress, new CoordinatorAddress("2", coordinatorAddress.getEndpoints(), 4)
+        };
     }
 
     @Override
     protected String[] expectedJsons() {
         return new String[] {
-            "{\"version\":2,\"id\":\"1\",\"listeners\":\"CLIENT://localhost:1001,FLUSS://127.0.0.1:9124\"}"
+            "{\"version\":2,\"id\":\"1\",\"listeners\":\"CLIENT://localhost:1001,FLUSS://127.0.0.1:9124\"}",
+            "{\"version\":2,\"id\":\"2\",\"listeners\":\"CLIENT://localhost:1001,FLUSS://127.0.0.1:9124\",\"max_put_kv_version\":4}"
         };
     }
 
