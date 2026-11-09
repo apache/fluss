@@ -948,6 +948,18 @@ public abstract class FlinkProcedureITCase {
             assertCallResult(listProceduresIterator, new String[] {"+I[success]"});
         }
 
+        // The task may complete before the cancel request is processed. Wait for either valid
+        // terminal status before cleaning up the persisted task.
+        retry(
+                Duration.ofMinutes(2),
+                () -> {
+                    Optional<RebalanceProgress> finalProgressOpt =
+                            admin.listRebalanceProgress(progress.rebalanceId()).get();
+                    assertThat(finalProgressOpt).isPresent();
+                    assertThat(finalProgressOpt.get().status())
+                            .isIn(RebalanceStatus.CANCELED, RebalanceStatus.COMPLETED);
+                });
+
         // delete rebalance plan to avoid conflict with other tests.
         FLUSS_CLUSTER_EXTENSION.getZooKeeperClient().deleteRebalanceTask();
     }

@@ -21,6 +21,8 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -32,16 +34,21 @@ public class NotifyLeaderAndIsrResponseReceivedEvent implements CoordinatorEvent
     // the server id that return the response
     private final int responseServerId;
 
-    // the bucket epoch sent in the request for each bucket, the response itself carries no epoch
-    private final Map<TableBucket, Integer> requestBucketEpochs;
+    private final Map<TableBucket, NotifyLeaderAndIsrRequestContext> requestContexts;
+
+    public NotifyLeaderAndIsrResponseReceivedEvent(
+            List<NotifyLeaderAndIsrResultForBucket> notifyLeaderAndIsrResultForBuckets,
+            int responseServerId) {
+        this(notifyLeaderAndIsrResultForBuckets, responseServerId, Collections.emptyMap());
+    }
 
     public NotifyLeaderAndIsrResponseReceivedEvent(
             List<NotifyLeaderAndIsrResultForBucket> notifyLeaderAndIsrResultForBuckets,
             int responseServerId,
-            Map<TableBucket, Integer> requestBucketEpochs) {
+            Map<TableBucket, NotifyLeaderAndIsrRequestContext> requestContexts) {
         this.notifyLeaderAndIsrResultForBuckets = notifyLeaderAndIsrResultForBuckets;
         this.responseServerId = responseServerId;
-        this.requestBucketEpochs = requestBucketEpochs;
+        this.requestContexts = Collections.unmodifiableMap(new HashMap<>(requestContexts));
     }
 
     public int getResponseServerId() {
@@ -52,8 +59,7 @@ public class NotifyLeaderAndIsrResponseReceivedEvent implements CoordinatorEvent
         return notifyLeaderAndIsrResultForBuckets;
     }
 
-    /** Returns the bucket epoch the request sent for the bucket, or -1 if unknown. */
-    public int getRequestBucketEpoch(TableBucket tableBucket) {
-        return requestBucketEpochs.getOrDefault(tableBucket, -1);
+    public NotifyLeaderAndIsrRequestContext getRequestContext(TableBucket tableBucket) {
+        return requestContexts.get(tableBucket);
     }
 }
