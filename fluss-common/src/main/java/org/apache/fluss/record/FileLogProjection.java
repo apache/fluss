@@ -24,21 +24,14 @@ import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.record.FileLogInputStream.FileChannelLogRecordBatch;
 import org.apache.fluss.record.bytesview.BytesView;
 import org.apache.fluss.record.bytesview.MultiBytesView;
-import org.apache.fluss.row.GenericRow;
-import org.apache.fluss.row.arrow.writers.ArrowFieldWriter;
 import org.apache.fluss.shaded.arrow.com.google.flatbuffers.FlatBufferBuilder;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.flatbuf.Buffer;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.flatbuf.FieldNode;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.flatbuf.Message;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.flatbuf.RecordBatch;
-import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
-import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocatorUtil;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.TypeLayout;
-import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
-import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorUnloader;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.compression.CompressionUtil;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.WriteChannel;
-import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.ArrowBlock;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.ArrowBodyCompression;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.ArrowBuffer;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.ArrowFieldNode;
@@ -80,7 +73,6 @@ import static org.apache.fluss.record.LogRecordBatchFormat.statisticsLengthOffse
 import static org.apache.fluss.utils.FileUtils.readFully;
 import static org.apache.fluss.utils.FileUtils.readFullyOrFail;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
-import static org.apache.fluss.utils.Preconditions.checkState;
 
 /** Column projection util on Arrow format {@link FileLogRecords}. */
 public class FileLogProjection {
@@ -128,10 +120,8 @@ public class FileLogProjection {
             SchemaGetter schemaGetter,
             ArrowCompressionInfo compressionInfo,
             int[] selectedFieldPositions) {
-        // Empty projection is currently not supported on the server side: the Arrow metadata length
-        // estimate disagrees with the serialized length for a zero-field schema, which would
-        // cause the client to retry indefinitely. Fail fast with a clear, non-retriable error
-        // instead.
+        // Reject empty user projections, but allow a nonempty projection to select no stored
+        // columns from a historical batch. Such a batch still carries its row count and offsets.
         if (selectedFieldPositions != null && selectedFieldPositions.length == 0) {
             throw new InvalidColumnProjectionException(
                     "Empty projection is not supported. "
@@ -177,7 +167,7 @@ public class FileLogProjection {
             return builder.build();
         }
 
-        projectSingleBatch(channel, position, currentProjection, builder, Integer.MAX_VALUE, false);
+        projectSingleBatch(channel, position, currentProjection, builder, Integer.MAX_VALUE);
         return builder.build();
     }
 
@@ -189,17 +179,6 @@ public class FileLogProjection {
      */
     public BytesViewLogRecords project(FileChannel channel, int start, int end, int maxBytes)
             throws IOException {
-        return project(channel, start, end, maxBytes, false);
-    }
-
-    /**
-     * Projects file records, allowing the first batch to exceed {@code maxBytes} when {@code
-     * minOneMessage} is true. This preserves fetch progress when adding null columns makes a
-     * projected batch larger than its stored representation.
-     */
-    public BytesViewLogRecords project(
-            FileChannel channel, int start, int end, int maxBytes, boolean minOneMessage)
-            throws IOException {
 
         MultiBytesView.Builder builder = MultiBytesView.builder();
         int position = start;
@@ -209,7 +188,7 @@ public class FileLogProjection {
         // The condition is an optimization to avoid read log header when there is no enough bytes,
         // So we use V0 header size here for a conservative judgment. In the end, the condition
         // of (position >= end - recordBatchHeaderSize) will ensure the final correctness.
-        while (maxBytes > V0_RECORD_BATCH_HEADER_SIZE || (minOneMessage && position == start)) {
+        while (maxBytes > V0_RECORD_BATCH_HEADER_SIZE) {
             if (position > end - V0_RECORD_BATCH_HEADER_SIZE) {
                 // the remaining bytes in the file are not enough to read a batch header up to
                 // magic.
@@ -247,13 +226,7 @@ public class FileLogProjection {
             }
 
             int newBatchSizeInBytes =
-                    projectSingleBatch(
-                            channel,
-                            position,
-                            currentProjection,
-                            builder,
-                            maxBytes,
-                            minOneMessage && position == start);
+                    projectSingleBatch(channel, position, currentProjection, builder, maxBytes);
             if (newBatchSizeInBytes < 0) {
                 // the projected batch exceeds the remaining budget, stop here
                 return new BytesViewLogRecords(builder.build());
@@ -276,19 +249,15 @@ public class FileLogProjection {
      * @param position the start position of the batch in the file
      * @param currentProjection the projection info for the current schema
      * @param builder the builder to append projected bytes to
-     * @param maxBytes the maximum allowed projected batch size; returns -1 if exceeded unless
-     *     {@code allowOversizedBatch} is true
-     * @param allowOversizedBatch whether this batch may exceed the remaining fetch budget
-     * @return the projected batch size in bytes, or -1 if the budget is exceeded and oversized
-     *     batches are not allowed
+     * @param maxBytes the maximum allowed projected batch size; returns -1 if exceeded
+     * @return the projected batch size in bytes, or -1 if the projected size exceeds maxBytes
      */
     private int projectSingleBatch(
             FileChannel channel,
             int position,
             ProjectionInfo currentProjection,
             MultiBytesView.Builder builder,
-            int maxBytes,
-            boolean allowOversizedBatch)
+            int maxBytes)
             throws IOException {
         logHeaderBuffer.rewind();
         byte magic = logHeaderBuffer.get(MAGIC_OFFSET);
@@ -336,28 +305,21 @@ public class FileLogProjection {
                         currentProjection.nodesProjection,
                         currentProjection.buffersProjection,
                         currentProjection.bufferCount);
-        if (currentProjection.missingRowType.getFieldCount() > 0) {
-            projectedArrowBatch = appendNullColumns(projectedArrowBatch, currentProjection);
-        }
         long arrowBodyLength = projectedArrowBatch.bodyLength();
 
-        int newBatchSizeInBytes =
-                recordBatchHeaderSize
-                        + changeTypeBytes
-                        + currentProjection.arrowMetadataLength
-                        + (int) arrowBodyLength;
-
-        if (newBatchSizeInBytes > maxBytes && !allowOversizedBatch) {
-            return -1;
-        }
-
-        // create new arrow batch metadata which already projected
+        // A projection can contain no stored columns while still containing rows. Its
+        // zero-length body has a different FlatBuffer layout from the metadata estimate.
         byte[] headerMetadata =
                 serializeArrowRecordBatchMetadata(
                         projectedArrowBatch, arrowBodyLength, currentProjection.bodyCompression);
-        checkState(
-                headerMetadata.length == currentProjection.arrowMetadataLength,
-                "Invalid metadata length");
+        int newBatchSizeInBytes =
+                recordBatchHeaderSize
+                        + changeTypeBytes
+                        + headerMetadata.length
+                        + (int) arrowBodyLength;
+        if (newBatchSizeInBytes > maxBytes) {
+            return -1;
+        }
 
         // update and copy log batch header
         logHeaderBuffer.position(LENGTH_OFFSET);
@@ -379,9 +341,6 @@ public class FileLogProjection {
         final long bufferOffset = arrowHeaderOffset + ARROW_HEADER_SIZE + arrowMetadataSize;
         projectedArrowBatch.buffers.forEach(
                 b -> builder.addBytes(channel, bufferOffset + b.getOffset(), (int) b.getSize()));
-        if (projectedArrowBatch.appendedBuffers.length > 0) {
-            builder.addBytes(projectedArrowBatch.appendedBuffers);
-        }
 
         return newBatchSizeInBytes;
     }
@@ -411,51 +370,7 @@ public class FileLogProjection {
             newOffset += paddedLength;
         }
 
-        return new ProjectedArrowBatch(
-                numRecords, newNodes, newBufferLayouts, selectedBuffers, new byte[0]);
-    }
-
-    private ProjectedArrowBatch appendNullColumns(
-            ProjectedArrowBatch batch, ProjectionInfo projection) throws IOException {
-        // Schema evolution only appends columns. Keep existing columns as file slices and
-        // materialize only the missing suffix, without decoding or recompressing stored data.
-        RowType missingType = projection.missingRowType;
-        try (BufferAllocator allocator = BufferAllocatorUtil.createBufferAllocator(null);
-                VectorSchemaRoot root =
-                        VectorSchemaRoot.create(ArrowUtils.toArrowSchema(missingType), allocator)) {
-            int recordCount = Math.toIntExact(batch.numRecords);
-            GenericRow nullRow = new GenericRow(missingType.getFieldCount());
-            for (int i = 0; i < missingType.getFieldCount(); i++) {
-                root.getVector(i).setInitialCapacity(recordCount);
-                root.getVector(i).allocateNew();
-                ArrowFieldWriter writer =
-                        ArrowUtils.createArrowFieldWriter(
-                                root.getVector(i), missingType.getTypeAt(i));
-                for (int row = 0; row < recordCount; row++) {
-                    writer.write(row, nullRow, i, false);
-                }
-            }
-            root.setRowCount(recordCount);
-            try (ArrowRecordBatch nullBatch =
-                    new VectorUnloader(root, true, compressionInfo.createCompressionCodec(), true)
-                            .getRecordBatch()) {
-                ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-                ArrowBlock block =
-                        MessageSerializer.serialize(
-                                new WriteChannel(Channels.newChannel(bytes)), nullBatch);
-                byte[] body =
-                        Arrays.copyOfRange(
-                                bytes.toByteArray(), block.getMetadataLength(), bytes.size());
-                long bodyOffset = batch.bodyLength();
-                batch.nodes.addAll(nullBatch.getNodes());
-                for (ArrowBuffer buffer : nullBatch.getBuffersLayout()) {
-                    batch.buffersLayout.add(
-                            new ArrowBuffer(bodyOffset + buffer.getOffset(), buffer.getSize()));
-                }
-                return new ProjectedArrowBatch(
-                        batch.numRecords, batch.nodes, batch.buffersLayout, batch.buffers, body);
-            }
-        }
+        return new ProjectedArrowBatch(numRecords, newNodes, newBufferLayouts, selectedBuffers);
     }
 
     /**
@@ -555,20 +470,23 @@ public class FileLogProjection {
             if (magic == LOG_MAGIC_VALUE_V0 && size < V0_RECORD_BATCH_HEADER_SIZE) {
                 throw new EOFException(
                         String.format(
-                                "Failed to read v0 log header from file channel `%s`. Expected to read %d bytes, "
-                                        + "but reached end of file after reading %d bytes. Started read from position %d.",
+                                "Failed to read v0 log header from file channel `%s`. Expected to"
+                                        + " read %d bytes, but reached end of file after reading %d"
+                                        + " bytes. Started read from position %d.",
                                 channel, V0_RECORD_BATCH_HEADER_SIZE, size, position));
             } else if (magic == LOG_MAGIC_VALUE_V1 && size < V1_RECORD_BATCH_HEADER_SIZE) {
                 throw new EOFException(
                         String.format(
-                                "Failed to read v1 log header from file channel `%s`. Expected to read %d bytes, "
-                                        + "but reached end of file after reading %d bytes. Started read from position %d.",
+                                "Failed to read v1 log header from file channel `%s`. Expected to"
+                                        + " read %d bytes, but reached end of file after reading %d"
+                                        + " bytes. Started read from position %d.",
                                 channel, V1_RECORD_BATCH_HEADER_SIZE, size, position));
             } else if (magic == LOG_MAGIC_VALUE_V2 && size < V2_RECORD_BATCH_HEADER_SIZE) {
                 throw new EOFException(
                         String.format(
-                                "Failed to read v2 log header from file channel `%s`. Expected to read %d bytes, "
-                                        + "but reached end of file after reading %d bytes. Started read from position %d.",
+                                "Failed to read v2 log header from file channel `%s`. Expected to"
+                                        + " read %d bytes, but reached end of file after reading %d"
+                                        + " bytes. Started read from position %d.",
                                 channel, V2_RECORD_BATCH_HEADER_SIZE, size, position));
             }
         }
@@ -595,21 +513,17 @@ public class FileLogProjection {
         RowType rowType = schema.getRowType();
 
         // initialize the projection util information
-        RowType projectionRowType = rowType;
-        if (Arrays.stream(selectedFieldPositions).anyMatch(p -> p >= rowType.getFieldCount())) {
-            projectionRowType = schemaGetter.getLatestSchemaInfo().getSchema().getRowType();
+        // Added columns are valid requests even when absent from a historical batch. The
+        // client reconstructs the target schema; the server only sends stored columns.
+        int fieldCount = rowType.getFieldCount();
+        int validationFieldCount = fieldCount;
+        if (Arrays.stream(selectedFieldPositions).anyMatch(p -> p >= fieldCount)) {
+            validationFieldCount =
+                    schemaGetter.getLatestSchemaInfo().getSchema().getRowType().getFieldCount();
         }
-        // Validate against the current schema, not the narrower schema of an old batch.
-        toBitSet(projectionRowType.getFieldCount(), selectedFieldPositions);
+        toBitSet(validationFieldCount, selectedFieldPositions);
         int[] existingFields =
-                Arrays.stream(selectedFieldPositions)
-                        .filter(p -> p < rowType.getFieldCount())
-                        .toArray();
-        int[] missingFields =
-                Arrays.stream(selectedFieldPositions)
-                        .filter(p -> p >= rowType.getFieldCount())
-                        .toArray();
-        RowType missingRowType = projectionRowType.project(missingFields);
+                Arrays.stream(selectedFieldPositions).filter(p -> p < fieldCount).toArray();
         Schema arrowSchema = ArrowUtils.toArrowSchema(rowType);
         BitSet selection = toBitSet(arrowSchema.getFields().size(), existingFields);
         List<Tuple2<Field, Boolean>> flattenedFields = new ArrayList<>();
@@ -634,20 +548,14 @@ public class FileLogProjection {
             bufferIndex += bufferLayoutCount[i];
         }
 
-        Schema projectedArrowSchema =
-                ArrowUtils.toArrowSchema(projectionRowType.project(selectedFieldPositions));
         ArrowBodyCompression bodyCompression =
                 CompressionUtil.createBodyCompression(compressionInfo.createCompressionCodec());
-        int metadataLength =
-                ArrowUtils.estimateArrowMetadataLength(projectedArrowSchema, bodyCompression);
         return new ProjectionInfo(
                 nodesProjection,
                 buffersProjection,
                 bufferIndex,
-                metadataLength,
                 bodyCompression,
-                selectedFieldPositions,
-                missingRowType);
+                selectedFieldPositions);
     }
 
     /** Projection pushdown information for a specific schema and selected fields. */
@@ -655,26 +563,20 @@ public class FileLogProjection {
         final BitSet nodesProjection;
         final BitSet buffersProjection;
         final int bufferCount;
-        final int arrowMetadataLength;
         final ArrowBodyCompression bodyCompression;
         final int[] selectedFieldPositions;
-        final RowType missingRowType;
 
         private ProjectionInfo(
                 BitSet nodesProjection,
                 BitSet buffersProjection,
                 int bufferCount,
-                int arrowMetadataLength,
                 ArrowBodyCompression bodyCompression,
-                int[] selectedFieldPositions,
-                RowType missingRowType) {
+                int[] selectedFieldPositions) {
             this.nodesProjection = nodesProjection;
             this.buffersProjection = buffersProjection;
             this.bufferCount = bufferCount;
-            this.arrowMetadataLength = arrowMetadataLength;
             this.bodyCompression = bodyCompression;
             this.selectedFieldPositions = selectedFieldPositions;
-            this.missingRowType = missingRowType;
         }
     }
 
@@ -692,24 +594,19 @@ public class FileLogProjection {
         /** The projected buffer positions of {@link ArrowRecordBatch#getBuffers()}. */
         final List<ArrowBuffer> buffers;
 
-        /** Serialized buffers for columns absent from the stored batch's schema. */
-        final byte[] appendedBuffers;
-
         public ProjectedArrowBatch(
                 long numRecords,
                 List<ArrowFieldNode> nodes,
                 List<ArrowBuffer> buffersLayout,
-                List<ArrowBuffer> buffers,
-                byte[] appendedBuffers) {
+                List<ArrowBuffer> buffers) {
             this.numRecords = numRecords;
             this.nodes = nodes;
             this.buffersLayout = buffersLayout;
             this.buffers = buffers;
-            this.appendedBuffers = appendedBuffers;
         }
 
         public long bodyLength() {
-            long bodyLength = appendedBuffers.length;
+            long bodyLength = 0;
             for (ArrowBuffer buffer : buffers) {
                 bodyLength += buffer.getSize();
             }
