@@ -324,7 +324,7 @@ public class ServerConnectionTest {
     }
 
     @Test
-    void testRejectRangeBoundsForOldServer() throws Exception {
+    void testRejectBoundedPrefixLookupForOldServer() throws Exception {
         ServerConnection connection =
                 new ServerConnection(
                         bootstrap,
@@ -333,26 +333,21 @@ public class ServerConnectionTest {
                         clientAuthenticator,
                         (con, ignore) -> {});
         try {
-            org.apache.fluss.rpc.messages.ScanKvRequest request =
-                    new org.apache.fluss.rpc.messages.ScanKvRequest();
-            request.setBucketScanReq().setTableId(1).setBucketId(0);
-            connection.validateVersionCompatibility(ApiKeys.SCAN_KV, (short) 0, request);
-            request.getBucketScanReq().setStartKey(new byte[] {1});
+            org.apache.fluss.rpc.messages.PrefixLookupRequest request =
+                    new org.apache.fluss.rpc.messages.PrefixLookupRequest().setTableId(1);
+            org.apache.fluss.rpc.messages.PbPrefixLookupReqForBucket bucket =
+                    request.addBucketsReq().setBucketId(0);
+            bucket.addKey(new byte[] {1});
+            connection.validateVersionCompatibility(ApiKeys.PREFIX_LOOKUP, (short) 1, request);
+            bucket.clearKeys();
+            bucket.addLookup().setPrefixKey(new byte[] {1}).setStartKey(new byte[] {1, 2});
             assertThatThrownBy(
                             () ->
                                     connection.validateVersionCompatibility(
-                                            ApiKeys.SCAN_KV, (short) 0, request))
+                                            ApiKeys.PREFIX_LOOKUP, (short) 1, request))
                     .isInstanceOf(UnsupportedVersionException.class)
-                    .hasMessageContaining("SCAN_KV version 1");
-            connection.validateVersionCompatibility(ApiKeys.SCAN_KV, (short) 1, request);
-            org.apache.fluss.rpc.messages.ScanKvRequest upperOnly =
-                    new org.apache.fluss.rpc.messages.ScanKvRequest();
-            upperOnly.setBucketScanReq().setTableId(1).setBucketId(0).setEndKey(new byte[] {2});
-            assertThatThrownBy(
-                            () ->
-                                    connection.validateVersionCompatibility(
-                                            ApiKeys.SCAN_KV, (short) 0, upperOnly))
-                    .isInstanceOf(UnsupportedVersionException.class);
+                    .hasMessageContaining("PREFIX_LOOKUP version 2");
+            connection.validateVersionCompatibility(ApiKeys.PREFIX_LOOKUP, (short) 2, request);
         } finally {
             connection.close().get();
         }

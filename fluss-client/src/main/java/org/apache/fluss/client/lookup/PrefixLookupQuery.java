@@ -21,6 +21,8 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 
+import javax.annotation.Nullable;
+
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
@@ -31,11 +33,25 @@ import java.util.concurrent.CompletableFuture;
 @Internal
 public class PrefixLookupQuery extends AbstractLookupQuery<List<byte[]>> {
     private final CompletableFuture<List<byte[]>> future;
+    @Nullable private final byte[] startKey;
+    @Nullable private final byte[] endKey;
 
     PrefixLookupQuery(
             TablePath tablePath, TableBucket tableBucket, byte[] prefixKey, int bucketCount) {
+        this(tablePath, tableBucket, prefixKey, bucketCount, null, null);
+    }
+
+    PrefixLookupQuery(
+            TablePath tablePath,
+            TableBucket tableBucket,
+            byte[] prefixKey,
+            int bucketCount,
+            @Nullable byte[] startKey,
+            @Nullable byte[] endKey) {
         super(tablePath, tableBucket, prefixKey, null, bucketCount);
         this.future = new CompletableFuture<>();
+        this.startKey = startKey;
+        this.endKey = endKey;
     }
 
     PrefixLookupQuery(TablePath tablePath, TableBucket tableBucket, byte[] prefixKey) {
@@ -50,5 +66,17 @@ public class PrefixLookupQuery extends AbstractLookupQuery<List<byte[]>> {
     @Override
     public LookupType lookupType() {
         return LookupType.PREFIX_LOOKUP;
+    }
+
+    /** Returns the inclusive physical start, or null for an unrestricted prefix. */
+    @Nullable
+    public byte[] startKey() {
+        return startKey;
+    }
+
+    /** Returns the exclusive physical end, or null if unbounded. */
+    @Nullable
+    public byte[] endKey() {
+        return endKey;
     }
 }

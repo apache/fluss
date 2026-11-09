@@ -72,6 +72,7 @@ import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.messages.NotifyKvSnapshotOffsetResponse;
 import org.apache.fluss.rpc.messages.NotifyLakeTableOffsetResponse;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsResponse;
+import org.apache.fluss.rpc.messages.PbPrefixLookupKey;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.rpc.protocol.Errors;
@@ -1231,12 +1232,12 @@ public class ReplicaManager implements ServerReconfigurable {
      * @param apiVersion the client API version for backward compatibility validation
      */
     public void prefixLookups(
-            Map<TableBucket, List<byte[]>> entriesPerBucket,
+            Map<TableBucket, List<PbPrefixLookupKey>> entriesPerBucket,
             short apiVersion,
             Consumer<Map<TableBucket, PrefixLookupResultForBucket>> responseCallback) {
         TableMetricGroup tableMetrics = null;
         Map<TableBucket, PrefixLookupResultForBucket> result = new HashMap<>();
-        for (Map.Entry<TableBucket, List<byte[]>> entry : entriesPerBucket.entrySet()) {
+        for (Map.Entry<TableBucket, List<PbPrefixLookupKey>> entry : entriesPerBucket.entrySet()) {
             TableBucket tb = entry.getKey();
             List<List<ByteArraySlice>> resultForBucket = new ArrayList<>();
             try {
@@ -1245,8 +1246,19 @@ public class ReplicaManager implements ServerReconfigurable {
                         ApiKeys.PREFIX_LOOKUP, apiVersion, replica.getTableInfo());
                 tableMetrics = replica.tableMetrics();
                 tableMetrics.totalPrefixLookupRequests().inc();
-                for (byte[] prefixKey : entry.getValue()) {
-                    List<ByteArraySlice> resultForPerKey = replica.prefixLookup(prefixKey);
+                for (PbPrefixLookupKey key : entry.getValue()) {
+                    if (key.hasStartKey() || key.hasEndKey()) {
+                        if (apiVersion < 2
+                                || !replica.getTableInfo().getTableConfig().isOrderedKeyEnabled()) {
+                            throw new UnsupportedVersionException(
+                                    "Range prefix lookups require PREFIX_LOOKUP v2 and ordered keys.");
+                        }
+                    }
+                    List<ByteArraySlice> resultForPerKey =
+                            replica.prefixLookup(
+                                    key.getPrefixKey(),
+                                    key.hasStartKey() ? key.getStartKey() : null,
+                                    key.hasEndKey() ? key.getEndKey() : null);
                     resultForBucket.add(resultForPerKey);
                 }
                 result.put(tb, new PrefixLookupResultForBucket(tb, resultForBucket));

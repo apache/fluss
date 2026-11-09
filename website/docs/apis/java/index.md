@@ -382,87 +382,6 @@ The per-RPC payload size is controlled by
 further via `kv.scanner.max-batch-size`. Note that `BatchScanner` is not
 thread-safe — do not share an instance across threads.
 
-### Batch Scan — Primary Key Range
-
-Set `table.kv.ordered-key.enabled=true` when creating a primary-key table to use
-order-preserving index key encoding. This option defaults to false and cannot
-be altered after table creation because it determines the persisted key format.
-Currently, range scans use the primary key index. Bucket routing is unchanged.
-Upgrade all servers and clients before enabling ordered keys.
-Ordered keys support scalar types except FLOAT and DOUBLE; null and constructed
-key fields are rejected.
-
-```java
-Schema schema = Schema.newBuilder()
-        .column("group_id", DataTypes.INT())
-        .column("event_time", DataTypes.BIGINT())
-        .column("id", DataTypes.INT())
-        .column("amount", DataTypes.BIGINT())
-        .primaryKey("group_id", "event_time", "id")
-        .build();
-TableDescriptor descriptor = TableDescriptor.builder()
-        .schema(schema)
-        .distributedBy(8, "group_id")
-        .property(ConfigOptions.TABLE_KV_ORDERED_KEY_ENABLED, true)
-        .build();
-admin.createTable(tablePath, descriptor, false).get();
-
-try (Table table = connection.getTable(tablePath);
-        BatchScanner scanner = table.newScan()
-                .equalTo(Collections.singletonList("group_id"), GenericRow.of(groupId))
-                .range("event_time",
-                        ScanRange.closedOpen(GenericRow.of(startMillis), GenericRow.of(endMillis)))
-                .project(Arrays.asList("id", "amount"))
-                .createBatchScanner()) {
-    while (true) {
-        CloseableIterator<InternalRow> batch = scanner.pollBatch(Duration.ofSeconds(5));
-        if (batch == null) {
-            break;
-        }
-        try (CloseableIterator<InternalRow> rows = batch) {
-            while (rows.hasNext()) {
-                InternalRow row = rows.next();
-                // Process the projected row.
-            }
-        }
-    }
-}
-```
-
-Equality columns must identify a complete physical primary-key prefix, including
-all bucket fields, and the range column must immediately follow that prefix.
-For partitioned tables, include every partition field in `equalTo` and supply its
-value. Multiple equality fields are supported; values follow the column list
-order. Each finite range endpoint is a one-field row. `equalTo` copies the column
-list and values before returning; `range` copies its endpoint values before
-returning. Callers may then reuse their input rows and buffers.
-
-Each refinement returns a new immutable `Scan`. Repeated `equalTo` calls replace
-the entire equality condition set, and repeated `range` calls replace the range
-column and bounds. Configure both before creating a range scanner. Projection,
-limit and condition configuration may be applied in any order.
-
-`ScanRange` supports closed, open, closed-open and open-closed intervals, as well
-as `atLeast`, `greaterThan`, `atMost` and `lessThan` single-sided bounds. A reversed
-interval is invalid; equal endpoints produce either a singleton-value interval
-or an empty interval depending on inclusivity. An absent partition returns no
-rows.
-
-The scanner routes to one bucket, seeks to the physical lower bound and stops at
-the exclusive upper bound. It does not fall back to reading the whole prefix or
-table when no supported path exists. Projection and `limit` are supported;
-`limit` caps returned rows and does not mean earliest/latest rows. The existing
-`filter` option cannot be combined with range scans.
-
-The server fixes the KV view when opening the scan. Later writes are invisible
-to that scanner. Result ordering is not a SQL `ORDER BY` guarantee. A lost scan
-session fails rather than silently reopening a different view. Each scanner
-opens its own view. `createBatchScanner(tableBucket)` restricts the same conditions
-to the specified base-table bucket; a disjoint bucket returns no rows. A bucket
-from another table is invalid. Log scanners and the snapshot-ID batch scanner
-reject index range conditions. This Java interface currently uses the primary-key
-path. Automatic Flink SQL predicate pushdown is outside its scope.
-
 ### Lookup
 You can also use the Fluss API to perform lookups on a table. This is useful for querying specific records based on their primary key or prefix key.
 ```java
@@ -478,6 +397,70 @@ LookupResult prefixLookup = table.newLookup()
         .lookup(rowKey)
         .get();
 ```
+
+#### Prefix Lookup with Range Bounds
+
+For repeated asynchronous reads of a small range within an equality prefix,
+bind the equality columns with `lookupBy` and the range column with `rangeBy`.
+Pass the equality values and bounds on each invocation.
+
+```java
+Lookuper lookuper = table.newLookup()
+        .lookupBy("group_id")
+        .rangeBy("event_time")
+        .createLookuper();
+
+CompletableFuture<LookupResult> result = lookuper.lookup(
+        GenericRow.of(groupId),
+        Range.closedOpen(GenericRow.of(startMillis), GenericRow.of(endMillis)));
+```
+
+Use `org.apache.fluss.utils.Range<T>` to express open, closed or single-sided
+bounds. Each finite lookup endpoint is a one-field `InternalRow` containing
+a non-null value of the range column's internal type. A reversed interval is
+invalid; equal endpoints select either all rows with that value or no rows,
+depending on inclusivity. A missing partition returns no rows.
+
+Set `table.kv.ordered-key.enabled=true` when creating the table. This storage
+property defaults to false and cannot be altered after creation because it
+determines the persisted index key format. Upgrade all clients and servers
+before enabling ordered keys. Supported key types are scalar types except
+FLOAT and DOUBLE; null and constructed key fields are rejected.
+
+For example, create a table whose bucket key is an equality prefix.
+
+```java
+Schema schema = Schema.newBuilder()
+        .column("group_id", DataTypes.INT())
+        .column("event_time", DataTypes.BIGINT())
+        .column("id", DataTypes.INT())
+        .primaryKey("group_id", "event_time", "id")
+        .build();
+TableDescriptor descriptor = TableDescriptor.builder()
+        .schema(schema)
+        .distributedBy(8, "group_id")
+        .property(ConfigOptions.TABLE_KV_ORDERED_KEY_ENABLED, true)
+        .build();
+admin.createTable(tablePath, descriptor, false).get();
+```
+
+Currently the equality columns must form a physical primary-key prefix containing all bucket fields,
+with all partition fields also supplied. The range column immediately follows
+that prefix. Unsupported configurations fail when the lookuper is created.
+
+Each call returns all matching rows using a request-local fixed iterator view.
+The operation uses the prefix-lookup batching and retry machinery. It has no
+cross-request scanner session or pagination. Results are materialized in memory
+and intended for small result sets. Separate calls and retries can observe
+different views. Results have no ordering guarantee.
+
+Repeated `rangeBy` calls replace the range column. Configuration methods return
+new immutable `Lookup` instances. The ranged lookuper requires the two-argument
+`lookup(key, bounds)`; a lookuper without `rangeBy` rejects that overload.
+Key and endpoint values are captured before the invocation returns. The same
+overload is available on `TypedLookuper<T>` with a POJO equality key and
+`Range<? extends InternalRow>` bounds. Range lookup cannot be combined with
+`enableInsertIfNotExists`.
 
 ### Multi-Table Scanner and Writer
 `MultiTable`, obtained from `connection.getMultiTable()`, lets a single scanner or writer work across many tables without creating a `Table` instance for each one.

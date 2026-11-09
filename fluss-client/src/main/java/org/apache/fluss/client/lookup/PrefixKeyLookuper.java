@@ -32,6 +32,7 @@ import org.apache.fluss.row.encode.CompactedKeyEncoder;
 import org.apache.fluss.row.encode.KeyEncoder;
 import org.apache.fluss.row.encode.OrderedKeyEncoder;
 import org.apache.fluss.types.RowType;
+import org.apache.fluss.utils.Range;
 
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.NotThreadSafe;
@@ -43,6 +44,9 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+
+import static org.apache.fluss.utils.Preconditions.checkArgument;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /**
  * An implementation of {@link Lookuper} that lookups by prefix key. A prefix key is a prefix subset
@@ -59,6 +63,8 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
 
     private final BucketingFunction bucketingFunction;
     private final int numBuckets;
+    private final RowType lookupRowType;
+    @Nullable private final RowType rangeType;
 
     /**
      * a getter to extract partition from prefix lookup key row, null when it's not a partitioned.
@@ -78,13 +84,25 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
             SchemaGetter schemaGetter,
             MetadataUpdater metadataUpdater,
             LookupClient lookupClient,
-            List<String> lookupColumnNames) {
+            List<String> lookupColumnNames,
+            @Nullable String rangeColumn) {
         super(tableInfo, metadataUpdater, lookupClient, schemaGetter);
         // sanity check
         List<String> prefixKeys = validateAndGetPrefixKeys(tableInfo, lookupColumnNames);
         this.numBuckets = tableInfo.getNumBuckets();
         // the row type of the input lookup row
-        RowType lookupRowType = tableInfo.getRowType().project(lookupColumnNames);
+        this.lookupRowType = tableInfo.getRowType().project(lookupColumnNames);
+        if (rangeColumn != null) {
+            checkArgument(
+                    tableInfo.getTableConfig().isOrderedKeyEnabled(),
+                    "Range lookup requires table.kv.ordered-key.enabled=true.");
+            checkArgument(
+                    tableInfo.getPhysicalPrimaryKeys().get(prefixKeys.size()).equals(rangeColumn),
+                    "Range column must immediately follow the equality prefix.");
+            this.rangeType = tableInfo.getRowType().project(Collections.singletonList(rangeColumn));
+        } else {
+            this.rangeType = null;
+        }
         DataLakeFormat lakeFormat = tableInfo.getTableConfig().getDataLakeFormat().orElse(null);
 
         List<String> bucketKeys = tableInfo.getBucketKeys();
@@ -211,7 +229,10 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
 
     @Override
     public CompletableFuture<LookupResult> lookup(InternalRow prefixKey) {
-        CompletableFuture<LookupResult> result = lookupPrefix(prefixKey);
+        if (rangeType != null) {
+            throw new UnsupportedOperationException("This lookuper requires range bounds.");
+        }
+        CompletableFuture<LookupResult> result = lookupPrefix(prefixKey, null);
         if (clientFilterKeyGetters.length == 0) {
             return result;
         }
@@ -242,12 +263,36 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
         return true;
     }
 
-    private CompletableFuture<LookupResult> lookupPrefix(InternalRow prefixKey) {
+    @Override
+    public CompletableFuture<LookupResult> lookup(
+            InternalRow prefixKey, Range<? extends InternalRow> bounds) {
+        if (rangeType == null) {
+            throw new UnsupportedOperationException(
+                    "This lookuper has no configured range column.");
+        }
+        checkNotNull(prefixKey, "lookupKey");
+        checkNotNull(bounds, "bounds");
+        checkArgument(
+                prefixKey.getFieldCount() == lookupRowType.getFieldCount(),
+                "Lookup key arity does not match the lookup columns.");
+        for (int i = 0; i < prefixKey.getFieldCount(); i++) {
+            checkArgument(!prefixKey.isNullAt(i), "Null equality keys are not supported.");
+        }
+        return lookupPrefix(prefixKey, bounds);
+    }
+
+    private CompletableFuture<LookupResult> lookupPrefix(
+            InternalRow prefixKey, @Nullable Range<? extends InternalRow> bounds) {
         byte[] prefixKeyBytes = prefixKeyEncoder.encodeKey(prefixKey);
         byte[] bucketKeyBytes =
                 prefixKeyEncoder == bucketKeyEncoder
                         ? prefixKeyBytes
                         : bucketKeyEncoder.encodeKey(prefixKey);
+        IndexKeyRange keyRange =
+                bounds == null ? null : IndexKeyRange.encode(prefixKeyBytes, rangeType, bounds);
+        if (keyRange != null && keyRange.isEmpty()) {
+            return CompletableFuture.completedFuture(new LookupResult(Collections.emptyList()));
+        }
 
         Long partitionId = null;
         int bucketCount = numBuckets;
@@ -272,7 +317,13 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
         CompletableFuture<LookupResult> lookupFuture = new CompletableFuture<>();
         TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), partitionId, bucketId);
         lookupClient
-                .prefixLookup(tableInfo.getTablePath(), tableBucket, prefixKeyBytes, bucketCount)
+                .prefixLookup(
+                        tableInfo.getTablePath(),
+                        tableBucket,
+                        prefixKeyBytes,
+                        bucketCount,
+                        keyRange == null ? null : keyRange.getStartKey(),
+                        keyRange == null ? null : keyRange.getEndKey())
                 .whenComplete(
                         (result, error) -> {
                             if (error != null) {

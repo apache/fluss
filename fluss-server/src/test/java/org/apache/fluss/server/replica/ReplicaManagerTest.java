@@ -61,6 +61,7 @@ import org.apache.fluss.rpc.entity.LookupResultForBucket;
 import org.apache.fluss.rpc.entity.PrefixLookupResultForBucket;
 import org.apache.fluss.rpc.entity.ProduceLogResultForBucket;
 import org.apache.fluss.rpc.entity.PutKvResultForBucket;
+import org.apache.fluss.rpc.messages.PbPrefixLookupKey;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.rpc.protocol.Errors;
@@ -1455,7 +1456,10 @@ class ReplicaManagerTest extends ReplicaTestBase {
         TableBucket tb3 = new TableBucket(tableId, 0);
         makeLogTableAsLeader(tb3, false);
         replicaManager.prefixLookups(
-                Collections.singletonMap(tb3, Collections.singletonList(prefixKey2Bytes)),
+                Collections.singletonMap(
+                        tb3,
+                        Collections.singletonList(
+                                new PbPrefixLookupKey().setPrefixKey(prefixKey2Bytes))),
                 PREFIX_LOOKUP_KV_VERSION,
                 (prefixLookupResultForBuckets) -> {
                     PrefixLookupResultForBucket lookupResultForBucket =
@@ -1554,7 +1558,9 @@ class ReplicaManagerTest extends ReplicaTestBase {
         CompletableFuture<Map<TableBucket, PrefixLookupResultForBucket>> prefixFuture =
                 new CompletableFuture<>();
         replicaManager.prefixLookups(
-                Collections.singletonMap(tableBucket, Collections.singletonList(keyBytes)),
+                Collections.singletonMap(
+                        tableBucket,
+                        Collections.singletonList(new PbPrefixLookupKey().setPrefixKey(keyBytes))),
                 PREFIX_LOOKUP_KV_VERSION,
                 prefixFuture::complete);
         PrefixLookupResultForBucket prefixResult = prefixFuture.get().get(tableBucket);
@@ -2640,12 +2646,13 @@ class ReplicaManagerTest extends ReplicaTestBase {
     private void verifyPrefixLookup(
             TableBucket tb, List<byte[]> prefixKeyBytes, List<List<byte[]>> expectedValues)
             throws Exception {
-        Map<TableBucket, List<byte[]>> entriesPerBucket = new HashMap<>();
-        entriesPerBucket.put(tb, prefixKeyBytes);
+        List<PbPrefixLookupKey> keys = new ArrayList<>();
+        prefixKeyBytes.forEach(key -> keys.add(new PbPrefixLookupKey().setPrefixKey(key)));
 
         CompletableFuture<Map<TableBucket, PrefixLookupResultForBucket>> future =
                 new CompletableFuture<>();
-        replicaManager.prefixLookups(entriesPerBucket, PREFIX_LOOKUP_KV_VERSION, future::complete);
+        replicaManager.prefixLookups(
+                Collections.singletonMap(tb, keys), PREFIX_LOOKUP_KV_VERSION, future::complete);
         Map<TableBucket, PrefixLookupResultForBucket> prefixResult = future.get();
         assertThat(prefixResult.size()).isEqualTo(1);
         PrefixLookupResultForBucket resultForBucket = prefixResult.get(tb);
@@ -2767,7 +2774,10 @@ class ReplicaManagerTest extends ReplicaTestBase {
         CompletableFuture<Map<TableBucket, PrefixLookupResultForBucket>> prefixFuture =
                 new CompletableFuture<>();
         replicaManager.prefixLookups(
-                Collections.singletonMap(tb, Collections.singletonList(prefixKeyBytes)),
+                Collections.singletonMap(
+                        tb,
+                        Collections.singletonList(
+                                new PbPrefixLookupKey().setPrefixKey(prefixKeyBytes))),
                 oldClientVersion,
                 prefixFuture::complete);
         PrefixLookupResultForBucket prefixResult = prefixFuture.get().get(tb);

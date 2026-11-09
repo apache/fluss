@@ -101,7 +101,8 @@ class PrefixKeyLookuperTest {
                             new TestingSchemaGetter(tableInfo.getSchemaId(), tableInfo.getSchema()),
                             metadataUpdater,
                             lookupClient,
-                            Arrays.asList("a", "b"));
+                            Arrays.asList("a", "b"),
+                            null);
             byte[] buffer = FIRST.clone();
             CompletableFuture<LookupResult> result =
                     lookuper.lookup(GenericRow.of(1L, keyValue.apply(buffer)));

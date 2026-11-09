@@ -368,9 +368,6 @@ message PbScanReqForBucket {
   // If set, stops returning rows after this many records.
   optional int64 limit = 4;
   optional int32 routing_bucket_count = 5;
-  // SCAN_KV v1: inclusive start and exclusive end in the table's ordered key format.
-  optional bytes start_key = 6;
-  optional bytes end_key = 7;
 }
 
 message ScanKvRequest {
@@ -1195,6 +1192,14 @@ message PbPrefixLookupReqForBucket {
   required int32 bucket_id = 2;
   repeated bytes keys = 3;
   optional int32 routing_bucket_count = 4;
+  // Used instead of keys when any lookup in this bucket has range bounds.
+  repeated PbPrefixLookupKey lookups = 5;
+}
+
+message PbPrefixLookupKey {
+  required bytes prefix_key = 1;
+  optional bytes start_key = 2;
+  optional bytes end_key = 3;
 }
 
 message PbPrefixLookupRespForBucket {

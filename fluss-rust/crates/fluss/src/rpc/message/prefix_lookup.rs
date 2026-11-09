@@ -41,6 +41,7 @@ impl PrefixLookupRequest {
                     bucket_id,
                     keys,
                     routing_bucket_count,
+                    lookups: Vec::new(),
                 }
             })
             .collect();

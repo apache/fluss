@@ -82,7 +82,7 @@ public enum ApiKeys {
     // Version 0: Uses lake's encoder for prefix key encoding (legacy behavior).
     // Version 1: Uses CompactedKeyEncoder for prefix key encoding when bucket key differs from
     //            primary key, ensuring encoded bucket key bytes are a prefix of primary key bytes.
-    // Version 2: Supports ordered primary-key prefixes.
+    // Version 2: Supports ordered primary-key prefixes and per-lookup range bounds.
     PREFIX_LOOKUP(1034, 0, 2, PUBLIC),
 
     GET_DATABASE_INFO(1035, 0, 0, PUBLIC),
@@ -112,8 +112,7 @@ public enum ApiKeys {
     DROP_KV_SNAPSHOT_LEASE(1058, 0, 0, PUBLIC),
     GET_TABLE_STATS(1059, 0, 0, PUBLIC),
     ALTER_DATABASE(1060, 0, 0, PUBLIC),
-    // Version 1: Supports inclusive start and exclusive end keys in new scan requests.
-    SCAN_KV(1061, 0, 1, PUBLIC),
+    SCAN_KV(1061, 0, 0, PUBLIC),
     GET_CLUSTER_HEALTH(1062, 0, 0, PUBLIC),
     LIST_REMOTE_LOG_MANIFESTS(1063, 0, 0, PUBLIC),
     LIST_KV_SNAPSHOTS(1064, 0, 0, PUBLIC),

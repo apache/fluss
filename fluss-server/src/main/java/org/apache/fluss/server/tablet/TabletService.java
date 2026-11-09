@@ -81,6 +81,7 @@ import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsRequest;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsResponse;
 import org.apache.fluss.rpc.messages.PbFetchLogReqForTable;
+import org.apache.fluss.rpc.messages.PbPrefixLookupKey;
 import org.apache.fluss.rpc.messages.PbScanReqForBucket;
 import org.apache.fluss.rpc.messages.PbServerNode;
 import org.apache.fluss.rpc.messages.PrefixLookupRequest;
@@ -135,7 +136,6 @@ import org.apache.fluss.server.tablet.consumer.group.ConsumerOffsetTableManager;
 import org.apache.fluss.server.tablet.consumer.group.GroupManager;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
-import org.apache.fluss.shaded.guava32.com.google.common.primitives.UnsignedBytes;
 
 import javax.annotation.Nullable;
 
@@ -557,7 +557,7 @@ public final class TabletService extends RpcServiceBase
     @Override
     public CompletableFuture<PrefixLookupResponse> prefixLookup(PrefixLookupRequest request) {
         long tableId = request.getTableId();
-        Map<TableBucket, List<byte[]>> prefixLookupData = toPrefixLookupData(request);
+        Map<TableBucket, List<PbPrefixLookupKey>> prefixLookupData = toPrefixLookupData(request);
         Map<TableBucket, PrefixLookupResultForBucket> errorResponseMap = new HashMap<>();
         collectRoutingErrors(
                 request.getBucketsReqsList(),
@@ -570,7 +570,7 @@ public final class TabletService extends RpcServiceBase
                 PrefixLookupResultForBucket::new,
                 errorResponseMap);
         prefixLookupData.keySet().removeAll(errorResponseMap.keySet());
-        Map<TableBucket, List<byte[]>> interesting =
+        Map<TableBucket, List<PbPrefixLookupKey>> interesting =
                 authorizeRequestData(
                         READ, prefixLookupData, errorResponseMap, PrefixLookupResultForBucket::new);
         if (interesting.isEmpty()) {
@@ -945,23 +945,7 @@ public final class TabletService extends RpcServiceBase
                 Long limit = bucketReq.hasLimit() ? bucketReq.getLimit() : null;
 
                 Replica replica = replicaManager.getReplicaOrException(tableBucket);
-                byte[] startKey = bucketReq.hasStartKey() ? bucketReq.getStartKey() : null;
-                byte[] endKey = bucketReq.hasEndKey() ? bucketReq.getEndKey() : null;
-                if (startKey != null || endKey != null) {
-                    if (currentSession().getApiVersion() < 1
-                            || !replica.getTableInfo().getTableConfig().isOrderedKeyEnabled()) {
-                        throw new InvalidScanRequestException(
-                                "Key bounds require SCAN_KV v1 and table.kv.ordered-key.enabled=true.");
-                    }
-                    if (startKey != null
-                            && endKey != null
-                            && UnsignedBytes.lexicographicalComparator().compare(startKey, endKey)
-                                    > 0) {
-                        throw new InvalidScanRequestException("Scan start key exceeds end key.");
-                    }
-                }
-                OpenScanResult openResult =
-                        scannerManager.createScanner(replica, limit, startKey, endKey);
+                OpenScanResult openResult = scannerManager.createScanner(replica, limit);
                 isNewScan = true;
                 initialLogOffset = openResult.getLogOffset();
 
