@@ -80,6 +80,7 @@ public class WriterStateManager {
     private static final Logger LOG = LoggerFactory.getLogger(WriterStateManager.class);
 
     private final TableBucket tableBucket;
+    private final boolean sparseSequences;
     private final int writerExpirationMs;
     private final Map<Long, WriterStateEntry> writers = new HashMap<>();
 
@@ -93,10 +94,27 @@ public class WriterStateManager {
 
     public WriterStateManager(TableBucket tableBucket, File logTabletDir, int writerExpirationMs)
             throws IOException {
+        this(tableBucket, logTabletDir, writerExpirationMs, false);
+    }
+
+    /** Creates writer metadata recovery with the table's sequence policy. */
+    public WriterStateManager(
+            TableBucket tableBucket,
+            File logTabletDir,
+            int writerExpirationMs,
+            boolean sparseSequences)
+            throws IOException {
+        this.sparseSequences = sparseSequences;
         this.tableBucket = tableBucket;
         this.writerExpirationMs = writerExpirationMs;
         this.logTabletDir = logTabletDir;
         this.snapshots = loadSnapshots();
+    }
+
+    WriterAppendInfo.SequenceValidation recoverySequenceValidation() {
+        return sparseSequences
+                ? WriterAppendInfo.SequenceValidation.ACCEPT
+                : WriterAppendInfo.SequenceValidation.WARN_AND_ACCEPT;
     }
 
     public int writerExpirationMs() {

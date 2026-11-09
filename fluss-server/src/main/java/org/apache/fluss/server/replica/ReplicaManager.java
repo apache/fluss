@@ -808,6 +808,27 @@ public class ReplicaManager implements ServerReconfigurable {
             MergeMode mergeMode,
             short apiVersion,
             Consumer<List<PutKvResultForBucket>> responseCallback) {
+        putRecordsToKv(
+                timeoutMs,
+                requiredAcks,
+                entriesPerBucket,
+                targetColumns,
+                mergeMode,
+                apiVersion,
+                Collections.emptyMap(),
+                responseCallback);
+    }
+
+    /** Writes buckets with optional send-time acknowledged writer prefixes. */
+    public void putRecordsToKv(
+            int timeoutMs,
+            int requiredAcks,
+            Map<TableBucket, KvRecordBatch> entriesPerBucket,
+            @Nullable int[] targetColumns,
+            MergeMode mergeMode,
+            short apiVersion,
+            Map<TableBucket, Integer> acknowledgedSequences,
+            Consumer<List<PutKvResultForBucket>> responseCallback) {
         if (isRequiredAcksInvalid(requiredAcks)) {
             throw new InvalidRequiredAcksException("Invalid required acks: " + requiredAcks);
         }
@@ -815,7 +836,13 @@ public class ReplicaManager implements ServerReconfigurable {
 
         long startTime = System.currentTimeMillis();
         Map<TableBucket, PutKvResultForBucket> kvPutResult =
-                putToLocalKv(entriesPerBucket, targetColumns, mergeMode, requiredAcks, apiVersion);
+                putToLocalKv(
+                        entriesPerBucket,
+                        targetColumns,
+                        mergeMode,
+                        requiredAcks,
+                        apiVersion,
+                        acknowledgedSequences);
         LOG.debug(
                 "Put records to local kv storage and wait generate cdc log in {} ms",
                 System.currentTimeMillis() - startTime);
@@ -1687,7 +1714,8 @@ public class ReplicaManager implements ServerReconfigurable {
             @Nullable int[] targetColumns,
             MergeMode mergeMode,
             int requiredAcks,
-            short apiVersion) {
+            short apiVersion,
+            Map<TableBucket, Integer> acknowledgedSequences) {
         Map<TableBucket, PutKvResultForBucket> putResultForBucketMap = new HashMap<>();
         for (Map.Entry<TableBucket, KvRecordBatch> entry : entriesPerBucket.entrySet()) {
             TableBucket tb = entry.getKey();
@@ -1698,9 +1726,20 @@ public class ReplicaManager implements ServerReconfigurable {
                 validateClientVersionForPkTable(apiVersion, replica.getTableInfo());
                 tableMetrics = replica.tableMetrics();
                 tableMetrics.totalPutKvRequests().inc();
+                Integer acknowledgedSequence = acknowledgedSequences.get(tb);
+                boolean useFirstRowProgress =
+                        apiVersion >= 4
+                                && requiredAcks == -1
+                                && acknowledgedSequence != null
+                                && replica.supportsFirstRowProgress();
                 LogAppendInfo appendInfo =
                         replica.putRecordsToLeader(
-                                entry.getValue(), targetColumns, mergeMode, requiredAcks);
+                                entry.getValue(),
+                                targetColumns,
+                                mergeMode,
+                                requiredAcks,
+                                useFirstRowProgress ? acknowledgedSequence : null,
+                                metadataCache.supportsFirstRowProgress());
                 LOG.trace(
                         "Written to local kv for {}, and the cdc log beginning at offset {} and ending at offset {}",
                         tb,
@@ -1709,10 +1748,11 @@ public class ReplicaManager implements ServerReconfigurable {
                 // Sample the piggyback backpressure pressure right after the write, so the
                 // result is immutable and both the immediate (acks != -1) and the delayed
                 // (acks == -1) response paths carry it without any post-filling.
-                putResultForBucketMap.put(
-                        tb,
+                PutKvResultForBucket writeResult =
                         new PutKvResultForBucket(
-                                tb, appendInfo.lastOffset() + 1, replica.samplePressure()));
+                                tb, appendInfo.requiredOffset(), replica.samplePressure());
+                writeResult.setLeaderEpoch(appendInfo.leaderEpoch());
+                putResultForBucketMap.put(tb, writeResult);
 
                 // metric for kv
                 tableMetrics.incKvMessageIn(entry.getValue().getRecordCount());

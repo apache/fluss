@@ -464,6 +464,23 @@ public final class TabletService extends RpcServiceBase
                     responseCallback);
         } else {
             Map<TableBucket, KvRecordBatch> recordsByBucket = new HashMap<>();
+            Map<TableBucket, Integer> acknowledgedSequences = new HashMap<>();
+            if (currentSession().getApiVersion() >= 4) {
+                request.getBucketsReqsList()
+                        .forEach(
+                                bucket -> {
+                                    if (bucket.hasLastAckedSequence()) {
+                                        acknowledgedSequences.put(
+                                                new TableBucket(
+                                                        request.getTableId(),
+                                                        bucket.hasPartitionId()
+                                                                ? bucket.getPartitionId()
+                                                                : null,
+                                                        bucket.getBucketId()),
+                                                bucket.getLastAckedSequence());
+                                    }
+                                });
+            }
             putKvData.forEach(
                     putData -> recordsByBucket.put(putData.tableBucket(), putData.records()));
             replicaManager.putRecordsToKv(
@@ -473,6 +490,7 @@ public final class TabletService extends RpcServiceBase
                     getTargetColumns(request),
                     mergeMode,
                     currentSession().getApiVersion(),
+                    acknowledgedSequences,
                     responseCallback);
         }
         return response;

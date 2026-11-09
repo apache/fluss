@@ -35,6 +35,8 @@ public abstract class WriteResultForBucket extends ResultForBucket {
      */
     private final long writeLogEndOffset;
 
+    private int leaderEpoch = -1;
+
     public WriteResultForBucket(TableBucket tableBucket, long writeLogEndOffset, ApiError error) {
         super(tableBucket, error);
         this.writeLogEndOffset = writeLogEndOffset;
@@ -42,6 +44,16 @@ public abstract class WriteResultForBucket extends ResultForBucket {
 
     public long getWriteLogEndOffset() {
         return writeLogEndOffset;
+    }
+
+    /** Leadership that accepted this write, or -1 for a result without epoch fencing. */
+    public int getLeaderEpoch() {
+        return leaderEpoch;
+    }
+
+    /** Binds this result to the leadership that accepted it. */
+    public void setLeaderEpoch(int leaderEpoch) {
+        this.leaderEpoch = leaderEpoch;
     }
 
     /** Copy the instance of this write result with the new error. */

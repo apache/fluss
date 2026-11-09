@@ -777,7 +777,27 @@ public final class KvTablet {
                 !historicalPartition,
                 "putAsLeader is not supported for historical KV tablet %s",
                 tableBucket);
-        return putAsLeader(kvRecords, targetColumns, mergeMode, null, null);
+        return putAsLeader(kvRecords, targetColumns, mergeMode, null, null, null, false);
+    }
+
+    /** Writes using the client's acknowledged first-row sequence prefix. */
+    public LogAppendInfo putAsLeader(
+            KvRecordBatch kvRecords,
+            @Nullable int[] targetColumns,
+            MergeMode mergeMode,
+            int acknowledgedSequence,
+            boolean omitEmptyWal)
+            throws Exception {
+        checkState(
+                !historicalPartition, "First-row progress is not supported for historical tablets");
+        return putAsLeader(
+                kvRecords,
+                targetColumns,
+                mergeMode,
+                null,
+                null,
+                acknowledgedSequence,
+                omitEmptyWal);
     }
 
     /**
@@ -800,7 +820,9 @@ public final class KvTablet {
                 targetColumns,
                 mergeMode,
                 checkNotNull(originalPartitionName, "originalPartitionName must not be null"),
-                checkNotNull(historicalValueLookup, "Historical value lookup must not be null"));
+                checkNotNull(historicalValueLookup, "Historical value lookup must not be null"),
+                null,
+                false);
     }
 
     /**
@@ -836,7 +858,9 @@ public final class KvTablet {
             @Nullable int[] targetColumns,
             MergeMode mergeMode,
             @Nullable String originalPartitionName,
-            @Nullable HistoricalValueLookup historicalValueLookup)
+            @Nullable HistoricalValueLookup historicalValueLookup,
+            @Nullable Integer acknowledgedSequence,
+            boolean omitEmptyWal)
             throws Exception {
         return inWriteLock(
                 kvLock,
@@ -866,9 +890,10 @@ public final class KvTablet {
                                     mergeMode,
                                     kvStateAccessor,
                                     originalPartitionName,
-                                    historicalValueLookup);
-                    if (!appendInfo.duplicated()) {
-                        // KvWriteProcessor appends one WAL batch for each accepted KV batch.
+                                    historicalValueLookup,
+                                    acknowledgedSequence,
+                                    omitEmptyWal);
+                    if (appendInfo.appended()) {
                         kvPreWriteBuffer.markWalBatchEnd(appendInfo.lastOffset() + 1);
                     }
                     return appendInfo;

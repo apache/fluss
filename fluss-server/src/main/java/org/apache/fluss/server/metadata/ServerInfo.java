@@ -45,6 +45,7 @@ public class ServerInfo {
     private final Map<String, Endpoint> endpointMap;
     private final ServerType serverType;
     private final TabletServerResource resource;
+    private final int maxPutKvVersion;
 
     public ServerInfo(
             Integer id, @Nullable String rack, List<Endpoint> endpoints, ServerType serverType) {
@@ -57,6 +58,17 @@ public class ServerInfo {
             List<Endpoint> endpoints,
             ServerType serverType,
             TabletServerResource resource) {
+        this(id, rack, endpoints, serverType, resource, 0);
+    }
+
+    /** Creates node metadata including the supported write protocol version. */
+    public ServerInfo(
+            Integer id,
+            @Nullable String rack,
+            List<Endpoint> endpoints,
+            ServerType serverType,
+            TabletServerResource resource,
+            int maxPutKvVersion) {
         this.id = id;
         this.rack = rack;
         this.endpointMap =
@@ -64,6 +76,7 @@ public class ServerInfo {
                         .collect(Collectors.toMap(Endpoint::getListenerName, endpoint -> endpoint));
         this.serverType = serverType;
         this.resource = resource;
+        this.maxPutKvVersion = maxPutKvVersion;
     }
 
     public Integer id() {
@@ -112,13 +125,19 @@ public class ServerInfo {
         return resource;
     }
 
+    /** Maximum PutKv version advertised by this node. */
+    public int maxPutKvVersion() {
+        return maxPutKvVersion;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (o == null || getClass() != o.getClass()) {
             return false;
         }
         ServerInfo that = (ServerInfo) o;
-        return Objects.equals(id, that.id)
+        return maxPutKvVersion == that.maxPutKvVersion
+                && Objects.equals(id, that.id)
                 && Objects.equals(rack, that.rack)
                 && Objects.equals(endpointMap, that.endpointMap)
                 && Objects.equals(resource, that.resource);
@@ -126,7 +145,7 @@ public class ServerInfo {
 
     @Override
     public int hashCode() {
-        return Objects.hash(id, rack, endpointMap, resource);
+        return Objects.hash(id, rack, endpointMap, resource, maxPutKvVersion);
     }
 
     @Override

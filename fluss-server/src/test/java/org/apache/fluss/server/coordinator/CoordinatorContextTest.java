@@ -52,6 +52,23 @@ import static org.assertj.core.api.Assertions.assertThat;
 class CoordinatorContextTest {
 
     @Test
+    void testFirstRowProtocolWaitsForEveryCoordinator() {
+        CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
+        CoordinatorAddress modern =
+                new CoordinatorAddress(
+                        "modern", Endpoint.fromListenersString("CLIENT://localhost:1234"), 4);
+        CoordinatorAddress legacy =
+                new CoordinatorAddress(
+                        "legacy", Endpoint.fromListenersString("CLIENT://localhost:1235"));
+        context.setLiveCoordinators(Arrays.asList(modern, legacy));
+        assertThat(context.supportsFirstRowProgress()).isFalse();
+        context.removeLiveCoordinator(legacy.getId());
+        assertThat(context.supportsFirstRowProgress()).isTrue();
+        context.removeLiveCoordinator(modern.getId());
+        assertThat(context.supportsFirstRowProgress()).isFalse();
+    }
+
+    @Test
     void testCoordinatorStandbysExcludeActiveCoordinator() {
         CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
         CoordinatorAddress active =

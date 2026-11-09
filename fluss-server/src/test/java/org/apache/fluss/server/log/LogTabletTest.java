@@ -21,6 +21,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
+import org.apache.fluss.exception.StorageBackpressureException;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
@@ -687,6 +688,34 @@ final class LogTabletTest extends LogTestBase {
                                 "Out of order batch sequence for writer 1 at offset 25 in table-bucket "
                                         + "TableBucket{tableId=150001, bucket=%s} : 1 (incoming batch seq.), 6 (current batch seq.)",
                                 logTablet.getTableBucket().getBucket()));
+    }
+
+    @Test
+    void testFirstRowRetryWaitsForOmissionAfterWriterExpiration() throws Exception {
+        long writerId = 7;
+        logTablet.appendAsLeader(genMemoryLogRecordsWithWriterId(DATA1, writerId, 0, 0L));
+        logTablet.appendAsLeader(
+                genMemoryLogRecordsWithWriterId(Collections.emptyList(), writerId, 1, 0L));
+        long endOffset = logTablet.localLogEndOffset();
+        logTablet.updateHighWatermark(endOffset);
+        logTablet.removeExpiredWriter(
+                System.currentTimeMillis()
+                        + logTablet.writerStateManager().writerExpirationMs()
+                        + 1);
+        assertThat(logTablet.writerStateManager().lastEntry(writerId)).isEmpty();
+
+        assertThatThrownBy(
+                        () ->
+                                logTablet.appendFirstRowAsLeader(
+                                        genMemoryLogRecordsWithWriterId(
+                                                Collections.emptyList(), writerId, 1, 0L),
+                                        true))
+                .isInstanceOf(StorageBackpressureException.class);
+        assertThat(logTablet.localLogEndOffset()).isEqualTo(endOffset);
+
+        logTablet.appendFirstRowAsLeader(
+                genMemoryLogRecordsWithWriterId(DATA1, writerId, 2, 0L), false);
+        assertThat(logTablet.localLogEndOffset()).isGreaterThan(endOffset);
     }
 
     private LogTablet createLogTablet(Configuration config) throws Exception {

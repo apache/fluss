@@ -48,6 +48,7 @@ import java.util.Set;
 public class ServerMetadataSnapshot {
     private final @Nullable ServerInfo coordinatorServer;
     private final Map<Integer, ServerInfo> aliveTabletServers;
+    private final boolean firstRowProgressSupported;
     private final Map<TablePath, Long> tableIdByPath;
     private final Map<Long, TablePath> pathByTableId;
     // partition table.
@@ -81,6 +82,10 @@ public class ServerMetadataSnapshot {
             Map<Long, Long> bucketCountEpochByTableId) {
         this.coordinatorServer = coordinatorServer;
         this.aliveTabletServers = Collections.unmodifiableMap(aliveTabletServers);
+        this.firstRowProgressSupported =
+                !aliveTabletServers.isEmpty()
+                        && aliveTabletServers.values().stream()
+                                .allMatch(server -> server.maxPutKvVersion() >= 4);
 
         this.tableIdByPath = Collections.unmodifiableMap(tableIdByPath);
         this.pathByTableId = Collections.unmodifiableMap(pathByTableId);
@@ -111,6 +116,11 @@ public class ServerMetadataSnapshot {
                 Collections.emptyMap(),
                 Collections.emptyMap(),
                 Collections.emptyMap());
+    }
+
+    /** Whether every registered tablet server supports logical first-row write progress. */
+    public boolean supportsFirstRowProgress() {
+        return firstRowProgressSupported;
     }
 
     public ServerNode getCoordinatorServer(String listenerName) {

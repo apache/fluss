@@ -30,8 +30,15 @@ import java.util.Objects;
 public class CoordinatorAddress {
     private final String id;
     private final List<Endpoint> endpoints;
+    private final int maxPutKvVersion;
 
     public CoordinatorAddress(String id, List<Endpoint> endpoints) {
+        this(id, endpoints, 0);
+    }
+
+    /** Creates a coordinator registration with its write protocol capability. */
+    public CoordinatorAddress(String id, List<Endpoint> endpoints, int maxPutKvVersion) {
+        this.maxPutKvVersion = maxPutKvVersion;
         this.id = id;
         this.endpoints = endpoints;
     }
@@ -44,18 +51,25 @@ public class CoordinatorAddress {
         return endpoints;
     }
 
+    /** Maximum PutKv version understood by this coordinator build. */
+    public int getMaxPutKvVersion() {
+        return maxPutKvVersion;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (o == null || getClass() != o.getClass()) {
             return false;
         }
         CoordinatorAddress that = (CoordinatorAddress) o;
-        return Objects.equals(id, that.id) && Objects.equals(endpoints, that.endpoints);
+        return maxPutKvVersion == that.maxPutKvVersion
+                && Objects.equals(id, that.id)
+                && Objects.equals(endpoints, that.endpoints);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(id, endpoints);
+        return Objects.hash(id, endpoints, maxPutKvVersion);
     }
 
     @Override

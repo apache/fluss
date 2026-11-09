@@ -35,6 +35,7 @@ public class TabletServerRegistration {
     private final List<Endpoint> endpoints;
     private final long registerTimestamp;
     private final TabletServerResource resource;
+    private final int maxPutKvVersion;
 
     public TabletServerRegistration(
             @Nullable String rack, List<Endpoint> endpoints, long registerTimestamp) {
@@ -46,10 +47,21 @@ public class TabletServerRegistration {
             List<Endpoint> endpoints,
             long registerTimestamp,
             TabletServerResource resource) {
+        this(rack, endpoints, registerTimestamp, resource, 0);
+    }
+
+    /** Creates registration metadata including the supported write protocol version. */
+    public TabletServerRegistration(
+            @Nullable String rack,
+            List<Endpoint> endpoints,
+            long registerTimestamp,
+            TabletServerResource resource,
+            int maxPutKvVersion) {
         this.rack = rack;
         this.endpoints = endpoints;
         this.registerTimestamp = registerTimestamp;
         this.resource = resource;
+        this.maxPutKvVersion = maxPutKvVersion;
     }
 
     public List<Endpoint> getEndpoints() {
@@ -68,6 +80,11 @@ public class TabletServerRegistration {
         return resource;
     }
 
+    /** Maximum supported PutKv API version, or zero for legacy registrations. */
+    public int getMaxPutKvVersion() {
+        return maxPutKvVersion;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) {
@@ -77,7 +94,8 @@ public class TabletServerRegistration {
             return false;
         }
         TabletServerRegistration that = (TabletServerRegistration) o;
-        return registerTimestamp == that.registerTimestamp
+        return maxPutKvVersion == that.maxPutKvVersion
+                && registerTimestamp == that.registerTimestamp
                 && Objects.equals(endpoints, that.endpoints)
                 && Objects.equals(rack, that.rack)
                 && Objects.equals(resource, that.resource);
@@ -85,7 +103,7 @@ public class TabletServerRegistration {
 
     @Override
     public int hashCode() {
-        return Objects.hash(endpoints, registerTimestamp, rack, resource);
+        return Objects.hash(endpoints, registerTimestamp, rack, resource, maxPutKvVersion);
     }
 
     @Override

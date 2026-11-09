@@ -28,6 +28,7 @@ import org.apache.fluss.client.tiering.TieringLogSplit;
 import org.apache.fluss.client.tiering.TieringSnapshotSplit;
 import org.apache.fluss.client.write.HashBucketAssigner;
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.tiering.TestingLakeTieringFactory;
 import org.apache.fluss.flink.tiering.TestingWriteResult;
 import org.apache.fluss.flink.tiering.source.metrics.TieringMetrics;
@@ -50,6 +51,8 @@ import org.apache.flink.connector.base.source.reader.splitreader.SplitsAddition;
 import org.apache.flink.metrics.testutils.MetricListener;
 import org.apache.flink.runtime.metrics.groups.InternalSourceReaderMetricGroup;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -453,12 +456,14 @@ class TieringSplitReaderTest extends FlinkTestBase {
     }
 
     /**
-     * Verifies that the tiering service finishes under {@code first_row} merge engine even when
-     * duplicate upserts produce empty WAL batches.
+     * Verifies that tiering finishes with duplicate first-row writes, covering both empty WAL
+     * batches and logical writer progress without an append.
      */
-    @Test
-    void testTieringFirstRowMergeEngineFinishes() throws Exception {
-        TablePath tablePath = TablePath.of("fluss", "tiering_first_row_finish");
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testTieringFirstRowMergeEngineFinishes(boolean idempotenceEnabled) throws Exception {
+        TablePath tablePath =
+                TablePath.of("fluss", "tiering_first_row_finish_" + idempotenceEnabled);
         TableDescriptor descriptor =
                 TableDescriptor.builder()
                         .schema(DEFAULT_PK_TABLE_SCHEMA)
@@ -467,11 +472,12 @@ class TieringSplitReaderTest extends FlinkTestBase {
                         .build();
         long tableId = createTable(tablePath, descriptor);
 
-        // Duplicate upserts under FIRST_ROW: only the first per id yields a CDC
-        // record, the rest become empty WAL batches that still advance the offset.
         int distinctKeys = 5;
         int duplicatesPerKey = 10;
-        try (Table table = conn.getTable(tablePath)) {
+        Configuration writerConfig = FLUSS_CLUSTER_EXTENSION.getClientConfig();
+        writerConfig.set(ConfigOptions.CLIENT_WRITER_ENABLE_IDEMPOTENCE, idempotenceEnabled);
+        try (Connection writerConnection = ConnectionFactory.createConnection(writerConfig);
+                Table table = writerConnection.getTable(tablePath)) {
             for (int round = 0; round < duplicatesPerKey; round++) {
                 UpsertWriter writer = table.newUpsert().createWriter();
                 for (int id = 0; id < distinctKeys; id++) {
@@ -499,14 +505,11 @@ class TieringSplitReaderTest extends FlinkTestBase {
             splitIds.add(split.splitId());
         }
         assertThat(logSplits).isNotEmpty();
-        // Pre-condition: total log offsets must exceed distinct-key count, otherwise
-        // no empty batch was produced.
-        assertThat(totalLogEndOffset)
-                .as(
-                        "Expected logEndOffset (%d) to exceed distinctKeys (%d) so that "
-                                + "empty batches are produced under FIRST_ROW",
-                        totalLogEndOffset, distinctKeys)
-                .isGreaterThan(distinctKeys);
+        if (idempotenceEnabled) {
+            assertThat(totalLogEndOffset).isEqualTo(distinctKeys);
+        } else {
+            assertThat(totalLogEndOffset).isGreaterThan(distinctKeys);
+        }
 
         try (Connection connection =
                         ConnectionFactory.createConnection(
@@ -515,7 +518,7 @@ class TieringSplitReaderTest extends FlinkTestBase {
                         createTieringReader(connection)) {
             tieringSplitReader.handleSplitsChanges(new SplitsAddition<>(logSplits));
 
-            // With the fix every split must finish within a few fetch rounds.
+            // Every split must finish within a few fetch rounds.
             Set<String> finished = new HashSet<>();
             int maxRounds = 10;
             for (int i = 0; i < maxRounds && !finished.containsAll(splitIds); i++) {

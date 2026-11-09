@@ -124,7 +124,8 @@ public class DelayedWrite<T extends WriteResultForBucket> extends DelayedOperati
                     Replica replica = replicaManager.getReplicaOrException(tableBucket);
                     result =
                             replica.checkEnoughReplicasReachOffset(
-                                    delayedBucketStatus.getRequiredOffset());
+                                    delayedBucketStatus.getRequiredOffset(),
+                                    delayedBucketStatus.getWriteResultForBucket().getLeaderEpoch());
                 } catch (Exception e) {
                     result = Tuple2.of(false, Errors.forException(e));
                 }

@@ -49,10 +49,12 @@ import org.apache.fluss.server.kv.historical.LocalValueLookupResult;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.TruncateReason;
 import org.apache.fluss.server.kv.rowmerger.DefaultRowMerger;
+import org.apache.fluss.server.kv.rowmerger.FirstRowRowMerger;
 import org.apache.fluss.server.kv.rowmerger.RowMerger;
 import org.apache.fluss.server.kv.wal.ArrowWalBuilder;
 import org.apache.fluss.server.kv.wal.CompactedWalBuilder;
 import org.apache.fluss.server.kv.wal.IndexWalBuilder;
+import org.apache.fluss.server.kv.wal.LazyWalBuilder;
 import org.apache.fluss.server.kv.wal.WalBuilder;
 import org.apache.fluss.server.log.LogAppendInfo;
 import org.apache.fluss.server.log.LogTablet;
@@ -68,7 +70,12 @@ import javax.annotation.Nullable;
 import javax.annotation.concurrent.NotThreadSafe;
 
 import java.util.HashSet;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Set;
+
+import static org.apache.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
 
 /**
  * Processes a KV record batch into local state mutations and the corresponding WAL records.
@@ -90,6 +97,7 @@ import java.util.Set;
 public final class KvWriteProcessor {
 
     private static final Logger LOG = LoggerFactory.getLogger(KvWriteProcessor.class);
+    private static final int MAX_EXPIRED_WRITERS_PER_WRITE = 16;
 
     private final TableBucket tableBucket;
     private final LogTablet logTablet;
@@ -113,6 +121,8 @@ public final class KvWriteProcessor {
     @Nullable private final RowTtlTimestampProvider rowTtlTimestampProvider;
     private final Clock clock;
     private final boolean skipUnchangedUpsert;
+    private final LinkedHashMap<Long, FirstRowWriterState> firstRowWriters =
+            new LinkedHashMap<>(16, 0.75f, true);
 
     /** Creates a KV write processor. */
     public KvWriteProcessor(
@@ -160,11 +170,49 @@ public final class KvWriteProcessor {
             MergeMode mergeMode,
             KvStateAccessor stateAccessor,
             @Nullable String originalPartitionName,
-            @Nullable HistoricalValueLookup historicalValueLookup)
+            @Nullable HistoricalValueLookup historicalValueLookup,
+            @Nullable Integer acknowledgedSequence,
+            boolean allowEmptyWalElision)
             throws Exception {
+        FirstRowWriterState writerState = null;
+        boolean logicalProgress =
+                acknowledgedSequence != null
+                        && rowMerger instanceof FirstRowRowMerger
+                        && rowTtlTimestampProvider == null
+                        && mergeMode == MergeMode.DEFAULT
+                        && originalPartitionName == null
+                        && kvRecords.writerId() != NO_WRITER_ID;
+        boolean omitEmptyWal = logicalProgress && allowEmptyWalElision;
+        if (logicalProgress) {
+            long now = clock.milliseconds();
+            expireFirstRowWriters(now);
+            FirstRowWriterState previous = firstRowWriters.get(kvRecords.writerId());
+            if (previous != null
+                    && now - previous.lastAccessMs()
+                            >= logTablet.writerStateManager().writerExpirationMs()) {
+                firstRowWriters.remove(kvRecords.writerId());
+            }
+            writerState =
+                    firstRowWriters.computeIfAbsent(
+                            kvRecords.writerId(),
+                            id -> new FirstRowWriterState(acknowledgedSequence, now));
+            long barrier =
+                    writerState.prepare(
+                            kvRecords.batchSequence(),
+                            acknowledgedSequence,
+                            logTablet.getHighWatermark(),
+                            now);
+            if (barrier >= 0) {
+                return LogAppendInfo.noAppend(barrier);
+            }
+        }
         WriteContext writeContext = createWriteContext(kvRecords, targetColumns, mergeMode);
         RowType latestRowType = writeContext.latestSchema.getRowType();
-        WalBuilder walBuilder = createWalBuilder(writeContext.latestSchemaId, latestRowType);
+        WalBuilder walBuilder =
+                omitEmptyWal
+                        ? new LazyWalBuilder(
+                                () -> createWalBuilder(writeContext.latestSchemaId, latestRowType))
+                        : createWalBuilder(writeContext.latestSchemaId, latestRowType);
         walBuilder.setWriterState(kvRecords.writerId(), kvRecords.batchSequence());
         // we only support ADD COLUMN LAST, so the BinaryRow after RowMerger is
         // only has fewer ending columns than latest schema, so we pad nulls to
@@ -177,29 +225,32 @@ public final class KvWriteProcessor {
             if (rowTtlTimestampProvider != null) {
                 rowTtlTimestampProvider.prepareForBatch(clock.milliseconds());
             }
-            processKvRecords(
-                    kvRecords,
-                    kvRecords.schemaId(),
-                    writeContext.rowMerger,
-                    writeContext.autoIncrementUpdater,
-                    walBuilder,
-                    latestSchemaRow,
-                    logEndOffsetOfPrevBatch,
-                    stateAccessor,
-                    originalPartitionName,
-                    historicalValueLookup);
+            long outputEndOffset =
+                    processKvRecords(
+                            kvRecords,
+                            kvRecords.schemaId(),
+                            writeContext.rowMerger,
+                            writeContext.autoIncrementUpdater,
+                            walBuilder,
+                            latestSchemaRow,
+                            logEndOffsetOfPrevBatch,
+                            stateAccessor,
+                            originalPartitionName,
+                            historicalValueLookup);
 
-            // There will be a situation that these batches of kvRecordBatch have not
-            // generated any CDC logs, for example, when client attempts to delete
-            // some non-existent keys or MergeEngineType set to FIRST_ROW. In this case,
-            // we cannot simply return, as doing so would cause a
-            // OutOfOrderSequenceException problem. Therefore, here we will build an
-            // empty batch with lastLogOffset to 0L as the baseLogOffset is 0L. As doing
-            // that, the logOffsetDelta in logRecordBatch will be set to 0L. So, we will
-            // put a batch into file with recordCount 0 and offset plus 1L, it will
-            // update the batchSequence corresponding to the writerId and also increment
-            // the CDC log offset by 1.
-            LogAppendInfo logAppendInfo = logTablet.appendAsLeader(walBuilder.build());
+            LogAppendInfo logAppendInfo;
+            if (omitEmptyWal && outputEndOffset == logEndOffsetOfPrevBatch) {
+                logAppendInfo = LogAppendInfo.noAppend(logEndOffsetOfPrevBatch);
+            } else {
+                logAppendInfo =
+                        logicalProgress
+                                ? logTablet.appendFirstRowAsLeader(
+                                        walBuilder.build(), !allowEmptyWalElision)
+                                : logTablet.appendAsLeader(walBuilder.build());
+            }
+            if (writerState != null) {
+                writerState.complete(kvRecords.batchSequence(), logAppendInfo.requiredOffset());
+            }
 
             // if the batch is duplicated, we should truncate the state pre-write
             // buffer already written.
@@ -306,7 +357,7 @@ public final class KvWriteProcessor {
         }
     }
 
-    private void processKvRecords(
+    private long processKvRecords(
             KvRecordBatch kvRecords,
             short schemaIdOfNewData,
             RowMerger currentMerger,
@@ -355,6 +406,21 @@ public final class KvWriteProcessor {
                                 keyBytes,
                                 historicalValueLookup);
             }
+        }
+        return logOffset;
+    }
+
+    private void expireFirstRowWriters(long now) {
+        Iterator<Map.Entry<Long, FirstRowWriterState>> iterator =
+                firstRowWriters.entrySet().iterator();
+        long oldestAllowed = now - logTablet.writerStateManager().writerExpirationMs();
+        int removed = 0;
+        while (removed < MAX_EXPIRED_WRITERS_PER_WRITE && iterator.hasNext()) {
+            if (iterator.next().getValue().lastAccessMs() >= oldestAllowed) {
+                break;
+            }
+            iterator.remove();
+            removed++;
         }
     }
 

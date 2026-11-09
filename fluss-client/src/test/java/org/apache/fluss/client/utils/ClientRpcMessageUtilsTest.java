@@ -64,6 +64,21 @@ class ClientRpcMessageUtilsTest {
     private static final int TIMEOUT_MS = 30000;
 
     @Test
+    void testPutKvCarriesSendTimeAcknowledgedPrefix() throws Exception {
+        KvWriteBatch batch = createKvWriteBatch(0, MergeMode.DEFAULT);
+        batch.setWriterState(42L, 3);
+        batch.setLastAckedSequenceAtSend(1);
+        PutKvRequest request =
+                ClientRpcMessageUtils.makePutKvRequest(
+                        TABLE_ID,
+                        -1,
+                        TIMEOUT_MS,
+                        Collections.singletonList(
+                                new ReadyWriteBatch(new TableBucket(TABLE_ID, 0), batch)));
+        assertThat(request.getBucketsReqsList().get(0).getLastAckedSequence()).isEqualTo(1);
+    }
+
+    @Test
     void testMakePutKvRequestWithConsistentMergeMode() throws Exception {
         // Create two batches with same mergeMode (DEFAULT)
         KvWriteBatch batch1 = createKvWriteBatch(0, MergeMode.DEFAULT);

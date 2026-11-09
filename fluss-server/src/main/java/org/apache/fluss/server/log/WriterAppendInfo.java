@@ -35,6 +35,7 @@ public class WriterAppendInfo {
 
     enum SequenceValidation {
         ENFORCE,
+        ACCEPT,
         WARN_AND_ACCEPT
     }
 
@@ -127,6 +128,9 @@ public class WriterAppendInfo {
             long lastOffset,
             boolean isAppendAsLeader,
             SequenceValidation sequenceValidation) {
+        if (sequenceValidation == SequenceValidation.ACCEPT) {
+            return;
+        }
         int currentLastSeq = currentLastBatchSequence();
         // must be in sequence, even for the first batch should start from 0
         if (!inSequence(currentLastSeq, appendFirstSeq, isWriterInBatchExpired, isAppendAsLeader)) {
