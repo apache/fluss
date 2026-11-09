@@ -75,6 +75,7 @@ public class ServerMetricUtils {
             MetricRegistry registry, String clusterId, String hostname, String serverId) {
         CoordinatorMetricGroup coordinatorMetricGroup =
                 new CoordinatorMetricGroup(registry, clusterId, hostname, serverId);
+        coordinatorMetricGroup.registerRebalanceMetrics();
         createAndInitializeStatusMetricGroup(coordinatorMetricGroup);
         return coordinatorMetricGroup;
     }
