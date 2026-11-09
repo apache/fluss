@@ -18,6 +18,7 @@
 package org.apache.fluss.client.table;
 
 import org.apache.fluss.client.admin.ClientToServerITCaseBase;
+import org.apache.fluss.client.lookup.Lookuper;
 import org.apache.fluss.client.table.scanner.Scan;
 import org.apache.fluss.client.table.scanner.ScanRange;
 import org.apache.fluss.client.table.scanner.batch.BatchScanUtils;
@@ -225,6 +226,40 @@ class TableRangeScanITCase extends ClientToServerITCaseBase {
                     .isInstanceOf(IllegalArgumentException.class);
             assertThatThrownBy(() -> scan.createBatchScanner(new TableBucket(tableId, 3)))
                     .isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+
+    @Test
+    void testInsertIfNotExistsWithOrderedKeys() throws Exception {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("value", DataTypes.STRING())
+                        .primaryKey("id")
+                        .build();
+        TablePath path = TablePath.of("range_scan", "insert_if_missing");
+        long tableId =
+                createTable(
+                        path,
+                        TableDescriptor.builder()
+                                .schema(schema)
+                                .distributedBy(3)
+                                .property(ConfigOptions.TABLE_KV_ORDERED_KEY_ENABLED, true)
+                                .build(),
+                        true);
+        waitAllReplicasReady(tableId, 3);
+        try (Table table = conn.getTable(path)) {
+            Lookuper lookuper = table.newLookup().enableInsertIfNotExists().createLookuper();
+            InternalRow inserted = lookuper.lookup(GenericRow.of(7)).get().getSingletonRow();
+            assertThat(inserted).isNotNull();
+            assertThat(inserted.getInt(0)).isEqualTo(7);
+            assertThat(inserted.isNullAt(1)).isTrue();
+            UpsertWriter writer = table.newUpsert().createWriter();
+            writer.upsert(row(7, "existing"));
+            writer.flush();
+            InternalRow existing = lookuper.lookup(GenericRow.of(7)).get().getSingletonRow();
+            assertThat(existing).isNotNull();
+            assertThat(existing.getString(1).toString()).isEqualTo("existing");
         }
     }
 
