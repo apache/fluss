@@ -368,6 +368,9 @@ message PbScanReqForBucket {
   // If set, stops returning rows after this many records.
   optional int64 limit = 4;
   optional int32 routing_bucket_count = 5;
+  // SCAN_KV v1: inclusive start and exclusive end in the table's ordered key format.
+  optional bytes start_key = 6;
+  optional bytes end_key = 7;
 }
 
 message ScanKvRequest {

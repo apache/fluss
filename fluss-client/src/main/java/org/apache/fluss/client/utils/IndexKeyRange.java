@@ -15,8 +15,9 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.client.lookup;
+package org.apache.fluss.client.utils;
 
+import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.OrderedKeyEncoder;
 import org.apache.fluss.row.ordered.OrderedKeyCodec;
@@ -32,7 +33,8 @@ import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** Encoded inclusive start and exclusive end for an ordered index prefix. */
-final class IndexKeyRange {
+@Internal
+public final class IndexKeyRange {
     @Nullable private final byte[] startKey;
     @Nullable private final byte[] endKey;
 
@@ -42,7 +44,7 @@ final class IndexKeyRange {
     }
 
     /** Captures and encodes one-column bounds within the supplied equality prefix. */
-    static IndexKeyRange encode(
+    public static IndexKeyRange encode(
             byte[] prefix, RowType endpointType, Range<? extends InternalRow> bounds) {
         checkNotNull(bounds, "bounds");
         OrderedKeyEncoder encoder =
@@ -68,20 +70,29 @@ final class IndexKeyRange {
         return new IndexKeyRange(start, end);
     }
 
+    /** Restricts this field interval to the supplied equality prefix. */
+    public IndexKeyRange withPrefix(byte[] prefix) {
+        return new IndexKeyRange(
+                startKey == null ? null : concatenate(prefix, startKey),
+                endKey == null
+                        ? OrderedKeyCodec.prefixUpperBound(prefix)
+                        : concatenate(prefix, endKey));
+    }
+
     /** Returns the inclusive start key, or null for an exhausted lower bound. */
     @Nullable
-    byte[] getStartKey() {
+    public byte[] getStartKey() {
         return startKey;
     }
 
     /** Returns the exclusive end key, or null if unbounded. */
     @Nullable
-    byte[] getEndKey() {
+    public byte[] getEndKey() {
         return endKey;
     }
 
     /** Whether the interval contains no physical keys. */
-    boolean isEmpty() {
+    public boolean isEmpty() {
         return startKey == null
                 || (endKey != null
                         && UnsignedBytes.lexicographicalComparator().compare(startKey, endKey)
