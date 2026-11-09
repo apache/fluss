@@ -422,6 +422,6 @@ For details on union reads and streaming reads, see [Union Read](../union-read.m
 ## Further Reading
 
 - [Iceberg Integration](../datalake-formats/iceberg.md) — Table mapping, data types, supported catalog types, and limitations
-- [Streaming Lakehouse Overview](../overview.mdx) — General tiered storage concepts
+- [Lakestream Overview](../overview.mdx) — General tiered storage concepts
 - [S3 Filesystem](../../maintenance/tiered-storage/filesystems/s3.md) — Configuring S3 as Fluss remote storage
 - [Iceberg AWS Docs](https://iceberg.apache.org/docs/1.10.1/aws/) — Full reference for Glue and S3 properties

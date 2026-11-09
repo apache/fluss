@@ -16,6 +16,9 @@ Fluss Gateway is a stateless REST service for metadata, DDL, and schema-aware
 batch writes. Any Gateway instance can handle any request, so instances can be
 scaled behind a load balancer.
 
+For an end-to-end walkthrough — ingesting events via the Gateway and querying
+ them through a Paimon lakehouse — see 
+[Ingest HTTP Events into a Real-Time Lakehouse](../quickstart/gateway-lakehouse.md).
 To run the Gateway as a binary distribution or container, see
 [Deploying Fluss Gateway](../install-deploy/deploying-gateway.md).
 

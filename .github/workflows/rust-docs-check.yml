@@ -32,9 +32,11 @@ on:
       - 'fluss-rust/website/**'
       - '.github/workflows/rust-docs-check.yml'
 
+# PRs run on arm64, whose queue stays short at peak hours. Pushes to main run
+# on x86, so a merge that breaks only x86 still shows up there.
 jobs:
   check-documentation:
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     defaults:
       run:
         working-directory: fluss-rust/website

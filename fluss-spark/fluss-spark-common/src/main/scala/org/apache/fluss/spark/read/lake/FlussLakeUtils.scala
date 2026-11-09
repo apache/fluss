@@ -20,7 +20,7 @@ package org.apache.fluss.spark.read.lake
 import org.apache.fluss.config.{ConfigOptions, Configuration}
 import org.apache.fluss.lake.lakestorage.LakeStoragePluginSetUp
 import org.apache.fluss.lake.source.{LakeSource, LakeSplit}
-import org.apache.fluss.metadata.{LakeTableUtil, TablePath}
+import org.apache.fluss.metadata.{DataLakeFormat, LakeTableUtil, TablePath}
 import org.apache.fluss.predicate.{Predicate => FlussPredicate}
 import org.apache.fluss.utils.PropertiesUtils
 
@@ -55,6 +55,11 @@ object FlussLakeUtils extends Logging {
     val tableConfig = Configuration.fromMap(tableProperties)
     val lakeTablePath = LakeTableUtil.resolveLakeTablePath(tablePath, tableConfig)
     val datalakeFormat = tableConfig.get(ConfigOptions.TABLE_DATALAKE_FORMAT)
+    // Spark custom lake paths are currently covered for Paimon, not other lake formats.
+    if (lakeTablePath != tablePath && datalakeFormat != DataLakeFormat.PAIMON) {
+      throw new UnsupportedOperationException(
+        "Custom lake table path is not supported for Spark lake reads yet.")
+    }
     val dataLakePrefix = "table.datalake." + datalakeFormat + "."
 
     val rewriteProperties =

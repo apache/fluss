@@ -67,6 +67,7 @@ abstract class AbstractLogScanner<R> implements AutoCloseable {
         this.logScannerStatus = logScannerStatus;
         this.logFetcher = logFetcher;
         this.scannerMetricGroup = scannerMetricGroup;
+        this.scannerMetricGroup.registerRecordsLagGauge(logScannerStatus::recordsLag);
     }
 
     /**

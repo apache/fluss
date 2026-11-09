@@ -1,14 +1,14 @@
 ---
-title: "Deploying Streaming Lakehouse"
+title: "Deploying Lakestream"
 sidebar_position: 6
 ---
 
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Deploying Streaming Lakehouse
+# Deploying Lakestream
 
-This guide covers how to deploy a Fluss cluster with Streaming Lakehouse capabilities. For conceptual overview, see [Lakehouse Overview](../streaming-lakehouse/overview.mdx).
+This guide covers how to deploy a Lakestream foundation with Fluss, a Flink tiering service, and lakehouse storage. For the relationship between Streamhouse, Lakestream, and Fluss, see [Streamhouse and Lakestream](../concepts/streamhouse-and-lakestream.mdx).
 
 ## Prerequisites
 

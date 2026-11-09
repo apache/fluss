@@ -275,9 +275,21 @@ public class FlinkConversions {
 
         String comment = catalogBaseTable.getComment();
 
-        // then set distributed by information
+        // then set distributed by information, either from DISTRIBUTED BY or from options
+        Optional<TableDescriptor.TableDistribution> distribution =
+                CatalogTableAdapter.toFlussDistribution(catalogBaseTable);
+        if (distribution.isPresent()
+                && (flinkTableConf.containsKey(BUCKET_KEY.key())
+                        || flinkTableConf.containsKey(BUCKET_NUMBER.key()))) {
+            throw new CatalogException(
+                    String.format(
+                            "Cannot use DISTRIBUTED BY together with the '%s' or '%s' option.",
+                            BUCKET_KEY.key(), BUCKET_NUMBER.key()));
+        }
         List<String> bucketKey;
-        if (flinkTableConf.containsKey(BUCKET_KEY.key())) {
+        if (distribution.isPresent() && !distribution.get().getBucketKeys().isEmpty()) {
+            bucketKey = distribution.get().getBucketKeys();
+        } else if (flinkTableConf.containsKey(BUCKET_KEY.key())) {
             bucketKey =
                     Arrays.stream(flinkTableConf.get(BUCKET_KEY).split(","))
                             .map(String::trim)
@@ -295,7 +307,10 @@ public class FlinkConversions {
                                     })
                             .orElse(Collections.emptyList());
         }
-        Integer bucketNum = flinkTableConf.getOptional(BUCKET_NUMBER).orElse(null);
+        Integer bucketNum =
+                distribution.isPresent()
+                        ? distribution.get().getBucketCount().orElse(null)
+                        : flinkTableConf.getOptional(BUCKET_NUMBER).orElse(null);
 
         return TableDescriptor.builder()
                 .schema(schema)
@@ -502,8 +517,11 @@ public class FlinkConversions {
         }
     }
 
-    private static TableChange.SetOption convertSetOption(
+    private static TableChange convertSetOption(
             org.apache.flink.table.catalog.TableChange.SetOption flinkSetOption) {
+        if (BUCKET_NUMBER.key().equals(flinkSetOption.getKey())) {
+            return TableChange.modifyBucketCount(Integer.parseInt(flinkSetOption.getValue()));
+        }
         return TableChange.set(flinkSetOption.getKey(), flinkSetOption.getValue());
     }
 
@@ -584,6 +602,11 @@ public class FlinkConversions {
                 TableChange.set(
                         MATERIALIZED_TABLE_REFRESH_HANDLER_BYTES.key(),
                         encodeBytesToBase64(newHandlerBytes)));
+    }
+
+    /** Returns whether the given Fluss table stores a Flink materialized table. */
+    public static boolean isMaterializedTable(TableInfo tableInfo) {
+        return isMaterializedTable(tableInfo.getCustomProperties().toMap());
     }
 
     /**

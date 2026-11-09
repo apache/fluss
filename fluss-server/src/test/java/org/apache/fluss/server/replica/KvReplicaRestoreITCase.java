@@ -135,8 +135,13 @@ class KvReplicaRestoreITCase {
         // we delete the kv dir to make flush fail
         FileUtils.deleteDirectory(replica.getKvTablet().getKvTabletDir());
 
-        // should fail
+        // Append the batch that must be recovered from WAL.
         putRecordBatch(tableBucket, leaderServer, toKvRecordBatch(records));
+
+        // A complete WAL batch is one native write and may remain in the active memtable.
+        // Further writes rotate the memtable and surface the deleted directory as an I/O error.
+        KvRecordBatch triggerBatch =
+                genKvRecordBatch(new Object[] {recordsNum - 1, "k" + (recordsNum - 1)});
 
         // wait for the replica to restore in another server
         AtomicInteger newLeaderServer = new AtomicInteger(-1);
@@ -147,6 +152,7 @@ class KvReplicaRestoreITCase {
                         newLeaderServer.set(restoreServer);
                         return true;
                     }
+                    putRecordBatch(tableBucket, leaderServer, triggerBatch);
                     return false;
                 },
                 Duration.ofMinutes(2),

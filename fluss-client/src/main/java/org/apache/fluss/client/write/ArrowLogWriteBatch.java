@@ -54,6 +54,7 @@ public class ArrowLogWriteBatch extends WriteBatch {
     public ArrowLogWriteBatch(
             long tableId,
             int bucketId,
+            int bucketCount,
             PhysicalTablePath physicalTablePath,
             int schemaId,
             ArrowWriter arrowWriter,
@@ -64,6 +65,7 @@ public class ArrowLogWriteBatch extends WriteBatch {
         super(
                 tableId,
                 bucketId,
+                bucketCount,
                 physicalTablePath,
                 schemaId,
                 WriteFormat.ARROW_LOG,

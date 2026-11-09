@@ -18,6 +18,7 @@
 package org.apache.fluss.server.tablet;
 
 import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.exception.ApiException;
 import org.apache.fluss.exception.AuthorizationException;
 import org.apache.fluss.exception.InvalidScanRequestException;
 import org.apache.fluss.exception.InvalidTableException;
@@ -37,19 +38,33 @@ import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.entity.LookupResultForBucket;
 import org.apache.fluss.rpc.entity.PrefixLookupResultForBucket;
 import org.apache.fluss.rpc.entity.ProduceLogResultForBucket;
+import org.apache.fluss.rpc.entity.PutKvResultForBucket;
 import org.apache.fluss.rpc.entity.ResultForBucket;
+import org.apache.fluss.rpc.entity.TableStatsResultForBucket;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
+import org.apache.fluss.rpc.messages.CommitConsumerOffsetsRequest;
+import org.apache.fluss.rpc.messages.CommitConsumerOffsetsResponse;
+import org.apache.fluss.rpc.messages.DeleteConsumerGroupsRequest;
+import org.apache.fluss.rpc.messages.DeleteConsumerGroupsResponse;
+import org.apache.fluss.rpc.messages.DeleteConsumerOffsetsRequest;
+import org.apache.fluss.rpc.messages.DeleteConsumerOffsetsResponse;
 import org.apache.fluss.rpc.messages.FetchLogRequest;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
+import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerRequest;
+import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerResponse;
 import org.apache.fluss.rpc.messages.GetClusterHealthRequest;
 import org.apache.fluss.rpc.messages.GetClusterHealthResponse;
+import org.apache.fluss.rpc.messages.GetConsumerOffsetsRequest;
+import org.apache.fluss.rpc.messages.GetConsumerOffsetsResponse;
 import org.apache.fluss.rpc.messages.GetTableStatsRequest;
 import org.apache.fluss.rpc.messages.GetTableStatsResponse;
 import org.apache.fluss.rpc.messages.InitWriterRequest;
 import org.apache.fluss.rpc.messages.InitWriterResponse;
 import org.apache.fluss.rpc.messages.LimitScanRequest;
 import org.apache.fluss.rpc.messages.LimitScanResponse;
+import org.apache.fluss.rpc.messages.ListConsumerGroupsRequest;
+import org.apache.fluss.rpc.messages.ListConsumerGroupsResponse;
 import org.apache.fluss.rpc.messages.ListOffsetsRequest;
 import org.apache.fluss.rpc.messages.ListOffsetsResponse;
 import org.apache.fluss.rpc.messages.LookupRequest;
@@ -64,6 +79,7 @@ import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsRequest;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsResponse;
+import org.apache.fluss.rpc.messages.PbFetchLogReqForTable;
 import org.apache.fluss.rpc.messages.PbScanReqForBucket;
 import org.apache.fluss.rpc.messages.PrefixLookupRequest;
 import org.apache.fluss.rpc.messages.PrefixLookupResponse;
@@ -77,6 +93,7 @@ import org.apache.fluss.rpc.messages.StopReplicaRequest;
 import org.apache.fluss.rpc.messages.StopReplicaResponse;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.rpc.messages.UpdateMetadataResponse;
+import org.apache.fluss.rpc.netty.server.Session;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.protocol.FetchLogReadPreference;
@@ -105,16 +122,24 @@ import org.apache.fluss.server.log.FetchParamsBuilder;
 import org.apache.fluss.server.log.FilterInfo;
 import org.apache.fluss.server.log.ListOffsetsParam;
 import org.apache.fluss.server.metadata.ClusterMetadata;
+import org.apache.fluss.server.metadata.MetadataView;
+import org.apache.fluss.server.metadata.MetadataViewProvider;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.metadata.TabletServerMetadataProvider;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.replica.ReplicaManager;
+import org.apache.fluss.server.tablet.consumer.group.ConsumerGroupManager;
+import org.apache.fluss.server.tablet.consumer.group.ConsumerOffsetAndMetadata;
+import org.apache.fluss.server.tablet.consumer.group.ConsumerOffsetTableConfig;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import javax.annotation.Nullable;
 
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -124,6 +149,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
+import java.util.function.Function;
+import java.util.function.ToIntFunction;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.hasHistoricalLookup;
@@ -134,6 +161,7 @@ import static org.apache.fluss.security.acl.OperationType.READ;
 import static org.apache.fluss.security.acl.OperationType.WRITE;
 import static org.apache.fluss.server.coordinator.CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
 import static org.apache.fluss.server.log.FetchParams.DEFAULT_MAX_WAIT_MS_WHEN_MIN_BYTES_ENABLE;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.decodeCommitConsumerOffsetsRequest;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getFetchLogData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getListOffsetsData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getNotifyLakeTableOffset;
@@ -145,6 +173,7 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getTableFilter
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getTableStatsRequestData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getTargetColumns;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getUpdateMetadataRequestData;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeCommitConsumerOffsetsResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeFetchLogResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeGetTableStatsResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeInitWriterResponse;
@@ -163,7 +192,8 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toProduceLogDa
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toPutKvDataForBuckets;
 
 /** An RPC Gateway service for tablet server. */
-public final class TabletService extends RpcServiceBase implements TabletServerGateway {
+public final class TabletService extends RpcServiceBase
+        implements TabletServerGateway, MetadataViewProvider {
 
     private final String serviceName;
     private final ReplicaManager replicaManager;
@@ -173,6 +203,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     private final CoordinatorGateway coordinatorGateway;
     private final String interListenerName;
     private final ExecutorService replicaStateChangeExecutor;
+    private final ConsumerGroupManager groupManager;
 
     public TabletService(
             int serverId,
@@ -187,7 +218,8 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
             ExecutorService replicaStateChangeExecutor,
             ScannerManager scannerManager,
             CoordinatorGateway coordinatorGateway,
-            String interListenerName) {
+            String interListenerName,
+            ConsumerOffsetTableConfig offsetsConfig) {
         super(
                 remoteFileSystem,
                 ServerType.TABLET_SERVER,
@@ -205,6 +237,27 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         this.coordinatorGateway = coordinatorGateway;
         this.interListenerName = interListenerName;
         this.replicaStateChangeExecutor = replicaStateChangeExecutor;
+        this.groupManager =
+                new ConsumerGroupManager(
+                        serverId,
+                        replicaManager,
+                        offsetsConfig,
+                        zkClient,
+                        metadataManager,
+                        metadataCache,
+                        metadataFunctionProvider,
+                        coordinatorGateway,
+                        ioExecutor);
+    }
+
+    /** Returns the local replica manager used by protocol plugins. */
+    public ReplicaManager getReplicaManager() {
+        return replicaManager;
+    }
+
+    /** Returns the shared TabletServer metadata cache. */
+    public TabletServerMetadataCache getMetadataCache() {
+        return metadataCache;
     }
 
     @Override
@@ -218,11 +271,35 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     @Override
     public CompletableFuture<ProduceLogResponse> produceLog(ProduceLogRequest request) {
         authorizeTable(WRITE, request.getTableId());
-        CompletableFuture<ProduceLogResponse> response = new CompletableFuture<>();
+        long tableId = request.getTableId();
+        Map<TableBucket, ProduceLogResultForBucket> routingErrors = new HashMap<>();
+        collectRoutingErrors(
+                request.getBucketsReqsList(),
+                pbBucket ->
+                        new TableBucket(
+                                tableId,
+                                pbBucket.hasPartitionId() ? pbBucket.getPartitionId() : null,
+                                pbBucket.getBucketId()),
+                pbBucket -> pbBucket.hasRoutingBucketCount() ? pbBucket.getRoutingBucketCount() : 0,
+                ProduceLogResultForBucket::new,
+                routingErrors);
+
         List<ProduceLogDataForBucket> produceLogData = toProduceLogDataForBuckets(request);
+        if (!routingErrors.isEmpty()) {
+            produceLogData.removeIf(
+                    bucketData -> routingErrors.containsKey(bucketData.tableBucket()));
+            if (produceLogData.isEmpty()) {
+                return CompletableFuture.completedFuture(
+                        makeProduceLogResponse(routingErrors.values()));
+            }
+        }
+
+        CompletableFuture<ProduceLogResponse> response = new CompletableFuture<>();
         UserContext userContext = new UserContext(currentSession().getPrincipal());
         Consumer<List<ProduceLogResultForBucket>> responseCallback =
-                results -> response.complete(makeProduceLogResponse(results));
+                results ->
+                        response.complete(
+                                makeProduceLogResponse(withRoutingErrors(results, routingErrors)));
         if (hasHistoricalProduce(request)) {
             replicaManager.appendHistoricalRecordsToLog(
                     request.getTimeoutMs(),
@@ -245,10 +322,51 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         return response;
     }
 
+    /**
+     * Validates one request-scoped bucket and propagates any standard replica or routing {@link
+     * ApiException} to fail the single-bucket request immediately.
+     */
+    private void validateRoutingBucketCountOrThrow(
+            TableBucket tableBucket, int routingBucketCount) {
+        replicaManager.validateRoutingBucketCount(tableBucket, routingBucketCount);
+    }
+
+    /**
+     * Bucket-count validation applies to client requests only ({@code followerServerId < 0}).
+     * Server-internal replication traffic (follower fetch and follower listOffsets) never carries a
+     * bucket count, and a follower's bucket ids come from {@code NotifyLeaderAndIsr}, which is
+     * authoritative. Validating them against the leader's metadata cache would stall replication
+     * whenever that cache lags behind or the table has been rescaled.
+     */
+    private static boolean isFromClient(int followerServerId) {
+        return followerServerId < 0;
+    }
+
     @Override
     public CompletableFuture<FetchLogResponse> fetchLog(FetchLogRequest request) {
         Map<TableBucket, FetchReqInfo> fetchLogData = getFetchLogData(request);
         Map<TableBucket, FetchLogResultForBucket> errorResponseMap = new HashMap<>();
+        if (isFromClient(request.getFollowerServerId())) {
+            for (PbFetchLogReqForTable pbTable : request.getTablesReqsList()) {
+                long tableId = pbTable.getTableId();
+                collectRoutingErrors(
+                        pbTable.getBucketsReqsList(),
+                        pbBucket ->
+                                new TableBucket(
+                                        tableId,
+                                        pbBucket.hasPartitionId()
+                                                ? pbBucket.getPartitionId()
+                                                : null,
+                                        pbBucket.getBucketId()),
+                        pbBucket ->
+                                pbBucket.hasRoutingBucketCount()
+                                        ? pbBucket.getRoutingBucketCount()
+                                        : 0,
+                        FetchLogResultForBucket::error,
+                        errorResponseMap);
+            }
+            fetchLogData.keySet().removeAll(errorResponseMap.keySet());
+        }
         Map<TableBucket, FetchReqInfo> interesting =
                 // TODO: we should also authorize for follower, otherwise, users can mock follower
                 //  to skip the authorization.
@@ -307,14 +425,37 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     @Override
     public CompletableFuture<PutKvResponse> putKv(PutKvRequest request) {
         authorizeTable(WRITE, request.getTableId());
+        long tableId = request.getTableId();
+        Map<TableBucket, PutKvResultForBucket> routingErrors = new HashMap<>();
+        collectRoutingErrors(
+                request.getBucketsReqsList(),
+                pbBucket ->
+                        new TableBucket(
+                                tableId,
+                                pbBucket.hasPartitionId() ? pbBucket.getPartitionId() : null,
+                                pbBucket.getBucketId()),
+                pbBucket -> pbBucket.hasRoutingBucketCount() ? pbBucket.getRoutingBucketCount() : 0,
+                PutKvResultForBucket::new,
+                routingErrors);
 
         List<PutKvDataForBucket> putKvData = toPutKvDataForBuckets(request);
+        if (!routingErrors.isEmpty()) {
+            putKvData.removeIf(bucketData -> routingErrors.containsKey(bucketData.tableBucket()));
+            if (putKvData.isEmpty()) {
+                return CompletableFuture.completedFuture(makePutKvResponse(routingErrors.values()));
+            }
+        }
+
         // Get mergeMode from request, default to DEFAULT if not set
         MergeMode mergeMode =
                 request.hasAggMode()
                         ? MergeMode.fromValue(request.getAggMode())
                         : MergeMode.DEFAULT;
         CompletableFuture<PutKvResponse> response = new CompletableFuture<>();
+        Consumer<List<PutKvResultForBucket>> responseCallback =
+                results ->
+                        response.complete(
+                                makePutKvResponse(withRoutingErrors(results, routingErrors)));
         if (hasHistoricalPut(request)) {
             replicaManager.putHistoricalRecordsToKv(
                     request.getTimeoutMs(),
@@ -323,7 +464,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                     getTargetColumns(request),
                     mergeMode,
                     currentSession().getApiVersion(),
-                    bucketResponse -> response.complete(makePutKvResponse(bucketResponse)));
+                    responseCallback);
         } else {
             Map<TableBucket, KvRecordBatch> recordsByBucket = new HashMap<>();
             putKvData.forEach(
@@ -335,14 +476,25 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                     getTargetColumns(request),
                     mergeMode,
                     currentSession().getApiVersion(),
-                    bucketResponse -> response.complete(makePutKvResponse(bucketResponse)));
+                    responseCallback);
         }
         return response;
     }
 
     @Override
     public CompletableFuture<LookupResponse> lookup(LookupRequest request) {
+        long tableId = request.getTableId();
         Map<TableBucket, LookupResultForBucket> errorResponseMap = new HashMap<>();
+        collectRoutingErrors(
+                request.getBucketsReqsList(),
+                pbBucket ->
+                        new TableBucket(
+                                tableId,
+                                pbBucket.hasPartitionId() ? pbBucket.getPartitionId() : null,
+                                pbBucket.getBucketId()),
+                pbBucket -> pbBucket.hasRoutingBucketCount() ? pbBucket.getRoutingBucketCount() : 0,
+                LookupResultForBucket::new,
+                errorResponseMap);
         CompletableFuture<LookupResponse> response = new CompletableFuture<>();
 
         if (request.hasInsertIfNotExists() && request.isInsertIfNotExists()) {
@@ -353,6 +505,10 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                                 + "historical partition lookup.");
             }
             Map<TableBucket, List<byte[]>> normalLookupData = toLookupData(request);
+            normalLookupData.keySet().removeAll(errorResponseMap.keySet());
+            if (normalLookupData.isEmpty()) {
+                return CompletableFuture.completedFuture(makeLookupResponse(errorResponseMap));
+            }
             replicaManager.lookups(
                     request.isInsertIfNotExists(),
                     request.getTimeoutMs(),
@@ -365,11 +521,20 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
             if (historicalLookupRequest) {
                 List<LookupDataForBucket> historicalLookupData = toHistoricalLookupData(request);
                 authorizeTable(READ, request.getTableId());
+                historicalLookupData.removeIf(
+                        bucketData -> errorResponseMap.containsKey(bucketData.tableBucket()));
+                if (historicalLookupData.isEmpty()) {
+                    return CompletableFuture.completedFuture(makeLookupResponse(errorResponseMap));
+                }
                 replicaManager.historicalLookups(
                         historicalLookupData,
-                        value -> response.complete(makeLookupResponse(value)));
+                        value ->
+                                response.complete(
+                                        makeLookupResponse(
+                                                withRoutingErrors(value, errorResponseMap))));
             } else {
                 Map<TableBucket, List<byte[]>> normalLookupData = toLookupData(request);
+                normalLookupData.keySet().removeAll(errorResponseMap.keySet());
                 Map<TableBucket, List<byte[]>> interesting =
                         authorizeRequestData(
                                 READ,
@@ -390,8 +555,20 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
 
     @Override
     public CompletableFuture<PrefixLookupResponse> prefixLookup(PrefixLookupRequest request) {
+        long tableId = request.getTableId();
         Map<TableBucket, List<byte[]>> prefixLookupData = toPrefixLookupData(request);
         Map<TableBucket, PrefixLookupResultForBucket> errorResponseMap = new HashMap<>();
+        collectRoutingErrors(
+                request.getBucketsReqsList(),
+                pbBucket ->
+                        new TableBucket(
+                                tableId,
+                                pbBucket.hasPartitionId() ? pbBucket.getPartitionId() : null,
+                                pbBucket.getBucketId()),
+                pbBucket -> pbBucket.hasRoutingBucketCount() ? pbBucket.getRoutingBucketCount() : 0,
+                PrefixLookupResultForBucket::new,
+                errorResponseMap);
+        prefixLookupData.keySet().removeAll(errorResponseMap.keySet());
         Map<TableBucket, List<byte[]>> interesting =
                 authorizeRequestData(
                         READ, prefixLookupData, errorResponseMap, PrefixLookupResultForBucket::new);
@@ -410,6 +587,12 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     @Override
     public CompletableFuture<LimitScanResponse> limitScan(LimitScanRequest request) {
         authorizeTable(READ, request.getTableId());
+        validateRoutingBucketCountOrThrow(
+                new TableBucket(
+                        request.getTableId(),
+                        request.hasPartitionId() ? request.getPartitionId() : null,
+                        request.getBucketId()),
+                request.hasRoutingBucketCount() ? request.getRoutingBucketCount() : 0);
 
         CompletableFuture<LimitScanResponse> response = new CompletableFuture<>();
         replicaManager.limitScan(
@@ -425,11 +608,35 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     @Override
     public CompletableFuture<GetTableStatsResponse> getTableStats(GetTableStatsRequest request) {
         authorizeTable(READ, request.getTableId());
+        long tableId = request.getTableId();
+        Map<TableBucket, TableStatsResultForBucket> routingErrors = new HashMap<>();
+        collectRoutingErrors(
+                request.getBucketsReqsList(),
+                pbBucket ->
+                        new TableBucket(
+                                tableId,
+                                pbBucket.hasPartitionId() ? pbBucket.getPartitionId() : null,
+                                pbBucket.getBucketId()),
+                pbBucket -> pbBucket.hasRoutingBucketCount() ? pbBucket.getRoutingBucketCount() : 0,
+                TableStatsResultForBucket::new,
+                routingErrors);
+
+        List<TableBucket> requestedBuckets = getTableStatsRequestData(request);
+        if (!routingErrors.isEmpty()) {
+            requestedBuckets.removeAll(routingErrors.keySet());
+            if (requestedBuckets.isEmpty()) {
+                return CompletableFuture.completedFuture(
+                        makeGetTableStatsResponse(new ArrayList<>(routingErrors.values())));
+            }
+        }
 
         CompletableFuture<GetTableStatsResponse> response = new CompletableFuture<>();
         replicaManager.getTableStats(
-                getTableStatsRequestData(request),
-                result -> response.complete(makeGetTableStatsResponse(result)));
+                requestedBuckets,
+                result ->
+                        response.complete(
+                                makeGetTableStatsResponse(
+                                        withRoutingErrors(result, routingErrors))));
         return response;
     }
 
@@ -447,6 +654,13 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                                 coordinatorEpoch,
                                 notifyLeaderAndIsrRequestData,
                                 value -> result.complete(makeNotifyLeaderAndIsrResponse(value))));
+    }
+
+    @Override
+    public MetadataView getMetadataView(Session session) {
+        return metadataCache.getMetadataView(
+                session.getListenerName(),
+                path -> isTableMetadataAuthorized(session, authorizer, path));
     }
 
     @Override
@@ -474,6 +688,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                 response,
                 result -> {
                     replicaManager.maybeUpdateMetadataCache(coordinatorEpoch, clusterMetadata);
+                    groupManager.onTableMetadataUpdate(clusterMetadata.getTableMetadataList());
                     result.complete(new UpdateMetadataResponse());
                 });
     }
@@ -496,6 +711,19 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     @Override
     public CompletableFuture<ListOffsetsResponse> listOffsets(ListOffsetsRequest request) {
         authorizeTable(DESCRIBE, request.getTableId());
+        if (isFromClient(request.getFollowerServerId())) {
+            // Unlike the per-bucket requests, both the partition and the routing count are
+            // request-scoped here, so every requested bucket shares one bucket layout: a stale
+            // route invalidates the whole request at once and failing it as a whole is exact.
+            Long partitionId = request.hasPartitionId() ? request.getPartitionId() : null;
+            int routingBucketCount =
+                    request.hasRoutingBucketCount() ? request.getRoutingBucketCount() : 0;
+            for (int bucketId : request.getBucketIds()) {
+                validateRoutingBucketCountOrThrow(
+                        new TableBucket(request.getTableId(), partitionId, bucketId),
+                        routingBucketCount);
+            }
+        }
         CompletableFuture<ListOffsetsResponse> response = new CompletableFuture<>();
         Set<TableBucket> tableBuckets = getListOffsetsData(request);
         replicaManager.listOffsets(
@@ -582,6 +810,80 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     }
 
     @Override
+    public CompletableFuture<FindConsumerGroupOwnerResponse> findConsumerGroupOwner(
+            FindConsumerGroupOwnerRequest request) {
+        return groupManager
+                .findOwner(request.getGroupId(), currentListenerName())
+                .thenApply(ServerRpcMessageUtils::makeFindConsumerGroupOwnerResponse);
+    }
+
+    @Override
+    public CompletableFuture<CommitConsumerOffsetsResponse> commitConsumerOffsets(
+            CommitConsumerOffsetsRequest request) {
+        String groupId = request.getGroupId();
+        final Replica offsetsReplica;
+        final Map<TableBucket, ConsumerOffsetAndMetadata> offsets;
+        try {
+            offsetsReplica = groupManager.validateGroupId(groupId);
+            offsets = decodeCommitConsumerOffsetsRequest(request);
+        } catch (ApiException e) {
+            return FutureUtils.completedExceptionally(e);
+        }
+        if (offsets.isEmpty()) {
+            return CompletableFuture.completedFuture(
+                    makeCommitConsumerOffsetsResponse(Collections.emptyMap()));
+        }
+
+        // The session is bound to the RPC thread; authorize all sources before starting any write.
+        if (authorizer != null) {
+            offsets.keySet().stream()
+                    .map(TableBucket::getTableId)
+                    .distinct()
+                    .forEach(tableId -> authorizeTable(READ, tableId));
+        }
+
+        return groupManager
+                .handleCommitConsumerOffsets(groupId, offsetsReplica, offsets)
+                .thenApply(ServerRpcMessageUtils::makeCommitConsumerOffsetsResponse);
+    }
+
+    @Override
+    public CompletableFuture<GetConsumerOffsetsResponse> getConsumerOffsets(
+            GetConsumerOffsetsRequest request) {
+        CompletableFuture<GetConsumerOffsetsResponse> response = new CompletableFuture<>();
+        response.completeExceptionally(
+                new UnsupportedOperationException("getConsumerOffsets is not supported yet"));
+        return response;
+    }
+
+    @Override
+    public CompletableFuture<DeleteConsumerOffsetsResponse> deleteConsumerOffsets(
+            DeleteConsumerOffsetsRequest request) {
+        CompletableFuture<DeleteConsumerOffsetsResponse> response = new CompletableFuture<>();
+        response.completeExceptionally(
+                new UnsupportedOperationException("deleteConsumerOffsets is not supported yet"));
+        return response;
+    }
+
+    @Override
+    public CompletableFuture<ListConsumerGroupsResponse> listConsumerGroups(
+            ListConsumerGroupsRequest request) {
+        CompletableFuture<ListConsumerGroupsResponse> response = new CompletableFuture<>();
+        response.completeExceptionally(
+                new UnsupportedOperationException("listConsumerGroups is not supported yet"));
+        return response;
+    }
+
+    @Override
+    public CompletableFuture<DeleteConsumerGroupsResponse> deleteConsumerGroups(
+            DeleteConsumerGroupsRequest request) {
+        CompletableFuture<DeleteConsumerGroupsResponse> response = new CompletableFuture<>();
+        response.completeExceptionally(
+                new UnsupportedOperationException("deleteConsumerGroups is not supported yet"));
+        return response;
+    }
+
+    @Override
     public CompletableFuture<ScanKvResponse> scanKv(ScanKvRequest request) {
         ScanKvResponse response = new ScanKvResponse();
         ScannerContext openedContext = null;
@@ -629,13 +931,16 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
             if (request.hasBucketScanReq()) {
                 PbScanReqForBucket bucketReq = request.getBucketScanReq();
                 long tableId = bucketReq.getTableId();
-                authorizeTable(READ, tableId);
-
                 TableBucket tableBucket =
                         new TableBucket(
                                 tableId,
                                 bucketReq.hasPartitionId() ? bucketReq.getPartitionId() : null,
                                 bucketReq.getBucketId());
+                validateRoutingBucketCountOrThrow(
+                        tableBucket,
+                        bucketReq.hasRoutingBucketCount() ? bucketReq.getRoutingBucketCount() : 0);
+                authorizeTable(READ, tableId);
+
                 Long limit = bucketReq.hasLimit() ? bucketReq.getLimit() : null;
 
                 Replica replica = replicaManager.getReplicaOrException(tableBucket);
@@ -904,6 +1209,50 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                     }
                 });
         return interesting;
+    }
+
+    /**
+     * Records a per-bucket error for every request bucket whose routing validation fails. This
+     * includes stale bucket counts and the standard unknown, non-local, or offline replica errors
+     * raised while resolving the target bucket.
+     *
+     * <p>A failure on one bucket does not invalidate other buckets in the same batched request, so
+     * each {@link ApiException} is converted into the corresponding bucket result. Request-scoped
+     * validation (for example {@link #listOffsets}) instead propagates the exception and fails the
+     * whole request.
+     */
+    private <P, K extends ResultForBucket> void collectRoutingErrors(
+            List<P> bucketReqs,
+            Function<P, TableBucket> toTableBucket,
+            ToIntFunction<P> routingBucketCountOf,
+            BiFunction<TableBucket, ApiError, K> resultCreator,
+            Map<TableBucket, K> errorsOut) {
+        for (P bucketReq : bucketReqs) {
+            TableBucket tableBucket = toTableBucket.apply(bucketReq);
+            try {
+                replicaManager.validateRoutingBucketCount(
+                        tableBucket, routingBucketCountOf.applyAsInt(bucketReq));
+            } catch (ApiException e) {
+                errorsOut.put(
+                        tableBucket, resultCreator.apply(tableBucket, ApiError.fromThrowable(e)));
+            }
+        }
+    }
+
+    /**
+     * Appends routing errors to the results produced for the accepted buckets, so that the response
+     * covers every bucket the client asked about. Returns {@code results} untouched when every
+     * bucket has valid routing information.
+     */
+    private static <K extends ResultForBucket> List<K> withRoutingErrors(
+            List<K> results, Map<TableBucket, K> routingErrors) {
+        if (routingErrors.isEmpty()) {
+            return results;
+        }
+        List<K> merged = new ArrayList<>(results.size() + routingErrors.size());
+        merged.addAll(results);
+        merged.addAll(routingErrors.values());
+        return merged;
     }
 
     private Set<Long> filterAuthorizedTables(

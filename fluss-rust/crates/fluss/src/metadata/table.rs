@@ -537,10 +537,24 @@ impl SchemaBuilder {
         primary_key: Option<&PrimaryKey>,
     ) -> Result<Vec<Column>> {
         let names: Vec<_> = columns.iter().map(|c| &c.name).collect();
+        if names.iter().any(|name| name.trim().is_empty()) {
+            return Err(Error::invalid_table(
+                "Field names must contain at least one non-whitespace character.",
+            ));
+        }
         if let Some(duplicates) = Self::find_duplicates(&names) {
             return Err(Error::invalid_table(format!(
                 "Duplicate column names found: {duplicates:?}"
             )));
+        }
+        for column in columns {
+            column
+                .data_type()
+                .validate_row_field_names()
+                .map_err(|error| match error {
+                    IllegalArgument { message } => Error::invalid_table(message),
+                    other => other,
+                })?;
         }
 
         let Some(pk) = primary_key else {
@@ -1162,6 +1176,7 @@ pub struct TableInfo {
     /// Resolved once at construction. The failure is held rather than raised so
     /// that a malformed property only breaks writers, not metadata loading.
     stats_index_mapping: std::result::Result<Vec<usize>, String>,
+    bucket_count_epoch: i64,
 }
 
 impl TableInfo {
@@ -1417,7 +1432,13 @@ impl TableInfo {
             created_time,
             modified_time,
             stats_index_mapping,
+            bucket_count_epoch: 0,
         }
+    }
+
+    pub fn with_bucket_count_epoch(mut self, bucket_count_epoch: i64) -> Self {
+        self.bucket_count_epoch = bucket_count_epoch;
+        self
     }
 
     pub fn get_table_path(&self) -> &TablePath {
@@ -1486,6 +1507,11 @@ impl TableInfo {
 
     pub fn get_num_buckets(&self) -> i32 {
         self.num_buckets
+    }
+
+    /// Above 0, `bucket.num` has changed and partitions may differ from `num_buckets`.
+    pub fn get_bucket_count_epoch(&self) -> i64 {
+        self.bucket_count_epoch
     }
 
     pub fn get_properties(&self) -> &HashMap<String, String> {
@@ -1579,6 +1605,23 @@ impl Display for TableInfo {
     }
 }
 
+/// The owner of a bucket layout: a non-partitioned table, or one partition of a partitioned table.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+pub enum TableOrPartition {
+    Table(TableId),
+    Partition(PartitionId),
+}
+
+impl TableOrPartition {
+    /// Returns the partition when `partition_id` is set, otherwise the table.
+    pub fn of(table_id: TableId, partition_id: Option<PartitionId>) -> Self {
+        match partition_id {
+            Some(partition_id) => TableOrPartition::Partition(partition_id),
+            None => TableOrPartition::Table(table_id),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Hash, PartialEq, Eq)]
 pub struct TableBucket {
     table_id: TableId,
@@ -1617,6 +1660,10 @@ impl TableBucket {
 
     pub fn partition_id(&self) -> Option<PartitionId> {
         self.partition_id
+    }
+
+    pub fn table_or_partition(&self) -> TableOrPartition {
+        TableOrPartition::of(self.table_id, self.partition_id)
     }
 
     pub fn to_pb(&self) -> crate::proto::PbTableBucket {
@@ -1710,6 +1757,20 @@ mod tests {
     }
 
     #[test]
+    fn blank_column_names_are_rejected() {
+        let err = Schema::builder()
+            .column(" \t", DataTypes::int())
+            .build()
+            .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("Field names must contain at least one non-whitespace character."),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn multiple_primary_keys_are_rejected() {
         let err = Schema::builder()
             .column("id", DataTypes::int())
@@ -1721,6 +1782,29 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("Multiple primary keys are not supported."),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn invalid_nested_row_field_names_are_rejected() {
+        let err = Schema::builder()
+            .column(
+                "payload",
+                DataTypes::array(DataTypes::map(
+                    DataTypes::string(),
+                    DataTypes::row(vec![
+                        DataTypes::field("value", DataTypes::int()),
+                        DataTypes::field("value", DataTypes::bigint()),
+                    ]),
+                )),
+            )
+            .build()
+            .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("Field names must be unique. Found duplicates:"),
             "unexpected error: {err}"
         );
     }

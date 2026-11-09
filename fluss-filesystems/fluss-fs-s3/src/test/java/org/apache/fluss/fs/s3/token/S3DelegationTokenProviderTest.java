@@ -23,6 +23,8 @@ import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
 import software.amazon.awssdk.auth.credentials.AwsCredentials;
 import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider;
 import software.amazon.awssdk.auth.credentials.AwsSessionCredentials;
+import software.amazon.awssdk.regions.Region;
+import software.amazon.awssdk.services.sts.StsClient;
 
 import java.io.IOException;
 import java.net.URI;
@@ -98,16 +100,38 @@ public class S3DelegationTokenProviderTest {
     }
 
     @Test
-    void testConfiguredProviderWithRoleArnThrows() {
+    void testConfiguredProviderWithRoleArnCallsAssumeRoleAsTheProvider() throws IOException {
         Configuration conf = new Configuration();
         conf.set("fs.s3a.region", "us-east-1");
-        setConfiguredProvider(conf, RefreshableCredentialsProvider.class);
+        setConfiguredProvider(conf, SessionCredentialsProvider.class);
         conf.set("fs.s3a.assumed.role.arn", "arn:aws:iam::123456789012:role/test-role");
 
-        assertThatThrownBy(() -> new S3DelegationTokenProvider("s3", conf))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("AssumeRole")
-                .hasMessageContaining("custom AWS credentials provider");
+        S3DelegationTokenProvider provider = new S3DelegationTokenProvider("s3", conf);
+
+        assertThat(provider.createStsCredentialsProvider().resolveCredentials())
+                .isInstanceOf(AwsSessionCredentials.class);
+    }
+
+    @Test
+    void testStsClientCloseDoesNotInvalidateTheConfiguredProvider() throws IOException {
+        Configuration conf = new Configuration();
+        conf.set("fs.s3a.region", "us-east-1");
+        setConfiguredProvider(conf, SessionCredentialsProvider.class);
+        conf.set("fs.s3a.assumed.role.arn", "arn:aws:iam::123456789012:role/test-role");
+
+        S3DelegationTokenProvider provider = new S3DelegationTokenProvider("s3", conf);
+        AwsCredentialsProvider stsCaller = provider.createStsCredentialsProvider();
+
+        try (StsClient client =
+                StsClient.builder()
+                        .region(Region.of("us-east-1"))
+                        .credentialsProvider(stsCaller)
+                        .build()) {
+            assertThat(client).isNotNull();
+        }
+
+        assertThat(provider.createStsCredentialsProvider().resolveCredentials())
+                .isInstanceOf(AwsSessionCredentials.class);
     }
 
     @Test

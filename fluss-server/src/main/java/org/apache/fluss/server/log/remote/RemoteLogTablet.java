@@ -18,6 +18,7 @@
 package org.apache.fluss.server.log.remote;
 
 import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metrics.MetricNames;
@@ -90,9 +91,13 @@ public class RemoteLogTablet {
      */
     private volatile long remoteLogEndOffset;
 
+    private final FsPath remoteLogDir;
+
     private volatile boolean closed = false;
 
-    public RemoteLogTablet(PhysicalTablePath physicalTablePath, TableBucket tableBucket) {
+    public RemoteLogTablet(
+            PhysicalTablePath physicalTablePath, TableBucket tableBucket, FsPath remoteLogDir) {
+        this.remoteLogDir = remoteLogDir;
         this.currentManifest =
                 new RemoteLogManifest(physicalTablePath, tableBucket, new ArrayList<>());
         reset();
@@ -290,6 +295,10 @@ public class RemoteLogTablet {
                 : OptionalLong.of(remoteLogEndOffset);
     }
 
+    public FsPath getRemoteLogDir() {
+        return remoteLogDir;
+    }
+
     /** Returns the highest exclusive offset successfully copied to remote storage. */
     public long getHighestCopiedEndOffset() {
         // lock-free, the currentManifest is volatile and the offset is immutable.
@@ -309,15 +318,17 @@ public class RemoteLogTablet {
         inWriteLock(
                 lock,
                 () -> {
+                    RemoteLogManifest normalizedManifest =
+                            manifestSnapshot.normalizeLogicalRanges();
                     reset();
-                    for (RemoteLogSegment segment : manifestSnapshot.getRemoteLogSegmentList()) {
+                    for (RemoteLogSegment segment : normalizedManifest.getRemoteLogSegmentList()) {
                         addSegment(segment);
                     }
-                    remoteSizeInBytes = manifestSnapshot.getRemoteLogSize();
-                    numRemoteLogSegments = manifestSnapshot.getRemoteLogSegmentList().size();
-                    remoteLogStartOffset = manifestSnapshot.getRemoteLogStartOffset();
-                    remoteLogEndOffset = manifestSnapshot.getRemoteLogEndOffset();
-                    currentManifest = manifestSnapshot;
+                    remoteSizeInBytes = normalizedManifest.getRemoteLogSize();
+                    numRemoteLogSegments = normalizedManifest.getRemoteLogSegmentList().size();
+                    remoteLogStartOffset = normalizedManifest.getRemoteLogStartOffset();
+                    remoteLogEndOffset = normalizedManifest.getRemoteLogEndOffset();
+                    currentManifest = normalizedManifest;
                 });
     }
 

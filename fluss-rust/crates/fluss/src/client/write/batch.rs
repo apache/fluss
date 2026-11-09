@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::TableId;
 use crate::client::broadcast::{BatchWriteResult, BroadcastOnce};
 use crate::client::{Record, ResultHandle, WriteRecord};
 use crate::error::{Error, Result};
@@ -23,6 +22,7 @@ use crate::metadata::{KvFormat, PhysicalTablePath};
 use crate::record::kv::KvRecordBatchBuilder;
 use crate::record::{ArrowBatchConfig, MemoryLogRecordsArrowBuilder};
 use crate::record::{NO_BATCH_SEQUENCE, NO_WRITER_ID};
+use crate::{PartitionId, TableId};
 use bytes::Bytes;
 use std::cmp::max;
 use std::sync::Arc;
@@ -39,6 +39,11 @@ pub struct InnerWriteBatch {
     drained_ms: i64,
     batch_sequence: i32,
     writer_id: i64,
+    /// The partition the batch sequence was assigned in, `None` for a non-partitioned table.
+    sequence_partition_id: Option<PartitionId>,
+    last_acked_sequence_at_send: i32,
+    /// The bucket count the bucket id was computed with, or 0 before routing sets it.
+    routing_bucket_count: i32,
 }
 
 impl InnerWriteBatch {
@@ -59,6 +64,9 @@ impl InnerWriteBatch {
             drained_ms: -1,
             batch_sequence: NO_BATCH_SEQUENCE,
             writer_id: NO_WRITER_ID,
+            sequence_partition_id: None,
+            last_acked_sequence_at_send: -1,
+            routing_bucket_count: 0,
         }
     }
 
@@ -241,6 +249,32 @@ impl WriteBatch {
 
     pub fn has_batch_sequence(&self) -> bool {
         self.inner_batch().has_batch_sequence()
+    }
+
+    /// Last acknowledged sequence for this bucket when the current attempt was sent.
+    pub(crate) fn last_acked_sequence_at_send(&self) -> i32 {
+        self.inner_batch().last_acked_sequence_at_send
+    }
+
+    /// Refreshes the acknowledged-sequence snapshot on every send, including retries.
+    pub(crate) fn set_last_acked_sequence_at_send(&mut self, sequence: i32) {
+        self.inner_batch_mut().last_acked_sequence_at_send = sequence;
+    }
+
+    pub(crate) fn sequence_partition_id(&self) -> Option<PartitionId> {
+        self.inner_batch().sequence_partition_id
+    }
+
+    pub(crate) fn set_sequence_partition_id(&mut self, partition_id: Option<PartitionId>) {
+        self.inner_batch_mut().sequence_partition_id = partition_id;
+    }
+
+    pub(crate) fn routing_bucket_count(&self) -> Option<i32> {
+        Some(self.inner_batch().routing_bucket_count).filter(|count| *count > 0)
+    }
+
+    pub(crate) fn set_routing_bucket_count(&mut self, bucket_count: i32) {
+        self.inner_batch_mut().routing_bucket_count = bucket_count;
     }
 
     pub fn set_writer_state(&mut self, writer_id: i64, batch_base_sequence: i32) {

@@ -17,9 +17,15 @@
 
 package org.apache.fluss.server.tablet;
 
+import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.ConsumerGroupOwnerLoadingException;
+import org.apache.fluss.exception.ConsumerGroupOwnerNotAvailableException;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.InvalidRequiredAcksException;
+import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -37,8 +43,13 @@ import org.apache.fluss.row.encode.ValueDecoder;
 import org.apache.fluss.row.encode.ValueEncoder;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
+import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerRequest;
+import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerResponse;
+import org.apache.fluss.rpc.messages.GetTableStatsRequest;
+import org.apache.fluss.rpc.messages.GetTableStatsResponse;
 import org.apache.fluss.rpc.messages.InitWriterRequest;
 import org.apache.fluss.rpc.messages.InitWriterResponse;
+import org.apache.fluss.rpc.messages.ListOffsetsRequest;
 import org.apache.fluss.rpc.messages.ListOffsetsResponse;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
@@ -49,6 +60,7 @@ import org.apache.fluss.rpc.messages.PbLookupRespForBucket;
 import org.apache.fluss.rpc.messages.PbNotifyLeaderAndIsrReqForBucket;
 import org.apache.fluss.rpc.messages.PbPrefixLookupRespForBucket;
 import org.apache.fluss.rpc.messages.PbPutKvRespForBucket;
+import org.apache.fluss.rpc.messages.PbTableStatsRespForBucket;
 import org.apache.fluss.rpc.messages.ProduceLogResponse;
 import org.apache.fluss.rpc.messages.PutKvResponse;
 import org.apache.fluss.rpc.messages.ScanKvRequest;
@@ -59,12 +71,16 @@ import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 import org.apache.fluss.server.log.ListOffsetsParam;
 import org.apache.fluss.server.metadata.ServerInfo;
+import org.apache.fluss.server.metadata.SystemTables;
+import org.apache.fluss.server.tablet.consumer.group.ConsumerOffsetTableConfig;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.types.DataField;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
+import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.junit.jupiter.api.Disabled;
@@ -88,6 +104,7 @@ import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ExecutionException;
 
 import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V0;
 import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V1;
@@ -133,6 +150,66 @@ public class TabletServiceITCase {
     @RegisterExtension
     public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
             FlussClusterExtension.builder().setNumOfTabletServers(3).build();
+
+    @Test
+    void testFindConsumerGroupOwner() throws Exception {
+        ServerNode anyTabletServer =
+                FLUSS_CLUSTER_EXTENSION.getTabletServerNodes().iterator().next();
+        TabletServerGateway gateway =
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(anyTabletServer.id());
+        FindConsumerGroupOwnerRequest request =
+                new FindConsumerGroupOwnerRequest().setGroupId("test-group-owner");
+
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    try {
+                        FindConsumerGroupOwnerResponse response =
+                                gateway.findConsumerGroupOwner(request).get();
+                        assertThat(response.getOwner().getNodeId()).isGreaterThanOrEqualTo(0);
+                        assertThat(response.getOwner().getHost()).isNotEmpty();
+                        assertThat(response.getOwner().getPort()).isPositive();
+                    } catch (ExecutionException e) {
+                        Throwable cause = ExceptionUtils.stripExecutionException(e);
+                        if (cause instanceof ConsumerGroupOwnerNotAvailableException
+                                || cause instanceof ConsumerGroupOwnerLoadingException) {
+                            throw new AssertionError(cause);
+                        }
+                        throw e;
+                    }
+                });
+
+        TableRegistration consumerOffsetsTable =
+                FLUSS_CLUSTER_EXTENSION
+                        .getZooKeeperClient()
+                        .getTable(SystemTables.CONSUMER_OFFSETS)
+                        .get();
+        assertThat(consumerOffsetsTable.remoteDataDir)
+                .isEqualTo(FLUSS_CLUSTER_EXTENSION.getRemoteDataDir());
+        Configuration expectedProperties =
+                new Configuration()
+                        .set(ConfigOptions.TABLE_LOG_FORMAT, LogFormat.COMPACTED)
+                        .set(
+                                ConfigOptions.TABLE_LOG_TTL,
+                                ConfigOptions.OFFSETS_RETENTION.defaultValue())
+                        .set(
+                                ConfigOptions.TABLE_LOG_LOCAL_TTL,
+                                ConsumerOffsetTableConfig.OFFSETS_TABLE_LOCAL_LOG_TTL)
+                        .set(
+                                ConfigOptions.TABLE_KV_TTL,
+                                ConfigOptions.OFFSETS_RETENTION.defaultValue())
+                        .set(
+                                ConfigOptions.TABLE_REPLICATION_FACTOR,
+                                ConfigOptions.OFFSETS_TABLE_REPLICATION_FACTOR.defaultValue())
+                        .set(
+                                ConfigOptions.TABLE_KV_FORMAT_VERSION,
+                                ConfigOptions.CURRENT_KV_FORMAT_VERSION)
+                        .set(
+                                ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION,
+                                KvValueLayout.TAGGED.version());
+        assertThat(consumerOffsetsTable.properties)
+                .containsExactlyInAnyOrderEntriesOf(expectedProperties.toMap());
+    }
 
     @ParameterizedTest
     @ValueSource(bytes = {LOG_MAGIC_VALUE_V0, LOG_MAGIC_VALUE_V1})
@@ -767,6 +844,138 @@ public class TabletServiceITCase {
     }
 
     @Test
+    void testRoutingBucketCountValidationAppliesToClientRequestsOnly() throws Exception {
+        // Routing validation only applies to hash-distributed tables: a keyless table may place a
+        // record in any bucket, so a stale count is harmless there (see
+        // ReplicaManager#validateRoutingBucketCount).
+        long tableId =
+                createTable(
+                        FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH_PK, DATA1_TABLE_DESCRIPTOR_PK);
+        TableBucket tb = new TableBucket(tableId, 0);
+
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
+
+        int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
+        TabletServerGateway leaderGateWay =
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
+
+        // a client whose bucket count doesn't match the actual one computed its bucketId from a
+        // count the server has confirmed to be stale.
+        assertThatThrownBy(
+                        () ->
+                                leaderGateWay
+                                        .listOffsets(
+                                                newListOffsetsRequestWithRoutingBucketCount(
+                                                        -1,
+                                                        ListOffsetsParam.LATEST_OFFSET_TYPE,
+                                                        tableId,
+                                                        0,
+                                                        999))
+                                        .get())
+                .cause()
+                .isInstanceOf(InvalidBucketRoutingException.class);
+
+        // the very same count coming from a follower is not validated: a follower's bucket ids come
+        // from NotifyLeaderAndIsr, so replication must not depend on the leader's metadata cache.
+        assertListOffsetsResponse(
+                leaderGateWay
+                        .listOffsets(
+                                newListOffsetsRequestWithRoutingBucketCount(
+                                        1, ListOffsetsParam.LATEST_OFFSET_TYPE, tableId, 0, 999))
+                        .get(),
+                0L,
+                Errors.NONE.code(),
+                null);
+
+        // Request-scoped validation resolves the target immediately, so an unknown table/bucket
+        // fails the whole RPC with the standard replica lookup exception.
+        assertThatThrownBy(
+                        () ->
+                                leaderGateWay
+                                        .listOffsets(
+                                                newListOffsetsRequestWithRoutingBucketCount(
+                                                        -1,
+                                                        ListOffsetsParam.LATEST_OFFSET_TYPE,
+                                                        10005L,
+                                                        0,
+                                                        3))
+                                        .get())
+                .cause()
+                .isInstanceOf(UnknownTableOrBucketException.class)
+                .hasMessageContaining("Unknown table or bucket");
+    }
+
+    private static ListOffsetsRequest newListOffsetsRequestWithRoutingBucketCount(
+            int followerServerId,
+            int offsetType,
+            long tableId,
+            int bucketId,
+            int routingBucketCount) {
+        return newListOffsetsRequest(followerServerId, offsetType, tableId, bucketId)
+                .setRoutingBucketCount(routingBucketCount);
+    }
+
+    @Test
+    void testInvalidRoutingBucketCountOnlyFailsTheOffendingBucket() throws Exception {
+        // 9 buckets over 3 tablet servers, so at least one server necessarily leads two of them
+        // and a single request can carry two buckets hosted by the same leader.
+        int bucketCount = 9;
+        TablePath tablePath = TablePath.of("test_db_1", "test_stale_routing_per_bucket");
+        long tableId =
+                createTable(
+                        FLUSS_CLUSTER_EXTENSION,
+                        tablePath,
+                        TableDescriptor.builder()
+                                .schema(DATA1_SCHEMA)
+                                // hash-distributed: routing validation is skipped for keyless
+                                // tables
+                                .distributedBy(bucketCount, "a")
+                                .build());
+
+        Map<Integer, List<Integer>> bucketsByLeader = new HashMap<>();
+        for (int bucketId = 0; bucketId < bucketCount; bucketId++) {
+            TableBucket tb = new TableBucket(tableId, bucketId);
+            FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
+            bucketsByLeader
+                    .computeIfAbsent(
+                            FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb), k -> new ArrayList<>())
+                    .add(bucketId);
+        }
+        Map.Entry<Integer, List<Integer>> coLocated =
+                bucketsByLeader.entrySet().stream()
+                        .filter(entry -> entry.getValue().size() >= 2)
+                        .findFirst()
+                        .orElseThrow(
+                                () ->
+                                        new AssertionError(
+                                                "9 buckets over 3 servers must co-locate two leaders"));
+        int healthyBucket = coLocated.getValue().get(0);
+        int staleBucket = coLocated.getValue().get(1);
+
+        GetTableStatsRequest request = new GetTableStatsRequest().setTableId(tableId);
+        request.addBucketsReq().setBucketId(healthyBucket).setRoutingBucketCount(bucketCount);
+        request.addBucketsReq().setBucketId(staleBucket).setRoutingBucketCount(bucketCount + 1);
+
+        GetTableStatsResponse response =
+                FLUSS_CLUSTER_EXTENSION
+                        .newTabletServerClientForNode(coLocated.getKey())
+                        .getTableStats(request)
+                        .get();
+
+        assertThat(response.getBucketsRespsCount()).isEqualTo(2);
+        Map<Integer, PbTableStatsRespForBucket> respByBucket = new HashMap<>();
+        for (PbTableStatsRespForBucket bucketResp : response.getBucketsRespsList()) {
+            respByBucket.put(bucketResp.getBucketId(), bucketResp);
+        }
+
+        // the co-batched bucket whose routing is still valid is served as usual
+        assertThat(respByBucket.get(healthyBucket).hasErrorCode()).isFalse();
+        // Only the bucket routed by an invalid count is rejected without retrying the fixed route.
+        assertThat(respByBucket.get(staleBucket).getErrorCode())
+                .isEqualTo(Errors.INVALID_BUCKET_ROUTING.code());
+    }
+
+    @Test
     void testListOffsets() throws Exception {
         long tableId =
                 createTable(FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR);
@@ -988,7 +1197,12 @@ public class TabletServiceITCase {
         PbNotifyLeaderAndIsrReqForBucket reqForBucket =
                 makeNotifyBucketLeaderAndIsr(
                         new NotifyLeaderAndIsrData(
-                                physicalTablePath, tableBucket, leaderAndIsr.isr(), leaderAndIsr));
+                                physicalTablePath,
+                                tableBucket,
+                                leaderAndIsr.isr(),
+                                leaderAndIsr,
+                                3,
+                                0L));
         return ServerRpcMessageUtils.makeNotifyLeaderAndIsrRequest(
                 0, Collections.singletonList(reqForBucket));
     }

@@ -37,7 +37,6 @@ import java.util.Collections;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
-import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for remote log ttl in {@link RemoteLogManager}. */
@@ -51,12 +50,7 @@ final class RemoteLogTTLTest extends RemoteLogTestBase {
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testRemoteLogTTL(boolean partitionTable) throws Exception {
-        TableBucket tb;
-        if (partitionTable) {
-            tb = new TableBucket(DATA1_TABLE_ID, 0L, 0);
-        } else {
-            tb = new TableBucket(DATA1_TABLE_ID, 0);
-        }
+        TableBucket tb = makeTableBucket(partitionTable);
         // Need to make leader by ReplicaManager.
         makeLogTableAsLeader(tb, partitionTable);
         Replica replica = replicaManager.getReplicaOrException(tb);
@@ -143,11 +137,9 @@ final class RemoteLogTTLTest extends RemoteLogTestBase {
         assertThat(remoteLog.getRemoteLogStartOffset()).isEqualTo(Long.MAX_VALUE);
         assertThat(remoteLog.getHighestCopiedEndOffset()).isEqualTo(40L);
 
-        // Fetch records from remote.
-        // mock to update remote log end offset and remote log start offset as
-        // NotifyRemoteLogOffsetsRequest do.
-        logTablet.updateRemoteLogStartOffset(40L);
-        logTablet.updateRemoteLogEndOffset(40L);
+        // Fetch records from remote. Mock the empty manifest state propagated by
+        // NotifyRemoteLogOffsetsRequest.
+        logTablet.updateRemoteLogOffsets(Long.MAX_VALUE, -1L, 40L);
         CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> future =
                 new CompletableFuture<>();
         replicaManager.fetchLogRecords(

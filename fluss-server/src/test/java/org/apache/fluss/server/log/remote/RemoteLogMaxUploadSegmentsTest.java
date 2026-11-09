@@ -30,7 +30,6 @@ import org.junit.jupiter.params.provider.ValueSource;
 import java.util.List;
 import java.util.stream.Collectors;
 
-import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link LogTieringTask} max upload segments per task limit. */
@@ -80,13 +79,5 @@ class RemoteLogMaxUploadSegmentsTest extends RemoteLogTestBase {
                         manifestSegments.stream()
                                 .map(s -> s.remoteLogSegmentId().toString())
                                 .collect(Collectors.toSet()));
-    }
-
-    private TableBucket makeTableBucket(boolean partitionTable) {
-        if (partitionTable) {
-            return new TableBucket(DATA1_TABLE_ID, 0L, 0);
-        } else {
-            return new TableBucket(DATA1_TABLE_ID, 0);
-        }
     }
 }

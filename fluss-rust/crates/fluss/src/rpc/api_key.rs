@@ -108,7 +108,6 @@ impl ApiKey {
             | ApiKey::CreateAcls
             | ApiKey::ListAcls
             | ApiKey::DropAcls
-            | ApiKey::AlterTable
             | ApiKey::DescribeClusterConfigs
             | ApiKey::AlterClusterConfigs
             | ApiKey::AddServerTag
@@ -128,6 +127,8 @@ impl ApiKey {
             | ApiKey::GetClusterHealth
             | ApiKey::ListRemoteLogManifests
             | ApiKey::ListKvSnapshots => Some(ApiVersionRange::new(ApiVersion(0), ApiVersion(0))),
+            // AlterTable v1 adds modify_bucket_count.
+            ApiKey::AlterTable => Some(ApiVersionRange::new(ApiVersion(0), ApiVersion(1))),
             // ProduceLog v1 adds historical partition context to requests and responses.
             ApiKey::ProduceLog => Some(ApiVersionRange::new(ApiVersion(0), ApiVersion(1))),
             // PutKv v2 adds the storage backpressure error code; v3 adds historical partition

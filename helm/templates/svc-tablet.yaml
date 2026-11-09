@@ -19,7 +19,7 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: tablet-server-hs
+  name: {{ include "fluss.tablet.serviceName" . }}
   labels:
     {{- include "fluss.labels" . | nindent 4 }}
     app.kubernetes.io/component: tablet
@@ -30,6 +30,7 @@ metadata:
 spec:
   clusterIP: None
   type: ClusterIP
+  publishNotReadyAddresses: {{ .Values.tablet.service.publishNotReadyAddresses }}
   ports:
     - name: internal
       protocol: TCP
@@ -39,6 +40,12 @@ spec:
       protocol: TCP
       port: {{ .Values.listeners.client.port }}
       targetPort: client
+    {{- if (include "fluss.listeners.external.enabled" .) }}
+    - name: external
+      protocol: TCP
+      port: {{ include "fluss.listeners.external.port" . }}
+      targetPort: external
+    {{- end }}
   selector:
     {{- include "fluss.selectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: tablet

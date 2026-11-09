@@ -17,14 +17,23 @@
 
 package org.apache.fluss.server;
 
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.server.authorizer.Authorizer;
+import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.utils.FlussPaths;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.annotation.Nullable;
 
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -38,6 +47,48 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link ServerBase}. */
 final class ServerBaseTest {
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testStartupWithEitherRemoteDataDirConfig(boolean useRemoteDataDir) throws Exception {
+        FlussClusterExtension cluster =
+                FlussClusterExtension.builder()
+                        .setNumOfTabletServers(1)
+                        .setRemoteDirNames(
+                                useRemoteDataDir
+                                        ? Collections.emptyList()
+                                        : Arrays.asList("dir1", "dir2"))
+                        .setUseRemoteDataDir(useRemoteDataDir)
+                        .build();
+        try {
+            cluster.start();
+            String expectedRemoteDataDir =
+                    useRemoteDataDir
+                            ? cluster.getRemoteDataDir()
+                            : cluster.getRemoteDataDir("dir1");
+            Set<ServerBase> servers = new HashSet<>(cluster.getTabletServers());
+            servers.add(cluster.getCoordinatorServer());
+            for (ServerBase server : servers) {
+                if (useRemoteDataDir) {
+                    assertThat(server.conf.get(ConfigOptions.REMOTE_DATA_DIR))
+                            .isEqualTo(expectedRemoteDataDir);
+                    assertThat(server.conf.getOptional(ConfigOptions.REMOTE_DATA_DIRS)).isEmpty();
+                } else {
+                    assertThat(server.conf.getOptional(ConfigOptions.REMOTE_DATA_DIR)).isEmpty();
+                    assertThat(server.conf.get(ConfigOptions.REMOTE_DATA_DIRS))
+                            .containsExactly(
+                                    cluster.getRemoteDataDir("dir1"),
+                                    cluster.getRemoteDataDir("dir2"));
+                }
+                assertThat(FlussPaths.remoteLogDir(server.conf))
+                        .isEqualTo(FlussPaths.remoteLogDir(expectedRemoteDataDir));
+                assertThat(FlussPaths.remoteKvDir(server.conf))
+                        .isEqualTo(FlussPaths.remoteKvDir(expectedRemoteDataDir));
+            }
+        } finally {
+            cluster.close();
+        }
+    }
 
     @Test
     void testFatalErrorTriggersShutdownOnDedicatedThread() throws Exception {

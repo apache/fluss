@@ -51,6 +51,7 @@ public class ConfigurationUtils {
         "token",
         "basic-auth",
         "jaas.config",
+        "security.sasl.plain.credentials",
         "http-headers",
         "private.key",
         "private-key",
@@ -290,7 +291,7 @@ public class ConfigurationUtils {
             return (Boolean) o;
         }
 
-        switch (o.toString().toUpperCase()) {
+        switch (o.toString().toUpperCase(Locale.ROOT)) {
             case "TRUE":
                 return true;
             case "FALSE":

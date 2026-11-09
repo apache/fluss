@@ -38,7 +38,9 @@ import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.DeleteReplicaResponseReceivedEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
+import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrRequestContext;
 import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrResponseReceivedEvent;
+import org.apache.fluss.server.coordinator.rebalance.RebalanceExecutionKey;
 import org.apache.fluss.server.entity.DeleteReplicaResultForBucket;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.metadata.BucketMetadata;
@@ -60,6 +62,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.server.metadata.PartitionMetadata.DELETED_PARTITION_ID;
@@ -114,14 +117,17 @@ public class CoordinatorRequestBatch {
     private final CoordinatorChannelManager coordinatorChannelManager;
     private final EventManager eventManager;
     private final CoordinatorContext coordinatorContext;
+    private final Function<TableBucket, RebalanceExecutionKey> rebalanceExecutionKeyResolver;
 
     public CoordinatorRequestBatch(
             CoordinatorChannelManager coordinatorChannelManager,
             EventManager eventManager,
-            CoordinatorContext coordinatorContext) {
+            CoordinatorContext coordinatorContext,
+            Function<TableBucket, RebalanceExecutionKey> rebalanceExecutionKeyResolver) {
         this.coordinatorChannelManager = coordinatorChannelManager;
         this.eventManager = eventManager;
         this.coordinatorContext = coordinatorContext;
+        this.rebalanceExecutionKeyResolver = rebalanceExecutionKeyResolver;
     }
 
     public void newBatch() {
@@ -212,6 +218,9 @@ public class CoordinatorRequestBatch {
             TableBucket tableBucket,
             List<Integer> bucketReplicas,
             LeaderAndIsr leaderAndIsr) {
+        Integer bucketCount = getBucketCount(tableBucket);
+        Long bucketCountEpoch = getBucketCountEpoch(tableBucket.getTableId());
+
         tabletServers.stream()
                 .filter(s -> s >= 0 && !coordinatorContext.shuttingDownTabletServers().contains(s))
                 .forEach(
@@ -226,17 +235,46 @@ public class CoordinatorRequestBatch {
                                                     tablePath,
                                                     tableBucket,
                                                     bucketReplicas,
-                                                    leaderAndIsr));
+                                                    leaderAndIsr,
+                                                    bucketCount,
+                                                    bucketCountEpoch));
                             notifyBucketLeaderAndIsr.put(tableBucket, notifyLeaderAndIsrForBucket);
                         });
 
         // TODO for these cases, we can send NotifyLeaderAndIsrRequest instead of another
         // updateMetadata request, trace by: https://github.com/apache/fluss/issues/983
-        addUpdateMetadataRequestForTabletServers(
-                coordinatorContext.getLiveTabletServers().keySet(),
-                null,
-                null,
-                Collections.singleton(tableBucket));
+        // Location updates require the bucket's replica assignment even when its count is known.
+        Map<Integer, List<Integer>> assignment =
+                tableBucket.getPartitionId() == null
+                        ? coordinatorContext.getTableAssignment(tableBucket.getTableId())
+                        : coordinatorContext.getPartitionAssignment(
+                                new TablePartition(
+                                        tableBucket.getTableId(), tableBucket.getPartitionId()));
+        if (assignment.containsKey(tableBucket.getBucket())) {
+            addUpdateMetadataRequestForTabletServers(
+                    coordinatorContext.getLiveTabletServers().keySet(),
+                    null,
+                    null,
+                    Collections.singleton(tableBucket));
+        }
+    }
+
+    /**
+     * The logical count of the bucket's owning table/partition, or null before that layout count
+     * has been loaded. Activation carries the count independently of incremental location updates.
+     */
+    private @Nullable Integer getBucketCount(TableBucket tableBucket) {
+        if (tableBucket.getPartitionId() != null) {
+            return coordinatorContext.getPartitionBucketCount(
+                    new TablePartition(tableBucket.getTableId(), tableBucket.getPartitionId()));
+        }
+        TableInfo tableInfo = coordinatorContext.getTableInfoById(tableBucket.getTableId());
+        return tableInfo == null ? null : tableInfo.getNumBuckets();
+    }
+
+    private @Nullable Long getBucketCountEpoch(long tableId) {
+        TableInfo tableInfo = coordinatorContext.getTableInfoById(tableId);
+        return tableInfo == null ? null : tableInfo.getBucketCountEpoch();
     }
 
     public void addStopReplicaRequestForTabletServers(
@@ -425,6 +463,19 @@ public class CoordinatorRequestBatch {
             NotifyLeaderAndIsrRequest notifyLeaderAndIsrRequest =
                     makeNotifyLeaderAndIsrRequest(
                             coordinatorEpoch, notifyRequestEntry.getValue().values());
+            Map<TableBucket, NotifyLeaderAndIsrRequestContext> requestContexts = new HashMap<>();
+            for (Map.Entry<TableBucket, PbNotifyLeaderAndIsrReqForBucket> entry :
+                    notifyRequestEntry.getValue().entrySet()) {
+                PbNotifyLeaderAndIsrReqForBucket request = entry.getValue();
+                requestContexts.put(
+                        entry.getKey(),
+                        new NotifyLeaderAndIsrRequestContext(
+                                coordinatorEpoch,
+                                request.getLeader(),
+                                request.getLeaderEpoch(),
+                                request.getBucketEpoch(),
+                                rebalanceExecutionKeyResolver.apply(entry.getKey())));
+            }
 
             // Track exactly which buckets THIS request marked as pending leader activation. Only
             // those entries (where leader == serverId) need to be cleared if the request fails
@@ -473,7 +524,9 @@ public class CoordinatorRequestBatch {
                         // put the response receive event into the event manager
                         eventManager.put(
                                 new NotifyLeaderAndIsrResponseReceivedEvent(
-                                        getNotifyLeaderAndIsrResponseData(response), serverId));
+                                        getNotifyLeaderAndIsrResponseData(response),
+                                        serverId,
+                                        requestContexts));
                     });
         }
         notifyLeaderAndIsrRequestMap.clear();
@@ -685,6 +738,10 @@ public class CoordinatorRequestBatch {
                                 coordinatorContext.isPartitionQueuedForDeletion(
                                         new TablePartition(tableId, partitionId));
                         String partitionName = coordinatorContext.getPartitionName(partitionId);
+                        // Count belongs to the registered layout, not the incremental locations.
+                        Integer bucketCount =
+                                coordinatorContext.getPartitionBucketCount(
+                                        new TablePartition(tableId, partitionId));
                         PartitionMetadata partitionMetadata;
                         if (partitionName == null) {
                             if (partitionQueuedForDeletion) {
@@ -693,7 +750,8 @@ public class CoordinatorRequestBatch {
                                                 tableId,
                                                 DELETED_PARTITION_NAME,
                                                 partitionId,
-                                                kvEntry.getValue());
+                                                kvEntry.getValue(),
+                                                bucketCount);
                             } else {
                                 throw new IllegalStateException(
                                         "Partition name is null for partition " + partitionId);
@@ -706,7 +764,8 @@ public class CoordinatorRequestBatch {
                                             partitionQueuedForDeletion
                                                     ? DELETED_PARTITION_ID
                                                     : partitionId,
-                                            kvEntry.getValue());
+                                            kvEntry.getValue(),
+                                            bucketCount);
                         }
                         // table
                         partitionMetadataList.add(partitionMetadata);

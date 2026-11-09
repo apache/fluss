@@ -18,9 +18,19 @@
 package org.apache.fluss.lake.paimon.utils;
 
 import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.config.AutoPartitionTimeUnit;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.lake.paimon.source.FlussRowAsPaimonRow;
+import org.apache.fluss.metadata.AggFunction;
+import org.apache.fluss.metadata.AggFunctionType;
+import org.apache.fluss.metadata.AggFunctions;
+import org.apache.fluss.metadata.DeleteBehavior;
+import org.apache.fluss.metadata.KvFormat;
+import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -28,22 +38,48 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.encode.RowEncoder;
+import org.apache.fluss.row.encode.ValueEncoder;
 import org.apache.fluss.types.DataTypeRoot;
+import org.apache.fluss.utils.AutoPartitionStrategy;
 import org.apache.fluss.utils.PartitionUtils;
 
 import org.apache.paimon.CoreOptions;
 import org.apache.paimon.catalog.Identifier;
 import org.apache.paimon.data.BinaryRow;
+import org.apache.paimon.mergetree.compact.aggregate.factory.FieldBoolAndAggFactory;
+import org.apache.paimon.mergetree.compact.aggregate.factory.FieldBoolOrAggFactory;
+import org.apache.paimon.mergetree.compact.aggregate.factory.FieldFirstNonNullValueAggFactory;
+import org.apache.paimon.mergetree.compact.aggregate.factory.FieldFirstValueAggFactory;
+import org.apache.paimon.mergetree.compact.aggregate.factory.FieldLastNonNullValueAggFactory;
+import org.apache.paimon.mergetree.compact.aggregate.factory.FieldLastValueAggFactory;
+import org.apache.paimon.mergetree.compact.aggregate.factory.FieldMaxAggFactory;
+import org.apache.paimon.mergetree.compact.aggregate.factory.FieldMinAggFactory;
+import org.apache.paimon.mergetree.compact.aggregate.factory.FieldProductAggFactory;
+import org.apache.paimon.mergetree.compact.aggregate.factory.FieldRoaringBitmap32AggFactory;
+import org.apache.paimon.mergetree.compact.aggregate.factory.FieldRoaringBitmap64AggFactory;
+import org.apache.paimon.mergetree.compact.aggregate.factory.FieldSumAggFactory;
 import org.apache.paimon.options.Options;
 import org.apache.paimon.schema.Schema;
 import org.apache.paimon.schema.SchemaChange;
+import org.apache.paimon.table.BucketMode;
+import org.apache.paimon.table.BucketSpec;
+import org.apache.paimon.table.FileStoreTable;
 import org.apache.paimon.table.Table;
+import org.apache.paimon.types.ArrayType;
 import org.apache.paimon.types.DataField;
 import org.apache.paimon.types.DataType;
+import org.apache.paimon.types.DataTypeDefaultVisitor;
+import org.apache.paimon.types.MapType;
 import org.apache.paimon.types.RowKind;
 import org.apache.paimon.types.RowType;
 
+import javax.annotation.Nullable;
+
+import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -54,6 +90,10 @@ import java.util.function.Function;
 import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_ENABLED;
 import static org.apache.fluss.lake.paimon.PaimonLakeCatalog.LEGACY_SYSTEM_COLUMNS;
 import static org.apache.fluss.utils.Preconditions.checkState;
+import static org.apache.paimon.CoreOptions.AGG_FUNCTION;
+import static org.apache.paimon.CoreOptions.FIELDS_PREFIX;
+import static org.apache.paimon.CoreOptions.IGNORE_RETRACT;
+import static org.apache.paimon.mergetree.compact.PartialUpdateMergeFunction.SEQUENCE_GROUP;
 
 /** Utils for conversion between Paimon and Fluss. */
 public class PaimonConversions {
@@ -88,6 +128,10 @@ public class PaimonConversions {
         PAIMON_UNSETTABLE_OPTIONS.add(CoreOptions.BUCKET_KEY.key());
         PAIMON_UNSETTABLE_OPTIONS.add(PARTITION_GENERATE_LEGACY_NAME_OPTION_KEY);
     }
+
+    // ------------------------------------------------------------------------
+    // Row and value conversions
+    // ------------------------------------------------------------------------
 
     public static RowKind toRowKind(ChangeType changeType) {
         switch (changeType) {
@@ -142,6 +186,33 @@ public class PaimonConversions {
     }
 
     /**
+     * Encodes a Paimon row as a Fluss KV value.
+     *
+     * @throws RuntimeException if encoding or closing the encoder fails
+     */
+    public static byte[] toFlussValue(
+            org.apache.paimon.data.InternalRow paimonRow,
+            short schemaId,
+            org.apache.fluss.types.RowType valueRowType,
+            KvFormat kvFormat) {
+        PaimonRowAsFlussRow flussRow = new PaimonRowAsFlussRow(paimonRow);
+        InternalRow.FieldGetter[] fieldGetters = InternalRow.createFieldGetters(valueRowType);
+        try (RowEncoder rowEncoder = RowEncoder.create(kvFormat, valueRowType)) {
+            rowEncoder.startNewRow();
+            for (int i = 0; i < fieldGetters.length; i++) {
+                rowEncoder.encodeField(i, fieldGetters[i].getFieldOrNull(flussRow));
+            }
+            return ValueEncoder.encodeValue(schemaId, rowEncoder.finishRow());
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to encode Paimon lookup row as Fluss value.", e);
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // Partition value conversions
+    // ------------------------------------------------------------------------
+
+    /**
      * Renders a Paimon partition row into Fluss partition value strings, in partition-key order.
      */
     public static List<String> toFlussPartitionValues(
@@ -180,6 +251,59 @@ public class PaimonConversions {
         }
 
         return partitionExtractor.apply(new FlussRowAsPaimonRow(partitionRow, paimonRowType));
+    }
+
+    // ------------------------------------------------------------------------
+    // Paimon schema change conversion
+    // ------------------------------------------------------------------------
+
+    /** Validates an added column against the Paimon options resulting from this ALTER. */
+    public static void validateAddedColumnAggregation(
+            TablePath tablePath,
+            FileStoreTable table,
+            TableChange.AddColumn addColumn,
+            List<SchemaChange> schemaChanges) {
+        Map<String, String> updatedOptions = new HashMap<>(table.options());
+        for (SchemaChange schemaChange : schemaChanges) {
+            if (schemaChange instanceof SchemaChange.SetOption) {
+                SchemaChange.SetOption setOption = (SchemaChange.SetOption) schemaChange;
+                updatedOptions.put(setOption.key(), setOption.value());
+            } else if (schemaChange instanceof SchemaChange.RemoveOption) {
+                updatedOptions.remove(((SchemaChange.RemoveOption) schemaChange).key());
+            }
+        }
+        CoreOptions options = new CoreOptions(updatedOptions);
+        if (table.primaryKeys().isEmpty()
+                || (options.mergeEngine() != CoreOptions.MergeEngine.PARTIAL_UPDATE
+                        && options.mergeEngine() != CoreOptions.MergeEngine.AGGREGATE)) {
+            return;
+        }
+        try {
+            validatePrimaryKeyAggregateFunction(
+                    tablePath, options, addColumn.getName(), addColumn.getDataType().isNullable());
+            validateAggregateRetraction(tablePath, table, options, addColumn.getName());
+        } catch (InvalidTableException e) {
+            throw new InvalidAlterTableException(
+                    String.format(
+                            "Invalid aggregation function for column '%s': %s",
+                            addColumn.getName(), e.getMessage()),
+                    e);
+        }
+        AggFunction paimonFunction =
+                derivePrimaryKeyAggregateFunction(table, options, addColumn.getName());
+        // Fluss uses LAST_VALUE_IGNORE_NULLS when no function is specified.
+        AggFunction flussFunction =
+                addColumn.getAggFunction().orElseGet(AggFunctions::LAST_VALUE_IGNORE_NULLS);
+        if (!flussFunction.equals(paimonFunction)) {
+            throw new InvalidAlterTableException(
+                    String.format(
+                            "Cannot add column '%s' with aggregation function %s: "
+                                    + "Paimon merge engine '%s' requires %s.",
+                            addColumn.getName(),
+                            flussFunction,
+                            options.mergeEngine(),
+                            paimonFunction));
+        }
     }
 
     public static List<SchemaChange> toPaimonSchemaChanges(
@@ -264,6 +388,72 @@ public class PaimonConversions {
         }
 
         return schemaChanges;
+    }
+
+    // ------------------------------------------------------------------------
+    // Table metadata conversions
+    // ------------------------------------------------------------------------
+
+    /** Converts an existing Paimon table to a lake-disabled Fluss table descriptor. */
+    public static TableDescriptor toFlussTableDescriptor(
+            TablePath tablePath, FileStoreTable table) {
+        validateTable(tablePath, table);
+        Map<String, String> properties = deriveTableProperties(table);
+        CoreOptions options = new CoreOptions(table.options());
+
+        List<DataField> dataFields = table.schema().fields();
+        org.apache.fluss.metadata.Schema.Builder schemaBuilder =
+                org.apache.fluss.metadata.Schema.newBuilder();
+        for (DataField dataField : dataFields) {
+            try {
+                org.apache.fluss.types.DataType dataType =
+                        dataField.type().accept(PaimonDataTypeToFlussDataType.INSTANCE);
+                AggFunction aggFunction =
+                        table.primaryKeys().isEmpty()
+                                ? null
+                                : derivePrimaryKeyAggregateFunction(
+                                        table, options, dataField.name());
+                if (aggFunction == null) {
+                    schemaBuilder.column(dataField.name(), dataType);
+                } else {
+                    schemaBuilder.column(dataField.name(), dataType, aggFunction);
+                }
+                schemaBuilder.withComment(dataField.description());
+            } catch (UnsupportedOperationException e) {
+                throw new InvalidTableException(
+                        String.format(
+                                "Paimon table %s column '%s' uses unsupported type %s.",
+                                tablePath, dataField.name(), dataField.type()),
+                        e);
+            }
+        }
+        if (!table.primaryKeys().isEmpty()) {
+            schemaBuilder.primaryKey(table.primaryKeys());
+        }
+
+        TableDescriptor.Builder descriptorBuilder =
+                TableDescriptor.builder()
+                        .schema(schemaBuilder.build())
+                        .partitionedBy(table.partitionKeys())
+                        .properties(properties)
+                        .comment(table.comment().orElse(null));
+        if (!table.primaryKeys().isEmpty()) {
+            // Preserve validated native merge settings so enablement and schema changes can
+            // compare immutable options strictly against the existing Paimon table.
+            for (String option :
+                    new String[] {
+                        CoreOptions.MERGE_ENGINE.key(),
+                        CoreOptions.AGGREGATION_REMOVE_RECORD_ON_DELETE.key(),
+                        CoreOptions.PARTIAL_UPDATE_REMOVE_RECORD_ON_DELETE.key()
+                    }) {
+                String value = table.options().get(option);
+                if (value != null) {
+                    descriptorBuilder.customProperty(PAIMON_CONF_PREFIX + option, value);
+                }
+            }
+        }
+        applyDistribution(tablePath, table, descriptorBuilder);
+        return descriptorBuilder.build();
     }
 
     public static Schema toPaimonSchema(TableDescriptor tableDescriptor) {
@@ -360,6 +550,634 @@ public class PaimonConversions {
 
         return schemaBuilder.build();
     }
+
+    private static void validateTable(TablePath tablePath, FileStoreTable table) {
+        if (table.primaryKeys().isEmpty()) {
+            validateAppendOnlyTable(tablePath, table);
+        } else {
+            validatePrimaryKeyTable(tablePath, table);
+        }
+        validateNoColumnDefaultValues(tablePath, table.rowType(), "");
+    }
+
+    private static void validateNoColumnDefaultValues(
+            TablePath tablePath, DataType type, String columnPath) {
+        type.accept(
+                new DataTypeDefaultVisitor<Void>() {
+                    @Override
+                    public Void visit(RowType rowType) {
+                        for (DataField field : rowType.getFields()) {
+                            String fieldPath =
+                                    columnPath.isEmpty()
+                                            ? field.name()
+                                            : columnPath + "." + field.name();
+                            if (field.defaultValue() != null) {
+                                throw new InvalidTableException(
+                                        String.format(
+                                                "Paimon table %s column '%s' has a default value, which cannot be "
+                                                        + "represented in a Fluss table.",
+                                                tablePath, fieldPath));
+                            }
+                            validateNoColumnDefaultValues(tablePath, field.type(), fieldPath);
+                        }
+                        return null;
+                    }
+
+                    @Override
+                    public Void visit(ArrayType arrayType) {
+                        validateNoColumnDefaultValues(
+                                tablePath, arrayType.getElementType(), columnPath + ".element");
+                        return null;
+                    }
+
+                    @Override
+                    public Void visit(MapType mapType) {
+                        validateNoColumnDefaultValues(
+                                tablePath, mapType.getKeyType(), columnPath + ".key");
+                        validateNoColumnDefaultValues(
+                                tablePath, mapType.getValueType(), columnPath + ".value");
+                        return null;
+                    }
+
+                    @Override
+                    protected Void defaultMethod(DataType dataType) {
+                        return null;
+                    }
+                });
+    }
+
+    private static Map<String, String> deriveTableProperties(FileStoreTable table) {
+        Map<String, String> properties = new HashMap<>(deriveAutoPartitionProperties(table));
+        if (!table.primaryKeys().isEmpty()) {
+            properties.putAll(derivePrimaryKeyProperties(new CoreOptions(table.options())).toMap());
+        }
+        return properties;
+    }
+
+    // ------------------------------------------------------------------------
+    // Append-only table validation
+    // ------------------------------------------------------------------------
+
+    private static void validateAppendOnlyTable(TablePath tablePath, FileStoreTable table) {
+        CoreOptions coreOptions = new CoreOptions(table.options());
+        // TODO: Support rowkind.field for Paimon append tables. Preserve Paimon's
+        // +I/+U append and -D/-U reject/filter rules (including ignore-delete and
+        // ignore-update-before) before records enter the Fluss log. Adapt the
+        // record and Arrow tiering paths, which can bypass TableWriteImpl's
+        // row-kind checks, and test both paths before removing this rejection.
+        if (coreOptions.rowkindField().isPresent()) {
+            throw unsupportedAppendTableFeature(tablePath, CoreOptions.ROWKIND_FIELD.key());
+        }
+        if (coreOptions.dataEvolutionEnabled()) {
+            throw unsupportedAppendTableFeature(
+                    tablePath, CoreOptions.DATA_EVOLUTION_ENABLED.key());
+        }
+        if (coreOptions.rowTrackingEnabled()) {
+            throw unsupportedAppendTableFeature(tablePath, CoreOptions.ROW_TRACKING_ENABLED.key());
+        }
+        if (coreOptions.deletionVectorsEnabled()) {
+            throw unsupportedAppendTableFeature(
+                    tablePath, CoreOptions.DELETION_VECTORS_ENABLED.key());
+        }
+    }
+
+    private static InvalidTableException unsupportedAppendTableFeature(
+            TablePath tablePath, String option) {
+        return new InvalidTableException(
+                String.format(
+                        "Paimon table %s enables unsupported append-table feature '%s'.",
+                        tablePath, option));
+    }
+
+    // ------------------------------------------------------------------------
+    // Primary-key table validation
+    // ------------------------------------------------------------------------
+
+    private static void validatePrimaryKeyTable(TablePath tablePath, FileStoreTable table) {
+        CoreOptions options = new CoreOptions(table.options());
+        if (options.rowkindField().isPresent()) {
+            throw unsupportedPrimaryKeyDefinition(
+                    tablePath,
+                    CoreOptions.ROWKIND_FIELD.key(),
+                    "Fluss does not interpret a data column as an INSERT, UPDATE or DELETE operation.");
+        }
+        if (options.snapshotSequenceOrdering()) {
+            throw unsupportedPrimaryKeyDefinition(
+                    tablePath,
+                    CoreOptions.SEQUENCE_SNAPSHOT_ORDERING.key(),
+                    "Fluss does not support ordering primary-key updates by Paimon commit snapshot ID.");
+        }
+        for (String key : table.options().keySet()) {
+            if (key.startsWith(FIELDS_PREFIX + ".")
+                    && (key.endsWith("." + SEQUENCE_GROUP)
+                            || key.endsWith("." + SEQUENCE_GROUP + ".sort-order"))) {
+                throw unsupportedPrimaryKeyDefinition(
+                        tablePath,
+                        key,
+                        "Fluss does not support Paimon sequence groups or their field-level ordering rules.");
+            }
+        }
+        if (table.options()
+                .containsKey(CoreOptions.PARTIAL_UPDATE_REMOVE_RECORD_ON_SEQUENCE_GROUP.key())) {
+            throw unsupportedPrimaryKeyDefinition(
+                    tablePath,
+                    CoreOptions.PARTIAL_UPDATE_REMOVE_RECORD_ON_SEQUENCE_GROUP.key(),
+                    "Fluss does not support deleting an entire row based on a Paimon sequence-group condition.");
+        }
+        for (String key : table.primaryKeys()) {
+            if (table.rowType().getField(key).type().isNullable()) {
+                throw unsupportedPrimaryKeyDefinition(
+                        tablePath,
+                        "nullable primary key '" + key + "'",
+                        "Fluss requires every primary-key column to be NOT NULL.");
+            }
+        }
+        if (options.mergeEngine() == CoreOptions.MergeEngine.AGGREGATE) {
+            // Paimon's AggregateMergeFunction reinitializes its accumulator from the DELETE
+            // payload. With Fluss's old-row payload, SUM produces 13 instead of 3 for
+            // INSERT(10), DELETE(10), INSERT(3) in one flush. Reject this configuration until
+            // delete/reinsert is handled correctly. Tiering also forwards undo DELETEs even
+            // when ignore-delete=true, so that option cannot make this configuration safe.
+            // See https://github.com/apache/paimon/issues/10963.
+            if (options.aggregationRemoveRecordOnDelete()) {
+                throw unsupportedPrimaryKeyDefinition(
+                        tablePath,
+                        CoreOptions.AGGREGATION_REMOVE_RECORD_ON_DELETE.key(),
+                        "Fluss tiering includes the old row in the DELETE payload. Paimon uses it "
+                                + "to reinitialize the aggregation accumulator, so delete/reinsert "
+                                + "can retain deleted values. Set 'aggregation.remove-record-on-delete=false' "
+                                + "and 'ignore-delete=true'.");
+            }
+            if (!options.ignoreDelete()) {
+                throw unsupportedPrimaryKeyDefinition(
+                        tablePath,
+                        CoreOptions.IGNORE_DELETE.key(),
+                        "Fluss aggregation cannot retract field contributions on DELETE. "
+                                + "Set 'ignore-delete=true'.");
+            }
+        }
+        validatePrimaryKeySequenceField(tablePath, table, options);
+        validatePrimaryKeyRecordExpiration(tablePath, table, options);
+        for (DataField field : table.schema().fields()) {
+            if (!table.primaryKeys().contains(field.name())) {
+                validatePrimaryKeyAggregateFunction(
+                        tablePath, options, field.name(), field.type().isNullable());
+            }
+        }
+        validateMergeEngineCompatibility(tablePath, table, options);
+    }
+
+    /**
+     * Validates Paimon merge settings for the changelog produced by the mapped Fluss merge engine.
+     *
+     * <p>Tiering bypasses Paimon's TableWriteImpl.RowKindFilter, so UPDATE_BEFORE and undo DELETE
+     * reach the original merge engine regardless of the table-level ignore options. SUM must
+     * retract the previous aggregate result before accumulating the next result. PRODUCT cannot
+     * safely retract zero-valued results and is rejected. Functions without retraction support must
+     * ignore these records at field level; otherwise Paimon throws UnsupportedOperationException
+     * when merging them, for example during flush.
+     *
+     * <p>The recovery assumption is limited to undo followed by complete deterministic replay of
+     * the original input. Ignoring an undo record or a restored NULL may retain a later value while
+     * recovery is in progress. Arbitrary user-issued OVERWRITE writes are outside this scope:
+     * lowering MAX or overwriting a partial-update field with NULL can leave the lake state
+     * inconsistent even after tiering catches up. Such writes are not blocked by this validation.
+     */
+    private static void validateMergeEngineCompatibility(
+            TablePath tablePath, FileStoreTable table, CoreOptions options) {
+        CoreOptions.MergeEngine engine = options.mergeEngine();
+        if (engine == CoreOptions.MergeEngine.PARTIAL_UPDATE
+                && !options.ignoreDelete()
+                && !options.toConfiguration()
+                        .get(CoreOptions.PARTIAL_UPDATE_REMOVE_RECORD_ON_DELETE)) {
+            throw unsupportedPrimaryKeyDefinition(
+                    tablePath,
+                    CoreOptions.PARTIAL_UPDATE_REMOVE_RECORD_ON_DELETE.key(),
+                    "Fluss tiering writes UPDATE_BEFORE and undo DELETE records. "
+                            + "Paimon partial-update requires 'ignore-delete=true' or "
+                            + "'partial-update.remove-record-on-delete=true' to accept these records.");
+        }
+        if (engine != CoreOptions.MergeEngine.AGGREGATE) {
+            return;
+        }
+        String defaultFunction = options.fieldsDefaultFunc();
+        if (defaultFunction != null
+                && !FieldLastValueAggFactory.NAME.equals(defaultFunction)
+                && !FieldLastNonNullValueAggFactory.NAME.equals(defaultFunction)) {
+            throw unsupportedPrimaryKeyDefinition(
+                    tablePath,
+                    CoreOptions.FIELDS_DEFAULT_AGG_FUNC.key() + "=" + defaultFunction,
+                    "Fluss supports only last_value or last_non_null_value as the default aggregate "
+                            + "function. Newly added columns inherit this function without field-level "
+                            + "retraction settings, so other defaults may be incompatible with Fluss changelog.");
+        }
+        for (DataField field : table.schema().fields()) {
+            validateAggregateRetraction(tablePath, table, options, field.name());
+        }
+    }
+
+    private static void validateAggregateRetraction(
+            TablePath tablePath, FileStoreTable table, CoreOptions options, String fieldName) {
+        if (options.mergeEngine() != CoreOptions.MergeEngine.AGGREGATE) {
+            return;
+        }
+        AggFunction function = derivePrimaryKeyAggregateFunction(table, options, fieldName);
+        if (function == null) {
+            return;
+        }
+        boolean ignoreRetract = options.fieldAggIgnoreRetract(fieldName);
+        String key = FIELDS_PREFIX + "." + fieldName + "." + IGNORE_RETRACT;
+        switch (function.getType()) {
+            case PRODUCT:
+                throw unsupportedPrimaryKeyDefinition(
+                        tablePath,
+                        FIELDS_PREFIX + "." + fieldName + "." + AGG_FUNCTION,
+                        "Fluss tiering retracts complete aggregate results. Paimon PRODUCT "
+                                + "retracts by division, so zero-valued results can cause "
+                                + "division by zero or NaN and cannot be safely supported.");
+            case SUM:
+                if (ignoreRetract) {
+                    throw unsupportedPrimaryKeyDefinition(
+                            tablePath,
+                            key,
+                            "Fluss tiering writes complete aggregate results. SUM "
+                                    + "requires 'ignore-retract=false' to retract the previous "
+                                    + "result before accumulating the next result.");
+                }
+                break;
+            case LAST_VALUE:
+            case LAST_VALUE_IGNORE_NULLS:
+                break;
+            default:
+                // Preserve Paimon's rejection of unsupported retractions and fail early.
+                if (!ignoreRetract) {
+                    throw unsupportedPrimaryKeyDefinition(
+                            tablePath,
+                            key,
+                            "Fluss tiering writes UPDATE_BEFORE records. This Paimon aggregation "
+                                    + "function throws UnsupportedOperationException when merging "
+                                    + "these records. Field-level "
+                                    + "'ignore-retract=true' is required and cannot be combined "
+                                    + "with 'aggregation.remove-record-on-delete=true'.");
+                }
+                break;
+        }
+    }
+
+    private static void validatePrimaryKeySequenceField(
+            TablePath tablePath, FileStoreTable table, CoreOptions options) {
+        List<String> sequenceFields = options.sequenceField();
+        if (sequenceFields.isEmpty()) {
+            return;
+        }
+        if (options.mergeEngine() != CoreOptions.MergeEngine.DEDUPLICATE
+                || sequenceFields.size() != 1
+                || !options.sequenceFieldSortOrderIsAscending()
+                || !options.ignoreDelete()) {
+            throw unsupportedPrimaryKeyDefinition(
+                    tablePath,
+                    CoreOptions.SEQUENCE_FIELD.key(),
+                    "Fluss supports a single sequence field in ascending order with 'ignore-delete=true'. "
+                            + "Paimon 'merge-engine=deduplicate' is required for equivalent semantics.");
+        }
+        String sequenceField = sequenceFields.get(0);
+        DataType type = table.rowType().getField(sequenceField).type();
+        if (type.isNullable()) {
+            throw unsupportedPrimaryKeyDefinition(
+                    tablePath,
+                    "nullable sequence.field '" + sequenceField + "'",
+                    "Fluss VERSIONED merging cannot preserve Paimon's null ordering for a nullable sequence field.");
+        }
+        switch (type.getTypeRoot()) {
+            case INTEGER:
+            case BIGINT:
+            case TIMESTAMP_WITHOUT_TIME_ZONE:
+            case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
+                break;
+            default:
+                throw unsupportedPrimaryKeyDefinition(
+                        tablePath,
+                        CoreOptions.SEQUENCE_FIELD.key(),
+                        String.format(
+                                "Fluss VERSIONED merging supports only INT, BIGINT, TIMESTAMP and TIMESTAMP_LTZ "
+                                        + "sequence fields, but column '%s' has type %s.",
+                                sequenceField, type));
+        }
+    }
+
+    private static void validatePrimaryKeyRecordExpiration(
+            TablePath tablePath, FileStoreTable table, CoreOptions options) {
+        Duration ttl = options.recordLevelExpireTime();
+        if (ttl == null) {
+            return;
+        }
+        String timeField = options.recordLevelTimeField();
+        if (timeField == null) {
+            throw unsupportedPrimaryKeyDefinition(
+                    tablePath,
+                    CoreOptions.RECORD_LEVEL_TIME_FIELD.key(),
+                    "Fluss event-time TTL requires 'record-level.time-field' to be specified.");
+        }
+        DataType type = table.rowType().getField(timeField).type();
+        switch (type.getTypeRoot()) {
+            case BIGINT:
+                throw unsupportedPrimaryKeyDefinition(
+                        tablePath,
+                        CoreOptions.RECORD_LEVEL_TIME_FIELD.key(),
+                        String.format(
+                                "Fluss row-level TTL cannot safely use BIGINT time column '%s': "
+                                        + "Paimon accepts both epoch seconds and milliseconds, while Fluss "
+                                        + "requires milliseconds. Use TIMESTAMP_LTZ instead.",
+                                timeField));
+            case TIMESTAMP_WITHOUT_TIME_ZONE:
+                // TabletServers must use UTC to preserve Paimon's internal millisecond value.
+                break;
+            case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
+                break;
+            default:
+                throw unsupportedPrimaryKeyDefinition(
+                        tablePath,
+                        CoreOptions.RECORD_LEVEL_TIME_FIELD.key(),
+                        String.format(
+                                "Fluss row-level TTL supports only BIGINT, TIMESTAMP and TIMESTAMP_LTZ "
+                                        + "time columns, but column '%s' has type %s.",
+                                timeField, type));
+        }
+        if (ttl.isNegative() || ttl.isZero() || ttl.toMillis() < 1) {
+            throw unsupportedPrimaryKeyDefinition(
+                    tablePath,
+                    CoreOptions.RECORD_LEVEL_EXPIRE_TIME.key(),
+                    String.format(
+                            "Invalid value '%s': the duration must be at least 1 millisecond.",
+                            table.options().get(CoreOptions.RECORD_LEVEL_EXPIRE_TIME.key())));
+        }
+    }
+
+    private static void validatePrimaryKeyAggregateFunction(
+            TablePath tablePath, CoreOptions options, String fieldName, boolean nullable) {
+        String function = getPaimonAggregateFunction(options, fieldName);
+        String fieldPrefix = FIELDS_PREFIX + "." + fieldName + ".";
+        String key = fieldPrefix + AGG_FUNCTION;
+        if (options.mergeEngine() == CoreOptions.MergeEngine.PARTIAL_UPDATE && function != null) {
+            throw unsupportedPrimaryKeyDefinition(
+                    tablePath,
+                    key,
+                    "Fluss supports plain partial-update semantics using last_value_ignore_nulls for non-key fields.");
+        }
+        if (options.mergeEngine() != CoreOptions.MergeEngine.AGGREGATE || function == null) {
+            return;
+        }
+        if (toFlussAggregateFunction(function) == null) {
+            throw unsupportedPrimaryKeyDefinition(
+                    tablePath,
+                    key + "=" + function,
+                    "No supported Fluss aggregation mapping preserves this Paimon function's semantics.");
+        }
+        if (FieldFirstValueAggFactory.NAME.equals(function) && nullable) {
+            throw unsupportedPrimaryKeyDefinition(
+                    tablePath,
+                    key,
+                    "Fluss FIRST_VALUE retains the first non-null value, while Paimon first_value "
+                            + "retains an initial NULL. Only NOT NULL columns can preserve these semantics.");
+        }
+        if (FieldSumAggFactory.NAME.equals(function)
+                && options.fieldSumAggFailOnOverflow(fieldName)) {
+            throw unsupportedPrimaryKeyDefinition(
+                    tablePath,
+                    fieldPrefix + FieldSumAggFactory.NAME + ".fail-on-overflow",
+                    "Fluss SUM aggregation does not support failing on overflow.");
+        }
+        if (FieldProductAggFactory.NAME.equals(function)
+                && options.fieldProductAggFailOnOverflow(fieldName)) {
+            throw unsupportedPrimaryKeyDefinition(
+                    tablePath,
+                    fieldPrefix + FieldProductAggFactory.NAME + ".fail-on-overflow",
+                    "Fluss PRODUCT aggregation does not support failing on overflow.");
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // Primary-key table property and aggregation mapping
+    // ------------------------------------------------------------------------
+
+    private static Configuration derivePrimaryKeyProperties(CoreOptions options) {
+        Configuration configuration = new Configuration();
+        // Merge engines and delete behavior must be mapped together.
+        CoreOptions.MergeEngine paimonMergeEngine = options.mergeEngine();
+        boolean ignoreDelete = options.ignoreDelete();
+        MergeEngineType mergeEngine = null;
+        DeleteBehavior deleteBehavior = ignoreDelete ? DeleteBehavior.IGNORE : DeleteBehavior.ALLOW;
+        if (paimonMergeEngine == CoreOptions.MergeEngine.FIRST_ROW) {
+            mergeEngine = MergeEngineType.FIRST_ROW;
+            // Paimon's first-row merger rejects deletes unless ignore-delete is enabled.
+            deleteBehavior = ignoreDelete ? DeleteBehavior.IGNORE : DeleteBehavior.DISABLE;
+        } else if (paimonMergeEngine == CoreOptions.MergeEngine.PARTIAL_UPDATE
+                || paimonMergeEngine == CoreOptions.MergeEngine.AGGREGATE) {
+            mergeEngine = MergeEngineType.AGGREGATION;
+        }
+        // A supported sequence field turns deduplicate into the versioned merge engine.
+        List<String> sequenceFields = options.sequenceField();
+        if (!sequenceFields.isEmpty()) {
+            mergeEngine = MergeEngineType.VERSIONED;
+            configuration.set(
+                    ConfigOptions.TABLE_MERGE_ENGINE_VERSION_COLUMN, sequenceFields.get(0));
+        }
+        if (mergeEngine != null) {
+            configuration.set(ConfigOptions.TABLE_MERGE_ENGINE, mergeEngine);
+        }
+        // Keep DELETE explicit for mapped merge engines so source defaults cannot be overridden.
+        if (mergeEngine != null || deleteBehavior != DeleteBehavior.ALLOW) {
+            configuration.set(ConfigOptions.TABLE_DELETE_BEHAVIOR, deleteBehavior);
+        }
+
+        Duration ttl = options.recordLevelExpireTime();
+        if (ttl != null) {
+            configuration.set(ConfigOptions.TABLE_KV_TTL, ttl);
+            configuration.set(
+                    ConfigOptions.TABLE_KV_TTL_TIME_COLUMN, options.recordLevelTimeField());
+        }
+        return configuration;
+    }
+
+    @Nullable
+    private static AggFunction derivePrimaryKeyAggregateFunction(
+            FileStoreTable table, CoreOptions options, String fieldName) {
+        if (table.primaryKeys().contains(fieldName)) {
+            return null;
+        }
+        if (options.mergeEngine() == CoreOptions.MergeEngine.PARTIAL_UPDATE) {
+            return AggFunctions.LAST_VALUE_IGNORE_NULLS();
+        }
+        if (options.mergeEngine() != CoreOptions.MergeEngine.AGGREGATE) {
+            return null;
+        }
+        String function = getPaimonAggregateFunction(options, fieldName);
+        return function == null
+                ? AggFunctions.LAST_VALUE_IGNORE_NULLS()
+                : toFlussAggregateFunction(function);
+    }
+
+    @Nullable
+    private static String getPaimonAggregateFunction(CoreOptions options, String fieldName) {
+        // Field-specific functions take precedence over the table default.
+        String function = options.fieldAggFunc(fieldName);
+        return function == null ? options.fieldsDefaultFunc() : function;
+    }
+
+    @Nullable
+    private static AggFunction toFlussAggregateFunction(String function) {
+        switch (function) {
+            case FieldLastNonNullValueAggFactory.NAME:
+                return AggFunctions.LAST_VALUE_IGNORE_NULLS();
+            case FieldFirstNonNullValueAggFactory.NAME:
+                return AggFunctions.FIRST_VALUE_IGNORE_NULLS();
+            case FieldFirstValueAggFactory.NAME:
+                return AggFunctions.FIRST_VALUE();
+            case FieldSumAggFactory.NAME:
+            case FieldProductAggFactory.NAME:
+            case FieldMinAggFactory.NAME:
+            case FieldMaxAggFactory.NAME:
+            case FieldLastValueAggFactory.NAME:
+            case FieldBoolAndAggFactory.NAME:
+            case FieldBoolOrAggFactory.NAME:
+            case FieldRoaringBitmap32AggFactory.NAME:
+            case FieldRoaringBitmap64AggFactory.NAME:
+                return AggFunctions.of(AggFunctionType.fromString(function));
+            default:
+                return null;
+        }
+    }
+
+    private static InvalidTableException unsupportedPrimaryKeyDefinition(
+            TablePath tablePath, String option, String message) {
+        return new InvalidTableException(
+                String.format(
+                        "Paimon primary-key table %s, definition '%s': %s",
+                        tablePath, option, message));
+    }
+
+    // ------------------------------------------------------------------------
+    // Auto-partition inference
+    // ------------------------------------------------------------------------
+
+    private static Map<String, String> deriveAutoPartitionProperties(FileStoreTable table) {
+        if (table.partitionKeys().isEmpty()) {
+            return Collections.emptyMap();
+        }
+
+        CoreOptions coreOptions = new CoreOptions(table.options());
+        String paimonFormatter = coreOptions.partitionTimestampFormatter();
+        String timeKey = inferTimePartitionKey(table.partitionKeys(), coreOptions);
+        if (paimonFormatter == null || timeKey == null) {
+            return Collections.emptyMap();
+        }
+
+        AutoPartitionTimeUnit timeUnit = inferTimeUnit(paimonFormatter, coreOptions);
+        if (timeUnit == null) {
+            return Collections.emptyMap();
+        }
+
+        DataType timeKeyType = table.rowType().getTypeAt(table.rowType().getFieldIndex(timeKey));
+        // Fluss reads DATE partition values as yyyy-MM-dd (for example, 2025-10-13).
+        // Auto partitioning with yyyyMMdd would generate 20251013, which cannot be read as DATE.
+        // Keep other DATE formats as regular partitions; inferTimeUnit maps yyyy-MM-dd to DAY.
+        // Other key types may use formats such as yyyyMMdd.
+        if (timeKeyType.getTypeRoot() == org.apache.paimon.types.DataTypeRoot.DATE
+                && !"yyyy-MM-dd".equals(paimonFormatter)) {
+            return Collections.emptyMap();
+        }
+
+        Map<String, String> properties = new HashMap<>();
+        properties.put(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED.key(), Boolean.TRUE.toString());
+        properties.put(ConfigOptions.TABLE_AUTO_PARTITION_KEY.key(), timeKey);
+        properties.put(ConfigOptions.TABLE_AUTO_PARTITION_TIME_FORMAT.key(), paimonFormatter);
+        properties.put(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT.key(), timeUnit.toString());
+        properties.put(
+                ConfigOptions.TABLE_AUTO_PARTITION_TIMEZONE.key(),
+                coreOptions.sinkProcessTimeZone().getId());
+        if (table.partitionKeys().size() > 1) {
+            properties.put(ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE.key(), "0");
+        }
+        return properties;
+    }
+
+    /**
+     * Returns the partition key referenced by the Paimon timestamp pattern, or the first partition
+     * key when no pattern is configured. Returns {@code null} when the configured pattern does not
+     * reference exactly one partition key.
+     */
+    @Nullable
+    private static String inferTimePartitionKey(
+            List<String> partitionKeys, CoreOptions coreOptions) {
+        String pattern = coreOptions.partitionTimestampPattern();
+        if (pattern == null) {
+            return partitionKeys.get(0);
+        }
+        for (String partitionKey : partitionKeys) {
+            if (("$" + partitionKey).equals(pattern)) {
+                return partitionKey;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Returns the single Fluss time unit compatible with the Paimon timestamp formatter, or {@code
+     * null} when the formatter cannot be mapped unambiguously.
+     */
+    @Nullable
+    private static AutoPartitionTimeUnit inferTimeUnit(
+            String paimonFormatter, CoreOptions coreOptions) {
+        List<AutoPartitionTimeUnit> compatibleUnits = new ArrayList<>();
+        // Find every Fluss time unit that accepts the Paimon formatter. A unique match is required.
+        for (AutoPartitionTimeUnit candidate : AutoPartitionTimeUnit.values()) {
+            Map<String, String> options = new HashMap<>();
+            options.put(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED.key(), Boolean.TRUE.toString());
+            options.put(ConfigOptions.TABLE_AUTO_PARTITION_TIME_FORMAT.key(), paimonFormatter);
+            options.put(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT.key(), candidate.toString());
+            options.put(
+                    ConfigOptions.TABLE_AUTO_PARTITION_TIMEZONE.key(),
+                    coreOptions.sinkProcessTimeZone().getId());
+            try {
+                PartitionUtils.validateTimeFormat(candidate, AutoPartitionStrategy.from(options));
+                compatibleUnits.add(candidate);
+            } catch (IllegalArgumentException ignored) {
+                // The formatter is not compatible with this Fluss time unit.
+            }
+        }
+        return compatibleUnits.size() == 1 ? compatibleUnits.get(0) : null;
+    }
+
+    // ------------------------------------------------------------------------
+    // Bucket distribution mapping
+    // ------------------------------------------------------------------------
+
+    private static void applyDistribution(
+            TablePath tablePath, FileStoreTable table, TableDescriptor.Builder descriptorBuilder) {
+        BucketMode bucketMode = table.bucketMode();
+        BucketSpec bucketSpec = table.bucketSpec();
+        if (bucketMode == BucketMode.HASH_FIXED) {
+            CoreOptions coreOptions = new CoreOptions(table.options());
+            if (coreOptions.bucketFunctionType() != CoreOptions.BucketFunctionType.DEFAULT) {
+                throw new InvalidTableException(
+                        String.format(
+                                "Paimon table %s uses unsupported bucket function '%s'.",
+                                tablePath, coreOptions.bucketFunctionType()));
+            }
+            descriptorBuilder.distributedBy(bucketSpec.getNumBuckets(), bucketSpec.getBucketKeys());
+        } else if (bucketMode == BucketMode.BUCKET_UNAWARE) {
+            descriptorBuilder.distributedBy(null, Collections.<String>emptyList());
+        } else {
+            throw new InvalidTableException(
+                    String.format(
+                            "Paimon table %s uses unsupported bucket mode '%s'.",
+                            tablePath, bucketMode));
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // Lake lifecycle and option conversions
+    // ------------------------------------------------------------------------
 
     private static boolean isDataLakeEnabled(TableDescriptor tableDescriptor) {
         return Boolean.parseBoolean(

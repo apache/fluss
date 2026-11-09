@@ -46,6 +46,7 @@ abstract class AbstractRowLogWriteBatch<R> extends WriteBatch {
     protected AbstractRowLogWriteBatch(
             long tableId,
             int bucketId,
+            int bucketCount,
             PhysicalTablePath physicalTablePath,
             int schemaId,
             WriteFormat writeFormat,
@@ -57,6 +58,7 @@ abstract class AbstractRowLogWriteBatch<R> extends WriteBatch {
         super(
                 tableId,
                 bucketId,
+                bucketCount,
                 physicalTablePath,
                 schemaId,
                 writeFormat,

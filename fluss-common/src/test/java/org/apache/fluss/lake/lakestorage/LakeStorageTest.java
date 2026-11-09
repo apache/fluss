@@ -20,27 +20,50 @@ package org.apache.fluss.lake.lakestorage;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
+import org.apache.fluss.lake.lakestorage.LakeTableLookuperManager.LookupCacheOptions;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
+import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.plugin.PluginManager;
+import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.CALLS_REAL_METHODS;
+import static org.mockito.Mockito.mock;
 
 /** Tests for the {@link LakeStorage} base class. */
 class LakeStorageTest {
     private static final String TEST_LAKE_PLUGIN_FORMAT = "test-plugin";
+    private static final TableDescriptor TEST_TABLE_DESCRIPTOR =
+            TableDescriptor.builder()
+                    .schema(Schema.newBuilder().column("id", DataTypes.BIGINT()).build())
+                    .build();
+
+    @Test
+    void testLookupCacheOptionsRejectInvalidResourceLimits() {
+        assertThatThrownBy(() -> new LookupCacheOptions(0L, Duration.ofHours(1)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new LookupCacheOptions(1024L, Duration.ZERO))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new LookupCacheOptions(1024L, Duration.ofSeconds(-1)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new LookupCacheOptions(1024L, null))
+                .isInstanceOf(NullPointerException.class);
+    }
 
     @Test
     void testContextWithoutCurrentLakeTablePath() {
@@ -87,6 +110,7 @@ class LakeStorageTest {
                         ((PluginLakeStorageWrapper.ClassLoaderFixingLakeStorage) lakeStorage)
                                 .getWrappedDelegate())
                 .isInstanceOf(TestPaimonLakeStorage.class);
+        assertThat(lakeStorage.createLakeTieringFactory().supportsPartitionMarkDone()).isFalse();
 
         // the LakeCatalog should wrap TestPaimonLakeCatalog
         LakeCatalog lakeCatalog = lakeStorage.createLakeCatalog();
@@ -96,6 +120,29 @@ class LakeStorageTest {
                         ((PluginLakeStorageWrapper.ClassLoaderFixingLakeCatalog) lakeCatalog)
                                 .getWrappedDelegate())
                 .isInstanceOf(TestPaimonLakeCatalog.class);
+
+        assertThat(lakeCatalog.getTableDescriptor(TablePath.of("test_db", "test_table")))
+                .isEqualTo(TEST_TABLE_DESCRIPTOR);
+        assertThat(lakeCatalog.getLatestSnapshotId(TablePath.of("test_db", "test_table")))
+                .contains(42L);
+
+        LakeTableLookuperManager lookuperManager =
+                lakeStorage.createLakeTableLookuperManager(
+                        "lookup-dir", new LookupCacheOptions(1024L, Duration.ofHours(3)));
+        assertThat(lookuperManager)
+                .isInstanceOf(
+                        PluginLakeStorageWrapper.ClassLoaderFixingLakeTableLookuperManager.class);
+        TestLakeTableLookuperManager innerLookuperManager =
+                (TestLakeTableLookuperManager)
+                        ((PluginLakeStorageWrapper.ClassLoaderFixingLakeTableLookuperManager)
+                                        lookuperManager)
+                                .getWrappedDelegate();
+        LookupCacheOptions updatedOptions = new LookupCacheOptions(2048L, Duration.ofMinutes(30));
+        lookuperManager.reconfigure(updatedOptions);
+        assertThat(innerLookuperManager.options).isSameAs(updatedOptions);
+        assertThat(lookuperManager.fileCacheCapacityEvictions()).isEqualTo(3L);
+        lookuperManager.close();
+        assertThat(innerLookuperManager.closed).isTrue();
     }
 
     private static class TestingPluginManager implements PluginManager {
@@ -129,12 +176,11 @@ class LakeStorageTest {
     }
 
     private static class TestPaimonLakeStorage implements LakeStorage {
-
         public TestPaimonLakeStorage() {}
 
         @Override
         public LakeTieringFactory<?, ?> createLakeTieringFactory() {
-            return null;
+            return mock(LakeTieringFactory.class, CALLS_REAL_METHODS);
         }
 
         @Override
@@ -146,9 +192,51 @@ class LakeStorageTest {
         public LakeSource<?> createLakeSource(TablePath tablePath) {
             throw new UnsupportedOperationException("Not implemented");
         }
+
+        @Override
+        public LakeTableLookuperManager createLakeTableLookuperManager(
+                String ioTmpDir, LookupCacheOptions options) {
+            return new TestLakeTableLookuperManager();
+        }
+    }
+
+    private static class TestLakeTableLookuperManager implements LakeTableLookuperManager {
+
+        private boolean closed;
+        private LookupCacheOptions options;
+
+        @Override
+        public LakeTableLookuper createLakeTableLookuper(TablePath tablePath, Context context) {
+            throw new UnsupportedOperationException("Not implemented");
+        }
+
+        @Override
+        public void reconfigure(LookupCacheOptions options) {
+            this.options = options;
+        }
+
+        @Override
+        public long fileCacheCapacityEvictions() {
+            return 3L;
+        }
+
+        @Override
+        public void close() {
+            closed = true;
+        }
     }
 
     private static class TestPaimonLakeCatalog implements LakeCatalog {
+
+        @Override
+        public TableDescriptor getTableDescriptor(TablePath tablePath) {
+            return TEST_TABLE_DESCRIPTOR;
+        }
+
+        @Override
+        public Optional<Long> getLatestSnapshotId(TablePath tablePath) {
+            return Optional.of(42L);
+        }
 
         @Override
         public void createTable(

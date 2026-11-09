@@ -85,6 +85,7 @@ import org.apache.fluss.server.metadata.TableMetadata;
 import org.apache.fluss.server.testutils.KvTestUtils;
 import org.apache.fluss.server.testutils.ServerTestTags;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.lake.LakeTable;
 import org.apache.fluss.testutils.DataTestUtils;
@@ -617,7 +618,9 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                         Collections.singletonList(TABLET_SERVER_ID),
                                         Collections.emptyList(),
                                         INITIAL_COORDINATOR_EPOCH,
-                                        INITIAL_BUCKET_EPOCH))),
+                                        INITIAL_BUCKET_EPOCH),
+                                3,
+                                0L)),
                 future::complete);
 
         List<NotifyLeaderAndIsrResultForBucket> results = future.get();
@@ -643,7 +646,9 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                         Collections.singletonList(TABLET_SERVER_ID),
                                         Collections.emptyList(),
                                         INITIAL_COORDINATOR_EPOCH,
-                                        INITIAL_BUCKET_EPOCH))),
+                                        INITIAL_BUCKET_EPOCH),
+                                3,
+                                0L)),
                 future::complete);
 
         assertThat(future.get()).containsOnly(new NotifyLeaderAndIsrResultForBucket(logTb));
@@ -1510,6 +1515,11 @@ class ReplicaManagerTest extends ReplicaTestBase {
         PutKvResultForBucket putResult = putFuture.get().get(0);
         assertThat(putResult.failed()).isFalse();
 
+        // Lookups read RocksDB only, never the kv pre-write buffer, so wait until the
+        // asynchronous flush has published the just-written value.
+        flushAndWait(
+                replicaManager.getReplicaOrException(tableBucket).getKvTablet(), Long.MAX_VALUE);
+
         CompactedKeyEncoder keyEncoder = new CompactedKeyEncoder(DATA1_ROW_TYPE, new int[] {0});
         byte[] keyBytes = keyEncoder.encodeKey(row(DATA_1_WITH_KEY_AND_VALUE.get(0).f0));
 
@@ -1578,7 +1588,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testListOffsets(boolean isPartitioned) throws Exception {
-        TableBucket tb = new TableBucket(DATA1_TABLE_ID, isPartitioned ? 10L : null, 1);
+        TableBucket tb = makeTableBucket(DATA1_TABLE_ID, isPartitioned ? 10L : null, false);
         makeLogTableAsLeader(tb, isPartitioned);
 
         // produce one batch to this bucket.
@@ -1787,7 +1797,9 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                         Arrays.asList(1, 2, 3),
                                         Collections.emptyList(),
                                         INITIAL_COORDINATOR_EPOCH,
-                                        INITIAL_BUCKET_EPOCH))),
+                                        INITIAL_BUCKET_EPOCH),
+                                3,
+                                0L)),
                 future::complete);
         assertThat(future.get()).containsOnly(new NotifyLeaderAndIsrResultForBucket(tb));
         assertReplicaEpochEquals(
@@ -1808,7 +1820,9 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                         Arrays.asList(1, 2, 3),
                                         Collections.emptyList(),
                                         INITIAL_COORDINATOR_EPOCH,
-                                        INITIAL_BUCKET_EPOCH))),
+                                        INITIAL_BUCKET_EPOCH),
+                                3,
+                                0L)),
                 future::complete);
         assertThat(future.get())
                 .containsOnly(
@@ -1857,7 +1871,9 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                         Collections.singletonList(TABLET_SERVER_ID),
                                         Collections.emptyList(),
                                         INITIAL_COORDINATOR_EPOCH,
-                                        INITIAL_BUCKET_EPOCH))),
+                                        INITIAL_BUCKET_EPOCH),
+                                3,
+                                0L)),
                 future::complete);
 
         assertThat(future.get()).containsOnly(new NotifyLeaderAndIsrResultForBucket(tableBucket));
@@ -1884,7 +1900,9 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                         Arrays.asList(1, 2, 3),
                                         Collections.emptyList(),
                                         INITIAL_COORDINATOR_EPOCH,
-                                        INITIAL_BUCKET_EPOCH))),
+                                        INITIAL_BUCKET_EPOCH),
+                                3,
+                                0L)),
                 future::complete);
         assertThat(future.get()).containsOnly(new NotifyLeaderAndIsrResultForBucket(tb));
         assertReplicaEpochEquals(
@@ -1916,7 +1934,9 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                         Arrays.asList(1, 2, 3),
                                         Collections.emptyList(),
                                         INITIAL_COORDINATOR_EPOCH,
-                                        INITIAL_BUCKET_EPOCH))),
+                                        INITIAL_BUCKET_EPOCH),
+                                3,
+                                0L)),
                 future::complete);
         assertThat(future.get()).containsOnly(new NotifyLeaderAndIsrResultForBucket(tb));
         assertReplicaEpochEquals(
@@ -2295,10 +2315,18 @@ class ReplicaManagerTest extends ReplicaTestBase {
 
         PartitionMetadata partitionMetadata1 =
                 new PartitionMetadata(
-                        partitionTableId, partitionName1, partitionId1, Collections.emptyList());
+                        partitionTableId,
+                        partitionName1,
+                        partitionId1,
+                        Collections.emptyList(),
+                        null);
         PartitionMetadata partitionMetadata2 =
                 new PartitionMetadata(
-                        partitionTableId, partitionName2, partitionId2, Collections.emptyList());
+                        partitionTableId,
+                        partitionName2,
+                        partitionId2,
+                        Collections.emptyList(),
+                        null);
         replicaManager.maybeUpdateMetadataCache(
                 2,
                 buildClusterMetadata(
@@ -2321,20 +2349,33 @@ class ReplicaManagerTest extends ReplicaTestBase {
                         DATA1_PARTITIONED_TABLE_DESCRIPTOR));
         zkClient.registerFirstSchema(
                 partitionTablePath, DATA1_PARTITIONED_TABLE_DESCRIPTOR.getSchema());
+        // register partitions to zk.
+        for (PartitionMetadata partitionMetadata :
+                Arrays.asList(partitionMetadata1, partitionMetadata2)) {
+            zkClient.registerPartitionAssignmentAndMetadata(
+                    partitionMetadata.getPartitionId(),
+                    partitionMetadata.getPartitionName(),
+                    new PartitionAssignment(partitionTableId, Collections.emptyMap()),
+                    DEFAULT_REMOTE_DATA_DIR,
+                    partitionTablePath,
+                    partitionTableId,
+                    0);
+        }
 
         expectedCoordinatorServer.put(
                 "INTERNAL", new ServerNode(0, "localhost", 1235, ServerType.COORDINATOR));
         expectedTablePathById.put(nonePartitionTableId, nonePartitionTablePath);
         expectedTablePathById.put(partitionTableId, partitionTablePath);
 
-        expectedTableMetadataById.put(nonePartitionTablePath, tableMetadata1);
+        // Identity-only updates do not make the routing metadata ready.
+        expectedTableMetadataById.put(nonePartitionTablePath, null);
         expectedTableMetadataById.put(partitionTablePath, tableMetadata2);
 
         expectedPartitionNameById.put(partitionId1, partitionName1);
         expectedPartitionNameById.put(partitionId2, partitionName2);
 
-        expectedPartitionMetadataById.put(physicalTablePath1, partitionMetadata1);
-        expectedPartitionMetadataById.put(physicalTablePath2, partitionMetadata2);
+        expectedPartitionMetadataById.put(physicalTablePath1, null);
+        expectedPartitionMetadataById.put(physicalTablePath2, null);
 
         assertUpdateMetadataEquals(
                 expectedCoordinatorServer,
@@ -2386,7 +2427,8 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                         partitionTableId,
                                         partitionName1,
                                         DELETED_PARTITION_ID, // mark as deleted.
-                                        Collections.emptyList()))));
+                                        Collections.emptyList(),
+                                        null))));
         expectedPartitionNameById.put(partitionId1, null);
         expectedPartitionMetadataById.put(physicalTablePath1, null);
         assertUpdateMetadataEquals(

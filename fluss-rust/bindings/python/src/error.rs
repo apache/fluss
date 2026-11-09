@@ -273,7 +273,55 @@ impl ErrorCode {
     /// Deletion operations are disabled on this table.
     #[classattr]
     const DELETION_DISABLED_EXCEPTION: i32 = 57;
+    /// The server does not exist.
+    #[classattr]
+    const SERVER_NOT_EXIST_EXCEPTION: i32 = 58;
+    /// The server tag already exists.
+    #[classattr]
+    const SERVER_TAG_ALREADY_EXIST_EXCEPTION: i32 = 59;
+    /// The server tag does not exist.
+    #[classattr]
+    const SERVER_TAG_NOT_EXIST_EXCEPTION: i32 = 60;
+    /// The rebalance task failed.
+    #[classattr]
+    const REBALANCE_FAILURE_EXCEPTION: i32 = 61;
+    /// No rebalance task is in progress.
+    #[classattr]
+    const NO_REBALANCE_IN_PROGRESS_EXCEPTION: i32 = 62;
+    /// The client used an invalid producer ID.
+    #[classattr]
+    const INVALID_PRODUCER_ID_EXCEPTION: i32 = 63;
+    /// A configuration error occurred.
+    #[classattr]
+    const CONFIG_EXCEPTION: i32 = 64;
+    /// The coordinator is not the leader and cannot process the request.
+    #[classattr]
+    const NOT_COORDINATOR_LEADER_EXCEPTION: i32 = 65;
+    /// The scanner session expired due to inactivity.
+    #[classattr]
+    const SCANNER_EXPIRED: i32 = 66;
+    /// The server does not recognize the scanner id.
+    #[classattr]
+    const UNKNOWN_SCANNER_ID: i32 = 67;
+    /// The scan request is invalid.
+    #[classattr]
+    const INVALID_SCAN_REQUEST: i32 = 68;
+    /// The per-bucket or per-server scanner session limit has been reached.
+    #[classattr]
+    const TOO_MANY_SCANNERS: i32 = 69;
+    /// The tablet server rejected writes because its data disk reached the write-limit ratio.
+    #[classattr]
+    const DISK_WRITE_LOCKED: i32 = 70;
+    /// The cluster does not have enough KV leader replica capacity.
+    #[classattr]
+    const INSUFFICIENT_KV_LEADER_REPLICA_CAPACITY: i32 = 71;
     /// The server rejected a write due to storage backpressure.
     #[classattr]
     const STORAGE_BACKPRESSURE_EXCEPTION: i32 = 72;
+    /// The historical partition request was throttled because too many are in flight.
+    #[classattr]
+    const HISTORICAL_PARTITION_THROTTLED: i32 = 73;
+    /// The request's bucket routing is missing or stale; refresh metadata and rebuild it.
+    #[classattr]
+    const INVALID_BUCKET_ROUTING: i32 = 74;
 }

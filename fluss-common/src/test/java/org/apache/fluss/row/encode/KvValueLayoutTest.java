@@ -69,6 +69,22 @@ class KvValueLayoutTest {
     }
 
     @Test
+    void testEncodeValueWithCallerProvidedTag() {
+        BinaryRow row = compactedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
+        byte[] value =
+                ValueEncoder.forLayout(KvValueLayout.TAGGED)
+                        .encodeValue(new BinaryValue(DEFAULT_SCHEMA_ID, row), 42L);
+
+        assertThat(KvValueLayout.TAGGED.readValueTag(MemorySegment.wrap(value))).isEqualTo(42L);
+        assertThatThrownBy(
+                        () ->
+                                ValueEncoder.forLayout(KvValueLayout.TAGGED)
+                                        .encodeValue(new BinaryValue(DEFAULT_SCHEMA_ID, row)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("explicit value tag");
+    }
+
+    @Test
     void testTwoArgumentValueDecoderUsesPlainLayout() {
         BinaryRow row = compactedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
         byte[] value = ValueEncoder.encodeValue(DEFAULT_SCHEMA_ID, row);

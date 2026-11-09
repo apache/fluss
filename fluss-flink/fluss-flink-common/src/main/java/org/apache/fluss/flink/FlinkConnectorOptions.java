@@ -24,6 +24,7 @@ import org.apache.fluss.flink.utils.FlinkConversions;
 import org.apache.flink.configuration.ConfigOption;
 import org.apache.flink.configuration.ConfigOptions;
 import org.apache.flink.configuration.DescribedEnum;
+import org.apache.flink.configuration.MemorySize;
 import org.apache.flink.configuration.description.InlineElement;
 import org.apache.flink.table.catalog.CatalogMaterializedTable;
 
@@ -54,7 +55,10 @@ public class FlinkConnectorOptions {
             ConfigOptions.key("bucket.num")
                     .intType()
                     .noDefaultValue()
-                    .withDescription("The number of buckets of a Fluss table.");
+                    .withDescription(
+                            "The target number of buckets for a Fluss table. "
+                                    + "For partitioned tables, this value applies to newly created "
+                                    + "partitions; existing partitions retain their original bucket count.");
 
     public static final ConfigOption<String> BUCKET_KEY =
             ConfigOptions.key("bucket.key")
@@ -113,6 +117,46 @@ public class FlinkConnectorOptions {
                                     + "When enabled, if a lookup does not find a matching row, a new row will be inserted "
                                     + "with the lookup key values. This feature cannot be used with PREFIX_LOOKUP type. "
                                     + "Default is false.");
+
+    // --------------------------------------------------------------------------------------------
+    // Full lookup cache options
+    // --------------------------------------------------------------------------------------------
+
+    public static final ConfigOption<MemorySize> LOOKUP_FULL_CACHE_WRITE_BUFFER_SIZE =
+            ConfigOptions.key("lookup.full-cache.rocksdb.write-buffer-size")
+                    .memoryType()
+                    .defaultValue(MemorySize.ofMebiBytes(32))
+                    .withDescription(
+                            "RocksDB memtable size per full-cache instance in the TaskManager.");
+
+    public static final ConfigOption<Integer> LOOKUP_FULL_CACHE_WRITE_BUFFER_COUNT =
+            ConfigOptions.key("lookup.full-cache.rocksdb.write-buffer-count")
+                    .intType()
+                    .defaultValue(2)
+                    .withDescription(
+                            "Maximum number of RocksDB write buffers per full-cache instance; at least two.");
+
+    public static final ConfigOption<MemorySize> LOOKUP_FULL_CACHE_BLOCK_CACHE_SIZE =
+            ConfigOptions.key("lookup.full-cache.rocksdb.block-cache-size")
+                    .memoryType()
+                    .defaultValue(MemorySize.ofMebiBytes(32))
+                    .withDescription(
+                            "RocksDB block cache capacity per full-cache instance, including index and filter blocks. "
+                                    + "Pinned blocks can exceed this capacity; this does not bound total native memory.");
+
+    public static final ConfigOption<Integer> LOOKUP_FULL_CACHE_MAX_BACKGROUND_JOBS =
+            ConfigOptions.key("lookup.full-cache.rocksdb.max-background-jobs")
+                    .intType()
+                    .defaultValue(2)
+                    .withDescription(
+                            "Maximum RocksDB background flush and compaction jobs per full-cache instance.");
+
+    public static final ConfigOption<Integer> LOOKUP_FULL_CACHE_MAX_OPEN_FILES =
+            ConfigOptions.key("lookup.full-cache.rocksdb.max-open-files")
+                    .intType()
+                    .defaultValue(512)
+                    .withDescription(
+                            "Maximum open files per full-cache RocksDB instance; must be positive.");
 
     // --------------------------------------------------------------------------------------------
     // Scan specific options
@@ -229,6 +273,14 @@ public class FlinkConnectorOptions {
                     .defaultValue(DistributionMode.AUTO)
                     .withDescription(
                             "Defines the distribution mode for writing data to the sink. Available options are:\n"
+                                    + "- BUCKET_BALANCE: Shuffles records by bucket key using an LCM-based logical-slot assignment. "
+                                    + "This improves sink-subtask utilization and expected load distribution, particularly when the bucket count and sink parallelism do not evenly divide each other. "
+                                    + "For a fixed bucket count and sink parallelism, records with the same bucket key always route to the same subtask, "
+                                    + "while different bucket keys in the same physical bucket may be processed by different subtasks assigned to that bucket. "
+                                    + "This mode does not guarantee that every physical bucket is distributed across all subtasks, or that every subtask receives data; actual load depends on the bucket-key distribution. "
+                                    + "When the bucket count is an exact multiple of the sink parallelism, it behaves like BUCKET mode. "
+                                    + "It requires 'bucket.key' to be defined and does not guarantee intra-bucket ordering. "
+                                    + "It is not supported for tables using the aggregation merge engine because Undo Recovery requires each physical bucket to be written by exactly one subtask.\n"
                                     + "- AUTO: Automatically chooses the best mode based on the table type. "
                                     + "Uses BUCKET mode for Primary Key Tables and Log table with bucket key to maximize throughput, "
                                     + "and NONE for Log Tables without bucket key.\n"
@@ -268,8 +320,8 @@ public class FlinkConnectorOptions {
     public static final List<String> ALTER_DISALLOW_OPTIONS =
             Arrays.asList(
                     AUTO_INCREMENT_FIELDS.key(),
-                    BUCKET_NUMBER.key(),
                     BUCKET_KEY.key(),
+                    BUCKET_NUMBER.key(),
                     BOOTSTRAP_SERVERS.key());
 
     // -------------------------------------------------------------------------------------------

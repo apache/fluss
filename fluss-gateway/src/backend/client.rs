@@ -129,21 +129,21 @@ impl NativeFlussBackend {
                 table
                     .new_append()
                     .and_then(|append| append.create_writer())
-                    .map_err(&writer_error)?,
+                    .map_err(writer_error)?,
             )
         } else {
-            let upsert = table.new_upsert().map_err(&writer_error)?;
+            let upsert = table.new_upsert().map_err(writer_error)?;
             let upsert = match &partial_update_columns {
                 Some(columns) => {
                     // TODO: Roll fluss-rust batches when partial-update columns change.
                     let names: Vec<&str> = columns.iter().map(String::as_str).collect();
                     upsert
                         .partial_update_with_column_names(&names)
-                        .map_err(&writer_error)?
+                        .map_err(writer_error)?
                 }
                 None => upsert,
             };
-            Writer::Upsert(upsert.create_writer().map_err(&writer_error)?)
+            Writer::Upsert(upsert.create_writer().map_err(writer_error)?)
         };
 
         let (mut failures, pending) =

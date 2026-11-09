@@ -19,7 +19,7 @@ use crate::metadata::BucketStatsRequest;
 use crate::rpc::api_key::ApiKey;
 use crate::rpc::frame::{ReadError, WriteError};
 use crate::rpc::message::{ReadType, RequestBody, WriteType};
-use crate::{TableId, impl_read_type, impl_write_type, proto};
+use crate::{PartitionId, TableId, impl_read_type, impl_write_type, proto};
 use bytes::{Buf, BufMut};
 use prost::Message;
 
@@ -41,6 +41,16 @@ impl GetTableStatsRequest {
                 target_columns,
             },
         }
+    }
+
+    pub fn with_routing_bucket_counts(
+        mut self,
+        bucket_count_of: impl Fn(Option<PartitionId>) -> Option<i32>,
+    ) -> Self {
+        for bucket in &mut self.inner_request.buckets_req {
+            bucket.routing_bucket_count = bucket_count_of(bucket.partition_id);
+        }
+        self
     }
 }
 

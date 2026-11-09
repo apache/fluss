@@ -151,11 +151,15 @@ docker compose up -d
 ```
 This command automatically starts all the containers defined in the Docker Compose configuration in detached mode.
 
-Run
+Count the long-running containers:
+
 ```shell
-docker container ls -a
+docker compose ps --status running --quiet \
+  coordinator-server tablet-server zookeeper jobmanager taskmanager | wc -l
 ```
-to check whether all containers are running properly.
+
+The expected output is `5`. A lower number means that one or more containers failed
+to start. Run `docker compose ps -a` to identify them.
 
 You can also visit http://localhost:8083/ to see if Flink is running normally.
 

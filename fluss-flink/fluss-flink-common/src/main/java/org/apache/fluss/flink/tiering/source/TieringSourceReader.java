@@ -20,10 +20,12 @@ package org.apache.fluss.flink.tiering.source;
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.Connection;
+import org.apache.fluss.client.tiering.TableBucketWriteResult;
+import org.apache.fluss.client.tiering.TieringSplit;
 import org.apache.fluss.flink.adapter.SingleThreadMultiplexSourceReaderBaseAdapter;
 import org.apache.fluss.flink.tiering.event.TieringReachMaxDurationEvent;
 import org.apache.fluss.flink.tiering.source.metrics.TieringMetrics;
-import org.apache.fluss.flink.tiering.source.split.TieringSplit;
+import org.apache.fluss.flink.tiering.source.split.FlinkTieringSplit;
 import org.apache.fluss.flink.tiering.source.state.TieringSplitState;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 
@@ -48,7 +50,7 @@ public final class TieringSourceReader<WriteResult>
         extends SingleThreadMultiplexSourceReaderBaseAdapter<
                 TableBucketWriteResult<WriteResult>,
                 TableBucketWriteResult<WriteResult>,
-                TieringSplit,
+                FlinkTieringSplit,
                 TieringSplitState> {
 
     private static final Logger LOG = LoggerFactory.getLogger(TieringSourceReader.class);
@@ -144,24 +146,23 @@ public final class TieringSourceReader<WriteResult>
     }
 
     @Override
-    public List<TieringSplit> snapshotState(long checkpointId) {
+    public List<FlinkTieringSplit> snapshotState(long checkpointId) {
         // we return empty list to make source reader be stateless
         return Collections.emptyList();
     }
 
     @Override
-    protected TieringSplitState initializedState(TieringSplit split) {
-        if (split.isTieringSnapshotSplit()) {
-            return new TieringSplitState(split);
-        } else if (split.isTieringLogSplit()) {
-            return new TieringSplitState(split);
+    protected TieringSplitState initializedState(FlinkTieringSplit split) {
+        TieringSplit tieringSplit = split.unwrap();
+        if (tieringSplit.isTieringSnapshotSplit() || tieringSplit.isTieringLogSplit()) {
+            return new TieringSplitState(tieringSplit);
         } else {
             throw new UnsupportedOperationException("Unsupported split type: " + split);
         }
     }
 
     @Override
-    protected TieringSplit toSplitType(String splitId, TieringSplitState splitState) {
+    protected FlinkTieringSplit toSplitType(String splitId, TieringSplitState splitState) {
         return splitState.toSourceSplit();
     }
 

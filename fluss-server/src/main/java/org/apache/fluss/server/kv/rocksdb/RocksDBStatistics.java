@@ -19,16 +19,16 @@ package org.apache.fluss.server.kv.rocksdb;
 
 import org.apache.fluss.server.utils.ResourceGuard;
 
-import org.rocksdb.Cache;
-import org.rocksdb.ColumnFamilyHandle;
-import org.rocksdb.HistogramData;
-import org.rocksdb.HistogramType;
-import org.rocksdb.MemoryUsageType;
-import org.rocksdb.MemoryUtil;
-import org.rocksdb.RocksDB;
-import org.rocksdb.RocksDBException;
-import org.rocksdb.Statistics;
-import org.rocksdb.TickerType;
+import io.github.fluss_contrib.rocksdb.Cache;
+import io.github.fluss_contrib.rocksdb.ColumnFamilyHandle;
+import io.github.fluss_contrib.rocksdb.HistogramData;
+import io.github.fluss_contrib.rocksdb.HistogramType;
+import io.github.fluss_contrib.rocksdb.MemoryUsageType;
+import io.github.fluss_contrib.rocksdb.MemoryUtil;
+import io.github.fluss_contrib.rocksdb.RocksDB;
+import io.github.fluss_contrib.rocksdb.RocksDBException;
+import io.github.fluss_contrib.rocksdb.Statistics;
+import io.github.fluss_contrib.rocksdb.TickerType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -37,6 +37,7 @@ import javax.annotation.Nullable;
 import java.util.Collections;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.ToLongFunction;
 
 /**
  * Collects and provides access to RocksDB statistics for a single KvTablet.
@@ -71,6 +72,24 @@ public class RocksDBStatistics implements AutoCloseable {
         this.resourceGuard = resourceGuard;
         this.defaultColumnFamilyHandle = defaultColumnFamilyHandle;
         this.blockCache = blockCache;
+    }
+
+    /**
+     * Collects a metric while keeping this RocksDB instance and its statistics alive.
+     *
+     * <p>The collector may retain the statistics identity for deduplication, but must only access
+     * the native statistics during the call. Returns zero if statistics are unavailable or
+     * collection fails.
+     */
+    public long collectStatistics(ToLongFunction<Statistics> collector) {
+        try (ResourceGuard.Lease lease = resourceGuard.acquireResource()) {
+            if (statistics != null) {
+                return collector.applyAsLong(statistics);
+            }
+        } catch (Exception e) {
+            LOG.debug("Failed to collect RocksDB statistics (possibly closed or unavailable)", e);
+        }
+        return 0L;
     }
 
     // ==================== Ticker-based Metrics ====================
@@ -440,7 +459,7 @@ public class RocksDBStatistics implements AutoCloseable {
 
     @Override
     public void close() {
-        // No resources to clean up, statistics are managed by TableMetricGroup
+        // The RocksDB resource container owns the statistics reference.
         LOG.debug("RocksDB statistics accessor closed");
     }
 }

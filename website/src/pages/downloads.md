@@ -2,19 +2,26 @@
 
 > Apache Fluss is a streaming storage built for real-time analytics & AI which can serve as the real-time data layer for Lakehouse architectures.
 
-[Apache Fluss 0.9.1 (Incubating)](#apache-fluss-incubating-091) is the latest stable release.
+[Apache Fluss 1.0.0](#apache-fluss-100) is the latest stable release.
 
-<!-- TODO: remove comment when 1.0 release is ready; not made visible at the moment because this page is not versioned
-## Apache Fluss 1.0
+## Apache Fluss 1.0.0
 
-Coming soon...
+| Artifact | Signature | SHA |
+|---------|---------|---------|
+| [Fluss Binary Release](https://www.apache.org/dyn/closer.lua/fluss/fluss-1.0.0/fluss-1.0.0-bin.tgz) | [.asc](https://downloads.apache.org/fluss/fluss-1.0.0/fluss-1.0.0-bin.tgz.asc) | [.sha512](https://downloads.apache.org/fluss/fluss-1.0.0/fluss-1.0.0-bin.tgz.sha512) |
+| [Fluss Source Release](https://www.apache.org/dyn/closer.lua/fluss/fluss-1.0.0/fluss-1.0.0-src.tgz) | [.asc](https://downloads.apache.org/fluss/fluss-1.0.0/fluss-1.0.0-src.tgz.asc) | [.sha512](https://downloads.apache.org/fluss/fluss-1.0.0/fluss-1.0.0-src.tgz.sha512) |
+| [Fluss Gateway Binary Release for Linux AMD64](https://www.apache.org/dyn/closer.lua/fluss/fluss-1.0.0/fluss-gateway-1.0.0-bin-linux-amd64.tgz) | [.asc](https://downloads.apache.org/fluss/fluss-1.0.0/fluss-gateway-1.0.0-bin-linux-amd64.tgz.asc) | [.sha512](https://downloads.apache.org/fluss/fluss-1.0.0/fluss-gateway-1.0.0-bin-linux-amd64.tgz.sha512) |
+| [Fluss Gateway Binary Release for Linux ARM64](https://www.apache.org/dyn/closer.lua/fluss/fluss-1.0.0/fluss-gateway-1.0.0-bin-linux-arm64.tgz) | [.asc](https://downloads.apache.org/fluss/fluss-1.0.0/fluss-gateway-1.0.0-bin-linux-arm64.tgz.asc) | [.sha512](https://downloads.apache.org/fluss/fluss-1.0.0/fluss-gateway-1.0.0-bin-linux-arm64.tgz.sha512) |
+| [Fluss Helm Chart](https://www.apache.org/dyn/closer.lua/fluss/helm-chart/1.0.0/fluss-1.0.0.tgz) | [.asc](https://downloads.apache.org/fluss/helm-chart/1.0.0/fluss-1.0.0.tgz.asc) | [.sha512](https://downloads.apache.org/fluss/helm-chart/1.0.0/fluss-1.0.0.tgz.sha512) |
+
+Read the [release blog](https://fluss.apache.org/blog/releases/1.0/) about the new features and significant improvements in the Apache Fluss 1.0.0 release.
 
 ## Verifying Downloads
 
 Downloaded Apache Fluss artifacts can be verified by following [this tutorial](https://www.apache.org/info/verification.html) of the Apache Software Foundation using the Apache Fluss release-signing [KEYS](https://downloads.apache.org/fluss/KEYS).
 
 ------------------
--->
+
 ## Apache Incubator Releases
 
 ### Apache Fluss (Incubating) 0.9.1

@@ -25,6 +25,7 @@ import org.apache.fluss.config.cluster.ServerReconfigurable;
 import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.exception.FencedLeaderEpochException;
 import org.apache.fluss.exception.HistoricalPartitionThrottledException;
+import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.InvalidColumnProjectionException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidPartitionException;
@@ -39,9 +40,11 @@ import org.apache.fluss.exception.StorageException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.exception.UnsupportedVersionException;
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.memory.LazyMemorySegmentPool;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -122,7 +125,10 @@ import org.apache.fluss.server.storage.LocalDiskManager;
 import org.apache.fluss.server.utils.FatalErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.server.zk.data.PartitionRegistration;
+import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import org.apache.fluss.utils.ByteArraySlice;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
@@ -163,7 +169,9 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static org.apache.fluss.config.ConfigOptions.KV_FORMAT_VERSION_2;
-import static org.apache.fluss.server.TabletManagerBase.getTableInfo;
+import static org.apache.fluss.server.TabletManagerBase.getPartitionRegistration;
+import static org.apache.fluss.server.TabletManagerBase.getSchemaInfo;
+import static org.apache.fluss.server.TabletManagerBase.getTableRegistration;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.Preconditions.checkState;
@@ -396,6 +404,16 @@ public class ReplicaManager implements ServerReconfigurable {
         localDiskManager.startDiskUsageMonitor(scheduler);
     }
 
+    /** Returns the shared Arrow allocator; callers must not close it. */
+    public BufferAllocator getArrowBufferAllocator() {
+        return kvManager.getArrowBufferAllocator();
+    }
+
+    /** Returns the shared memory segment pool; callers must not close it. */
+    public LazyMemorySegmentPool getMemorySegmentPool() {
+        return kvManager.getMemorySegmentPool();
+    }
+
     public RemoteLogManager getRemoteLogManager() {
         return remoteLogManager;
     }
@@ -427,6 +445,24 @@ public class ReplicaManager implements ServerReconfigurable {
                             "Invalid log.replica.min-in-sync-replicas-number can not be "
                                     + "negative or zero: %d",
                             newMinInSyncReplicas));
+        }
+
+        int newHistoricalPartitionThreadPoolMaxSize =
+                newConfig.get(ConfigOptions.SERVER_HISTORICAL_PARTITION_THREAD_POOL_MAX_SIZE);
+        if (newHistoricalPartitionThreadPoolMaxSize <= 0) {
+            throw new ConfigException(
+                    String.format(
+                            "Invalid configuration for %s, it must be greater than 0.",
+                            ConfigOptions.SERVER_HISTORICAL_PARTITION_THREAD_POOL_MAX_SIZE.key()));
+        }
+
+        int newMaxQueuedHistoricalRequests =
+                newConfig.get(ConfigOptions.NETTY_SERVER_MAX_QUEUED_HISTORICAL_REQUESTS);
+        if (newMaxQueuedHistoricalRequests <= 0) {
+            throw new ConfigException(
+                    String.format(
+                            "Invalid configuration for %s, it must be greater than 0.",
+                            ConfigOptions.NETTY_SERVER_MAX_QUEUED_HISTORICAL_REQUESTS.key()));
         }
     }
 
@@ -460,9 +496,9 @@ public class ReplicaManager implements ServerReconfigurable {
         historicalMetrics.gauge(
                 MetricNames.HISTORICAL_LOOKUP_CACHE_TABLE_COUNT,
                 historicalPartitionManager::cachedTableCount);
-        historicalMetrics.counter(
-                MetricNames.HISTORICAL_LOOKUP_CACHE_CAPACITY_EVICTIONS,
-                historicalPartitionManager.capacityEvictions());
+        historicalMetrics.gauge(
+                MetricNames.HISTORICAL_LOOKUP_CACHE_FILE_CAPACITY_EVICTIONS,
+                historicalPartitionManager::fileCacheCapacityEvictions);
 
         serverMetricGroup.gauge(
                 MetricNames.REPLICA_LEADER_COUNT,
@@ -685,9 +721,11 @@ public class ReplicaManager implements ServerReconfigurable {
                 appendToLocalLog(entriesPerBucket, requiredAcks, userContext);
         LOG.debug("Append records to local log in {} ms", System.currentTimeMillis() - startTime);
 
-        // maybe do delay write operation.
+        // Register any delayed write before waking followers. The append has already released
+        // the replica locks, so completion checks can run directly here.
         maybeAddDelayedWrite(
                 timeoutMs, requiredAcks, entriesPerBucket.size(), appendResult, responseCallback);
+        completeDelayedFetches(appendResult);
     }
 
     /** Appends historical log batches while preserving each original partition in the response. */
@@ -1347,12 +1385,10 @@ public class ReplicaManager implements ServerReconfigurable {
                     // remote.
                     TableBucket tb = notifyRemoteLogOffsetsData.getTableBucket();
                     LogTablet logTablet = getReplicaOrException(tb).getLogTablet();
-                    logTablet.updateHighestCopiedEndOffset(
+                    logTablet.updateRemoteLogOffsets(
+                            notifyRemoteLogOffsetsData.getRemoteLogStartOffset(),
+                            notifyRemoteLogOffsetsData.getRemoteLogEndOffset(),
                             notifyRemoteLogOffsetsData.getHighestCopiedEndOffset());
-                    logTablet.updateRemoteLogStartOffset(
-                            notifyRemoteLogOffsetsData.getRemoteLogStartOffset());
-                    logTablet.updateRemoteLogEndOffset(
-                            notifyRemoteLogOffsetsData.getRemoteLogEndOffset());
                     responseCallback.accept(new NotifyRemoteLogOffsetsResponse());
                 });
     }
@@ -1393,7 +1429,8 @@ public class ReplicaManager implements ServerReconfigurable {
                             lakeBucketOffsets.entrySet()) {
                         TableBucket tb = lakeBucketOffsetEntry.getKey();
                         LakeBucketOffset lakeBucketOffset = lakeBucketOffsetEntry.getValue();
-                        LogTablet logTablet = getReplicaOrException(tb).getLogTablet();
+                        Replica replica = getReplicaOrException(tb);
+                        LogTablet logTablet = replica.getLogTablet();
                         logTablet.updateLakeTableSnapshotId(lakeBucketOffset.getSnapshotId());
 
                         lakeBucketOffset
@@ -1402,7 +1439,16 @@ public class ReplicaManager implements ServerReconfigurable {
 
                         lakeBucketOffset
                                 .getLogEndOffset()
-                                .ifPresent(logTablet::updateLakeLogEndOffset);
+                                .ifPresent(
+                                        lakeLogEndOffset -> {
+                                            logTablet.updateLakeLogEndOffset(lakeLogEndOffset);
+                                            if (replica.isHistoricalPartition()) {
+                                                historicalPartitionManager.onLakeProgress(
+                                                        replica,
+                                                        lakeBucketOffset.getSnapshotId(),
+                                                        lakeLogEndOffset);
+                                            }
+                                        });
 
                         lakeBucketOffset
                                 .getMaxTimestamp()
@@ -1972,11 +2018,10 @@ public class ReplicaManager implements ServerReconfigurable {
                     remoteLogManager.lookupPositionForOffset(
                             remoteLogSegmentList.get(0), fetchOffset);
             PhysicalTablePath physicalTablePath = replica.getPhysicalTablePath();
+            FsPath remoteLogDir = FlussPaths.remoteLogDir(replica.getRemoteDataDir());
             FsPath remoteLogTabletDir =
                     FlussPaths.remoteLogTabletDir(
-                            remoteLogManager.remoteLogDir(),
-                            physicalTablePath,
-                            replica.getTableBucket());
+                            remoteLogDir, physicalTablePath, replica.getTableBucket());
             return new RemoteLogFetchInfo(
                     remoteLogTabletDir.toString(),
                     physicalTablePath.getPartitionName(),
@@ -2193,6 +2238,23 @@ public class ReplicaManager implements ServerReconfigurable {
                 || error == Errors.UNKNOWN_TABLE_OR_BUCKET_EXCEPTION;
     }
 
+    private void completeDelayedFetches(Map<TableBucket, ProduceLogResultForBucket> appendResults) {
+        appendResults.forEach(
+                (tableBucket, appendResult) -> {
+                    if (appendResult.succeeded()) {
+                        try {
+                            delayedFetchLogManager.checkAndComplete(
+                                    new DelayedTableBucketKey(tableBucket));
+                        } catch (Exception e) {
+                            LOG.error(
+                                    "Failed to complete delayed fetches for bucket {}.",
+                                    tableBucket,
+                                    e);
+                        }
+                    }
+                });
+    }
+
     private void completeDelayedOperations(TableBucket tableBucket) {
         DelayedTableBucketKey delayedTableBucketKey = new DelayedTableBucketKey(tableBucket);
         delayedWriteManager.checkAndComplete(delayedTableBucketKey);
@@ -2341,7 +2403,9 @@ public class ReplicaManager implements ServerReconfigurable {
                     replicaToDelete, deleteRemote && replicaToDelete.isLeader());
             if (deleteRemote && replicaToDelete.isLeader()) {
                 kvManager.deleteRemoteKvSnapshot(
-                        replicaToDelete.getPhysicalTablePath(), replicaToDelete.getTableBucket());
+                        replicaToDelete.getRemoteDataDir(),
+                        replicaToDelete.getPhysicalTablePath(),
+                        replicaToDelete.getTableBucket());
             }
         }
 
@@ -2455,6 +2519,20 @@ public class ReplicaManager implements ServerReconfigurable {
         }
     }
 
+    private String getRemoteDataDir(
+            TableBucket tb,
+            PhysicalTablePath physicalTablePath,
+            TableRegistration tableRegistration)
+            throws Exception {
+        if (tb.getPartitionId() != null) {
+            PartitionRegistration partitionRegistration =
+                    getPartitionRegistration(zkClient, physicalTablePath);
+            return partitionRegistration.getRemoteDataDir();
+        } else {
+            return tableRegistration.remoteDataDir;
+        }
+    }
+
     protected Optional<Replica> maybeCreateReplica(NotifyLeaderAndIsrData data) {
         Optional<Replica> replicaOpt = Optional.empty();
         try {
@@ -2463,7 +2541,12 @@ public class ReplicaManager implements ServerReconfigurable {
             if (hostedReplica instanceof NoneReplica) {
                 PhysicalTablePath physicalTablePath = data.getPhysicalTablePath();
                 TablePath tablePath = physicalTablePath.getTablePath();
-                TableInfo tableInfo = getTableInfo(zkClient, tablePath);
+
+                TableRegistration tableRegistration = getTableRegistration(zkClient, tablePath);
+                SchemaInfo schemaInfo = getSchemaInfo(zkClient, tablePath);
+                TableInfo tableInfo = tableRegistration.toTableInfo(tablePath, schemaInfo);
+
+                String remoteDataDir = getRemoteDataDir(tb, physicalTablePath, tableRegistration);
 
                 boolean isKvTable = tableInfo.hasPrimaryKey();
                 Optional<LogTablet> existingLogTabletOpt = logManager.getLog(tb);
@@ -2497,9 +2580,13 @@ public class ReplicaManager implements ServerReconfigurable {
                                 fatalErrorHandler,
                                 bucketMetricGroup,
                                 tableInfo,
+                                remoteDataDir,
                                 clock,
                                 remoteLogManager,
                                 scannerManager);
+                // Initialize the routing state before the replica becomes visible, so a
+                // ready leader always has its routing bucket count ready.
+                replica.updateRoutingState(data);
                 if (!existingLogTabletOpt.isPresent()) {
                     localDiskManager.recordReplicaLoad(dataDir, isKvTable);
                 }
@@ -2529,6 +2616,63 @@ public class ReplicaManager implements ServerReconfigurable {
         } else {
             throw new UnknownTableOrBucketException("Unknown table or bucket: " + tableBucket);
         }
+    }
+
+    /**
+     * Validates the routing bucket count of a client request against the replica-local routing
+     * state. The target bucket is resolved first through {@link
+     * #getReplicaOrException(TableBucket)}, so an unknown, non-local, or offline replica fails
+     * immediately with its standard API exception. Missing or mismatched routing information fails
+     * with INVALID_BUCKET_ROUTING. Online followers skip the leader-only routing validation.
+     *
+     * <p>Only client requests may be validated; follower-initiated requests carry bucket ids
+     * assigned authoritatively by NotifyLeaderAndIsr and must skip this check.
+     */
+    public void validateRoutingBucketCount(TableBucket tableBucket, int routingBucketCount) {
+        Replica replica = getReplicaOrException(tableBucket);
+        if (!replica.isLeader()) {
+            return;
+        }
+
+        Integer actual = replica.getRoutingBucketCount();
+        if (routingBucketCount <= 0) {
+            if (resolveBucketCountEpoch(replica) > 0) {
+                throw new InvalidBucketRoutingException(
+                        "Invalid bucket routing for "
+                                + tableBucket
+                                + ": the request did not include a routing bucket count; expected "
+                                + actual
+                                + ". Refresh partition metadata, recompute the bucket id, and "
+                                + "rebuild the request.");
+            }
+            return;
+        }
+
+        if (actual == null) {
+            return;
+        }
+        if (routingBucketCount != actual) {
+            throw new InvalidBucketRoutingException(
+                    "Invalid bucket routing for "
+                            + tableBucket
+                            + ": requested bucket count "
+                            + routingBucketCount
+                            + ", expected "
+                            + actual
+                            + ". Refresh partition metadata, recompute the bucket id, and rebuild "
+                            + "the request.");
+        }
+    }
+
+    /**
+     * Resolves the effective bucket layout epoch as the maximum of the replica-local value and the
+     * metadata cache: ALTER bucket.num advances only the cache, and the epoch is monotonic.
+     */
+    private long resolveBucketCountEpoch(Replica replica) {
+        Long replicaEpoch = replica.getBucketCountEpoch();
+        long cachedEpoch =
+                metadataCache.getBucketCountEpoch(replica.getTableBucket().getTableId()).orElse(0L);
+        return Math.max(replicaEpoch == null ? 0L : replicaEpoch, cachedEpoch);
     }
 
     public HostedReplica getReplica(TableBucket tableBucket) {

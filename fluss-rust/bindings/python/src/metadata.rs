@@ -20,7 +20,7 @@ use pyo3::types::PyDict;
 use std::collections::HashMap;
 
 /// Represents the type of change for a record in a log
-#[pyclass(eq, eq_int, from_py_object)]
+#[pyclass(eq, eq_int, skip_from_py_object)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ChangeType {
     /// Append-only operation

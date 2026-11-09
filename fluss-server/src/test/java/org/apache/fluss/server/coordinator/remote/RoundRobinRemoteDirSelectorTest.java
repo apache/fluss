@@ -19,6 +19,7 @@ package org.apache.fluss.server.coordinator.remote;
 
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -27,6 +28,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -138,6 +140,25 @@ class RoundRobinRemoteDirSelectorTest {
 
         // Both cycles should have same sequence
         assertThat(secondCycle).isEqualTo(firstCycle);
+    }
+
+    @Test
+    void testPositionWrapsAtEndOfCycle() throws Exception {
+        List<String> dirs =
+                Arrays.asList(
+                        "hdfs://cluster/data1", "hdfs://cluster/data2", "hdfs://cluster/data3");
+        RoundRobinRemoteDirSelector selector = new RoundRobinRemoteDirSelector(DEFAULT_DIR, dirs);
+
+        Field positionField = RoundRobinRemoteDirSelector.class.getDeclaredField("position");
+        positionField.setAccessible(true);
+        AtomicInteger position = (AtomicInteger) positionField.get(selector);
+
+        for (String dir : dirs) {
+            assertThat(selector.nextDataDir()).isEqualTo(dir);
+        }
+
+        assertThat(position).hasValue(0);
+        assertThat(selector.nextDataDir()).isEqualTo(dirs.get(0));
     }
 
     @Test

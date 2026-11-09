@@ -8,7 +8,7 @@ sidebar_position: 4
 ## Introduction
 
 [Apache Hudi](https://hudi.apache.org/) is an open lakehouse table format that provides transactional writes, record-level updates, and incremental processing on data lakes.
-To integrate Fluss with Hudi, you must enable lakehouse storage and configure Hudi as the lakehouse storage. For more details, see [Deploying Streaming Lakehouse](../../install-deploy/deploying-streaming-lakehouse.md).
+To integrate Fluss with Hudi, you must enable lakehouse storage and configure Hudi as the lakehouse storage. For more details, see [Deploying Lakestream](../../install-deploy/deploying-streaming-lakehouse.md).
 
 Fluss tiers data to standard Hudi tables. Primary-key Fluss tables are written as Hudi Merge-On-Read tables, while Fluss log tables are written as Hudi Copy-On-Write tables.
 
@@ -93,7 +93,7 @@ Restart Fluss after changing the plugin directory.
 
 ### Start Tiering Service to Hudi
 
-Then, start the datalake tiering service to tier Fluss data to Hudi. For the general process, see [Deploying Streaming Lakehouse](../../install-deploy/deploying-streaming-lakehouse.md).
+Then, start the datalake tiering service to tier Fluss data to Hudi. For the general process, see [Deploying Lakestream](../../install-deploy/deploying-streaming-lakehouse.md).
 
 For Hudi, prepare the following JARs in `${FLINK_HOME}/lib`:
 

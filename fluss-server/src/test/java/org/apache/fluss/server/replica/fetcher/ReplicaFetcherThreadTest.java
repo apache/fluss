@@ -22,11 +22,17 @@ import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.remote.RemoteLogFetchInfo;
+import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.rpc.RpcClient;
+import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.entity.ProduceLogResultForBucket;
+import org.apache.fluss.rpc.messages.FetchLogResponse;
 import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
@@ -37,6 +43,9 @@ import org.apache.fluss.server.kv.KvManager;
 import org.apache.fluss.server.kv.scan.ScannerManager;
 import org.apache.fluss.server.kv.snapshot.TestingCompletedKvSnapshotCommitter;
 import org.apache.fluss.server.log.LogManager;
+import org.apache.fluss.server.log.LogTablet;
+import org.apache.fluss.server.log.WriterStateEntry;
+import org.apache.fluss.server.log.remote.RemoteLogStorage.IndexType;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
@@ -46,10 +55,13 @@ import org.apache.fluss.server.storage.LocalDiskManager;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
+import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
+import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.clock.ManualClock;
 import org.apache.fluss.utils.concurrent.FlussScheduler;
@@ -61,14 +73,20 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -76,6 +94,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.function.Consumer;
 
 import static org.apache.fluss.record.TestData.DATA1;
+import static org.apache.fluss.record.TestData.DATA1_PARTITIONED_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
@@ -248,7 +267,7 @@ public class ReplicaFetcherThreadTest {
         leaderReplica.getLogTablet().updateHighWatermark(30L);
         followerReplica.getLogTablet().updateHighWatermark(30L);
         leaderReplica.getLogTablet().updateMinRetainOffset(30L);
-        followerReplica.getLogTablet().updateHighestCopiedEndOffset(30L);
+        followerReplica.getLogTablet().updateRemoteLogOffsets(Long.MAX_VALUE, -1L, 30L);
 
         assertThat(leaderReplica.getLocalLogEndOffset()).isEqualTo(30L);
         assertThat(followerReplica.getLocalLogEndOffset()).isEqualTo(30L);
@@ -542,6 +561,113 @@ public class ReplicaFetcherThreadTest {
         }
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testRestoreWriterSnapshotFromNonDefaultRemoteDirectory(boolean partitioned)
+            throws Exception {
+        long tableId = 100L;
+        TablePath tablePath = TablePath.of("test_db", "remote_writer_recovery");
+        String partitionName = partitioned ? "p1" : null;
+        TableBucket bucket = new TableBucket(tableId, partitioned ? 1L : null, 0);
+        PhysicalTablePath physicalTablePath = PhysicalTablePath.of(tablePath, partitionName);
+        String remoteDataDir = new File(tempDir, "dir2").toURI().toString();
+        zkClient.registerTable(
+                tablePath,
+                TableRegistration.newTable(
+                        tableId,
+                        remoteDataDir,
+                        partitioned ? DATA1_PARTITIONED_TABLE_DESCRIPTOR : DATA1_TABLE_DESCRIPTOR));
+        zkClient.registerFirstSchema(tablePath, DATA1_SCHEMA);
+        if (partitioned) {
+            zkClient.registerPartitionAssignmentAndMetadata(
+                    1L,
+                    partitionName,
+                    new PartitionAssignment(
+                            tableId,
+                            Collections.singletonMap(
+                                    0, BucketAssignment.of(leaderServerId, followerServerId))),
+                    remoteDataDir,
+                    tablePath,
+                    tableId,
+                    1);
+        }
+        makeLeaderAndFollower(physicalTablePath, bucket);
+        Replica leaderReplica = leaderRM.getReplicaOrException(bucket);
+        Replica followerReplica = followerRM.getReplicaOrException(bucket);
+        long nextFetchOffset = DATA1.size();
+        leaderReplica.appendRecordsToFollower(genMemoryLogRecordsWithWriterId(DATA1, 123L, 0, 0L));
+        LogTablet leaderLog = leaderReplica.getLogTablet();
+        leaderLog.writerStateManager().takeSnapshot();
+        // Stale local writer state must be replaced, not merged with the remote snapshot.
+        followerReplica.appendRecordsToFollower(
+                genMemoryLogRecordsWithWriterId(DATA1, 456L, 0, 0L));
+
+        RemoteLogSegment segment =
+                RemoteLogSegment.Builder.builder()
+                        .physicalTablePath(physicalTablePath)
+                        .tableBucket(bucket)
+                        .remoteLogSegmentId(UUID.randomUUID())
+                        .remoteLogStartOffset(0L)
+                        .remoteLogEndOffset(nextFetchOffset)
+                        .build();
+        FsPath remoteLogDir = FlussPaths.remoteLogDir(remoteDataDir);
+        RemoteLogFetchInfo fetchInfo =
+                new RemoteLogFetchInfo(
+                        FlussPaths.remoteLogTabletDir(remoteLogDir, physicalTablePath, bucket)
+                                .toString(),
+                        partitionName,
+                        Collections.singletonList(segment),
+                        0);
+        Path remoteSnapshot =
+                Paths.get(
+                        FlussPaths.remoteWriterSnapshotFile(
+                                        remoteLogDir,
+                                        segment,
+                                        IndexType.getFileSuffix(IndexType.WRITER_ID_SNAPSHOT))
+                                .toUri());
+        Files.createDirectories(remoteSnapshot.getParent());
+        Files.copy(
+                FlussPaths.writerSnapshotFile(leaderLog.getLogDir(), nextFetchOffset).toPath(),
+                remoteSnapshot);
+        TestingLeaderEndpoint endpoint =
+                new TestingLeaderEndpoint(
+                        new Configuration(),
+                        leaderRM,
+                        new ServerNode(
+                                followerServerId,
+                                "localhost",
+                                10001,
+                                ServerType.TABLET_SERVER,
+                                "rack2")) {
+                    @Override
+                    public CompletableFuture<FetchData> fetchLog(FetchLogContext context) {
+                        return CompletableFuture.completedFuture(
+                                new FetchData(
+                                        new FetchLogResponse(),
+                                        Collections.singletonMap(
+                                                bucket,
+                                                FetchLogResultForBucket.remote(
+                                                        bucket, fetchInfo, nextFetchOffset))));
+                    }
+                };
+        ReplicaFetcherThread fetcher =
+                new ReplicaFetcherThread("remote-snapshot-test", followerRM, endpoint, 0);
+        fetcher.addBuckets(
+                Collections.singletonMap(
+                        bucket, new InitialFetchStatus(tableId, tablePath, leaderServerId, 0L)));
+
+        fetcher.doWork();
+
+        assertThat(fetcher.fetchStatus(bucket).get().fetchOffset()).isEqualTo(nextFetchOffset);
+        LogTablet followerLog = followerReplica.getLogTablet();
+        assertThat(followerLog.writerStateManager().activeWriters()).containsOnlyKeys(123L);
+        WriterStateEntry writer = followerLog.writerStateManager().activeWriters().get(123L);
+        assertThat(writer.writerId()).isEqualTo(123L);
+        assertThat(writer.lastBatchSequence()).isZero();
+        assertThat(writer.lastDataOffset()).isEqualTo(nextFetchOffset - 1);
+        assertThat(followerLog.localLogEndOffset()).isEqualTo(nextFetchOffset);
+    }
+
     private void registerTableInZkClient() throws Exception {
         ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupRoot();
         zkClient.registerTable(
@@ -570,7 +696,9 @@ public class ReplicaFetcherThreadTest {
                                         Arrays.asList(leaderServerId, followerServerId),
                                         Collections.emptyList(),
                                         INITIAL_COORDINATOR_EPOCH,
-                                        INITIAL_BUCKET_EPOCH))),
+                                        INITIAL_BUCKET_EPOCH),
+                                3,
+                                0L)),
                 result -> {});
         followerRM.becomeLeaderOrFollower(
                 INITIAL_COORDINATOR_EPOCH,
@@ -585,7 +713,9 @@ public class ReplicaFetcherThreadTest {
                                         Arrays.asList(leaderServerId, followerServerId),
                                         Collections.emptyList(),
                                         INITIAL_COORDINATOR_EPOCH,
-                                        INITIAL_BUCKET_EPOCH))),
+                                        INITIAL_BUCKET_EPOCH),
+                                3,
+                                0L)),
                 result -> {});
     }
 

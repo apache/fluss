@@ -209,6 +209,35 @@ writer.flush();
 
 Fluss currently supports the following aggregate functions:
 
+### count
+
+Counts non-null input values for each primary key.
+
+- **Supported Data Type**: `BIGINT`, for both input and stored count
+- **Behavior**: Each non-null input contributes one, regardless of its numeric value. The first non-null input is stored as `1`.
+- **Null Handling**: Null inputs contribute zero. A null input initializes a `NULL` count to `0` and leaves an existing count unchanged.
+- **Partial Updates**: Only updates targeting this column contribute to the count. An untargeted count column retains its previous value, or remains `NULL` on the first write for a key. A targeted column follows the behavior above, including initialization to `0` for a null input.
+
+```sql
+CREATE TABLE event_counts (
+    id INT,
+    cnt BIGINT,
+    PRIMARY KEY (id) NOT ENFORCED
+) WITH (
+    'table.merge-engine' = 'aggregation',
+    'fields.cnt.agg' = 'count'
+);
+
+INSERT INTO event_counts VALUES (1, 100), (1, 0), (1, NULL);
+-- The stored cnt for id = 1 is 2.
+```
+
+For the Java API, use `.column("cnt", DataTypes.BIGINT(), AggFunctions.COUNT())`.
+To count every input row, provide a non-null value for this column in every row.
+To accumulate counts already computed upstream, use `sum` instead. Like other aggregation functions, `count` does not support retractions.
+
+When `'table.delete.behavior' = 'allow'`, a partial delete targeting the count column clears it to `NULL` rather than decrementing it. A subsequent targeted update starts the count at `1` for a non-null input or `0` for a null input. If the count column is not targeted by the delete, its value is retained; a count of `0` is non-null and therefore prevents the entire record from being removed when deleting other columns. See [Delete Behavior](#delete-behavior) for the full and partial delete rules.
+
 ### sum
 
 Aggregates values by computing the sum across multiple rows.
@@ -593,11 +622,15 @@ TableDescriptor.builder()
 
 ### first_value
 
-Retrieves and retains the first value seen for a field.
+Retrieves and retains the first non-null value seen for a field.
 
 - **Supported Data Types**: All data types
-- **Behavior**: Keeps the first received value, ignores all subsequent values
-- **Null Handling**: Null values are retained if received first
+- **Behavior**: Keeps the first received non-null value, ignores all subsequent values
+- **Null Handling**: Null values are treated as unset until a non-null value is received
+
+This function has the same behavior as `first_value_ignore_nulls`. For example,
+`NULL -> 10 -> 20` produces `10`. In partial updates, omitting a field does not
+prevent a later update from supplying its first non-null value.
 
 **Example:**
 <Tabs>
@@ -1085,6 +1118,182 @@ TableDescriptor.builder()
 
 // Input: (1, false), (1, false), (1, true)
 // Result: (1, true) -- At least one value is true
+```
+
+</TabItem>
+</Tabs>
+
+### last_n
+
+Appends input arrays to the stored array and keeps the last `size` elements.
+
+- **Supported Data Types**: `ARRAY` of any element type
+- **Behavior**: Appends the input elements, then drops the oldest elements beyond `size`. The first write for a key is trimmed as well
+- **Ordering**: Elements are kept in the order writes reach the server. With the default `'sink.distribution-mode'`, Flink writes for the same key go through a single sink task, so the order follows the input. Independent clients writing to the same key may interleave
+- **Null Handling**: A null input leaves the column unchanged
+- **Size**: Required, a positive integer. Creating a table without it fails
+
+:::note
+Every update rewrites the whole stored array. With the default `'table.changelog.image' = 'full'`, both the old and the new array are also written to the changelog on every update. Keep `size` small.
+:::
+
+**Example:**
+<Tabs>
+<TabItem value="flink-sql" label="Flink SQL" default>
+
+```sql
+CREATE TABLE test_last_n (
+    user_id BIGINT,
+    recent_events ARRAY<STRING>,
+    PRIMARY KEY (user_id) NOT ENFORCED
+) WITH (
+    'table.merge-engine' = 'aggregation',
+    'fields.recent_events.agg' = 'last_n',
+    'fields.recent_events.last_n.size' = '3'
+);
+
+INSERT INTO test_last_n VALUES
+    (1, ARRAY['login']),
+    (1, ARRAY['search']),
+    (1, ARRAY['view', 'add_to_cart']);
+
+SELECT * FROM test_last_n WHERE user_id = 1;
++------------+----------------------------------+
+| user_id    | recent_events                    |
++------------+----------------------------------+
+|          1 | [search, view, add_to_cart]      |
++------------+----------------------------------+
+```
+
+</TabItem>
+<TabItem value="java-client" label="Java Client">
+
+```java
+Schema schema = Schema.newBuilder()
+    .column("user_id", DataTypes.BIGINT())
+    .column("recent_events", DataTypes.ARRAY(DataTypes.STRING()), AggFunctions.LAST_N(3))
+    .primaryKey("user_id")
+    .build();
+
+TableDescriptor.builder()
+    .schema(schema)
+    .property("table.merge-engine", "aggregation")
+    .build();
+
+// Input: (1, ['login']), (1, ['search']), (1, ['view', 'add_to_cart'])
+// Result: (1, ['search', 'view', 'add_to_cart'])
+```
+
+</TabItem>
+</Tabs>
+
+### collect
+
+Collects array elements into a single array.
+
+- **Supported Data Types**: `ARRAY<T>`
+- **Behavior**: Concatenates array elements; with `distinct=true`, duplicates are removed
+- **Ordering**: Elements follow the order writes reach the server. With `distinct=true`, the first occurrence of each element is retained
+- **Null Handling**: Null elements are retained; null inputs are ignored
+- **Parameters**: `distinct` (`true` or `false`, default is `false`)
+
+:::note
+The collected array has no size limit. Every update rewrites the whole stored array. With the default `'table.changelog.image' = 'full'`, both the old and the new array are also written to the changelog on every update. As the array grows, so do memory usage, write costs, and changelog volume. Use `last_n` when only a bounded number of recent elements is needed.
+:::
+
+**Example:**
+<Tabs>
+<TabItem value="flink-sql" label="Flink SQL" default>
+
+```sql
+CREATE TABLE test_collect  (
+    id BIGINT,
+    tags ARRAY<INT>,
+    PRIMARY KEY (id) NOT ENFORCED
+) WITH (
+    'table.merge-engine' = 'aggregation',
+    'fields.tags.agg' = 'collect',
+    'fields.tags.collect.distinct' = 'true'
+);
+
+INSERT INTO test_collect VALUES
+    (1, ARRAY[1, 2, 2]),
+    (1, ARRAY[2, 3, NULL]);
+
+SELECT * FROM test_collect;
+-- Result:
+-- (1, [1, 2, 3, NULL])
+```
+
+</TabItem>
+<TabItem value="java-client" label="Java Client">
+
+```java
+Schema schema = Schema.newBuilder()
+    .column("id", DataTypes.BIGINT())
+    .column("tags", DataTypes.ARRAY(DataTypes.INT()), AggFunctions.COLLECT(true))
+    .primaryKey("id")
+    .build();
+
+TableDescriptor.builder()
+    .schema(schema)
+    .property("table.merge-engine", "aggregation")
+    .build();
+
+// Input: (1, [1, 2, 2]), (1, [2, 3, null])
+// Result: (1, [1, 2, 3, null])
+```
+
+</TabItem>
+</Tabs>
+
+### merge_map
+
+Merges map values by combining key-value pairs. For duplicate keys, the latest value wins.
+
+- **Supported Data Types**: `MAP<K, V>`
+- **Behavior**: Merges maps, overriding earlier values for duplicate keys
+- **Null Handling**: Null keys are not allowed; null values are allowed
+
+**Example:**
+<Tabs>
+<TabItem value="flink-sql" label="Flink SQL" default>
+
+```sql
+CREATE TABLE test_merge_map  (
+    id BIGINT,
+    attributes MAP<INT, STRING>,
+    PRIMARY KEY (id) NOT ENFORCED
+) WITH (
+    'table.merge-engine' = 'aggregation',
+    'fields.attributes.agg' = 'merge_map'
+);
+
+INSERT INTO test_merge_map VALUES
+    (1, MAP[1, 'a', 2, 'b']),
+    (1, MAP[2, 'c', 3, NULL]);
+
+SELECT * FROM test_merge_map;
+-- Result: (1, {1='a', 2='c', 3=NULL})
+```
+
+</TabItem>
+<TabItem value="java-client" label="Java Client">
+
+```java
+Schema schema = Schema.newBuilder()
+    .column("id", DataTypes.BIGINT())
+    .column("attributes", DataTypes.MAP(DataTypes.INT(), DataTypes.STRING()), AggFunctions.MERGE_MAP())
+    .primaryKey("id")
+    .build();
+
+TableDescriptor.builder()
+    .schema(schema)
+    .property("table.merge-engine", "aggregation")
+    .build();
+
+// Input: (1, {1='a', 2='b'}), (1, {2='c', 3=null})
+// Result: (1, {1='a', 2='c', 3=null})
 ```
 
 </TabItem>

@@ -223,6 +223,7 @@ class KvWriteBatchTest {
         return new KvWriteBatch(
                 tb.getTableId(),
                 tb.getBucket(),
+                DATA1_TABLE_INFO_PK.getNumBuckets(),
                 PhysicalTablePath.of(DATA1_TABLE_PATH_PK),
                 DATA1_TABLE_INFO_PK.getSchemaId(),
                 KvFormat.COMPACTED,
@@ -320,6 +321,7 @@ class KvWriteBatchTest {
         return new KvWriteBatch(
                 tb.getTableId(),
                 tb.getBucket(),
+                DATA1_TABLE_INFO_PK.getNumBuckets(),
                 PhysicalTablePath.of(DATA1_TABLE_PATH_PK),
                 DATA1_TABLE_INFO_PK.getSchemaId(),
                 KvFormat.COMPACTED,

@@ -24,14 +24,26 @@ import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.ApiMessage;
 import org.apache.fluss.rpc.messages.ApiVersionsRequest;
 import org.apache.fluss.rpc.messages.ApiVersionsResponse;
+import org.apache.fluss.rpc.messages.CommitConsumerOffsetsRequest;
+import org.apache.fluss.rpc.messages.CommitConsumerOffsetsResponse;
 import org.apache.fluss.rpc.messages.DatabaseExistsRequest;
 import org.apache.fluss.rpc.messages.DatabaseExistsResponse;
+import org.apache.fluss.rpc.messages.DeleteConsumerGroupsRequest;
+import org.apache.fluss.rpc.messages.DeleteConsumerGroupsResponse;
+import org.apache.fluss.rpc.messages.DeleteConsumerOffsetsRequest;
+import org.apache.fluss.rpc.messages.DeleteConsumerOffsetsResponse;
+import org.apache.fluss.rpc.messages.DescribeBucketsRequest;
+import org.apache.fluss.rpc.messages.DescribeBucketsResponse;
 import org.apache.fluss.rpc.messages.DescribeClusterConfigsRequest;
 import org.apache.fluss.rpc.messages.DescribeClusterConfigsResponse;
 import org.apache.fluss.rpc.messages.FetchLogRequest;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
+import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerRequest;
+import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerResponse;
 import org.apache.fluss.rpc.messages.GetClusterHealthRequest;
 import org.apache.fluss.rpc.messages.GetClusterHealthResponse;
+import org.apache.fluss.rpc.messages.GetConsumerOffsetsRequest;
+import org.apache.fluss.rpc.messages.GetConsumerOffsetsResponse;
 import org.apache.fluss.rpc.messages.GetDatabaseInfoRequest;
 import org.apache.fluss.rpc.messages.GetDatabaseInfoResponse;
 import org.apache.fluss.rpc.messages.GetFileSystemSecurityTokenRequest;
@@ -54,6 +66,8 @@ import org.apache.fluss.rpc.messages.LimitScanRequest;
 import org.apache.fluss.rpc.messages.LimitScanResponse;
 import org.apache.fluss.rpc.messages.ListAclsRequest;
 import org.apache.fluss.rpc.messages.ListAclsResponse;
+import org.apache.fluss.rpc.messages.ListConsumerGroupsRequest;
+import org.apache.fluss.rpc.messages.ListConsumerGroupsResponse;
 import org.apache.fluss.rpc.messages.ListDatabasesRequest;
 import org.apache.fluss.rpc.messages.ListDatabasesResponse;
 import org.apache.fluss.rpc.messages.ListOffsetsRequest;
@@ -111,6 +125,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getFetchLogData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeFetchLogResponse;
+import static org.apache.fluss.utils.concurrent.FutureUtils.completedExceptionally;
 
 /** A {@link TabletServerGateway} for test purpose. */
 public class TestTabletServerGateway implements TabletServerGateway {
@@ -259,6 +274,12 @@ public class TestTabletServerGateway implements TabletServerGateway {
     }
 
     @Override
+    public CompletableFuture<DescribeBucketsResponse> describeBuckets(
+            DescribeBucketsRequest request) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
     public CompletableFuture<GetTableSchemaResponse> getTableSchema(GetTableSchemaRequest request) {
         throw new UnsupportedOperationException();
     }
@@ -362,6 +383,48 @@ public class TestTabletServerGateway implements TabletServerGateway {
     public CompletableFuture<NotifyLakeTableOffsetResponse> notifyLakeTableOffset(
             NotifyLakeTableOffsetRequest request) {
         throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public CompletableFuture<FindConsumerGroupOwnerResponse> findConsumerGroupOwner(
+            FindConsumerGroupOwnerRequest request) {
+        return completedExceptionally(
+                new UnsupportedOperationException("findConsumerGroupOwner is not supported"));
+    }
+
+    @Override
+    public CompletableFuture<CommitConsumerOffsetsResponse> commitConsumerOffsets(
+            CommitConsumerOffsetsRequest request) {
+        return completedExceptionally(
+                new UnsupportedOperationException("commitConsumerOffsets is not supported"));
+    }
+
+    @Override
+    public CompletableFuture<GetConsumerOffsetsResponse> getConsumerOffsets(
+            GetConsumerOffsetsRequest request) {
+        return completedExceptionally(
+                new UnsupportedOperationException("getConsumerOffsets is not supported"));
+    }
+
+    @Override
+    public CompletableFuture<DeleteConsumerOffsetsResponse> deleteConsumerOffsets(
+            DeleteConsumerOffsetsRequest request) {
+        return completedExceptionally(
+                new UnsupportedOperationException("deleteConsumerOffsets is not supported"));
+    }
+
+    @Override
+    public CompletableFuture<ListConsumerGroupsResponse> listConsumerGroups(
+            ListConsumerGroupsRequest request) {
+        return completedExceptionally(
+                new UnsupportedOperationException("listConsumerGroups is not supported"));
+    }
+
+    @Override
+    public CompletableFuture<DeleteConsumerGroupsResponse> deleteConsumerGroups(
+            DeleteConsumerGroupsRequest request) {
+        return completedExceptionally(
+                new UnsupportedOperationException("deleteConsumerGroups is not supported"));
     }
 
     @Override

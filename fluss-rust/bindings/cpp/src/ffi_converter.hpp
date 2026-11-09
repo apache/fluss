@@ -220,9 +220,12 @@ inline ffi::FfiConfig to_ffi_config(const Configuration& config) {
     ffi_config.writer_dynamic_batch_size_enabled = config.writer_dynamic_batch_size_enabled;
     ffi_config.writer_dynamic_batch_size_min = config.writer_dynamic_batch_size_min;
     ffi_config.writer_bucket_no_key_assigner = rust::String(config.writer_bucket_no_key_assigner);
+    ffi_config.writer_dynamic_create_partition_enabled =
+        config.writer_dynamic_create_partition_enabled;
     ffi_config.scanner_remote_log_prefetch_num = config.scanner_remote_log_prefetch_num;
     ffi_config.remote_file_download_thread_num = config.remote_file_download_thread_num;
     ffi_config.scanner_remote_log_read_concurrency = config.scanner_remote_log_read_concurrency;
+    ffi_config.scanner_io_tmp_dir = rust::String(config.scanner_io_tmp_dir);
     ffi_config.scanner_log_max_poll_records = config.scanner_log_max_poll_records;
     ffi_config.scanner_log_fetch_max_bytes = config.scanner_log_fetch_max_bytes;
     ffi_config.scanner_log_fetch_min_bytes = config.scanner_log_fetch_min_bytes;
@@ -236,7 +239,10 @@ inline ffi::FfiConfig to_ffi_config(const Configuration& config) {
     ffi_config.writer_buffer_wait_timeout_ms = config.writer_buffer_wait_timeout_ms;
     ffi_config.writer_kv_backpressure_max_throttle_ms =
         config.writer_kv_backpressure_max_throttle_ms;
+    ffi_config.writer_retry_backoff_ms = config.writer_retry_backoff_ms;
+    ffi_config.writer_retry_max_backoff_ms = config.writer_retry_max_backoff_ms;
     ffi_config.connect_timeout_ms = config.connect_timeout_ms;
+    ffi_config.connection_max_idle_time_ms = config.connection_max_idle_time_ms;
     ffi_config.security_protocol = rust::String(config.security_protocol);
     ffi_config.security_sasl_mechanism = rust::String(config.security_sasl_mechanism);
     ffi_config.security_sasl_username = rust::String(config.security_sasl_username);
@@ -246,6 +252,8 @@ inline ffi::FfiConfig to_ffi_config(const Configuration& config) {
     ffi_config.lookup_batch_timeout_ms = config.lookup_batch_timeout_ms;
     ffi_config.lookup_max_inflight_requests = config.lookup_max_inflight_requests;
     ffi_config.lookup_max_retries = config.lookup_max_retries;
+    ffi_config.lookup_retry_backoff_ms = config.lookup_retry_backoff_ms;
+    ffi_config.lookup_retry_max_backoff_ms = config.lookup_retry_max_backoff_ms;
     return ffi_config;
 }
 

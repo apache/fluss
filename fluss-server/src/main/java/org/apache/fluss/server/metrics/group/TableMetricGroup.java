@@ -22,6 +22,7 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.CharacterFilter;
 import org.apache.fluss.metrics.Counter;
 import org.apache.fluss.metrics.DescriptiveStatisticsHistogram;
+import org.apache.fluss.metrics.Gauge;
 import org.apache.fluss.metrics.Histogram;
 import org.apache.fluss.metrics.MeterView;
 import org.apache.fluss.metrics.MetricNames;
@@ -32,11 +33,19 @@ import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.metrics.registry.MetricRegistry;
 import org.apache.fluss.server.kv.rocksdb.RocksDBStatistics;
 
+import io.github.fluss_contrib.rocksdb.HistogramType;
+import io.github.fluss_contrib.rocksdb.Statistics;
+import io.github.fluss_contrib.rocksdb.TickerType;
+
 import javax.annotation.Nullable;
 
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.function.ToLongFunction;
+import java.util.stream.LongStream;
 import java.util.stream.Stream;
 
 import static org.apache.fluss.metrics.utils.MetricGroupUtils.makeScope;
@@ -167,6 +176,15 @@ public class TableMetricGroup extends AbstractMetricGroup {
 
     public Counter remoteLogDeleteErrors() {
         return logMetrics.remoteLogDeleteErrors;
+    }
+
+    /** Returns the successful KV snapshot upload byte counter, or a no-op for log tables. */
+    public Counter remoteKvCopyBytes() {
+        if (kvMetrics == null) {
+            return NoOpCounter.INSTANCE;
+        } else {
+            return kvMetrics.remoteKvCopyBytes;
+        }
     }
 
     public void incKvMessageIn(long n) {
@@ -353,39 +371,52 @@ public class TableMetricGroup extends AbstractMetricGroup {
                 .filter(stats -> stats != null);
     }
 
+    private LongStream collectDistinctStatistics(ToLongFunction<Statistics> reader) {
+        Set<Statistics> seen = new HashSet<>();
+        return allRocksDBStatistics()
+                .mapToLong(
+                        source ->
+                                source.collectStatistics(
+                                        statistics -> {
+                                            if (seen.contains(statistics)) {
+                                                return 0L;
+                                            }
+                                            long value = reader.applyAsLong(statistics);
+                                            seen.add(statistics);
+                                            return value;
+                                        }));
+    }
+
+    private LongStream tickerValues(TickerType type) {
+        return collectDistinctStatistics(statistics -> statistics.getTickerCount(type));
+    }
+
+    private LongStream histogramValues(HistogramType type) {
+        return collectDistinctStatistics(
+                statistics -> Math.round(statistics.getHistogramData(type).getPercentile99()));
+    }
+
     public TabletServerMetricGroup getServerMetricGroup() {
         return (TabletServerMetricGroup) parent;
     }
 
     /**
-     * Register RocksDB aggregated metrics at table level. These metrics aggregate values from all
-     * buckets of this table.
+     * Registers native statistics once per shared object, and RocksDB instance properties over all
+     * live buckets. Shared histograms represent all samples of this table on this server, and stall
+     * time is cumulative across RocksDB instances.
      *
      * <p>This method is called once during TableMetricGroup construction for KV tables.
      */
     private void registerRocksDBMetrics() {
-        // Max aggregation metrics - track the maximum value across all buckets
-        gauge(
-                MetricNames.ROCKSDB_WRITE_STALL_MICROS_MAX,
-                () ->
-                        allRocksDBStatistics()
-                                .mapToLong(RocksDBStatistics::getWriteStallMicros)
-                                .max()
-                                .orElse(0L));
-        gauge(
-                MetricNames.ROCKSDB_GET_LATENCY_MICROS_MAX,
-                () ->
-                        allRocksDBStatistics()
-                                .mapToLong(RocksDBStatistics::getGetLatencyMicros)
-                                .max()
-                                .orElse(0L));
-        gauge(
-                MetricNames.ROCKSDB_WRITE_LATENCY_MICROS_MAX,
-                () ->
-                        allRocksDBStatistics()
-                                .mapToLong(RocksDBStatistics::getWriteLatencyMicros)
-                                .max()
-                                .orElse(0L));
+        Gauge<Long> writeStall = () -> tickerValues(TickerType.STALL_MICROS).sum();
+        gauge(MetricNames.ROCKSDB_WRITE_STALL_MICROS_TOTAL, writeStall);
+        gauge(MetricNames.ROCKSDB_WRITE_STALL_MICROS_MAX, writeStall::getValue);
+        Gauge<Long> getLatency = () -> histogramValues(HistogramType.DB_GET).max().orElse(0L);
+        gauge(MetricNames.ROCKSDB_GET_LATENCY_MICROS_P99, getLatency);
+        gauge(MetricNames.ROCKSDB_GET_LATENCY_MICROS_MAX, getLatency::getValue);
+        Gauge<Long> writeLatency = () -> histogramValues(HistogramType.DB_WRITE).max().orElse(0L);
+        gauge(MetricNames.ROCKSDB_WRITE_LATENCY_MICROS_P99, writeLatency);
+        gauge(MetricNames.ROCKSDB_WRITE_LATENCY_MICROS_MAX, writeLatency::getValue);
         gauge(
                 MetricNames.ROCKSDB_NUM_FILES_AT_LEVEL0_MAX,
                 () ->
@@ -407,38 +438,25 @@ public class TableMetricGroup extends AbstractMetricGroup {
                                 .mapToLong(RocksDBStatistics::getCompactionPending)
                                 .max()
                                 .orElse(0L));
-        gauge(
-                MetricNames.ROCKSDB_COMPACTION_TIME_MICROS_MAX,
-                () ->
-                        allRocksDBStatistics()
-                                .mapToLong(RocksDBStatistics::getCompactionTimeMicros)
-                                .max()
-                                .orElse(0L));
-        // Sum aggregation metrics - track the total value across all buckets
+        Gauge<Long> compactionTime =
+                () -> histogramValues(HistogramType.COMPACTION_TIME).max().orElse(0L);
+        gauge(MetricNames.ROCKSDB_COMPACTION_TIME_MICROS_P99, compactionTime);
+        gauge(MetricNames.ROCKSDB_COMPACTION_TIME_MICROS_MAX, compactionTime::getValue);
         gauge(
                 MetricNames.ROCKSDB_BYTES_READ_TOTAL,
-                () -> allRocksDBStatistics().mapToLong(RocksDBStatistics::getBytesRead).sum());
+                () -> tickerValues(TickerType.BYTES_READ).sum());
         gauge(
                 MetricNames.ROCKSDB_BYTES_WRITTEN_TOTAL,
-                () -> allRocksDBStatistics().mapToLong(RocksDBStatistics::getBytesWritten).sum());
+                () -> tickerValues(TickerType.BYTES_WRITTEN).sum());
         gauge(
                 MetricNames.ROCKSDB_FLUSH_BYTES_WRITTEN_TOTAL,
-                () ->
-                        allRocksDBStatistics()
-                                .mapToLong(RocksDBStatistics::getFlushBytesWritten)
-                                .sum());
+                () -> tickerValues(TickerType.FLUSH_WRITE_BYTES).sum());
         gauge(
                 MetricNames.ROCKSDB_COMPACTION_BYTES_READ_TOTAL,
-                () ->
-                        allRocksDBStatistics()
-                                .mapToLong(RocksDBStatistics::getCompactionBytesRead)
-                                .sum());
+                () -> tickerValues(TickerType.COMPACT_READ_BYTES).sum());
         gauge(
                 MetricNames.ROCKSDB_COMPACTION_BYTES_WRITTEN_TOTAL,
-                () ->
-                        allRocksDBStatistics()
-                                .mapToLong(RocksDBStatistics::getCompactionBytesWritten)
-                                .sum());
+                () -> tickerValues(TickerType.COMPACT_WRITE_BYTES).sum());
 
         // Fine-grained memory metrics - track memory usage by component type
         gauge(
@@ -592,6 +610,8 @@ public class TableMetricGroup extends AbstractMetricGroup {
 
         private static final String LOOKUP_FILE_DOWNLOADED = "lookup_file_downloaded";
 
+        private final Counter remoteKvCopyBytes;
+
         private final Counter totalLookupRequests;
         private final Counter failedLookupRequests;
         private final Counter totalHistoricalLookupRequests;
@@ -609,6 +629,10 @@ public class TableMetricGroup extends AbstractMetricGroup {
 
         public KvMetricGroup(TableMetricGroup tableMetricGroup) {
             super(tableMetricGroup, TabletType.KV);
+
+            // for kv snapshot upload
+            remoteKvCopyBytes = new ThreadSafeSimpleCounter();
+            meter(MetricNames.REMOTE_KV_COPY_BYTES_RATE, new MeterView(remoteKvCopyBytes));
 
             // for lookup request
             totalLookupRequests = new ThreadSafeSimpleCounter();
@@ -705,7 +729,8 @@ public class TableMetricGroup extends AbstractMetricGroup {
             lakeLookupTimeMs =
                     histogram(
                             MetricNames.LAKE_LOOKUP_TIME_MS,
-                            new DescriptiveStatisticsHistogram(WINDOW_SIZE));
+                            new DescriptiveStatisticsHistogram(
+                                    WINDOW_SIZE, DescriptiveStatisticsHistogram.DEFAULT_MAX_AGE));
         }
 
         private void recordLookup(long lookupTimeNanos) {

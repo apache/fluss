@@ -18,7 +18,7 @@
 package org.apache.fluss.spark.read
 
 import org.apache.fluss.config.{Configuration => FlussConfiguration}
-import org.apache.fluss.metadata.{LogFormat, TableInfo, TablePath}
+import org.apache.fluss.metadata.{DataLakeFormat, LogFormat, TableInfo, TablePath}
 import org.apache.fluss.predicate.{Predicate => FlussPredicate}
 import org.apache.fluss.spark.read.lake.FlussLakeUtils
 import org.apache.fluss.spark.utils.{SparkPartitionPredicate, SparkPredicateConverter}
@@ -96,7 +96,11 @@ trait FlussSupportsPushDownV2Filters extends FlussSupportsPushDownPartitionFilte
         SparkPredicateConverter.convertPredicates(tableInfo.getRowType, nonPartition.toSeq)
       pushedPredicate = predicate
       acceptedPredicates = accepted.toArray
-    } else if (tableInfo.getTableConfig.isDataLakeEnabled) {
+    } else if (
+      tableInfo.getTableConfig.isDataLakeEnabled &&
+      (tableInfo.getLakeTablePath == tableInfo.getTablePath ||
+        tableInfo.getTableConfig.getDataLakeFormat.orElse(null) == DataLakeFormat.PAIMON)
+    ) {
       // Lake-enabled tables: probe the lake source for which predicates it accepts. All predicates
       // (including partition) are offered because the lake source handles both partition pruning
       // and data filtering internally. This recovers the former FlussLakeSupportsPushDownV2Filters

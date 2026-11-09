@@ -314,6 +314,14 @@ impl IdempotenceManager {
             .map(|b| b.batch_sequence)
     }
 
+    /// Returns the last acknowledged sequence, or -1 if no batch has been acknowledged.
+    pub(crate) fn last_acked_sequence(&self, bucket: &TableBucket) -> i32 {
+        self.bucket_entries
+            .lock()
+            .get(bucket)
+            .map_or(-1, |entry| entry.last_acked_sequence)
+    }
+
     pub fn is_next_sequence(&self, bucket: &TableBucket, batch_sequence: i32) -> bool {
         let entries = self.bucket_entries.lock();
         if let Some(entry) = entries.get(bucket) {
@@ -342,6 +350,7 @@ impl IdempotenceManager {
         bucket: &TableBucket,
         batch_sequence: i32,
         batch_id: i64,
+        last_acked_sequence_at_send: i32,
         error: FlussError,
     ) -> bool {
         if !self.has_writer_id() {
@@ -353,10 +362,11 @@ impl IdempotenceManager {
 
         if error == FlussError::OutOfOrderSequenceException {
             // Inline is_next_sequence logic to avoid double-locking
-            let is_next = entry.map_or(batch_sequence == 0, |e| {
-                e.last_acked_sequence + 1 == batch_sequence
-            });
-            return is_reset || !is_next;
+            let last_acked_sequence = entry.map_or(-1, |e| e.last_acked_sequence);
+            let is_next = last_acked_sequence + 1 == batch_sequence;
+            // A predecessor acknowledged since this attempt was sent makes the error stale.
+            // Without that progress, an unadjusted next batch must still fail and reset.
+            return is_reset || !is_next || last_acked_sequence > last_acked_sequence_at_send;
         }
         if error == FlussError::UnknownWriterIdException {
             return is_reset;
@@ -457,37 +467,40 @@ mod tests {
 
     #[test]
     fn test_can_retry_out_of_order() {
+        let error = FlussError::OutOfOrderSequenceException;
         let mgr = IdempotenceManager::new(true, 5);
         let b0 = test_bucket(0);
 
         // No writer_id → never retriable
-        assert!(!mgr.can_retry_for_error(&b0, 0, 100, FlussError::OutOfOrderSequenceException));
+        assert!(!mgr.can_retry_for_error(&b0, 0, 100, -1, error));
 
         mgr.set_writer_id(42);
         mgr.add_in_flight_batch(&b0, 0, 100);
         mgr.add_in_flight_batch(&b0, 1, 101);
 
         // seq=0 IS next expected (last_acked=-1+1=0) → genuine violation, NOT retriable
-        assert!(!mgr.can_retry_for_error(&b0, 0, 100, FlussError::OutOfOrderSequenceException));
+        assert!(!mgr.can_retry_for_error(&b0, 0, 100, -1, error));
         // seq=1 is NOT next expected → retriable
-        assert!(mgr.can_retry_for_error(&b0, 1, 101, FlussError::OutOfOrderSequenceException));
+        assert!(mgr.can_retry_for_error(&b0, 1, 101, -1, error));
     }
 
     #[test]
     fn test_can_retry_after_sequence_reset() {
+        let error = FlussError::OutOfOrderSequenceException;
         // OOS: batch whose seq was adjusted to match last_acked+1 is still retriable
         let (mgr, b0) = setup_three_in_flight();
         mgr.handle_completed_batch(&b0, 100, 42); // last_acked=0
         mgr.handle_failed_batch(&b0, 101, 42, None, true); // batch_id=102 adjusted to seq=1
 
         // seq=1 == last_acked(0)+1, but batch was reset → retriable
-        assert!(mgr.can_retry_for_error(&b0, 1, 102, FlussError::OutOfOrderSequenceException));
+        assert!(mgr.can_retry_for_error(&b0, 1, 102, 0, error));
 
         // UnknownWriterId: non-reset → NOT retriable, reset → retriable
+        let error = FlussError::UnknownWriterIdException;
         let (mgr, b0) = setup_three_in_flight();
-        assert!(!mgr.can_retry_for_error(&b0, 0, 100, FlussError::UnknownWriterIdException));
+        assert!(!mgr.can_retry_for_error(&b0, 0, 100, -1, error));
         mgr.handle_failed_batch(&b0, 101, 42, None, true); // batch_id=102 is reset
-        assert!(mgr.can_retry_for_error(&b0, 1, 102, FlussError::UnknownWriterIdException));
+        assert!(mgr.can_retry_for_error(&b0, 1, 102, -1, error));
     }
 
     #[test]
@@ -644,6 +657,7 @@ mod tests {
 
     #[test]
     fn scenario_multiple_inflight_retried_in_order() {
+        let error = FlussError::OutOfOrderSequenceException;
         // Java: testIdempotenceWithMultipleInflightBatchesRetriedInOrder
         // 3 batches in-flight, batch 0 times out, batches 1+2 get OOS.
         // All are retriable and must be retried one-at-a-time in sequence order.
@@ -651,9 +665,9 @@ mod tests {
 
         // Batch 0 (seq=0) times out → retriable, stays in in-flight
         // Batch 1 (seq=1) OOS → retriable (not next expected seq)
-        assert!(mgr.can_retry_for_error(&b0, 1, 101, FlussError::OutOfOrderSequenceException));
+        assert!(mgr.can_retry_for_error(&b0, 1, 101, -1, error));
         // Batch 2 (seq=2) OOS → retriable
-        assert!(mgr.can_retry_for_error(&b0, 2, 102, FlussError::OutOfOrderSequenceException));
+        assert!(mgr.can_retry_for_error(&b0, 2, 102, -1, error));
 
         // Retry phase: only first-in-flight batch should be drained
         assert!(mgr.is_first_in_flight_batch(&b0, 100));
@@ -676,6 +690,7 @@ mod tests {
 
     #[test]
     fn scenario_out_of_order_responses() {
+        let error = FlussError::OutOfOrderSequenceException;
         // Java: testCorrectHandlingOfOutOfOrderResponses
         // Server responds to batch 1 (OOS) before batch 0 (timeout).
         // Both re-enqueued, retried in order.
@@ -688,7 +703,7 @@ mod tests {
         mgr.add_in_flight_batch(&b0, 1, 101);
 
         // Batch 1 response arrives first: OOS → retriable (seq 1 ≠ next expected 0)
-        assert!(mgr.can_retry_for_error(&b0, 1, 101, FlussError::OutOfOrderSequenceException));
+        assert!(mgr.can_retry_for_error(&b0, 1, 101, -1, error));
         // Batch 0 response: timeout → retriable (no IdempotenceManager call)
 
         // Retry: batch 0 must go first
@@ -736,6 +751,7 @@ mod tests {
 
     #[test]
     fn scenario_unknown_writer_id_resets_and_restarts() {
+        let error = FlussError::UnknownWriterIdException;
         // Java: testRetryAfterResettingInFlightBatchSequence
         // Batch 0 times out (retriable), batch 1 gets UnknownWriterId (non-retriable).
         // UnknownWriterId resets all state. After new writer ID, sequences restart at 0.
@@ -749,7 +765,7 @@ mod tests {
 
         // Batch 0 times out → retriable (stays in in-flight)
         // Batch 1 UnknownWriterId → NOT retriable (non-reset batch)
-        assert!(!mgr.can_retry_for_error(&b0, 1, 101, FlussError::UnknownWriterIdException));
+        assert!(!mgr.can_retry_for_error(&b0, 1, 101, -1, error));
 
         // Sender calls fail_batch → handle_failed_batch with error → full reset
         mgr.handle_failed_batch(

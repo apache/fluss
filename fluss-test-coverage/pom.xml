@@ -23,7 +23,7 @@
     <parent>
         <groupId>org.apache.fluss</groupId>
         <artifactId>fluss</artifactId>
-        <version>1.0-SNAPSHOT</version>
+        <version>1.1-SNAPSHOT</version>
     </parent>
 
     <artifactId>fluss-test-coverage</artifactId>
@@ -309,6 +309,10 @@
                                                 <exclude>fluss-test-utils/**</exclude>
                                                 <!-- exclude adapter classes to avoid Jacoco error: "Can't add different class with same name" -->
                                                 <exclude>fluss-flink/**/target/classes/org/apache/fluss/flink/adapter/**</exclude>
+                                                <!-- exclude the Iceberg 1.12 classes that replace the classes of the same name in fluss-lake-iceberg-common, for the same reason -->
+                                                <exclude>fluss-lake/fluss-lake-iceberg-1.12/target/classes/org/apache/fluss/lake/iceberg/IcebergLakeStoragePlugin.class</exclude>
+                                                <exclude>fluss-lake/fluss-lake-iceberg-1.12/target/classes/org/apache/fluss/lake/iceberg/source/IcebergSplitSerializer.class</exclude>
+                                                <exclude>fluss-lake/fluss-lake-iceberg-1.12/target/classes/org/apache/fluss/lake/iceberg/tiering/writer/**</exclude>
                                             </excludes>
                                         </resource>
                                     </resources>
@@ -376,6 +380,9 @@
                             <goal>check</goal>
                         </goals>
                         <configuration>
+                            <!-- Modules that require Java 11 skip their tests on Java 8, so the
+                            coverage gate is only meaningful (and enforced) on Java 11+ builds. -->
+                            <skip>${skip.on.java8}</skip>
                             <dataFile>${project.basedir}/target/jacoco-aggregate.exec</dataFile>
                             <rules>
                                 <rule>
@@ -488,6 +495,8 @@
                                         <exclude>org.apache.fluss.predicate.*</exclude>
                                         <!-- end exclude for lake source -->
                                         <exclude>org.apache.fluss.lake.source.*</exclude>
+                                        <exclude>org.apache.fluss.lake.lakestorage.LakeCatalog</exclude>
+                                        <exclude>org.apache.fluss.lake.lakestorage.LakeCatalog.Context</exclude>
                                         <exclude>org.apache.fluss.lake.lakestorage.LakeStorage</exclude>
                                         <exclude>
                                             org.apache.fluss.lake.lakestorage.LakeTableLookuper
@@ -531,7 +540,7 @@
                                         <exclude>
                                             org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper
                                         </exclude>
-                                        <exclude>org.apache.fluss.flink.tiering.source.TieringWriterInitContext
+                                        <exclude>org.apache.fluss.client.tiering.TieringWriterInitContext
                                         </exclude>
                                         <exclude>org.apache.fluss.flink.tiering.source.TieringSourceReader</exclude>
                                         <exclude>org.apache.fluss.flink.tiering.source.TieringSourceFetcherManager</exclude>
@@ -546,12 +555,13 @@
                                         <exclude>org.apache.fluss.flink.tiering.committer.CommittableMessageTypeInfo*
                                         </exclude>
                                         <exclude>
-                                            org.apache.fluss.flink.tiering.committer.TieringCommitterInitContext
+                                            org.apache.fluss.client.tiering.TieringCommitterInitContext
                                         </exclude>
                                         <exclude>
                                             org.apache.fluss.flink.tiering.LakeTieringJobBuilder
                                         </exclude>
                                         <exclude>org.apache.fluss.lake.committer.LakeCommitResult*</exclude>
+                                        <exclude>org.apache.fluss.lake.committer.LakeCommitter.CommitContext</exclude>
                                         <exclude>org.apache.fluss.flink.tiering.FlussLakeTieringEntrypoint</exclude>
                                         <exclude>org.apache.fluss.flink.tiering.FlussLakeTiering</exclude>
                                         <!-- end exclude for flink tiering service -->

@@ -18,6 +18,7 @@
 package org.apache.fluss.rpc.protocol;
 
 import org.apache.fluss.exception.HistoricalPartitionThrottledException;
+import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.NotEnoughReplicasException;
 import org.apache.fluss.exception.TimeoutException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
@@ -88,6 +89,13 @@ public class ApiErrorTest {
                                 historicalLookupThrottledErrorMsg),
                         Errors.HISTORICAL_PARTITION_THROTTLED,
                         historicalLookupThrottledErrorMsg));
+
+        String invalidBucketRoutingErrorMsg = "invalid bucket routing";
+        arguments.add(
+                Arguments.of(
+                        new InvalidBucketRoutingException(invalidBucketRoutingErrorMsg),
+                        Errors.INVALID_BUCKET_ROUTING,
+                        invalidBucketRoutingErrorMsg));
 
         return arguments;
     }

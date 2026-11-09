@@ -18,6 +18,8 @@
 package org.apache.fluss.client.table.scanner.log;
 
 import org.apache.fluss.client.table.scanner.ScanRecord;
+import org.apache.fluss.exception.CorruptMessageException;
+import org.apache.fluss.exception.FetchException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -47,6 +49,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import javax.annotation.Nullable;
 
 import java.io.File;
+import java.io.RandomAccessFile;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
@@ -67,6 +70,7 @@ import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
 import static org.apache.fluss.testutils.DataTestUtils.genLogFile;
 import static org.apache.fluss.utils.FlussPaths.remoteLogSegmentDir;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link org.apache.fluss.client.table.scanner.log.RemoteCompletedFetch}. */
 class RemoteCompletedFetchTest {
@@ -131,6 +135,62 @@ class RemoteCompletedFetchTest {
         // no more records can be read
         scanRecords = completedFetch.fetchRecords(8);
         assertThat(scanRecords.size()).isEqualTo(0);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testProjectedFileReadRespectsCrcSetting(boolean checkCrc) throws Exception {
+        TableBucket tableBucket = new TableBucket(DATA2_TABLE_ID, 0);
+        FileLogRecords file =
+                createFileLogRecords(
+                        tableBucket, DATA2_PHYSICAL_TABLE_PATH, DATA2, LogFormat.ARROW);
+        // Corrupt the last (unselected) column's body. Projection must not suppress validation
+        // when CRC is enabled, and must not read/decompress this buffer when CRC is disabled.
+        try (RandomAccessFile writable = new RandomAccessFile(file.file(), "rw")) {
+            long position = writable.length() - 8;
+            writable.seek(position);
+            int value = writable.read();
+            writable.seek(position);
+            writable.write(value ^ 0xff);
+        }
+        try (LogRecordReadContext context =
+                LogRecordReadContext.createReadContext(
+                        tableInfo,
+                        true,
+                        LogRecordReadContext.SchemaResolution.TARGET,
+                        Projection.of(new int[] {0, 0}),
+                        schemaGetter,
+                        null)) {
+            RemoteCompletedFetch fetch =
+                    new RemoteCompletedFetch(
+                            tableBucket,
+                            DATA2_TABLE_PATH,
+                            file,
+                            10L,
+                            context,
+                            logScannerStatus,
+                            checkCrc,
+                            0L,
+                            () -> {});
+            try {
+                if (checkCrc) {
+                    assertThatThrownBy(() -> fetch.fetchRecords(10))
+                            .isInstanceOf(FetchException.class)
+                            .hasRootCauseInstanceOf(CorruptMessageException.class);
+                } else {
+                    List<ScanRecord> records = fetch.fetchRecords(10);
+                    assertThat(records).hasSize(DATA2.size());
+                    for (int i = 0; i < records.size(); i++) {
+                        assertThat(records.get(i).logOffset()).isEqualTo(i);
+                        assertThat(records.get(i).getRow().getInt(0)).isEqualTo(DATA2.get(i)[0]);
+                        assertThat(records.get(i).getRow().getInt(1)).isEqualTo(DATA2.get(i)[0]);
+                    }
+                }
+            } finally {
+                fetch.drain();
+            }
+            assertThat(context.getBufferAllocator().getAllocatedMemory()).isZero();
+        }
     }
 
     @Test

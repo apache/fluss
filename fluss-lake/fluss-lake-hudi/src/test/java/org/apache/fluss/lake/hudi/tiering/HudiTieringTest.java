@@ -22,6 +22,7 @@ import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
 import org.apache.fluss.lake.committer.CommitterInitContext;
 import org.apache.fluss.lake.committer.LakeCommitResult;
 import org.apache.fluss.lake.committer.LakeCommitter;
+import org.apache.fluss.lake.committer.LakeCommitter.CommitContext;
 import org.apache.fluss.lake.hudi.HudiLakeCatalog;
 import org.apache.fluss.lake.hudi.utils.meta.CkpMetadata;
 import org.apache.fluss.lake.lakestorage.TestingLakeCatalogContext;
@@ -59,6 +60,7 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.InOrder;
 
 import javax.annotation.Nullable;
@@ -116,6 +118,32 @@ class HudiTieringTest {
         }
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testWriteClientHadoopConfiguration(boolean isPrimaryKeyTable) throws Exception {
+        hudiConfig.setString("hadoop.fs.s3a.endpoint", "http://localhost:9000");
+        hudiConfig.setString("hadoop.fs.s3a.access.key", "test-access-key");
+        hudiConfig.setString("hadoop.fs.s3a.secret.key", "test-secret-key");
+        TablePath tablePath = TablePath.of("hudi", "test_hadoop_configuration");
+        TableDescriptor tableDescriptor =
+                isPrimaryKeyTable ? createPkTableDescriptor() : createLogTableDescriptor();
+        hudiLakeCatalog.createTable(
+                tablePath, tableDescriptor, new TestingLakeCatalogContext(tableDescriptor));
+
+        try (HudiWriteTableInfo tableInfo =
+                HudiWriteTableInfo.create(new HudiCatalogProvider(hudiConfig), tablePath)) {
+            org.apache.hadoop.conf.Configuration writeClientConf =
+                    tableInfo
+                            .getWriteClient()
+                            .getEngineContext()
+                            .getStorageConf()
+                            .unwrapAs(org.apache.hadoop.conf.Configuration.class);
+            assertThat(writeClientConf.get("fs.s3a.endpoint")).isEqualTo("http://localhost:9000");
+            assertThat(writeClientConf.get("fs.s3a.access.key")).isEqualTo("test-access-key");
+            assertThat(writeClientConf.get("fs.s3a.secret.key")).isEqualTo("test-secret-key");
+        }
+    }
+
     @Test
     void testWriteAndCommitLogTable() throws Exception {
         TablePath tablePath = TablePath.of("hudi", "test_write_and_commit_log_table");
@@ -145,9 +173,11 @@ class HudiTieringTest {
                     committer
                             .commit(
                                     committable,
-                                    Collections.singletonMap(
-                                            FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY,
-                                            "fluss-offset-file"))
+                                    new CommitContext(
+                                            Collections.singletonMap(
+                                                    FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY,
+                                                    "fluss-offset-file"),
+                                            Collections.emptyMap()))
                             .getCommittedSnapshotId();
         }
 
@@ -190,9 +220,11 @@ class HudiTieringTest {
                     committer
                             .commit(
                                     committable,
-                                    Collections.singletonMap(
-                                            FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY,
-                                            "fluss-offset-file"))
+                                    new CommitContext(
+                                            Collections.singletonMap(
+                                                    FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY,
+                                                    "fluss-offset-file"),
+                                            Collections.emptyMap()))
                             .getCommittedSnapshotId();
         }
         assertThat(readLatestCommitMetadata(tablePath).getOperationType())
@@ -247,7 +279,13 @@ class HudiTieringTest {
         try (LakeCommitter<HudiWriteResult, HudiCommittable> committer =
                 createLakeCommitter(tablePath, tableInfo)) {
             HudiCommittable committable = committer.toCommittable(Collections.emptyList());
-            assertThatThrownBy(() -> committer.commit(committable, Collections.emptyMap()))
+            assertThatThrownBy(
+                            () ->
+                                    committer.commit(
+                                            committable,
+                                            new CommitContext(
+                                                    Collections.emptyMap(),
+                                                    Collections.emptyMap())))
                     .isInstanceOf(IOException.class)
                     .hasMessageContaining("hudi.hoodie.allow.empty.commit");
             assertThat(committer.getMissingLakeSnapshot(null)).isNull();
@@ -271,7 +309,7 @@ class HudiTieringTest {
         LakeCommitResult result =
                 context.committer.commit(
                         context.committer.toCommittable(Collections.emptyList()),
-                        Collections.emptyMap());
+                        new CommitContext(Collections.emptyMap(), Collections.emptyMap()));
 
         assertThat(result.getCommittedSnapshotId()).isEqualTo(Long.parseLong(DATA_INSTANT));
         verifyNoInteractions(context.ckpMetadata);
@@ -295,7 +333,8 @@ class HudiTieringTest {
                         () ->
                                 context.committer.commit(
                                         context.committer.toCommittable(Collections.emptyList()),
-                                        Collections.emptyMap()))
+                                        new CommitContext(
+                                                Collections.emptyMap(), Collections.emptyMap())))
                 .isInstanceOf(IOException.class)
                 .hasMessageContaining("was not completed");
         verify(context.writeClient).rollback(DATA_INSTANT);
@@ -320,7 +359,13 @@ class HudiTieringTest {
                                     new HudiWriteStats(
                                             Collections.singletonList(writeStat()), 0L)));
 
-            assertThatThrownBy(() -> committer.commit(committable, Collections.emptyMap()))
+            assertThatThrownBy(
+                            () ->
+                                    committer.commit(
+                                            committable,
+                                            new CommitContext(
+                                                    Collections.emptyMap(),
+                                                    Collections.emptyMap())))
                     .isInstanceOf(IOException.class)
                     .hasMessageContaining("Hudi write stats must contain exactly one instant");
         }
@@ -336,7 +381,9 @@ class HudiTieringTest {
                 .thenReturn(COMPACTION_INSTANT);
 
         LakeCommitResult commitResult =
-                context.committer.commit(committable, Collections.emptyMap());
+                context.committer.commit(
+                        committable,
+                        new CommitContext(Collections.emptyMap(), Collections.emptyMap()));
 
         assertThat(commitResult.getCommittedSnapshotId()).isEqualTo(Long.parseLong(DATA_INSTANT));
         InOrder inOrder =
@@ -359,7 +406,12 @@ class HudiTieringTest {
                 .when(context.compactionService)
                 .commitCompaction(eq(committable.getCompactionWriteStats()), anyMap());
 
-        assertThatThrownBy(() -> context.committer.commit(committable, Collections.emptyMap()))
+        assertThatThrownBy(
+                        () ->
+                                context.committer.commit(
+                                        committable,
+                                        new CommitContext(
+                                                Collections.emptyMap(), Collections.emptyMap())))
                 .isInstanceOf(IOException.class)
                 .hasMessageContaining("compaction failed");
         verify(context.compactionService, never()).scheduleCompaction();
@@ -379,7 +431,9 @@ class HudiTieringTest {
                 .scheduleCompaction();
 
         LakeCommitResult commitResult =
-                context.committer.commit(committable, Collections.emptyMap());
+                context.committer.commit(
+                        committable,
+                        new CommitContext(Collections.emptyMap(), Collections.emptyMap()));
 
         assertThat(commitResult.getCommittedSnapshotId()).isEqualTo(Long.parseLong(DATA_INSTANT));
         verify(context.compactionService, never()).markSelectedCompactionsInflight();
@@ -468,8 +522,11 @@ class HudiTieringTest {
             return committer
                     .commit(
                             committer.toCommittable(Collections.singletonList(writeResult)),
-                            Collections.singletonMap(
-                                    FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, "fluss-offset-file"))
+                            new CommitContext(
+                                    Collections.singletonMap(
+                                            FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY,
+                                            "fluss-offset-file"),
+                                    Collections.emptyMap()))
                     .getCommittedSnapshotId();
         }
     }
@@ -653,6 +710,11 @@ class HudiTieringTest {
         @Override
         public long tieringRoundTimestamp() {
             return tieringRoundTimestamp;
+        }
+
+        @Override
+        public int bucketCount() {
+            return tableInfo.getNumBuckets();
         }
     }
 

@@ -23,6 +23,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.utils.ExponentialBackoff;
 import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 
 import org.slf4j.Logger;
@@ -37,6 +38,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /**
  * A client that lookups value of keys from server.
@@ -64,6 +67,7 @@ public class LookupClient {
     private final LookupSender lookupSender;
 
     public LookupClient(Configuration conf, MetadataUpdater metadataUpdater) {
+        ExponentialBackoff retryBackoff = createRetryBackoff(conf);
         this.lookupQueue = new LookupQueue(conf);
         this.lookupSenderThreadPool = createThreadPool();
         short acks = configureAcks(conf);
@@ -73,9 +77,24 @@ public class LookupClient {
                         lookupQueue,
                         conf.getInt(ConfigOptions.CLIENT_LOOKUP_MAX_INFLIGHT_SIZE),
                         conf.getInt(ConfigOptions.CLIENT_LOOKUP_MAX_RETRIES),
+                        retryBackoff,
                         acks,
                         (int) conf.get(ConfigOptions.CLIENT_REQUEST_TIMEOUT).toMillis());
         lookupSenderThreadPool.submit(lookupSender);
+    }
+
+    private static ExponentialBackoff createRetryBackoff(Configuration conf) {
+        Duration initial = conf.get(ConfigOptions.CLIENT_LOOKUP_RETRY_BACKOFF);
+        Duration maximum = conf.get(ConfigOptions.CLIENT_LOOKUP_RETRY_BACKOFF_MAX);
+        checkArgument(
+                !initial.isNegative()
+                        && initial.compareTo(maximum) <= 0
+                        && maximum.compareTo(Duration.ofMillis(Integer.MAX_VALUE)) <= 0,
+                "%s and %s must satisfy 0ms <= initial <= maximum <= %sms.",
+                ConfigOptions.CLIENT_LOOKUP_RETRY_BACKOFF.key(),
+                ConfigOptions.CLIENT_LOOKUP_RETRY_BACKOFF_MAX.key(),
+                Integer.MAX_VALUE);
+        return new ExponentialBackoff(initial.toMillis(), 2, maximum.toMillis(), 0.2);
     }
 
     private short configureAcks(Configuration conf) {
@@ -113,17 +132,24 @@ public class LookupClient {
             TableBucket tableBucket,
             byte[] keyBytes,
             boolean insertIfNotExists,
-            @Nullable String originalPartitionName) {
+            @Nullable String originalPartitionName,
+            int bucketCount) {
         LookupQuery lookup =
                 new LookupQuery(
-                        tablePath, tableBucket, keyBytes, insertIfNotExists, originalPartitionName);
+                        tablePath,
+                        tableBucket,
+                        keyBytes,
+                        insertIfNotExists,
+                        originalPartitionName,
+                        bucketCount);
         lookupQueue.appendLookup(lookup);
         return lookup.future();
     }
 
     public CompletableFuture<List<byte[]>> prefixLookup(
-            TablePath tablePath, TableBucket tableBucket, byte[] keyBytes) {
-        PrefixLookupQuery prefixLookup = new PrefixLookupQuery(tablePath, tableBucket, keyBytes);
+            TablePath tablePath, TableBucket tableBucket, byte[] keyBytes, int bucketCount) {
+        PrefixLookupQuery prefixLookup =
+                new PrefixLookupQuery(tablePath, tableBucket, keyBytes, bucketCount);
         lookupQueue.appendLookup(prefixLookup);
         return prefixLookup.future();
     }

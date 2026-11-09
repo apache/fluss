@@ -20,6 +20,7 @@ import Link from '@docusaurus/Link';
 import Layout from '@theme/Layout';
 import {useColorMode} from '@docusaurus/theme-common';
 import HomepageFeatures from '@site/src/components/HomepageFeatures';
+import UserLogoBand from '@site/src/components/UserLogoBand';
 import {useEffect, useRef, useState} from 'react';
 import {Highlight} from 'prism-react-renderer';
 import flussPrismDark from '@site/src/utils/prismDark';
@@ -112,35 +113,33 @@ const SLACK_INVITE =
     'https://join.slack.com/t/apache-fluss/shared_invite/zt-473vgmvjr-cmIma~_iAA4cN02o5u2pDQ';
 
 function HeroDiagram() {
-    // Inline SVG: a four-column architectural map of the Fluss data plane.
-    //
-    //   01 · SOURCES       (left)   — databases, CDC, event logs, IoT
-    //   02 · FLUSS HOT TIER (centre) — Coordinator + Tablet Servers
-    //   03 · READ PATTERNS (right)  — streaming, batch, lookup, union
-    //   04 · QUERY ENGINES (bottom) — Flink, Spark, Trino, StarRocks, Doris, DuckDB, Ray
-    //
-    // The hot tier tiers down to a Lakehouse cold tier (Paimon · Iceberg ·
-    // Hudi · Lance) via a Tiering Service. ViewBox is 1200 × 640 (15:8) to give the
-    // four columns enough breathing room without crowding labels.
+    // Keep the original Fluss diagram palette and cluster layout. The taller
+    // canvas adds the gateway, direct reads, engine status, and access patterns.
     return (
         <svg
-            viewBox="0 0 1200 640"
+            viewBox="0 0 1200 820"
             xmlns="http://www.w3.org/2000/svg"
             role="img"
             aria-labelledby="heroDiagramTitle heroDiagramDesc">
             <title id="heroDiagramTitle">Apache Fluss architecture</title>
             <desc id="heroDiagramDesc">
-                Sources on the left (databases, CDC streams, event logs,
-                IoT/clickstreams) feed the Fluss hot tier in the centre,
-                which is composed of a Coordinator Server and a row of
-                Tablet Servers. Data continuously tiers down to a Lakehouse
-                cold tier (Apache Paimon, Apache Iceberg, Apache Hudi,
-                Lance) via a
-                Tiering Service. Read patterns on the right include
-                streaming reads, batch reads, lookup joins, and a union
-                read that merges hot and cold. Query engines along the
-                bottom include Apache Flink, Apache Spark, Trino,
-                StarRocks, Apache Doris, DuckDB and Ray.
+                CDC streams, event streams, and AI workloads feed the Fluss hot
+                tier through ingestion. The Fluss Gateway provides HTTP/REST and
+                AI agent access. A Coordinator Server manages metadata, placement,
+                and failover for Tablet Servers with Log Tables and PK Tables,
+                exposing sub-second freshness, a columnar log, changelog streams,
+                and latest state. Lakestream coordinates Fluss and lakehouse
+                storage through shared metadata and a Flink tiering service.
+                Lake formats include Apache Paimon, Apache Iceberg, Apache Hudi,
+                and Lance. Read patterns include incremental streaming reads,
+                batch snapshot and full scans, key-value and prefix lookups,
+                and union reads across hot and cold data in a single query.
+                Query engines can query Fluss directly through supported
+                integrations. Engines shown are Apache Flink, Apache Spark,
+                StarRocks (planned), Apache DataFusion (work in progress), Apache Doris
+                (work in progress), DuckDB (experimental), and Trino (work in
+                progress). Data access patterns include column pruning,
+                partition pruning, and predicate pushdowns.
             </desc>
 
             <defs>
@@ -149,7 +148,7 @@ function HeroDiagram() {
                         orient="auto-start-reverse">
                     <path d="M0 0 L 10 5 L 0 10 Z" fill="#266D95" />
                 </marker>
-<marker id="hgArrowMuted" viewBox="0 0 10 10" refX="9" refY="5"
+                <marker id="hgArrowMuted" viewBox="0 0 10 10" refX="9" refY="5"
                         markerWidth="7" markerHeight="7"
                         orient="auto-start-reverse">
                     <path d="M0 0 L 10 5 L 0 10 Z" fill="#7AAFCB" />
@@ -175,7 +174,7 @@ function HeroDiagram() {
             <g fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace" fontSize="12">
 
                 {/* ===== Column eyebrows ===== */}
-                <text x="-15" y="32" fill="#266D95" fontSize="11"
+                <text x="0" y="32" fill="#266D95" fontSize="11"
                       fontWeight="700" letterSpacing="1.6">
                     01 · SOURCES
                 </text>
@@ -188,39 +187,46 @@ function HeroDiagram() {
                     03 · READ PATTERNS
                 </text>
 
-                {/* ===== 01 · SOURCES (left column, plain text list) =====
-                    Anchored at x=-15 (just outside the SVG viewBox; the
-                    surrounding CSS keeps overflow visible) so the bold
-                    title "IoT · Clickstreams" doesn't bleed under the
-                    vertical separator at x=130. */}
+                {/* ===== 01 · SOURCES ===== */}
                 {[
                     {y: 120, title: 'CDC Streams',   items: ['Postgres · MySQL', 'Oracle · MongoDB']},
-                    {y: 188, title: 'Event Streams', items: ['Device · Web', 'Mobile']},
+                    {y: 188, title: 'Event Streams', items: ['Devices · Web', 'Mobile']},
                     {y: 256, title: 'AI Workloads',  items: ['Features · Embeddings', 'Multimodal · Agents']},
                 ].map((s, i) => (
                     <g key={i}>
-                        <text x="-15" y={s.y}
+                        <text x="0" y={s.y}
                               fill="#E6ECFA" fontSize="13" fontWeight="700">
                             {s.title}
                         </text>
-                        <text x="-15" fill="#7AAFCB" fontSize="11">
+                        <text x="0" fill="#7AAFCB" fontSize="11">
                             {s.items.map((line, j) => (
-                                <tspan key={j} x="-15" y={s.y + 18 + j * 14}>{line}</tspan>
+                                <tspan key={j} x="0" y={s.y + 18 + j * 14}>{line}</tspan>
                             ))}
                         </text>
                     </g>
                 ))}
 
+                {/* Gateway access enters the same shared streaming tables. */}
+                <rect x="0" y="330" width="176" height="90" rx="9"
+                      fill="#102856" stroke="rgba(122,175,203,0.4)" />
+                <text x="14" y="356" fill="#E6ECFA" fontSize="13" fontWeight="700">
+                    Fluss Gateway
+                </text>
+                <text x="14" y="378" fill="#7AAFCB" fontSize="11">HTTP / REST</text>
+                <text x="14" y="396" fill="#7AAFCB" fontSize="11">AI Agent Access</text>
+                <path className="fluss-hero-live"
+                      d="M176 375 L190 375 Q210 375 210 355 L210 265 Q210 245 230 245 L290 245"
+                      fill="none" stroke="#266D95" strokeWidth="1.75"
+                      strokeDasharray="6 6" markerEnd="url(#hgArrowLive)" />
+
                 {/* Vertical separator between sources column and hot tier */}
-                <line x1="130" y1="60" x2="130" y2="320"
+                <line x1="150" y1="60" x2="150" y2="310"
                       stroke="rgba(122,175,203,0.18)" strokeWidth="1" />
 
-                {/* Sources → Fluss arrow: 4× the original length (40 → 160
-                    units). Marker is also enlarged so the arrowhead remains
-                    proportional to the longer line. */}
+                {/* Ingestion through engines and Fluss clients. */}
                 <path
                     className="fluss-hero-live"
-                    d="M130 200 L 290 200"
+                    d="M150 200 L 290 200"
                     stroke="#266D95"
                     strokeWidth="1.75"
                     strokeDasharray="6 6"
@@ -228,8 +234,9 @@ function HeroDiagram() {
                     markerEnd="url(#hgArrowLive)"
                 />
                 <text fill="#B1CEDF" fontSize="10" textAnchor="middle">
-                    <tspan x="210" y="180">Apache Flink / Spark</tspan>
-                    <tspan x="210" y="192">Apache Fluss Clients</tspan>
+                    <tspan x="220" y="158" fontSize="12" fontWeight="700">Ingestion</tspan>
+                    <tspan x="220" y="179">Apache Flink / Spark</tspan>
+                    <tspan x="220" y="192">Apache Fluss Clients</tspan>
                 </text>
 
                 {/* ===== 02 · FLUSS · HOT TIER ===== */}
@@ -240,23 +247,26 @@ function HeroDiagram() {
                 <text x="310" y="86"
                       fill="#B1CEDF" fontSize="11"
                       fontWeight="700" letterSpacing="1.2">
-                    APACHE FLUSS · HOT TIER
+                    FLUSS CLUSTER
                 </text>
                 <text x="310" y="104"
                       fill="#7AAFCB" fontSize="11">
-                    Sub-second freshness · Columnar log · Changelog stream
+                    Sub-second freshness · Columnar log
+                </text>
+                <text x="310" y="119" fill="#7AAFCB" fontSize="11">
+                    Changelog stream · Latest state
                 </text>
 
                 {/* Coordinator Server (centred, top) */}
-                <rect x="420" y="124" width="280" height="50" rx="9"
+                <rect x="420" y="134" width="280" height="50" rx="9"
                       fill="#0A1745"
                       stroke="rgba(38,109,149,0.55)"
                       strokeWidth="1" />
-                <text x="560" y="146" textAnchor="middle"
+                <text x="560" y="154" textAnchor="middle"
                       fill="#B1CEDF" fontSize="13" fontWeight="700">
                     Coordinator Server
                 </text>
-                <text x="560" y="163" textAnchor="middle"
+                <text x="560" y="173" textAnchor="middle"
                       fill="#7AAFCB" fontSize="10">
                     Metadata · Placement · Failover
                 </text>
@@ -264,7 +274,7 @@ function HeroDiagram() {
                 {/* Coordinator → Tablet Server fan-out (dashed muted lines) */}
                 {[365, 495, 625, 755].map((cx, i) => (
                     <path key={i}
-                          d={`M560 174 L 560 196 L ${cx} 196 L ${cx} 216`}
+                          d={`M560 184 L 560 196 L ${cx} 196 L ${cx} 216`}
                           stroke="rgba(122,175,203,0.35)"
                           strokeWidth="1"
                           strokeDasharray="3 3"
@@ -319,53 +329,52 @@ function HeroDiagram() {
                     </g>
                 ))}
 
-                {/* ===== Tiering Service (hot → cold) ===== */}
-                <path
-                    className="fluss-hero-live"
-                    d="M560 300 L 560 370"
-                    stroke="#266D95"
-                    strokeWidth="1.75"
-                    strokeDasharray="4 4"
-                    fill="none"
-                    markerEnd="url(#hgArrowLive)"
-                />
-                <text x="580" y="324"
-                      fill="#B1CEDF" fontSize="12" fontWeight="700">
+                {/* Lakestream coordinates the streaming and lake representations. */}
+                <path className="fluss-hero-live"
+                      d="M560 300 L560 450"
+                      stroke="#266D95" strokeWidth="1.75" strokeDasharray="4 4"
+                      fill="none" markerEnd="url(#hgArrowLive)" />
+                <text x="580" y="335" fill="#B1CEDF" fontSize="15" fontWeight="700">
+                    LAKESTREAM
+                </text>
+                <text x="580" y="354" fill="#7AAFCB" fontSize="10">
+                    One logical table · Two freshness layers
+                </text>
+                <text x="580" y="387" fill="#B1CEDF" fontSize="12" fontWeight="700">
                     Tiering Service
                 </text>
-                <text x="580" y="342"
-                      fill="#7AAFCB" fontSize="10">
-                    Flink Job · Continuous Compaction
+                <text x="580" y="405" fill="#7AAFCB" fontSize="10">
+                    Flink job · Compaction &amp; commits
+                </text>
+                <text x="580" y="423" fill="#7AAFCB" fontSize="10">
+                    Shared metadata · Committed progress
                 </text>
 
-                {/* ===== LAKEHOUSE · COLD TIER ===== */}
-                <rect x="290" y="380" width="540" height="120" rx="14"
-                      fill="#102856"
-                      stroke="rgba(38,109,149,0.55)"
-                      strokeWidth="1.25"
-                      strokeDasharray="5 4" />
-                <text x="310" y="406"
-                      fill="#B1CEDF" fontSize="11"
+                {/* ===== 04 · LAKEHOUSE NATIVE ===== */}
+                <text x="310" y="439" fill="#266D95" fontSize="11"
+                      fontWeight="700" letterSpacing="1.6">
+                    04 · LAKEHOUSE NATIVE
+                </text>
+                <rect x="290" y="460" width="540" height="120" rx="14"
+                      fill="#102856" stroke="rgba(38,109,149,0.55)"
+                      strokeWidth="1.25" strokeDasharray="5 4" />
+                <text x="310" y="486" fill="#B1CEDF" fontSize="11"
                       fontWeight="700" letterSpacing="1.2">
                     LAKEHOUSE · COLD TIER
                 </text>
-                <text x="310" y="424"
-                      fill="#7AAFCB" fontSize="11">
+                <text x="310" y="504" fill="#7AAFCB" fontSize="11">
                     Open formats · Long retention · Query-engine native
                 </text>
-
                 {[
                     {x: 312, label: 'Apache Paimon'},
                     {x: 438, label: 'Apache Iceberg'},
                     {x: 564, label: 'Apache Hudi'},
                     {x: 690, label: 'Lance'},
-                ].map((l, i) => (
-                    <g key={i}>
-                        <rect x={l.x} y="438" width="118" height="46" rx="8"
-                              fill="#0A1745"
-                              stroke="rgba(122,175,203,0.4)"
-                              strokeWidth="1" />
-                        <text x={l.x + 59} y="466" textAnchor="middle"
+                ].map((l) => (
+                    <g key={l.label}>
+                        <rect x={l.x} y="518" width="118" height="46" rx="8"
+                              fill="#0A1745" stroke="rgba(122,175,203,0.4)" />
+                        <text x={l.x + 59} y="546" textAnchor="middle"
                               fill="#E6ECFA" fontSize="12" fontWeight="700">
                             {l.label}
                         </text>
@@ -374,15 +383,13 @@ function HeroDiagram() {
 
                 {/* ===== 03 · READ PATTERNS (right column) ===== */}
 
-                {/* Four read-pattern arrows form a single evenly-spaced
-                    group (59-unit gaps): Streaming / Batch / Lookup are
-                    rendered here; Union Read is the fourth slot below and
-                    is rendered separately because it merges branches from
-                    both tiers. */}
+                <text x="940" y="60" fill="#B1CEDF" fontSize="10">
+                    Consume / Query
+                </text>
                 {[
                     {y: 91,  title: 'Streaming Reads', sub: 'Changelog stream · Incremental'},
-                    {y: 150, title: 'Batch Reads',     sub: 'Snapshot scan · Time travel'},
-                    {y: 209, title: 'Lookup Join',     sub: 'Key/Value Lookups · PK Tables'},
+                    {y: 150, title: 'Batch Reads',     sub: 'Snapshot scan · Full scan'},
+                    {y: 209, title: 'Lookups',         sub: 'KV lookups · Prefix lookups'},
                 ].map((r, i) => (
                     <g key={i}>
                         <path
@@ -405,16 +412,10 @@ function HeroDiagram() {
                     </g>
                 ))}
 
-                {/* Union Read. The Y-junction is centred vertically between
-                    the hot and cold branch exits — hot leaves the hot tier
-                    at y=240, cold leaves the cold tier at y=460, so the
-                    midpoint (and junction) is at y=350. Both branches are
-                    therefore the same length (110 units) so the merge is
-                    visually balanced. The Union Read label moves with the
-                    junction to y=350. */}
+                {/* Union Read combines the coordinated hot and lake layers. */}
                 <path
                     className="fluss-hero-live"
-                    d="M830 240 L 880 240 L 880 350"
+                    d="M830 240 L880 240 L880 410"
                     stroke="#266D95"
                     strokeWidth="1.75"
                     strokeDasharray="4 4"
@@ -422,58 +423,100 @@ function HeroDiagram() {
                 />
                 <path
                     className="fluss-hero-live"
-                    d="M830 460 L 880 460 L 880 350 L 930 350"
+                    d="M830 540 L880 540 L880 410 L930 410"
                     stroke="#266D95"
                     strokeWidth="1.75"
                     strokeDasharray="4 4"
                     fill="none"
                     markerEnd="url(#hgArrowLive)"
                 />
-                <text x="940" y="346"
+                <text x="940" y="406"
                       fill="#E6ECFA" fontSize="13" fontWeight="700">
                     Union Read
                 </text>
-                <text x="940" y="364"
+                <text x="940" y="424"
                       fill="#7AAFCB" fontSize="11">
                     Hot &amp; Cold Data · Single query
                 </text>
 
-                {/* ===== Cold tier → Query engines connector ===== */}
-                <path
-                    d="M560 500 L 560 558"
-                    stroke="rgba(122,175,203,0.45)"
-                    strokeWidth="1"
-                    strokeDasharray="4 4"
-                    fill="none"
-                />
-
-                {/* ===== 04 · QUERY ENGINES (bottom row) =====
-                    Whole row (eyebrow, engine pills, and the "+ Any Iceberg
-                    client" trailing text) is centred on the diagram's
-                    horizontal midline (viewBox centre, x=600). */}
-                <text x="600" y="540" textAnchor="middle"
-                      fill="#266D95" fontSize="11"
-                      fontWeight="700" letterSpacing="1.6">
-                    04 · QUERY ENGINES
+                {/* ===== 05 · QUERY ENGINES ===== */}
+                <path d="M560 580 L560 642" fill="none"
+                      stroke="rgba(122,175,203,0.45)" strokeWidth="1"
+                      strokeDasharray="4 4" />
+                <rect x="290" y="642" width="540" height="146" rx="14"
+                      fill="#102856" stroke="rgba(38,109,149,0.5)" />
+                <path d="M290 713 L250 713 L250 280 L290 280"
+                      fill="none" stroke="#7AAFCB" strokeWidth="1.25"
+                      strokeDasharray="4 4" markerEnd="url(#hgArrowMuted)" />
+                <text x="230" y="489" textAnchor="end"
+                      fill="#B1CEDF" fontSize="11" fontWeight="700">
+                    <tspan x="230">Query Fluss</tspan>
+                    <tspan x="230" dy="17">directly</tspan>
                 </text>
-
+                <text x="310" y="625" fill="#266D95" fontSize="11"
+                      fontWeight="700" letterSpacing="1.6">
+                    05 · QUERY ENGINES
+                </text>
                 {[
-                    {x: 220, w: 130, label: 'Apache Flink' },
-                    {x: 364, w: 130, label: 'Apache Spark' },
-                    {x: 508, w: 90,  label: 'Trino'        },
-                    {x: 612, w: 110, label: 'StarRocks'    },
-                    {x: 736, w: 118, label: 'Apache Doris' },
-                    {x: 868, w: 100, label: 'DuckDB'       },
-                ].map((e, i) => (
-                    <g key={i}>
-                        <rect x={e.x} y="558" width={e.w} height="42" rx="8"
-                              fill="#0A1745"
+                    {x: 302, y: 656, w: 122, label: 'Apache Flink', status: ''},
+                    {x: 434, y: 656, w: 122, label: 'Apache Spark', status: ''},
+                    {x: 566, y: 656, w: 122, label: 'Apache DataFusion', status: 'WIP'},
+                    {x: 698, y: 656, w: 120, label: 'Apache Doris', status: 'WIP'},
+                    {x: 330, y: 720, w: 144, label: 'StarRocks', status: 'Planned'},
+                    {x: 486, y: 720, w: 144, label: 'DuckDB', status: 'Experimental'},
+                    {x: 642, y: 720, w: 144, label: 'Trino', status: 'WIP'},
+                ].map((e) => (
+                    <g key={e.label}>
+                        <rect x={e.x} y={e.y} width={e.w} height="52" rx="8"
+                              fill={e.status ? '#17335B' : '#0A1745'}
                               stroke="rgba(122,175,203,0.4)"
-                              strokeWidth="1" />
-                        <text x={e.x + e.w / 2} y="584" textAnchor="middle"
-                              fill="#E6ECFA"
-                              fontSize="12" fontWeight="700">
+                              strokeDasharray={e.status ? '3 3' : undefined} />
+                        <text x={e.x + e.w / 2} y={e.y + (e.status ? 21 : 30)}
+                              textAnchor="middle" fill="#E6ECFA"
+                              fontSize="10.5" fontWeight="700">
                             {e.label}
+                        </text>
+                        {e.status && (
+                            <text x={e.x + e.w / 2} y={e.y + 39}
+                                  textAnchor="middle" fill="#B1CEDF" fontSize="10">
+                                {e.status}
+                            </text>
+                        )}
+                    </g>
+                ))}
+
+                {/* ===== 06 · DATA ACCESS PATTERNS ===== */}
+                <rect x="915" y="495" width="280" height="293" rx="14"
+                      fill="#102856" stroke="rgba(38,109,149,0.5)" />
+                <text x="933" y="524" fill="#7AAFCB" fontSize="11"
+                      fontWeight="700" letterSpacing="1">
+                    06 · DATA ACCESS PATTERNS
+                </text>
+                {[
+                    {y: 569, label: 'Column Pruning', kind: 'column'},
+                    {y: 650, label: 'Partition Pruning', kind: 'partition'},
+                    {y: 731, label: 'Predicate Pushdowns', kind: 'predicate'},
+                ].map((pattern) => (
+                    <g key={pattern.kind}>
+                        <g transform={`translate(933 ${pattern.y - 19})`}
+                           stroke="#7AAFCB" strokeWidth="1">
+                            {pattern.kind === 'predicate' ? (
+                                <path d="M0 0 H32 L20 16 V29 L12 33 V16 Z"
+                                      fill="#266D95" />
+                            ) : (
+                                [0, 1, 2, 3].map((row) => (
+                                    [0, 1, 2].map((col) => (
+                                        <rect key={`${row}-${col}`}
+                                              x={col * 11} y={row * 9} width="9" height="7"
+                                              fill={(pattern.kind === 'column' ? col === 1 : row === 1)
+                                                  ? '#7AAFCB' : '#0A1745'} />
+                                    ))
+                                ))
+                            )}
+                        </g>
+                        <text x="981" y={pattern.y} fill="#E6ECFA"
+                              fontSize="12" fontWeight="700">
+                            {pattern.label}
                         </text>
                     </g>
                 ))}
@@ -505,11 +548,10 @@ function HomepageHeader({heroRef}: {heroRef: React.RefObject<HTMLElement>}) {
 
                         <p className={styles.heroSubtitle}>
                             Apache Fluss is an open-source,
-                            lakehouse-native streaming storage. It collapses the
-                            message broker, online KV store, stream-processing
-                            state backend, and lakehouse cold store into a
-                            single coherent foundation, making the Lakehouse
-                            truly real-time.
+                            lakehouse-native streaming storage system. It enables
+                            Lakestream: a shared table foundation coordinating
+                            fresh streaming data and historical lakehouse data
+                            for the Streamhouse architecture.
                         </p>
 
                         <div className={styles.heroCtas}>
@@ -538,6 +580,7 @@ function HomepageHeader({heroRef}: {heroRef: React.RefObject<HTMLElement>}) {
                         <HeroCodePanel />
                     </div>
                 </div>
+                <UserLogoBand />
             </div>
         </header>
     );
@@ -616,10 +659,22 @@ function ArchitectureSection() {
                 <div className={clsx(styles.sectionHeader, styles.sectionHeaderCenter)}>
                     <span className={styles.eyebrow}>Architecture</span>
                     <h2 className={clsx(styles.sectionTitle, styles.archTitle)}>
-                        Unlocking the Lakestream Architecture
+                        Unlocking the Streamhouse Architecture
                     </h2>
+                    <p className={clsx(styles.sectionLead, styles.archLead)}>
+                        Streamhouse brings streaming, serving, and analytics
+                        together through shared tables and independent compute
+                        engines. Fluss enables its Lakestream storage foundation
+                        by coordinating fresh streaming data with historical lakehouse data.
+                    </p>
+                    <Link className={styles.btnSecondary} to="/docs/next/concepts/streamhouse-and-lakestream">
+                        Explore Streamhouse and Lakestream
+                        <span aria-hidden="true">→</span>
+                    </Link>
                 </div>
-                <div className={styles.archDiagram}>
+                <div className={styles.archDiagram}
+                     role="region" aria-label="Apache Fluss architecture diagram"
+                     tabIndex={0}>
                     <HeroDiagram />
                 </div>
             </div>
@@ -662,11 +717,11 @@ function SystemsTaxSection() {
         },
         {
             label: 'Lakestream',
-            sub: 'Real-time data layer for Lakehouse architecture',
+            sub: 'Coordinated streaming and lakehouse layers of one logical table',
         },
         {
-            label: 'State Store',
-            sub: 'Externalized state for joins and aggregations',
+            label: 'Shared Tables',
+            sub: 'Reusable results maintained by independent compute engines',
         },
         {
             label: 'Multi-Modal',
@@ -689,21 +744,21 @@ function SystemsTaxSection() {
                 <div className={styles.sectionHeader}>
                     <span className={styles.eyebrow}>The multiple-systems tax</span>
                     <h2 className={styles.sectionTitle}>
-                        Five systems, four integrations, continuous engineering tax.
+                        Shared tables reduce repeated data maintenance.
                     </h2>
                     <p className={styles.sectionLead}>
-                        A conventional real-time AI stack stitches together a message broker,
-                        a stream processor, an online store, an offline store, and a
-                        synchronization layer. Every boundary is an integration point where
-                        data silently diverges. Apache Fluss collapses that stack into one
-                        substrate.
+                        A common stream can feed several systems that each ingest,
+                        reconstruct, and synchronize equivalent data. Streamhouse
+                        lets compatible workloads reuse maintained tables on a
+                        Lakestream foundation. Compute engines still run transformations;
+                        specialized stores remain useful when a workload needs them.
                     </p>
                 </div>
 
                 <div className={styles.taxGrid}>
                     <div className={styles.taxColumn}>
                         <span className={clsx(styles.taxLabel, styles.taxLabelBefore)}>
-                            Before · fragmented stack
+                            Separate systems · repeated maintenance
                         </span>
                         <div className={styles.taxStack}>
                             {beforeStack.map((s, i) => (
@@ -719,7 +774,7 @@ function SystemsTaxSection() {
                             ))}
                         </div>
                         <p className={styles.taxFootnote}>
-                            5 Systems · 4 Sync Boundaries · Continuous Engineering Tax
+                            Repeated ingestion · Equivalent state · Synchronization work
                         </p>
                     </div>
 
@@ -744,14 +799,14 @@ function SystemsTaxSection() {
 
                     <div className={styles.taxColumn}>
                         <span className={clsx(styles.taxLabel, styles.taxLabelAfter)}>
-                            After · unified substrate
+                            Streamhouse · shared table foundation
                         </span>
                         <div className={styles.taxAfterCard}>
                             <div className={styles.taxAfterHeader}>
                                 <div className={styles.taxAfterTitle}>Apache Fluss</div>
                                 <div className={styles.taxAfterSub}>
-                                    One columnar streaming store designed for the
-                                    real-time AI data plane.
+                                    Streaming tables and lakehouse integration
+                                    enabling Lakestream beneath independent engines.
                                 </div>
                             </div>
                             <ul className={styles.taxAfterList}>
@@ -768,7 +823,7 @@ function SystemsTaxSection() {
                             </ul>
                         </div>
                         <p className={styles.taxFootnote}>
-                            1 Substrate · 0 Sync Boundaries · Single Source of Truth
+                            Shared tables · Managed tiering · Compatible access paths
                         </p>
                     </div>
                 </div>

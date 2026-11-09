@@ -110,6 +110,7 @@ abstract class AbstractLogFetchCollector<T, R> {
                     // Always record the advanced next fetch offset for this bucket, even when
                     // the materialized record list is empty.
                     consumedUpToOffsets.put(tableBucket, nextInLineFetch.nextFetchOffset());
+                    recordsRemaining -= fetchedRecordCount(nextInLineFetch, records);
                     if (!records.isEmpty()) {
                         List<T> currentRecords = fetched.get(tableBucket);
                         if (currentRecords == null) {
@@ -126,7 +127,6 @@ abstract class AbstractLogFetchCollector<T, R> {
                             fetched.put(tableBucket, mergedRecords);
                         }
 
-                        recordsRemaining -= recordCount(records);
                     } else {
                         fetched.putIfAbsent(tableBucket, Collections.emptyList());
                     }
@@ -144,6 +144,11 @@ abstract class AbstractLogFetchCollector<T, R> {
         }
 
         return toResult(fetched, consumedUpToOffsets);
+    }
+
+    /** Returns the scanned record count, including records rejected before materialization. */
+    protected int fetchedRecordCount(CompletedFetch fetch, List<T> records) {
+        return recordCount(records);
     }
 
     /** Initialize a {@link CompletedFetch} object. */
@@ -210,6 +215,7 @@ abstract class AbstractLogFetchCollector<T, R> {
         TableBucket tb = completedFetch.tableBucket;
         long fetchOffset = completedFetch.nextFetchOffset();
         if (error == Errors.NOT_LEADER_OR_FOLLOWER
+                || error == Errors.LEADER_NOT_AVAILABLE_EXCEPTION
                 || error == Errors.LOG_STORAGE_EXCEPTION
                 || error == Errors.KV_STORAGE_EXCEPTION
                 || error == Errors.STORAGE_EXCEPTION

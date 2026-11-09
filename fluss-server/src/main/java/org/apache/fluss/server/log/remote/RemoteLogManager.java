@@ -34,6 +34,7 @@ import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.storage.LocalDiskManager;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
+import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
@@ -140,10 +141,6 @@ public class RemoteLogManager implements Closeable {
         return remoteLogStorage;
     }
 
-    public FsPath remoteLogDir() {
-        return remoteLogStorage.getRemoteLogDir();
-    }
-
     /** Register the replica to the remote log manager. */
     public void registerReplica(Replica replica) throws Exception {
         if (remoteDisabled()) {
@@ -152,7 +149,9 @@ public class RemoteLogManager implements Closeable {
         TableBucket tableBucket = replica.getTableBucket();
         PhysicalTablePath physicalTablePath = replica.getPhysicalTablePath();
         LogTablet log = replica.getLogTablet();
-        RemoteLogTablet remoteLog = new RemoteLogTablet(physicalTablePath, tableBucket);
+        FsPath remoteLogDir = FlussPaths.remoteLogDir(replica.getRemoteDataDir());
+        RemoteLogTablet remoteLog =
+                new RemoteLogTablet(physicalTablePath, tableBucket, remoteLogDir);
         Optional<RemoteLogManifestHandle> remoteLogManifestHandleOpt =
                 zkClient.getRemoteLogManifestHandle(tableBucket);
         if (remoteLogManifestHandleOpt.isPresent()) {
@@ -161,12 +160,19 @@ public class RemoteLogManager implements Closeable {
             RemoteLogManifest manifest =
                     remoteLogStorage.readRemoteLogManifestSnapshot(
                             remoteLogManifestHandleOpt.get().getRemoteLogManifestPath());
+
             remoteLog.loadRemoteLogManifest(manifest);
         }
-        log.updateHighestCopiedEndOffset(remoteLog.getHighestCopiedEndOffset());
-        log.updateRemoteLogEndOffset(remoteLog.getRemoteLogEndOffset().orElse(-1L));
-        log.updateRemoteLogStartOffset(remoteLog.getRemoteLogStartOffset());
+
+        log.updateRemoteLogOffsets(
+                remoteLog.getRemoteLogStartOffset(),
+                remoteLog.getRemoteLogEndOffset().orElse(-1L),
+                remoteLog.getHighestCopiedEndOffset());
         log.updateRemoteLogSize(remoteLog.getRemoteSizeInBytes());
+        RemoteLogTablet previous = remoteLogs.get(tableBucket);
+        if (previous != null) {
+            previous.unregisterMetrics();
+        }
         // leader needs to register the remote log metrics
         remoteLog.registerMetrics(replica.bucketMetrics());
         remoteLogs.put(tableBucket, remoteLog);
@@ -233,15 +239,19 @@ public class RemoteLogManager implements Closeable {
 
         if (deleteRemote) {
             LOG.info("Deleting the remote log segments for table-bucket: {}", tb);
+            FsPath remoteLogDir = FlussPaths.remoteLogDir(replica.getRemoteDataDir());
             // delete the remote log of the table bucket.
-            deleteRemoteLog(physicalTablePath, tb);
+            deleteRemoteLog(remoteLogDir, physicalTablePath, tb);
         }
     }
 
     /** Get the position of the given offset in the remote log segment. */
     public int lookupPositionForOffset(RemoteLogSegment remoteLogSegment, long offset) {
         return remoteLogIndexCacheForBucket(remoteLogSegment.tableBucket())
-                .lookupPosition(remoteLogSegment, offset);
+                .lookupPosition(
+                        remoteLogTablet(remoteLogSegment.tableBucket()).getRemoteLogDir(),
+                        remoteLogSegment,
+                        offset);
     }
 
     /**
@@ -260,7 +270,9 @@ public class RemoteLogManager implements Closeable {
 
         RemoteLogIndexCache indexCache = remoteLogIndexCacheForBucket(tableBucket);
         for (RemoteLogSegment segment : remoteLogTablet.findSegmentsByTimestamp(timestamp)) {
-            long offset = indexCache.lookupOffsetForTimestamp(segment, timestamp);
+            long offset =
+                    indexCache.lookupOffsetForTimestamp(
+                            remoteLogTablet.getRemoteLogDir(), segment, timestamp);
             // The timestamp index covers the complete physical segment, while overlap handling may
             // expose only a clipped logical range. Clamp a result in the hidden prefix to the
             // logical start, and skip a result in the hidden suffix in favor of the next candidate.
@@ -300,11 +312,12 @@ public class RemoteLogManager implements Closeable {
      * <p>Note: the zk path for {@link RemoteLogManifestHandle} will be deleted by coordinator while
      * table delete.
      */
-    private void deleteRemoteLog(PhysicalTablePath physicalTablePath, TableBucket tableBucket) {
+    private void deleteRemoteLog(
+            FsPath remoteLogDir, PhysicalTablePath physicalTablePath, TableBucket tableBucket) {
         // delete the file in remote storage.
         try {
             // TODO: maybe need to optimize to delete on specific file path
-            remoteLogStorage.deleteTableBucket(physicalTablePath, tableBucket);
+            remoteLogStorage.deleteTableBucket(remoteLogDir, physicalTablePath, tableBucket);
         } catch (RemoteStorageException e) {
             LOG.error(
                     "Error occurred while deleting remote log for table-bucket: {}",

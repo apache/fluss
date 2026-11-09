@@ -26,31 +26,42 @@ import org.apache.fluss.cluster.BucketLocation;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.FetchException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.LogRecordReadContext;
+import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.remote.RemoteLogFetchInfo;
+import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.messages.FetchLogRequest;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
+import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.protocol.FetchLogReadPreference;
 import org.apache.fluss.server.entity.FetchReqInfo;
 import org.apache.fluss.server.tablet.TestTabletServerGateway;
+import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.IOUtils;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.io.IOException;
+import java.nio.file.Path;
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -59,13 +70,17 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.apache.fluss.client.metadata.TestingMetadataUpdater.NODE1;
 import static org.apache.fluss.client.metadata.TestingMetadataUpdater.NODE2;
 import static org.apache.fluss.client.metadata.TestingMetadataUpdater.NODE3;
+import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getFetchLogData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeFetchLogResponse;
+import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsWithBaseOffset;
+import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** UT Test for {@link LogFetcher}. */
 public class LogFetcherTest {
@@ -88,18 +103,26 @@ public class LogFetcherTest {
     }
 
     private LogFetcher createLogFetcher(Configuration conf) {
-        LogScannerStatus logScannerStatus = initializeLogScannerStatus();
+        return createLogFetcher(conf, metadataUpdater, new RemoteFileDownloader(1));
+    }
+
+    private LogFetcher createLogFetcher(
+            Configuration conf,
+            TestingMetadataUpdater updater,
+            RemoteFileDownloader remoteFileDownloader) {
         LogFetcher fetcher =
                 new LogFetcher(
                         "default-fetcher",
-                        logScannerStatus,
+                        initializeLogScannerStatus(),
                         conf,
-                        metadataUpdater,
+                        updater,
                         TestingScannerMetricGroup.newInstance(),
-                        new RemoteFileDownloader(1),
+                        remoteFileDownloader,
                         LogRecordReadContext.SchemaResolution.TARGET);
         fetcher.registerTable(
-                new TableScanSpec(DATA1_TABLE_INFO, null, null), createSchemaGetter(conf));
+                new TableScanSpec(DATA1_TABLE_INFO, null, null),
+                new TestingClientSchemaGetter(
+                        DATA1_TABLE_PATH, new SchemaInfo(DATA1_SCHEMA, 0), updater, conf));
         return fetcher;
     }
 
@@ -130,6 +153,39 @@ public class LogFetcherTest {
         // When NotLeaderOrFollowerException is received, the bucketLocation will be removed from
         // metadata updater to trigger get the latest bucketLocation in next fetch round.
         assertThat(metadataUpdater.getBucketLocation(tb1)).isNotPresent();
+    }
+
+    @Test
+    void testRefetchBucketAfterLeaderNotAvailable() throws Exception {
+        IOUtils.closeQuietly(logFetcher);
+        long fetchOffset = 5L;
+        MemoryLogRecords records = genMemoryLogRecordsWithBaseOffset(fetchOffset, DATA1);
+        metadataUpdater =
+                initializeMetadataUpdater(
+                        new ErrorThenRecordsTabletServerGateway(
+                                Errors.LEADER_NOT_AVAILABLE_EXCEPTION,
+                                records,
+                                fetchOffset + DATA1.size()));
+        logFetcher = createLogFetcher(new Configuration());
+        LogScannerStatus scannerStatus = logFetcher.getLogScannerStatus();
+        scannerStatus.assignScanBuckets(Collections.singletonMap(tb1, fetchOffset));
+
+        logFetcher.sendFetchRequest(
+                1, logFetcher.prepareFetchLogRequests(Collections.singletonList(tb1)).get(1));
+
+        assertThat(metadataUpdater.getBucketLocation(tb1)).isNotPresent();
+        assertThat(logFetcher.collectFetch()).isEmpty();
+        assertThat(scannerStatus.getBucketOffset(tb1)).isEqualTo(fetchOffset);
+
+        metadataUpdater.updateTableInfos(
+                Collections.singletonMap(DATA1_TABLE_PATH, DATA1_TABLE_INFO));
+        FetchLogRequest retryRequest =
+                logFetcher.prepareFetchLogRequests(Collections.singletonList(tb1)).get(1);
+        assertThat(getFetchLogData(retryRequest).get(tb1).getFetchOffset()).isEqualTo(fetchOffset);
+        logFetcher.sendFetchRequest(1, retryRequest);
+
+        assertThat(logFetcher.collectFetch().records(tb1)).hasSize(DATA1.size());
+        assertThat(scannerStatus.getBucketOffset(tb1)).isEqualTo(fetchOffset + DATA1.size());
     }
 
     @Test
@@ -223,12 +279,82 @@ public class LogFetcherTest {
         }
     }
 
+    @Test
+    void throwExceptionWhenRemoteDownloadFails() throws Exception {
+        TestingMetadataUpdater localMetadataUpdater =
+                initializeMetadataUpdater(new RemoteFetchTabletServerGateway());
+
+        try (RemoteFileDownloader failingDownloader =
+                        new RemoteFileDownloader(1) {
+                            @Override
+                            protected long downloadFile(Path targetFilePath, FsPath remoteFilePath)
+                                    throws IOException {
+                                throw new IOException("Simulated remote download failure");
+                            }
+                        };
+                LogFetcher fetcher =
+                        createLogFetcher(
+                                new Configuration(), localMetadataUpdater, failingDownloader)) {
+
+            Map<Integer, FetchLogRequest> requestMap =
+                    fetcher.prepareFetchLogRequests(Collections.singletonList(tb1));
+            fetcher.sendFetchRequest(1, requestMap.get(1));
+            retry(Duration.ofSeconds(30), () -> assertThat(fetcher.hasAvailableFetches()).isTrue());
+            // collectFetch should throw FetchException due to download failure
+            assertThatThrownBy(fetcher::collectFetch)
+                    .isInstanceOf(FetchException.class)
+                    .rootCause()
+                    .hasMessageContaining("Simulated remote download failure");
+        }
+    }
+
     private LogScannerStatus initializeLogScannerStatus() {
         Map<TableBucket, Long> scanBucketAndOffsets = new HashMap<>();
         scanBucketAndOffsets.put(tb1, 0L);
         LogScannerStatus status = new LogScannerStatus();
         status.assignScanBuckets(scanBucketAndOffsets);
         return status;
+    }
+
+    private static class RemoteFetchTabletServerGateway extends TestTabletServerGateway {
+
+        public RemoteFetchTabletServerGateway() {
+            super(false, Collections.emptySet());
+        }
+
+        @Override
+        public CompletableFuture<FetchLogResponse> fetchLog(FetchLogRequest request) {
+            Map<TableBucket, FetchReqInfo> fetchLogData = getFetchLogData(request);
+            Map<TableBucket, FetchLogResultForBucket> resultForBucketMap = new HashMap<>();
+            fetchLogData.forEach(
+                    (tableBucket, fetchReqInfo) -> {
+                        RemoteLogSegment segment =
+                                RemoteLogSegment.Builder.builder()
+                                        .tableBucket(tableBucket)
+                                        .physicalTablePath(PhysicalTablePath.of(DATA1_TABLE_PATH))
+                                        .remoteLogSegmentId(UUID.randomUUID())
+                                        .remoteLogStartOffset(fetchReqInfo.getFetchOffset())
+                                        .remoteLogEndOffset(fetchReqInfo.getFetchOffset() + 100)
+                                        .maxTimestamp(1000L)
+                                        .segmentSizeInBytes(1024)
+                                        .build();
+                        RemoteLogFetchInfo remoteLogFetchInfo =
+                                new RemoteLogFetchInfo(
+                                        FlussPaths.remoteLogTabletDir(
+                                                        new FsPath("/tmp/remote/log"),
+                                                        segment.physicalTablePath(),
+                                                        tableBucket)
+                                                .toString(),
+                                        null,
+                                        Collections.singletonList(segment),
+                                        0);
+                        resultForBucketMap.put(
+                                tableBucket,
+                                FetchLogResultForBucket.remote(
+                                        tableBucket, remoteLogFetchInfo, 100L));
+                    });
+            return CompletableFuture.completedFuture(makeFetchLogResponse(resultForBucketMap));
+        }
     }
 
     private static class TestingTabletServerGateway extends TestTabletServerGateway {
@@ -252,6 +378,37 @@ public class LogFetcherTest {
                                                         "mock fetchLog fail for not leader or follower exception.")));
                         resultForBucketMap.put(tableBucket, fetchLogResultForBucket);
                     });
+            return CompletableFuture.completedFuture(makeFetchLogResponse(resultForBucketMap));
+        }
+    }
+
+    private static class ErrorThenRecordsTabletServerGateway extends TestTabletServerGateway {
+        private final Errors error;
+        private final MemoryLogRecords records;
+        private final long highWatermark;
+        private boolean errorReturned;
+
+        ErrorThenRecordsTabletServerGateway(
+                Errors error, MemoryLogRecords records, long highWatermark) {
+            super(false, Collections.emptySet());
+            this.error = error;
+            this.records = records;
+            this.highWatermark = highWatermark;
+        }
+
+        @Override
+        public CompletableFuture<FetchLogResponse> fetchLog(FetchLogRequest request) {
+            Map<TableBucket, FetchLogResultForBucket> resultForBucketMap = new HashMap<>();
+            for (TableBucket tableBucket : getFetchLogData(request).keySet()) {
+                resultForBucketMap.put(
+                        tableBucket,
+                        errorReturned
+                                ? FetchLogResultForBucket.records(
+                                        tableBucket, records, highWatermark, -1L, -1L)
+                                : FetchLogResultForBucket.error(
+                                        tableBucket, new ApiError(error, "mock fetch error")));
+            }
+            errorReturned = true;
             return CompletableFuture.completedFuture(makeFetchLogResponse(resultForBucketMap));
         }
     }

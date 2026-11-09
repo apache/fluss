@@ -109,4 +109,23 @@ public class ClusterModelStatsTest {
         assertThat(clusterModelStats.replicaStats().get(StatisticType.ST_DEV).doubleValue())
                 .isCloseTo(5.0, offset(0.001));
     }
+
+    @Test
+    void testPerTableStandardDeviationIncludesOfflineReplicasInAverage() {
+        SortedSet<ServerModel> servers = new TreeSet<>();
+        servers.add(new ServerModel(0, "rack0", false));
+        servers.add(new ServerModel(1, "rack1", false));
+        servers.add(new ServerModel(2, "rack2", true));
+        ClusterModel cluster = new ClusterModel(servers);
+        addBucket(cluster, new TableBucket(9, 0), Arrays.asList(0));
+        addBucket(cluster, new TableBucket(9, 1), Arrays.asList(0));
+        addBucket(cluster, new TableBucket(9, 2), Arrays.asList(2));
+
+        ClusterModelStats stats = cluster.getClusterStats();
+        // All three replicas contribute to avg=3/2, while only the two alive hosts contribute
+        // variance: sqrt(((2-1.5)^2 + (0-1.5)^2) / 2) = sqrt(1.25).
+        assertThat(stats.replicaStdDevByTable().get(9L)).isCloseTo(Math.sqrt(1.25), offset(0.001));
+        assertThat(stats.leaderReplicaStdDevByTable().get(9L))
+                .isCloseTo(Math.sqrt(1.25), offset(0.001));
+    }
 }

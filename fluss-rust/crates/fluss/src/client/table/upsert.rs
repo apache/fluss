@@ -23,6 +23,7 @@ use crate::row::InternalRow;
 use crate::row::encode::{KeyEncoder, KeyEncoderFactory, RowEncoder, RowEncoderFactory};
 use crate::row::field_getter::FieldGetter;
 use std::sync::Arc;
+use std::time::Instant;
 
 use crate::client::table::partition_getter::{PartitionGetter, get_physical_path};
 use bitvec::prelude::bitvec;
@@ -347,6 +348,18 @@ impl UpsertWriter {
     /// A [`WriteResultFuture`] that can be awaited to wait for server acknowledgment,
     /// or dropped for fire-and-forget behavior (use `flush()` to ensure delivery).
     pub fn upsert<R: InternalRow>(&self, row: &R) -> Result<WriteResultFuture> {
+        self.upsert_with_deadline(row, None)
+    }
+
+    /// Internal: bounds the buffer-memory wait by `deadline` so a language binding can share
+    /// one `client.writer.buffer.wait-timeout` budget with callback admission waits. Not a
+    /// public deadline API; use [`Self::upsert`], which passes `None` and defers to the config.
+    #[doc(hidden)]
+    pub fn upsert_with_deadline<R: InternalRow>(
+        &self,
+        row: &R,
+        deadline: Option<Instant>,
+    ) -> Result<WriteResultFuture> {
         self.check_field_count(row)?;
 
         let (key, bucket_key) = self.get_keys(row)?;
@@ -369,7 +382,8 @@ impl UpsertWriter {
             self.write_format,
             self.target_columns.clone(),
             Some(row_bytes),
-        );
+        )
+        .with_submit_deadline(deadline);
 
         let result_handle = self.writer_client.send(&write_record)?;
         Ok(WriteResultFuture::new(result_handle))
@@ -388,6 +402,18 @@ impl UpsertWriter {
     /// A [`WriteResultFuture`] that can be awaited to wait for server acknowledgment,
     /// or dropped for fire-and-forget behavior (use `flush()` to ensure delivery).
     pub fn delete<R: InternalRow>(&self, row: &R) -> Result<WriteResultFuture> {
+        self.delete_with_deadline(row, None)
+    }
+
+    /// Internal: bounds the buffer-memory wait by `deadline` so a language binding can share
+    /// one `client.writer.buffer.wait-timeout` budget with callback admission waits. Not a
+    /// public deadline API; use [`Self::delete`], which passes `None` and defers to the config.
+    #[doc(hidden)]
+    pub fn delete_with_deadline<R: InternalRow>(
+        &self,
+        row: &R,
+        deadline: Option<Instant>,
+    ) -> Result<WriteResultFuture> {
         self.check_field_count(row)?;
 
         let (key, bucket_key) = self.get_keys(row)?;
@@ -405,7 +431,8 @@ impl UpsertWriter {
             self.write_format,
             self.target_columns.clone(),
             None,
-        );
+        )
+        .with_submit_deadline(deadline);
 
         let result_handle = self.writer_client.send(&write_record)?;
         Ok(WriteResultFuture::new(result_handle))

@@ -10,7 +10,7 @@ Run through this before cutting a release candidate. It catches the problems tha
 ## Access and secrets
 
 - [ ] Maven Central (Apache Nexus) access for `org.apache.fluss` — see [Release Manager Preparation](release-manager-preparation.md)
-- [ ] `CARGO_REGISTRY_TOKEN`, `PYPI_API_TOKEN`, and `TEST_PYPI_API_TOKEN` configured as repository secrets
+- [ ] Trusted Publishing configured on crates.io, PyPI, and TestPyPI, each still naming `apache/fluss` and the right workflow file — see [Release Manager Preparation](release-manager-preparation.md#trusted-publishing)
 - [ ] crates.io owner of `fluss-rs`; PyPI maintainer of `pyfluss`
 - [ ] The ASF Infra request for `apache/fluss-gateway` is resolved, the Docker
   Hub repository exists, and the release manager has access to
@@ -19,6 +19,7 @@ Run through this before cutting a release candidate. It catches the problems tha
 
 ## Build and publish dry-runs
 
+- [ ] the RC tag's `rust-release.yml` run authenticated against crates.io — that step is the only check that the Trusted Publishing config is correct before the release tag
 - [ ] `cargo publish -p fluss-rs --dry-run` succeeds
 - [ ] Python wheels + sdist install from **TestPyPI** (the RC tag publishes there):
 

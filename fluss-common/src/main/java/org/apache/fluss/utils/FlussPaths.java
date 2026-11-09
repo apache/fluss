@@ -17,8 +17,8 @@
 
 package org.apache.fluss.utils;
 
-import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.FlussConfigUtils;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
@@ -458,7 +458,21 @@ public class FlussPaths {
      * </pre>
      */
     public static FsPath remoteLogDir(Configuration conf) {
-        return new FsPath(conf.get(ConfigOptions.REMOTE_DATA_DIR) + "/" + REMOTE_LOG_DIR_NAME);
+        return new FsPath(
+                FlussConfigUtils.getDefaultRemoteDataDir(conf) + "/" + REMOTE_LOG_DIR_NAME);
+    }
+
+    /**
+     * Returns the remote root directory path for storing log files.
+     *
+     * <p>The path contract:
+     *
+     * <pre>
+     * {$remote.data.dir}/log
+     * </pre>
+     */
+    public static FsPath remoteLogDir(String remoteDataDir) {
+        return new FsPath(remoteDataDir, REMOTE_LOG_DIR_NAME);
     }
 
     /**
@@ -480,6 +494,19 @@ public class FlussPaths {
             FsPath remoteLogDir, PhysicalTablePath physicalPath, TableBucket tableBucket) {
         FsPath remoteTableDir = remoteTabletParentDir(remoteLogDir, physicalPath, tableBucket);
         return new FsPath(remoteTableDir, String.valueOf(tableBucket.getBucket()));
+    }
+
+    /**
+     * Returns the remote log root from a tablet directory created by {@link
+     * #remoteLogTabletDir(FsPath, PhysicalTablePath, TableBucket)}.
+     *
+     * @param remoteLogTabletDir the remote log tablet directory
+     * @param tableBucket the bucket identifying whether the directory includes a partition
+     */
+    public static FsPath remoteLogDirFromTabletDir(
+            FsPath remoteLogTabletDir, TableBucket tableBucket) {
+        FsPath remoteLogDir = remoteLogTabletDir.getParent().getParent().getParent();
+        return tableBucket.getPartitionId() == null ? remoteLogDir : remoteLogDir.getParent();
     }
 
     /**
@@ -624,7 +651,21 @@ public class FlussPaths {
      * </pre>
      */
     public static FsPath remoteKvDir(Configuration conf) {
-        return new FsPath(conf.get(ConfigOptions.REMOTE_DATA_DIR) + "/" + REMOTE_KV_DIR_NAME);
+        return new FsPath(
+                FlussConfigUtils.getDefaultRemoteDataDir(conf) + "/" + REMOTE_KV_DIR_NAME);
+    }
+
+    /**
+     * Returns the remote root directory path for storing kv snapshot files.
+     *
+     * <p>The path contract:
+     *
+     * <pre>
+     * {$remote.data.dir}/kv
+     * </pre>
+     */
+    public static FsPath remoteKvDir(String remoteDataDir) {
+        return new FsPath(remoteDataDir, REMOTE_KV_DIR_NAME);
     }
 
     /**

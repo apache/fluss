@@ -12,7 +12,7 @@ Fluss supports different metric types: **Counters**, **Gauges**, **Histograms**,
 
 - `Gauge`: Provides a value of any type at a point in time.
 - `Counter`: Used to count values by incrementing and decrementing.
-- `Histogram`: Measure the statistical distribution of a set of values including the min, max, mean, standard deviation and percentile.
+- `Histogram`: Measure the statistical distribution of a set of values including the min, max, mean, standard deviation and percentile. Built-in histograms only consider samples from the last five minutes; see [Histograms](metric-reporters.md#histograms).
 - `Meter`: The gauge exports the meter's rate.
 
 Fluss client also has supported built-in metrics to measure operations of **write to**, **read from** fluss cluster, 
@@ -407,6 +407,11 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
     </tr>
     <tr>
       <td rowspan="8">lakeTiering_table</td>
+      <td>freshness</td>
+      <td>The user-configured data freshness interval (in milliseconds) for this table.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
       <td>tierLag</td>
       <td>Time in milliseconds since the last successful tiering operation for this table. For newly registered tables that have never completed a tiering round, the lag is measured from the time the table was registered.</td>
       <td>Gauge</td>
@@ -441,11 +446,6 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>How long (in milliseconds) the table has been waiting in the pending queue for tiering. Returns 0 when the table is not currently pending.</td>
       <td>Gauge</td>
     </tr>
-    <tr>
-      <td>freshness</td>
-      <td>The user-configured data freshness interval (in milliseconds) for this table.</td>
-      <td>Gauge</td>
-    </tr>
   </tbody>
 </table>
 
@@ -463,8 +463,8 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </thead>
   <tbody>
     <tr>
-      <th rowspan="37"><strong>tabletserver</strong></th>
-      <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="25">-</td>
+      <th rowspan="39"><strong>tabletserver</strong></th>
+      <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="27">-</td>
       <td>messagesInPerSecond</td>
       <td>The number of messages written per second to this server.</td>
       <td>Meter</td>
@@ -590,6 +590,16 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>Meter</td>
     </tr>
     <tr>
+      <td>kvWalMemoryPoolUsage</td>
+      <td>Memory currently allocated from the server-wide WAL memory pool for primary key tables in this server (in bytes). The pool capacity is configured by <code>server.buffer.memory-size</code>.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>kvWalMemoryPoolCapacity</td>
+      <td>Total capacity of the server-wide WAL memory pool for primary key tables in this server (in bytes).</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
       <td rowspan="4">historical</td>
       <td>inflightRequests</td>
       <td>The number of accepted historical requests that have not completed.</td>
@@ -606,9 +616,9 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>Gauge</td>
     </tr>
     <tr>
-      <td>lookupCacheCapacityEvictions</td>
-      <td>The cumulative number of cached table lookupers evicted because the cache retains at most ten tables.</td>
-      <td>Counter</td>
+      <td>lookupCacheFileCapacityEvictions</td>
+      <td>The cumulative number of lookup files evicted to enforce the shared TabletServer disk budget. Expiration, replacement, and explicit invalidation are excluded.</td>
+      <td>Gauge</td>
     </tr>
     <tr>
       <td rowspan="2">logicalStorage</td>
@@ -683,7 +693,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>Gauge</td>
     </tr>
     <tr>
-      <th rowspan="9">tabletserver</th>
+      <th rowspan="10">tabletserver</th>
       <td rowspan="1">request</td>
       <td>requestQueueSize</td>
       <td>The TabletServer node network waiting queue size.</td>
@@ -706,6 +716,8 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
           request_metadata
           request_fetchLogClient
           request_fetchLogFollower
+          request_kafka_produce
+          request_kafka_metadata
       </td>
       <td>requestsPerSecond</td>
       <td>The total number of requests processed per second for each request type.</td>
@@ -740,6 +752,12 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>responseSendTimeMs</td>
       <td>Time to send the response	for each request type.</td>
       <td>Histogram</td>
+    </tr>
+    <tr>
+      <td rowspan="1">request_error</td>
+      <td>errorsPerSecond</td>
+      <td>The number of failed RPC responses processed per second for each request type and <code>error</code> name. One event is recorded for each failed RPC response; <code>NONE</code> and errors in successful response buckets are excluded. A series appears only after its request/error first occurs.</td>
+      <td>Meter</td>
     </tr>
      <tr>
       <th rowspan="6">client</th>
@@ -790,8 +808,8 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </thead>
   <tbody>
     <tr>
-      <th rowspan="39"><strong>tabletserver</strong></th>
-      <td rowspan="20">table</td>
+      <th rowspan="41"><strong>tabletserver</strong></th>
+      <td rowspan="22">table</td>
       <td>messagesInPerSecond</td>
       <td>The number of messages written per second to this table.</td>
       <td>Meter</td>
@@ -889,6 +907,11 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
     <tr>
       <td>remoteLogDeleteErrorPerSecond</td>
       <td>The number of failed delete remote log requests to delete remote log after log ttl per second.</td>
+      <td>Meter</td>
+    </tr>
+    <tr>
+      <td>remoteKvCopyBytesPerSecond</td>
+      <td>The bytes of kv snapshot data uploaded to remote per second for this table. Only available for primary key tables.</td>
       <td>Meter</td>
     </tr>
     <tr>
@@ -1003,9 +1026,11 @@ lookup file; <code>false</code> means that it did not download a local lookup fi
 
 RocksDB metrics provide insights into the performance and health of the underlying RocksDB storage engine used by Fluss. These metrics are categorized into table-level metrics (aggregated from all buckets of a table) and server-level metrics (aggregated from all tables in a server).
 
-#### Table-level RocksDB Metrics (Max Aggregation)
+#### Table-level RocksDB Latency and Instance State
 
-These metrics use Max aggregation to show the maximum value across all buckets of a table, which helps identify the worst-performing bucket.
+Each TabletServer shares one native Statistics object among all RocksDB instances of a table. Latency percentiles describe the combined samples, and write stall time is cumulative across these RocksDB instances. A low-volume slow bucket can be hidden by faster buckets in the combined P99. L0 file counts and pending indicators still use the maximum across live RocksDB instance properties. The shared statistics retain counters and histogram samples from closed RocksDB instances while any RocksDB instance of the table remains open. They are released after the last RocksDB instance closes; reopening then starts fresh statistics.
+
+Since Fluss 1.1, the latency P99 and cumulative write stall metrics use the names below. The four historical `...Max` names remain as **deprecated aliases** throughout Fluss 1.x and will be removed in Fluss 2.0. From 1.1, these aliases report the shared table statistics, not the maximum bucket values reported in 1.0. Existing dashboards retain their metric names, but alert thresholds and interpretations must be reviewed. A P99 reported by one TabletServer is not a cluster-wide table P99; taking the maximum or average across TabletServers does not produce that percentile.
 
 <table class="table table-bordered">
   <thead>
@@ -1021,18 +1046,18 @@ These metrics use Max aggregation to show the maximum value across all buckets o
     <tr>
       <th rowspan="7"><strong>tabletserver</strong></th>
       <td rowspan="7">table</td>
-      <td>rocksdbWriteStallMicrosMax</td>
-      <td>Maximum write stall duration across all buckets of this table (in microseconds). Write stalls occur when RocksDB needs to slow down writes due to compaction pressure or memory limits.</td>
+      <td>rocksdbWriteStallMicrosTotal<br /><strong>Deprecated alias:</strong> rocksdbWriteStallMicrosMax</td>
+      <td>Cumulative write stall time across all RocksDB instances of this table on this TabletServer (in microseconds), collected by shared Statistics. Concurrent stalls can overlap.</td>
       <td>Gauge</td>
     </tr>
     <tr>
-      <td>rocksdbGetLatencyMicrosMax</td>
-      <td>Maximum get operation latency across all buckets of this table (in microseconds). This represents the slowest read operation among all buckets.</td>
+      <td>rocksdbGetLatencyMicrosP99<br /><strong>Deprecated alias:</strong> rocksdbGetLatencyMicrosMax</td>
+      <td>P99 of the combined native DB_GET samples from all RocksDB instances of this table on this TabletServer (in microseconds). Samples accumulate since the shared Statistics object was created or reset. This is not the maximum bucket P99 or RPC latency.</td>
       <td>Gauge</td>
     </tr>
     <tr>
-      <td>rocksdbWriteLatencyMicrosMax</td>
-      <td>Maximum write operation latency across all buckets of this table (in microseconds). This represents the slowest write operation among all buckets.</td>
+      <td>rocksdbWriteLatencyMicrosP99<br /><strong>Deprecated alias:</strong> rocksdbWriteLatencyMicrosMax</td>
+      <td>P99 of the combined native DB_WRITE samples from all RocksDB instances of this table on this TabletServer (in microseconds), accumulated since shared Statistics creation or reset. This is not the maximum bucket P99.</td>
       <td>Gauge</td>
     </tr>
     <tr>
@@ -1051,8 +1076,8 @@ These metrics use Max aggregation to show the maximum value across all buckets o
       <td>Gauge</td>
     </tr>
     <tr>
-      <td>rocksdbCompactionTimeMicrosMax</td>
-      <td>Maximum compaction time across all buckets of this table (in microseconds). This represents the longest compaction operation among all buckets.</td>
+      <td>rocksdbCompactionTimeMicrosP99<br /><strong>Deprecated alias:</strong> rocksdbCompactionTimeMicrosMax</td>
+      <td>P99 of the combined native COMPACTION_TIME samples from all RocksDB instances of this table on this TabletServer (in microseconds), accumulated since shared Statistics creation or reset. This is not the maximum bucket P99.</td>
       <td>Gauge</td>
     </tr>
   </tbody>
@@ -1258,6 +1283,12 @@ How to Use Flink Metrics, you can see [Flink Metrics](https://nightlies.apache.o
             <td>Time difference between reading the data file and file creation.</td>
             <td>Gauge</td>
         </tr>
+        <tr>
+            <td>pendingRecords</td>
+            <td>Flink Source Operator</td>
+            <td>The number of log records that are available after the current source fetch offset. Only the streaming log part is counted, snapshot and lake records are excluded.</td>
+            <td>Gauge</td>
+        </tr>
     </tbody>
 </table>
 
@@ -1302,8 +1333,8 @@ How to Use Flink Metrics, you can see [Flink Metrics](https://nightlies.apache.o
 
 ### Tiering Service Metrics
 
-These metrics are exposed by the Flink-based tiering source reader when running the Lake Tiering Service.
-All metrics are registered under the `fluss.tieringService` metric group, which is a child of the Flink `SourceReaderMetricGroup`.
+These metrics are exposed by the Flink-based tiering source when running the Lake Tiering Service.
+All metrics are registered under the `fluss.tieringService` metric group, as a child of the Flink `SourceReaderMetricGroup` for reader metrics or `SplitEnumeratorMetricGroup` for enumerator metrics.
 
 <table class="table table-bordered">
     <thead>
@@ -1327,5 +1358,16 @@ All metrics are registered under the `fluss.tieringService` metric group, which 
             <td>The read throughput rate in bytes per second, derived from the readBytes counter using a 60-second sliding window.</td>
             <td>Meter</td>
         </tr>
+        <tr>
+            <td>readersAwaitingSplitRatio</td>
+            <td>Flink Source Enumerator</td>
+            <td>The current ratio (0–1) of readers tracked by the enumerator as waiting for a split to the source parallelism.</td>
+            <td>Gauge</td>
+        </tr>
     </tbody>
 </table>
+
+:::tip
+A tiering round that fails to commit is retried in the next round without failing the tiering job, so a table whose commits keep failing stops advancing in the lake while the job looks healthy.
+To alert on it, use the `lakeTiering_table` metrics of the [Coordinator Server](#coordinator-server): `tierLag` keeps growing while a table cannot complete a round, for example beyond a multiple of its `freshness`, and `failuresTotal` counts its failed rounds.
+:::
