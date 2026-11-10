@@ -20,20 +20,8 @@ package org.apache.fluss.server.coordinator.event;
 /** An event that checks active rebalance tasks for timeout and reconciliation work. */
 public final class CheckRebalanceTimeoutEvent implements CoordinatorEvent {
 
-    private final String rebalanceId;
-
-    /** Creates a timeout-check event for the active rebalance. */
-    public CheckRebalanceTimeoutEvent(String rebalanceId) {
-        this.rebalanceId = rebalanceId;
-    }
-
-    /** Returns the rebalance id captured when this event was scheduled. */
-    public String getRebalanceId() {
-        return rebalanceId;
-    }
-
     @Override
     public String toString() {
-        return "CheckRebalanceTimeoutEvent{rebalanceId='" + rebalanceId + "'}";
+        return "CheckRebalanceTimeoutEvent{}";
     }
 }

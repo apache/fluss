@@ -85,7 +85,6 @@ import org.apache.fluss.server.coordinator.event.DropPartitionEvent;
 import org.apache.fluss.server.coordinator.event.DropTableEvent;
 import org.apache.fluss.server.coordinator.event.EventProcessor;
 import org.apache.fluss.server.coordinator.event.FencedCoordinatorEvent;
-import org.apache.fluss.server.coordinator.event.FinalizeRebalanceEvent;
 import org.apache.fluss.server.coordinator.event.ListRebalanceProgressEvent;
 import org.apache.fluss.server.coordinator.event.NewCoordinatorEvent;
 import org.apache.fluss.server.coordinator.event.NewTabletServerEvent;
@@ -832,7 +831,7 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                     cancelRebalanceEvent.getRespCallback(),
                     () -> processCancelRebalance(cancelRebalanceEvent));
         } else if (event instanceof CheckRebalanceTimeoutEvent) {
-            rebalanceManager.checkTimeout(((CheckRebalanceTimeoutEvent) event).getRebalanceId());
+            rebalanceManager.checkTimeout();
         } else if (event instanceof ReconcileRebalanceTaskEvent) {
             ReconcileRebalanceTaskEvent reconcileEvent = (ReconcileRebalanceTaskEvent) event;
             RebalancePlanForBucket plan =
@@ -849,9 +848,6 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                 assignmentPersistenceByBucket.remove(
                         reconcileEvent.getExecutionKey().getTableBucket());
             }
-        } else if (event instanceof FinalizeRebalanceEvent) {
-            rebalanceManager.retryFinalizeRebalance(
-                    ((FinalizeRebalanceEvent) event).getRebalanceId());
         } else if (event instanceof ResumeDropEvent) {
             // Resume-mode reconciliation queued by TableLifecycleThrottler: dispatch on the event
             // thread so the @NotThreadSafe CoordinatorContext / state machines are only mutated

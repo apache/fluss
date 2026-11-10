@@ -35,7 +35,6 @@ import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.coordinator.event.CheckRebalanceTimeoutEvent;
 import org.apache.fluss.server.coordinator.event.CoordinatorEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
-import org.apache.fluss.server.coordinator.event.FinalizeRebalanceEvent;
 import org.apache.fluss.server.coordinator.event.ReconcileRebalanceTaskEvent;
 import org.apache.fluss.server.coordinator.event.RecoverRebalanceEvent;
 import org.apache.fluss.server.coordinator.rebalance.goal.ReplicaDistributionGoal;
@@ -172,9 +171,7 @@ public class RebalanceManagerTest {
         assertThat(eventManager.events.get(0)).isInstanceOf(CheckRebalanceTimeoutEvent.class);
         assertThat(statuses(rebalanceManager).get(tb1)).isEqualTo(REBALANCING);
 
-        CheckRebalanceTimeoutEvent checkEvent =
-                (CheckRebalanceTimeoutEvent) eventManager.events.get(0);
-        rebalanceManager.checkTimeout(checkEvent.getRebalanceId());
+        rebalanceManager.checkTimeout();
 
         assertThat(statuses(rebalanceManager).get(tb1)).isEqualTo(TIMEOUT);
         assertThat(eventManager.events).hasSize(2);
@@ -186,14 +183,13 @@ public class RebalanceManagerTest {
         TableBucket firstBucket = new TableBucket(1L, 0);
         rebalanceManager.registerRebalance("first-rebalance", plans(firstBucket));
         timeoutChecker.triggerPeriodicScheduledTasks();
-        CheckRebalanceTimeoutEvent staleCheck =
-                (CheckRebalanceTimeoutEvent) eventManager.events.get(0);
+        assertThat(eventManager.events.get(0)).isInstanceOf(CheckRebalanceTimeoutEvent.class);
         rebalanceManager.finishRebalanceTask(firstBucket, COMPLETED);
 
         TableBucket nextBucket = new TableBucket(2L, 0);
         rebalanceManager.registerRebalance("next-rebalance", plans(nextBucket));
-        clock.advanceTime(Duration.ofMillis(130_000));
-        rebalanceManager.checkTimeout(staleCheck.getRebalanceId());
+        clock.advanceTime(Duration.ofMillis(100_000));
+        rebalanceManager.checkTimeout();
 
         assertThat(statuses(rebalanceManager).get(nextBucket)).isEqualTo(REBALANCING);
     }
@@ -977,16 +973,8 @@ public class RebalanceManagerTest {
                     .isEqualTo(NOT_STARTED);
 
             timeoutChecker.triggerPeriodicScheduledTasks();
-            CheckRebalanceTimeoutEvent checkEvent =
-                    (CheckRebalanceTimeoutEvent) eventManager.events.get(0);
-            rebalanceManager.checkTimeout(checkEvent.getRebalanceId());
-            FinalizeRebalanceEvent event =
-                    (FinalizeRebalanceEvent)
-                            eventManager.events.stream()
-                                    .filter(FinalizeRebalanceEvent.class::isInstance)
-                                    .findFirst()
-                                    .get();
-            rebalanceManager.retryFinalizeRebalance(event.getRebalanceId());
+            assertThat(eventManager.events.get(0)).isInstanceOf(CheckRebalanceTimeoutEvent.class);
+            rebalanceManager.checkTimeout();
 
             assertThat(testingClient.getRebalanceTask().get().getRebalanceStatus())
                     .isEqualTo(COMPLETED);

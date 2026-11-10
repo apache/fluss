@@ -35,7 +35,6 @@ import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.coordinator.event.CheckRebalanceTimeoutEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
-import org.apache.fluss.server.coordinator.event.FinalizeRebalanceEvent;
 import org.apache.fluss.server.coordinator.event.ReconcileRebalanceTaskEvent;
 import org.apache.fluss.server.coordinator.event.RecoverRebalanceEvent;
 import org.apache.fluss.server.coordinator.rebalance.RebalanceExecutor.ExecutionResult;
@@ -118,11 +117,11 @@ import static org.apache.fluss.utils.Preconditions.checkState;
  * bucket can retain an intermediate assignment for a subsequent rebalance to clean up.
  *
  * <p>All rebalance state is confined to the coordinator event thread. The shared scheduler only
- * reads {@link #activeRebalanceIdForTimeoutCheck} and enqueues a timeout-check event; the event
- * thread performs the actual timeout and reconciliation work. The dynamic concurrency setting may
- * be updated by a configuration callback, so that scalar is independently volatile. Startup
- * recovery is tracked by {@link #recoveryPending}, which fences new rebalance requests until
- * recovery has finished regardless of when the event loop starts.
+ * reads {@link #hasActiveRebalance} and enqueues a timeout-check event; the event thread performs
+ * the actual timeout and reconciliation work. The dynamic concurrency setting may be updated by a
+ * configuration callback, so that scalar is independently volatile. Startup recovery is tracked by
+ * {@link #recoveryPending}, which fences new rebalance requests until recovery has finished
+ * regardless of when the event loop starts.
  */
 @NotThreadSafe
 public class RebalanceManager implements ServerReconfigurable {
@@ -174,7 +173,7 @@ public class RebalanceManager implements ServerReconfigurable {
     private volatile int maxInflightRebalanceTasks;
 
     /** Cross-thread signal read by the shared scheduler; all task details remain event-confined. */
-    private volatile @Nullable String activeRebalanceIdForTimeoutCheck;
+    private volatile boolean hasActiveRebalance;
 
     /**
      * Whether the startup recovery workflow is pending, not whether the recovered rebalance itself
@@ -201,7 +200,6 @@ public class RebalanceManager implements ServerReconfigurable {
 
     private boolean cancelRequested;
     private boolean finalizationPending;
-    private boolean finalizationEventQueued;
     private boolean isClosed = false;
 
     /** Creates a manager with validated coordinator rebalance settings. */
@@ -271,7 +269,8 @@ public class RebalanceManager implements ServerReconfigurable {
     public void reconfigure(Configuration newConfig) {
         int newMaxInflightRebalanceTasks =
                 newConfig.get(ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS);
-        if (newMaxInflightRebalanceTasks == maxInflightRebalanceTasks) {
+        int oldMaxInflightRebalanceTasks = maxInflightRebalanceTasks;
+        if (newMaxInflightRebalanceTasks == oldMaxInflightRebalanceTasks) {
             LOG.debug(
                     "{} unchanged: {}",
                     ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS.key(),
@@ -279,7 +278,6 @@ public class RebalanceManager implements ServerReconfigurable {
             return;
         }
 
-        int oldMaxInflightRebalanceTasks = maxInflightRebalanceTasks;
         maxInflightRebalanceTasks = newMaxInflightRebalanceTasks;
         LOG.info(
                 "{} reconfigured: {} -> {}",
@@ -351,7 +349,7 @@ public class RebalanceManager implements ServerReconfigurable {
                                 entry.getValue(), rebalanceTask.getRebalanceStatus()));
             }
             rebalanceStatus = rebalanceTask.getRebalanceStatus();
-            activeRebalanceIdForTimeoutCheck = null;
+            hasActiveRebalance = false;
             recoveryPending = false;
             return;
         }
@@ -758,13 +756,6 @@ public class RebalanceManager implements ServerReconfigurable {
         return result.plan();
     }
 
-    public void retryFinalizeRebalance(String rebalanceId) {
-        finalizationEventQueued = false;
-        if (finalizationPending && rebalanceId.equals(currentRebalanceId)) {
-            persistFinalStatus();
-        }
-    }
-
     private void processNewRebalanceTasks() {
         TableBucket tableBucket;
         while (timedOutRebalanceTasks.size() < maxTrackedTimedOutTasks
@@ -850,14 +841,13 @@ public class RebalanceManager implements ServerReconfigurable {
 
         rebalanceStatus = finalStatus;
         finalizationPending = false;
-        finalizationEventQueued = false;
-        activeRebalanceIdForTimeoutCheck = null;
         inProgressRebalanceTasks.clear();
         pendingRebalanceTasks.clear();
         pendingRecoveredTasks.clear();
         runningRebalanceTasks.clear();
         timedOutRebalanceTasks.clear();
         queuedReconcileEvents.clear();
+        hasActiveRebalance = false;
 
         LOG.info(
                 "Rebalance {} reached final status {} in {} ms.",
@@ -869,11 +859,9 @@ public class RebalanceManager implements ServerReconfigurable {
     private void resetRebalance(String rebalanceId, boolean cancelRequested) {
         registerTime = System.currentTimeMillis();
         currentRebalanceId = rebalanceId;
-        activeRebalanceIdForTimeoutCheck = rebalanceId;
         recoveredRebalance = false;
         this.cancelRequested = cancelRequested;
         finalizationPending = false;
-        finalizationEventQueued = false;
         inProgressRebalanceTasks.clear();
         pendingRebalanceTasks.clear();
         pendingRecoveredTasks.clear();
@@ -881,6 +869,7 @@ public class RebalanceManager implements ServerReconfigurable {
         timedOutRebalanceTasks.clear();
         finishedRebalanceTasks.clear();
         queuedReconcileEvents.clear();
+        hasActiveRebalance = true;
     }
 
     private void addPendingTask(TableBucket tableBucket, RebalancePlanForBucket plan) {
@@ -1108,30 +1097,18 @@ public class RebalanceManager implements ServerReconfigurable {
     }
 
     private void enqueueTimeoutCheckSafely() {
-        String rebalanceId = activeRebalanceIdForTimeoutCheck;
-        if (rebalanceId == null) {
+        if (!hasActiveRebalance) {
             return;
         }
         try {
-            eventManager.put(new CheckRebalanceTimeoutEvent(rebalanceId));
+            eventManager.put(new CheckRebalanceTimeoutEvent());
         } catch (Throwable t) {
-            LOG.error("Failed to enqueue timeout check for rebalance {}.", rebalanceId, t);
+            LOG.error("Failed to enqueue rebalance timeout check.", t);
         }
     }
 
     /** Checks timeout and reconciliation state on the coordinator event thread. */
-    public void checkTimeout(String rebalanceId) {
-        if (!rebalanceId.equals(currentRebalanceId)
-                || !rebalanceId.equals(activeRebalanceIdForTimeoutCheck)) {
-            LOG.debug("Ignore stale timeout check for rebalance {}.", rebalanceId);
-            return;
-        }
-
-        checkTimeout();
-    }
-
-    @VisibleForTesting
-    void checkTimeout() {
+    public void checkTimeout() {
         long now = clock.milliseconds();
         List<RebalanceExecutionKey> timedOutAttempts = new ArrayList<>();
         for (RebalanceTaskAttempt attempt : runningRebalanceTasks.values()) {
@@ -1157,10 +1134,8 @@ public class RebalanceManager implements ServerReconfigurable {
             }
         }
 
-        String rebalanceId = currentRebalanceId;
-        if (finalizationPending && rebalanceId != null && !finalizationEventQueued) {
-            finalizationEventQueued = true;
-            eventManager.put(new FinalizeRebalanceEvent(rebalanceId));
+        if (finalizationPending) {
+            persistFinalStatus();
         }
     }
 
@@ -1170,7 +1145,7 @@ public class RebalanceManager implements ServerReconfigurable {
 
     /** Stops the periodic producer before the coordinator event loop is shut down. */
     public void stopTimeoutChecker() {
-        activeRebalanceIdForTimeoutCheck = null;
+        hasActiveRebalance = false;
         if (timeoutCheckTask != null) {
             timeoutCheckTask.cancel(false);
             timeoutCheckTask = null;
