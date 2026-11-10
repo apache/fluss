@@ -45,6 +45,7 @@ import org.apache.fluss.server.zk.ZkAsyncRequest.ZkGetDataRequest;
 import org.apache.fluss.server.zk.ZkAsyncResponse.ZkCheckExistsResponse;
 import org.apache.fluss.server.zk.ZkAsyncResponse.ZkGetChildrenResponse;
 import org.apache.fluss.server.zk.ZkAsyncResponse.ZkGetDataResponse;
+import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.CoordinatorAddress;
 import org.apache.fluss.server.zk.data.DatabaseRegistration;
@@ -460,10 +461,11 @@ public class ZooKeeperClient implements AutoCloseable {
                 tableIds.stream().collect(toMap(TableIdZNode::path, id -> id));
 
         List<ZkGetDataResponse> responses = getDataInBackground(path2TableIdMap.keySet());
-        return processGetDataResponsesOrThrow(
+        return processGetDataResponses(
                 responses,
                 response -> path2TableIdMap.get(response.getPath()),
-                data -> data == null || data.length == 0 ? null : TableIdZNode.decode(data));
+                TableIdZNode::decode,
+                "table assignment");
     }
 
     /** Get the partition assignment in ZK. */
@@ -479,10 +481,11 @@ public class ZooKeeperClient implements AutoCloseable {
                 partitionIds.stream().collect(toMap(PartitionIdZNode::path, id -> id));
 
         List<ZkGetDataResponse> responses = getDataInBackground(path2PartitionIdMap.keySet());
-        return processGetDataResponsesOrThrow(
+        return processGetDataResponses(
                 responses,
                 response -> path2PartitionIdMap.get(response.getPath()),
-                PartitionIdZNode::decode);
+                PartitionIdZNode::decode,
+                "partition assignment");
     }
 
     public void updateTableAssignment(
@@ -609,10 +612,11 @@ public class ZooKeeperClient implements AutoCloseable {
                 tableBuckets.stream().collect(toMap(LeaderAndIsrZNode::path, bucket -> bucket));
 
         List<ZkGetDataResponse> responses = getDataInBackground(path2TableBucketMap.keySet());
-        return processGetDataResponsesOrThrow(
+        return processGetDataResponses(
                 responses,
                 response -> path2TableBucketMap.get(response.getPath()),
-                LeaderAndIsrZNode::decode);
+                LeaderAndIsrZNode::decode,
+                "leader and isr");
     }
 
     public void updateLeaderAndIsr(
@@ -2000,10 +2004,10 @@ public class ZooKeeperClient implements AutoCloseable {
             // this might be null if the leader and isr not known yet.
             BucketMetadata bucketMetadata =
                     createBucketMetadata(
-                            leaderAndIsrs,
-                            bucket,
                             bucketId,
-                            checkNotNull(tablesAssignments.get(tableId)));
+                            checkNotNull(tablesAssignments.get(tableId))
+                                    .getBucketAssignment(bucketId),
+                            leaderAndIsrs.get(bucket));
             result.get(tableId).add(bucketMetadata);
         }
         return result;
@@ -2035,22 +2039,17 @@ public class ZooKeeperClient implements AutoCloseable {
             long partitionId = checkNotNull(bucket.getPartitionId());
             BucketMetadata bucketMetadata =
                     createBucketMetadata(
-                            leaderAndIsrs,
-                            bucket,
                             bucketId,
-                            checkNotNull(partitionsAssignments.get(partitionId)));
+                            checkNotNull(partitionsAssignments.get(partitionId))
+                                    .getBucketAssignment(bucketId),
+                            leaderAndIsrs.get(bucket));
             result.computeIfAbsent(partitionId, k -> new ArrayList<>()).add(bucketMetadata);
         }
         return result;
     }
 
-    private BucketMetadata createBucketMetadata(
-            Map<TableBucket, LeaderAndIsr> leaderAndIsrs,
-            TableBucket bucket,
-            int bucketId,
-            TableAssignment assignment) {
-        // this might be null if the leader and isr not known yet.
-        LeaderAndIsr leaderAndIsr = leaderAndIsrs.get(bucket);
+    static BucketMetadata createBucketMetadata(
+            int bucketId, BucketAssignment assignment, @Nullable LeaderAndIsr leaderAndIsr) {
         Integer leader = leaderAndIsr != null ? leaderAndIsr.leader() : null;
         Integer leaderEpoch = leaderAndIsr != null ? leaderAndIsr.leaderEpoch() : null;
         List<Integer> isr = leaderAndIsr != null ? leaderAndIsr.isr() : Collections.emptyList();
@@ -2058,7 +2057,7 @@ public class ZooKeeperClient implements AutoCloseable {
                 leaderAndIsr != null
                         ? leaderAndIsr.bucketEpoch()
                         : BucketMetadata.NO_LEADER_ISR_STATE_EPOCH;
-        List<Integer> replicas = assignment.getBucketAssignments().get(bucketId).getReplicas();
+        List<Integer> replicas = assignment.getReplicas();
         return new BucketMetadata(bucketId, leader, leaderEpoch, replicas, isr, bucketEpoch);
     }
 
@@ -2171,7 +2170,6 @@ public class ZooKeeperClient implements AutoCloseable {
      * @return list of async responses for each path
      * @throws Exception if there is an error during the operation
      */
-    @VisibleForTesting
     List<ZkGetDataResponse> getDataInBackground(Collection<String> paths) throws Exception {
         List<ZkGetDataRequest> requests =
                 paths.stream().map(ZkGetDataRequest::new).collect(Collectors.toList());
@@ -2259,7 +2257,6 @@ public class ZooKeeperClient implements AutoCloseable {
         return result;
     }
 
-    @VisibleForTesting
     static <K, V> Map<K, V> processGetDataResponsesOrThrow(
             List<ZkGetDataResponse> responses,
             Function<ZkGetDataResponse, K> keyExtractor,
