@@ -32,10 +32,10 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
+import org.apache.fluss.server.coordinator.event.CheckRebalanceTimeoutEvent;
 import org.apache.fluss.server.coordinator.event.CoordinatorEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
 import org.apache.fluss.server.coordinator.event.FinalizeRebalanceEvent;
-import org.apache.fluss.server.coordinator.event.RebalanceTaskTimeoutEvent;
 import org.apache.fluss.server.coordinator.event.ReconcileRebalanceTaskEvent;
 import org.apache.fluss.server.coordinator.event.RecoverRebalanceEvent;
 import org.apache.fluss.server.coordinator.rebalance.goal.ReplicaDistributionGoal;
@@ -51,6 +51,7 @@ import org.apache.fluss.shaded.curator5.org.apache.curator.retry.ExponentialBack
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
 import org.apache.fluss.utils.clock.ManualClock;
+import org.apache.fluss.utils.concurrent.Scheduler;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
@@ -72,6 +73,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -134,6 +137,8 @@ public class RebalanceManagerTest {
 
     @Test
     void testRebalanceWithoutTask() throws Exception {
+        assertThat(rebalanceManager.isRecoveryPending()).isFalse();
+        assertThat(rebalanceManager.hasInProgressRebalance()).isFalse();
         assertThat(rebalanceManager.getRebalanceId()).isNull();
         assertThat(rebalanceManager.getRebalanceStatus()).isNull();
 
@@ -154,29 +159,43 @@ public class RebalanceManagerTest {
     }
 
     @Test
-    void testTimeoutEnqueuesEvent() throws Exception {
+    void testScheduledTimeoutCheckRunsOnEventThread() throws Exception {
         TableBucket tb1 = new TableBucket(1L, 0);
         TableBucket tb2 = new TableBucket(1L, 1);
         Map<TableBucket, RebalancePlanForBucket> plan = plans(tb1, tb2);
         rebalanceManager.registerRebalance("timeout-test", plan);
-        RebalanceExecutionKey executionKey = rebalanceManager.getExecutionKey(tb1);
 
-        clock.advanceTime(Duration.ofMillis(100_000));
-        rebalanceManager.checkTimeout();
-        assertThat(eventManager.events).isEmpty();
-
-        clock.advanceTime(Duration.ofMillis(30_000));
-        rebalanceManager.checkTimeout();
+        clock.advanceTime(Duration.ofMillis(130_000));
+        timeoutChecker.triggerPeriodicScheduledTasks();
 
         assertThat(eventManager.events).hasSize(1);
-        assertThat(eventManager.events.get(0)).isInstanceOf(RebalanceTaskTimeoutEvent.class);
-        RebalanceTaskTimeoutEvent timeoutEvent =
-                (RebalanceTaskTimeoutEvent) eventManager.events.get(0);
-        assertThat(timeoutEvent.getExecutionKey()).isEqualTo(executionKey);
+        assertThat(eventManager.events.get(0)).isInstanceOf(CheckRebalanceTimeoutEvent.class);
+        assertThat(statuses(rebalanceManager).get(tb1)).isEqualTo(REBALANCING);
 
-        clock.advanceTime(Duration.ofMillis(30_000));
-        rebalanceManager.checkTimeout();
-        assertThat(eventManager.events).hasSize(1);
+        CheckRebalanceTimeoutEvent checkEvent =
+                (CheckRebalanceTimeoutEvent) eventManager.events.get(0);
+        rebalanceManager.checkTimeout(checkEvent.getRebalanceId());
+
+        assertThat(statuses(rebalanceManager).get(tb1)).isEqualTo(TIMEOUT);
+        assertThat(eventManager.events).hasSize(2);
+        assertThat(eventManager.events.get(1)).isInstanceOf(ReconcileRebalanceTaskEvent.class);
+    }
+
+    @Test
+    void testStaleTimeoutCheckDoesNotAffectNextRebalance() {
+        TableBucket firstBucket = new TableBucket(1L, 0);
+        rebalanceManager.registerRebalance("first-rebalance", plans(firstBucket));
+        timeoutChecker.triggerPeriodicScheduledTasks();
+        CheckRebalanceTimeoutEvent staleCheck =
+                (CheckRebalanceTimeoutEvent) eventManager.events.get(0);
+        rebalanceManager.finishRebalanceTask(firstBucket, COMPLETED);
+
+        TableBucket nextBucket = new TableBucket(2L, 0);
+        rebalanceManager.registerRebalance("next-rebalance", plans(nextBucket));
+        clock.advanceTime(Duration.ofMillis(130_000));
+        rebalanceManager.checkTimeout(staleCheck.getRebalanceId());
+
+        assertThat(statuses(rebalanceManager).get(nextBucket)).isEqualTo(REBALANCING);
     }
 
     @Test
@@ -266,7 +285,7 @@ public class RebalanceManagerTest {
     }
 
     @Test
-    void testTimeoutEnqueuesEventsForAllInflightTasks() {
+    void testTimeoutsAllInflightTasks() {
         reconfigureMaxInflightTasks(2);
         TableBucket tb1 = new TableBucket(1L, 0);
         TableBucket tb2 = new TableBucket(1L, 1);
@@ -276,20 +295,8 @@ public class RebalanceManagerTest {
         clock.advanceTime(Duration.ofMillis(130_000));
         rebalanceManager.checkTimeout();
 
-        assertThat(eventManager.events)
-                .filteredOn(RebalanceTaskTimeoutEvent.class::isInstance)
-                .extracting(
-                        event ->
-                                ((RebalanceTaskTimeoutEvent) event)
-                                        .getExecutionKey()
-                                        .getTableBucket())
-                .containsExactlyInAnyOrder(tb1, tb2);
-        for (CoordinatorEvent event : new ArrayList<>(eventManager.events)) {
-            assertThat(
-                            rebalanceManager.timeoutRebalanceTask(
-                                    ((RebalanceTaskTimeoutEvent) event).getExecutionKey()))
-                    .isTrue();
-        }
+        assertThat(statuses(rebalanceManager).get(tb1)).isEqualTo(TIMEOUT);
+        assertThat(statuses(rebalanceManager).get(tb2)).isEqualTo(TIMEOUT);
         assertThat(rebalanceExecutor.executedPlans)
                 .extracting(RebalancePlanForBucket::getTableBucket)
                 .containsExactly(tb1, tb2, tb3);
@@ -347,9 +354,6 @@ public class RebalanceManagerTest {
 
         clock.advanceTime(Duration.ofMillis(130_000));
         rebalanceManager.checkTimeout();
-        RebalanceTaskTimeoutEvent timeoutEvent =
-                (RebalanceTaskTimeoutEvent) eventManager.events.get(0);
-        assertThat(rebalanceManager.timeoutRebalanceTask(timeoutEvent.getExecutionKey())).isTrue();
 
         RebalanceExecutionKey secondAttempt = rebalanceManager.getExecutionKey(tb2);
         assertThat(secondAttempt).isNotNull();
@@ -364,20 +368,20 @@ public class RebalanceManagerTest {
                                 .get(tb1)
                                 .status())
                 .isEqualTo(TIMEOUT);
-        assertThat(eventManager.events.get(1)).isInstanceOf(ReconcileRebalanceTaskEvent.class);
+        assertThat(eventManager.events.get(0)).isInstanceOf(ReconcileRebalanceTaskEvent.class);
 
         RebalancePlanForBucket retryPlan = rebalanceManager.prepareReconciliation(firstAttempt);
         assertThat(retryPlan).isNotNull();
         assertThat(retryPlan.getTableBucket()).isEqualTo(tb1);
         // the dispatched reconciliation backs off, so no event is enqueued right away.
         rebalanceManager.checkTimeout();
-        assertThat(eventManager.events).hasSize(2);
+        assertThat(eventManager.events).hasSize(1);
 
         clock.advanceTime(Duration.ofMillis(30_000));
         rebalanceManager.checkTimeout();
-        assertThat(eventManager.events).hasSize(3);
-        assertThat(eventManager.events.get(2)).isInstanceOf(ReconcileRebalanceTaskEvent.class);
-        assertThat(((ReconcileRebalanceTaskEvent) eventManager.events.get(2)).getExecutionKey())
+        assertThat(eventManager.events).hasSize(2);
+        assertThat(eventManager.events.get(1)).isInstanceOf(ReconcileRebalanceTaskEvent.class);
+        assertThat(((ReconcileRebalanceTaskEvent) eventManager.events.get(1)).getExecutionKey())
                 .isEqualTo(firstAttempt);
 
         assertThat(rebalanceManager.timeoutRebalanceTask(firstAttempt)).isFalse();
@@ -973,8 +977,15 @@ public class RebalanceManagerTest {
                     .isEqualTo(NOT_STARTED);
 
             timeoutChecker.triggerPeriodicScheduledTasks();
-            assertThat(eventManager.events).hasSize(1);
-            FinalizeRebalanceEvent event = (FinalizeRebalanceEvent) eventManager.events.get(0);
+            CheckRebalanceTimeoutEvent checkEvent =
+                    (CheckRebalanceTimeoutEvent) eventManager.events.get(0);
+            rebalanceManager.checkTimeout(checkEvent.getRebalanceId());
+            FinalizeRebalanceEvent event =
+                    (FinalizeRebalanceEvent)
+                            eventManager.events.stream()
+                                    .filter(FinalizeRebalanceEvent.class::isInstance)
+                                    .findFirst()
+                                    .get();
             rebalanceManager.retryFinalizeRebalance(event.getRebalanceId());
 
             assertThat(testingClient.getRebalanceTask().get().getRebalanceStatus())
@@ -996,7 +1007,12 @@ public class RebalanceManagerTest {
         timeoutChecker = new ManuallyTriggeredScheduledExecutorService();
         RebalanceManager manager =
                 new RebalanceManager(
-                        rebalanceExecutor, client, eventManager, clock, conf, timeoutChecker);
+                        rebalanceExecutor,
+                        client,
+                        eventManager,
+                        clock,
+                        conf,
+                        new TestingScheduler(timeoutChecker));
         manager.startup();
         return manager;
     }
@@ -1043,7 +1059,14 @@ public class RebalanceManagerTest {
         configureManager(new Configuration());
 
         assertThat(rebalanceManager.hasInProgressRebalance()).isTrue();
+        assertThat(rebalanceManager.isRecoveryPending()).isTrue();
         assertThat(rebalanceManager.getRebalanceId()).isNull();
+        assertThatThrownBy(
+                        () ->
+                                rebalanceManager.registerRebalance(
+                                        "too-early", plans(new TableBucket(2L, 0))))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("startup recovery");
         assertThat(timeoutChecker.getActivePeriodicScheduledTask()).hasSize(1);
         assertThat(eventManager.events).hasSize(1);
         RecoverRebalanceEvent recoveryEvent = (RecoverRebalanceEvent) eventManager.events.get(0);
@@ -1051,8 +1074,59 @@ public class RebalanceManagerTest {
 
         rebalanceExecutor.originBuckets.add(tableBucket);
         rebalanceManager.recoverRebalance(recoveryEvent.getRebalanceTask());
+        assertThat(rebalanceManager.isRecoveryPending()).isFalse();
         assertThat(rebalanceManager.getRebalanceId()).isEqualTo("startup-recovery-test");
         assertThat(rebalanceExecutor.executedPlans).hasSize(1);
+    }
+
+    @Test
+    void testNewRebalanceIsAdmittedAfterRecoveryCompletes() throws Exception {
+        TableBucket recoveredBucket = new TableBucket(1L, 0);
+        zookeeperClient.registerRebalanceTask(
+                new RebalanceTask("completed-recovery", COMPLETED, plans(recoveredBucket)));
+        configureManager(new Configuration());
+
+        assertThat(rebalanceManager.hasInProgressRebalance()).isTrue();
+        assertThatThrownBy(
+                        () ->
+                                rebalanceManager.registerRebalance(
+                                        "too-early", plans(new TableBucket(2L, 0))))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("startup recovery");
+
+        RecoverRebalanceEvent recoveryEvent = (RecoverRebalanceEvent) eventManager.events.get(0);
+        rebalanceManager.recoverRebalance(recoveryEvent.getRebalanceTask());
+        assertThat(rebalanceManager.isRecoveryPending()).isFalse();
+        assertThat(rebalanceManager.hasInProgressRebalance()).isFalse();
+
+        TableBucket nextBucket = new TableBucket(2L, 0);
+        rebalanceManager.registerRebalance("after-recovery", plans(nextBucket));
+        assertThat(rebalanceManager.getRebalanceId()).isEqualTo("after-recovery");
+        assertThat(rebalanceManager.getExecutionKey(nextBucket)).isNotNull();
+    }
+
+    @Test
+    void testRecoveryFailureKeepsNewRebalanceFenced() throws Exception {
+        TableBucket recoveredBucket = new TableBucket(1L, 0);
+        zookeeperClient.registerRebalanceTask(
+                new RebalanceTask("failed-recovery", REBALANCING, plans(recoveredBucket)));
+        configureManager(new Configuration());
+        rebalanceExecutor.failOriginCheck = true;
+
+        RecoverRebalanceEvent recoveryEvent = (RecoverRebalanceEvent) eventManager.events.get(0);
+        assertThatThrownBy(
+                        () -> rebalanceManager.recoverRebalance(recoveryEvent.getRebalanceTask()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("origin check failed");
+
+        assertThat(rebalanceManager.isRecoveryPending()).isTrue();
+        assertThat(rebalanceManager.hasInProgressRebalance()).isTrue();
+        assertThatThrownBy(
+                        () ->
+                                rebalanceManager.registerRebalance(
+                                        "too-early", plans(new TableBucket(2L, 0))))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("startup recovery");
     }
 
     private static Map<TableBucket, RebalancePlanForBucket> plans(TableBucket... tableBuckets) {
@@ -1075,12 +1149,36 @@ public class RebalanceManagerTest {
         return statuses;
     }
 
+    private static final class TestingScheduler implements Scheduler {
+        private final ManuallyTriggeredScheduledExecutorService executor;
+
+        private TestingScheduler(ManuallyTriggeredScheduledExecutorService executor) {
+            this.executor = executor;
+        }
+
+        @Override
+        public void startup() {}
+
+        @Override
+        public void shutdown() {}
+
+        @Override
+        public ScheduledFuture<?> schedule(
+                String name, Runnable task, long delayMs, long periodMs) {
+            if (periodMs > 0) {
+                return executor.scheduleAtFixedRate(task, delayMs, periodMs, TimeUnit.MILLISECONDS);
+            }
+            return executor.schedule(task, delayMs, TimeUnit.MILLISECONDS);
+        }
+    }
+
     private static final class TestingRebalanceExecutor implements RebalanceExecutor {
         private final CoordinatorContext coordinatorContext;
         private final List<RebalancePlanForBucket> executedPlans = new ArrayList<>();
         private final Set<TableBucket> originBuckets = new HashSet<>();
         private final Set<TableBucket> deletedBuckets = new HashSet<>();
         private final Set<TableBucket> synchronouslyCompletedBuckets = new HashSet<>();
+        private boolean failOriginCheck;
 
         private TestingRebalanceExecutor(CoordinatorContext coordinatorContext) {
             this.coordinatorContext = coordinatorContext;
@@ -1101,6 +1199,9 @@ public class RebalanceManagerTest {
 
         @Override
         public boolean isRebalanceTaskAtOrigin(RebalancePlanForBucket planForBucket) {
+            if (failOriginCheck) {
+                throw new IllegalStateException("origin check failed");
+            }
             return originBuckets.contains(planForBucket.getTableBucket());
         }
 

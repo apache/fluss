@@ -175,8 +175,21 @@ public class RebalanceManagerITCase {
         assertThat(originReplicaStates).allMatch(replicaState -> replicaState == OnlineReplica);
         assertThat(newReplicaStates).allMatch(Objects::isNull);
 
-        rebalanceManager.registerRebalance(
-                "test-rebalance-dsds", Collections.singletonMap(tb, planForBucket));
+        // RebalanceManager state is confined to the coordinator event thread.
+        AccessContextEvent<Void> registerEvent =
+                new AccessContextEvent<>(
+                        ctx -> {
+                            rebalanceManager.registerRebalance(
+                                    "test-rebalance-dsds",
+                                    Collections.singletonMap(tb, planForBucket));
+                            return null;
+                        });
+        FLUSS_CLUSTER_EXTENSION
+                .getCoordinatorServer()
+                .getCoordinatorEventProcessor()
+                .getCoordinatorEventManager()
+                .put(registerEvent);
+        registerEvent.getResultFuture().get(30, TimeUnit.SECONDS);
 
         retry(
                 Duration.ofMinutes(2),
