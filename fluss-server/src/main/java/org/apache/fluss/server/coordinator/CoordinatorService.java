@@ -284,7 +284,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     private final boolean kvTableAllowCreation;
     private final Supplier<EventManager> eventManagerSupplier;
     private final Supplier<Integer> coordinatorEpochSupplier;
-    private final Supplier<Integer> coordinatorZkVersionSupplier;
+    private final Supplier<MetadataManager> ddlMetadataManagerSupplier;
     private final CoordinatorMetadataCache metadataCache;
 
     private final Supplier<CompletedSnapshotStoreManager> snapshotStoreManagerSupplier;
@@ -330,8 +330,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                 () -> coordinatorEventProcessorSupplier.get().getCoordinatorEventManager();
         this.coordinatorEpochSupplier =
                 () -> coordinatorEventProcessorSupplier.get().getCoordinatorEpoch();
-        this.coordinatorZkVersionSupplier =
-                () -> coordinatorEventProcessorSupplier.get().getCoordinatorZkVersion();
+        this.ddlMetadataManagerSupplier =
+                () -> coordinatorEventProcessorSupplier.get().getMetadataManager();
         this.snapshotStoreManagerSupplier =
                 () -> coordinatorEventProcessorSupplier.get().completedSnapshotStoreManager();
         this.lakeTableTieringManager = lakeTableTieringManager;
@@ -445,9 +445,18 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         } else {
             databaseDescriptor = DatabaseDescriptor.builder().build();
         }
-        metadataManager.createDatabase(
-                request.getDatabaseName(), databaseDescriptor, request.isIgnoreIfExists());
-        return CompletableFuture.completedFuture(response);
+        return ddlMetadataManagerSupplier
+                .get()
+                .runDatabaseDdlAsync(
+                        request.getDatabaseName(),
+                        ioExecutor,
+                        scoped -> {
+                            scoped.createDatabase(
+                                    request.getDatabaseName(),
+                                    databaseDescriptor,
+                                    request.isIgnoreIfExists());
+                            return response;
+                        });
     }
 
     @Override
@@ -462,10 +471,18 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         DatabasePropertyChanges databasePropertyChanges =
                 toDatabasePropertyChanges(databaseChanges);
 
-        metadataManager.alterDatabaseProperties(
-                databaseName, databasePropertyChanges, request.isIgnoreIfNotExists());
-
-        return CompletableFuture.completedFuture(new AlterDatabaseResponse());
+        return ddlMetadataManagerSupplier
+                .get()
+                .runDatabaseDdlAsync(
+                        databaseName,
+                        ioExecutor,
+                        scoped -> {
+                            scoped.alterDatabaseProperties(
+                                    databaseName,
+                                    databasePropertyChanges,
+                                    request.isIgnoreIfNotExists());
+                            return new AlterDatabaseResponse();
+                        });
     }
 
     private DatabasePropertyChanges toDatabasePropertyChanges(
@@ -496,9 +513,18 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     public CompletableFuture<DropDatabaseResponse> dropDatabase(DropDatabaseRequest request) {
         authorizeDatabase(OperationType.DROP, request.getDatabaseName());
         DropDatabaseResponse response = new DropDatabaseResponse();
-        metadataManager.dropDatabase(
-                request.getDatabaseName(), request.isIgnoreIfNotExists(), request.isCascade());
-        return CompletableFuture.completedFuture(response);
+        return ddlMetadataManagerSupplier
+                .get()
+                .runDatabaseDdlAsync(
+                        request.getDatabaseName(),
+                        ioExecutor,
+                        scoped -> {
+                            scoped.dropDatabase(
+                                    request.getDatabaseName(),
+                                    request.isIgnoreIfNotExists(),
+                                    request.isCascade());
+                            return response;
+                        });
     }
 
     @Override
@@ -522,13 +548,26 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             }
         }
 
-        LakeCatalogDynamicLoader.LakeCatalogContainer lakeCatalogContainer =
-                lakeCatalogDynamicLoader.getLakeCatalogContainer();
+        return ddlMetadataManagerSupplier
+                .get()
+                .runTableDdlAsync(
+                        tablePath,
+                        ioExecutor,
+                        metadataManager -> {
+                            LakeCatalogDynamicLoader.LakeCatalogContainer lakeCatalogContainer =
+                                    lakeCatalogDynamicLoader.getLakeCatalogContainer();
 
-        createTableInternal(
-                tablePath, tableDescriptor, request.isIgnoreIfExists(), true, lakeCatalogContainer);
+                            createTableInternal(
+                                    metadataManager,
+                                    tablePath,
+                                    tableDescriptor,
+                                    request.isIgnoreIfExists(),
+                                    true,
+                                    lakeCatalogContainer,
+                                    session);
 
-        return CompletableFuture.completedFuture(new CreateTableResponse());
+                            return new CreateTableResponse();
+                        });
     }
 
     @Override
@@ -537,44 +576,64 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         TablePath tablePath = toTablePath(request.getTablePath());
         tablePath.validate();
         String databaseName = tablePath.getDatabaseName();
-
-        boolean databaseExists = metadataManager.databaseExists(databaseName);
-        if (databaseExists) {
-            authorizeDatabase(OperationType.CREATE, databaseName);
-        } else if (authorizer != null) {
-            authorizer.authorize(currentSession(), OperationType.CREATE, Resource.cluster());
-        }
-        validateSystemTableCreationCaller(tablePath, currentSession());
-
+        Session session = currentSession();
+        MetadataManager metadata = ddlMetadataManagerSupplier.get();
         LakeCatalogDynamicLoader.LakeCatalogContainer lakeCatalogContainer =
                 lakeCatalogDynamicLoader.getLakeCatalogContainer();
-        if (!lakeCatalogContainer.isClusterDataLakeTableEnabled()
-                || lakeCatalogContainer.getDataLakeFormat() != DataLakeFormat.PAIMON
-                || lakeCatalogContainer.getLakeCatalog() == null) {
-            throw new InvalidTableException(
-                    "Creating a Fluss table on an existing lake table requires the cluster to "
-                            + "enable Paimon Lake Storage.");
+        return metadata.runTableOrDatabaseDdlAsync(
+                tablePath,
+                ioExecutor,
+                () -> {
+                    authorizeCreateTableFromLake(metadata, databaseName, session);
+                    validateSystemTableCreationCaller(tablePath, session);
+                    if (!lakeCatalogContainer.isClusterDataLakeTableEnabled()
+                            || lakeCatalogContainer.getDataLakeFormat() != DataLakeFormat.PAIMON
+                            || lakeCatalogContainer.getLakeCatalog() == null) {
+                        throw new InvalidTableException(
+                                "Creating a Fluss table on an existing lake table requires the cluster to "
+                                        + "enable Paimon Lake Storage.");
+                    }
+                    return mergeCreateTableFromLakeOptions(
+                            tablePath,
+                            lakeCatalogContainer.getLakeCatalog().getTableDescriptor(tablePath),
+                            request.getOptionsList());
+                },
+                (scoped, descriptor) -> {
+                    authorizeCreateTableFromLake(scoped, databaseName, session);
+                    if (!scoped.databaseExists(databaseName)) {
+                        scoped.createDatabase(
+                                databaseName, DatabaseDescriptor.builder().build(), true);
+                    }
+                    return createTableFromLake(
+                            scoped, tablePath, descriptor, lakeCatalogContainer, session);
+                });
+    }
+
+    private void authorizeCreateTableFromLake(
+            MetadataManager metadata, String databaseName, Session session) {
+        if (metadata.databaseExists(databaseName)) {
+            if (authorizer != null) {
+                authorizer.authorize(
+                        session, OperationType.CREATE, Resource.database(databaseName));
+            }
+        } else if (authorizer != null) {
+            authorizer.authorize(session, OperationType.CREATE, Resource.cluster());
         }
+    }
 
-        TableDescriptor tableDescriptor =
-                lakeCatalogContainer.getLakeCatalog().getTableDescriptor(tablePath);
-        tableDescriptor =
-                mergeCreateTableFromLakeOptions(
-                        tablePath, tableDescriptor, request.getOptionsList());
-
-        if (databaseExists && metadataManager.tableExists(tablePath)) {
-            validateExistingTableFromLake(
-                    tablePath, metadataManager.getTable(tablePath), tableDescriptor);
+    private CreateTableFromLakeResponse createTableFromLake(
+            MetadataManager metadata,
+            TablePath tablePath,
+            TableDescriptor tableDescriptor,
+            LakeCatalogDynamicLoader.LakeCatalogContainer lakeCatalogContainer,
+            Session session) {
+        if (metadata.tableExists(tablePath)) {
+            validateExistingTableFromLake(tablePath, metadata.getTable(tablePath), tableDescriptor);
             throw new TableAlreadyExistException("Table " + tablePath + " already exists.");
         }
-
-        if (!databaseExists) {
-            metadataManager.createDatabase(
-                    databaseName, DatabaseDescriptor.builder().build(), true);
-        }
-        createTableInternal(tablePath, tableDescriptor, false, false, lakeCatalogContainer);
-
-        TableInfo tableInfo = metadataManager.getTable(tablePath);
+        createTableInternal(
+                metadata, tablePath, tableDescriptor, false, false, lakeCatalogContainer, session);
+        TableInfo tableInfo = metadata.getTable(tablePath);
         PbTableInfo pbTableInfo =
                 new PbTableInfo()
                         .setTableId(tableInfo.getTableId())
@@ -586,16 +645,17 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         if (tableInfo.getRemoteDataDir() != null) {
             pbTableInfo.setRemoteDataDir(tableInfo.getRemoteDataDir());
         }
-        return CompletableFuture.completedFuture(
-                new CreateTableFromLakeResponse().setTableInfo(pbTableInfo));
+        return new CreateTableFromLakeResponse().setTableInfo(pbTableInfo);
     }
 
     private void createTableInternal(
+            MetadataManager metadataManager,
             TablePath tablePath,
             TableDescriptor tableDescriptor,
             boolean ignoreIfExists,
             boolean createLakeTable,
-            LakeCatalogDynamicLoader.LakeCatalogContainer lakeCatalogContainer) {
+            LakeCatalogDynamicLoader.LakeCatalogContainer lakeCatalogContainer,
+            Session session) {
 
         // Check table creation permissions based on table type
         validateTableCreationPermission(tableDescriptor, tablePath);
@@ -639,11 +699,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                                 lakeTablePath,
                                 tableDescriptor,
                                 new DefaultLakeCatalogContext(
-                                        true,
-                                        null,
-                                        currentSession().getPrincipal(),
-                                        null,
-                                        tableDescriptor));
+                                        true, null, session.getPrincipal(), null, tableDescriptor));
             } catch (TableAlreadyExistException e) {
                 throw new LakeTableAlreadyExistException(e.getMessage(), e);
             }
@@ -660,7 +716,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                         tablePath, remoteDataDir, tableDescriptor, tableAssignment, ignoreIfExists);
         if (tableId >= 0 && isHistoricalPartitionEnabled(tableDescriptor)) {
             try {
-                createHistoricalPartition(tablePath, tableId, tableDescriptor);
+                createHistoricalPartition(metadataManager, tablePath, tableId, tableDescriptor);
             } catch (Exception e) {
                 throw historicalPartitionCreateTableException(tablePath, e);
             }
@@ -806,6 +862,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
     @Override
     public CompletableFuture<AlterTableResponse> alterTable(AlterTableRequest request) {
+        Session session = currentSession();
         TablePath tablePath = toTablePath(request.getTablePath());
         tablePath.validate();
         authorizeTable(OperationType.ALTER, tablePath);
@@ -827,55 +884,70 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                             + "table properties, table schema, or table distribution.");
         }
 
-        if (hasSchemaChanges) {
-            metadataManager.alterTableSchema(
-                    tablePath,
-                    alterSchemaChanges,
-                    request.isIgnoreIfNotExists(),
-                    currentSession().getPrincipal());
-        }
+        return ddlMetadataManagerSupplier
+                .get()
+                .runTableDdlAsync(
+                        tablePath,
+                        ioExecutor,
+                        metadataManager -> {
+                            if (hasSchemaChanges) {
+                                metadataManager.alterTableSchema(
+                                        tablePath,
+                                        alterSchemaChanges,
+                                        request.isIgnoreIfNotExists(),
+                                        session.getPrincipal());
+                            }
 
-        if (hasConfigChanges) {
-            metadataManager.alterTableProperties(
-                    tablePath,
-                    alterTableConfigChanges,
-                    tablePropertyChanges,
-                    request.isIgnoreIfNotExists(),
-                    currentSession().getPrincipal(),
-                    this::beforeTablePropertiesUpdate,
-                    this::afterTablePropertiesUpdate,
-                    coordinatorZkVersionSupplier.get());
-        }
+                            if (hasConfigChanges) {
+                                metadataManager.alterTableProperties(
+                                        tablePath,
+                                        alterTableConfigChanges,
+                                        tablePropertyChanges,
+                                        request.isIgnoreIfNotExists(),
+                                        session.getPrincipal(),
+                                        (current, updated) ->
+                                                beforeTablePropertiesUpdate(
+                                                        metadataManager, current, updated),
+                                        (current, updated) ->
+                                                afterTablePropertiesUpdate(
+                                                        metadataManager, current, updated),
+                                        metadataManager.getCoordinatorZkVersion());
+                            }
 
-        if (hasDistributionChanges) {
-            TableChange.ModifyBucketCount modifyBucketCount =
-                    (TableChange.ModifyBucketCount) alterDistributionChanges.get(0);
-            metadataManager.alterBucketCount(
-                    tablePath,
-                    modifyBucketCount.getNewBucketCount(),
-                    request.isIgnoreIfNotExists(),
-                    currentSession().getPrincipal(),
-                    coordinatorZkVersionSupplier.get());
-        }
+                            if (hasDistributionChanges) {
+                                TableChange.ModifyBucketCount modifyBucketCount =
+                                        (TableChange.ModifyBucketCount)
+                                                alterDistributionChanges.get(0);
+                                metadataManager.alterBucketCount(
+                                        tablePath,
+                                        modifyBucketCount.getNewBucketCount(),
+                                        request.isIgnoreIfNotExists(),
+                                        session.getPrincipal(),
+                                        metadataManager.getCoordinatorZkVersion());
+                            }
 
-        return CompletableFuture.completedFuture(new AlterTableResponse());
+                            return new AlterTableResponse();
+                        });
     }
 
-    private void beforeTablePropertiesUpdate(TableInfo currentTable, TableDescriptor updatedTable) {
+    private void beforeTablePropertiesUpdate(
+            MetadataManager metadataManager, TableInfo currentTable, TableDescriptor updatedTable) {
         if (!currentTable.getTableConfig().isHistoricalPartitionEnabled()
                 && isHistoricalPartitionEnabled(updatedTable)) {
             TablePath tablePath = currentTable.getTablePath();
             try {
                 replicaCapacityController.checkCanCreateKvLeaderReplicas(
                         getBucketCount(updatedTable));
-                createHistoricalPartition(tablePath, currentTable.getTableId(), updatedTable);
+                createHistoricalPartition(
+                        metadataManager, tablePath, currentTable.getTableId(), updatedTable);
             } catch (Exception e) {
                 throw historicalPartitionEnableException(tablePath, e);
             }
         }
     }
 
-    private void afterTablePropertiesUpdate(TableInfo currentTable, TableDescriptor updatedTable) {
+    private void afterTablePropertiesUpdate(
+            MetadataManager metadataManager, TableInfo currentTable, TableDescriptor updatedTable) {
         boolean oldEnabled = currentTable.getTableConfig().isHistoricalPartitionEnabled();
         boolean newEnabled = isHistoricalPartitionEnabled(updatedTable);
         if (!oldEnabled || newEnabled) {
@@ -891,7 +963,10 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     }
 
     private void createHistoricalPartition(
-            TablePath tablePath, long tableId, TableDescriptor tableDescriptor) {
+            MetadataManager metadataManager,
+            TablePath tablePath,
+            long tableId,
+            TableDescriptor tableDescriptor) {
         int replicaFactor = tableDescriptor.getReplicationFactor();
         TabletServerInfo[] servers = metadataCache.getLiveServers();
         int bucketCount = getBucketCount(tableDescriptor);
@@ -1113,8 +1188,15 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         authorizeTable(OperationType.DROP, tablePath);
 
         DropTableResponse response = new DropTableResponse();
-        metadataManager.dropTable(tablePath, request.isIgnoreIfNotExists());
-        return CompletableFuture.completedFuture(response);
+        return ddlMetadataManagerSupplier
+                .get()
+                .runTableDdlAsync(
+                        tablePath,
+                        ioExecutor,
+                        scoped -> {
+                            scoped.dropTable(tablePath, request.isIgnoreIfNotExists());
+                            return response;
+                        });
     }
 
     @Override
@@ -1123,60 +1205,78 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         TablePath tablePath = toTablePath(request.getTablePath());
         authorizeTable(OperationType.WRITE, tablePath);
 
-        CreatePartitionResponse response = new CreatePartitionResponse();
-        // The table metadata (including bucket.num) is read fresh here, and the partition's
-        // registration persists its assignment and bucket count atomically in one ZK transaction
-        TableInfo tableInfo = metadataManager.getTable(tablePath);
-        if (!tableInfo.isPartitioned()) {
-            throw new TableNotPartitionedException(
-                    "Only partitioned table support create partition.");
-        }
+        return ddlMetadataManagerSupplier
+                .get()
+                .runTableDdlAsync(
+                        tablePath,
+                        ioExecutor,
+                        metadataManager -> {
+                            CreatePartitionResponse response = new CreatePartitionResponse();
+                            // The table metadata (including bucket.num) is read fresh here, and the
+                            // partition's
+                            // registration persists its assignment and bucket count atomically in
+                            // one ZK transaction
+                            TableInfo tableInfo = metadataManager.getTable(tablePath);
+                            if (!tableInfo.isPartitioned()) {
+                                throw new TableNotPartitionedException(
+                                        "Only partitioned table support create partition.");
+                            }
 
-        // first, validate the partition spec, and get resolved partition spec.
-        PartitionSpec partitionSpec = getPartitionSpec(request.getPartitionSpec());
-        validatePartitionSpec(tablePath, tableInfo.getPartitionKeys(), partitionSpec, true);
+                            // first, validate the partition spec, and get resolved partition spec.
+                            PartitionSpec partitionSpec =
+                                    getPartitionSpec(request.getPartitionSpec());
+                            validatePartitionSpec(
+                                    tablePath, tableInfo.getPartitionKeys(), partitionSpec, true);
 
-        // second, check whether the partition is out-of-date.
-        validateAutoPartitionTime(
-                partitionSpec,
-                tableInfo.getPartitionKeys(),
-                tableInfo.getTableConfig().getAutoPartitionStrategy());
+                            // second, check whether the partition is out-of-date.
+                            validateAutoPartitionTime(
+                                    partitionSpec,
+                                    tableInfo.getPartitionKeys(),
+                                    tableInfo.getTableConfig().getAutoPartitionStrategy());
 
-        ResolvedPartitionSpec partitionToCreate =
-                ResolvedPartitionSpec.fromPartitionSpec(
-                        tableInfo.getPartitionKeys(), partitionSpec);
-        if (request.isIgnoreIfNotExists()
-                && metadataManager
-                        .getOptionalPartitionRegistration(
-                                tablePath, partitionToCreate.getPartitionName())
-                        .isPresent()) {
-            return CompletableFuture.completedFuture(response);
-        }
+                            ResolvedPartitionSpec partitionToCreate =
+                                    ResolvedPartitionSpec.fromPartitionSpec(
+                                            tableInfo.getPartitionKeys(), partitionSpec);
+                            if (request.isIgnoreIfNotExists()
+                                    && metadataManager
+                                            .getOptionalPartitionRegistration(
+                                                    tablePath, partitionToCreate.getPartitionName())
+                                            .isPresent()) {
+                                return response;
+                            }
 
-        long newKvLeaderReplicaCount = tableInfo.hasPrimaryKey() ? tableInfo.getNumBuckets() : 0;
-        replicaCapacityController.checkCanCreateKvLeaderReplicas(newKvLeaderReplicaCount);
+                            long newKvLeaderReplicaCount =
+                                    tableInfo.hasPrimaryKey() ? tableInfo.getNumBuckets() : 0;
+                            replicaCapacityController.checkCanCreateKvLeaderReplicas(
+                                    newKvLeaderReplicaCount);
 
-        // third, generate the PartitionAssignment.
-        int replicaFactor = tableInfo.getTableConfig().getReplicationFactor();
-        TabletServerInfo[] servers = metadataCache.getLiveServers();
-        Map<Integer, BucketAssignment> bucketAssignments =
-                generateAssignment(tableInfo.getNumBuckets(), replicaFactor, servers)
-                        .getBucketAssignments();
-        PartitionAssignment partitionAssignment =
-                new PartitionAssignment(tableInfo.getTableId(), bucketAssignments);
+                            // third, generate the PartitionAssignment.
+                            int replicaFactor = tableInfo.getTableConfig().getReplicationFactor();
+                            TabletServerInfo[] servers = metadataCache.getLiveServers();
+                            Map<Integer, BucketAssignment> bucketAssignments =
+                                    generateAssignment(
+                                                    tableInfo.getNumBuckets(),
+                                                    replicaFactor,
+                                                    servers)
+                                            .getBucketAssignments();
+                            PartitionAssignment partitionAssignment =
+                                    new PartitionAssignment(
+                                            tableInfo.getTableId(), bucketAssignments);
 
-        // select remote data dir for partition
-        String remoteDataDir = remoteDirDynamicLoader.getRemoteDirSelector().nextDataDir();
+                            // select remote data dir for partition
+                            String remoteDataDir =
+                                    remoteDirDynamicLoader.getRemoteDirSelector().nextDataDir();
 
-        metadataManager.createPartition(
-                tablePath,
-                tableInfo.getTableId(),
-                remoteDataDir,
-                partitionAssignment,
-                partitionToCreate,
-                request.isIgnoreIfNotExists(),
-                tableInfo.getNumBuckets());
-        return CompletableFuture.completedFuture(response);
+                            metadataManager.createPartition(
+                                    tablePath,
+                                    tableInfo.getTableId(),
+                                    remoteDataDir,
+                                    partitionAssignment,
+                                    partitionToCreate,
+                                    request.isIgnoreIfNotExists(),
+                                    tableInfo.getNumBuckets());
+                            return response;
+                        });
     }
 
     @Override
@@ -1184,27 +1284,40 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         TablePath tablePath = toTablePath(request.getTablePath());
         authorizeTable(OperationType.WRITE, tablePath);
 
-        DropPartitionResponse response = new DropPartitionResponse();
-        TableRegistration table = metadataManager.getTableRegistration(tablePath);
-        if (!table.isPartitioned()) {
-            throw new TableNotPartitionedException(
-                    "Only partitioned table support drop partition.");
-        }
+        return ddlMetadataManagerSupplier
+                .get()
+                .runTableDdlAsync(
+                        tablePath,
+                        ioExecutor,
+                        metadataManager -> {
+                            DropPartitionResponse response = new DropPartitionResponse();
+                            TableRegistration table =
+                                    metadataManager.getTableRegistration(tablePath);
+                            if (!table.isPartitioned()) {
+                                throw new TableNotPartitionedException(
+                                        "Only partitioned table support drop partition.");
+                            }
 
-        // first, validate the partition spec.
-        PartitionSpec partitionSpec = getPartitionSpec(request.getPartitionSpec());
-        validatePartitionSpec(tablePath, table.partitionKeys, partitionSpec, false);
-        ResolvedPartitionSpec partitionToDrop =
-                ResolvedPartitionSpec.fromPartitionSpec(table.partitionKeys, partitionSpec);
-        if (table.getTableConfig().isHistoricalPartitionEnabled()
-                && HISTORICAL_PARTITION_VALUE.equals(partitionToDrop.getPartitionName())) {
-            throw new InvalidPartitionException(
-                    "Historical system partition is managed by the coordinator and cannot be "
-                            + "dropped manually.");
-        }
+                            // first, validate the partition spec.
+                            PartitionSpec partitionSpec =
+                                    getPartitionSpec(request.getPartitionSpec());
+                            validatePartitionSpec(
+                                    tablePath, table.partitionKeys, partitionSpec, false);
+                            ResolvedPartitionSpec partitionToDrop =
+                                    ResolvedPartitionSpec.fromPartitionSpec(
+                                            table.partitionKeys, partitionSpec);
+                            if (table.getTableConfig().isHistoricalPartitionEnabled()
+                                    && HISTORICAL_PARTITION_VALUE.equals(
+                                            partitionToDrop.getPartitionName())) {
+                                throw new InvalidPartitionException(
+                                        "Historical system partition is managed by the coordinator and cannot be "
+                                                + "dropped manually.");
+                            }
 
-        metadataManager.dropPartition(tablePath, partitionToDrop, request.isIgnoreIfNotExists());
-        return CompletableFuture.completedFuture(response);
+                            metadataManager.dropPartition(
+                                    tablePath, partitionToDrop, request.isIgnoreIfNotExists());
+                            return response;
+                        });
     }
 
     @Override

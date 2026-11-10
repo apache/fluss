@@ -26,6 +26,7 @@ import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.exception.LakeTableAlreadyExistException;
+import org.apache.fluss.exception.OperationNotAttemptedException;
 import org.apache.fluss.exception.PartitionAlreadyExistsException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.SchemaNotExistException;
@@ -54,6 +55,8 @@ import org.apache.fluss.server.entity.DatabasePropertyChanges;
 import org.apache.fluss.server.entity.TablePropertyChanges;
 import org.apache.fluss.server.utils.TableDescriptorValidation;
 import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.ZooKeeperMetadataContext;
+import org.apache.fluss.server.zk.ZooKeeperMetadataOperation;
 import org.apache.fluss.server.zk.data.DatabaseRegistration;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.PartitionRegistration;
@@ -80,10 +83,16 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 import java.util.function.BiConsumer;
+import java.util.function.BiFunction;
+import java.util.function.Function;
+import java.util.function.Supplier;
 
 import static org.apache.fluss.server.utils.TableDescriptorValidation.validateAlterTableProperties;
 import static org.apache.fluss.server.utils.TableDescriptorValidation.validateAlterTableSchema;
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /** A manager for metadata. */
 public class MetadataManager {
@@ -100,6 +109,11 @@ public class MetadataManager {
     private final int maxPartitionNum;
     private final int maxBucketNum;
     private final LakeCatalogDynamicLoader lakeCatalogDynamicLoader;
+
+    private final DdlAdmission ddlAdmission;
+    @Nullable private final ZooKeeperMetadataContext ddlContext;
+    @Nullable private final ZooKeeperMetadataOperation ddlOperation;
+    @Nullable private final DdlAdmission.Permit ddlPermit;
 
     public static final Set<String> SENSITIVE_TABLE_OPTIONS = new HashSet<>();
 
@@ -119,10 +133,199 @@ public class MetadataManager {
             ZooKeeperClient zookeeperClient,
             Configuration conf,
             LakeCatalogDynamicLoader lakeCatalogDynamicLoader) {
+        this.ddlAdmission = new DdlAdmission();
+        this.ddlContext = null;
+        this.ddlOperation = null;
+        this.ddlPermit = null;
         this.zookeeperClient = zookeeperClient;
         this.maxPartitionNum = conf.get(ConfigOptions.MAX_PARTITION_NUM);
         this.maxBucketNum = conf.get(ConfigOptions.MAX_BUCKET_NUM);
         this.lakeCatalogDynamicLoader = lakeCatalogDynamicLoader;
+    }
+
+    private MetadataManager(
+            MetadataManager source,
+            DdlAdmission admission,
+            @Nullable ZooKeeperMetadataContext context,
+            @Nullable ZooKeeperMetadataOperation operation,
+            @Nullable DdlAdmission.Permit permit) {
+        this.zookeeperClient = source.zookeeperClient;
+        this.maxPartitionNum = source.maxPartitionNum;
+        this.maxBucketNum = source.maxBucketNum;
+        this.lakeCatalogDynamicLoader = source.lakeCatalogDynamicLoader;
+        this.ddlAdmission = admission;
+        this.ddlContext = context;
+        this.ddlOperation = operation;
+        this.ddlPermit = permit;
+    }
+
+    /** Creates a metadata view bound to one coordinator leadership and ZooKeeper session. */
+    public MetadataManager forLeader(int coordinatorZkVersion) {
+        ZooKeeperMetadataContext context =
+                uncheck(
+                        () -> zookeeperClient.newMetadataContext(coordinatorZkVersion),
+                        "Failed to bind DDL metadata to coordinator leadership");
+        return new MetadataManager(this, ddlAdmission.newLeadership(), context, null, null);
+    }
+
+    /** Ends this leader's admission without waiting for operations already executing. */
+    void closeDdlAdmission() {
+        ddlAdmission.close();
+    }
+
+    <T> CompletableFuture<T> runTableDdlAsync(
+            TablePath tablePath, Executor executor, Function<MetadataManager, T> action) {
+        return runDdlAsync(tablePath.getDatabaseName(), tablePath.getTableName(), executor, action);
+    }
+
+    <T> CompletableFuture<T> runDatabaseDdlAsync(
+            String database, Executor executor, Function<MetadataManager, T> action) {
+        return runDdlAsync(database, null, executor, action);
+    }
+
+    private <T> CompletableFuture<T> runDdlAsync(
+            String database,
+            @Nullable String table,
+            Executor executor,
+            Function<MetadataManager, T> action) {
+        return ddlAdmission.withRequest(
+                context -> runDdlAsync(context, database, table, executor, action));
+    }
+
+    /** Prepares table creation and selects its final scope using one request capacity. */
+    <P, T> CompletableFuture<T> runTableOrDatabaseDdlAsync(
+            TablePath tablePath,
+            Executor executor,
+            Supplier<P> prepare,
+            BiFunction<MetadataManager, P, T> action) {
+        String database = tablePath.getDatabaseName();
+        return ddlAdmission.withRequest(
+                context -> {
+                    CompletableFuture<P> preparation =
+                            ddlAdmission.submit(
+                                    context, null, null, executor, ignored -> prepare.get());
+                    return preparation.thenCompose(
+                            prepared -> {
+                                CompletableFuture<Optional<T>> tableResult =
+                                        runDdlAsync(
+                                                context,
+                                                database,
+                                                tablePath.getTableName(),
+                                                executor,
+                                                scoped -> {
+                                                    if (!scoped.databaseExists(database)) {
+                                                        return Optional.empty();
+                                                    }
+                                                    return Optional.of(
+                                                            action.apply(scoped, prepared));
+                                                });
+                                return tableResult.thenCompose(
+                                        result -> {
+                                            if (result.isPresent()) {
+                                                return CompletableFuture.completedFuture(
+                                                        result.get());
+                                            }
+                                            // The missing-database check made no changes and
+                                            // released its table permit.
+                                            return runDdlAsync(
+                                                    context,
+                                                    database,
+                                                    null,
+                                                    executor,
+                                                    scoped -> action.apply(scoped, prepared));
+                                        });
+                            });
+                });
+    }
+
+    private <T> CompletableFuture<T> runDdlAsync(
+            DdlAdmission.RequestContext context,
+            String database,
+            @Nullable String table,
+            Executor executor,
+            Function<MetadataManager, T> action) {
+        return ddlAdmission.submit(
+                context,
+                database,
+                table,
+                executor,
+                permit -> {
+                    try {
+                        ZooKeeperMetadataOperation operation =
+                                ddlContext == null ? null : ddlContext.beginOperation();
+                        return action.apply(
+                                new MetadataManager(
+                                        this, ddlAdmission, ddlContext, operation, permit));
+                    } catch (RuntimeException e) {
+                        throw e;
+                    } catch (Exception e) {
+                        throw new FlussRuntimeException(
+                                "Failed to start DDL metadata operation", e);
+                    }
+                });
+    }
+
+    /** Returns the captured epoch, or -1 when no fenced DDL operation is active. */
+    int getCoordinatorZkVersion() {
+        return ddlOperation == null ? -1 : ddlOperation.getEpochVersion();
+    }
+
+    /**
+     * Runs modifying table work on the calling worker thread, waiting for conflicting DDL before
+     * reads or external side effects. The supplied view must be used for all nested metadata work.
+     */
+    public <T> T runTableDdl(TablePath tablePath, Function<MetadataManager, T> action) {
+        if (ddlPermit != null) {
+            ddlPermit.checkTable(tablePath);
+            return action.apply(this);
+        }
+        return runDdl(tablePath.getDatabaseName(), tablePath.getTableName(), action, true);
+    }
+
+    /** Runs background table work without waiting while maintenance locks may be held. */
+    <T> T tryRunTableDdl(TablePath tablePath, Function<MetadataManager, T> action) {
+        if (ddlPermit != null) {
+            ddlPermit.checkTable(tablePath);
+            return action.apply(this);
+        }
+        return runDdl(tablePath.getDatabaseName(), tablePath.getTableName(), action, false);
+    }
+
+    /** Runs modifying database work, excluding all modifying work in its child tables. */
+    public <T> T runDatabaseDdl(String databaseName, Function<MetadataManager, T> action) {
+        if (ddlPermit != null) {
+            ddlPermit.checkDatabase(databaseName);
+            return action.apply(this);
+        }
+        return runDdl(databaseName, null, action, true);
+    }
+
+    private <T> T runDdl(
+            String databaseName,
+            @Nullable String tableName,
+            Function<MetadataManager, T> action,
+            boolean waitForAdmission) {
+        try (DdlAdmission.Permit permit =
+                waitForAdmission
+                        ? ddlAdmission.acquire(databaseName, tableName)
+                        : ddlAdmission.tryAcquire(databaseName, tableName)) {
+            ZooKeeperMetadataOperation operation =
+                    ddlContext == null ? null : ddlContext.beginOperation();
+            MetadataManager scoped =
+                    new MetadataManager(this, ddlAdmission, ddlContext, operation, permit);
+            return action.apply(scoped);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new FlussRuntimeException("Interrupted while waiting for DDL admission", e);
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new FlussRuntimeException("Failed to start DDL metadata operation", e);
+        }
+    }
+
+    private <T> T readMetadata(Callable<T> read) throws Exception {
+        return ddlOperation == null ? read.call() : ddlOperation.read(read);
     }
 
     /** Validates a descriptor and its Kafka topic identity before persistence. */
@@ -137,6 +340,17 @@ public class MetadataManager {
     public void createDatabase(
             String databaseName, DatabaseDescriptor databaseDescriptor, boolean ignoreIfExists)
             throws DatabaseAlreadyExistException {
+        if (ddlPermit == null) {
+            runDatabaseDdl(
+                    databaseName,
+                    metadata -> {
+                        metadata.createDatabase(databaseName, databaseDescriptor, ignoreIfExists);
+                        return null;
+                    });
+            return;
+        }
+        ddlPermit.checkDatabase(databaseName);
+
         if (databaseExists(databaseName)) {
             if (ignoreIfExists) {
                 return;
@@ -147,7 +361,11 @@ public class MetadataManager {
 
         DatabaseRegistration databaseRegistration = DatabaseRegistration.of(databaseDescriptor);
         try {
-            zookeeperClient.registerDatabase(databaseName, databaseRegistration);
+            if (ddlOperation == null) {
+                zookeeperClient.registerDatabase(databaseName, databaseRegistration);
+            } else {
+                zookeeperClient.registerDatabase(ddlOperation, databaseName, databaseRegistration);
+            }
         } catch (Exception e) {
             if (e instanceof KeeperException.NodeExistsException) {
                 if (ignoreIfExists) {
@@ -165,6 +383,18 @@ public class MetadataManager {
             String databaseName,
             DatabasePropertyChanges databasePropertyChanges,
             boolean ignoreIfNotExists) {
+        if (ddlPermit == null) {
+            runDatabaseDdl(
+                    databaseName,
+                    metadata -> {
+                        metadata.alterDatabaseProperties(
+                                databaseName, databasePropertyChanges, ignoreIfNotExists);
+                        return null;
+                    });
+            return;
+        }
+        ddlPermit.checkDatabase(databaseName);
+
         try {
             // Check if database exists
             if (!databaseExists(databaseName)) {
@@ -185,7 +415,11 @@ public class MetadataManager {
                 // Update the database in ZooKeeper
                 DatabaseRegistration updatedRegistration =
                         databaseRegistration.newProperties(newDescriptor);
-                zookeeperClient.updateDatabase(databaseName, updatedRegistration);
+                if (ddlOperation == null) {
+                    zookeeperClient.updateDatabase(databaseName, updatedRegistration);
+                } else {
+                    zookeeperClient.updateDatabase(ddlOperation, databaseName, updatedRegistration);
+                }
                 LOG.info("Successfully altered database properties for database: {}", databaseName);
             } else {
                 LOG.info(
@@ -250,7 +484,7 @@ public class MetadataManager {
     public DatabaseRegistration getDatabaseRegistration(String databaseName) {
         Optional<DatabaseRegistration> optionalDB;
         try {
-            optionalDB = zookeeperClient.getDatabase(databaseName);
+            optionalDB = readMetadata(() -> zookeeperClient.getDatabase(databaseName));
         } catch (Exception e) {
             throw new FlussRuntimeException(
                     String.format("Fail to get database '%s'.", databaseName), e);
@@ -264,12 +498,12 @@ public class MetadataManager {
 
     public boolean databaseExists(String databaseName) {
         return uncheck(
-                () -> zookeeperClient.databaseExists(databaseName),
+                () -> readMetadata(() -> zookeeperClient.databaseExists(databaseName)),
                 "Fail to check database exists or not");
     }
 
     public List<String> listDatabases() {
-        return uncheck(zookeeperClient::listDatabases, "Fail to list database");
+        return uncheck(() -> readMetadata(zookeeperClient::listDatabases), "Fail to list database");
     }
 
     public List<DatabaseSummary> listDatabaseSummaries(Collection<String> databaseNames) {
@@ -283,7 +517,7 @@ public class MetadataManager {
             throw new DatabaseNotExistException("Database " + databaseName + " does not exist.");
         }
         return uncheck(
-                () -> zookeeperClient.listTables(databaseName),
+                () -> readMetadata(() -> zookeeperClient.listTables(databaseName)),
                 "Fail to list tables for database:" + databaseName);
     }
 
@@ -325,11 +559,13 @@ public class MetadataManager {
         }
         try {
             if (partitionFilter == null) {
-                return zookeeperClient.getPartitionRegistrations(tablePath);
+                return readMetadata(() -> zookeeperClient.getPartitionRegistrations(tablePath));
             } else {
 
-                return zookeeperClient.getPartitionRegistrations(
-                        tablePath, tableInfo.getPartitionKeys(), partitionFilter);
+                return readMetadata(
+                        () ->
+                                zookeeperClient.getPartitionRegistrations(
+                                        tablePath, tableInfo.getPartitionKeys(), partitionFilter));
             }
         } catch (InvalidPartitionException e) {
             throw e;
@@ -344,6 +580,17 @@ public class MetadataManager {
 
     public void dropDatabase(String name, boolean ignoreIfNotExists, boolean cascade)
             throws DatabaseNotExistException, DatabaseNotEmptyException {
+        if (ddlPermit == null) {
+            runDatabaseDdl(
+                    name,
+                    metadata -> {
+                        metadata.dropDatabase(name, ignoreIfNotExists, cascade);
+                        return null;
+                    });
+            return;
+        }
+        ddlPermit.checkDatabase(name);
+
         if (CoordinatorServer.DEFAULT_DATABASE.equals(name)) {
             throw new UnsupportedOperationException(
                     "Cannot drop the default database '"
@@ -360,21 +607,50 @@ public class MetadataManager {
             throw new DatabaseNotEmptyException("Database " + name + " is not empty.");
         }
 
-        uncheck(() -> zookeeperClient.deleteDatabase(name), "Fail to drop database: " + name);
+        uncheck(
+                () -> {
+                    if (ddlOperation == null) {
+                        zookeeperClient.deleteDatabase(name);
+                    } else {
+                        zookeeperClient.deleteDatabase(ddlOperation, name);
+                    }
+                },
+                "Fail to drop database: " + name);
     }
 
     public void dropTable(TablePath tablePath, boolean ignoreIfNotExists)
             throws TableNotExistException {
-        if (!tableExists(tablePath)) {
-            if (ignoreIfNotExists) {
-                return;
-            }
+        if (ddlPermit == null) {
+            runTableDdl(
+                    tablePath,
+                    metadata -> {
+                        metadata.dropTable(tablePath, ignoreIfNotExists);
+                        return null;
+                    });
+            return;
+        }
+        ddlPermit.checkTable(tablePath);
+
+        if (!tableExists(tablePath) && !ignoreIfNotExists) {
             throw new TableNotExistException("Table " + tablePath + " does not exist.");
         }
 
-        // in here, we just delete the table node in zookeeper, which will then trigger
-        // the physical deletion in tablet servers and assignments in zk
-        uncheck(() -> zookeeperClient.deleteTable(tablePath), "Fail to drop table: " + tablePath);
+        // The visibility change drives replica and assignment deletion through the watcher.
+        uncheck(
+                () -> {
+                    try {
+                        if (ddlOperation == null) {
+                            zookeeperClient.deleteTable(tablePath);
+                        } else {
+                            zookeeperClient.deleteTable(ddlOperation, tablePath);
+                        }
+                    } catch (KeeperException.NoNodeException e) {
+                        if (!ignoreIfNotExists) {
+                            throw e;
+                        }
+                    }
+                },
+                "Fail to drop table: " + tablePath);
     }
 
     public void completeDeleteTable(long tableId) {
@@ -413,6 +689,19 @@ public class MetadataManager {
             @Nullable TableAssignment tableAssignment,
             boolean ignoreIfExists)
             throws TableAlreadyExistException, DatabaseNotExistException {
+        if (ddlPermit == null) {
+            return runTableDdl(
+                    tablePath,
+                    metadata ->
+                            metadata.createTable(
+                                    tablePath,
+                                    remoteDataDir,
+                                    tableToCreate,
+                                    tableAssignment,
+                                    ignoreIfExists));
+        }
+        ddlPermit.checkTable(tablePath);
+
         if (!databaseExists(tablePath.getDatabaseName())) {
             throw new DatabaseNotExistException(
                     "Database " + tablePath.getDatabaseName() + " does not exist.");
@@ -429,7 +718,12 @@ public class MetadataManager {
         // first register a schema to the zk, if then register the table
         // to zk fails, there's no harm to register a new schema to zk again
         try {
-            zookeeperClient.registerFirstSchema(tablePath, tableToCreate.getSchema());
+            if (ddlOperation == null) {
+                zookeeperClient.registerFirstSchema(tablePath, tableToCreate.getSchema());
+            } else {
+                zookeeperClient.registerFirstSchema(
+                        ddlOperation, tablePath, tableToCreate.getSchema());
+            }
         } catch (Exception e) {
             throw new FlussRuntimeException(
                     "Fail to register schema when creating table " + tablePath, e);
@@ -440,16 +734,24 @@ public class MetadataManager {
         return uncheck(
                 () -> {
                     // generate a table id
-                    long tableId = zookeeperClient.getTableIdAndIncrement();
+                    long tableId = readMetadata(() -> zookeeperClient.getTableIdAndIncrement());
                     if (tableAssignment != null) {
                         // register table assignment
-                        zookeeperClient.registerTableAssignment(tableId, tableAssignment);
+                        if (ddlOperation == null) {
+                            zookeeperClient.registerTableAssignment(tableId, tableAssignment);
+                        } else {
+                            zookeeperClient.registerTableAssignment(
+                                    ddlOperation, tableId, tableAssignment);
+                        }
                     }
                     // register the table
-                    zookeeperClient.registerTable(
-                            tablePath,
-                            TableRegistration.newTable(tableId, remoteDataDir, tableToCreate),
-                            false);
+                    TableRegistration registration =
+                            TableRegistration.newTable(tableId, remoteDataDir, tableToCreate);
+                    if (ddlOperation == null) {
+                        zookeeperClient.registerTable(tablePath, registration, false);
+                    } else {
+                        zookeeperClient.registerTable(ddlOperation, tablePath, registration, false);
+                    }
                     return tableId;
                 },
                 "Fail to create table " + tablePath);
@@ -461,6 +763,18 @@ public class MetadataManager {
             boolean ignoreIfNotExists,
             FlussPrincipal flussPrincipal)
             throws TableNotExistException, TableNotPartitionedException {
+        if (ddlPermit == null) {
+            runTableDdl(
+                    tablePath,
+                    metadata -> {
+                        metadata.alterTableSchema(
+                                tablePath, schemaChanges, ignoreIfNotExists, flussPrincipal);
+                        return null;
+                    });
+            return;
+        }
+        ddlPermit.checkTable(tablePath);
+
         try {
 
             TableInfo table = getTable(tablePath);
@@ -483,7 +797,13 @@ public class MetadataManager {
 
                 // Update Fluss schema (ZK) after Lake sync succeeds
                 if (!newSchema.equals(table.getSchema())) {
-                    zookeeperClient.registerSchema(tablePath, newSchema, table.getSchemaId() + 1);
+                    if (ddlOperation == null) {
+                        zookeeperClient.registerSchema(
+                                tablePath, newSchema, table.getSchemaId() + 1);
+                    } else {
+                        zookeeperClient.registerSchema(
+                                ddlOperation, tablePath, newSchema, table.getSchemaId() + 1);
+                    }
                 } else {
                     LOG.info(
                             "Skipping schema evolution for table {} because the column(s) to add {} already exist.",
@@ -654,6 +974,25 @@ public class MetadataManager {
             BiConsumer<TableInfo, TableDescriptor> beforeUpdate,
             BiConsumer<TableInfo, TableDescriptor> afterUpdate,
             int coordinatorZkVersion) {
+        if (ddlPermit == null) {
+            runTableDdl(
+                    tablePath,
+                    metadata -> {
+                        metadata.alterTableProperties(
+                                tablePath,
+                                tableChanges,
+                                tablePropertyChanges,
+                                ignoreIfNotExists,
+                                flussPrincipal,
+                                beforeUpdate,
+                                afterUpdate,
+                                coordinatorZkVersion);
+                        return null;
+                    });
+            return;
+        }
+        ddlPermit.checkTable(tablePath);
+
         int attempt = 0;
         while (true) {
             try {
@@ -697,6 +1036,22 @@ public class MetadataManager {
             boolean ignoreIfNotExists,
             FlussPrincipal flussPrincipal,
             int coordinatorZkVersion) {
+        if (ddlPermit == null) {
+            runTableDdl(
+                    tablePath,
+                    metadata -> {
+                        metadata.alterBucketCount(
+                                tablePath,
+                                newBucketCount,
+                                ignoreIfNotExists,
+                                flussPrincipal,
+                                coordinatorZkVersion);
+                        return null;
+                    });
+            return;
+        }
+        ddlPermit.checkTable(tablePath);
+
         int attempt = 0;
         while (true) {
             try {
@@ -730,7 +1085,7 @@ public class MetadataManager {
                                 tablePath,
                                 tableInfo.getNumBuckets(),
                                 tableInfo.getBucketCountEpoch());
-                zookeeperClient.updateTableWithPartitionBucketCountBackfill(
+                updateTableWithPartitionBucketCountBackfill(
                         tablePath,
                         tableReg.newBucketCount(newBucketCount),
                         versionedTableReg.zkVersion(),
@@ -761,6 +1116,22 @@ public class MetadataManager {
         }
     }
 
+    private void updateTableWithPartitionBucketCountBackfill(
+            TablePath tablePath,
+            TableRegistration registration,
+            int version,
+            Map<String, ZooKeeperClient.VersionedData<PartitionRegistration>> backfills,
+            int expectedEpoch)
+            throws Exception {
+        if (ddlOperation == null) {
+            zookeeperClient.updateTableWithPartitionBucketCountBackfill(
+                    tablePath, registration, version, backfills, expectedEpoch);
+        } else {
+            zookeeperClient.updateTableWithPartitionBucketCountBackfill(
+                    ddlOperation, tablePath, registration, version, backfills);
+        }
+    }
+
     private void retryAlterOrThrow(TablePath tablePath, int attempt, Exception cause) {
         if (attempt >= MAX_ALTER_TABLE_RETRIES) {
             throw new FlussRuntimeException(
@@ -779,7 +1150,7 @@ public class MetadataManager {
     /** Returns whether the table registration node still exists in ZooKeeper. */
     private boolean isTablePresent(TablePath tablePath) {
         try {
-            return zookeeperClient.tableExist(tablePath);
+            return readMetadata(() -> zookeeperClient.tableExist(tablePath));
         } catch (Exception e) {
             return false;
         }
@@ -869,7 +1240,7 @@ public class MetadataManager {
                     tableReg.newProperties(
                             newDescriptor.getProperties(), newDescriptor.getCustomProperties());
             try {
-                zookeeperClient.updateTableWithPartitionBucketCountBackfill(
+                updateTableWithPartitionBucketCountBackfill(
                         tablePath,
                         updatedTableRegistration,
                         tableZkVersion,
@@ -908,7 +1279,8 @@ public class MetadataManager {
             Map<String, ZooKeeperClient.VersionedData<PartitionRegistration>> backfills =
                     new HashMap<>();
             Map<String, ZooKeeperClient.VersionedData<PartitionRegistration>> registrations =
-                    zookeeperClient.getPartitionRegistrationsWithVersion(tablePath);
+                    readMetadata(
+                            () -> zookeeperClient.getPartitionRegistrationsWithVersion(tablePath));
             for (Map.Entry<String, ZooKeeperClient.VersionedData<PartitionRegistration>> entry :
                     registrations.entrySet()) {
                 String partitionName = entry.getKey();
@@ -1030,8 +1402,10 @@ public class MetadataManager {
     @Nullable
     private Long getCurrentLakeSnapshotId(TableInfo tableInfo) {
         try {
-            return zookeeperClient
-                    .getLakeTableSnapshot(tableInfo.getTableId(), null)
+            return readMetadata(
+                            () ->
+                                    zookeeperClient.getLakeTableSnapshot(
+                                            tableInfo.getTableId(), null))
                     .map(LakeTableSnapshot::getSnapshotId)
                     .orElse(null);
         } catch (Exception e) {
@@ -1100,7 +1474,7 @@ public class MetadataManager {
     public TableInfo getTable(TablePath tablePath) throws TableNotExistException {
         Optional<TableRegistration> optionalTable;
         try {
-            optionalTable = zookeeperClient.getTable(tablePath);
+            optionalTable = readMetadata(() -> zookeeperClient.getTable(tablePath));
         } catch (Exception e) {
             throw new FlussRuntimeException(
                     String.format("Failed to get table '%s'.", tablePath), e);
@@ -1161,7 +1535,7 @@ public class MetadataManager {
     public TableRegistration getTableRegistration(TablePath tablePath) {
         Optional<TableRegistration> optionalTable;
         try {
-            optionalTable = zookeeperClient.getTable(tablePath);
+            optionalTable = readMetadata(() -> zookeeperClient.getTable(tablePath));
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
@@ -1196,7 +1570,7 @@ public class MetadataManager {
             TablePath tablePath) {
         Optional<ZooKeeperClient.VersionedData<TableRegistration>> optionalTable;
         try {
-            optionalTable = zookeeperClient.getTableWithVersion(tablePath);
+            optionalTable = readMetadata(() -> zookeeperClient.getTableWithVersion(tablePath));
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
@@ -1209,7 +1583,7 @@ public class MetadataManager {
     public SchemaInfo getLatestSchema(TablePath tablePath) throws SchemaNotExistException {
         final int currentSchemaId;
         try {
-            currentSchemaId = zookeeperClient.getCurrentSchemaId(tablePath);
+            currentSchemaId = readMetadata(() -> zookeeperClient.getCurrentSchemaId(tablePath));
         } catch (Exception e) {
             throw new FlussRuntimeException(
                     "Failed to get latest schema id of table " + tablePath, e);
@@ -1221,7 +1595,7 @@ public class MetadataManager {
             throws SchemaNotExistException {
         Optional<SchemaInfo> optionalSchema;
         try {
-            optionalSchema = zookeeperClient.getSchemaById(tablePath, schemaId);
+            optionalSchema = readMetadata(() -> zookeeperClient.getSchemaById(tablePath, schemaId));
         } catch (Exception e) {
             throw new FlussRuntimeException(
                     String.format("Fail to get schema of %s for table %s", schemaId, tablePath), e);
@@ -1241,7 +1615,7 @@ public class MetadataManager {
     public boolean tableExists(TablePath tablePath) {
         // check the path of the table exists
         return uncheck(
-                () -> zookeeperClient.tableExist(tablePath),
+                () -> readMetadata(() -> zookeeperClient.tableExist(tablePath)),
                 String.format("Fail to check the table %s exist or not.", tablePath));
     }
 
@@ -1252,7 +1626,7 @@ public class MetadataManager {
 
     public Set<String> getPartitions(TablePath tablePath) {
         return uncheck(
-                () -> zookeeperClient.getPartitions(tablePath),
+                () -> readMetadata(() -> zookeeperClient.getPartitions(tablePath)),
                 "Fail to get partitions from zookeeper for table " + tablePath);
     }
 
@@ -1268,6 +1642,29 @@ public class MetadataManager {
             ResolvedPartitionSpec partition,
             boolean ignoreIfExists,
             int bucketCount) {
+        if (ddlPermit == null) {
+            runTableDdl(
+                    tablePath,
+                    metadata -> {
+                        metadata.createPartition(
+                                tablePath,
+                                tableId,
+                                remoteDataDir,
+                                partitionAssignment,
+                                partition,
+                                ignoreIfExists,
+                                bucketCount);
+                        return null;
+                    });
+            return;
+        }
+        ddlPermit.checkTable(tablePath);
+
+        TableRegistration current = getTableRegistration(tablePath);
+        if (current.tableId != tableId) {
+            throw new OperationNotAttemptedException(
+                    "Table " + tablePath + " was recreated. Please refresh its metadata.");
+        }
         String partitionName = partition.getPartitionName();
         Optional<PartitionRegistration> optionalPartitionRegistration =
                 getOptionalPartitionRegistration(tablePath, partitionName);
@@ -1282,7 +1679,7 @@ public class MetadataManager {
         }
 
         try {
-            int partitionNumber = zookeeperClient.getPartitionNumber(tablePath);
+            int partitionNumber = readMetadata(() -> zookeeperClient.getPartitionNumber(tablePath));
             if (partitionNumber + 1 > maxPartitionNum) {
                 throw new TooManyPartitionsException(
                         String.format(
@@ -1310,17 +1707,44 @@ public class MetadataManager {
                             maxBucketNum));
         }
 
+        checkArgument(
+                partitionAssignment.getTableId() == tableId,
+                "Partition assignment must belong to table %s.",
+                tableId);
+        checkArgument(
+                assignmentBucketCount == bucketCount,
+                "Partition assignment must contain %s buckets.",
+                bucketCount);
+        if (current.bucketCount != bucketCount) {
+            throw new OperationNotAttemptedException(
+                    "Bucket count for table "
+                            + tablePath
+                            + " changed. Please refresh its metadata.");
+        }
+
         try {
-            long partitionId = zookeeperClient.getPartitionIdAndIncrement();
+            long partitionId = readMetadata(() -> zookeeperClient.getPartitionIdAndIncrement());
             // register partition assignments and partition metadata to zk in transaction
-            zookeeperClient.registerPartitionAssignmentAndMetadata(
-                    partitionId,
-                    partitionName,
-                    partitionAssignment,
-                    remoteDataDir,
-                    tablePath,
-                    tableId,
-                    bucketCount);
+            if (ddlOperation == null) {
+                zookeeperClient.registerPartitionAssignmentAndMetadata(
+                        partitionId,
+                        partitionName,
+                        partitionAssignment,
+                        remoteDataDir,
+                        tablePath,
+                        tableId,
+                        bucketCount);
+            } else {
+                zookeeperClient.registerPartitionAssignmentAndMetadata(
+                        ddlOperation,
+                        partitionId,
+                        partitionName,
+                        partitionAssignment,
+                        remoteDataDir,
+                        tablePath,
+                        tableId,
+                        bucketCount);
+            }
             LOG.info(
                     "Register partition {} to zookeeper for table [{}].", partitionName, tablePath);
         } catch (KeeperException.NodeExistsException nodeExistsException) {
@@ -1339,8 +1763,39 @@ public class MetadataManager {
         }
     }
 
+    /** Drops a partition only if its cached parent table still has the same physical identity. */
+    public void dropPartition(
+            TablePath tablePath,
+            long expectedTableId,
+            ResolvedPartitionSpec partition,
+            boolean ignoreIfNotExists) {
+        tryRunTableDdl(
+                tablePath,
+                metadata -> {
+                    if (metadata.getTableRegistration(tablePath).tableId != expectedTableId) {
+                        throw new OperationNotAttemptedException(
+                                "Table "
+                                        + tablePath
+                                        + " was recreated. Please refresh its metadata.");
+                    }
+                    metadata.dropPartition(tablePath, partition, ignoreIfNotExists);
+                    return null;
+                });
+    }
+
     public void dropPartition(
             TablePath tablePath, ResolvedPartitionSpec partition, boolean ignoreIfNotExists) {
+        if (ddlPermit == null) {
+            runTableDdl(
+                    tablePath,
+                    metadata -> {
+                        metadata.dropPartition(tablePath, partition, ignoreIfNotExists);
+                        return null;
+                    });
+            return;
+        }
+        ddlPermit.checkTable(tablePath);
+
         String partitionName = partition.getPartitionName();
         Optional<PartitionRegistration> optionalPartitionRegistration =
                 getOptionalPartitionRegistration(tablePath, partitionName);
@@ -1356,7 +1811,11 @@ public class MetadataManager {
         }
 
         try {
-            zookeeperClient.deletePartition(tablePath, partitionName);
+            if (ddlOperation == null) {
+                zookeeperClient.deletePartition(tablePath, partitionName);
+            } else {
+                zookeeperClient.deletePartition(ddlOperation, tablePath, partitionName, -1);
+            }
         } catch (Exception e) {
             throw new FlussRuntimeException(
                     String.format(
@@ -1369,7 +1828,7 @@ public class MetadataManager {
     Optional<PartitionRegistration> getOptionalPartitionRegistration(
             TablePath tablePath, String partitionName) {
         try {
-            return zookeeperClient.getPartition(tablePath, partitionName);
+            return readMetadata(() -> zookeeperClient.getPartition(tablePath, partitionName));
         } catch (Exception e) {
             throw new FlussRuntimeException(
                     String.format(

@@ -150,10 +150,15 @@ public class TableChangeWatcher {
                             if (tablePath == null) {
                                 break;
                             }
-                            // Distinguish between table creation and properties change.
-                            // If oldData exists and contains valid table registration data,
-                            // it's a properties change; otherwise, it's a table creation.
-                            if (oldData != null
+                            // Empty registration withdraws a table before its children are removed.
+                            // Non-empty registration publishes a table or updates its properties.
+                            if (newData.getData() == null || newData.getData().length == 0) {
+                                if (oldData != null
+                                        && oldData.getData() != null
+                                        && oldData.getData().length > 0) {
+                                    processDropTable(oldData);
+                                }
+                            } else if (oldData != null
                                     && oldData.getData() != null
                                     && oldData.getData().length > 0) {
                                 processTableRegistrationChange(tablePath, newData);
@@ -185,23 +190,28 @@ public class TableChangeWatcher {
                             // maybe table node is deleted
                             // try to parse the path as a table node
                             TablePath tablePath = TableZNode.parsePath(oldData.getPath());
-                            if (tablePath == null) {
+                            if (tablePath == null
+                                    || oldData.getData() == null
+                                    || oldData.getData().length == 0) {
                                 break;
                             }
-                            TableRegistration table = TableZNode.decode(oldData.getData());
-                            TableConfig tableConfig =
-                                    new TableConfig(Configuration.fromMap(table.properties));
-                            lifecycleThrottler.submitTableDrop(
-                                    table.tableId,
-                                    table.isPartitioned(),
-                                    tableConfig.getAutoPartitionStrategy().isAutoPartitionEnabled(),
-                                    tableConfig.isDataLakeEnabled());
+                            processDropTable(oldData);
                         }
                         break;
                     }
                 default:
                     break;
             }
+        }
+
+        private void processDropTable(ChildData tableData) {
+            TableRegistration table = TableZNode.decode(tableData.getData());
+            TableConfig tableConfig = new TableConfig(Configuration.fromMap(table.properties));
+            lifecycleThrottler.submitTableDrop(
+                    table.tableId,
+                    table.isPartitioned(),
+                    tableConfig.getAutoPartitionStrategy().isAutoPartitionEnabled(),
+                    tableConfig.isDataLakeEnabled());
         }
 
         private void processCreateTable(TablePath tablePath, ChildData tableData) {

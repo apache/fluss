@@ -81,8 +81,10 @@ class CoordinatorContextTest {
         PartitionInfo retainedPartition = createPartitionInfo(101L, "2027");
         PhysicalTablePath removedPath = PhysicalTablePath.of("db1", "table1", "2026");
         PhysicalTablePath retainedPath = PhysicalTablePath.of("db1", "table1", "2027");
-        context.putPartition(100L, removedPath, removedPartition);
-        context.putPartition(101L, retainedPath, retainedPartition);
+        context.putPartition(1L, 100L, removedPath, removedPartition);
+        context.putPartition(1L, 101L, retainedPath, retainedPartition);
+        context.putPartition(1L, 100L, removedPath, removedPartition);
+        assertThat(context.hasPartitions(1L)).isTrue();
 
         assertThat(context.getPartitionInfoById(100L)).isSameAs(removedPartition);
         assertThat(context.getPartitionInfoById(101L)).isSameAs(retainedPartition);
@@ -94,6 +96,36 @@ class CoordinatorContextTest {
         assertThat(context.getPhysicalTablePath(101L)).contains(retainedPath);
         assertThat(context.getPartitionInfoById(101L)).isSameAs(retainedPartition);
         assertThat(context.getPartitionInfoById(100L)).isNull();
+        assertThat(context.hasPartitions(1L)).isTrue();
+        context.removePartition(new TablePartition(1L, 100L));
+        context.removePartition(new TablePartition(1L, 101L));
+        assertThat(context.hasPartitions(1L)).isFalse();
+    }
+
+    @Test
+    void testOldDeletionPreservesRecreatedTableAndPartitionPaths() {
+        CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
+        TablePath tablePath = TablePath.of("db", "recreated");
+        PhysicalTablePath partitionPath = PhysicalTablePath.of(tablePath, "2026");
+        context.putTablePath(1L, tablePath);
+        context.putPartition(1L, 100L, partitionPath, createPartitionInfo(100L, "2026"));
+        assertThat(context.getPartitionId(partitionPath)).contains(100L);
+        context.putTablePath(2L, tablePath);
+        assertThat(context.getPartitionId(partitionPath)).isEmpty();
+        assertThat(context.getPartitionInfoById(100L)).isNotNull();
+        context.putPartition(2L, 101L, partitionPath, createPartitionInfo(101L, "2026"));
+
+        context.removePartition(new TablePartition(1L, 100L));
+        context.removeTable(1L);
+
+        assertThat(context.getTableIdByPath(tablePath)).isEqualTo(2L);
+        assertThat(context.getTablePathById(2L)).isEqualTo(tablePath);
+        assertThat(context.getPartitionId(partitionPath)).contains(101L);
+        assertThat(context.getPhysicalTablePath(101L)).contains(partitionPath);
+        assertThat(context.hasPartitions(1L)).isFalse();
+        assertThat(context.hasPartitions(2L)).isTrue();
+        context.removePartition(new TablePartition(2L, 101L));
+        assertThat(context.hasPartitions(2L)).isFalse();
     }
 
     @Test
@@ -101,7 +133,7 @@ class CoordinatorContextTest {
         CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
         PartitionInfo partitionInfo = createPartitionInfo(100L, "2026");
         PhysicalTablePath partitionPath = PhysicalTablePath.of("db1", "table1", "2026");
-        context.putPartition(100L, partitionPath, partitionInfo);
+        context.putPartition(1L, 100L, partitionPath, partitionInfo);
 
         assertThat(context.getPartitionInfoById(100L)).isSameAs(partitionInfo);
 
@@ -110,6 +142,7 @@ class CoordinatorContextTest {
         assertThat(context.getPhysicalTablePath(100L)).isEmpty();
         assertThat(context.getPartitionId(partitionPath)).isEmpty();
         assertThat(context.getPartitionInfoById(100L)).isNull();
+        assertThat(context.hasPartitions(1L)).isFalse();
     }
 
     @Test

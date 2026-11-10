@@ -46,6 +46,7 @@ import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
+import org.apache.fluss.server.zk.data.ZkData.TableZNode;
 import org.apache.fluss.server.zk.data.ZkVersion;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.types.DataTypes;
@@ -131,6 +132,63 @@ class TableChangeWatcherTest {
         if (lifecycleThrottler != null) {
             lifecycleThrottler.close();
         }
+    }
+
+    @Test
+    void testRegistrationWithdrawalDropsTableBeforeCleanup() throws Exception {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "withdrawn");
+        TableAssignment assignment =
+                generateAssignment(
+                        3,
+                        3,
+                        new TabletServerInfo[] {
+                            new TabletServerInfo(0, "rack0"),
+                            new TabletServerInfo(1, "rack1"),
+                            new TabletServerInfo(2, "rack2")
+                        });
+        long tableId =
+                metadataManager.createTable(
+                        tablePath, DEFAULT_REMOTE_DATA_DIR, TEST_TABLE, assignment, false);
+        CreateTableEvent created =
+                new CreateTableEvent(metadataManager.getTable(tablePath), assignment);
+        retry(Duration.ofMinutes(1), () -> assertThat(eventManager.getEvents()).contains(created));
+
+        zookeeperClient
+                .getCuratorClient()
+                .setData()
+                .forPath(TableZNode.path(tablePath), new byte[0]);
+
+        DropTableEvent withdrawn = new DropTableEvent(tableId, false, false);
+        retry(
+                Duration.ofMinutes(1),
+                () -> assertThat(eventManager.getEvents()).contains(withdrawn));
+        lifecycleThrottler.onTableDropCompleted(tableId);
+        zookeeperClient
+                .getCuratorClient()
+                .setData()
+                .forPath(TableZNode.path(tablePath), new byte[0]);
+        zookeeperClient.deleteTable(tablePath);
+
+        long replacementId =
+                metadataManager.createTable(
+                        tablePath, DEFAULT_REMOTE_DATA_DIR, TEST_TABLE, assignment, false);
+        CreateTableEvent replacement =
+                new CreateTableEvent(metadataManager.getTable(tablePath), assignment);
+        retry(
+                Duration.ofMinutes(1),
+                () -> assertThat(eventManager.getEvents()).contains(replacement));
+        metadataManager.dropTable(tablePath, false);
+
+        DropTableEvent replacementDrop = new DropTableEvent(replacementId, false, false);
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        assertThat(eventManager.getEvents())
+                                .filteredOn(event -> event instanceof DropTableEvent)
+                                .containsExactly(withdrawn, replacementDrop));
+        assertThat(eventManager.getEvents())
+                .filteredOn(event -> event instanceof TableRegistrationChangeEvent)
+                .isEmpty();
     }
 
     @Test

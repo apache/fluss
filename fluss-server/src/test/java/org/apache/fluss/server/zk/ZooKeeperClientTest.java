@@ -24,6 +24,7 @@ import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseSummary;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
@@ -37,6 +38,7 @@ import org.apache.fluss.server.zk.ZkAsyncResponse.ZkGetDataResponse;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.CoordinatorAddress;
+import org.apache.fluss.server.zk.data.DatabaseRegistration;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.PartitionRegistration;
@@ -45,16 +47,22 @@ import org.apache.fluss.server.zk.data.ServerTags;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
+import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.server.zk.data.ZkData.BucketIdZNode;
 import org.apache.fluss.server.zk.data.ZkData.TableIdZNode;
 import org.apache.fluss.server.zk.data.lease.KvSnapshotLeaseMetadata;
 import org.apache.fluss.shaded.curator5.org.apache.curator.CuratorZookeeperClient;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
+import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFrameworkFactory;
+import org.apache.fluss.shaded.curator5.org.apache.curator.retry.ExponentialBackoffRetry;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
+import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.Op;
+import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.ZooDefs;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.ZooKeeper;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.client.ZKClientConfig;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.utils.function.ThrowingConsumer;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.junit.jupiter.api.AfterAll;
@@ -74,6 +82,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.COMPLETED;
@@ -83,6 +93,7 @@ import static org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.common.ZKC
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyCollection;
+import static org.mockito.ArgumentMatchers.anyIterable;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
@@ -121,6 +132,264 @@ class ZooKeeperClientTest {
     @AfterAll
     static void afterAll() {
         zookeeperClient.close();
+    }
+
+    @Test
+    void testMetadataBarrierSettlesLostPublicationResponse() throws Exception {
+        AtomicBoolean loseResponse = new AtomicBoolean();
+        try (ZooKeeperClient client =
+                newFaultInjectingMetadataClient(
+                        "metadata-lost-response",
+                        session ->
+                                doAnswer(
+                                                invocation -> {
+                                                    if (loseResponse.compareAndSet(true, false)) {
+                                                        Iterable<Op> requests =
+                                                                invocation.getArgument(0);
+                                                        session.multi(
+                                                                requests,
+                                                                (code,
+                                                                        path,
+                                                                        context,
+                                                                        results) -> {},
+                                                                null);
+                                                        throw new KeeperException
+                                                                .ConnectionLossException();
+                                                    }
+                                                    return invocation.callRealMethod();
+                                                })
+                                        .when(session)
+                                        .multi(anyIterable()))) {
+            ZkEpoch epoch = client.fenceBecomeCoordinatorLeader("lost-response");
+            ZooKeeperMetadataContext context =
+                    client.newMetadataContext(epoch.getCoordinatorEpochZkVersion());
+            ZooKeeperMetadataOperation operation = context.beginOperation();
+            operation.ensurePath("/ddl");
+            loseResponse.set(true);
+
+            assertThatThrownBy(() -> operation.create("/ddl/published", new byte[] {1}))
+                    .isInstanceOf(KeeperException.ConnectionLossException.class);
+
+            ZooKeeperMetadataOperation next = context.beginOperation();
+            assertThat(next.read(() -> client.getOrEmpty("/ddl/published"))).isPresent();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testWithdrawnTableRemainsAbsentAfterInterruptedDeletion(boolean cascade) throws Exception {
+        AtomicBoolean interrupt = new AtomicBoolean();
+        AtomicInteger originalEpoch = new AtomicInteger();
+        AtomicInteger originalEpochVersion = new AtomicInteger();
+        try (ZooKeeperClient client =
+                newFaultInjectingMetadataClient(
+                        "metadata-interrupted-drop-" + cascade,
+                        session ->
+                                doAnswer(
+                                                invocation -> {
+                                                    Object result = invocation.callRealMethod();
+                                                    Iterable<Op> requests =
+                                                            invocation.getArgument(0);
+                                                    for (Op request : requests) {
+                                                        if (request.getType()
+                                                                        == ZooDefs.OpCode.delete
+                                                                && request.getPath()
+                                                                        .contains("/schemas/")
+                                                                && interrupt.compareAndSet(
+                                                                        true, false)) {
+                                                            Op epochCheck =
+                                                                    requests.iterator().next();
+                                                            session.setData(
+                                                                    epochCheck.getPath(),
+                                                                    ZkData.CoordinatorEpochZNode
+                                                                            .encode(
+                                                                                    originalEpoch
+                                                                                                    .get()
+                                                                                            + 1),
+                                                                    originalEpochVersion.get());
+                                                        }
+                                                    }
+                                                    return result;
+                                                })
+                                        .when(session)
+                                        .multi(anyIterable()))) {
+            ZkEpoch epoch = client.fenceBecomeCoordinatorLeader("original");
+            originalEpoch.set(epoch.getCoordinatorEpoch());
+            originalEpochVersion.set(epoch.getCoordinatorEpochZkVersion());
+            ZooKeeperMetadataOperation operation =
+                    client.newMetadataContext(epoch.getCoordinatorEpochZkVersion())
+                            .beginOperation();
+            Schema schema = Schema.newBuilder().column("old", DataTypes.INT()).build();
+            TablePath path = createMetadataTable(client, operation, schema);
+            interrupt.set(true);
+
+            assertThatThrownBy(
+                            () -> {
+                                if (cascade) {
+                                    client.deleteDatabase(operation, path.getDatabaseName());
+                                } else {
+                                    client.deleteTable(operation, path);
+                                }
+                            })
+                    .isInstanceOf(KeeperException.BadVersionException.class);
+            assertThat(client.getTable(path)).isEmpty();
+            assertThat(client.getChildren(ZkData.SchemasZNode.path(path))).hasSize(1);
+
+            ZkEpoch replacementEpoch = client.fenceBecomeCoordinatorLeader("replacement");
+            ZooKeeperMetadataOperation replacement =
+                    client.newMetadataContext(replacementEpoch.getCoordinatorEpochZkVersion())
+                            .beginOperation();
+            Schema replacementSchema =
+                    Schema.newBuilder().column("new", DataTypes.STRING()).build();
+            client.registerFirstSchema(replacement, path, replacementSchema);
+            client.registerTable(
+                    replacement,
+                    path,
+                    TableRegistration.newTable(
+                            2,
+                            remoteDataDir,
+                            TableDescriptor.builder()
+                                    .schema(replacementSchema)
+                                    .distributedBy(1)
+                                    .build()),
+                    false);
+
+            assertThatThrownBy(() -> client.deleteTable(operation, path))
+                    .isInstanceOf(KeeperException.BadVersionException.class);
+            assertThat(client.getTable(path).get().tableId).isEqualTo(2);
+            assertThat(client.getSchemaById(path, 1).get().getSchema())
+                    .isEqualTo(replacementSchema);
+        }
+    }
+
+    @Test
+    void testUnknownWithdrawalDoesNotDeleteSchemas() throws Exception {
+        AtomicBoolean loseResponse = new AtomicBoolean();
+        try (ZooKeeperClient client =
+                newFaultInjectingMetadataClient(
+                        "metadata-unknown-withdrawal",
+                        session ->
+                                doAnswer(
+                                                invocation -> {
+                                                    if (loseResponse.compareAndSet(true, false)) {
+                                                        Iterable<Op> requests =
+                                                                invocation.getArgument(0);
+                                                        session.multi(
+                                                                requests,
+                                                                (code,
+                                                                        path,
+                                                                        context,
+                                                                        results) -> {},
+                                                                null);
+                                                        throw new KeeperException
+                                                                .ConnectionLossException();
+                                                    }
+                                                    return invocation.callRealMethod();
+                                                })
+                                        .when(session)
+                                        .multi(anyIterable()))) {
+            ZkEpoch epoch = client.fenceBecomeCoordinatorLeader("original");
+            ZooKeeperMetadataContext context =
+                    client.newMetadataContext(epoch.getCoordinatorEpochZkVersion());
+            ZooKeeperMetadataOperation operation = context.beginOperation();
+            TablePath path =
+                    createMetadataTable(
+                            client,
+                            operation,
+                            Schema.newBuilder().column("old", DataTypes.INT()).build());
+            loseResponse.set(true);
+
+            assertThatThrownBy(() -> client.deleteTable(operation, path))
+                    .isInstanceOf(KeeperException.ConnectionLossException.class);
+
+            ZooKeeperMetadataOperation next = context.beginOperation();
+            assertThat(next.read(() -> client.getTable(path))).isEmpty();
+            assertThat(client.getChildren(ZkData.SchemasZNode.path(path))).hasSize(2);
+            client.deleteTable(next, path);
+            assertThat(client.getOrEmpty(ZkData.TableZNode.path(path))).isEmpty();
+        }
+    }
+
+    @Test
+    void testMetadataOperationFencesRecursiveDeletion() throws Exception {
+        ZooKeeperMetadataOperation operation =
+                zookeeperClient
+                        .newMetadataContext(zkEpoch.getCoordinatorEpochZkVersion())
+                        .beginOperation();
+        operation.ensurePath("/ddl");
+        operation.ensurePath("/ddl/child");
+        operation.create("/ddl/child/leaf", new byte[] {1});
+
+        zookeeperClient.fenceBecomeCoordinatorLeader("replacement");
+
+        assertThatThrownBy(() -> operation.deleteRecursively("/ddl"))
+                .isInstanceOf(KeeperException.BadVersionException.class);
+        assertThat(zookeeperClient.getOrEmpty("/ddl/child/leaf")).isPresent();
+    }
+
+    @Test
+    void testMetadataOperationRejectsReplacedSession() throws Exception {
+        ZooKeeperMetadataContext context =
+                zookeeperClient.newMetadataContext(zkEpoch.getCoordinatorEpochZkVersion());
+        ZooKeeperMetadataOperation operation = context.beginOperation();
+        operation.ensurePath("/ddl");
+
+        zookeeperClient.getCuratorClient().getZookeeperClient().reset();
+
+        assertThatThrownBy(() -> operation.create("/ddl/stale", new byte[0]))
+                .isInstanceOf(KeeperException.SessionExpiredException.class);
+        assertThatThrownBy(context::beginOperation)
+                .isInstanceOf(KeeperException.SessionExpiredException.class);
+        assertThat(zookeeperClient.getOrEmpty("/ddl/stale")).isEmpty();
+    }
+
+    @Test
+    void testMetadataReadRejectsSessionChangedDuringRead() throws Exception {
+        ZooKeeperMetadataOperation operation =
+                zookeeperClient
+                        .newMetadataContext(zkEpoch.getCoordinatorEpochZkVersion())
+                        .beginOperation();
+
+        assertThatThrownBy(
+                        () ->
+                                operation.read(
+                                        () -> {
+                                            zookeeperClient
+                                                    .getCuratorClient()
+                                                    .getZookeeperClient()
+                                                    .reset();
+                                            return "stale";
+                                        }))
+                .isInstanceOf(KeeperException.SessionExpiredException.class);
+    }
+
+    @Test
+    void testMetadataOperationDoesNotRecreateSchemaAncestors() throws Exception {
+        ZooKeeperMetadataOperation operation =
+                zookeeperClient
+                        .newMetadataContext(zkEpoch.getCoordinatorEpochZkVersion())
+                        .beginOperation();
+        TablePath path = TablePath.of("missing_database", "missing_table");
+        Schema schema = Schema.newBuilder().column("id", DataTypes.INT()).build();
+
+        assertThatThrownBy(() -> zookeeperClient.registerSchema(operation, path, schema, 2))
+                .isInstanceOf(KeeperException.NoNodeException.class);
+        assertThat(zookeeperClient.tableExist(path)).isFalse();
+    }
+
+    @Test
+    void testMetadataOperationDeletesCompleteTree() throws Exception {
+        ZooKeeperMetadataOperation operation =
+                zookeeperClient
+                        .newMetadataContext(zkEpoch.getCoordinatorEpochZkVersion())
+                        .beginOperation();
+        operation.ensurePath("/ddl");
+        operation.ensurePath("/ddl/child");
+        operation.create("/ddl/child/leaf", new byte[] {1});
+
+        operation.deleteRecursively("/ddl");
+
+        assertThat(zookeeperClient.getOrEmpty("/ddl")).isEmpty();
     }
 
     @Test
@@ -1085,5 +1354,58 @@ class ZooKeeperClientTest {
         assertThat(databaseSummary.getDatabaseName()).isEqualTo("db2");
         assertThat(databaseSummary.getTableCount()).isEqualTo(1);
         assertThat(databaseSummary.getCreatedTime()).isGreaterThan(afterCreateTime);
+    }
+
+    private ZooKeeperClient newFaultInjectingMetadataClient(
+            String namespace, ThrowingConsumer<ZooKeeper, Exception> configure) throws Exception {
+        CuratorFramework curator =
+                CuratorFrameworkFactory.builder()
+                        .connectString(
+                                ZOO_KEEPER_EXTENSION_WRAPPER
+                                        .getCustomExtension()
+                                        .getConnectString())
+                        .namespace(namespace)
+                        .retryPolicy(new ExponentialBackoffRetry(1, 0))
+                        .zookeeperFactory(
+                                (connectString, timeout, watcher, readOnly) -> {
+                                    ZooKeeper session =
+                                            spy(
+                                                    new ZooKeeper(
+                                                            connectString,
+                                                            timeout,
+                                                            watcher,
+                                                            readOnly));
+                                    configure.accept(session);
+                                    return session;
+                                })
+                        .build();
+        curator.start();
+        curator.blockUntilConnected();
+        Configuration configuration = new Configuration();
+        configuration.set(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
+        return new ZooKeeperClient(
+                new CuratorFrameworkWithUnhandledErrorListener(curator, (message, failure) -> {}),
+                configuration);
+    }
+
+    private TablePath createMetadataTable(
+            ZooKeeperClient client, ZooKeeperMetadataOperation operation, Schema schema)
+            throws Exception {
+        TablePath path = TablePath.of("db", "table");
+        client.registerDatabase(
+                operation,
+                path.getDatabaseName(),
+                DatabaseRegistration.of(DatabaseDescriptor.builder().build()));
+        client.registerFirstSchema(operation, path, schema);
+        client.registerSchema(operation, path, schema, 2);
+        client.registerTable(
+                operation,
+                path,
+                TableRegistration.newTable(
+                        1,
+                        remoteDataDir,
+                        TableDescriptor.builder().schema(schema).distributedBy(1).build()),
+                false);
+        return path;
     }
 }

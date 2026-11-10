@@ -212,6 +212,35 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
     }
 
     @Test
+    void testStartupSkipsUnpublishedTableRegistration() throws Exception {
+        eventProcessor.shutdown();
+        TablePath unpublished = TablePath.of(defaultDatabase, "unpublished");
+        zookeeperClient.registerFirstSchema(unpublished, TEST_TABLE.getSchema());
+        TablePath published = TablePath.of(defaultDatabase, "published");
+        TableAssignment assignment =
+                generateAssignment(
+                        N_BUCKETS,
+                        REPLICATION_FACTOR,
+                        new TabletServerInfo[] {
+                            new TabletServerInfo(0, "rack0"),
+                            new TabletServerInfo(1, "rack1"),
+                            new TabletServerInfo(2, "rack2")
+                        });
+        long tableId =
+                metadataManager.createTable(
+                        published, remoteDataDir, TEST_TABLE, assignment, false);
+
+        eventProcessor = buildCoordinatorEventProcessor();
+        initCoordinatorChannel();
+        eventProcessor.startup();
+
+        assertThat(fromCtx(CoordinatorContext::allTables))
+                .containsOnlyKeys(tableId)
+                .containsEntry(tableId, published);
+        assertThat(zookeeperClient.getTable(unpublished)).isEmpty();
+    }
+
+    @Test
     void testStartupAndShutdownPublishObservedKvLeaderReplicaCount() throws Exception {
         initCoordinatorChannel();
         TablePath tablePath = TablePath.of(defaultDatabase, "startup_observed_count");
@@ -1174,11 +1203,15 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                 TablePath.of(defaultDatabase, "test_drop_partitioned_table_no_partitions");
         initCoordinatorChannel();
 
+        TableDescriptor descriptor =
+                TableDescriptor.builder(getPartitionedTable())
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, false)
+                        .build();
         long tableId =
-                metadataManager.createTable(
-                        tablePath, remoteDataDir, getPartitionedTable(), null, false);
+                metadataManager.createTable(tablePath, remoteDataDir, descriptor, null, false);
         retryVerifyContext(ctx -> assertThat(ctx.getTablePathById(tableId)).isNotNull());
 
+        assertThat(zookeeperClient.getPartitionRegistrations(tablePath)).isEmpty();
         metadataManager.dropTable(tablePath, false);
 
         // The fix at the tail of processDropTable explicitly calls resumeDeletions(), which
@@ -1190,6 +1223,144 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                     assertThat(ctx.getTablePathById(tableId)).isNull();
                     assertThat(ctx.getTablesToBeDeleted()).doesNotContain(tableId);
                     assertThat(ctx.allTables()).doesNotContainKey(tableId);
+                });
+    }
+
+    @Test
+    void testStartupIgnoresPartitionFromRecreatedParent() throws Exception {
+        eventProcessor.shutdown();
+        TablePath tablePath = TablePath.of(defaultDatabase, "recreated_partition_parent");
+        TableDescriptor descriptor =
+                TableDescriptor.builder(getPartitionedTable())
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, false)
+                        .build();
+        long oldTableId =
+                metadataManager.createTable(tablePath, remoteDataDir, descriptor, null, false);
+        metadataManager.dropTable(tablePath, false);
+        long tableId =
+                metadataManager.createTable(tablePath, remoteDataDir, descriptor, null, false);
+        assertThat(tableId).isNotEqualTo(oldTableId);
+
+        PartitionAssignment assignment =
+                new PartitionAssignment(
+                        oldTableId,
+                        generateAssignment(
+                                        3,
+                                        3,
+                                        new TabletServerInfo[] {
+                                            new TabletServerInfo(0, "rack0"),
+                                            new TabletServerInfo(1, "rack1"),
+                                            new TabletServerInfo(2, "rack2")
+                                        })
+                                .getBucketAssignments());
+        long partitionId = zookeeperClient.getPartitionIdAndIncrement();
+        String partitionName = "2024";
+        zookeeperClient.registerPartitionAssignmentAndMetadata(
+                partitionId,
+                partitionName,
+                assignment,
+                remoteDataDir,
+                tablePath,
+                oldTableId,
+                assignment.getBucketAssignments().size());
+
+        eventProcessor = buildCoordinatorEventProcessor();
+        initCoordinatorChannel();
+        eventProcessor.startup();
+
+        verifyPartitionDropped(oldTableId, partitionId);
+        retryVerifyContext(
+                ctx -> {
+                    assertThat(ctx.allTables()).containsOnlyKeys(tableId);
+                    assertThat(ctx.getTableIdByPath(tablePath)).isEqualTo(tableId);
+                    assertThat(ctx.getTableInfoById(oldTableId)).isNull();
+                    assertThat(ctx.getPartitionInfoById(partitionId)).isNull();
+                    assertThat(ctx.getPhysicalTablePath(partitionId)).isEmpty();
+                    assertThat(ctx.getPartitionId(PhysicalTablePath.of(tablePath, partitionName)))
+                            .isEmpty();
+                });
+        assertThat(metadataManager.getTable(tablePath).getTableId()).isEqualTo(tableId);
+    }
+
+    @Test
+    void testStartupReconcilesWithdrawnPartitionedTable() throws Exception {
+        TablePath tablePath = TablePath.of(defaultDatabase, "withdrawn_partitioned_table");
+        initCoordinatorChannel();
+        TableDescriptor descriptor =
+                TableDescriptor.builder(getPartitionedTable())
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, false)
+                        .build();
+        long tableId =
+                metadataManager.createTable(tablePath, remoteDataDir, descriptor, null, false);
+        Map<Integer, BucketAssignment> assignments =
+                generateAssignment(
+                                3,
+                                3,
+                                new TabletServerInfo[] {
+                                    new TabletServerInfo(0, "rack0"),
+                                    new TabletServerInfo(1, "rack1"),
+                                    new TabletServerInfo(2, "rack2")
+                                })
+                        .getBucketAssignments();
+        PartitionAssignment assignment = new PartitionAssignment(tableId, assignments);
+        Tuple2<PartitionIdName, PartitionIdName> oldPartitions =
+                preparePartitionAssignment(tablePath, tableId, assignment);
+        verifyPartitionCreated(
+                new TablePartition(tableId, oldPartitions.f0.partitionId), assignment, 3, 3);
+        verifyPartitionCreated(
+                new TablePartition(tableId, oldPartitions.f1.partitionId), assignment, 3, 3);
+
+        eventProcessor.shutdown();
+        zookeeperClient
+                .getCuratorClient()
+                .setData()
+                .forPath(ZkData.TableZNode.path(tablePath), new byte[0]);
+        eventProcessor = buildCoordinatorEventProcessor();
+        initCoordinatorChannel();
+        eventProcessor.startup();
+
+        verifyPartitionDropped(tableId, oldPartitions.f0.partitionId);
+        verifyPartitionDropped(tableId, oldPartitions.f1.partitionId);
+        assertThat(fromCtx(CoordinatorContext::allTables)).isEmpty();
+
+        zookeeperClient.deleteTable(tablePath);
+        long replacementId =
+                metadataManager.createTable(tablePath, remoteDataDir, descriptor, null, false);
+        assertThat(replacementId).isNotEqualTo(tableId);
+        PartitionAssignment replacementAssignment =
+                new PartitionAssignment(replacementId, assignments);
+        Tuple2<PartitionIdName, PartitionIdName> replacementPartitions =
+                preparePartitionAssignment(tablePath, replacementId, replacementAssignment);
+        verifyPartitionCreated(
+                new TablePartition(replacementId, replacementPartitions.f0.partitionId),
+                replacementAssignment,
+                3,
+                3);
+        verifyPartitionCreated(
+                new TablePartition(replacementId, replacementPartitions.f1.partitionId),
+                replacementAssignment,
+                3,
+                3);
+
+        retryVerifyContext(
+                ctx -> {
+                    assertThat(ctx.allTables()).containsOnlyKeys(replacementId);
+                    assertThat(ctx.getTableIdByPath(tablePath)).isEqualTo(replacementId);
+                    assertThat(ctx.getPhysicalTablePath(oldPartitions.f0.partitionId)).isEmpty();
+                    assertThat(ctx.getPhysicalTablePath(oldPartitions.f1.partitionId)).isEmpty();
+                    assertThat(
+                                    ctx.getPartitionId(
+                                            PhysicalTablePath.of(
+                                                    tablePath,
+                                                    replacementPartitions.f0.partitionName)))
+                            .contains(replacementPartitions.f0.partitionId);
+                });
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    assertThat(eventProcessor.getLifecycleThrottler().getInflightCount()).isZero();
+                    assertThat(eventProcessor.getLifecycleThrottler().getPendingDropCount())
+                            .isZero();
                 });
     }
 

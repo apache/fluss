@@ -160,6 +160,68 @@ public class TabletServerMetadataCacheTest {
                                 initialBucketMetadata.size()));
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testRecreatedTableDoesNotExposeOldPartition(boolean clusterUpdate) {
+        serverMetadataCache.updateClusterMetadata(
+                new ClusterMetadata(
+                        coordinatorServer,
+                        aliveTableServers,
+                        tableMetadataList,
+                        partitionMetadataList));
+        ServerMetadataSnapshot oldSnapshot = serverMetadataCache.getSnapshot();
+        PhysicalTablePath path = PhysicalTablePath.of(partitionedTablePath, partitionName1);
+        long replacementTableId = partitionTableId + 1;
+        TableInfo replacement =
+                TableInfo.of(
+                        partitionedTablePath,
+                        replacementTableId,
+                        0,
+                        DATA1_PARTITIONED_TABLE_DESCRIPTOR,
+                        DEFAULT_REMOTE_DATA_DIR,
+                        100L,
+                        100L);
+        TableMetadata replacementMetadata = new TableMetadata(replacement, Collections.emptyList());
+        if (clusterUpdate) {
+            serverMetadataCache.updateClusterMetadata(
+                    new ClusterMetadata(
+                            coordinatorServer,
+                            aliveTableServers,
+                            Collections.singletonList(replacementMetadata),
+                            Collections.emptyList()));
+        } else {
+            serverMetadataCache.updateTableMetadata(replacementMetadata);
+        }
+        assertThat(serverMetadataCache.getPartitionMetadata(path)).isEmpty();
+        assertThat(oldSnapshot.getPartitionId(path)).contains(partitionId1);
+
+        long replacementPartitionId = partitionId1 + 100;
+        serverMetadataCache.updatePartitionMetadata(
+                new PartitionMetadata(
+                        replacementTableId,
+                        partitionName1,
+                        replacementPartitionId,
+                        initialBucketMetadata));
+        serverMetadataCache.updateClusterMetadata(
+                new ClusterMetadata(
+                        coordinatorServer,
+                        aliveTableServers,
+                        Collections.emptyList(),
+                        Collections.singletonList(
+                                new PartitionMetadata(
+                                        partitionTableId,
+                                        DELETED_PARTITION_NAME,
+                                        partitionId1,
+                                        Collections.emptyList()))));
+        assertThat(serverMetadataCache.getPartitionMetadata(path))
+                .hasValueSatisfying(
+                        partition -> {
+                            assertThat(partition.getTableId()).isEqualTo(replacementTableId);
+                            assertThat(partition.getPartitionId())
+                                    .isEqualTo(replacementPartitionId);
+                        });
+    }
+
     @Test
     void testUpdateClusterMetadataRequest() {
         serverMetadataCache.updateClusterMetadata(
