@@ -21,8 +21,10 @@ import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.AuthenticationException;
 import org.apache.fluss.exception.DisconnectException;
 import org.apache.fluss.exception.InvalidServerTypeException;
+import org.apache.fluss.exception.RetriableAuthenticationException;
 import org.apache.fluss.exception.UnsupportedVersionException;
 import org.apache.fluss.metrics.Gauge;
 import org.apache.fluss.metrics.Metric;
@@ -61,8 +63,13 @@ import org.apache.fluss.security.auth.AuthenticationFactory;
 import org.apache.fluss.security.auth.ClientAuthenticator;
 import org.apache.fluss.shaded.netty4.io.netty.bootstrap.Bootstrap;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
+import org.apache.fluss.shaded.netty4.io.netty.channel.Channel;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelFuture;
 import org.apache.fluss.shaded.netty4.io.netty.channel.EventLoopGroup;
+import org.apache.fluss.shaded.netty4.io.netty.handler.ssl.DelegatingSslContext;
+import org.apache.fluss.shaded.netty4.io.netty.handler.ssl.SslContext;
+import org.apache.fluss.shaded.netty4.io.netty.handler.ssl.SslContextBuilder;
+import org.apache.fluss.shaded.netty4.io.netty.handler.ssl.SslHandshakeCompletionEvent;
 import org.apache.fluss.utils.NetUtils;
 
 import org.junit.jupiter.api.AfterEach;
@@ -71,6 +78,11 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import javax.net.ssl.SSLEngine;
+import javax.net.ssl.SSLException;
+
+import java.nio.channels.ClosedChannelException;
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
@@ -93,6 +105,7 @@ import static org.apache.fluss.metrics.MetricNames.CLIENT_RESPONSES_RATE_TOTAL;
 import static org.apache.fluss.rpc.netty.NettyUtils.getClientSocketChannelClass;
 import static org.apache.fluss.rpc.netty.NettyUtils.newEventLoopGroup;
 import static org.apache.fluss.rpc.protocol.UpdateMetadataRequestCompat.DELETED_TABLE_ID;
+import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.apache.fluss.utils.NetUtils.getAvailablePort;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -111,6 +124,8 @@ public class ServerConnectionTest {
                         serverNode,
                         TestingClientMetricGroup.newInstance(),
                         clientAuthenticator,
+                        null,
+                        null,
                         (con, ignored) -> {});
         try {
             CommitKvSnapshotRequest request = new CommitKvSnapshotRequest();
@@ -166,6 +181,8 @@ public class ServerConnectionTest {
                         serverNode,
                         TestingClientMetricGroup.newInstance(),
                         clientAuthenticator,
+                        null,
+                        null,
                         (con, ignore) -> {});
         ConnectionState connectionState = connection.getConnectionState();
         assertThat(connectionState).isEqualTo(ConnectionState.CONNECTING);
@@ -196,10 +213,22 @@ public class ServerConnectionTest {
         ClientMetricGroup client = new ClientMetricGroup(metricRegistry, "client");
         ServerConnection connection =
                 new ServerConnection(
-                        bootstrap, serverNode, client, clientAuthenticator, (con, ignore) -> {});
+                        bootstrap,
+                        serverNode,
+                        client,
+                        clientAuthenticator,
+                        null,
+                        null,
+                        (con, ignore) -> {});
         ServerConnection connection2 =
                 new ServerConnection(
-                        bootstrap, serverNode2, client, clientAuthenticator, (con, ignore) -> {});
+                        bootstrap,
+                        serverNode2,
+                        client,
+                        clientAuthenticator,
+                        null,
+                        null,
+                        (con, ignore) -> {});
         LookupRequest request = new LookupRequest().setTableId(1);
         PbLookupReqForBucket pbLookupReqForBucket = request.addBucketsReq();
         pbLookupReqForBucket.setBucketId(1);
@@ -249,6 +278,8 @@ public class ServerConnectionTest {
                         serverNode,
                         TestingClientMetricGroup.newInstance(),
                         clientAuthenticator,
+                        null,
+                        null,
                         (con, ignore) -> {});
         try {
             OutOfMemoryError error = new OutOfMemoryError("Direct buffer memory");
@@ -299,6 +330,8 @@ public class ServerConnectionTest {
                         wrongServerTypeNode,
                         TestingClientMetricGroup.newInstance(),
                         clientAuthenticator,
+                        null,
+                        null,
                         (con, ignore) -> {});
 
         // Pending request will be rejected with InvalidServerTypeException which is
@@ -324,6 +357,91 @@ public class ServerConnectionTest {
     }
 
     @Test
+    void testSendAfterAuthenticationFailureFailsWithSameCause() throws Exception {
+        ServerConnection connection =
+                new ServerConnection(
+                        bootstrap,
+                        serverNode,
+                        TestingClientMetricGroup.newInstance(),
+                        clientAuthenticator,
+                        null,
+                        null,
+                        (con, ignore) -> {});
+        retry(Duration.ofSeconds(20), () -> assertThat(connection.isReady()).isTrue());
+
+        Channel channel = connection.channel();
+        channel.eventLoop()
+                .submit(
+                        () ->
+                                channel.pipeline()
+                                        .fireUserEventTriggered(
+                                                new SslHandshakeCompletionEvent(
+                                                        new SSLException("untrusted"))))
+                .get();
+
+        assertThat(connection.getConnectionState()).isEqualTo(ConnectionState.DISCONNECTED);
+        assertThatThrownBy(
+                        () ->
+                                connection
+                                        .send(ApiKeys.LIST_DATABASES, new ListDatabasesRequest())
+                                        .get())
+                .cause()
+                .isInstanceOf(AuthenticationException.class)
+                .hasMessageContaining("untrusted");
+    }
+
+    @Test
+    void testOnlyNonRetriableAuthenticationFailuresAreKept() {
+        assertThat(
+                        ServerConnection.isAuthenticationFailure(
+                                new AuthenticationException(
+                                        "TLS handshake failed", new SSLException("untrusted"))))
+                .isTrue();
+        assertThat(
+                        ServerConnection.isAuthenticationFailure(
+                                new AuthenticationException("Invalid password")))
+                .isTrue();
+        assertThat(
+                        ServerConnection.isAuthenticationFailure(
+                                new RetriableAuthenticationException("try again")))
+                .isFalse();
+        assertThat(ServerConnection.isAuthenticationFailure(new ClosedChannelException()))
+                .isFalse();
+    }
+
+    @Test
+    void testSslHandlerCreationFailureClosesConnection() throws Exception {
+        SslContext failingSslContext =
+                new DelegatingSslContext(SslContextBuilder.forClient().build()) {
+                    @Override
+                    protected void initEngine(SSLEngine engine) {
+                        throw new IllegalStateException("cannot create engine");
+                    }
+                };
+        ServerConnection connection =
+                new ServerConnection(
+                        bootstrap,
+                        serverNode,
+                        TestingClientMetricGroup.newInstance(),
+                        clientAuthenticator,
+                        failingSslContext,
+                        null,
+                        (con, ignore) -> {});
+
+        // Without the guard the connection is stuck in CONNECTING and never reaches DISCONNECTED.
+        retry(
+                Duration.ofSeconds(20),
+                () ->
+                        assertThat(connection.getConnectionState())
+                                .isEqualTo(ConnectionState.DISCONNECTED));
+        // The close future carries the failure cause.
+        assertThatThrownBy(() -> connection.close().get(20, TimeUnit.SECONDS))
+                .cause()
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("cannot create engine");
+    }
+
+    @Test
     void testRejectBucketCountChangeForOldServer() throws Exception {
         ServerConnection connection =
                 new ServerConnection(
@@ -331,6 +449,8 @@ public class ServerConnectionTest {
                         serverNode,
                         TestingClientMetricGroup.newInstance(),
                         clientAuthenticator,
+                        null,
+                        null,
                         (con, ignore) -> {});
         try {
             connection.validateVersionCompatibility(
@@ -361,6 +481,8 @@ public class ServerConnectionTest {
                         serverNode,
                         TestingClientMetricGroup.newInstance(),
                         clientAuthenticator,
+                        null,
+                        null,
                         (con, ignore) -> {});
         try {
             assertThat(connection.send(ApiKeys.PUT_KV, putKvRequest(null)).get())
@@ -431,6 +553,8 @@ public class ServerConnectionTest {
                         serverNode,
                         TestingClientMetricGroup.newInstance(),
                         clientAuthenticator,
+                        null,
+                        null,
                         (con, ignore) -> {});
         try {
             UpdateMetadataRequest request = new UpdateMetadataRequest();
