@@ -26,6 +26,7 @@ import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOption;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
@@ -80,6 +81,7 @@ import static org.apache.fluss.cluster.rebalance.RebalanceStatus.FAILED;
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.NOT_STARTED;
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.REBALANCING;
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.TIMEOUT;
+import static org.apache.fluss.config.ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS;
 import static org.apache.fluss.config.ConfigOptions.COORDINATOR_REBALANCE_MAX_TRACKED_TIMED_OUT_TASKS;
 import static org.apache.fluss.config.ConfigOptions.COORDINATOR_REBALANCE_NO_PROGRESS_TIMEOUT;
 import static org.apache.fluss.config.ConfigOptions.COORDINATOR_REBALANCE_TARGET_UNAVAILABLE_TIMEOUT;
@@ -175,6 +177,162 @@ public class RebalanceManagerTest {
         clock.advanceTime(Duration.ofMillis(30_000));
         rebalanceManager.checkTimeout();
         assertThat(eventManager.events).hasSize(1);
+    }
+
+    @Test
+    void testRegisterRebalanceRespectsMaxInflightTasks() {
+        reconfigureMaxInflightTasks(2);
+        TableBucket tb1 = new TableBucket(1L, 0);
+        TableBucket tb2 = new TableBucket(1L, 1);
+        TableBucket tb3 = new TableBucket(1L, 2);
+        TableBucket tb4 = new TableBucket(1L, 3);
+
+        rebalanceManager.registerRebalance("concurrent-test", plans(tb1, tb2, tb3, tb4));
+
+        assertThat(rebalanceExecutor.executedPlans)
+                .extracting(RebalancePlanForBucket::getTableBucket)
+                .containsExactly(tb1, tb2);
+        assertThat(statuses(rebalanceManager).values()).filteredOn(NOT_STARTED::equals).hasSize(2);
+        assertThat(statuses(rebalanceManager).values()).filteredOn(REBALANCING::equals).hasSize(2);
+
+        rebalanceManager.finishRebalanceTask(tb1, COMPLETED);
+
+        assertThat(rebalanceExecutor.executedPlans)
+                .extracting(RebalancePlanForBucket::getTableBucket)
+                .containsExactly(tb1, tb2, tb3);
+        assertThat(statuses(rebalanceManager).values()).filteredOn(REBALANCING::equals).hasSize(2);
+    }
+
+    @Test
+    void testIncreasingMaxInflightTasksAppliesOnNextAdmission() {
+        TableBucket tb1 = new TableBucket(1L, 0);
+        TableBucket tb2 = new TableBucket(1L, 1);
+        TableBucket tb3 = new TableBucket(1L, 2);
+        rebalanceManager.registerRebalance("scale-up-test", plans(tb1, tb2, tb3));
+
+        assertThat(rebalanceManager.getMaxInflightRebalanceTasks()).isEqualTo(1);
+        assertThat(rebalanceExecutor.executedPlans).hasSize(1);
+
+        reconfigureMaxInflightTasks(3);
+
+        assertThat(rebalanceExecutor.executedPlans).hasSize(1);
+
+        rebalanceManager.finishRebalanceTask(tb1, COMPLETED);
+
+        assertThat(rebalanceExecutor.executedPlans)
+                .extracting(RebalancePlanForBucket::getTableBucket)
+                .containsExactly(tb1, tb2, tb3);
+    }
+
+    @Test
+    void testDecreasingMaxInflightTasksDoesNotCancelRunningTasks() {
+        reconfigureMaxInflightTasks(3);
+        TableBucket tb1 = new TableBucket(1L, 0);
+        TableBucket tb2 = new TableBucket(1L, 1);
+        TableBucket tb3 = new TableBucket(1L, 2);
+        TableBucket tb4 = new TableBucket(1L, 3);
+        rebalanceManager.registerRebalance("scale-down-test", plans(tb1, tb2, tb3, tb4));
+
+        reconfigureMaxInflightTasks(1);
+        rebalanceManager.finishRebalanceTask(tb1, COMPLETED);
+        rebalanceManager.finishRebalanceTask(tb2, COMPLETED);
+        assertThat(rebalanceExecutor.executedPlans).hasSize(3);
+
+        rebalanceManager.finishRebalanceTask(tb3, COMPLETED);
+        assertThat(rebalanceExecutor.executedPlans)
+                .extracting(RebalancePlanForBucket::getTableBucket)
+                .containsExactly(tb1, tb2, tb3, tb4);
+    }
+
+    @Test
+    void testSynchronousCompletionsAreHandledIteratively() {
+        int taskCount = 100;
+        reconfigureMaxInflightTasks(3);
+        TableBucket[] tableBuckets = new TableBucket[taskCount];
+        for (int i = 0; i < taskCount; i++) {
+            tableBuckets[i] = new TableBucket(1L, i);
+            if (i < taskCount - 3) {
+                rebalanceExecutor.synchronouslyCompletedBuckets.add(tableBuckets[i]);
+            }
+        }
+
+        rebalanceManager.registerRebalance("synchronous-completion-test", plans(tableBuckets));
+
+        assertThat(rebalanceExecutor.executedPlans).hasSize(taskCount);
+        assertThat(statuses(rebalanceManager).values())
+                .filteredOn(COMPLETED::equals)
+                .hasSize(taskCount - 3);
+        assertThat(statuses(rebalanceManager).values()).filteredOn(REBALANCING::equals).hasSize(3);
+    }
+
+    @Test
+    void testTimeoutEnqueuesEventsForAllInflightTasks() {
+        reconfigureMaxInflightTasks(2);
+        TableBucket tb1 = new TableBucket(1L, 0);
+        TableBucket tb2 = new TableBucket(1L, 1);
+        TableBucket tb3 = new TableBucket(1L, 2);
+        rebalanceManager.registerRebalance("timeout-all-test", plans(tb1, tb2, tb3));
+
+        clock.advanceTime(Duration.ofMillis(130_000));
+        rebalanceManager.checkTimeout();
+
+        assertThat(eventManager.events)
+                .filteredOn(RebalanceTaskTimeoutEvent.class::isInstance)
+                .extracting(
+                        event ->
+                                ((RebalanceTaskTimeoutEvent) event)
+                                        .getExecutionKey()
+                                        .getTableBucket())
+                .containsExactlyInAnyOrder(tb1, tb2);
+        for (CoordinatorEvent event : new ArrayList<>(eventManager.events)) {
+            assertThat(
+                            rebalanceManager.timeoutRebalanceTask(
+                                    ((RebalanceTaskTimeoutEvent) event).getExecutionKey()))
+                    .isTrue();
+        }
+        assertThat(rebalanceExecutor.executedPlans)
+                .extracting(RebalancePlanForBucket::getTableBucket)
+                .containsExactly(tb1, tb2, tb3);
+    }
+
+    @Test
+    void testTimeoutTrackingCapIsPreservedWithConcurrentTasks() {
+        configureManager(
+                new Configuration()
+                        .set(COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS, 4)
+                        .set(COORDINATOR_REBALANCE_MAX_TRACKED_TIMED_OUT_TASKS, 2));
+        TableBucket[] tableBuckets = new TableBucket[4];
+        for (int i = 0; i < tableBuckets.length; i++) {
+            tableBuckets[i] = new TableBucket(1L, i);
+        }
+        rebalanceManager.registerRebalance("concurrent-timeout-cap-test", plans(tableBuckets));
+        List<RebalanceExecutionKey> attempts =
+                Arrays.stream(tableBuckets)
+                        .map(rebalanceManager::getExecutionKey)
+                        .collect(Collectors.toList());
+
+        assertThat(rebalanceManager.timeoutRebalanceTask(attempts.get(0))).isTrue();
+        assertThat(rebalanceManager.timeoutRebalanceTask(attempts.get(1))).isTrue();
+        assertThat(rebalanceManager.timeoutRebalanceTask(attempts.get(2))).isFalse();
+        assertThat(statuses(rebalanceManager).values()).filteredOn(TIMEOUT::equals).hasSize(2);
+        assertThat(statuses(rebalanceManager).values()).filteredOn(REBALANCING::equals).hasSize(2);
+
+        assertThat(rebalanceManager.finishRebalanceTask(attempts.get(0), COMPLETED)).isTrue();
+        assertThat(rebalanceManager.timeoutRebalanceTask(attempts.get(2))).isTrue();
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {0, -1})
+    void testRejectNonPositiveMaxInflightTasks(int maxInflightTasks) {
+        assertThatThrownBy(
+                        () ->
+                                rebalanceManager.validate(
+                                        new Configuration()
+                                                .set(
+                                                        COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS,
+                                                        maxInflightTasks)))
+                .isInstanceOf(ConfigException.class)
+                .hasMessageContaining("must be at least 1");
     }
 
     @Test
@@ -848,6 +1006,12 @@ public class RebalanceManagerTest {
         rebalanceManager = createManager(conf);
     }
 
+    private void reconfigureMaxInflightTasks(int maxInflightTasks) {
+        rebalanceManager.reconfigure(
+                new Configuration()
+                        .set(COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS, maxInflightTasks));
+    }
+
     private static int reconciliationsFor(
             RecordingEventManager eventManager, RebalanceExecutionKey executionKey) {
         int reconciliations = 0;
@@ -916,6 +1080,7 @@ public class RebalanceManagerTest {
         private final List<RebalancePlanForBucket> executedPlans = new ArrayList<>();
         private final Set<TableBucket> originBuckets = new HashSet<>();
         private final Set<TableBucket> deletedBuckets = new HashSet<>();
+        private final Set<TableBucket> synchronouslyCompletedBuckets = new HashSet<>();
 
         private TestingRebalanceExecutor(CoordinatorContext coordinatorContext) {
             this.coordinatorContext = coordinatorContext;
@@ -927,8 +1092,11 @@ public class RebalanceManagerTest {
         }
 
         @Override
-        public void tryToExecuteRebalanceTask(RebalancePlanForBucket planForBucket) {
+        public ExecutionResult tryToExecuteRebalanceTask(RebalancePlanForBucket planForBucket) {
             executedPlans.add(planForBucket);
+            return synchronouslyCompletedBuckets.contains(planForBucket.getTableBucket())
+                    ? ExecutionResult.COMPLETED
+                    : ExecutionResult.IN_PROGRESS;
         }
 
         @Override

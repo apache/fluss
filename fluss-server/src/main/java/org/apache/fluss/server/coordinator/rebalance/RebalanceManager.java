@@ -26,6 +26,8 @@ import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOption;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.cluster.ServerReconfigurable;
+import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.exception.NoRebalanceInProgressException;
 import org.apache.fluss.exception.RebalanceFailureException;
 import org.apache.fluss.metadata.TableBucket;
@@ -36,6 +38,7 @@ import org.apache.fluss.server.coordinator.event.FinalizeRebalanceEvent;
 import org.apache.fluss.server.coordinator.event.RebalanceTaskTimeoutEvent;
 import org.apache.fluss.server.coordinator.event.ReconcileRebalanceTaskEvent;
 import org.apache.fluss.server.coordinator.event.RecoverRebalanceEvent;
+import org.apache.fluss.server.coordinator.rebalance.RebalanceExecutor.ExecutionResult;
 import org.apache.fluss.server.coordinator.rebalance.goal.Goal;
 import org.apache.fluss.server.coordinator.rebalance.goal.GoalOptimizer;
 import org.apache.fluss.server.coordinator.rebalance.model.ClusterModel;
@@ -102,13 +105,13 @@ import static org.apache.fluss.utils.Preconditions.checkState;
  * Any non-final task --bucket deleted--------> COMPLETED
  * </pre>
  *
- * <p>Only one bucket occupies the normal execution slot. TIMEOUT releases that slot but remains
- * non-final and tracked; reaching the configured tracking limit pauses admission of new buckets.
- * Cancellation is persisted before local state changes, including which buckets were canceled. New
- * pending tasks are canceled directly; recovered or admitted tasks must still be at their origin to
- * be canceled. Recovery admits intermediate tasks into reconciliation up to the configured tracking
- * limit, and still requires a current leader acknowledgement even when the persisted state already
- * matches the target.
+ * <p>Normally running buckets occupy the configured execution slots. TIMEOUT releases a slot but
+ * remains non-final and tracked; reaching the configured tracking limit pauses admission of new
+ * buckets. Cancellation is persisted before local state changes, including which buckets were
+ * canceled. New pending tasks are canceled directly; recovered or admitted tasks must still be at
+ * their origin to be canceled. Recovery admits intermediate tasks into reconciliation up to the
+ * configured tracking limit, and still requires a current leader acknowledgement even when the
+ * persisted state already matches the target.
  *
  * <p>The overall rebalance remains REBALANCING while buckets are pending, running, or timed out,
  * and while its final state cannot be persisted. Once all buckets are final, any failed bucket
@@ -121,7 +124,7 @@ import static org.apache.fluss.utils.Preconditions.checkState;
  * manager's monitor.
  */
 @ThreadSafe
-public class RebalanceManager {
+public class RebalanceManager implements ServerReconfigurable {
     private static final Logger LOG = LoggerFactory.getLogger(RebalanceManager.class);
 
     /** Hardcoded timeout for an in-flight rebalance task: 2 minutes. */
@@ -152,7 +155,7 @@ public class RebalanceManager {
     private final Map<TableBucket, RebalanceResultForBucket> inProgressRebalanceTasks =
             new HashMap<>();
 
-    /** Normally running tasks. This map contains at most one entry until concurrency is added. */
+    /** Normally running tasks that occupy configured execution slots. */
     private final Map<TableBucket, RebalanceTaskAttempt> runningRebalanceTasks = new HashMap<>();
 
     /** Soft-timed-out tasks that no longer occupy the normal execution slot. */
@@ -166,6 +169,7 @@ public class RebalanceManager {
             new HashMap<>();
 
     private final GoalOptimizer goalOptimizer;
+    private int maxInflightRebalanceTasks;
     private long registerTime;
     private @Nullable RebalanceStatus rebalanceStatus;
     private @Nullable String currentRebalanceId;
@@ -224,6 +228,9 @@ public class RebalanceManager {
         this.clock = clock == null ? SystemClock.getInstance() : clock;
         this.timeoutChecker = timeoutChecker;
         this.goalOptimizer = new GoalOptimizer();
+        validate(conf);
+        this.maxInflightRebalanceTasks =
+                conf.get(ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS);
     }
 
     public synchronized void startup() {
@@ -245,6 +252,40 @@ public class RebalanceManager {
 
     public synchronized @Nullable String getRebalanceId() {
         return currentRebalanceId;
+    }
+
+    @Override
+    public void validate(Configuration newConfig) throws ConfigException {
+        int newMaxInflightRebalanceTasks =
+                newConfig.get(ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS);
+        if (newMaxInflightRebalanceTasks < 1) {
+            throw new ConfigException(
+                    String.format(
+                            "Invalid %s: must be at least 1, but was %s",
+                            ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS.key(),
+                            newMaxInflightRebalanceTasks));
+        }
+    }
+
+    @Override
+    public synchronized void reconfigure(Configuration newConfig) {
+        int newMaxInflightRebalanceTasks =
+                newConfig.get(ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS);
+        if (newMaxInflightRebalanceTasks == maxInflightRebalanceTasks) {
+            LOG.debug(
+                    "{} unchanged: {}",
+                    ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS.key(),
+                    newMaxInflightRebalanceTasks);
+            return;
+        }
+
+        int oldMaxInflightRebalanceTasks = maxInflightRebalanceTasks;
+        maxInflightRebalanceTasks = newMaxInflightRebalanceTasks;
+        LOG.info(
+                "{} reconfigured: {} -> {}",
+                ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS.key(),
+                oldMaxInflightRebalanceTasks,
+                newMaxInflightRebalanceTasks);
     }
 
     private void initialize() {
@@ -280,7 +321,7 @@ public class RebalanceManager {
         }
 
         rebalanceStatus = REBALANCING;
-        processNewRebalanceTask();
+        processNewRebalanceTasks();
     }
 
     /** Recovers a persisted task by comparing every bucket plan with current coordinator state. */
@@ -328,7 +369,7 @@ public class RebalanceManager {
             finalizeRebalance();
         } else {
             rebalanceStatus = REBALANCING;
-            processNewRebalanceTask();
+            processNewRebalanceTasks();
         }
     }
 
@@ -341,6 +382,15 @@ public class RebalanceManager {
     }
 
     public synchronized boolean finishRebalanceTask(
+            RebalanceExecutionKey executionKey, RebalanceStatus statusForBucket) {
+        boolean completed = completeRebalanceTaskState(executionKey, statusForBucket);
+        if (completed && !inProgressRebalanceTasks.isEmpty()) {
+            processNewRebalanceTasks();
+        }
+        return completed;
+    }
+
+    private boolean completeRebalanceTaskState(
             RebalanceExecutionKey executionKey, RebalanceStatus statusForBucket) {
         checkNotClosed();
         checkArgument(statusForBucket != TIMEOUT, "Use timeoutRebalanceTask for soft timeouts.");
@@ -372,8 +422,6 @@ public class RebalanceManager {
 
         if (inProgressRebalanceTasks.isEmpty()) {
             finalizeRebalance();
-        } else {
-            processNewRebalanceTask();
         }
         return true;
     }
@@ -606,6 +654,16 @@ public class RebalanceManager {
             LOG.debug("Ignore stale timeout for {}.", executionKey);
             return false;
         }
+        if (timedOutRebalanceTasks.size() >= maxTrackedTimedOutTasks) {
+            // Keep the attempt in the normal running set until a reconciliation slot becomes
+            // available. The timeout checker will enqueue another timeout event on its next pass.
+            LOG.info(
+                    "Keep timed-out rebalance task {} in the running set because {} other "
+                            + "timed-out tasks are still being reconciled.",
+                    executionKey,
+                    timedOutRebalanceTasks.size());
+            return false;
+        }
 
         TableBucket tableBucket = executionKey.getTableBucket();
         runningRebalanceTasks.remove(tableBucket);
@@ -620,7 +678,7 @@ public class RebalanceManager {
         attempt.onTimedOut(
                 clock.milliseconds(), observeReconciliationState(tableBucket, result.plan()));
         enqueueReconciliation(attempt);
-        processNewRebalanceTask();
+        processNewRebalanceTasks();
         return true;
     }
 
@@ -689,7 +747,7 @@ public class RebalanceManager {
         }
     }
 
-    private void processNewRebalanceTask() {
+    private void processNewRebalanceTasks() {
         TableBucket tableBucket;
         while (timedOutRebalanceTasks.size() < maxTrackedTimedOutTasks
                 && (tableBucket = pendingRecoveredTasks.poll()) != null) {
@@ -709,9 +767,6 @@ public class RebalanceManager {
         if (!pendingRecoveredTasks.isEmpty()) {
             return;
         }
-        if (!runningRebalanceTasks.isEmpty()) {
-            return;
-        }
         if (timedOutRebalanceTasks.size() >= maxTrackedTimedOutTasks) {
             // Stop admitting work until some of the timed-out tasks reach a final status, so that
             // a long cluster operation cannot grow the tracked set, and with it the reconciliation
@@ -723,7 +778,8 @@ public class RebalanceManager {
                     timedOutRebalanceTasks.size());
             return;
         }
-        while ((tableBucket = pendingRebalanceTasks.poll()) != null) {
+        while (runningRebalanceTasks.size() < maxInflightRebalanceTasks
+                && (tableBucket = pendingRebalanceTasks.poll()) != null) {
             RebalanceResultForBucket resultForBucket = inProgressRebalanceTasks.get(tableBucket);
             if (resultForBucket == null || resultForBucket.status() != NOT_STARTED) {
                 continue;
@@ -734,9 +790,18 @@ public class RebalanceManager {
                     tableBucket, new RebalanceTaskAttempt(executionKey, clock.milliseconds()));
             inProgressRebalanceTasks.put(
                     tableBucket, RebalanceResultForBucket.of(resultForBucket.plan(), REBALANCING));
-            rebalanceExecutor.tryToExecuteRebalanceTask(resultForBucket.plan());
-            return;
+            ExecutionResult executionResult =
+                    rebalanceExecutor.tryToExecuteRebalanceTask(resultForBucket.plan());
+            if (executionResult == ExecutionResult.COMPLETED) {
+                completeRebalanceTaskState(executionKey, COMPLETED);
+            }
         }
+    }
+
+    /** Returns the current rebalance concurrency limit. */
+    @VisibleForTesting
+    public synchronized int getMaxInflightRebalanceTasks() {
+        return maxInflightRebalanceTasks;
     }
 
     private void finalizeRebalance() {

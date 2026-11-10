@@ -20,6 +20,7 @@ package org.apache.fluss.server.coordinator;
 import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
 import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -107,6 +108,135 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
             registerTabletServer(2);
         }
         ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupPath(ZkData.ServerIdZNode.path(3));
+    }
+
+    @Test
+    void testApplyRebalanceConcurrencyChange() {
+        Configuration newConfig = new Configuration();
+        newConfig.set(ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS, 3);
+
+        eventProcessor.getRebalanceManager().reconfigure(newConfig);
+
+        assertThat(eventProcessor.getRebalanceManager().getMaxInflightRebalanceTasks())
+                .isEqualTo(3);
+    }
+
+    @Test
+    void testLeaderOnlyRebalanceExecutesUpToConfiguredConcurrency() throws Exception {
+        initCoordinatorChannel();
+        List<Integer> replicas = Arrays.asList(0, 1, 2);
+        long tableId = createTableWithReplicas(replicas, 3);
+        TableBucket tb0 = new TableBucket(tableId, 0);
+        TableBucket tb1 = new TableBucket(tableId, 1);
+        TableBucket tb2 = new TableBucket(tableId, 2);
+        installBlockingNotifyGateways(pendingResponses);
+
+        Map<TableBucket, RebalancePlanForBucket> plan = new LinkedHashMap<>();
+        plan.put(tb0, new RebalancePlanForBucket(tb0, 0, 1, replicas, Arrays.asList(1, 0, 2)));
+        plan.put(tb1, new RebalancePlanForBucket(tb1, 0, 2, replicas, Arrays.asList(2, 0, 1)));
+        plan.put(tb2, new RebalancePlanForBucket(tb2, 0, 1, replicas, Arrays.asList(1, 2, 0)));
+
+        fromCtx(
+                ctx -> {
+                    eventProcessor
+                            .getRebalanceManager()
+                            .reconfigure(
+                                    new Configuration()
+                                            .set(
+                                                    ConfigOptions
+                                                            .COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS,
+                                                    2));
+                    eventProcessor
+                            .getRebalanceManager()
+                            .registerRebalance("parallel-leader-only", plan);
+                    return null;
+                });
+
+        assertThat(eventProcessor.getRebalanceManager().getExecutionKey(tb0)).isNotNull();
+        assertThat(eventProcessor.getRebalanceManager().getExecutionKey(tb1)).isNotNull();
+        assertThat(eventProcessor.getRebalanceManager().getExecutionKey(tb2)).isNull();
+        verifyIsr(tb0, 1, replicas);
+        verifyIsr(tb1, 2, replicas);
+        verifyIsr(tb2, 0, replicas);
+
+        drainPendingNotifyTriggers(pendingResponses);
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        assertThat(eventProcessor.getRebalanceManager().getExecutionKey(tb2))
+                                .isNotNull());
+        drainPendingNotifyTriggers(pendingResponses);
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        assertThat(eventProcessor.getRebalanceManager().hasInProgressRebalance())
+                                .isFalse());
+    }
+
+    @Test
+    void testReplicaMigrationsExecuteUpToConfiguredConcurrency() throws Exception {
+        registerTabletServer(3);
+        initCoordinatorChannel();
+        List<Integer> origin = Arrays.asList(0, 1, 3);
+        List<Integer> target = Arrays.asList(0, 1, 2);
+        List<Integer> union = Arrays.asList(0, 1, 2, 3);
+        long tableId = createTableWithReplicas(origin, 3);
+        TableBucket tb0 = new TableBucket(tableId, 0);
+        TableBucket tb1 = new TableBucket(tableId, 1);
+        TableBucket tb2 = new TableBucket(tableId, 2);
+        installBlockingNotifyGateways(pendingResponses);
+
+        Map<TableBucket, RebalancePlanForBucket> plan = new LinkedHashMap<>();
+        plan.put(tb0, new RebalancePlanForBucket(tb0, 0, 0, origin, target));
+        plan.put(tb1, new RebalancePlanForBucket(tb1, 0, 0, origin, target));
+        plan.put(tb2, new RebalancePlanForBucket(tb2, 0, 0, origin, target));
+        fromCtx(
+                ctx -> {
+                    eventProcessor
+                            .getRebalanceManager()
+                            .reconfigure(
+                                    new Configuration()
+                                            .set(
+                                                    ConfigOptions
+                                                            .COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS,
+                                                    2));
+                    eventProcessor
+                            .getRebalanceManager()
+                            .registerRebalance("parallel-replica-migration", plan);
+                    return null;
+                });
+
+        TableAssignment assignment = zookeeperClient.getTableAssignment(tableId).get();
+        assertThat(assignment.getBucketAssignment(0)).isEqualTo(new BucketAssignment(union));
+        assertThat(assignment.getBucketAssignment(1)).isEqualTo(new BucketAssignment(union));
+        assertThat(assignment.getBucketAssignment(2)).isEqualTo(new BucketAssignment(origin));
+
+        adjustRebalanceIsr(tb0, union);
+        adjustRebalanceIsr(tb1, union);
+        drainPendingNotifyTriggers(pendingResponses);
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        assertThat(
+                                        zookeeperClient
+                                                .getTableAssignment(tableId)
+                                                .get()
+                                                .getBucketAssignment(2))
+                                .isEqualTo(new BucketAssignment(union)));
+
+        adjustRebalanceIsr(tb2, union);
+        drainPendingNotifyTriggers(pendingResponses);
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    drainPendingNotifyTriggers(pendingResponses);
+                    assertThat(eventProcessor.getRebalanceManager().hasInProgressRebalance())
+                            .isFalse();
+                });
+        assignment = zookeeperClient.getTableAssignment(tableId).get();
+        assertThat(assignment.getBucketAssignment(0)).isEqualTo(new BucketAssignment(target));
+        assertThat(assignment.getBucketAssignment(1)).isEqualTo(new BucketAssignment(target));
+        assertThat(assignment.getBucketAssignment(2)).isEqualTo(new BucketAssignment(target));
     }
 
     @Test
