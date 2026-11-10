@@ -101,7 +101,8 @@ class FlussConnectionMetadataTest {
             assertThat(connection.getMetadataUpdater().getCluster().getTablePath(TABLE_ID))
                     .hasValue(TABLE_PATH);
             assertThat(service.tableInfoRequests.get()).isEqualTo(expectedRequests);
-            assertThat(service.metadataTableRequests.get()).isZero();
+            // getTable refreshes the table routing after the access check.
+            assertThat(service.metadataTableRequests.get()).isEqualTo(1);
         }
     }
 
