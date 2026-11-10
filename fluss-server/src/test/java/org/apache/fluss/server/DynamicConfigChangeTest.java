@@ -674,9 +674,9 @@ public class DynamicConfigChangeTest {
                 Collections.singletonList(
                         new AlterConfig(
                                 ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS.key(),
-                                "0",
+                                "2",
                                 AlterConfigOpType.SET)));
-        assertThat(recorder.value).isZero();
+        assertThat(recorder.value).isEqualTo(2);
 
         dynamicConfigManager.alterConfigs(
                 Collections.singletonList(

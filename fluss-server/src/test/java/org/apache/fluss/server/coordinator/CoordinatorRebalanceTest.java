@@ -111,20 +111,14 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
     }
 
     @Test
-    void testApplyRebalanceConcurrencyChangeOnCoordinatorEventThread() {
+    void testApplyRebalanceConcurrencyChange() {
         Configuration newConfig = new Configuration();
         newConfig.set(ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS, 3);
 
         eventProcessor.getRebalanceManager().reconfigure(newConfig);
 
-        retry(
-                Duration.ofSeconds(10),
-                () ->
-                        assertThat(
-                                        eventProcessor
-                                                .getRebalanceManager()
-                                                .getMaxInflightRebalanceTasks())
-                                .isEqualTo(3));
+        assertThat(eventProcessor.getRebalanceManager().getMaxInflightRebalanceTasks())
+                .isEqualTo(3);
     }
 
     @Test
@@ -144,7 +138,14 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
 
         fromCtx(
                 ctx -> {
-                    eventProcessor.getRebalanceManager().updateMaxInflightRebalanceTasks(2);
+                    eventProcessor
+                            .getRebalanceManager()
+                            .reconfigure(
+                                    new Configuration()
+                                            .set(
+                                                    ConfigOptions
+                                                            .COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS,
+                                                    2));
                     eventProcessor
                             .getRebalanceManager()
                             .registerRebalance("parallel-leader-only", plan);
@@ -191,7 +192,14 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
         plan.put(tb2, new RebalancePlanForBucket(tb2, 0, 0, origin, target));
         fromCtx(
                 ctx -> {
-                    eventProcessor.getRebalanceManager().updateMaxInflightRebalanceTasks(2);
+                    eventProcessor
+                            .getRebalanceManager()
+                            .reconfigure(
+                                    new Configuration()
+                                            .set(
+                                                    ConfigOptions
+                                                            .COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS,
+                                                    2));
                     eventProcessor
                             .getRebalanceManager()
                             .registerRebalance("parallel-replica-migration", plan);

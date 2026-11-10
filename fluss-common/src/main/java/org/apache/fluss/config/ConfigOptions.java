@@ -282,10 +282,8 @@ public class ConfigOptions {
                             "The maximum number of bucket-level rebalance tasks that can be "
                                     + "executed concurrently by the coordinator. A higher value "
                                     + "can speed up rebalance, while a lower value reduces the "
-                                    + "number of simultaneous bucket movements. Setting it to 0 "
-                                    + "pauses scheduling new rebalance tasks; already in-flight "
-                                    + "tasks continue until they complete or time out. The value "
-                                    + "must be non-negative.");
+                                    + "number of simultaneous bucket movements. Must be at least "
+                                    + "1.");
 
     public static final ConfigOption<Duration> COORDINATOR_OFFLINE_LEADER_RETRY_DELAY =
             key("coordinator.offline-leader.retry-delay")

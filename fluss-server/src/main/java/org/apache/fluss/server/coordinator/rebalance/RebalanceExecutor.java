@@ -24,11 +24,17 @@ import org.apache.fluss.server.coordinator.CoordinatorContext;
 /** Coordinator operations needed to execute and reconcile rebalance bucket plans. */
 public interface RebalanceExecutor {
 
+    /** Result of attempting to execute one bucket-level rebalance task. */
+    enum ExecutionResult {
+        COMPLETED,
+        IN_PROGRESS
+    }
+
     /** Returns the coordinator state used to build a cluster model. */
     CoordinatorContext getCoordinatorContext();
 
-    /** Starts or resumes one bucket plan. */
-    void tryToExecuteRebalanceTask(RebalancePlanForBucket planForBucket);
+    /** Starts or resumes one bucket plan and reports whether it completed synchronously. */
+    ExecutionResult tryToExecuteRebalanceTask(RebalancePlanForBucket planForBucket);
 
     /** Returns whether the plan remains at its clean origin state. */
     boolean isRebalanceTaskAtOrigin(RebalancePlanForBucket planForBucket);

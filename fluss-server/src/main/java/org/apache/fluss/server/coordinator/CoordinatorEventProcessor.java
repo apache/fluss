@@ -68,7 +68,6 @@ import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.AddServerTagByRackEvent;
 import org.apache.fluss.server.coordinator.event.AddServerTagEvent;
 import org.apache.fluss.server.coordinator.event.AdjustIsrReceivedEvent;
-import org.apache.fluss.server.coordinator.event.AdmitRebalanceTasksEvent;
 import org.apache.fluss.server.coordinator.event.CancelRebalanceEvent;
 import org.apache.fluss.server.coordinator.event.CommitKvSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitLakeTableSnapshotEvent;
@@ -94,7 +93,6 @@ import org.apache.fluss.server.coordinator.event.NotifyLakeTableOffsetEvent;
 import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrRequestContext;
 import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrResponseReceivedEvent;
 import org.apache.fluss.server.coordinator.event.RebalanceEvent;
-import org.apache.fluss.server.coordinator.event.RebalanceMaxInflightTasksChangedEvent;
 import org.apache.fluss.server.coordinator.event.RebalanceTaskTimeoutEvent;
 import org.apache.fluss.server.coordinator.event.ReconcileRebalanceTaskEvent;
 import org.apache.fluss.server.coordinator.event.RecoverRebalanceEvent;
@@ -825,11 +823,6 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                             new ArrayList<>(coordinatorContext.getAssignment(tableBucket)));
                 }
             }
-        } else if (event instanceof RebalanceMaxInflightTasksChangedEvent) {
-            rebalanceManager.updateMaxInflightRebalanceTasks(
-                    ((RebalanceMaxInflightTasksChangedEvent) event).getMaxInflightTasks());
-        } else if (event instanceof AdmitRebalanceTasksEvent) {
-            rebalanceManager.continueRebalanceTaskAdmission();
         } else if (event instanceof CancelRebalanceEvent) {
             CancelRebalanceEvent cancelRebalanceEvent = (CancelRebalanceEvent) event;
             completeFromCallable(
@@ -847,7 +840,13 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
             RebalancePlanForBucket plan =
                     rebalanceManager.prepareReconciliation(reconcileEvent.getExecutionKey());
             if (plan != null) {
-                tryToExecuteRebalanceTask(plan);
+                ExecutionResult executionResult = tryToExecuteRebalanceTask(plan);
+                if (executionResult == ExecutionResult.COMPLETED) {
+                    rebalanceManager.finishRebalanceTask(
+                            reconcileEvent.getExecutionKey(), RebalanceStatus.COMPLETED);
+                    assignmentPersistenceByBucket.remove(
+                            reconcileEvent.getExecutionKey().getTableBucket());
+                }
             } else {
                 assignmentPersistenceByBucket.remove(
                         reconcileEvent.getExecutionKey().getTableBucket());
@@ -1752,10 +1751,15 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
      *       Zookeeper.
      * </ul>
      */
-    public void tryToExecuteRebalanceTask(RebalancePlanForBucket planForBucket) {
+    public ExecutionResult tryToExecuteRebalanceTask(RebalancePlanForBucket planForBucket) {
         TableBucket tableBucket = planForBucket.getTableBucket();
-        if (completeRebalanceTaskIfDeleted(tableBucket)) {
-            return;
+        if (isRebalanceTaskDeleted(tableBucket)) {
+            LOG.info(
+                    "Complete rebalance task {} because its table bucket was deleted or is being "
+                            + "deleted.",
+                    tableBucket);
+            assignmentPersistenceByBucket.remove(tableBucket);
+            return ExecutionResult.COMPLETED;
         }
 
         List<Integer> newReplicas = planForBucket.getNewReplicas();
@@ -1791,7 +1795,8 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                             leaderAndIsr);
                 }
             } else {
-                finishRebalanceTask(tableBucket, RebalanceStatus.COMPLETED);
+                assignmentPersistenceByBucket.remove(tableBucket);
+                return ExecutionResult.COMPLETED;
             }
         } catch (Exception e) {
             LOG.warn(
@@ -1800,6 +1805,7 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                     tableBucket,
                     e);
         }
+        return ExecutionResult.IN_PROGRESS;
     }
 
     /** try to finish rebalance tasks after receive notify leader and isr response. */
@@ -1906,19 +1912,6 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
         return coordinatorContext.getAssignment(tableBucket).isEmpty()
                 || coordinatorContext.isTableQueuedForDeletion(tableBucket.getTableId())
                 || coordinatorContext.isToBeDeleted(tableBucket);
-    }
-
-    private boolean completeRebalanceTaskIfDeleted(TableBucket tableBucket) {
-        if (!isRebalanceTaskDeleted(tableBucket)) {
-            return false;
-        }
-
-        LOG.info(
-                "Complete rebalance task {} because its table bucket was deleted or is being "
-                        + "deleted.",
-                tableBucket);
-        finishRebalanceTask(tableBucket, RebalanceStatus.COMPLETED);
-        return true;
     }
 
     private void finishRebalanceTask(TableBucket tableBucket, RebalanceStatus status) {
