@@ -38,10 +38,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 class OSSFileSystemPluginTest {
 
     @Test
-    void testFallbackSchemes() {
+    void testAliasSchemes() {
         assertThat(new OSSFileSystemPlugin().getScheme()).isEqualTo("oss");
-        assertThat(new OSSFileSystemPlugin().getFallbackSchemes()).containsExactly("ossj");
-        assertThat(new OSSSecurityTokenReceiver().getFallbackSchemes()).containsExactly("ossj");
+        assertThat(new OSSFileSystemPlugin().getAliasSchemes()).containsExactly("ossj");
+        assertThat(new OSSSecurityTokenReceiver().getAliasSchemes()).containsExactly("ossj");
     }
 
     @ParameterizedTest

@@ -290,7 +290,7 @@ public abstract class FileSystem {
                         FS_PLUGINS.put(scheme, plugin);
                     }
                     for (FileSystemPlugin plugin : fileSystemFactories) {
-                        for (String scheme : plugin.getFallbackSchemes()) {
+                        for (String scheme : plugin.getAliasSchemes()) {
                             FS_PLUGINS.putIfAbsent(scheme, plugin);
                         }
                     }

@@ -84,7 +84,7 @@ public class OSSSecurityTokenReceiver implements SecurityTokenReceiver {
     }
 
     @Override
-    public Set<String> getFallbackSchemes() {
+    public Set<String> getAliasSchemes() {
         return Collections.singleton("ossj");
     }
 

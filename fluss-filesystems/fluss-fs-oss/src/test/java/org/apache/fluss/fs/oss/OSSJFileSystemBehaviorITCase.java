@@ -29,7 +29,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** OSS filesystem behavior tests for the ossj fallback scheme. */
+/** OSS filesystem behavior tests for the {@code ossj} alias. */
 class OSSJFileSystemBehaviorITCase extends OSSFileSystemBehaviorITCase {
 
     private static final String TEST_DATA_DIR = "tests-ossj-" + UUID.randomUUID();

@@ -54,40 +54,42 @@ class FileSystemTest {
     }
 
     @Test
-    void testFallbackSchemeWithoutPrimaryPlugin() throws Exception {
-        TestPluginFileSystemPlugin fallback =
+    void testAliasSchemeWithoutPrimaryPlugin() throws Exception {
+        TestPluginFileSystemPlugin ossPlugin =
                 new TestPluginFileSystemPlugin(
                         "oss", new LocalFileSystem(), Collections.singleton("ossj"));
-        initializePlugins(Collections.singletonList(fallback));
+        initializePlugins(Collections.singletonList(ossPlugin));
 
         URI uri = URI.create("ossj://bucket/path");
         FileSystem fileSystem = FileSystem.get(uri);
         assertThat(WrappingProxyUtils.stripProxy((WrappingProxy<FileSystem>) fileSystem))
-                .isSameAs(fallback.fileSystem);
-        assertThat(fallback.createdUri).isEqualTo(uri);
+                .isSameAs(ossPlugin.fileSystem);
+        assertThat(ossPlugin.createdUri).isEqualTo(uri);
         assertThat(FileSystem.get(uri)).isSameAs(fileSystem);
     }
 
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
-    void testPrimarySchemeTakesPrecedenceOverFallback(boolean primaryFirst) throws Exception {
+    void testPrimarySchemeTakesPrecedenceOverAlias(boolean primaryFirst) throws Exception {
         TestPluginFileSystemPlugin primary =
                 new TestPluginFileSystemPlugin("ossj", new LocalFileSystem());
-        TestPluginFileSystemPlugin fallback =
+        TestPluginFileSystemPlugin ossPlugin =
                 new TestPluginFileSystemPlugin(
                         "oss", new LocalFileSystem(), Collections.singleton("ossj"));
         initializePlugins(
-                primaryFirst ? Arrays.asList(primary, fallback) : Arrays.asList(fallback, primary));
+                primaryFirst
+                        ? Arrays.asList(primary, ossPlugin)
+                        : Arrays.asList(ossPlugin, primary));
 
         assertThat(getFileSystemWithoutSafetyNet("ossj://bucket/path"))
                 .isSameAs(primary.fileSystem);
-        assertThat(fallback.createdUri).isNull();
+        assertThat(ossPlugin.createdUri).isNull();
         assertThat(getFileSystemWithoutSafetyNet("oss://bucket/path"))
-                .isSameAs(fallback.fileSystem);
+                .isSameAs(ossPlugin.fileSystem);
     }
 
     @Test
-    void testPrimaryPluginFailureDoesNotUseFallback() {
+    void testPrimaryPluginFailureDoesNotUseAliasPlugin() {
         TestPluginFileSystemPlugin primary =
                 new TestPluginFileSystemPlugin("ossj", new LocalFileSystem()) {
                     @Override
@@ -96,15 +98,15 @@ class FileSystemTest {
                         throw new IOException("Primary plugin initialization failed");
                     }
                 };
-        TestPluginFileSystemPlugin fallback =
+        TestPluginFileSystemPlugin ossPlugin =
                 new TestPluginFileSystemPlugin(
                         "oss", new LocalFileSystem(), Collections.singleton("ossj"));
-        initializePlugins(Arrays.asList(primary, fallback));
+        initializePlugins(Arrays.asList(primary, ossPlugin));
 
         assertThatThrownBy(() -> FileSystem.get(URI.create("ossj://bucket/path")))
                 .isInstanceOf(IOException.class)
                 .hasMessage("Primary plugin initialization failed");
-        assertThat(fallback.createdUri).isNull();
+        assertThat(ossPlugin.createdUri).isNull();
     }
 
     private static void initializePlugins(List<FileSystemPlugin> plugins) {
@@ -260,7 +262,7 @@ class FileSystemTest {
 
         private final String scheme;
         private final FileSystem fileSystem;
-        private final Set<String> fallbackSchemes;
+        private final Set<String> aliasSchemes;
         private URI createdUri;
 
         public TestPluginFileSystemPlugin(String scheme, FileSystem fileSystem) {
@@ -268,10 +270,10 @@ class FileSystemTest {
         }
 
         private TestPluginFileSystemPlugin(
-                String scheme, FileSystem fileSystem, Set<String> fallbackSchemes) {
+                String scheme, FileSystem fileSystem, Set<String> aliasSchemes) {
             this.scheme = scheme;
             this.fileSystem = fileSystem;
-            this.fallbackSchemes = fallbackSchemes;
+            this.aliasSchemes = aliasSchemes;
         }
 
         @Override
@@ -280,8 +282,8 @@ class FileSystemTest {
         }
 
         @Override
-        public Set<String> getFallbackSchemes() {
-            return fallbackSchemes;
+        public Set<String> getAliasSchemes() {
+            return aliasSchemes;
         }
 
         @Override

@@ -68,7 +68,7 @@ public class OSSFileSystemPlugin implements FileSystemPlugin {
     }
 
     @Override
-    public Set<String> getFallbackSchemes() {
+    public Set<String> getAliasSchemes() {
         return Collections.singleton("ossj");
     }
 

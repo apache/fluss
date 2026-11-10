@@ -65,7 +65,7 @@ class SecurityTokenReceiverRepository {
             LOG.info("Security token receiver '{}' loaded and initialized", receiver.scheme());
         }
         for (SecurityTokenReceiver receiver : tokenReceivers) {
-            for (String scheme : receiver.getFallbackSchemes()) {
+            for (String scheme : receiver.getAliasSchemes()) {
                 receivers.putIfAbsent(scheme, receiver);
             }
         }

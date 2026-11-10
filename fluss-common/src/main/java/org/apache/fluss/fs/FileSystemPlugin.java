@@ -37,16 +37,19 @@ public interface FileSystemPlugin extends Plugin {
     /** Gets the scheme of the file system created by this plugin. */
     String getScheme();
 
-    /** Gets schemes this plugin supports when no plugin declares them as its primary scheme. */
-    default Set<String> getFallbackSchemes() {
+    /**
+     * Returns the additional URI schemes this plugin supports. Each alias is registered only when
+     * no plugin declares it as its primary scheme via {@link #getScheme()}.
+     */
+    default Set<String> getAliasSchemes() {
         return Collections.emptySet();
     }
 
     /**
      * Creates a new file system for the given file system URI. The URI describes the type of file
      * system (via its scheme) and optionally the authority (for example the host) of the file
-     * system. The returned file system must support paths with this scheme, including fallback
-     * schemes.
+     * system. The returned file system must support paths with the given URI scheme, including
+     * schemes declared by {@link #getAliasSchemes()}.
      *
      * @param fsUri The URI that describes the file system.
      * @param configuration the configuration used to create the file system.

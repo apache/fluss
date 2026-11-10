@@ -50,8 +50,8 @@ public class PluginFileSystemWrapper implements FileSystemPlugin {
     }
 
     @Override
-    public Set<String> getFallbackSchemes() {
-        return inner.getFallbackSchemes();
+    public Set<String> getAliasSchemes() {
+        return inner.getAliasSchemes();
     }
 
     @Override

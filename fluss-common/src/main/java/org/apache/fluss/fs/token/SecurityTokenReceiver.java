@@ -29,8 +29,11 @@ public interface SecurityTokenReceiver {
     /** Scheme of the filesystem to receive security tokens for. This name should be unique. */
     String scheme();
 
-    /** Gets schemes this receiver supports when no receiver declares them as its primary scheme. */
-    default Set<String> getFallbackSchemes() {
+    /**
+     * Returns the additional URI schemes this receiver supports. Each alias is registered only when
+     * no receiver declares it as its primary scheme via {@link #scheme()}.
+     */
+    default Set<String> getAliasSchemes() {
         return Collections.emptySet();
     }
 

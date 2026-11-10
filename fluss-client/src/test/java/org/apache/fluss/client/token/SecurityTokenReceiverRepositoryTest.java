@@ -36,45 +36,45 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class SecurityTokenReceiverRepositoryTest {
 
     @Test
-    void testFallbackWithoutPrimaryReceiver() {
-        RecordingSecurityTokenReceiver fallback =
+    void testAliasSchemeWithoutPrimaryReceiver() {
+        RecordingSecurityTokenReceiver ossReceiver =
                 new RecordingSecurityTokenReceiver("oss", Collections.singleton("ossj"));
         SecurityTokenReceiverRepository repository =
-                new SecurityTokenReceiverRepository(Collections.singletonList(fallback));
+                new SecurityTokenReceiverRepository(Collections.singletonList(ossReceiver));
         ObtainedSecurityToken token = token("ossj");
 
         repository.onNewTokensObtained(token);
 
-        assertThat(fallback.receivedToken).isSameAs(token);
+        assertThat(ossReceiver.receivedToken).isSameAs(token);
     }
 
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
-    void testPrimaryReceiverTakesPrecedenceOverFallback(boolean primaryFirst) {
+    void testPrimarySchemeTakesPrecedenceOverAlias(boolean primaryFirst) {
         RecordingSecurityTokenReceiver primary =
                 new RecordingSecurityTokenReceiver("ossj", Collections.emptySet());
-        RecordingSecurityTokenReceiver fallback =
+        RecordingSecurityTokenReceiver ossReceiver =
                 new RecordingSecurityTokenReceiver("oss", Collections.singleton("ossj"));
         SecurityTokenReceiverRepository repository =
                 new SecurityTokenReceiverRepository(
                         primaryFirst
-                                ? Arrays.asList(primary, fallback)
-                                : Arrays.asList(fallback, primary));
+                                ? Arrays.asList(primary, ossReceiver)
+                                : Arrays.asList(ossReceiver, primary));
         ObtainedSecurityToken token = token("ossj");
 
         repository.onNewTokensObtained(token);
 
         assertThat(primary.receivedToken).isSameAs(token);
-        assertThat(fallback.receivedToken).isNull();
+        assertThat(ossReceiver.receivedToken).isNull();
         ObtainedSecurityToken ossToken = token("oss");
         repository.onNewTokensObtained(ossToken);
-        assertThat(fallback.receivedToken).isSameAs(ossToken);
+        assertThat(ossReceiver.receivedToken).isSameAs(ossToken);
     }
 
     @Test
-    void testReceiverWithoutFallbackSchemes() {
+    void testReceiverWithoutAliasSchemes() {
         SecurityTokenReceiver receiver = new TestingSecurityTokenReceiver();
-        assertThat(receiver.getFallbackSchemes()).isEmpty();
+        assertThat(receiver.getAliasSchemes()).isEmpty();
         SecurityTokenReceiverRepository repository =
                 new SecurityTokenReceiverRepository(Collections.singletonList(receiver));
 
@@ -104,12 +104,12 @@ class SecurityTokenReceiverRepositoryTest {
     private static class RecordingSecurityTokenReceiver extends TestingSecurityTokenReceiver {
 
         private final String scheme;
-        private final Set<String> fallbackSchemes;
+        private final Set<String> aliasSchemes;
         private ObtainedSecurityToken receivedToken;
 
-        private RecordingSecurityTokenReceiver(String scheme, Set<String> fallbackSchemes) {
+        private RecordingSecurityTokenReceiver(String scheme, Set<String> aliasSchemes) {
             this.scheme = scheme;
-            this.fallbackSchemes = fallbackSchemes;
+            this.aliasSchemes = aliasSchemes;
         }
 
         @Override
@@ -118,8 +118,8 @@ class SecurityTokenReceiverRepositoryTest {
         }
 
         @Override
-        public Set<String> getFallbackSchemes() {
-            return fallbackSchemes;
+        public Set<String> getAliasSchemes() {
+            return aliasSchemes;
         }
 
         @Override
