@@ -39,6 +39,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -248,6 +249,157 @@ class UndoRecoveryExecutorTest {
                                                                 bucket, 0L, recordCount))))
                 .hasRootCauseMessage("injected acknowledgement failure");
         assertThat(writer.submitted).isLessThan(recordCount);
+    }
+
+    @Test
+    void testBucketAdmissionWaitsForCompletionAndReleasesKeys() throws Exception {
+        for (int limit : Arrays.asList(1, 2, 32)) {
+            List<BucketRecoveryContext> contexts = new ArrayList<>();
+            for (int i = 0; i < 40; i++) {
+                TableBucket bucket =
+                        i % 2 == 0
+                                ? new TableBucket(TABLE_ID, i)
+                                : new TableBucket(TABLE_ID, 100L + i, i);
+                contexts.add(new BucketRecoveryContext(bucket, 0L, 1L));
+            }
+            BufferedUpsertWriter writer = new BufferedUpsertWriter(false);
+            AdmissionScanner scanner = new AdmissionScanner(contexts, writer);
+            Map<TableBucket, Long> recovered =
+                    new UndoRecoveryExecutor(
+                                    scanner, writer, new UndoComputer(keyEncoder, writer), limit, 3)
+                            .execute(contexts);
+
+            assertThat(scanner.maxActive).isEqualTo(limit);
+            assertThat(scanner.admitted).isEqualTo(40);
+            assertThat(scanner.active).isEmpty();
+            assertThat(recovered).hasSize(40);
+            assertThat(writer.submitted).isEqualTo(40);
+            assertThat(writer.pending).isEmpty();
+            for (BucketRecoveryContext context : contexts) {
+                assertThat(context.isComplete()).isTrue();
+                assertThat(context.getProcessedKeys()).isEmpty();
+                assertThat(context.getTotalUndoOperations()).isEqualTo(1);
+                assertThat(recovered.get(context.getBucket())).isGreaterThanOrEqualTo(1L);
+            }
+        }
+    }
+
+    @Test
+    void testFailedWriteDoesNotAdmitQueuedBuckets() {
+        List<BucketRecoveryContext> contexts =
+                Arrays.asList(
+                        new BucketRecoveryContext(new TableBucket(TABLE_ID, 0), 0L, 1L),
+                        new BucketRecoveryContext(new TableBucket(TABLE_ID, 1), 0L, 1L));
+        BufferedUpsertWriter writer = new BufferedUpsertWriter(true);
+        AdmissionScanner scanner = new AdmissionScanner(contexts, writer);
+        assertThatThrownBy(
+                        () ->
+                                new UndoRecoveryExecutor(
+                                                scanner,
+                                                writer,
+                                                new UndoComputer(keyEncoder, writer),
+                                                1,
+                                                3)
+                                        .execute(contexts))
+                .hasRootCauseMessage("injected acknowledgement failure");
+        assertThat(scanner.admitted).isEqualTo(1);
+        assertThat(writer.submitted).isEqualTo(1);
+    }
+
+    @Test
+    void testWriteWindowIsConfigurable() throws Exception {
+        for (int window : Arrays.asList(1, 3, 1024)) {
+            TableBucket bucket = new TableBucket(TABLE_ID, 0);
+            setLargeRecoveryRecords(bucket, 2050);
+            BufferedUpsertWriter writer = new BufferedUpsertWriter(false);
+            new UndoRecoveryExecutor(
+                            mockScanner, writer, new UndoComputer(keyEncoder, writer), 1, window)
+                    .execute(
+                            Collections.singletonList(
+                                    new BucketRecoveryContext(bucket, 0L, 2050L)));
+            assertThat(writer.maxBuffered).isEqualTo(window);
+            assertThat(writer.submitted).isEqualTo(2050);
+            assertThat(writer.pending).isEmpty();
+        }
+    }
+
+    @Test
+    void testRecoveryLimitsMustBePositive() {
+        for (int invalid : Arrays.asList(0, -1)) {
+            assertThatThrownBy(
+                            () ->
+                                    new UndoRecoveryExecutor(
+                                            mockScanner, mockWriter, undoComputer, invalid, 1024))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("sink.undo-recovery.max-concurrent-buckets");
+            assertThatThrownBy(
+                            () ->
+                                    new UndoRecoveryExecutor(
+                                            mockScanner, mockWriter, undoComputer, 32, invalid))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("sink.undo-recovery.max-pending-writes");
+        }
+    }
+
+    private static class AdmissionScanner extends TestLogScanner {
+        private final Map<TableBucket, BucketRecoveryContext> contexts = new HashMap<>();
+        private final Map<TableBucket, Boolean> active = new LinkedHashMap<>();
+        private final BufferedUpsertWriter writer;
+        private int maxActive;
+        private int admitted;
+
+        private AdmissionScanner(
+                List<BucketRecoveryContext> contexts, BufferedUpsertWriter writer) {
+            for (BucketRecoveryContext context : contexts) {
+                this.contexts.put(context.getBucket(), context);
+            }
+            this.writer = writer;
+        }
+
+        @Override
+        public void subscribe(int bucket, long offset) {
+            admit(new TableBucket(TABLE_ID, bucket), offset);
+        }
+
+        @Override
+        public void subscribe(long partitionId, int bucket, long offset) {
+            admit(new TableBucket(TABLE_ID, partitionId, bucket), offset);
+        }
+
+        private void admit(TableBucket bucket, long offset) {
+            assertThat(offset).isEqualTo(contexts.get(bucket).getCheckpointOffset());
+            assertThat(writer.pending).isEmpty();
+            for (BucketRecoveryContext context : contexts.values()) {
+                if (context.isComplete()) {
+                    assertThat(context.getProcessedKeys()).isEmpty();
+                }
+            }
+            active.put(bucket, false);
+            admitted++;
+            maxActive = Math.max(maxActive, active.size());
+        }
+
+        @Override
+        public ScanRecords poll(Duration timeout) {
+            TableBucket bucket = active.keySet().iterator().next();
+            assertThat(active.get(bucket)).isFalse();
+            active.put(bucket, true);
+            ScanRecord record =
+                    new ScanRecord(0L, 0L, ChangeType.DELETE, row(bucket.getBucket(), "value", 1));
+            return new ScanRecords(
+                    Collections.singletonMap(bucket, Collections.singletonList(record)),
+                    Collections.singletonMap(bucket, 1L));
+        }
+
+        @Override
+        public void unsubscribe(int bucket) {
+            active.remove(new TableBucket(TABLE_ID, bucket));
+        }
+
+        @Override
+        public void unsubscribe(long partitionId, int bucket) {
+            active.remove(new TableBucket(TABLE_ID, partitionId, bucket));
+        }
     }
 
     private void setLargeRecoveryRecords(TableBucket bucket, int count) {

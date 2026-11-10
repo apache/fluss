@@ -264,6 +264,8 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                                 FlinkConnectorOptions.SINK_BUCKET_SHUFFLE,
                                 FlinkConnectorOptions.SINK_DISTRIBUTION_MODE,
                                 FlinkConnectorOptions.SINK_PRODUCER_ID,
+                                FlinkConnectorOptions.SINK_UNDO_RECOVERY_MAX_CONCURRENT_BUCKETS,
+                                FlinkConnectorOptions.SINK_UNDO_RECOVERY_MAX_PENDING_WRITES,
                                 LookupOptions.MAX_RETRIES,
                                 LookupOptions.CACHE_TYPE,
                                 LookupOptions.PARTIAL_CACHE_EXPIRE_AFTER_ACCESS,
@@ -299,7 +301,13 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
         // forward all client configs
         tableOptions.forEach(
                 (key, value) -> {
-                    if (key.startsWith(CLIENT_PREFIX)) {
+                    if (key.startsWith(CLIENT_PREFIX)
+                            || key.equals(
+                                    FlinkConnectorOptions.SINK_UNDO_RECOVERY_MAX_CONCURRENT_BUCKETS
+                                            .key())
+                            || key.equals(
+                                    FlinkConnectorOptions.SINK_UNDO_RECOVERY_MAX_PENDING_WRITES
+                                            .key())) {
                         flussConfig.setString(key, value);
                     }
                 });

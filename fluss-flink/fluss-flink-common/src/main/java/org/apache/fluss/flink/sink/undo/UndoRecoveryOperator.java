@@ -52,6 +52,8 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
+import static org.apache.fluss.flink.FlinkConnectorOptions.SINK_UNDO_RECOVERY_MAX_CONCURRENT_BUCKETS;
+import static org.apache.fluss.flink.FlinkConnectorOptions.SINK_UNDO_RECOVERY_MAX_PENDING_WRITES;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.Preconditions.checkState;
@@ -405,7 +407,14 @@ public class UndoRecoveryOperator<IN> extends AbstractStreamOperator<IN>
         // Reuse UndoRecoveryManager for actual recovery
         // UndoOffsets already contains both checkpointOffset and logEndOffset,
         // so no additional listOffset call is needed
-        UndoRecoveryManager recoveryManager = new UndoRecoveryManager(table, targetColumnIndexes);
+        org.apache.flink.configuration.Configuration recoveryConfig =
+                org.apache.flink.configuration.Configuration.fromMap(flussConfig.toMap());
+        UndoRecoveryManager recoveryManager =
+                new UndoRecoveryManager(
+                        table,
+                        targetColumnIndexes,
+                        recoveryConfig.get(SINK_UNDO_RECOVERY_MAX_CONCURRENT_BUCKETS),
+                        recoveryConfig.get(SINK_UNDO_RECOVERY_MAX_PENDING_WRITES));
         Map<TableBucket, Long> recoveredOffsets =
                 recoveryManager.performUndoRecovery(undoOffsets, subtaskIndex, parallelism);
 

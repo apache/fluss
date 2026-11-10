@@ -274,9 +274,12 @@ public class UndoRecoveryOperatorStateTest extends FlinkTestBase {
 
     private UndoRecoveryOperatorFactory<InternalRow> createFactory(
             AggTable table, String producerId) {
+        Configuration recoveryConfig = new Configuration(clientConf);
+        recoveryConfig.setString("sink.undo-recovery.max-concurrent-buckets", "1");
+        recoveryConfig.setString("sink.undo-recovery.max-pending-writes", "1");
         return new UndoRecoveryOperatorFactory<>(
                 table.tablePath,
-                new Configuration(clientConf),
+                recoveryConfig,
                 AGG_SCHEMA.getRowType(),
                 null,
                 table.numBuckets,

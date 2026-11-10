@@ -36,12 +36,16 @@ import java.util.ArrayList;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 
+import static org.apache.fluss.flink.FlinkConnectorOptions.SINK_UNDO_RECOVERY_MAX_CONCURRENT_BUCKETS;
+import static org.apache.fluss.flink.FlinkConnectorOptions.SINK_UNDO_RECOVERY_MAX_PENDING_WRITES;
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
@@ -59,7 +63,7 @@ import static org.apache.fluss.utils.Preconditions.checkState;
  * <p>The execution flow (streaming):
  *
  * <ol>
- *   <li>Subscribe all buckets to the LogScanner
+ *   <li>Subscribe queued buckets up to the configured concurrency limit
  *   <li>Poll changelog records and execute undo operations immediately
  *   <li>Track a bounded window of write completion futures
  *   <li>Flush and wait for all futures to ensure all writes complete
@@ -68,8 +72,6 @@ import static org.apache.fluss.utils.Preconditions.checkState;
 public class UndoRecoveryExecutor {
 
     private static final Logger LOG = LoggerFactory.getLogger(UndoRecoveryExecutor.class);
-
-    private static final int MAX_PENDING_UNDO_WRITES = 1024;
 
     /** Fixed poll timeout in milliseconds. */
     private static final long POLL_TIMEOUT_MS = 10_000;
@@ -83,6 +85,8 @@ public class UndoRecoveryExecutor {
     private final LogScanner scanner;
     private final UpsertWriter writer;
     private final UndoComputer undoComputer;
+    private final int maxConcurrentBuckets;
+    private final int maxPendingWrites;
 
     // Configurable timeout parameter
     private final long maxTotalWaitTimeMs;
@@ -105,6 +109,56 @@ public class UndoRecoveryExecutor {
             UpsertWriter writer,
             UndoComputer undoComputer,
             long maxTotalWaitTimeMs) {
+        this(
+                scanner,
+                writer,
+                undoComputer,
+                maxTotalWaitTimeMs,
+                SINK_UNDO_RECOVERY_MAX_CONCURRENT_BUCKETS.defaultValue(),
+                SINK_UNDO_RECOVERY_MAX_PENDING_WRITES.defaultValue());
+    }
+
+    /**
+     * Creates an executor with per-subtask bucket and write limits.
+     *
+     * @param scanner the log scanner
+     * @param writer the upsert writer
+     * @param undoComputer the undo computer
+     * @param maxConcurrentBuckets maximum number of active recovery buckets
+     * @param maxPendingWrites maximum number of tracked undo writes
+     */
+    public UndoRecoveryExecutor(
+            LogScanner scanner,
+            UpsertWriter writer,
+            UndoComputer undoComputer,
+            int maxConcurrentBuckets,
+            int maxPendingWrites) {
+        this(
+                scanner,
+                writer,
+                undoComputer,
+                DEFAULT_MAX_TOTAL_WAIT_TIME_MS,
+                maxConcurrentBuckets,
+                maxPendingWrites);
+    }
+
+    UndoRecoveryExecutor(
+            LogScanner scanner,
+            UpsertWriter writer,
+            UndoComputer undoComputer,
+            long maxTotalWaitTimeMs,
+            int maxConcurrentBuckets,
+            int maxPendingWrites) {
+        checkArgument(
+                maxConcurrentBuckets > 0,
+                "%s must be greater than zero",
+                SINK_UNDO_RECOVERY_MAX_CONCURRENT_BUCKETS.key());
+        checkArgument(
+                maxPendingWrites > 0,
+                "%s must be greater than zero",
+                SINK_UNDO_RECOVERY_MAX_PENDING_WRITES.key());
+        this.maxConcurrentBuckets = maxConcurrentBuckets;
+        this.maxPendingWrites = maxPendingWrites;
         this.scanner = scanner;
         this.writer = writer;
         this.undoComputer = undoComputer;
@@ -132,8 +186,7 @@ public class UndoRecoveryExecutor {
 
         LOG.debug("Executing undo recovery for {} bucket(s)", toRecover.size());
 
-        // Subscribe and read changelog with streaming execution
-        subscribeAll(toRecover);
+        // Admit buckets while reading changelog with streaming execution.
         List<CompletableFuture<?>> pendingWrites =
                 readChangelogAndExecute(toRecover, recoveredOffsets);
 
@@ -170,15 +223,13 @@ public class UndoRecoveryExecutor {
         return result;
     }
 
-    private void subscribeAll(List<BucketRecoveryContext> contexts) {
-        for (BucketRecoveryContext ctx : contexts) {
-            TableBucket bucket = ctx.getBucket();
-            if (bucket.getPartitionId() != null) {
-                scanner.subscribe(
-                        bucket.getPartitionId(), bucket.getBucket(), ctx.getCheckpointOffset());
-            } else {
-                scanner.subscribe(bucket.getBucket(), ctx.getCheckpointOffset());
-            }
+    private void subscribe(BucketRecoveryContext context) {
+        TableBucket bucket = context.getBucket();
+        if (bucket.getPartitionId() != null) {
+            scanner.subscribe(
+                    bucket.getPartitionId(), bucket.getBucket(), context.getCheckpointOffset());
+        } else {
+            scanner.subscribe(bucket.getBucket(), context.getCheckpointOffset());
         }
     }
 
@@ -187,21 +238,19 @@ public class UndoRecoveryExecutor {
             throws Exception {
         List<CompletableFuture<?>> pendingWrites = new ArrayList<>();
 
-        // Early exit if all contexts are already complete (no records to read)
-        if (allComplete(contexts)) {
-            LOG.debug("All buckets already complete, no changelog reading needed");
-            return pendingWrites;
-        }
-
         long startTimeMs = System.currentTimeMillis();
         long lastProgressLogTime = System.currentTimeMillis();
-        Set<TableBucket> unsubscribedBuckets = new HashSet<>();
+        Iterator<BucketRecoveryContext> queued = contexts.iterator();
+        List<BucketRecoveryContext> active = new ArrayList<>();
         Map<TableBucket, BucketRecoveryContext> contextsByBucket = new HashMap<>();
-        for (BucketRecoveryContext context : contexts) {
-            contextsByBucket.put(context.getBucket(), context);
-        }
 
-        while (!allComplete(contexts)) {
+        while (queued.hasNext() || !active.isEmpty()) {
+            while (queued.hasNext() && active.size() < maxConcurrentBuckets) {
+                BucketRecoveryContext context = queued.next();
+                subscribe(context);
+                active.add(context);
+                contextsByBucket.put(context.getBucket(), context);
+            }
             ScanRecords records;
             Map<TableBucket, Deque<SelectedKey>> encodedKeys =
                     scanner instanceof LogScannerImpl ? new HashMap<>() : null;
@@ -261,10 +310,9 @@ public class UndoRecoveryExecutor {
 
             // Process records before applying the post-poll progress. A poll may consume the
             // complete recovery range while returning its final records.
-            for (BucketRecoveryContext ctx : contexts) {
-                if (ctx.isComplete()) {
-                    continue;
-                }
+            Iterator<BucketRecoveryContext> activeIterator = active.iterator();
+            while (activeIterator.hasNext()) {
+                BucketRecoveryContext ctx = activeIterator.next();
                 List<ScanRecord> bucketRecords = records.records(ctx.getBucket());
                 if (!bucketRecords.isEmpty()) {
                     processRecords(
@@ -282,10 +330,17 @@ public class UndoRecoveryExecutor {
                 if (consumedUpToOffset != null) {
                     ctx.updateScanPosition(consumedUpToOffset);
                 }
-                if (ctx.isComplete() && unsubscribedBuckets.add(ctx.getBucket())) {
+                if (ctx.isComplete()) {
                     unsubscribeBucket(ctx.getBucket());
                     ctx.releaseProcessedKeys();
+                    contextsByBucket.remove(ctx.getBucket());
+                    activeIterator.remove();
                 }
+            }
+
+            // Finish outstanding writes before admitting replacement buckets.
+            if (queued.hasNext() && active.size() < maxConcurrentBuckets) {
+                flushAndAwait(pendingWrites);
             }
 
             // Log progress periodically (at the end of each loop iteration)
@@ -354,7 +409,7 @@ public class UndoRecoveryExecutor {
                 futures.add(
                         future.thenAccept(
                                 offset -> recoveredOffsets.merge(bucket, offset, Math::max)));
-                if (futures.size() == MAX_PENDING_UNDO_WRITES) {
+                if (futures.size() == maxPendingWrites) {
                     flushAndAwait(futures);
                 }
             }
@@ -379,15 +434,6 @@ public class UndoRecoveryExecutor {
             this.offset = offset;
             this.key = key;
         }
-    }
-
-    private boolean allComplete(List<BucketRecoveryContext> contexts) {
-        for (BucketRecoveryContext ctx : contexts) {
-            if (!ctx.isComplete()) {
-                return false;
-            }
-        }
-        return true;
     }
 
     private int countIncomplete(List<BucketRecoveryContext> contexts) {
