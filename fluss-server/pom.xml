@@ -154,6 +154,10 @@
                             </artifactSet>
                             <relocations>
                                 <relocation>
+                                    <pattern>org.apache.datasketches</pattern>
+                                    <shadedPattern>org.apache.fluss.shaded.org.apache.datasketches</shadedPattern>
+                                </relocation>
+                                <relocation>
                                     <pattern>org.apache.commons</pattern>
                                     <shadedPattern>org.apache.fluss.shaded.org.apache.commons</shadedPattern>
                                 </relocation>
