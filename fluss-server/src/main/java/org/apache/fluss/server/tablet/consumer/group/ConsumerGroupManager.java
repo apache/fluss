@@ -22,6 +22,7 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.exception.ApiException;
 import org.apache.fluss.exception.ConsumerGroupOwnerLoadingException;
 import org.apache.fluss.exception.ConsumerGroupOwnerNotAvailableException;
 import org.apache.fluss.exception.InvalidConsumerGroupIdException;
@@ -30,13 +31,16 @@ import org.apache.fluss.memory.UnmanagedPagedOutputView;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
+import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.record.DefaultKvRecordBatch;
 import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.KvRecordBatchBuilder;
+import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.compacted.CompactedRow;
+import org.apache.fluss.row.encode.ValueDecoder;
 import org.apache.fluss.rpc.entity.PutKvResultForBucket;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.messages.CreateDatabaseRequest;
@@ -57,6 +61,7 @@ import org.apache.fluss.server.replica.ReplicaManager.HostedReplica;
 import org.apache.fluss.server.replica.ReplicaManager.OnlineReplica;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
+import org.apache.fluss.utils.ByteArraySlice;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -64,6 +69,7 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -81,7 +87,7 @@ import static org.apache.fluss.server.tablet.consumer.group.ConsumerOffsetTableC
 import static org.apache.fluss.server.zk.data.LeaderAndIsr.NO_LEADER;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
-/** Discovers consumer group owners and commits offsets to the local leader replica. */
+/** Discovers consumer group owners and reads and commits their offsets on local leaders. */
 @ThreadSafe
 @Internal
 public final class ConsumerGroupManager {
@@ -93,6 +99,8 @@ public final class ConsumerGroupManager {
     private final ReplicaManager replicaManager;
     private final ConsumerOffsetTableConfig offsetsConfig;
     private final ConsumerOffsetSchema offsetSchema = new ConsumerOffsetSchema();
+    private volatile SchemaGetter schemaGetter;
+    private volatile ValueDecoder valueDecoder;
     private final ZooKeeperClient zkClient;
     private final MetadataManager metadataManager;
     private final TabletServerMetadataCache metadataCache;
@@ -134,6 +142,48 @@ public final class ConsumerGroupManager {
                                 resolveOwnerAsync(
                                         offsetSchema.bucketFor(groupId, info.getNumBuckets()),
                                         listenerName));
+    }
+
+    /** Reads all or selected committed offsets from the local leader replica. */
+    public CompletableFuture<Map<TableBucket, ConsumerOffsetAndMetadata>> handleGetConsumerOffsets(
+            String groupId, Replica offsetsReplica, List<TableBucket> requestedBuckets) {
+        return CompletableFuture.supplyAsync(
+                () -> {
+                    Map<TableBucket, ConsumerOffsetAndMetadata> offsets = new HashMap<>();
+                    ValueDecoder decoder = getValueDecoder(offsetsReplica);
+                    try {
+                        if (requestedBuckets == null) {
+                            populateAllOffsets(
+                                    offsetsReplica.prefixLookup(
+                                            offsetSchema.encodeOffsetCommitPrefix(groupId)),
+                                    decoder,
+                                    offsets);
+                        } else {
+                            List<byte[]> keys = new ArrayList<>(requestedBuckets.size());
+                            for (TableBucket tableBucket : requestedBuckets) {
+                                keys.add(
+                                        offsetSchema.encodeOffsetKey(
+                                                groupId,
+                                                tableBucket.getTableId(),
+                                                tableBucket.getPartitionId(),
+                                                tableBucket.getBucket()));
+                            }
+                            populateSelectedOffsets(
+                                    requestedBuckets,
+                                    offsetsReplica.lookups(keys),
+                                    decoder,
+                                    offsets);
+                        }
+                        return offsets;
+                    } catch (Exception e) {
+                        LOG.warn("Failed to read offsets for group {}.", groupId, e);
+                        if (e instanceof ApiException) {
+                            throw (ApiException) e;
+                        }
+                        throw Errors.forException(e).exception(e.getMessage());
+                    }
+                },
+                ioExecutor);
     }
 
     /** Updates local offsets table metadata even when another tablet served the find request. */
@@ -429,6 +479,51 @@ public final class ConsumerGroupManager {
         }
         return write.thenApply(
                 writeResults -> handleWriteCompletion(groupId, results, writeResults));
+    }
+
+    @VisibleForTesting
+    static void populateAllOffsets(
+            List<ByteArraySlice> values,
+            ValueDecoder valueDecoder,
+            Map<TableBucket, ConsumerOffsetAndMetadata> offsets) {
+        for (ByteArraySlice value : values) {
+            InternalRow row = valueDecoder.decodeValue(value.toByteArray()).row;
+            offsets.put(
+                    ConsumerOffsetSchema.toTableBucket(row),
+                    ConsumerOffsetSchema.toOffsetAndMetadata(row));
+        }
+    }
+
+    @VisibleForTesting
+    static void populateSelectedOffsets(
+            List<TableBucket> requestedBuckets,
+            List<ByteArraySlice> values,
+            ValueDecoder valueDecoder,
+            Map<TableBucket, ConsumerOffsetAndMetadata> offsets) {
+        for (int i = 0; i < requestedBuckets.size(); i++) {
+            ByteArraySlice value = values.get(i);
+            if (value == null) {
+                offsets.put(requestedBuckets.get(i), null);
+                continue;
+            }
+            InternalRow row = valueDecoder.decodeValue(value.toByteArray()).row;
+            offsets.put(requestedBuckets.get(i), ConsumerOffsetSchema.toOffsetAndMetadata(row));
+        }
+    }
+
+    private ValueDecoder getValueDecoder(Replica offsetsReplica) {
+        SchemaGetter currentSchemaGetter = offsetsReplica.getSchemaGetter();
+        ValueDecoder currentDecoder = valueDecoder;
+        if (currentDecoder == null || schemaGetter != currentSchemaGetter) {
+            synchronized (this) {
+                if (schemaGetter != currentSchemaGetter || valueDecoder == null) {
+                    schemaGetter = currentSchemaGetter;
+                    valueDecoder = ConsumerOffsetSchema.createValueDecoder(currentSchemaGetter);
+                }
+                currentDecoder = valueDecoder;
+            }
+        }
+        return currentDecoder;
     }
 
     @VisibleForTesting

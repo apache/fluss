@@ -34,6 +34,8 @@ import org.apache.fluss.rpc.entity.LookupResultForBucket;
 import org.apache.fluss.rpc.messages.CommitConsumerOffsetsRequest;
 import org.apache.fluss.rpc.messages.CommitConsumerOffsetsResponse;
 import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerRequest;
+import org.apache.fluss.rpc.messages.GetConsumerOffsetsRequest;
+import org.apache.fluss.rpc.messages.GetConsumerOffsetsResponse;
 import org.apache.fluss.rpc.messages.PbCommitConsumerOffsetsResponseBucket;
 import org.apache.fluss.rpc.netty.server.Session;
 import org.apache.fluss.rpc.protocol.ApiKeys;
@@ -190,6 +192,28 @@ class TabletServiceTest extends ReplicaTestBase {
         assertCommitResult(first, Errors.NONE);
         assertCommitResult(second, Errors.NONE);
         assertStoredOffset(GROUP_ID, 10L);
+    }
+
+    @Test
+    void testGetConsumerOffsetsAfterFindOwnerUsesInitializedMetadata() throws Exception {
+        registerOffsetsTable();
+        TabletService service = createService();
+
+        CompletableFuture<?> find =
+                service.findConsumerGroupOwner(
+                        new FindConsumerGroupOwnerRequest().setGroupId(GROUP_ID));
+        assertThat(find).isNotDone();
+        executor.triggerAll();
+        assertThat(find).isCompleted();
+
+        GetConsumerOffsetsRequest request =
+                new GetConsumerOffsetsRequest().setGroupId(GROUP_ID).setAllOffsets(true);
+        CompletableFuture<GetConsumerOffsetsResponse> response =
+                service.getConsumerOffsets(request);
+        executor.triggerAll();
+
+        assertThat(response).isCompleted();
+        assertThat(zkClient.tableExist(SystemTables.CONSUMER_OFFSETS)).isTrue();
     }
 
     @Test

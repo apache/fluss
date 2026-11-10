@@ -162,6 +162,7 @@ import static org.apache.fluss.security.acl.OperationType.WRITE;
 import static org.apache.fluss.server.coordinator.CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
 import static org.apache.fluss.server.log.FetchParams.DEFAULT_MAX_WAIT_MS_WHEN_MIN_BYTES_ENABLE;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.decodeCommitConsumerOffsetsRequest;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.decodeGetConsumerOffsetsRequest;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getFetchLogData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getListOffsetsData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getNotifyLakeTableOffset;
@@ -850,10 +851,33 @@ public final class TabletService extends RpcServiceBase
     @Override
     public CompletableFuture<GetConsumerOffsetsResponse> getConsumerOffsets(
             GetConsumerOffsetsRequest request) {
-        CompletableFuture<GetConsumerOffsetsResponse> response = new CompletableFuture<>();
-        response.completeExceptionally(
-                new UnsupportedOperationException("getConsumerOffsets is not supported yet"));
-        return response;
+        final String groupId = request.getGroupId();
+        final Replica offsetsReplica;
+        final List<TableBucket> requestedBuckets;
+        try {
+            offsetsReplica = groupManager.validateGroupId(groupId);
+            requestedBuckets = decodeGetConsumerOffsetsRequest(request);
+        } catch (ApiException | IllegalArgumentException e) {
+            return FutureUtils.completedExceptionally(e);
+        }
+
+        if (requestedBuckets != null && requestedBuckets.isEmpty()) {
+            return CompletableFuture.completedFuture(new GetConsumerOffsetsResponse());
+        }
+
+        // The session is bound to the RPC thread; authorize all requested sources before reading.
+        if (authorizer != null && requestedBuckets != null) {
+            requestedBuckets.stream()
+                    .map(TableBucket::getTableId)
+                    .distinct()
+                    .forEach(tableId -> authorizeTable(DESCRIBE, tableId));
+        }
+
+        // TODO: Once consumer-group ACLs are merged, authorize DESCRIBE on the group before
+        // reading offsets.
+        return groupManager
+                .handleGetConsumerOffsets(groupId, offsetsReplica, requestedBuckets)
+                .thenApply(ServerRpcMessageUtils::makeGetConsumerOffsetsResponse);
     }
 
     @Override
