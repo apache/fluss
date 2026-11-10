@@ -29,6 +29,7 @@ import org.apache.fluss.exception.LakeTableAlreadyExistException;
 import org.apache.fluss.exception.PartitionAlreadyExistsException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.SchemaNotExistException;
+import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.exception.TableNotPartitionedException;
@@ -42,6 +43,7 @@ import org.apache.fluss.metadata.DatabaseSummary;
 import org.apache.fluss.metadata.KafkaTableSchema;
 import org.apache.fluss.metadata.LakeTableUtil;
 import org.apache.fluss.metadata.MergeEngineType;
+import org.apache.fluss.metadata.PartitionTombstone;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaInfo;
@@ -63,6 +65,7 @@ import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import org.apache.fluss.utils.function.RunnableWithException;
 import org.apache.fluss.utils.function.ThrowingRunnable;
+import org.apache.fluss.utils.types.Tuple2;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -87,6 +90,8 @@ import static org.apache.fluss.server.utils.TableDescriptorValidation.validateAl
 
 /** A manager for metadata. */
 public class MetadataManager {
+
+    private static final int PARTITION_TOMBSTONE_CAS_RETRY_LIMIT = 3;
 
     private static final Logger LOG = LoggerFactory.getLogger(MetadataManager.class);
 
@@ -1311,16 +1316,26 @@ public class MetadataManager {
         }
 
         try {
-            long partitionId = zookeeperClient.getPartitionIdAndIncrement();
-            // register partition assignments and partition metadata to zk in transaction
-            zookeeperClient.registerPartitionAssignmentAndMetadata(
-                    partitionId,
-                    partitionName,
-                    partitionAssignment,
-                    remoteDataDir,
-                    tablePath,
-                    tableId,
-                    bucketCount);
+            for (int attempt = 0; ; attempt++) {
+                long partitionId = zookeeperClient.getPartitionIdAndIncrement();
+                try {
+                    zookeeperClient.registerPartitionAssignmentAndMetadata(
+                            partitionId,
+                            partitionName,
+                            partitionAssignment,
+                            remoteDataDir,
+                            tablePath,
+                            tableId,
+                            bucketCount);
+                    break;
+                } catch (StaleMetadataException e) {
+                    // A drop may cover an allocated but unpublished ID. Allocate again rather
+                    // than publish a partition already covered by the tombstone floor.
+                    if (attempt + 1 >= PARTITION_TOMBSTONE_CAS_RETRY_LIMIT) {
+                        throw e;
+                    }
+                }
+            }
             LOG.info(
                     "Register partition {} to zookeeper for table [{}].", partitionName, tablePath);
         } catch (KeeperException.NodeExistsException nodeExistsException) {
@@ -1340,7 +1355,10 @@ public class MetadataManager {
     }
 
     public void dropPartition(
-            TablePath tablePath, ResolvedPartitionSpec partition, boolean ignoreIfNotExists) {
+            TablePath tablePath,
+            long expectedTableId,
+            ResolvedPartitionSpec partition,
+            boolean ignoreIfNotExists) {
         String partitionName = partition.getPartitionName();
         Optional<PartitionRegistration> optionalPartitionRegistration =
                 getOptionalPartitionRegistration(tablePath, partitionName);
@@ -1356,13 +1374,82 @@ public class MetadataManager {
         }
 
         try {
-            zookeeperClient.deletePartition(tablePath, partitionName);
+            dropPartitionAndPersistTombstone(
+                    tablePath, expectedTableId, partitionName, optionalPartitionRegistration.get());
         } catch (Exception e) {
             throw new FlussRuntimeException(
                     String.format(
                             "Fail to delete partition '%s' from zookeeper for table %s.",
                             partitionName, tablePath),
                     e);
+        }
+    }
+
+    private void dropPartitionAndPersistTombstone(
+            TablePath tablePath,
+            long expectedTableId,
+            String partitionName,
+            PartitionRegistration partitionRegistration)
+            throws Exception {
+        long partitionId = partitionRegistration.getPartitionId();
+        Exception lastConflict = null;
+        for (int attempt = 0; attempt < PARTITION_TOMBSTONE_CAS_RETRY_LIMIT; attempt++) {
+            // Fence both concurrent deletion and publication before reading live partitions.
+            // A publication changes the directory version without changing the tombstone.
+            Tuple2<PartitionTombstone, Optional<Integer>> current =
+                    zookeeperClient.getPartitionTombstoneWithVersion(tablePath);
+            int partitionsVersion = zookeeperClient.getPartitionsZkVersion(tablePath);
+            Set<Long> alivePartitionIdsAfterDrop =
+                    loadAlivePartitionIdsAfterDrop(tablePath, partitionId);
+            PartitionTombstone updated =
+                    PartitionTombstoneAdvancer.advanceAfterDrop(
+                            current.f0, partitionId, alivePartitionIdsAfterDrop);
+            try {
+                zookeeperClient.deletePartitionAndSetTombstone(
+                        tablePath,
+                        partitionName,
+                        expectedTableId,
+                        partitionId,
+                        partitionsVersion,
+                        updated,
+                        current.f1);
+                return;
+            } catch (KeeperException.BadVersionException | KeeperException.NodeExistsException e) {
+                lastConflict = e;
+                LOG.warn(
+                        "Retrying atomic partition drop for table {} partition {} after a concurrent partition metadata change.",
+                        tablePath,
+                        partitionName,
+                        e);
+            }
+        }
+        throw new FlussRuntimeException(
+                String.format(
+                        "Failed to atomically drop partition '%s' for table %s after %s retries.",
+                        partitionName, tablePath, PARTITION_TOMBSTONE_CAS_RETRY_LIMIT),
+                lastConflict);
+    }
+
+    @Nullable
+    private Set<Long> loadAlivePartitionIdsAfterDrop(TablePath tablePath, long droppedPartitionId) {
+        try {
+            Set<Long> alivePartitionIds = new HashSet<>();
+            for (PartitionRegistration registration :
+                    zookeeperClient.getPartitionRegistrations(tablePath).values()) {
+                long partitionId = registration.getPartitionId();
+                if (partitionId != droppedPartitionId) {
+                    alivePartitionIds.add(partitionId);
+                }
+            }
+            return alivePartitionIds;
+        } catch (Exception e) {
+            LOG.warn(
+                    "Failed to load alive partition ids for table {} while dropping partition {}, "
+                            + "falling back to conservative tombstone advancement.",
+                    tablePath,
+                    droppedPartitionId,
+                    e);
+            return null;
         }
     }
 

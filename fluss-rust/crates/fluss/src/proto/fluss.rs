@@ -310,6 +310,9 @@ pub struct UpdateMetadataRequest {
     pub partition_metadata: ::prost::alloc::vec::Vec<PbPartitionMetadata>,
     #[prost(int32, optional, tag = "5")]
     pub coordinator_epoch: ::core::option::Option<i32>,
+    /// Partition deletion snapshots propagated from the Coordinator.
+    #[prost(message, repeated, tag = "6")]
+    pub partition_tombstones: ::prost::alloc::vec::Vec<PbPartitionTombstone>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct UpdateMetadataResponse {}
@@ -2351,4 +2354,16 @@ pub struct PbLiteralValue {
     /// Serialized decimal (non-compact mode)
     #[prost(bytes = "vec", optional, tag = "13")]
     pub decimal_bytes: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+}
+/// A partition ID is deleted when it is covered by the floor or the explicit set.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PbPartitionTombstone {
+    #[prost(int64, required, tag = "1")]
+    pub table_id: i64,
+    #[prost(int64, required, tag = "2")]
+    pub floor: i64,
+    #[prost(int64, repeated, tag = "3")]
+    pub explicit_set: ::prost::alloc::vec::Vec<i64>,
+    #[prost(int64, required, tag = "4")]
+    pub version: i64,
 }

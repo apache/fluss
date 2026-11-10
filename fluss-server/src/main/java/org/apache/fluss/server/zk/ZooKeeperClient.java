@@ -24,7 +24,9 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.ConfigurationUtils;
 import org.apache.fluss.config.FlussConfigUtils;
 import org.apache.fluss.exception.CoordinatorEpochFencedException;
+import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.metadata.DatabaseSummary;
+import org.apache.fluss.metadata.PartitionTombstone;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.Schema;
@@ -51,6 +53,7 @@ import org.apache.fluss.server.zk.data.DatabaseRegistration;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.PartitionRegistration;
+import org.apache.fluss.server.zk.data.PartitionTombstoneBinarySerde;
 import org.apache.fluss.server.zk.data.RebalanceTask;
 import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
 import org.apache.fluss.server.zk.data.ResourceAcl;
@@ -73,6 +76,7 @@ import org.apache.fluss.server.zk.data.ZkData.LakeTableZNode;
 import org.apache.fluss.server.zk.data.ZkData.LeaderAndIsrZNode;
 import org.apache.fluss.server.zk.data.ZkData.PartitionIdZNode;
 import org.apache.fluss.server.zk.data.ZkData.PartitionSequenceIdZNode;
+import org.apache.fluss.server.zk.data.ZkData.PartitionTombstoneZNode;
 import org.apache.fluss.server.zk.data.ZkData.PartitionZNode;
 import org.apache.fluss.server.zk.data.ZkData.PartitionsZNode;
 import org.apache.fluss.server.zk.data.ZkData.ProducerIdZNode;
@@ -176,6 +180,8 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  */
 @Internal
 public class ZooKeeperClient implements AutoCloseable {
+
+    private static final int PARTITION_REGISTRATION_RETRY_LIMIT = 3;
 
     private static final Logger LOG = LoggerFactory.getLogger(ZooKeeperClient.class);
     public static final int UNKNOWN_VERSION = -2;
@@ -1284,13 +1290,140 @@ public class ZooKeeperClient implements AutoCloseable {
         return stat.getNumChildren();
     }
 
+    /** Returns the partition-directory data version used to fence concurrent publication. */
+    public int getPartitionsZkVersion(TablePath tablePath) throws Exception {
+        Stat stat = new Stat();
+        zkClient.getData().storingStatIn(stat).forPath(PartitionsZNode.path(tablePath));
+        return stat.getVersion();
+    }
+
     /** Delete a partition for a table in ZK. */
     public void deletePartition(TablePath tablePath, String partitionName) throws Exception {
         String path = PartitionZNode.path(tablePath, partitionName);
         zkClient.delete().forPath(path);
     }
 
-    /** Register partition assignment and metadata in transaction. */
+    /**
+     * Deletes a partition metadata node and persists the table's partition tombstone in one ZK
+     * transaction.
+     *
+     * <p>This keeps the source-of-truth partition metadata and its partition tombstone consistent:
+     * a partition cannot become non-active without the corresponding tombstone being durable for
+     * distributed consumers.
+     */
+    public void deletePartitionAndSetTombstone(
+            TablePath tablePath,
+            String partitionName,
+            long expectedTableId,
+            long expectedPartitionId,
+            int expectedPartitionsVersion,
+            PartitionTombstone tombstone,
+            Optional<Integer> expectedTombstoneVersion)
+            throws Exception {
+        String tablePathInZk = TableZNode.path(tablePath);
+        Stat tableStat = getActiveTableStat(tablePath, expectedTableId);
+        String partitionPath = PartitionZNode.path(tablePath, partitionName);
+        Stat partitionStat =
+                getPartitionStat(tablePath, partitionName, expectedTableId, expectedPartitionId);
+        String tombstonePath = PartitionTombstoneZNode.path(tablePath);
+        byte[] tombstoneBytes = PartitionTombstoneBinarySerde.serialize(tombstone);
+
+        List<CuratorOp> ops = new ArrayList<>(5);
+        ops.add(zkOp.checkOp(tablePathInZk, tableStat.getVersion()));
+        ops.add(zkOp.checkOp(PartitionsZNode.path(tablePath), expectedPartitionsVersion));
+        ops.add(zkOp.checkOp(partitionPath, partitionStat.getVersion()));
+        ops.add(zkOp.deleteOp(partitionPath));
+        if (expectedTombstoneVersion.isPresent()) {
+            ops.add(
+                    zkClient.transactionOp()
+                            .setData()
+                            .withVersion(expectedTombstoneVersion.get())
+                            .forPath(tombstonePath, tombstoneBytes));
+        } else {
+            ops.add(zkOp.createOp(tombstonePath, tombstoneBytes, CreateMode.PERSISTENT));
+        }
+        zkClient.transaction().forOperations(ops);
+    }
+
+    // --------------------------------------------------------------------------------------------
+    // Partition Tombstone (per table)
+    // --------------------------------------------------------------------------------------------
+
+    /**
+     * Reads the {@link PartitionTombstone} for the given partitioned table from ZK. Returns {@link
+     * PartitionTombstone#EMPTY} when no tombstone metadata is persisted for the table.
+     */
+    public PartitionTombstone getPartitionTombstone(TablePath tablePath) throws Exception {
+        String path = PartitionTombstoneZNode.path(tablePath);
+        Optional<byte[]> data = getOrEmpty(path);
+        if (data.isPresent()) {
+            return decodePartitionTombstone(data.get());
+        }
+        return PartitionTombstone.EMPTY;
+    }
+
+    /**
+     * Reads the {@link PartitionTombstone} and the backing znode version. A missing znode is
+     * returned as {@code (PartitionTombstone.EMPTY, Optional.empty())}.
+     */
+    public Tuple2<PartitionTombstone, Optional<Integer>> getPartitionTombstoneWithVersion(
+            TablePath tablePath) throws Exception {
+        String path = PartitionTombstoneZNode.path(tablePath);
+        try {
+            Stat stat = new Stat();
+            byte[] bytes = zkClient.getData().storingStatIn(stat).forPath(path);
+            return Tuple2.of(decodePartitionTombstone(bytes), Optional.of(stat.getVersion()));
+        } catch (KeeperException.NoNodeException e) {
+            return Tuple2.of(PartitionTombstone.EMPTY, Optional.empty());
+        }
+    }
+
+    private Stat getActiveTableStat(TablePath tablePath, long expectedTableId) throws Exception {
+        Stat tableStat = new Stat();
+        byte[] tableBytes =
+                zkClient.getData().storingStatIn(tableStat).forPath(TableZNode.path(tablePath));
+        long actualTableId = TableZNode.decode(tableBytes).tableId;
+        if (actualTableId != expectedTableId) {
+            throw new IllegalStateException(
+                    String.format(
+                            "Table %s has id %d instead of expected id %d.",
+                            tablePath, actualTableId, expectedTableId));
+        }
+        return tableStat;
+    }
+
+    private Stat getPartitionStat(
+            TablePath tablePath,
+            String partitionName,
+            long expectedTableId,
+            long expectedPartitionId)
+            throws Exception {
+        Stat partitionStat = new Stat();
+        byte[] partitionBytes =
+                zkClient.getData()
+                        .storingStatIn(partitionStat)
+                        .forPath(PartitionZNode.path(tablePath, partitionName));
+        PartitionRegistration partition = PartitionZNode.decode(partitionBytes);
+        if (partition.getTableId() != expectedTableId
+                || partition.getPartitionId() != expectedPartitionId) {
+            throw new IllegalStateException(
+                    String.format(
+                            "Partition %s of table %s has identity (%d, %d) instead of expected (%d, %d).",
+                            partitionName,
+                            tablePath,
+                            partition.getTableId(),
+                            partition.getPartitionId(),
+                            expectedTableId,
+                            expectedPartitionId));
+        }
+        return partitionStat;
+    }
+
+    private static PartitionTombstone decodePartitionTombstone(byte[] bytes) {
+        return PartitionTombstoneBinarySerde.deserialize(bytes);
+    }
+
+    /** Registers a partition and coordinates its publication with partition deletion. */
     public void registerPartitionAssignmentAndMetadata(
             long partitionId,
             String partitionName,
@@ -1315,40 +1448,85 @@ public class ZooKeeperClient implements AutoCloseable {
         } catch (KeeperException.NodeExistsException e) {
             // ignore
         }
-        try {
-            String metadataPartitionParentPath = PartitionsZNode.path(tablePath);
-            zkClient.create()
-                    .creatingParentsIfNeeded()
-                    .withMode(CreateMode.PERSISTENT)
-                    .forPath(metadataPartitionParentPath);
-        } catch (KeeperException.NodeExistsException e) {
-            // ignore
-        }
-
-        List<CuratorOp> ops = new ArrayList<>(2);
+        String tablePathInZk = TableZNode.path(tablePath);
+        String metadataPartitionParentPath = PartitionsZNode.path(tablePath);
         String tabletServerPartitionPath = PartitionIdZNode.path(partitionId);
-        CuratorOp tabletServerPartitionNode =
-                zkClient.transactionOp()
-                        .create()
-                        .withMode(CreateMode.PERSISTENT)
-                        .forPath(
-                                tabletServerPartitionPath,
-                                PartitionIdZNode.encode(partitionAssignment));
-
         String metadataPath = PartitionZNode.path(tablePath, partitionName);
-        CuratorOp metadataPartitionNode =
-                zkClient.transactionOp()
-                        .create()
-                        .withMode(CreateMode.PERSISTENT)
-                        .forPath(
-                                metadataPath,
-                                PartitionZNode.encode(
-                                        new PartitionRegistration(
-                                                tableId, partitionId, remoteDataDir, bucketCount)));
+        String tombstonePath = PartitionTombstoneZNode.path(tablePath);
+        Exception lastConflict = null;
+        for (int attempt = 0; attempt < PARTITION_REGISTRATION_RETRY_LIMIT; attempt++) {
+            Stat tableStat = getActiveTableStat(tablePath, tableId);
+            boolean createMetadataPartitionParent =
+                    zkClient.checkExists().forPath(metadataPartitionParentPath) == null;
+            Tuple2<PartitionTombstone, Optional<Integer>> tombstone =
+                    getPartitionTombstoneWithVersion(tablePath);
+            boolean createTombstone = !tombstone.f1.isPresent();
+            if (partitionId <= tombstone.f0.getFloor()) {
+                throw new StaleMetadataException(
+                        "Partition id "
+                                + partitionId
+                                + " is covered by tombstone floor "
+                                + tombstone.f0.getFloor()
+                                + " for table "
+                                + tablePath);
+            }
+            List<CuratorOp> ops = new ArrayList<>(4);
+            ops.add(zkOp.checkOp(tablePathInZk, tableStat.getVersion()));
+            if (createTombstone) {
+                ops.add(
+                        zkOp.createOp(
+                                tombstonePath,
+                                PartitionTombstoneBinarySerde.serialize(tombstone.f0),
+                                CreateMode.PERSISTENT));
+            } else {
+                ops.add(zkOp.checkOp(tombstonePath, tombstone.f1.get()));
+            }
+            if (createMetadataPartitionParent) {
+                ops.add(zkOp.createOp(metadataPartitionParentPath, null, CreateMode.PERSISTENT));
+            } else {
+                // Publication invalidates a drop's live-partition snapshot. No CAS is needed
+                // between creators because the directory data stays empty.
+                ops.add(
+                        zkClient.transactionOp()
+                                .setData()
+                                .withVersion(-1)
+                                .forPath(metadataPartitionParentPath, null));
+            }
+            ops.add(
+                    zkClient.transactionOp()
+                            .create()
+                            .withMode(CreateMode.PERSISTENT)
+                            .forPath(
+                                    tabletServerPartitionPath,
+                                    PartitionIdZNode.encode(partitionAssignment)));
+            ops.add(
+                    zkClient.transactionOp()
+                            .create()
+                            .withMode(CreateMode.PERSISTENT)
+                            .forPath(
+                                    metadataPath,
+                                    PartitionZNode.encode(
+                                            new PartitionRegistration(
+                                                    tableId,
+                                                    partitionId,
+                                                    remoteDataDir,
+                                                    bucketCount))));
 
-        ops.add(tabletServerPartitionNode);
-        ops.add(metadataPartitionNode);
-        zkClient.transaction().forOperations(ops);
+            try {
+                zkClient.transaction().forOperations(ops);
+                return;
+            } catch (KeeperException.BadVersionException e) {
+                lastConflict = e;
+            } catch (KeeperException.NodeExistsException e) {
+                if ((!createMetadataPartitionParent && !createTombstone)
+                        || zkClient.checkExists().forPath(tabletServerPartitionPath) != null
+                        || zkClient.checkExists().forPath(metadataPath) != null) {
+                    throw e;
+                }
+                lastConflict = e;
+            }
+        }
+        throw lastConflict;
     }
 
     // --------------------------------------------------------------------------------------------

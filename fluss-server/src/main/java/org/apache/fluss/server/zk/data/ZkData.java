@@ -246,6 +246,21 @@ public final class ZkData {
     }
 
     /**
+     * The authoritative {@link org.apache.fluss.metadata.PartitionTombstone} for a partitioned
+     * table, storing a floor, explicit deleted IDs, and a logical version. The znode path is:
+     *
+     * <p>/metadata/databases/[databaseName]/tables/[tableName]/partition_tombstone
+     */
+    public static final class PartitionTombstoneZNode {
+
+        public static String path(TablePath tablePath) {
+            return TableZNode.path(tablePath) + "/partition_tombstone";
+        }
+
+        private PartitionTombstoneZNode() {}
+    }
+
+    /**
      * The znode used to generate a sequence unique id for a table. The znode path is:
      *
      * <p>/metadata/table_seqid

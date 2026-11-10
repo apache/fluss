@@ -884,7 +884,11 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
         TablePath tablePath = currentTable.getTablePath();
         try {
-            metadataManager.dropPartition(tablePath, historicalPartitionSpec(updatedTable), true);
+            metadataManager.dropPartition(
+                    tablePath,
+                    currentTable.getTableId(),
+                    historicalPartitionSpec(updatedTable),
+                    true);
         } catch (Exception e) {
             throw historicalPartitionDisableException(tablePath, e);
         }
@@ -1203,7 +1207,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                             + "dropped manually.");
         }
 
-        metadataManager.dropPartition(tablePath, partitionToDrop, request.isIgnoreIfNotExists());
+        metadataManager.dropPartition(
+                tablePath, table.tableId, partitionToDrop, request.isIgnoreIfNotExists());
         return CompletableFuture.completedFuture(response);
     }
 
