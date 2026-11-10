@@ -81,6 +81,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
+import static org.apache.fluss.trino.FlussTrinoTestBase.tableHandle;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -850,6 +851,50 @@ class FlussLogReadITCase {
                 executor.shutdownNow();
                 assertThat(executor.awaitTermination(30, TimeUnit.SECONDS)).isTrue();
             }
+        }
+    }
+
+    @Test
+    void testReadsAfterLogRetention() throws Exception {
+        String name = "retained_start_events";
+        TablePath path = TablePath.of("fluss", name);
+        admin.createTable(
+                        path,
+                        TableDescriptor.builder()
+                                .schema(Schema.newBuilder().column("id", DataTypes.INT()).build())
+                                .distributedBy(1)
+                                .property(ConfigOptions.TABLE_LOG_TTL, Duration.ofSeconds(1))
+                                .build(),
+                        false)
+                .get(30, TimeUnit.SECONDS);
+        append(name, GenericRow.of(1));
+        TableInfo info = admin.getTableInfo(path).get(30, TimeUnit.SECONDS);
+        LogTablet log =
+                CLUSTER.waitAndGetLeaderReplica(new TableBucket(info.getTableId(), 0))
+                        .getLogTablet();
+        log.roll(Optional.empty());
+        CLOCK.advanceTime(Duration.ofSeconds(2));
+        log.deleteExpiredSegments();
+        assertThat(log.logStartOffset()).isEqualTo(1);
+        append(name, GenericRow.of(2));
+
+        FlussClientManager clients =
+                new FlussClientManager(
+                        new FlussConfig().setBootstrapServers(CLUSTER.getBootstrapServers()));
+        try {
+            FlussSplitPlanner planner = new FlussSplitPlanner(new FlussMetadataAccess(clients));
+            assertThat(planner.plan(tableHandle(info), info))
+                    .singleElement()
+                    .satisfies(
+                            split -> {
+                                assertThat(split.getRequiredLogRange().getStartOffset())
+                                        .isEqualTo(1);
+                                assertThat(split.getRequiredLogRange().getStoppingOffset())
+                                        .isEqualTo(2);
+                            });
+            assertThat(rows("SELECT id FROM " + name)).containsExactly(Arrays.asList(2));
+        } finally {
+            clients.close();
         }
     }
 

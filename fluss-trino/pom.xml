@@ -47,7 +47,6 @@
         <junit.version>6.1.2</junit.version>
         <curator.version>5.4.0</curator.version>
         <assertj.version>3.27.7</assertj.version>
-        <mockito.version>5.20.0</mockito.version>
 
         <!-- Build plugins and tools -->
         <trino.maven.plugin.version>20</trino.maven.plugin.version>
@@ -182,13 +181,6 @@
             <groupId>io.airlift</groupId>
             <artifactId>configuration-testing</artifactId>
             <version>${dep.airlift.version}</version>
-            <scope>test</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>org.mockito</groupId>
-            <artifactId>mockito-core</artifactId>
-            <version>${mockito.version}</version>
             <scope>test</scope>
         </dependency>
 
@@ -334,8 +326,7 @@
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>${maven.surefire.plugin.version}</version>
                 <configuration>
-                    <!-- Explicit instrumentation avoids dynamic agent attachment -->
-                    <argLine>--add-modules=jdk.incubator.vector -javaagent:"${settings.localRepository}/org/mockito/mockito-core/${mockito.version}/mockito-core-${mockito.version}.jar"</argLine>
+                    <argLine>--add-modules=jdk.incubator.vector --enable-native-access=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED</argLine>
                 </configuration>
             </plugin>
             <plugin>
