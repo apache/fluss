@@ -39,6 +39,7 @@ import org.apache.fluss.rpc.messages.GetInProgressBulkLoadResponse;
 import org.apache.fluss.rpc.messages.PbBulkLoadHandle;
 import org.apache.fluss.rpc.messages.PbBulkLoadStatus;
 import org.apache.fluss.rpc.messages.PbBulkLoadTargetInfo;
+import org.apache.fluss.rpc.messages.PbTableInfo;
 import org.apache.fluss.rpc.messages.PbTablePath;
 import org.apache.fluss.security.acl.FlussPrincipal;
 import org.apache.fluss.server.coordinator.CompletedSnapshotStoreManager;
@@ -1117,14 +1118,19 @@ public final class BulkLoadManager {
     }
 
     private static PbBulkLoadTargetInfo toTargetInfo(BulkLoadTarget target, TableInfo info) {
-        PbBulkLoadTargetInfo result =
-                new PbBulkLoadTargetInfo()
-                        .setTarget(fromPhysicalTablePath(target.getTarget()))
+        PbTableInfo tableInfo =
+                new PbTableInfo()
+                        .setTableId(info.getTableId())
                         .setSchemaId(target.getSchemaId())
                         .setTableJson(info.toTableDescriptor().toJsonBytes())
                         .setCreatedTime(info.getCreatedTime())
                         .setModifiedTime(info.getModifiedTime())
                         .setRemoteDataDir(target.getRemoteDataDir())
+                        .setBucketCountEpoch(info.getBucketCountEpoch());
+        PbBulkLoadTargetInfo result =
+                new PbBulkLoadTargetInfo()
+                        .setTarget(fromPhysicalTablePath(target.getTarget()))
+                        .setTableInfo(tableInfo)
                         .setSnapshotIds(target.getSnapshotIds());
         if (target.getPartitionId() != null) {
             result.setPartitionId(target.getPartitionId());

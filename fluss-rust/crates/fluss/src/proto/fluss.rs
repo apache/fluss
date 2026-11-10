@@ -539,6 +539,9 @@ pub struct NotifyLeaderAndIsrResponse {
     pub notify_buckets_leader_resp: ::prost::alloc::vec::Vec<
         PbNotifyLeaderAndIsrRespForBucket,
     >,
+    /// Registered server session for Snapshot restoration; absent for ordinary role changes.
+    #[prost(int64, optional, tag = "2")]
+    pub server_session_id: ::core::option::Option<i64>,
 }
 /// stop bucket replica request
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1329,19 +1332,11 @@ pub struct PbBulkLoadStatus {
 pub struct PbBulkLoadTargetInfo {
     #[prost(message, required, tag = "1")]
     pub target: PbPhysicalTablePath,
-    #[prost(int32, required, tag = "2")]
-    pub schema_id: i32,
-    #[prost(bytes = "vec", required, tag = "3")]
-    pub table_json: ::prost::alloc::vec::Vec<u8>,
-    #[prost(int64, required, tag = "4")]
-    pub created_time: i64,
-    #[prost(int64, required, tag = "5")]
-    pub modified_time: i64,
-    #[prost(string, optional, tag = "6")]
-    pub remote_data_dir: ::core::option::Option<::prost::alloc::string::String>,
-    #[prost(int64, optional, tag = "7")]
+    #[prost(message, required, tag = "2")]
+    pub table_info: PbTableInfo,
+    #[prost(int64, optional, tag = "3")]
     pub partition_id: ::core::option::Option<i64>,
-    #[prost(int64, repeated, packed = "false", tag = "8")]
+    #[prost(int64, repeated, packed = "false", tag = "4")]
     pub snapshot_ids: ::prost::alloc::vec::Vec<i64>,
 }
 /// --------------- Inner classes ----------------

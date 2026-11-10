@@ -380,7 +380,7 @@ final class BulkLoadServerITCase {
                         org.apache.fluss.utils.FlussPaths.remoteKvSnapshotDir(
                                 org.apache.fluss.utils.FlussPaths.remoteKvTabletDir(
                                         new org.apache.fluss.fs.FsPath(
-                                                last.getRemoteDataDir(),
+                                                last.getTableInfo().getRemoteDataDir(),
                                                 org.apache.fluss.utils.FlussPaths
                                                         .REMOTE_KV_DIR_NAME),
                                         second,

@@ -34,8 +34,8 @@ import org.apache.fluss.row.encode.RowEncoder;
 import org.apache.fluss.row.encode.ValueEncoder;
 import org.apache.fluss.rpc.messages.BeginBulkLoadResponse;
 import org.apache.fluss.rpc.messages.CommitBulkLoadRequest;
-import org.apache.fluss.rpc.messages.PbBulkLoadHandle;
 import org.apache.fluss.rpc.messages.PbBulkLoadTargetInfo;
+import org.apache.fluss.rpc.messages.PbTableInfo;
 import org.apache.fluss.shaded.guava32.com.google.common.hash.Hasher;
 import org.apache.fluss.shaded.guava32.com.google.common.hash.Hashing;
 import org.apache.fluss.testutils.DataTestUtils;
@@ -77,7 +77,6 @@ public final class TestingBulkLoadInputBuilder {
                         target -> target.hasPartitionId() ? target.getPartitionId() : -1L));
         for (PbBulkLoadTargetInfo target : targets) {
             writeTarget(
-                    begun.getHandle(),
                     target,
                     rows.getOrDefault(
                             toPhysicalTablePath(target.getTarget()), Collections.emptyList()),
@@ -97,29 +96,30 @@ public final class TestingBulkLoadInputBuilder {
             throw new IllegalArgumentException("Explicit offsets require one physical target.");
         }
         Hasher digest = Hashing.sha256().newHasher();
-        writeTarget(begun.getHandle(), begun.getTargetInfoAt(0), rows, offsets, digest);
+        writeTarget(begun.getTargetInfoAt(0), rows, offsets, digest);
         return new CommitBulkLoadRequest()
                 .setHandle(begun.getHandle())
                 .setInputSha256(digest.hash().toString());
     }
 
     private void writeTarget(
-            PbBulkLoadHandle handle,
             PbBulkLoadTargetInfo target,
             List<Object[]> logicalRows,
             Map<Integer, Long> offsets,
             Hasher digest)
             throws Exception {
         PhysicalTablePath path = toPhysicalTablePath(target.getTarget());
+        PbTableInfo frozenTable = target.getTableInfo();
         TableInfo tableInfo =
                 TableInfo.of(
                         path.getTablePath(),
-                        handle.getTableId(),
-                        target.getSchemaId(),
-                        TableDescriptor.fromJsonBytes(target.getTableJson()),
-                        target.getRemoteDataDir(),
-                        target.getCreatedTime(),
-                        target.getModifiedTime());
+                        frozenTable.getTableId(),
+                        frozenTable.getSchemaId(),
+                        TableDescriptor.fromJsonBytes(frozenTable.getTableJson()),
+                        frozenTable.getRemoteDataDir(),
+                        frozenTable.getCreatedTime(),
+                        frozenTable.getModifiedTime(),
+                        frozenTable.hasBucketCountEpoch() ? frozenTable.getBucketCountEpoch() : 0L);
         ChangelogImage changelogImage = tableInfo.getTableConfig().getChangelogImage();
         KeyEncoder keyEncoder =
                 KeyEncoder.ofPrimaryKeyEncoder(
