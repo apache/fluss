@@ -78,10 +78,17 @@ public class RequestsMetrics {
                         ApiKeys.LOOKUP,
                         ApiKeys.FETCH_LOG,
                         ApiKeys.PREFIX_LOOKUP,
-                        ApiKeys.GET_METADATA)) {
+                        ApiKeys.GET_METADATA,
+                        ApiKeys.LIST_OFFSETS,
+                        ApiKeys.LIMIT_SCAN,
+                        ApiKeys.SCAN_KV,
+                        ApiKeys.GET_TABLE_STATS,
+                        ApiKeys.NOTIFY_LEADER_AND_ISR,
+                        ApiKeys.STOP_REPLICA)) {
             requestNames.add(toRequestName(apiKey, false, false));
         }
         requestNames.add(toRequestName(ApiKeys.FETCH_LOG, true, false));
+        requestNames.add(toRequestName(ApiKeys.LIST_OFFSETS, true, false));
         requestNames.add(toRequestName(ApiKeys.LOOKUP, false, true));
         requestNames.add(toRequestName(ApiKeys.PUT_KV, false, true));
         return new RequestsMetrics(serverMetricsGroup, requestNames);
@@ -128,6 +135,18 @@ public class RequestsMetrics {
                 return "prefixLookup";
             case FETCH_LOG:
                 return isFromFollower ? "fetchLogFollower" : "fetchLogClient";
+            case LIST_OFFSETS:
+                return isFromFollower ? "listOffsetsFollower" : "listOffsetsClient";
+            case LIMIT_SCAN:
+                return "limitScan";
+            case SCAN_KV:
+                return "scanKv";
+            case GET_TABLE_STATS:
+                return "tableStats";
+            case NOTIFY_LEADER_AND_ISR:
+                return "notifyLeaderAndIsr";
+            case STOP_REPLICA:
+                return "stopReplica";
             case GET_METADATA:
                 return "metadata";
             default:
@@ -220,7 +239,11 @@ public class RequestsMetrics {
 
         void markError(Errors error) {
             errorsCount.inc();
-            errorsCountByError.computeIfAbsent(error, this::registerErrorMeter).inc();
+            markErrorCount(error, 1);
+        }
+
+        void markErrorCount(Errors error, int count) {
+            errorsCountByError.computeIfAbsent(error, this::registerErrorMeter).inc(count);
         }
 
         private Counter registerErrorMeter(Errors error) {

@@ -716,6 +716,13 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
           request_metadata
           request_fetchLogClient
           request_fetchLogFollower
+          request_listOffsetsClient
+          request_listOffsetsFollower
+          request_limitScan
+          request_scanKv
+          request_tableStats
+          request_notifyLeaderAndIsr
+          request_stopReplica
           request_kafka_produce
           request_kafka_metadata
       </td>
@@ -725,7 +732,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
     </tr>
     <tr>
       <td>errorsPerSecond</td>
-      <td>The total number of error requests processed per second for each request type.</td>
+      <td>The number of failed requests per second for each request type. A Fluss RPC counts once when the whole request fails. A Kafka Produce or Metadata request counts once if it fails or its response contains an error.</td>
       <td>Meter</td>
     </tr>
     <tr>
@@ -756,7 +763,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
     <tr>
       <td rowspan="1">request_error</td>
       <td>errorsPerSecond</td>
-      <td>The number of failed RPC responses processed per second for each request type and <code>error</code> name. One event is recorded for each failed RPC response; <code>NONE</code> and errors in successful response buckets are excluded. A series appears only after its request/error first occurs.</td>
+      <td>The number of errors per second by Fluss RPC request type and <code>error</code> name. A failed RPC counts once. A successful RPC counts each non-<code>NONE</code> error in its bucket or scan results, so the sum can exceed the request type's aggregate <code>errorsPerSecond</code>. A series appears when the error first occurs.</td>
       <td>Meter</td>
     </tr>
      <tr>
