@@ -130,6 +130,7 @@ public class TableDescriptorValidation {
         checkPrimaryKey(tableDescriptor);
         // check individual options
         checkReplicationFactor(tableConf);
+        checkMinInSyncReplicas(tableConf);
         checkLogFormat(tableConf, hasPrimaryKey);
         checkArrowCompression(tableConf);
         checkMergeEngine(tableConf, hasPrimaryKey, schema);
@@ -523,6 +524,25 @@ public class TableDescriptorValidation {
                             "'%s' must be greater than 0.",
                             ConfigOptions.TABLE_REPLICATION_FACTOR.key()));
         }
+    }
+
+    private static void checkMinInSyncReplicas(Configuration tableConf) {
+        tableConf
+                .getOptional(ConfigOptions.TABLE_LOG_MIN_IN_SYNC_REPLICAS_NUMBER)
+                .ifPresent(
+                        minInSyncReplicas -> {
+                            int replicationFactor =
+                                    tableConf.get(ConfigOptions.TABLE_REPLICATION_FACTOR);
+                            if (minInSyncReplicas <= 0 || minInSyncReplicas > replicationFactor) {
+                                throw new InvalidConfigException(
+                                        String.format(
+                                                "'%s' must be between 1 and '%s' (%s).",
+                                                ConfigOptions.TABLE_LOG_MIN_IN_SYNC_REPLICAS_NUMBER
+                                                        .key(),
+                                                ConfigOptions.TABLE_REPLICATION_FACTOR.key(),
+                                                replicationFactor));
+                            }
+                        });
     }
 
     private static void checkLogFormat(Configuration tableConf, boolean hasPrimaryKey) {

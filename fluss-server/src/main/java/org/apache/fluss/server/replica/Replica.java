@@ -195,6 +195,7 @@ public final class Replica {
     private final AdjustIsrManager adjustIsrManager;
 
     private final SchemaGetter schemaGetter;
+    private final @Nullable Integer tableMinInSyncReplicas;
     private volatile TableInfo tableInfo;
 
     // Routing state carried with activation: both values are immutable per bucket, so they are
@@ -290,6 +291,7 @@ public final class Replica {
                         tableInfo.getSchema());
         this.tableInfo = tableInfo;
         TableConfig tableConfig = tableInfo.getTableConfig();
+        this.tableMinInSyncReplicas = tableConfig.getLogMinInSyncReplicas().orElse(null);
         String partitionName = physicalPath.getPartitionName();
         this.historicalPartition = HISTORICAL_PARTITION_VALUE.equals(partitionName);
         this.logFormat = tableConfig.getLogFormat();
@@ -445,7 +447,7 @@ public final class Replica {
     }
 
     public boolean isAtMinIsr() {
-        return isLeader() && isrState.isr().size() == minInSyncReplicasSupplier.getAsInt();
+        return isLeader() && isrState.isr().size() == getMinInSyncReplicas();
     }
 
     public BucketMetricGroup bucketMetrics() {
@@ -1948,7 +1950,7 @@ public final class Replica {
             }
 
             if (logTablet.getHighWatermark() >= requiredOffset) {
-                if (minInSyncReplicasSupplier.getAsInt() <= curMaximalIsr.size()) {
+                if (getMinInSyncReplicas() <= curMaximalIsr.size()) {
                     return Tuple2.of(true, Errors.NONE);
                 } else {
                     return Tuple2.of(true, Errors.NOT_ENOUGH_REPLICAS_AFTER_APPEND_EXCEPTION);
@@ -2579,7 +2581,7 @@ public final class Replica {
 
     private void validateInSyncReplicaSize(int requiredAcks) {
         int inSyncSize = isrState.isr().size();
-        if (inSyncSize < minInSyncReplicasSupplier.getAsInt() && requiredAcks == -1) {
+        if (inSyncSize < getMinInSyncReplicas() && requiredAcks == -1) {
             throw new NotEnoughReplicasException(
                     String.format(
                             "The size of the current ISR %s is insufficient to satisfy "
@@ -2594,7 +2596,13 @@ public final class Replica {
     }
 
     public boolean isUnderMinIsr() {
-        return isLeader() && isrState.isr().size() < minInSyncReplicasSupplier.getAsInt();
+        return isLeader() && isrState.isr().size() < getMinInSyncReplicas();
+    }
+
+    private int getMinInSyncReplicas() {
+        return tableMinInSyncReplicas != null
+                ? tableMinInSyncReplicas
+                : minInSyncReplicasSupplier.getAsInt();
     }
 
     private LogTablet localLogOrThrow(boolean requireLeader) {

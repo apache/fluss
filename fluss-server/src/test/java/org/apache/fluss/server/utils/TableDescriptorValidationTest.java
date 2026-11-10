@@ -41,6 +41,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.Collections;
 import java.util.HashMap;
@@ -53,6 +54,59 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for {@link TableDescriptorValidation}. */
 class TableDescriptorValidationTest {
+
+    @ParameterizedTest
+    @ValueSource(ints = {0, -1, 4})
+    void testRejectInvalidLogMinInSyncReplicas(int minInSyncReplicas) {
+        TableDescriptor tableDescriptor =
+                logTableWithProperty(
+                                ConfigOptions.TABLE_LOG_MIN_IN_SYNC_REPLICAS_NUMBER.key(),
+                                String.valueOf(minInSyncReplicas))
+                        .withReplicationFactor(3);
+
+        assertThatThrownBy(() -> validate(tableDescriptor, null))
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining(ConfigOptions.TABLE_LOG_MIN_IN_SYNC_REPLICAS_NUMBER.key())
+                .hasMessageContaining(ConfigOptions.TABLE_REPLICATION_FACTOR.key());
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {1, 3})
+    void testLogMinInSyncReplicasBounds(int minInSyncReplicas) {
+        TableDescriptor tableDescriptor =
+                logTableWithProperty(
+                                ConfigOptions.TABLE_LOG_MIN_IN_SYNC_REPLICAS_NUMBER.key(),
+                                String.valueOf(minInSyncReplicas))
+                        .withReplicationFactor(3);
+
+        assertThatCode(() -> validate(tableDescriptor, null)).doesNotThrowAnyException();
+    }
+
+    @Test
+    void testRejectMalformedLogMinInSyncReplicas() {
+        TableDescriptor tableDescriptor =
+                logTableWithProperty(
+                                ConfigOptions.TABLE_LOG_MIN_IN_SYNC_REPLICAS_NUMBER.key(),
+                                "invalid")
+                        .withReplicationFactor(3);
+
+        assertThatThrownBy(() -> validate(tableDescriptor, null))
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining(ConfigOptions.TABLE_LOG_MIN_IN_SYNC_REPLICAS_NUMBER.key());
+    }
+
+    @Test
+    void testLogMinInSyncReplicasCannotBeAltered() {
+        assertThatThrownBy(
+                        () ->
+                                TableDescriptorValidation.validateAlterTableProperties(
+                                        plainTableInfo(),
+                                        Collections.singleton(
+                                                ConfigOptions.TABLE_LOG_MIN_IN_SYNC_REPLICAS_NUMBER
+                                                        .key())))
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining(ConfigOptions.TABLE_LOG_MIN_IN_SYNC_REPLICAS_NUMBER.key());
+    }
 
     @Test
     void testSkipUnchangedUpsertsWithDefaultMergeBehavior() {
