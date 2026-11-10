@@ -232,7 +232,7 @@ class MetadataUpdaterITCase {
 
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
-    void testFirstWriteWithOnlyTableMapping(boolean partitioned) throws Exception {
+    void testGetTableLoadsTableMetadata(boolean partitioned) throws Exception {
         TablePath tablePath = TablePath.of("fluss", "mapping_only_" + partitioned);
         TableDescriptor.Builder builder =
                 TableDescriptor.builder()
@@ -259,9 +259,10 @@ class MetadataUpdaterITCase {
             }
             try (Table table = connection.getTable(tablePath)) {
                 MetadataUpdater updater = ((FlussConnection) connection).getMetadataUpdater();
-                assertThat(updater.getCluster().getTableId(tablePath))
-                        .hasValue(table.getTableInfo().getTableId());
-                assertThat(updater.getCluster().getBucketLocationsByPath()).isEmpty();
+                long tableId = table.getTableInfo().getTableId();
+                assertThat(updater.getCluster().getTableId(tablePath)).hasValue(tableId);
+                assertThat(updater.getCluster().getBucketCount(TableOrPartition.ofTable(tableId)))
+                        .isPresent();
                 table.newAppend().createWriter().append(row(1, "p1")).get();
                 try (Connection readerConnection =
                                 ConnectionFactory.createConnection(
@@ -272,8 +273,8 @@ class MetadataUpdaterITCase {
                                     ((FlussConnection) readerConnection)
                                             .getMetadataUpdater()
                                             .getCluster()
-                                            .getBucketLocationsByPath())
-                            .isEmpty();
+                                            .getBucketCount(TableOrPartition.ofTable(tableId)))
+                            .isPresent();
                     if (partitioned) {
                         scanner.subscribeFromBeginning(
                                 updater.getPartitionIdOrElseThrow(
@@ -294,7 +295,7 @@ class MetadataUpdaterITCase {
                                 return true;
                             },
                             Duration.ofSeconds(10),
-                            "Record was not read after loading bucket metadata");
+                            "Record was not read after subscribing the table");
                 }
             }
         }
