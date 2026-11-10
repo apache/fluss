@@ -195,6 +195,21 @@ public class RebalanceManagerTest {
     }
 
     @Test
+    void testQueuedTimeoutCheckIsIgnoredAfterTimeoutCheckerStops() {
+        TableBucket tableBucket = new TableBucket(1L, 0);
+        rebalanceManager.registerRebalance("stopping-rebalance", plans(tableBucket));
+        timeoutChecker.triggerPeriodicScheduledTasks();
+        assertThat(eventManager.events.get(0)).isInstanceOf(CheckRebalanceTimeoutEvent.class);
+
+        rebalanceManager.stopTimeoutChecker();
+        clock.advanceTime(Duration.ofMillis(130_000));
+        rebalanceManager.checkTimeout();
+
+        assertThat(statuses(rebalanceManager).get(tableBucket)).isEqualTo(REBALANCING);
+        assertThat(eventManager.events).hasSize(1);
+    }
+
+    @Test
     void testRegisterRebalanceRespectsMaxInflightTasks() {
         reconfigureMaxInflightTasks(2);
         TableBucket tb1 = new TableBucket(1L, 0);

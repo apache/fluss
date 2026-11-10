@@ -1109,6 +1109,10 @@ public class RebalanceManager implements ServerReconfigurable {
 
     /** Checks timeout and reconciliation state on the coordinator event thread. */
     public void checkTimeout() {
+        if (!hasActiveRebalance) {
+            return;
+        }
+
         long now = clock.milliseconds();
         List<RebalanceExecutionKey> timedOutAttempts = new ArrayList<>();
         for (RebalanceTaskAttempt attempt : runningRebalanceTasks.values()) {
